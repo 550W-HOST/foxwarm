@@ -4,20 +4,18 @@ Foxwarm is a lightweight, extensible AI assistant framework for development-orie
 
 ## Features
 
-- **Multi-Channel Support**: Telegram, Matrix, WeChat Work, WebUI, and TUI
+- **Multi-Channel Support**: Telegram, Matrix, WeChat Work, and WebUI
 - **Agents, Sessions, and Skills**: Separate long-lived knowledge from runtime conversation threads
 - **Persistent Memory**: Long-term context storage with LanceDB-based retrieval
 - **Tool Calling**: File operations, shell commands, browsing, session management, and more
 - **Queue + Compaction**: Serialized session work with manual/history compaction support
-- **WebUI + TUI**: Browser and terminal interfaces for the same backend
-
 
 ## Quick Start
 
 ### Prerequisites
 
 - Node.js 20+ and npm
-- (Optional) Ollama for local embeddings
+- (Optional) Ollama for embeddings
 - (Optional) Chromium for browsing features
 
 ### Installation
@@ -27,23 +25,16 @@ Foxwarm is a lightweight, extensible AI assistant framework for development-orie
 git clone <your-repo-url> foxwarm
 cd foxwarm
 
-# Install backend dependencies
-npm install
-
-# Build WebUI (optional, for browser access)
-cd packages/webui
-npm install
-npm run build
-cd ../..
-
-# Create local configuration
+# Create local config files
 cp .env.example .env
 mkdir -p state
 cp templates/models.example.yaml state/models.yaml
 
-# Edit .env and state/models.yaml
-npm run build
+# Install + build backend and WebUI in one step
+npm run build-all
 ```
+
+Then edit `state/models.yaml` and choose the models you actually want to use.
 
 ### Running Foxwarm
 
@@ -81,14 +72,14 @@ On first startup, Foxwarm will:
 3. Load model definitions from `state/models.yaml`
    - if missing, it falls back to `templates/models.example.yaml`
 4. Load session metadata and agent memory
-5. Start configured channels (Telegram / Matrix / WeChat Work / WebUI / TUI)
+5. Start configured channels (Telegram / Matrix / WeChat Work / WebUI)
 6. Run `ONBOOT.md` if present and show `BOOTSTRAP.md` guidance for first-time setup
 
 ## Configuration
 
 Foxwarm configuration has four main entry points:
 
-1. `.env` — secrets, ports, feature flags, provider defaults
+1. `.env` — app-level settings, ports, feature flags, and channel tokens
 2. `state/models.yaml` — available models and default model key
 3. `agents/<agent>/memory/` — long-term memory for each agent
 4. `skills/<skill>/` — reusable skill memory packs that can be attached to agents
@@ -101,52 +92,53 @@ The runtime resolves model definitions in this order:
 2. `state/models.yaml`
 3. `templates/models.example.yaml`
 
-For normal setup, put each model provider's `apiKey` and `baseUrl` directly in `state/models.yaml`.
-`.env` is still useful for app-level settings, but the recommended public configuration style is to keep model connection settings in YAML.
+Foxwarm's public setup flow is **YAML-first**: put each provider's connection settings and model list directly in `state/models.yaml`.
 
-Minimal example:
+Example:
 
 ```yaml
-default: openai/gpt-4.1-mini
+default: openai/gpt-5.2-codex
 models:
   openai:
     provider: openai
     baseUrl: https://api.openai.com/v1
-    apiKey: sk-...
+    apiKey: your-openai-key
     model:
-      - gpt-4.1-mini
-      - gpt-4o
+      - gpt-5.2-codex
+      - gpt-5.3-codex
+      - gpt-5.4
 
   anthropic:
     provider: anthropic
     baseUrl: https://api.anthropic.com
-    apiKey: sk-ant-...
+    apiKey: your-anthropic-key
     model:
-      - claude-3-7-sonnet-latest
+      - claude-sonnet-4-5
+      - claude-sonnet-4-6
+      - claude-sonnet-4-5-thinking
+      - claude-sonnet-4-6-thinking
 ```
 
-### Provider Credentials
+You can also replace those provider entries with a local OpenAI-compatible endpoint if you want to use your own hosted model.
 
-**OpenAI / OpenAI-compatible**
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL` (optional, default `https://api.openai.com/v1`)
+### Embeddings
 
-**Anthropic**
-- `ANTHROPIC_API_KEY`
-- `ANTHROPIC_BASE_URL` (optional, default `https://api.anthropic.com`)
+Vector memory uses Ollama for embeddings. The current embedding model is:
 
-See:
-- [OpenAI LLM Configuration](docs/openai-llm.md)
-- [Anthropic LLM Configuration](docs/anthropic-llm.md)
+```text
+qwen3-embedding:0.6b
+```
 
-### Channels and Server
+If you want retrieval / vector memory features, make sure that model is available in your Ollama environment.
+
+### Server and Channels
+
+Common settings live in `.env`, for example:
 
 - `HTTP_PORT` — WebUI + trigger server port (default `3001`)
-- `TELEGRAM_BOT_TOKEN` / `ALLOWED_USER_ID`
-- `MATRIX_HOMESERVER` / `MATRIX_ACCESS_TOKEN` / `MATRIX_USER_ID`
-- `WEWORK_WEBHOOK_URL`
 - `ENABLE_WEBUI`
 - `ENABLE_TRIGGER`
+- Telegram / Matrix / WeChat Work channel tokens if you want those integrations
 
 ## Core Concepts
 
@@ -177,9 +169,8 @@ Foxwarm supports multiple channels at the same time:
 
 - **Telegram**
 - **Matrix**
-- **WeChat Work** — [Setup Guide](docs/wework-webhook.md)
-- **WebUI** — browser-based interface
-- **TUI** — terminal interface via `npm run tui`
+- **WeChat Work**
+- **WebUI**
 
 All channels share the same agents, sessions, and memory backend.
 
@@ -201,13 +192,11 @@ foxwarm/
 
 ## Documentation
 
-- [Docs Index](docs/README.md)
 - [Session Management](docs/session-management.md)
 - [Multi-Agent Guide](docs/multi-agent.md)
 - [Architecture](docs/architecture.md)
 - [Development](docs/development.md)
-- [WebUI Guide](docs/webui-guide.md)
-
+- [Vector Memory](docs/vector-memory.md)
 
 ## Development
 
@@ -215,11 +204,11 @@ foxwarm/
 # Watch mode
 npm run dev
 
-# Build
+# Backend-only build
 npm run build
 
-# Run TUI
-npm run tui
+# Backend + WebUI install/build
+npm run build-all
 ```
 
 ## License

@@ -7,8 +7,7 @@ Foxwarm 是一个以 **agent / session / tool-calling** 为核心的多渠道 AI
 ```text
 Channels
   ├─ Telegram / Matrix / WeChat Work
-  ├─ WebUI
-  └─ TUI
+  └─ WebUI
         ↓
 Message Router
         ↓
@@ -75,7 +74,8 @@ Foxwarm 会为每个 session 生成 `persistentMemorySnapshot`。当前 prompt �
 - `matrixChannel.ts`
 - `weworkChannel.ts`
 - `webuiChannel.ts`
-- `tuiChannel.ts`
+
+> 注：代码中仍保留一些非主公开流程的运行入口，但首轮公开文档只保留当前建议用户使用的 channel/界面。
 
 ### Message Router
 实现位置：`src/messageRouter.ts`

@@ -31,8 +31,8 @@ npm start
 # 开发监听
 npm run dev
 
-# TUI
-npm run tui
+# 安装并构建 backend + WebUI
+npm run build-all
 ```
 
 ## 代码结构

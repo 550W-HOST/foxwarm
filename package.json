@@ -5,6 +5,7 @@
   "main": "lib/index.js",
   "scripts": {
     "build": "tsc",
+    "build-all": "npm install && npm run build && npm --prefix packages/webui install && npm --prefix packages/webui run build",
     "start": "./scripts/start.sh",
     "start:notmux": "npm run build && node lib/index.js",
     "restart": "./scripts/restart.sh",

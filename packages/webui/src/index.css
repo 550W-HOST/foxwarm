@@ -52,3 +52,36 @@ input, textarea, select {
   max-width: 100vw;
   min-height: 100dvh;
 }
+
+@layer components {
+  .foxwarm-markdown {
+    --tw-prose-headings: rgb(17 24 39);
+    --tw-prose-body: rgb(17 24 39);
+  }
+
+  .dark .foxwarm-markdown {
+    --tw-prose-headings: rgb(243 244 246);
+    --tw-prose-body: rgb(243 244 246);
+  }
+
+  .foxwarm-markdown :where(h1):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    font-size: 1.5em;
+    line-height: 1.2;
+    margin-top: 0.9em;
+    margin-bottom: 0.45em;
+  }
+
+  .foxwarm-markdown :where(h2):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    font-size: 1.2em;
+    line-height: 1.3;
+    margin-top: 0.85em;
+    margin-bottom: 0.4em;
+  }
+
+  .foxwarm-markdown :where(h3):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    font-size: 1.05em;
+    line-height: 1.35;
+    margin-top: 0.8em;
+    margin-bottom: 0.35em;
+  }
+}

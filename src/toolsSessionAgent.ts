@@ -362,30 +362,25 @@ export async function tool_compress_session(args: ToolArgs, ctx: ToolContext) {
   }
 
   const isSelf = targetSessionId === ctx.sessionId;
-
-  if (isSelf) {
-    if (!summary || !summary.trim()) {
-      throw new Error('Self compaction requires a non-empty summary.');
-    }
-
-    await sessionManager.compactHistoryWithSummary(targetSessionId, summary, keepPercent);
-    return `Current session \`${targetSessionId}\` compacted using provided summary.`;
+  if (isSelf && (!summary || !summary.trim())) {
+    throw new Error('Self compaction requires a non-empty summary.');
   }
 
-  if (targetSession.busy) {
-    throw new Error(`Target session \`${targetSessionId}\` is busy. Wait until it becomes idle before compacting.`);
-  }
-  if ((targetSession.queue?.length || 0) > 0) {
-    throw new Error(`Target session \`${targetSessionId}\` has queued work pending. Wait until the queue drains before compacting.`);
+  const result = await sessionManager.requestSessionCompaction(targetSessionId, {
+    summary: summary?.trim() || undefined,
+    keepPercent,
+  });
+
+  if (result.alreadyQueued) {
+    return `Compaction is already queued for session \`${targetSessionId}\`.`;
   }
 
-  if (summary && summary.trim()) {
-    await sessionManager.compactHistoryWithSummary(targetSessionId, summary, keepPercent);
-    return `Session \`${targetSessionId}\` compacted using provided summary.`;
+  const mode = summary && summary.trim() ? 'provided summary' : 'automatic summary';
+  if (result.startedImmediately) {
+    return `Compaction started for session \`${targetSessionId}\` using ${mode}.`;
   }
 
-  await sessionManager.compactHistory(targetSessionId, keepPercent);
-  return `Session \`${targetSessionId}\` compacted using automatic summary.`;
+  return `Compaction queued for session \`${targetSessionId}\` using ${mode}. Pending queue length: ${result.queueLength}`;
 }
 
 export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {

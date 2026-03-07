@@ -241,10 +241,10 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
                 // Keep track of background process
                 child.on('exit', (code, signal) => {
                     logStream.end();
-                    const finalMsg = `[SYSTEM: Background Process Finished] command: \`${command}\`\nExit code: ${code}${signal ? `, Signal: ${signal}` : ''}\nFull output in ${relativePath}`;
+                    const finalMsg = `Background Process Finished\ncommand: \`${command}\`\nExit code: ${code}${signal ? `, Signal: ${signal}` : ''}\nFull output in ${relativePath}`;
                     // Queue notification to session
                     if (ctx && ctx.sessionId) {
-                        sessionManager.queueSessionEvent(ctx.sessionId, finalMsg, 'background');
+                        sessionManager.queueSessionSystemEvent(ctx.sessionId, finalMsg, 'background');
                     }
                 });
 
@@ -788,7 +788,7 @@ export const definitions = [
         },
         {
             name: 'compress_session',
-            description: 'Compact a session history. If compressing the current session/self, summary is required and will be used directly. If compressing another idle session, it can either use the provided summary or generate an automatic summary.',
+            description: 'Queue a session compaction task. If compressing the current session/self, summary is required. For other sessions, a provided summary is optional; if omitted, automatic summary generation will be used when the queued compaction runs.',
             parameters: {
                 type: 'object',
                 properties: {

@@ -27,14 +27,6 @@ async function handleCompactCommand(ctx: ChannelContext, args: string[], session
     ctx.reply('History is empty.')
     return
   }
-  if (session.busy) {
-    ctx.reply('❌ Session is busy. Wait for the current request to finish before compacting.')
-    return
-  }
-  if ((session.queue?.length || 0) > 0) {
-    ctx.reply('❌ Session has queued work pending. Wait for the queue to drain before compacting.')
-    return
-  }
 
   let keepPercent = COMPACT_PERCENT
   if (args.length >= 1) {
@@ -44,7 +36,19 @@ async function handleCompactCommand(ctx: ChannelContext, args: string[], session
     }
   }
 
-  await sessionManager.compactHistory(sessionId, keepPercent)
+  const result = await sessionManager.requestSessionCompaction(sessionId, { keepPercent })
+
+  if (result.alreadyQueued) {
+    ctx.reply('ℹ️ Compaction is already queued for this session.')
+    return
+  }
+
+  if (result.startedImmediately) {
+    ctx.reply('🔄 Compaction started...')
+    return
+  }
+
+  ctx.reply(`⏳ Compaction queued. Pending queue length: ${result.queueLength}`)
 }
 
 export const COMMANDS: Record<string, CommandDef> = {

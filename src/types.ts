@@ -79,9 +79,11 @@ export interface QueueSource {
 }
 
 export interface QueueItem {
-  type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot';
+  type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact';
   source?: QueueSource;
   parts?: MessagePart[];
+  summary?: string;
+  keepPercent?: number;
 }
 
 export interface Session {

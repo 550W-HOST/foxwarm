@@ -6,7 +6,7 @@ import { logger } from './common';
 import { ChannelContext, ChannelMessage } from './channel';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
-import { MessagePart, QueueSource, Session, SessionReply } from './types';
+import { MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
 import { resolveModelConfig } from './config';
 
 function formatCurrentTimeForPrompt(date: Date): string {
@@ -145,6 +145,50 @@ export class MessageRouter {
     };
   }
 
+  private async continueWithQueuedWork(session: Session): Promise<boolean> {
+    if (session.queue.length === 0) {
+      return false;
+    }
+
+    await sessionManager.saveSession(session.id);
+    const nextItem = session.queue.shift();
+    if (!nextItem) {
+      return false;
+    }
+
+    await this.processQueuedItem(session.id, session, nextItem);
+    return true;
+  }
+
+  private async runQueuedCompaction(sessionId: string, session: Session, item: QueueItem): Promise<void> {
+    try {
+      if (item.summary && item.summary.trim()) {
+        await sessionManager.compactHistoryWithSummary(sessionId, item.summary, item.keepPercent);
+      } else {
+        await sessionManager.compactHistory(sessionId, item.keepPercent);
+      }
+    } catch (e: any) {
+      logger.error({ err: e, sessionId }, 'Queued compaction failed');
+      await this.sendSessionError(session, undefined, e);
+    } finally {
+      if (await this.continueWithQueuedWork(session)) {
+        return;
+      }
+
+      session.busy = false;
+      await sessionManager.saveSession(session.id);
+    }
+  }
+
+  private async processQueuedItem(sessionId: string, session: Session, item: QueueItem): Promise<void> {
+    if (item.type === 'compact') {
+      await this.runQueuedCompaction(sessionId, session, item);
+      return;
+    }
+
+    await this.runSessionTurn(sessionId, this.getQueuedTurnOptions(session, item));
+  }
+
   private async appendUserMessage(session: Session, parts: MessagePart[]): Promise<void> {
     await sessionManager.appendSessionMessage(session, {
       role: 'user',
@@ -196,7 +240,7 @@ export class MessageRouter {
 
     if (foundUser && !hasNoAction && !hasSendToSession && !hasUserFromPrefix && session.queue.length === 0) {
       const reminder = `message ended without send_to_session call. If you want to report to parent, call send_to_session({sessionId: \`${session.parentSessionId}\`, message: "..."}). If you confirmed to not sending messages, reply "NO_ACTION"`;
-      await sessionManager.queueSessionEvent(session.id, reminder, 'background');
+      await sessionManager.queueSessionSystemEvent(session.id, reminder, 'background');
     }
   }
 
@@ -358,13 +402,8 @@ export class MessageRouter {
       logger.error(e, 'Error handling message');
       await this.sendSessionError(session, options.sourceCtx, e);
     } finally {
-      if (session.queue.length > 0) {
-        await sessionManager.saveSession(session.id);
-        const nextItem = session.queue.shift();
-        if (nextItem) {
-          await this.runSessionTurn(session.id, this.getQueuedTurnOptions(session, nextItem));
-          return;
-        }
+      if (await this.continueWithQueuedWork(session)) {
+        return;
       }
 
       session.busy = false;
@@ -447,7 +486,7 @@ export class MessageRouter {
         return;
       }
 
-      await this.runSessionTurn(sessionId, this.getQueuedTurnOptions(session, item));
+      await this.processQueuedItem(sessionId, session, item);
     } finally {
       this.processingSessions.delete(sessionId);
     }

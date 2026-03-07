@@ -2023,7 +2023,7 @@ export default function Chat({ sessionId, onBack }: ChatProps) {
                           {/* Content based on view mode */}
                           {viewMode === 'rendered' ? (
                             <div
-                              className="prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100 prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
+                              className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100 prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
                               dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
                             />
                           ) : viewMode === 'raw' ? (

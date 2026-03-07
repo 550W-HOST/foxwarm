@@ -1164,20 +1164,23 @@ export async function sendToSession(targetSessionId: string, message: string, fr
     throw new Error('Isolated session can only communicate with parent/child sessions.');
   }
 
-  // Use [SYSTEM: ...] prefix to avoid duplicate [FROM: ...] prefix in messageRouter
-  let prefix = fromSessionId ? `[SYSTEM: Message from other session \`${fromSessionId}\`]\n` : '[SYSTEM MESSAGE]\n';
+  const parts: MessagePart[] = [
+    { system: fromSessionId ? `Message from other session \`${fromSessionId}\`` : 'SYSTEM MESSAGE' }
+  ];
 
   if (fromSessionId && (fromSession?.parentSessionId === targetSessionId || targetSession?.parentSessionId === fromSessionId)) {
     const replyTarget = fromSessionId;
-    prefix += `[SYSTEM: You can reply using send_to_session({sessionId: \`${replyTarget}\`, message: "..."}).]\n`;
+    parts.push({ system: `You can reply using send_to_session({sessionId: \`${replyTarget}\`, message: "..."}).` });
   }
 
-  const fullMessage = prefix + message;
+  if (message) {
+    parts.push({ text: message });
+  }
 
   logger.info({ targetSessionId, fromSessionId }, 'Message sent to session');
   await enqueueSessionItem(targetSessionId, {
     type: 'intersession',
-    parts: [{ text: fullMessage }]
+    parts,
   });
 }
 
@@ -1435,21 +1438,23 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
 
   const remaining = splitIndex < history.length ? history.slice(splitIndex) : [];
 
-  const summaryPrompt = "[SYSTEM: COMPACTION STARTED: PAUSE YOUR WORK before compation done. Please summarize the entire session history above concisely NOW. Preserve key information and important context. The earlier part of the session will be removed to save space. Update memory if needed.]";
+  const summaryPrompt: MessagePart = {
+    system: 'COMPACTION STARTED: PAUSE YOUR WORK before compation done. Please summarize the entire session history above concisely NOW. Preserve key information and important context. The earlier part of the session will be removed to save space. Update memory if needed.'
+  };
 
   try {
     const beforeCompactIndex = session.history.length;
 
     // Don't change snapshot and history before compacting LLM request,
     // to prevent recomputing whole history.
-    await llm.chat([{ text: summaryPrompt }], session, 0);
+    await llm.chat([summaryPrompt], session, 0);
 
     const summaryConversation = session.history.slice(beforeCompactIndex);
     if (summaryConversation.length < 2 /* summary system message + summary */) {
       throw new Error('No summary message');
     }
 
-    await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, '[SYSTEM: Compaction completed.]');
+    await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, 'Compaction completed.');
   } catch (e) {
     logger.error(e, 'Compaction failed');
   }
@@ -1490,11 +1495,11 @@ export async function compactHistoryWithSummary(sessionId: string, summary: stri
   const remaining = splitIndex < history.length ? history.slice(splitIndex) : [];
   const now = Date.now();
   const summaryConversation: Message[] = [
-    { role: 'user', parts: [{ text: '[SYSTEM: Manual compaction summary provided.]' }], __meta: { timestamp: now } },
+    { role: 'user', parts: [{ system: 'Manual compaction summary provided.' }], __meta: { timestamp: now } },
     { role: 'model', parts: [{ text: summary.trim() }], __meta: { timestamp: now } },
   ];
 
-  await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, '[SYSTEM: Manual compaction completed.]');
+  await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, 'Manual compaction completed.');
 }
 
 async function finalizeCompaction(
@@ -1507,10 +1512,10 @@ async function finalizeCompaction(
 ): Promise<void> {
   const now = Date.now();
   const summaryMessages: Message[] = [
-    { role: 'user', parts: [{ text: '[SYSTEM: This session has been compacted. Messages before this are removed.]' }], __meta: { timestamp: now } },
+    { role: 'user', parts: [{ system: 'This session has been compacted. Messages before this are removed.' }], __meta: { timestamp: now } },
     ...remaining,
     ...summaryConversation,
-    { role: 'user', parts: [{ text: completionMarker }], __meta: { timestamp: now } },
+    { role: 'user', parts: [{ system: completionMarker }], __meta: { timestamp: now } },
   ];
 
   session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
@@ -1637,6 +1642,34 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
   }
 }
 
+export async function requestSessionCompaction(
+  sessionId: string,
+  options: { summary?: string; keepPercent?: number } = {}
+): Promise<{ alreadyQueued: boolean; startedImmediately: boolean; queueLength: number }> {
+  const session = await getSession(sessionId);
+
+  if (session.queue.some(item => item.type === 'compact')) {
+    return {
+      alreadyQueued: true,
+      startedImmediately: false,
+      queueLength: session.queue.length,
+    };
+  }
+
+  const startedImmediately = !session.busy && session.queue.length === 0;
+  await enqueueSessionItem(sessionId, {
+    type: 'compact',
+    summary: options.summary,
+    keepPercent: options.keepPercent,
+  });
+
+  return {
+    alreadyQueued: false,
+    startedImmediately,
+    queueLength: session.queue.length,
+  };
+}
+
 /**
  * Queue an event notification to a session (unified handler for all event types)
  * @param sessionId Target session ID
@@ -1648,6 +1681,17 @@ export async function queueSessionEvent(sessionId: string, message: string, type
     type,
     parts: [{ text: message }]
   });
+}
+
+export async function queueSessionStructuredEvent(sessionId: string, parts: MessagePart[], type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+  await enqueueSessionItem(sessionId, {
+    type,
+    parts: parts.map(part => ({ ...part }))
+  });
+}
+
+export async function queueSessionSystemEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+  await queueSessionStructuredEvent(sessionId, [{ system: message }], type);
 }
 
 /**
@@ -1794,7 +1838,7 @@ export async function retrySession(sessionId: string): Promise<void> {
 
   // Trigger session processing by adding a retry marker to queue
   logger.info({ sessionId }, 'Retrying session');
-  await queueSessionEvent(sessionId, '[SYSTEM: retrying last request]', 'trigger');
+  await queueSessionSystemEvent(sessionId, 'retrying last request', 'trigger');
 }
 
 /**
@@ -1831,7 +1875,7 @@ export async function resumeBusySessions(): Promise<void> {
       // Reset busy flag and trigger
       session.busy = false;
       // Will save session inside, no need to call saveSession() here.
-      await queueSessionEvent(sessionId, '[SYSTEM: session resumed after process restart]');
+      await queueSessionSystemEvent(sessionId, 'session resumed after process restart');
       logger.info({ sessionId }, 'Busy session resumed');
     } catch (e) {
       logger.error({ err: e, sessionId }, 'Failed to resume busy session');
