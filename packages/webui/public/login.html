@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>🦊 Foxwarm - Login</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+      /* Prevent iOS zoom on input focus */
+      touch-action: manipulation;
+    }
+    .container {
+      background: white;
+      padding: 40px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      max-width: 400px;
+      width: 100%;
+    }
+    h1 { margin-bottom: 24px; font-size: 24px; text-align: center; }
+    input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      /* Prevent iOS zoom on input focus */
+      font-size: 16px !important;
+      margin-bottom: 16px;
+      touch-action: manipulation;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button:hover { background: #2563eb; }
+    .error {
+      color: #ef4444;
+      font-size: 14px;
+      margin-top: -8px;
+      margin-bottom: 16px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🦊 Foxwarm</h1>
+    <form id="loginForm">
+      <input type="password" id="token" placeholder="Enter token" required autofocus>
+      <div class="error" id="error">Invalid token</div>
+      <button type="submit">Login</button>
+    </form>
+  </div>
+  <script>
+    const form = document.getElementById('loginForm');
+    const tokenInput = document.getElementById('token');
+    const errorDiv = document.getElementById('error');
+
+    // Check for token in URL hash (#token=xxx)
+    const hash = window.location.hash;
+    if (hash.startsWith('#token=')) {
+      const urlToken = decodeURIComponent(hash.substring(7));
+      if (urlToken) {
+        tokenInput.value = urlToken;
+        form.dispatchEvent(new Event('submit'));
+      }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const token = tokenInput.value.trim();
+      
+      try {
+        const cookiePath = window.location.pathname.replace(/[^/]+$/, '');
+        document.cookie = `foxwarm_token=${encodeURIComponent(token)}; path=${cookiePath}; max-age=31536000; SameSite=Strict`;
+        localStorage.setItem('foxwarm_token', token);
+        window.location.href = './';
+      } catch (err) {
+        errorDiv.style.display = 'block';
+        errorDiv.textContent = 'Connection error';
+      }
+    });
+  </script>
+</body>
+</html>

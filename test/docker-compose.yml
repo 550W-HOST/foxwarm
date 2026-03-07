@@ -1,0 +1,29 @@
+#!/bin/bash
+# Main test environment for foxwarm
+# For multi-test-environment setup, copy this directory and modify:
+# - name (below)
+# - service name (foxwarm-test)
+# - ports (3002:3001 → 3003:3001, etc.)
+
+name: foxwarm-test  # Change this for multi-test environments
+
+services:
+  foxwarm-test:  # Change this service name for multi-test environments
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: foxwarm-test
+    ports:
+      - "3002:3001"  # Change external port for multi-test environments
+    volumes:
+      - ..:/app
+      - ./state:/app/state
+      - ./agents:/app/agents
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+    stop_grace_period: 5s
+    command: ["node", "lib/index.js"]
+    deploy:
+      resources:
+        limits:
+          memory: 2G

@@ -1,0 +1,1320 @@
+import fs from 'fs-extra'
+import path from 'path'
+import { ChannelContext } from './channel'
+import { nodesManager } from './nodesManager'
+import { Session } from './types'
+import * as sessionManager from './sessionManager'
+import * as skills from './skills'
+import * as tools from './tools'
+import { estimateSessionTokens } from './tokenCount'
+import { CONTEXT_LIMIT, COMPACT_PERCENT, resolveModelConfig } from './config'
+import { formatSessionMessagesPreview } from './utils/messagePreview'
+
+export type CommandDef = {
+  description: string
+  usage?: string
+  requiresSession?: boolean
+  showInTelegram?: boolean
+  handler: (ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) => Promise<void>
+}
+
+const messagesUsage = 'Usage: `/messages <num>` | `/messages <start> <end>`'
+const deleteMessagesUsage = 'Usage: `/delete-messages <num>` (positive: delete oldest, negative: delete newest)'
+
+async function handleCompactCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) {
+  if (!sessionId || !session) return
+  if (session.history.length === 0) {
+    ctx.reply('History is empty.')
+    return
+  }
+  if (session.busy) {
+    ctx.reply('❌ Session is busy. Wait for the current request to finish before compacting.')
+    return
+  }
+  if ((session.queue?.length || 0) > 0) {
+    ctx.reply('❌ Session has queued work pending. Wait for the queue to drain before compacting.')
+    return
+  }
+
+  let keepPercent = COMPACT_PERCENT
+  if (args.length >= 1) {
+    const pct = parseFloat(args[0])
+    if (!isNaN(pct) && pct > 0 && pct <= 100) {
+      keepPercent = pct / 100
+    }
+  }
+
+  await sessionManager.compactHistory(sessionId, keepPercent)
+}
+
+export const COMMANDS: Record<string, CommandDef> = {
+  '/help': {
+    description: 'Show help',
+    requiresSession: false,
+    handler: async (ctx) => {
+      let resp = '📖 *Commands*\n\n'
+      for (const [cmd, def] of Object.entries(COMMANDS)) {
+        if (def.showInTelegram === false) continue
+        resp += `\`${cmd}\` - ${def.description}`
+        if (def.usage) resp += ` ${def.usage}`
+        resp += '\n'
+      }
+      ctx.reply(resp)
+    }
+  },
+  '/compact': {
+    description: 'Compact history. `args: [keep%]`',
+    requiresSession: true,
+    handler: handleCompactCommand,
+  },
+  '/compress': {
+    description: 'Alias of /compact. `args: [keep%]`',
+    requiresSession: true,
+    handler: handleCompactCommand,
+    showInTelegram: false,
+  },
+  '/status': {
+    description: 'Show current session status',
+    requiresSession: true,
+    handler: async (ctx, _args, sessionId, session) => {
+      if (!sessionId || !session) return
+      const historyLen = session.history.length
+      const tokenCount = estimateSessionTokens(session)
+      const usage = session.stats.lastUsage
+
+      let resp = `📊 *Foxwarm Status*\n`
+      resp += `\n*Session:* \`${sessionId}\``
+      resp += `\n*Channel:* ${ctx.platform}:${ctx.channelUserId}`
+      resp += `\n- Messages: ${historyLen}`
+      const { currentKey, contextLimit } = resolveModelConfig(session.model)
+
+      resp += `\n- Model: ${currentKey}`
+      resp += `\n- Size: ~${(tokenCount / 1000).toFixed(1)}K tokens / ${(contextLimit / 1000).toFixed(1)}K tokens`
+      if (usage) {
+        resp += `\n*Last Turn Usage: - Cached: ${usage.cachedTokens || 0} / Input: ${usage.inputTokens} / Output: ${usage.outputTokens}`
+      }
+      resp += `\n*Total Session Usage - Cached: ${session.stats.totalCachedTokens || 0} / Input: ${session.stats.totalInputTokens} / Output: ${session.stats.totalOutputTokens}`
+
+      ctx.reply(resp)
+    }
+  },
+  '/session': {
+    description: 'Manage sessions: list, fork, move, parent/unparent, archive',
+    requiresSession: false,
+    handler: async (ctx, args, sessionId, session) => {
+      // Manually get session for subcommands that need it
+      if (!sessionId) {
+        sessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId);
+      }
+      if (!session && sessionId) {
+        session = await sessionManager.getSession(sessionId);
+      }
+      
+      const subcommand = args[0]
+      const subArgs = args.slice(1)
+
+      if (!subcommand) {
+        let resp = '📋 *Session Commands*\n\n'
+        resp += '`/session list` - List all sessions\n'
+        resp += '`/session new` - Create new ad-hoc session\n'
+        resp += '`/session create <agent> <session>` - Create session under an existing agent\n'
+        resp += '`/session fork` - Fork current session\n'
+        resp += '`/session delete <sessionId>` - Delete session\n'
+        resp += '`/session clear` - Clear current session history\n'
+        resp += '`/session rename <name>` - Rename session\n'
+        resp += '`/session isolated [on|off] [node]` - Toggle isolated mode\n'
+        resp += '`/session index` - Index messages to vector database\n'
+        resp += '`/session move [agent/]<new-session-id>` - Move/rename session\n'
+        resp += '`/session parent <parent-session-id> [child-session-id]` - Set parent session\n'
+        resp += '`/session unparent [child-session-id]` - Remove parent session\n'
+        resp += '`/session archive [session-id]` - Archive session (default: current)\n'
+        resp += '`/session unarchive [session-id]` - Unarchive session (default: current)\n'
+        ctx.reply(resp)
+        return
+      }
+
+      switch (subcommand) {
+        case 'list': {
+          const allSessions = sessionManager.getAllSessions()
+          const allAttachments = sessionManager.getAllAttachments()
+
+          let page = 1
+          if (subArgs.length >= 1) {
+            const p = parseInt(subArgs[0])
+            if (!isNaN(p) && p > 0) {
+              page = p
+            }
+          }
+
+          const PAGE_SIZE = 20
+          const sessionEntries = Array.from(allSessions.entries())
+            .sort((a, b) => {
+              const timeA = a[1].meta?.lastMessageTime || 0
+              const timeB = b[1].meta?.lastMessageTime || 0
+              return timeB - timeA
+            })
+          const totalPages = Math.ceil(sessionEntries.length / PAGE_SIZE)
+
+          if (page > totalPages && totalPages > 0) {
+            ctx.reply(`Page ${page} not found. Total pages: ${totalPages}`)
+            return
+          }
+
+          const startIdx = (page - 1) * PAGE_SIZE
+          const endIdx = Math.min(startIdx + PAGE_SIZE, sessionEntries.length)
+          const pageEntries = sessionEntries.slice(startIdx, endIdx)
+
+          let resp = `📋 *All Sessions* (Page ${page}/${totalPages || 1})\n\n`
+          for (const [sid, sess] of pageEntries) {
+            const attachedChannels = Array.from(allAttachments.entries())
+              .filter(([_, info]) => info.sessionId === sid)
+              .map(([channelKey, _]) => channelKey)
+
+            const msgCount = sess.meta?.messageCount || sess.history.length
+            const displayName = sess.displayName ? ` (${sess.displayName})` : ''
+            const node = sess.currentNode || 'master'
+            const isolated = sess.isolated ? ' isolated' : ''
+            resp += `\`${sid}\`${displayName} - ${msgCount} msgs - node: \`${node}\`${isolated}\n`
+            if (attachedChannels.length) {
+              resp += `    - channels: \`${attachedChannels.join(', ')}\`\n`
+            }
+          }
+
+          if (totalPages > 1) {
+            resp += `\nUse \`/session list <page>\` to view other pages.`
+          }
+
+          ctx.reply(resp)
+          break
+        }
+
+        case 'new': {
+          sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
+          const newSessionId = sessionManager.attachChannel(ctx.platform, ctx.channelUserId)
+          ctx.reply(`✅ Created and attached to new session \`${newSessionId}\``)
+          break
+        }
+
+        case 'create': {
+          if (subArgs.length < 2) {
+            ctx.reply('Usage: /session create <agent> <session>')
+            return
+          }
+
+          const agentName = subArgs[0]
+          const newSessionName = subArgs[1]
+
+          try {
+            const result = await sessionManager.createSessionInAgent({
+              agentName,
+              sessionName: newSessionName,
+              currentNode: session?.currentNode,
+              model: session?.model,
+            })
+
+            sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
+            sessionManager.attachChannel(ctx.platform, ctx.channelUserId, result.sessionId)
+            ctx.reply(`✅ Created session \`${result.sessionId}\` under agent \`${agentName}\` and attached current channel.`)
+          } catch (e: any) {
+            ctx.reply(`❌ Session create failed: ${e.message}`)
+          }
+          break
+        }
+
+        case 'fork': {
+          if (!sessionId || !session) {
+            ctx.reply('❌ No active session to fork.')
+            return
+          }
+          const forkedSessionId = await sessionManager.forkSession(sessionId)
+          sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
+          sessionManager.attachChannel(ctx.platform, ctx.channelUserId, forkedSessionId)
+          ctx.reply(`✅ Forked session \`${sessionId}\` → \`${forkedSessionId}\`\nMessages: ${session.history.length}`)
+          break
+        }
+
+        case 'delete': {
+          if (subArgs.length === 0) {
+            ctx.reply('Usage: /session delete <sessionId>\nUse /session list to see available sessions.')
+            return
+          }
+
+          const targetSessionId = subArgs[0]
+
+          if (targetSessionId === sessionId) {
+            ctx.reply('❌ Cannot delete current session. Use /session clear to clear history or /attach to switch to another session first.')
+            return
+          }
+
+          const deleted = await sessionManager.deleteSession(targetSessionId)
+
+          if (deleted) {
+            ctx.reply(`✅ Session \`${targetSessionId}\` deleted.`)
+          } else {
+            ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
+          }
+          break
+        }
+
+        case 'clear': {
+          if (!sessionId) {
+            ctx.reply('❌ No active session to clear.')
+            return
+          }
+          await sessionManager.clearSession(sessionId)
+          sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
+          ctx.reply('Session cleared.')
+          break
+        }
+
+        case 'rename': {
+          if (!sessionId || !session) {
+            ctx.reply('❌ No active session to rename.')
+            return
+          }
+          if (subArgs.length === 0) {
+            ctx.reply('Usage: /session rename <new name>\nExample: /session rename My Project\nUse /session rename - to clear the name.')
+            return
+          }
+
+          const newName = subArgs.join(' ')
+
+          try {
+            if (newName === '-') {
+              session.displayName = undefined
+              await sessionManager.saveSession(sessionId)
+              ctx.reply('✅ Session display name cleared.')
+            } else {
+              session.displayName = newName.trim()
+              await sessionManager.saveSession(sessionId)
+              ctx.reply(`✅ Session renamed to "${session.displayName}".`)
+            }
+          } catch (e: any) {
+            ctx.reply(`❌ Rename failed: ${e.message}`)
+          }
+          break
+        }
+
+        case 'isolated': {
+          if (!sessionId || !session) {
+            ctx.reply('❌ No active session.')
+            return
+          }
+
+          if (subArgs.length === 0) {
+            const node = session.currentNode || 'master'
+            const state = session.isolated ? 'on' : 'off'
+            ctx.reply(`🔒 Isolated: \`${state}\` (node: \`${node}\`)`)
+            return
+          }
+
+          const mode = subArgs[0]
+          if (mode !== 'on' && mode !== 'off') {
+            ctx.reply('Usage: /session isolated [on|off] [node]')
+            return
+          }
+
+          if (mode === 'on') {
+            const nodeId = subArgs[1]
+            if (nodeId) {
+              if (nodeId !== 'master' && !nodesManager.getNode(nodeId)) {
+                ctx.reply(`❌ Node \`${nodeId}\` not found.`)
+                return
+              }
+              session.currentNode = nodeId
+            }
+            session.isolated = true
+            await sessionManager.saveSession(sessionId)
+            ctx.reply(`✅ Isolated mode enabled (node: \`${session.currentNode || 'master'}\`)`)
+            return
+          }
+
+          session.isolated = false
+          await sessionManager.saveSession(sessionId)
+          ctx.reply('✅ Isolated mode disabled.')
+          break
+        }
+
+        case 'index': {
+          if (!sessionId || !session) {
+            ctx.reply('❌ No active session to index.')
+            return
+          }
+          const lastPos = session.vectorIndexPosition || 0
+          const totalMessages = session.history.length
+
+          if (lastPos >= totalMessages) {
+            ctx.reply('✅ All messages are already indexed.')
+            return
+          }
+
+          const toIndex = totalMessages - lastPos
+          ctx.reply(`🔄 Indexing ${toIndex} messages...`)
+
+          try {
+            await sessionManager.forceIndexSession(sessionId)
+            ctx.reply(`✅ Indexed ${toIndex} messages successfully.`)
+          } catch (e: any) {
+            ctx.reply(`❌ Indexing failed: ${e.message}`)
+          }
+          break
+        }
+
+        case 'move': {
+          if (!sessionId || !session) {
+            ctx.reply('❌ No active session to move.')
+            return
+          }
+          if (subArgs.length === 0) {
+            ctx.reply('Usage: /session move [agent/]<new-session-id>\nExample: /session move my-project\nExample: /session move my-agent/main')
+            return
+          }
+
+          const targetId = subArgs[0]
+          
+          try {
+            await tools.move_session({ 
+              sessionId: sessionId,
+              newSessionId: targetId 
+            }, { 
+              session,
+              sessionId: sessionId,
+              broadcast: async (msg: string) => ctx.reply(msg)
+            })
+            // move_session already sends reply via broadcast
+          } catch (e: any) {
+            ctx.reply(`❌ Move failed: ${e.message}`)
+          }
+          break
+        }
+
+        case 'parent': {
+          if (subArgs.length === 0) {
+            ctx.reply('Usage: /session parent <parent-session-id> [child-session-id]')
+            return
+          }
+
+          const parentSessionId = subArgs[0]
+          const targetChildSessionId = subArgs[1] || sessionId
+
+          if (!targetChildSessionId) {
+            ctx.reply('❌ No active session. Specify [child-session-id] explicitly.')
+            return
+          }
+
+          try {
+            const result = await sessionManager.setSessionParent(targetChildSessionId, parentSessionId)
+            const childLabel = targetChildSessionId === sessionId
+              ? 'Current session'
+              : `Session \`${result.childSessionId}\``
+
+            if (result.previousParentSessionId === result.parentSessionId) {
+              ctx.reply(`ℹ️ ${childLabel} already uses parent \`${result.parentSessionId}\`.`)
+              return
+            }
+
+            let resp = `✅ ${childLabel} parent set to \`${result.parentSessionId}\`.`
+            if (result.previousParentSessionId) {
+              resp += `\nPrevious parent: \`${result.previousParentSessionId}\``
+            }
+            ctx.reply(resp)
+          } catch (e: any) {
+            ctx.reply(`❌ Parent update failed: ${e.message}`)
+          }
+          break
+        }
+
+        case 'unparent': {
+          const targetChildSessionId = subArgs[0] || sessionId
+
+          if (!targetChildSessionId) {
+            ctx.reply('❌ No active session. Specify [child-session-id] explicitly.')
+            return
+          }
+
+          try {
+            const result = await sessionManager.setSessionParent(targetChildSessionId)
+            const childLabel = targetChildSessionId === sessionId
+              ? 'Current session'
+              : `Session \`${result.childSessionId}\``
+
+            if (!result.previousParentSessionId) {
+              ctx.reply(`ℹ️ ${childLabel} has no parent session.`)
+              return
+            }
+
+            ctx.reply(`✅ ${childLabel} detached from parent session \`${result.previousParentSessionId}\`.`)
+          } catch (e: any) {
+            ctx.reply(`❌ Unparent failed: ${e.message}`)
+          }
+          break
+        }
+
+        case 'archive': {
+          const targetSessionId = subArgs.length > 0 ? subArgs[0] : sessionId
+          
+          if (!targetSessionId) {
+            ctx.reply('❌ No session specified and no active session.')
+            return
+          }
+
+          const targetSession = await sessionManager.getSession(targetSessionId)
+          if (!targetSession) {
+            ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
+            return
+          }
+
+          // Archive by setting the archived flag
+          targetSession.archived = true
+          await sessionManager.saveSession(targetSessionId)
+
+          ctx.reply(`✅ Session \`${targetSessionId}\` archived.`)
+          break
+        }
+
+        case 'unarchive': {
+          const targetSessionId = subArgs.length > 0 ? subArgs[0] : sessionId
+          
+          if (!targetSessionId) {
+            ctx.reply('❌ No session specified and no active session.')
+            return
+          }
+
+          const targetSession = await sessionManager.getSession(targetSessionId)
+          if (!targetSession) {
+            ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
+            return
+          }
+
+          // Unarchive by removing the archived flag
+          targetSession.archived = false
+          await sessionManager.saveSession(targetSessionId)
+
+          ctx.reply(`✅ Session \`${targetSessionId}\` unarchived.`)
+          break
+        }
+
+        default:
+          ctx.reply(`❌ Unknown subcommand: ${subcommand}\nUse \`/session\` to see available commands.`)
+      }
+    }
+  },
+  '/attach': {
+    description: 'Attach to session. `args: <sessionId>`',
+    requiresSession: false,
+    handler: async (ctx, args) => {
+      if (args.length === 0) {
+        ctx.reply('Usage: /attach <sessionId>\nUse /sessions to see available sessions.')
+        return
+      }
+
+      const targetSessionId = args[0]
+      const allSessions = sessionManager.getAllSessions()
+
+      if (!allSessions.has(targetSessionId)) {
+        ctx.reply(`Session \`${targetSessionId}\` not found. Use /sessions to see available sessions.`)
+        return
+      }
+
+      sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
+      sessionManager.attachChannel(ctx.platform, ctx.channelUserId, targetSessionId)
+
+      ctx.reply(`✅ Attached to session \`${targetSessionId}\``)
+    }
+  },
+  '/team': {
+    description: 'Manage agent teams',
+    requiresSession: true,
+    handler: async (ctx, args, sessionId, session) => {
+      if (!sessionId || !session) return
+
+      const subcommand = args[0]
+      const subArgs = args.slice(1)
+
+      if (!subcommand) {
+        let resp = '👥 *Team Commands*\n\n'
+        resp += '`/team create <template>` - Create agent team\n'
+        resp += '`/team list` - List team templates\n'
+        resp += '`/team status` - Show current team status\n\n'
+        resp += '*Available Templates:*\n'
+        resp += '• `dev-team` - Developer + Tester\n'
+        resp += '• `full-team` - Developer + Tester + PM\n'
+        resp += '• `parallel-dev` - 3 parallel developers\n'
+        ctx.reply(resp)
+        return
+      }
+
+      switch (subcommand) {
+        case 'create': {
+          if (subArgs.length === 0) {
+            ctx.reply('Usage: /team create <template>\\nAvailable templates: dev-team, full-team, parallel-dev')
+            return
+          }
+
+          const template = subArgs[0]
+          const teamMembers: Array<{agentName: string, displayName: string, rolePrompt: string}> = []
+
+          // Generate unique team ID based on timestamp
+          const teamId = `team-${Date.now().toString(36)}`
+
+          switch (template) {
+            case 'dev-team':
+              teamMembers.push(
+                { 
+                  agentName: `${teamId}-dev`, 
+                  displayName: '开发者', 
+                  rolePrompt: 'You are a developer agent. Your role is to implement features, write code, and solve technical problems. Focus on code quality, best practices, and efficient implementation.' 
+                },
+                { 
+                  agentName: `${teamId}-test`, 
+                  displayName: '测试员', 
+                  rolePrompt: 'You are a tester agent. Your role is to test functionality, find bugs, and ensure quality. Focus on comprehensive testing, edge cases, and clear bug reports.' 
+                }
+              )
+              break
+            case 'full-team':
+              teamMembers.push(
+                { 
+                  agentName: `${teamId}-dev`, 
+                  displayName: '开发者', 
+                  rolePrompt: 'You are a developer agent. Your role is to implement features, write code, and solve technical problems. Focus on code quality, best practices, and efficient implementation.' 
+                },
+                { 
+                  agentName: `${teamId}-test`, 
+                  displayName: '测试员', 
+                  rolePrompt: 'You are a tester agent. Your role is to test functionality, find bugs, and ensure quality. Focus on comprehensive testing, edge cases, and clear bug reports.' 
+                },
+                { 
+                  agentName: `${teamId}-pm`, 
+                  displayName: '产品经理', 
+                  rolePrompt: 'You are a product manager agent. Your role is to define product direction, prioritize features, and ensure user needs are met. Focus on user experience, product strategy, and clear requirements.' 
+                }
+              )
+              break
+            case 'parallel-dev':
+              teamMembers.push(
+                { 
+                  agentName: `${teamId}-dev1`, 
+                  displayName: '开发者1', 
+                  rolePrompt: 'You are developer #1. Work on assigned tasks independently and efficiently. Coordinate with other developers when needed.' 
+                },
+                { 
+                  agentName: `${teamId}-dev2`, 
+                  displayName: '开发者2', 
+                  rolePrompt: 'You are developer #2. Work on assigned tasks independently and efficiently. Coordinate with other developers when needed.' 
+                },
+                { 
+                  agentName: `${teamId}-dev3`, 
+                  displayName: '开发者3', 
+                  rolePrompt: 'You are developer #3. Work on assigned tasks independently and efficiently. Coordinate with other developers when needed.' 
+                }
+              )
+              break
+            default:
+              ctx.reply(`❌ Unknown template: ${template}\\nAvailable: dev-team, full-team, parallel-dev`)
+              return
+          }
+
+          ctx.reply(`🔄 Creating ${template} with ${teamMembers.length} agent members...\\nTeam ID: ${teamId}`)
+
+          try {
+            const createdMembers: string[] = []
+
+            for (const member of teamMembers) {
+              const soulContent = `# SOUL.md - Who You Are
+
+*You are ${member.displayName}, working as part of a team.*
+
+## Role
+${member.rolePrompt}
+
+## Working Style
+- Collaborate with team members using send_to_session
+- Report progress and results clearly
+- Ask for clarification when needed
+`
+
+              const result = await sessionManager.createAgentWithMainSession({
+                agentName: member.agentName,
+                initialMemoryFiles: { 'SOUL.md': soulContent },
+                displayName: member.displayName,
+                currentNode: session?.currentNode || 'master',
+                model: session?.model
+              })
+
+              createdMembers.push(`\`${result.mainSessionId}\` (${member.displayName})`)
+            }
+
+            let resp = `✅ Team created successfully!\\n\\n`
+            resp += `*Team ID:* \`${teamId}\`\\n\\n`
+            resp += `*Members (Agents):*\\n${createdMembers.join('\\n')}\\n\\n`
+            resp += `Each member is an independent agent with their own memory and role.\\n`
+            resp += `Use \`send_to_session({sessionId: "agent/main", message: "..."})\` to assign tasks.`
+            ctx.reply(resp)
+          } catch (e: any) {
+            ctx.reply(`❌ Team creation failed: ${e.message}`)
+          }
+          break
+        }
+
+
+        case 'list': {
+          let resp = '👥 *Available Team Templates*\n\n'
+          resp += '**dev-team** - Developer + Tester\n'
+          resp += '  • Perfect for feature development with testing\n'
+          resp += '  • 2 members: dev, test\n\n'
+          resp += '**full-team** - Developer + Tester + PM\n'
+          resp += '  • Complete team with product management\n'
+          resp += '  • 3 members: dev, test, pm\n\n'
+          resp += '**parallel-dev** - 3 Parallel Developers\n'
+          resp += '  • For parallel task execution\n'
+          resp += '  • 3 members: dev1, dev2, dev3\n\n'
+          resp += 'Use `/team create <template>` to create a team.'
+          ctx.reply(resp)
+          break
+        }
+
+        case 'status': {
+          // Show current session's child sessions (team members)
+          const children = sessionManager.getChildSessionIds(session.id)
+          
+          if (children.length === 0) {
+            ctx.reply('❌ No team members found. Use `/team create` to create a team.')
+            return
+          }
+
+          let resp = '👥 *Current Team Status*\n\n'
+          for (const childId of children) {
+            const childSession = sessionManager.getAllSessions().get(childId)
+            if (childSession) {
+              const displayName = childSession.displayName || childId
+              const busy = childSession.busy ? '🔄 busy' : '✅ idle'
+              const msgCount = childSession.meta?.messageCount || childSession.history.length
+              resp += `**${displayName}** (\`${childId}\`)\n`
+              resp += `  Status: ${busy} | Messages: ${msgCount}\n\n`
+            }
+          }
+          ctx.reply(resp)
+          break
+        }
+
+        default:
+          ctx.reply(`❌ Unknown subcommand: ${subcommand}\nUse \`/team\` to see available commands.`)
+      }
+    }
+  },
+
+  '/agent': {
+    description: 'Manage agents',
+    requiresSession: false,
+    handler: async (ctx, args) => {
+      const subcommand = args[0]
+      const subArgs = args.slice(1)
+
+      if (!subcommand) {
+        let resp = '🤖 *Agent Commands*\n\n'
+        resp += '`/agent list` - List all agents\n'
+        resp += '`/agent create <name> [--no-main]` - Create new agent (optionally without creating main session)\n'
+        resp += '`/agent inherit <agent> <parent-agent|none>` - Set or clear shared memory inheritance\n'
+        resp += '`/agent delete <name> [--confirm]` - Delete agent (requires confirmation)\n'
+        ctx.reply(resp)
+        return
+      }
+
+      switch (subcommand) {
+        case 'list': {
+          const agentsDir = path.join(process.cwd(), 'agents')
+          
+          if (!await fs.pathExists(agentsDir)) {
+            ctx.reply('No agents found.')
+            return
+          }
+          
+          const entries = await fs.readdir(agentsDir, { withFileTypes: true })
+          const agents: Array<{name: string, sessionCount: number, inherit?: string, skills?: string[]}> = []
+          
+          for (const entry of entries) {
+            if (entry.isDirectory()) {
+              const agentName = entry.name
+              const sessions = Array.from(sessionManager.getAllSessions().values())
+                .filter(sess => (sess.agent || 'main') === agentName)
+              
+              agents.push({
+                name: agentName,
+                sessionCount: sessions.length,
+                inherit: sessionManager.getAgentMetadata(agentName).inherit,
+                skills: sessionManager.getAgentSkills(agentName)
+              })
+            }
+          }
+          
+          if (agents.length === 0) {
+            ctx.reply('No agents found.')
+            return
+          }
+          
+          let resp = `🤖 *Agents* (${agents.length})\n\n`
+          for (const agent of agents) {
+            resp += `\`${agent.name}\``
+            if (agent.sessionCount > 0) {
+              resp += ` - ${agent.sessionCount} session${agent.sessionCount > 1 ? 's' : ''}`
+            }
+            if (agent.inherit) {
+              resp += ` - inherits \`${agent.inherit}\``
+            }
+            if (agent.skills && agent.skills.length > 0) {
+              resp += ` - skills: ${agent.skills.map(skill => `\`${skill}\``).join(', ')}`
+            }
+            resp += '\n'
+          }
+          ctx.reply(resp)
+          break
+        }
+
+        case 'create': {
+          if (subArgs.length === 0) {
+            ctx.reply('Usage: /agent create <name> [--no-main]\nExample: /agent create my-assistant\nExample: /agent create my-agent --no-main')
+            return
+          }
+
+          const agentName = subArgs[0]
+          const createMainSession = !subArgs.includes('--no-main')
+          
+          try {
+            sessionManager.validateAgentName(agentName)
+
+            const soulContent = `# SOUL.md - Who You Are
+
+*You are ${agentName}, an AI assistant.*
+
+## Core Identity
+- Helpful and precise
+- Focus on your assigned tasks
+
+## Working Style
+- Think before acting
+- Collaborate using send_to_session when needed
+`
+
+            const result = await sessionManager.createAgentWithMainSession({
+              agentName,
+              initialMemoryFiles: { 'SOUL.md': soulContent },
+              currentNode: 'master',
+              createMainSession
+            })
+
+            let resp = `✅ Agent "${agentName}" created successfully!\n\nAgent folder: \`agents/${agentName}\``
+            resp += createMainSession
+              ? `\nMain session: \`${result.mainSessionId}\``
+              : '\nMain session: not created (`--no-main`)'
+            ctx.reply(resp)
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to create agent: ${e.message}`)
+          }
+          break
+        }
+
+        case 'inherit': {
+          if (subArgs.length < 2) {
+            ctx.reply('Usage: /agent inherit <agent> <parent-agent|none>')
+            return
+          }
+
+          const agentName = subArgs[0]
+          const inheritArg = subArgs[1]
+          const inheritAgentName = inheritArg === 'none' ? undefined : inheritArg
+
+          try {
+            const result = await sessionManager.setAgentInherit(agentName, inheritAgentName)
+            const chain = sessionManager.getAgentInheritanceChain(agentName)
+            let resp = inheritAgentName
+              ? `✅ Agent "${agentName}" now inherits shared memory from \`${inheritAgentName}\`.`
+              : `✅ Cleared shared memory inheritance for agent "${agentName}".`
+
+            resp += `\nInheritance chain: ${chain.map(name => `\`${name}\``).join(' -> ')}`
+            if (result.affectedSessions.length > 0) {
+              resp += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`
+            }
+            ctx.reply(resp)
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to update inherit: ${e.message}`)
+          }
+          break
+        }
+
+        case 'delete': {
+          if (subArgs.length === 0) {
+            ctx.reply('Usage: /agent delete <name> [--confirm]\nExample: /agent delete my-assistant --confirm\n\n⚠️ This will delete the agent and all its sessions permanently!')
+            return
+          }
+
+          const agentName = subArgs[0]
+          const confirmed = subArgs.includes('--confirm')
+
+          if (!confirmed) {
+            ctx.reply(`⚠️ Are you sure you want to delete agent "${agentName}"?\n\nThis will:\n- Delete all sessions for this agent\n- Delete the agent folder and memory\n- Cannot be undone\n\nTo confirm, run:\n\`/agent delete ${agentName} --confirm\``)
+            return
+          }
+
+          const agentDir = path.join(process.cwd(), 'agents', agentName)
+          
+          if (!await fs.pathExists(agentDir)) {
+            ctx.reply(`❌ Agent "${agentName}" not found.`)
+            return
+          }
+
+          try {
+            // Delete all sessions for this agent
+            const sessionsToDelete = Array.from(sessionManager.getAllSessions().keys())
+              .filter(sid => sid.startsWith(`${agentName}/`))
+            
+            for (const sid of sessionsToDelete) {
+              await sessionManager.deleteSession(sid)
+            }
+            
+            // Delete agent directory
+            await fs.remove(agentDir)
+            
+            ctx.reply(`✅ Agent "${agentName}" deleted successfully.\n\nDeleted ${sessionsToDelete.length} session(s).`)
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to delete agent: ${e.message}`)
+          }
+          break
+        }
+
+        default:
+          ctx.reply(`❌ Unknown subcommand: ${subcommand}\nUse \`/agent\` to see available commands.`)
+      }
+    }
+  },
+
+  '/skill': {
+    description: 'Manage skills: list, attach, detach, show',
+    requiresSession: false,
+    handler: async (ctx, args) => {
+      const subcommand = args[0]
+      const subArgs = args.slice(1)
+
+      if (!subcommand) {
+        let resp = '🧩 *Skill Commands*\n\n'
+        resp += '`/skill list` - List available skills\n'
+        resp += '`/skill attach <agent> <skill>` - Attach a skill to an agent\n'
+        resp += '`/skill detach <agent> <skill>` - Detach a skill from an agent\n'
+        resp += '`/skill show <skill>` - Show skill documents\n'
+        ctx.reply(resp)
+        return
+      }
+
+      switch (subcommand) {
+        case 'list': {
+          const skillList = await skills.listSkills()
+          if (skillList.length === 0) {
+            ctx.reply('No skills found.')
+            return
+          }
+
+          let resp = `🧩 *Skills* (${skillList.length})\n\n`
+          for (const skill of skillList) {
+            resp += `\`${skill.name}\``
+            if (skill.description) {
+              resp += ` - ${skill.description}`
+            }
+            if (skill.memoryFiles.length > 0) {
+              resp += ` (${skill.memoryFiles.length} file${skill.memoryFiles.length > 1 ? 's' : ''})`
+            }
+            resp += '\n'
+          }
+          ctx.reply(resp)
+          break
+        }
+
+        case 'attach': {
+          if (subArgs.length < 2) {
+            ctx.reply('Usage: /skill attach <agent> <skill>')
+            return
+          }
+
+          const agentName = subArgs[0]
+          const skillName = subArgs[1]
+
+          try {
+            const result = await sessionManager.attachAgentSkill(agentName, skillName)
+            let resp = result.changed
+              ? `✅ Skill \`${skillName}\` attached to agent \`${agentName}\`.`
+              : `ℹ️ Agent \`${agentName}\` already has skill \`${skillName}\`.`
+            resp += result.skills.length > 0
+              ? `\nSkills: ${result.skills.map(skill => `\`${skill}\``).join(', ')}`
+              : '\nSkills: (none)'
+            if (result.affectedSessions.length > 0) {
+              resp += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`
+            }
+            ctx.reply(resp)
+          } catch (e: any) {
+            ctx.reply(`❌ Skill attach failed: ${e.message}`)
+          }
+          break
+        }
+
+        case 'detach': {
+          if (subArgs.length < 2) {
+            ctx.reply('Usage: /skill detach <agent> <skill>')
+            return
+          }
+
+          const agentName = subArgs[0]
+          const skillName = subArgs[1]
+
+          try {
+            const result = await sessionManager.detachAgentSkill(agentName, skillName)
+            let resp = result.changed
+              ? `✅ Skill \`${skillName}\` detached from agent \`${agentName}\`.`
+              : `ℹ️ Agent \`${agentName}\` does not have skill \`${skillName}\`.`
+            resp += result.skills.length > 0
+              ? `\nSkills: ${result.skills.map(skill => `\`${skill}\``).join(', ')}`
+              : '\nSkills: (none)'
+            if (result.affectedSessions.length > 0) {
+              resp += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`
+            }
+            ctx.reply(resp)
+          } catch (e: any) {
+            ctx.reply(`❌ Skill detach failed: ${e.message}`)
+          }
+          break
+        }
+
+        case 'show': {
+          if (subArgs.length < 1) {
+            ctx.reply('Usage: /skill show <skill>')
+            return
+          }
+
+          const skillName = subArgs[0]
+
+          try {
+            const { info, documents } = await skills.loadSkillDocuments(skillName)
+            let resp = `🧩 *Skill:* \`${info.name}\``
+            if (info.description) {
+              resp += `\n${info.description}`
+            }
+            resp += `\nManifest: \`${info.manifestPath}\``
+
+            if (documents.length === 0) {
+              resp += '\n\n(No skill memory documents found.)'
+            } else {
+              for (const document of documents) {
+                resp += `\n\nFILE: \`${document.filePath}\`\n\n${document.content}`
+              }
+            }
+
+            ctx.reply(resp)
+          } catch (e: any) {
+            ctx.reply(`❌ Skill show failed: ${e.message}`)
+          }
+          break
+        }
+
+        default:
+          ctx.reply(`❌ Unknown subcommand: ${subcommand}\nUse \`/skill\` to see available commands.`)
+      }
+    }
+  },
+
+  '/stop': {
+    description: 'Stop current run',
+    requiresSession: true,
+    handler: async (ctx, _args, sessionId, session) => {
+      if (!sessionId || !session) return
+      if (!session.busy) {
+        ctx.reply('⚠️ Session is not currently running.')
+        return
+      }
+
+      try {
+        session.stopping = true
+        await sessionManager.saveSession(sessionId)
+        ctx.reply('🛑 Stop signal sent. The session will stop after the current tool call completes.')
+      } catch (e: any) {
+        ctx.reply(`❌ Stop failed: ${e.message}`)
+      }
+    }
+  },
+  '/retry': {
+    description: 'Retry last request (reactivate session without adding new message)',
+    requiresSession: true,
+    handler: async (ctx, _args, sessionId, session) => {
+      if (!sessionId || !session) return
+      if (session.busy) {
+        ctx.reply('⚠️ Session is already running.')
+        return
+      }
+
+      if (session.history.length === 0) {
+        ctx.reply('⚠️ No history to retry.')
+        return
+      }
+
+      try {
+        ctx.reply('🔄 Retrying last request...')
+        await sessionManager.retrySession(sessionId)
+      } catch (e: any) {
+        ctx.reply(`❌ Retry failed: ${e.message}`)
+      }
+    }
+  },
+  '/node': {
+    description: 'List or switch node. `args: [node-id]`',
+    requiresSession: true,
+    handler: async (ctx, args, sessionId, session) => {
+      if (!sessionId || !session) return
+      
+      // No args: list nodes
+      if (args.length === 0) {
+        const nodes = nodesManager.listNodes()
+        const currentNode = session.currentNode || 'master'
+
+        if (nodes.length === 0) {
+          ctx.reply('📋 No remote nodes registered.\n\n✅ Master node (local) is always available.')
+          return
+        }
+
+        let reply = `📋 **Available Nodes** (${nodes.length + 1} total):\n\n`
+
+        reply += currentNode === 'master' ? '✅ ' : '  '
+        reply += '`master` (local)\n'
+
+        for (const node of nodes) {
+          if (node.id === 'master') continue
+          reply += currentNode === node.id ? '✅ ' : '  '
+          reply += `\`${node.id}\` - Last activity: ${new Date(node.lastActivity).toLocaleString()}\n`
+        }
+
+        reply += `\n💡 Current node: \`${currentNode}\``
+
+        ctx.reply(reply)
+        return
+      }
+
+      // With args: switch node
+      const nodeId = args[0]
+
+      if (nodeId !== 'master' && !nodesManager.getNode(nodeId)) {
+        ctx.reply(`❌ Node \`${nodeId}\` not found.\n\nUse \`/node\` to list available nodes.`)
+        return
+      }
+
+      try {
+        nodesManager.setCurrentNode(sessionId, nodeId)
+        session.currentNode = nodeId
+        await sessionManager.saveSession(sessionId)
+        ctx.reply(`✅ Switched to node \`${nodeId}\`\n\nAll file/exec/browser tools will now execute on this node.`)
+      } catch (e: any) {
+        ctx.reply(`❌ Failed to switch node: ${e.message}`)
+      }
+    }
+  },
+  '/messages': {
+    description: 'Show message previews. `args: <num> | <start> <end>`',
+    requiresSession: true,
+    showInTelegram: false,
+    handler: async (ctx, args, sessionId, session) => {
+      if (!sessionId || !session) return
+      const totalMessages = session.history.length
+      const previewLength = 100
+
+      let start: number | undefined
+      let end: number | undefined
+
+      if (args.length === 0) {
+        ctx.reply(messagesUsage)
+        return
+      }
+
+      const n1 = parseInt(args[0], 10)
+      if (isNaN(n1)) {
+        ctx.reply(messagesUsage)
+        return
+      }
+
+      if (args.length === 1) {
+        if (n1 === 0) {
+          ctx.reply(messagesUsage)
+          return
+        }
+        if (n1 > 0) {
+          start = 0
+          end = Math.min(n1, totalMessages)
+        } else {
+          const count = Math.min(Math.abs(n1), totalMessages)
+          start = Math.max(0, totalMessages - count)
+          end = totalMessages
+        }
+      } else {
+        const n2 = parseInt(args[1], 10)
+        if (isNaN(n2)) {
+          ctx.reply(messagesUsage)
+          return
+        }
+
+        start = n1 < 0 ? totalMessages + n1 : n1
+        end = n2 < 0 ? totalMessages + n2 : n2
+
+        start = Math.max(0, Math.min(start, totalMessages))
+        end = Math.max(0, Math.min(end, totalMessages))
+      }
+
+      if (end === undefined || start === undefined || end < start) {
+        ctx.reply('No messages found in the specified range.')
+        return
+      }
+
+      const messages = await sessionManager.getSessionMessages(sessionId, start, end - start)
+      const preview = formatSessionMessagesPreview(sessionId, messages, start, totalMessages, previewLength)
+      ctx.reply(preview)
+    }
+  },
+  '/model': {
+    description: 'List or switch model. `args: [name|default]`',
+    requiresSession: true,
+    handler: async (ctx, args, sessionId, session) => {
+      if (!sessionId || !session) return
+      const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(session.model)
+      const modelKeys = modelsConfig.displayModels || Object.keys(modelsConfig.models || {})
+
+      if (args.length === 0) {
+        let resp = `🤖 *Models*\n\n`
+        resp += modelKeys.map(k => {
+          const tags: string[] = []
+          if (k === defaultKey) tags.push('default')
+          if (k === currentKey) tags.push('current')
+          const suffix = tags.length ? ` (${tags.join(', ')})` : ''
+          return `- \`${k}\`${suffix}`
+        }).join('\n')
+        ctx.reply(resp)
+        return
+      }
+
+      const target = args[0]
+      if (target === 'default') {
+        session.model = undefined
+        await sessionManager.saveSession(sessionId)
+        ctx.reply('✅ Model reset to default.')
+        return
+      }
+
+      // Try exact match first
+      if (modelsConfig.models[target]) {
+        session.model = target
+        await sessionManager.saveSession(sessionId)
+        ctx.reply(`✅ Model switched to \`${target}\`.`)
+        return
+      }
+
+      // Try partial match
+      const normalizedInput = target.toLowerCase()
+      const matches = modelKeys.filter(k => k.toLowerCase().includes(normalizedInput))
+
+      if (matches.length === 0) {
+        ctx.reply(`❌ No models matching \`${target}\`. Use /model to list available models.`)
+        return
+      }
+
+      if (matches.length === 1) {
+        session.model = matches[0]
+        await sessionManager.saveSession(sessionId)
+        ctx.reply(`✅ Model switched to \`${matches[0]}\`.`)
+        return
+      }
+
+      // Multiple matches
+      let resp = `❌ Multiple models match \`${target}\`:\n\n`
+      resp += matches.map(k => `- \`${k}\``).join('\n')
+      resp += `\n\nPlease be more specific.`
+      ctx.reply(resp)
+    }
+  },
+  '/delete-messages': {
+    description: 'Delete messages from current session. `args: <num>` (positive: oldest, negative: newest)',
+    requiresSession: true,
+    showInTelegram: false,
+    handler: async (ctx, args, sessionId) => {
+      if (!sessionId) return
+      if (args.length === 0) {
+        ctx.reply(deleteMessagesUsage)
+        return
+      }
+
+      const num = parseInt(args[0], 10)
+      if (isNaN(num) || num === 0) {
+        ctx.reply(deleteMessagesUsage)
+        return
+      }
+
+      const result = await sessionManager.deleteMessages(sessionId, num)
+      ctx.reply(`✅ Deleted ${result.deleted} messages. Remaining: ${result.remaining}.`)
+    }
+  },
+  '/verbose': {
+    description: 'Toggle verbose mode (show tool calls). `args: [on|off]`',
+    requiresSession: true,
+    handler: async (ctx, args, sessionId) => {
+      if (!sessionId) return
+      const session = await sessionManager.getSession(sessionId)
+      
+      if (args.length === 0) {
+        const current = session.verbose ? 'on' : 'off'
+        ctx.reply(`Verbose mode is currently *${current}*.`)
+        return
+      }
+      
+      const target = args[0].toLowerCase()
+      if (target === 'on') {
+        session.verbose = true
+        await sessionManager.saveSession(sessionId)
+        ctx.reply('✅ Verbose mode enabled. Tool calls will be shown.')
+      } else if (target === 'off') {
+        session.verbose = false
+        await sessionManager.saveSession(sessionId)
+        ctx.reply('✅ Verbose mode disabled. Tool calls will be hidden.')
+      } else {
+        ctx.reply('Usage: /verbose [on|off]')
+      }
+    }
+  },
+  '/channel': {
+    description: 'Manage channel settings. `args: mode <push-only|normal>`',
+    requiresSession: false,
+    handler: async (ctx, args) => {
+      if (args.length === 0) {
+        ctx.reply('Usage: /channel mode <push-only|normal>')
+        return
+      }
+
+      const subcommand = args[0].toLowerCase()
+      
+      if (subcommand === 'mode') {
+        if (args.length < 2) {
+          // Show current mode
+          const config = sessionManager.getChannelConfig(ctx.platform, ctx.channelUserId)
+          const currentMode = config?.mode || 'normal'
+          ctx.reply(`Current channel mode: *${currentMode}*\nUsage: /channel mode <push-only|normal>`)
+          return
+        }
+
+        const mode = args[1].toLowerCase()
+        if (mode !== 'push-only' && mode !== 'normal') {
+          ctx.reply('Invalid mode. Use: push-only or normal')
+          return
+        }
+
+        try {
+          sessionManager.setChannelMode(ctx.platform, ctx.channelUserId, mode === 'push-only' ? 'push-only' : undefined)
+          ctx.reply(`✅ Channel mode set to *${mode}*`)
+        } catch (e: any) {
+          ctx.reply(`❌ Failed to set channel mode: ${e.message}`)
+        }
+      } else {
+        ctx.reply('Unknown subcommand. Usage: /channel mode <push-only|normal>')
+      }
+    }
+  }
+}

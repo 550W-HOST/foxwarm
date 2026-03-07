@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .min-h-screen {
+    min-height: 100dvh;
+  }
+}
+
+html, body {
+  /* Prevent iOS overscroll bounce */
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+  /* Prevent horizontal overflow */
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+/* Mobile: fixed positioning to prevent Safari address bar issues */
+@media (max-width: 768px) {
+  html, body {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+  }
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Prevent iOS Safari zoom on input focus and double-tap */
+  touch-action: manipulation;
+}
+
+/* Prevent iOS Safari zoom on input elements */
+input, textarea, select {
+  font-size: 16px !important;
+  touch-action: manipulation;
+}
+
+/* Prevent overscroll on root element */
+#root {
+  overscroll-behavior: none;
+  max-width: 100vw;
+  min-height: 100dvh;
+}

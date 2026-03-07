@@ -1,0 +1,17 @@
+/node_modules/
+/lib
+/state
+/workspace
+/agents
+/.env
+*.log
+.DS_Store
+
+# WebUI
+/packages/webui/node_modules
+/packages/webui/dist
+
+# Test environment
+/test/.env
+/test/state
+/test/workspace

@@ -1,0 +1,29 @@
+# Copy this file to `state/models.yaml` to customize your model list.
+# If `state/models.yaml` is missing, the app falls back to this template.
+#
+# Secrets usually belong in `.env`:
+# - OPENAI_API_KEY / OPENAI_BASE_URL
+# - ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL
+#
+# You can still override `apiKey` / `baseUrl` per entry below if needed.
+
+default: openai/gpt-4.1-mini
+models:
+  openai:
+    provider: openai
+    model:
+      - gpt-4.1-mini
+      - gpt-4o
+    contextLimit: 128000
+    # Optional per-entry overrides:
+    # baseUrl: https://api.openai.com/v1
+    # apiKey: sk-...
+
+  anthropic:
+    provider: anthropic
+    model:
+      - claude-3-7-sonnet-latest
+    contextLimit: 200000
+    # Optional per-entry overrides:
+    # baseUrl: https://api.anthropic.com
+    # apiKey: sk-ant-...
