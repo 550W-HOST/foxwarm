@@ -101,6 +101,9 @@ The runtime resolves model definitions in this order:
 2. `state/models.yaml`
 3. `templates/models.example.yaml`
 
+For normal setup, put each model provider's `apiKey` and `baseUrl` directly in `state/models.yaml`.
+`.env` is still useful for app-level settings, but the recommended public configuration style is to keep model connection settings in YAML.
+
 Minimal example:
 
 ```yaml
@@ -108,12 +111,16 @@ default: openai/gpt-4.1-mini
 models:
   openai:
     provider: openai
+    baseUrl: https://api.openai.com/v1
+    apiKey: sk-...
     model:
       - gpt-4.1-mini
       - gpt-4o
 
   anthropic:
     provider: anthropic
+    baseUrl: https://api.anthropic.com
+    apiKey: sk-ant-...
     model:
       - claude-3-7-sonnet-latest
 ```
