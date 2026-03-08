@@ -11,7 +11,7 @@ import { logger } from './common';
 import { getChannelInstance } from './channel';
 import * as llm from './llm';
 import { getSkillInfo, validateSkillName } from './skills';
-import { estimateSessionTokens, estimateSessionRangeTokens } from './tokenCount';
+import { estimateSessionTokens } from './tokenCount';
 import * as vector from './vector';
 import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, CHANNELS_FILE, getAgentDir, getSessionArchiveImagesDir, getSessionArchiveLogPath } from './config';
 import * as sessionAgentOps from './sessionAgentOps';
@@ -554,63 +554,13 @@ export function generateSessionId(): string {
 }
 
 /**
- * Resume indexing if it was interrupted
+ * Clear legacy history-based indexing state after upgrade to archive-based indexing.
  */
 async function resumeIndexingIfNeeded(sessionId: string, session: Session): Promise<void> {
   if (!session.indexingState?.inProgress) return;
-  
-  const state = session.indexingState;
-  const timeSinceStart = Date.now() - state.startTime;
-  
-  // If indexing started more than 5 minutes ago, consider it stale and restart
-  if (timeSinceStart > 5 * 60 * 1000) {
-    logger.warn({ sessionId, timeSinceStart }, 'Stale indexing state detected, restarting');
-    session.indexingState = undefined;
-    return;
-  }
-  
-  // Check if history version matches
-  if (state.historyVersion !== session.historyVersion) {
-    logger.warn({ sessionId, stateVersion: state.historyVersion, currentVersion: session.historyVersion }, 
-      'History version mismatch, discarding indexing state');
-    session.indexingState = undefined;
-    return;
-  }
-  
-  // Check if the history has changed since indexing started
-  if (state.endPosition !== session.history.length) {
-    logger.info({ sessionId, oldEnd: state.endPosition, newEnd: session.history.length }, 
-      'History changed during indexing, will re-index');
-    session.indexingState = undefined;
-    return;
-  }
-  
-  logger.info({ sessionId, startPos: state.startPosition, endPos: state.endPosition }, 
-    'Resuming interrupted indexing');
-  
-  // Resume indexing
-  const currentVersion = session.historyVersion || 0;
-  vector.indexNewMessages(sessionId, session.history, state.startPosition)
-    .then(newPos => {
-      // Check if history was modified during indexing
-      if (session.historyVersion !== currentVersion) {
-        logger.warn({ sessionId, oldVersion: currentVersion, newVersion: session.historyVersion }, 
-          'History was modified during resumed indexing (compact/clear), not updating vectorIndexPosition');
-        session.indexingState = undefined;
-        return;
-      }
-      
-      session.vectorIndexPosition = newPos;
-      session.indexingState = undefined;
-      logger.info({ sessionId, newPos }, 'Resumed indexing completed');
-      saveSession(sessionId).catch(e => 
-        logger.error({ err: e, sessionId }, 'Failed to save after resumed indexing')
-      );
-    })
-    .catch(e => {
-      logger.error({ err: e, sessionId }, 'Failed to resume indexing');
-      session.indexingState = undefined;
-    });
+
+  logger.info({ sessionId }, 'Discarding legacy history-based indexing state after archive indexing upgrade');
+  session.indexingState = undefined;
 }
 
 export async function getSession(sessionId: string): Promise<Session> {
@@ -750,6 +700,7 @@ function getSessionAgentOpsDeps() {
     saveChannels,
     updateAliasCache,
     updateChildSessionParentIds,
+    moveSessionArchiveIndex: vector.renameSessionArchiveIndex,
     getAgentMetadata,
     getSessionsMap: getAllSessions,
     getAttachmentsMap: getAllAttachments,
@@ -1357,62 +1308,6 @@ export async function saveSession(sessionId: string): Promise<void> {
       session.historyVersion = 0;
     }
 
-    // Index new messages if needed (async, non-blocking)
-    try {
-      const lastPos = session.vectorIndexPosition || 0;
-      const newMessageCount = session.history.length - lastPos;
-
-      if (newMessageCount > 0) {
-        let totalTokens = 0;
-        totalTokens = estimateSessionRangeTokens(session, lastPos);
-
-        if (totalTokens >= 10000) {
-          // Check if already indexing
-          if (!session.indexingState?.inProgress) {
-            // Mark as indexing
-            const currentVersion = session.historyVersion;
-            session.indexingState = {
-              inProgress: true,
-              startPosition: lastPos,
-              endPosition: session.history.length,
-              startTime: Date.now(),
-              historyVersion: currentVersion
-            };
-            
-            logger.info({ sessionId, newMessageCount, totalTokens, lastPos }, 'Starting async indexing');
-            
-            // Start async indexing (don't await)
-            vector.indexNewMessages(sessionId, session.history, lastPos)
-              .then(newPos => {
-                // Check if history was modified during indexing
-                if (session.historyVersion !== currentVersion) {
-                  logger.warn({ sessionId, oldVersion: currentVersion, newVersion: session.historyVersion }, 
-                    'History was modified during indexing (compact/clear), not updating vectorIndexPosition');
-                  session.indexingState = undefined;
-                  return;
-                }
-                
-                session.vectorIndexPosition = newPos;
-                session.indexingState = undefined;
-                logger.info({ sessionId, newPos }, 'Async indexing completed');
-                // Save session to persist updated position
-                saveSession(sessionId).catch(e => 
-                  logger.error({ err: e, sessionId }, 'Failed to save after indexing')
-                );
-              })
-              .catch(e => {
-                logger.error({ err: e, sessionId }, 'Failed to index messages');
-                session.indexingState = undefined;
-              });
-          } else {
-            logger.debug({ sessionId }, 'Indexing already in progress, skipping');
-          }
-        }
-      }
-    } catch (e) {
-      logger.error({ err: e, sessionId }, 'Failed to start indexing for session');
-    }
-
     // Update message count in metadata
     session.meta.messageCount = session.history.length;
 
@@ -1442,6 +1337,10 @@ export async function saveSession(sessionId: string): Promise<void> {
     
     // Save metadata (lightweight operation)
     await saveSessionsMetadata();
+
+    // Schedule archive-based vector indexing (non-blocking)
+    vector.scheduleSessionArchiveIndex(sessionId, Math.max(0, (session.nextMessageSeq || 1) - 1))
+      .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
     
     // Notify session list update
     if (onSessionListUpdated) {
@@ -1542,29 +1441,15 @@ export async function forceIndexSession(sessionId: string): Promise<void> {
   }
 
   try {
-    const lastPos = session.vectorIndexPosition || 0;
-    if (lastPos < session.history.length) {
-      logger.info({ lastPos, historyLength: session.history.length }, 'Force indexing all remaining messages');
-      const newPos = await vector.indexNewMessages(sessionId, session.history, lastPos);
-      session.vectorIndexPosition = newPos;
-      await saveSession(sessionId);
-    }
+    const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
+    logger.info({ sessionId, latestSeqHint }, 'Force indexing session archive');
+    await vector.indexSessionArchive(sessionId, latestSeqHint);
+    session.vectorIndexPosition = session.history.length;
+    session.indexingState = undefined;
+    await saveSession(sessionId);
   } catch (e) {
-    logger.error({ err: e }, 'Failed to force index messages');
+    logger.error({ err: e, sessionId }, 'Failed to force index session archive');
     throw e;
-  }
-}
-
-async function forceIndexSessionInternal(sessionId: string, session: Session) {
-  try {
-    const lastPos = session.vectorIndexPosition || 0;
-    if (lastPos < session.history.length) {
-      logger.info({ lastPos, historyLength: session.history.length }, 'Force indexing all remaining messages');
-      const newPos = await vector.indexNewMessages(sessionId, session.history, lastPos);
-      session.vectorIndexPosition = newPos;
-    }
-  } catch (e) {
-    logger.error({ err: e }, 'Failed to force index messages');
   }
 }
 
@@ -1580,8 +1465,6 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
   if (session.broadcast) {
     session.broadcast('⚠️ Context size limit reached, compacting history...');
   }
-
-  await forceIndexSessionInternal(sessionId, session);
 
   let splitIndex = Math.floor(history.length * (1 - keepPercent));
 
@@ -1636,8 +1519,6 @@ export async function compactHistoryWithSummary(sessionId: string, summary: stri
   if (session.broadcast) {
     session.broadcast('⚠️ Manual compaction starting...');
   }
-
-  await forceIndexSessionInternal(sessionId, session);
 
   let splitIndex = Math.floor(history.length * (1 - keepPercent));
 
@@ -1710,8 +1591,6 @@ export async function deleteMessages(sessionId: string, num: number): Promise<{ 
   if (!session) return { deleted: 0, remaining: 0 };
   if (!num || isNaN(num)) return { deleted: 0, remaining: session.history.length };
 
-  await forceIndexSessionInternal(sessionId, session);
-
   const originalLen = session.history.length;
   let deleted = 0;
 
@@ -1740,7 +1619,6 @@ export async function deleteMessages(sessionId: string, num: number): Promise<{ 
 export async function clearSession(sessionId: string): Promise<void> {
   const session = sessions.get(sessionId);
   if (session) {
-    await forceIndexSessionInternal(sessionId, session);
     // Increment history version to invalidate ongoing indexing
     session.historyVersion = (session.historyVersion || 0) + 1;
     session.indexingState = undefined;

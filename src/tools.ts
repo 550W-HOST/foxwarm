@@ -277,43 +277,60 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     });
 }
 
-async function tool_search_memory({ query, limit = 5 }: { query: string; limit?: number }) {
-    const results = await vector.search(query, limit, false);
+async function tool_search_memory({ query, limit = 5, scope = 'all' }: { query: string; limit?: number; scope?: 'all' | 'current-session' | 'current-agent' }, ctx?: ToolContext) {
+    let searchOptions: { sessionIds?: string[]; agent?: string } | undefined;
+
+    if (scope === 'current-session') {
+        if (!ctx?.sessionId) {
+            throw new Error('scope=current-session requires an active session context.');
+        }
+
+        const session = await sessionManager.getSession(ctx.sessionId);
+        await vector.indexSessionArchive(session.id, Math.max(0, (session.nextMessageSeq || 1) - 1));
+        searchOptions = { sessionIds: [session.id, ...(session.aliases || [])] };
+    } else if (scope === 'current-agent') {
+        if (!ctx?.sessionId) {
+            throw new Error('scope=current-agent requires an active session context.');
+        }
+
+        const session = await sessionManager.getSession(ctx.sessionId);
+        await vector.indexAllSessionArchives();
+        searchOptions = { agent: session.agent || 'main' };
+    } else {
+        await vector.indexAllSessionArchives();
+    }
+
+    const results = await vector.search(query, limit, false, searchOptions);
     if (!results || !Array.isArray(results) || results.length === 0) return 'No relevant memories found.';
 
     return results.map(r => {
-        // Use start_timestamp for the time range display
-        const ts = r.start_timestamp != null && !isNaN(Number(r.start_timestamp)) ? Number(r.start_timestamp) : null;
+        const ts = r.timestamp != null && !isNaN(Number(r.timestamp)) ? Number(r.timestamp) : null;
         const date = ts ? new Date(ts) : null;
         const dateStr = (date && !isNaN(date.getTime())) ? date.toISOString() : 'unknown';
-
-        // Chunks don't have 'role', they are text fragments. Display index range instead.
         const idStr = (r.id && typeof r.id === 'string') ? `${r.id.substring(0, 8)}...` : 'N/A';
-        const indexRange = r.start_index != null && r.end_index != null
-            ? `[msg ${r.start_index}-${r.end_index}]`
+        const chunkLabel = r.chunk_count > 1
+            ? `[chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]`
             : '';
 
-        return `[${dateStr}] ${indexRange} [ID: ${idStr}]\n${r.text}`;
+        return `[${dateStr}] [session: ${r.session_id}] [seq: ${r.seq}] ${chunkLabel} [ID: ${idStr}]\n${r.text}`.trim();
     }).join('\n\n---\n\n');
 }
 
 async function tool_get_memory_context({ timestamp, limit = 10 }: { timestamp: number; limit?: number }) {
+    await vector.indexAllSessionArchives();
     const results = await vector.getContextAround(timestamp, limit);
     if (!results || results.length === 0) return 'No context found around this time.';
 
     return results.map(r => {
-        // Use start_timestamp for the time range display
-        const ts = r.start_timestamp != null && !isNaN(Number(r.start_timestamp)) ? Number(r.start_timestamp) : null;
+        const ts = r.timestamp != null && !isNaN(Number(r.timestamp)) ? Number(r.timestamp) : null;
         const date = ts ? new Date(ts) : null;
         const dateStr = (date && !isNaN(date.getTime())) ? date.toISOString() : 'unknown';
-
-        // Chunks don't have 'role', they are text fragments. Display index range instead.
         const idStr = (r.id && typeof r.id === 'string') ? `${r.id.substring(0, 8)}...` : 'N/A';
-        const indexRange = r.start_index != null && r.end_index != null
-            ? `[msg ${r.start_index}-${r.end_index}]`
+        const chunkLabel = r.chunk_count > 1
+            ? `[chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]`
             : '';
 
-        return `[${dateStr}] ${indexRange} [ID: ${idStr}]\n${r.text}`;
+        return `[${dateStr}] [session: ${r.session_id}] [seq: ${r.seq}] ${chunkLabel} [ID: ${idStr}]\n${r.text}`.trim();
     }).join('\n\n---\n\n');
 }
 
@@ -615,12 +632,13 @@ export const definitions = [
         },
         {
             name: 'search_memory',
-            description: 'Search for relevant past conversations in the vector memory. Returns IDs and timestamps.',
+            description: 'Search for relevant past conversations in the vector memory. Supports all/current-session/current-agent scope filtering.',
             parameters: {
                 type: 'object',
                 properties: { 
                     query: { type: 'string', description: 'The search query' },
-                    limit: { type: 'number' }
+                    limit: { type: 'number' },
+                    scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: 'Search scope. Defaults to all.' }
                 },
                 required: ['query']
             }

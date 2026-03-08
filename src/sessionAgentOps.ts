@@ -13,6 +13,7 @@ interface SessionAgentOpsDeps {
   saveChannels: () => Promise<void>;
   updateAliasCache: (aliases: string[], realId: string) => void;
   updateChildSessionParentIds: (oldParentSessionId: string, newParentSessionId: string) => Promise<string[]>;
+  moveSessionArchiveIndex: (oldSessionId: string, newSessionId: string) => Promise<void>;
   getAgentMetadata: (agentName: string) => { isolated?: boolean; [key: string]: any };
   getSessionsMap: () => Map<string, Session>;
   getAttachmentsMap: () => Map<string, { sessionId: string; mode?: any }>;
@@ -124,6 +125,7 @@ async function renameSessionIdentity(options: {
   }
 
   const updatedChildren = await deps.updateChildSessionParentIds(oldRealId, targetSessionId);
+  await deps.moveSessionArchiveIndex(oldRealId, targetSessionId);
 
   await deps.saveSession(targetSessionId);
   await deps.saveSessionsMetadata();

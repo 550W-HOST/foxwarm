@@ -344,20 +344,13 @@ export const COMMANDS: Record<string, CommandDef> = {
             ctx.reply('❌ No active session to index.')
             return
           }
-          const lastPos = session.vectorIndexPosition || 0
-          const totalMessages = session.history.length
 
-          if (lastPos >= totalMessages) {
-            ctx.reply('✅ All messages are already indexed.')
-            return
-          }
-
-          const toIndex = totalMessages - lastPos
-          ctx.reply(`🔄 Indexing ${toIndex} messages...`)
+          const latestSeq = Math.max(0, (session.nextMessageSeq || 1) - 1)
+          ctx.reply(`🔄 Indexing session archive up to seq ${latestSeq}...`)
 
           try {
             await sessionManager.forceIndexSession(sessionId)
-            ctx.reply(`✅ Indexed ${toIndex} messages successfully.`)
+            ctx.reply(`✅ Archive indexing completed up to seq ${latestSeq}.`)
           } catch (e: any) {
             ctx.reply(`❌ Indexing failed: ${e.message}`)
           }
