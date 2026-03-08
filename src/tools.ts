@@ -10,7 +10,7 @@ import { browserManager } from './browser';
 import { logger } from './common';
 import { nodesManager } from './nodesManager';
 import { formatTime, getDatedLogPath } from './logRotation';
-import { applyUpdateHunks, buildAddedFileContent, parseApplyPatchInput } from './applyPatch';
+import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from './applyPatch';
 import {
     tool_create_child_session,
     tool_send_to_session,
@@ -84,8 +84,12 @@ async function tool_read(args: ToolArgs, ctx: ToolContext) {
                         ext === '.webp' ? 'image/webp' :
                         ext === '.bmp' ? 'image/bmp' : 'image/jpeg';
         
-        // Return special marker for image
-        return `__IMAGE__:${mimeType}:${base64}`;
+        return {
+            output: `[Image loaded: ${filePath}]`,
+            mimeType,
+            sizeBytes: buffer.length,
+            inlineData: { data: base64, mimeType }
+        };
     }
     
     let content = await fs.readFile(fullPath, 'utf8');
@@ -171,7 +175,7 @@ async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
                 throw new Error(`Cannot update missing file: ${operation.filePath}`);
             }
             const content = await fs.readFile(fullPath, 'utf8');
-            const updatedContent = applyUpdateHunks(content, operation.hunks, operation.filePath);
+            const updatedContent = applyUpdatePatch(content, operation.lines, operation.filePath);
             await fs.writeFile(fullPath, updatedContent);
             summaries.push(`Updated ${operation.filePath}`);
             continue;
@@ -287,7 +291,6 @@ async function tool_search_memory({ query, limit = 5, scope = 'all' }: { query: 
         }
 
         const session = await sessionManager.getSession(ctx.sessionId);
-        await vector.indexSessionArchive(session.id, Math.max(0, (session.nextMessageSeq || 1) - 1));
         searchOptions = { sessionIds: [session.id, ...(session.aliases || [])] };
     } else if (scope === 'current-agent') {
         if (!ctx?.sessionId) {
@@ -295,10 +298,7 @@ async function tool_search_memory({ query, limit = 5, scope = 'all' }: { query: 
         }
 
         const session = await sessionManager.getSession(ctx.sessionId);
-        await vector.indexAllSessionArchives();
         searchOptions = { agent: session.agent || 'main' };
-    } else {
-        await vector.indexAllSessionArchives();
     }
 
     const results = await vector.search(query, limit, false, searchOptions);
@@ -318,7 +318,6 @@ async function tool_search_memory({ query, limit = 5, scope = 'all' }: { query: 
 }
 
 async function tool_get_memory_context({ timestamp, limit = 10 }: { timestamp: number; limit?: number }) {
-    await vector.indexAllSessionArchives();
     const results = await vector.getContextAround(timestamp, limit);
     if (!results || results.length === 0) return 'No context found around this time.';
 
@@ -362,8 +361,12 @@ async function tool_browse_get(args: ToolArgs) {
             await fs.writeFile(screenshot, buffer);
             return `Screenshot saved to: ${screenshot}`;
         } else {
-            // Return special marker that will be handled by LLM code
-            return `__SCREENSHOT__:${base64}`;
+            return {
+                output: `[Screenshot of ${tabId}]`,
+                mimeType: 'image/png',
+                sizeBytes: Buffer.byteLength(base64, 'base64'),
+                inlineData: { data: base64, mimeType: 'image/png' }
+            };
         }
     } else {
         const { text } = await browserManager.getTabContent(tabId);
@@ -616,7 +619,7 @@ export const definitions = [
         },
         {
             name: 'apply_patch',
-            description: 'This is a custom utility that makes it more convenient to add, remove, or edit code files. Pass the patch command text as `input`. The expected format uses an apply_patch envelope with `*** Begin Patch` / `*** End Patch`, and file actions such as `*** Update File: path`, `*** Add File: path`, or `*** Delete File: path`. Update hunks use context lines plus `- old` / `+ new`, with optional `@@` anchors for extra context.',
+            description: 'This is a custom utility that makes it more convenient to add, remove, or edit code files. Pass the patch command text as `input`. The expected format uses an apply_patch envelope with `*** Begin Patch` / `*** End Patch`, and file actions such as `*** Update File: path`, `*** Add File: path`, or `*** Delete File: path`. Update File bodies use a line-based patch format: optional `@@` / `@@ anchor` section markers, context lines prefixed with a single space, `-` deletions, `+` insertions, and optional `*** End of File`.',
             parameters: {
                 type: 'object',
                 properties: {

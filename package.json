@@ -13,6 +13,7 @@
     "tui": "npm run build && node lib/index.js --tui",
     "node": "npm run build && node lib/nodeClient.js",
     "dev": "tsc --watch",
+    "selftest:apply-patch": "npm run build && node lib/selftest/applyPatchSelfTest.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [

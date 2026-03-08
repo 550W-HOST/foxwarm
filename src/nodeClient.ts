@@ -122,10 +122,8 @@ class NodeClient {
       };
       
       // Execute tool
-      const output = await toolFn(args, ctx);
-      
-      // Return raw output (master will handle __IMAGE__ and __SCREENSHOT__ markers)
-      const result = { output };
+      const rawResult = await toolFn(args, ctx);
+      const result = this.normalizeToolResult(rawResult);
       
       // Send response
       this.send({
@@ -145,6 +143,26 @@ class NodeClient {
         error: e.message || String(e)
       });
     }
+  }
+
+  private normalizeToolResult(rawResult: any): any {
+    if (rawResult === undefined) {
+      return { output: '(No output)' };
+    }
+
+    if (rawResult === null) {
+      return { output: null };
+    }
+
+    if (typeof rawResult === 'string' || typeof rawResult === 'number' || typeof rawResult === 'boolean') {
+      return { output: rawResult };
+    }
+
+    if (typeof rawResult === 'object') {
+      return rawResult;
+    }
+
+    return { output: String(rawResult) };
   }
 
   private send(data: any): void {

@@ -623,6 +623,45 @@ function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
  */
 export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
     const parts = [];
+
+    const normalizeToolResult = (rawResult: any): any => {
+        if (rawResult === undefined) return { output: '(No output)' };
+        if (rawResult === null) return { output: null };
+        if (typeof rawResult === 'string' || typeof rawResult === 'number' || typeof rawResult === 'boolean') {
+            return { output: rawResult };
+        }
+        if (typeof rawResult === 'object') {
+            return rawResult;
+        }
+        return { output: String(rawResult) };
+    };
+
+    const consumeInlineData = (result: any, toolId: string, fallbackLabel: string): any => {
+        if (!result || typeof result !== 'object') return result;
+
+        const inlineItems = [
+            ...(result.inlineData ? [result.inlineData] : []),
+            ...(Array.isArray(result.inlineDataItems) ? result.inlineDataItems : []),
+        ].filter((item: any) => item?.data);
+
+        if (inlineItems.length === 0) return result;
+
+        for (const item of inlineItems) {
+            parts.push({
+                toolUseId: toolId,
+                inlineData: {
+                    data: item.data,
+                    mimeType: item.mimeType || item.mime_type || 'application/octet-stream'
+                }
+            });
+        }
+
+        const { inlineData, inlineDataItems, ...rest } = result;
+        if (rest.output === undefined) {
+            rest.output = fallbackLabel;
+        }
+        return rest;
+    };
     
     for (const call of functionCalls) {
         const toolFn = (tools as any)[call.name];
@@ -675,42 +714,41 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         if (targetNode !== 'master') {
             // Execute on remote node
             try {
-                result = await nodesManager.executeTool(targetNode, call.name, toolArgs, sessionId);
+                result = normalizeToolResult(await nodesManager.executeTool(targetNode, call.name, toolArgs, sessionId));
             } catch (e: any) {
                 result = { error: e.message || String(e) };
             }
         } else if (toolFn) {
             // Execute locally on master
             try {
-                const output = await toolFn(toolArgs, toolContext);
-                result = { output };
+                result = normalizeToolResult(await toolFn(toolArgs, toolContext));
             } catch (e) {
                 result = { error: e.message };
             }
         } else {
             result = { error: `Unknown tool: ${call.name}` };
         }
-        
-        // Unified handling of special markers in output (for both master and remote)
-        if (result && result.output && typeof result.output === 'string') {
+
+        result = consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
+
+        // Backward-compat fallback for older tools/nodes still returning marker strings.
+        if (result && typeof result.output === 'string') {
             const output = result.output;
-            
+
             if (output.startsWith('__IMAGE__:')) {
-                // Format: __IMAGE__:mimeType:base64data
                 const [, mimeType, base64] = output.split(':', 3);
                 parts.push({
                     toolUseId: toolId,
                     inlineData: { data: base64, mimeType }
                 });
-                result = { output: `[Image loaded: ${call.args.filePath || 'file'}]` };
+                result = { ...result, output: `[Image loaded: ${call.args.filePath || 'file'}]` };
             } else if (output.startsWith('__SCREENSHOT__:')) {
-                // Format: __SCREENSHOT__:base64data
                 const base64 = output.substring('__SCREENSHOT__:'.length);
                 parts.push({
                     toolUseId: toolId,
                     inlineData: { data: base64, mimeType: 'image/png' }
                 });
-                result = { output: `[Screenshot of ${call.args.tabId || 'page'}]` };
+                result = { ...result, output: `[Screenshot of ${call.args.tabId || 'page'}]` };
             }
         }
         
@@ -900,7 +938,7 @@ export async function chat(
             }
             break;
         } catch (e: any) {
-            logger.error({ err: e }, `LLM API Network Error (Attempt ${attempt}/${maxRetries})`);
+            logger.error({ status: (e as AxiosResponse)?.status }, `LLM API Network Error (Attempt ${attempt}/${maxRetries})`);
             if (attempt === maxRetries) {
                 return { text: `Error: API request failed after ${maxRetries} attempts: ${e?.message || e}` };
             }

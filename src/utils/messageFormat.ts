@@ -60,11 +60,19 @@ function formatFunctionResponse(part: MessagePart): string | undefined {
   if (!response) return undefined;
 
   if (response.error) {
-    return `ERROR: ${response.error}`;
+    return `ERROR: ${typeof response.error === 'string' ? response.error : JSON.stringify(response.error)}`;
   }
 
-  if (response.output) {
-    return response.output;
+  if (response.output !== undefined && response.output !== null) {
+    return typeof response.output === 'string' ? response.output : JSON.stringify(response.output);
+  }
+
+  if (response.content !== undefined && response.content !== null) {
+    return typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+  }
+
+  if (response.inlineData || response.inlineDataItems) {
+    return '[inline data]';
   }
 
   return JSON.stringify(response);

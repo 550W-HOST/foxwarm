@@ -1,12 +1,28 @@
 export type ApplyPatchOperation =
-  | { action: 'update'; filePath: string; hunks: ApplyPatchHunk[] }
+  | { action: 'update'; filePath: string; lines: string[] }
   | { action: 'add'; filePath: string; lines: string[] }
   | { action: 'delete'; filePath: string };
 
-export interface ApplyPatchHunk {
-  anchors: string[];
-  lines: string[];
+interface ApplyPatchChunk {
+  origIndex: number;
+  delLines: string[];
+  insLines: string[];
 }
+
+interface ParserState {
+  lines: string[];
+  index: number;
+  fuzz: number;
+}
+
+const END_PATCH = '*** End Patch';
+const END_FILE = '*** End of File';
+const FILE_HEADER_PREFIXES = [
+  '*** Update File: ',
+  '*** Add File: ',
+  '*** Delete File: ',
+] as const;
+const UPDATE_SECTION_TERMINATORS = [END_PATCH, END_FILE] as const;
 
 function normalizeNewlines(text: string): string {
   return text.replace(/\r\n/g, '\n');
@@ -15,20 +31,20 @@ function normalizeNewlines(text: string): string {
 export function extractPatchEnvelope(input: string): string {
   const normalized = normalizeNewlines(input);
   const beginIndex = normalized.indexOf('*** Begin Patch');
-  const endIndex = normalized.lastIndexOf('*** End Patch');
+  const endIndex = normalized.lastIndexOf(END_PATCH);
 
   if (beginIndex === -1 || endIndex === -1 || endIndex < beginIndex) {
     throw new Error('Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope.');
   }
 
-  return normalized.slice(beginIndex, endIndex + '*** End Patch'.length).trim();
+  return normalized.slice(beginIndex, endIndex + END_PATCH.length).trim();
 }
 
 export function parseApplyPatchInput(input: string): ApplyPatchOperation[] {
   const envelope = extractPatchEnvelope(input);
   const lines = envelope.split('\n');
 
-  if (lines[0] !== '*** Begin Patch' || lines[lines.length - 1] !== '*** End Patch') {
+  if (lines[0] !== '*** Begin Patch' || lines[lines.length - 1] !== END_PATCH) {
     throw new Error('Invalid apply_patch input: malformed patch envelope.');
   }
 
@@ -36,11 +52,7 @@ export function parseApplyPatchInput(input: string): ApplyPatchOperation[] {
   const operations: ApplyPatchOperation[] = [];
   let i = 0;
 
-  const isFileHeader = (line: string) => (
-    line.startsWith('*** Update File: ') ||
-    line.startsWith('*** Add File: ') ||
-    line.startsWith('*** Delete File: ')
-  );
+  const isFileHeader = (line: string): boolean => FILE_HEADER_PREFIXES.some(prefix => line.startsWith(prefix));
 
   while (i < body.length) {
     while (i < body.length && body[i].trim() === '') i++;
@@ -63,11 +75,11 @@ export function parseApplyPatchInput(input: string): ApplyPatchOperation[] {
     }
 
     if (action === 'update') {
-      operations.push({ action, filePath, hunks: parseUpdateSection(sectionLines, filePath) });
+      operations.push({ action, filePath, lines: parseUpdateSection(sectionLines, filePath) });
     } else if (action === 'add') {
       operations.push({ action, filePath, lines: parseAddSection(sectionLines, filePath) });
     } else {
-      if (sectionLines.some(line => line.trim() !== '')) {
+      if (sectionLines.some(lineText => lineText.trim() !== '')) {
         throw new Error(`Invalid apply_patch input for ${filePath}: delete section should not contain body lines.`);
       }
       operations.push({ action, filePath });
@@ -81,70 +93,22 @@ export function parseApplyPatchInput(input: string): ApplyPatchOperation[] {
   return operations;
 }
 
-function parseUpdateSection(lines: string[], filePath: string): ApplyPatchHunk[] {
-  const hunks: ApplyPatchHunk[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    while (i < lines.length && lines[i].trim() === '') i++;
-    if (i >= lines.length) break;
-
-    const anchors: string[] = [];
-    while (i < lines.length && lines[i].startsWith('@@')) {
-      anchors.push(lines[i].slice(2).trim());
-      i++;
-    }
-
-    const hunkLines: string[] = [];
-    let sawChange = false;
-
-    while (i < lines.length) {
-      const line = lines[i];
-
-      if (line.startsWith('@@') && hunkLines.length > 0 && sawChange) {
-        break;
-      }
-
-      if (line.trim() === '' && sawChange) {
-        let j = i + 1;
-        while (j < lines.length && lines[j].trim() === '') j++;
-        if (j >= lines.length || lines[j].startsWith('@@')) {
-          i = j;
-          break;
-        }
-      }
-
-      if (line.startsWith('-') || line.startsWith('+')) {
-        sawChange = true;
-      }
-
-      hunkLines.push(line);
-      i++;
-    }
-
-    if (!sawChange) {
-      throw new Error(`Invalid apply_patch input for ${filePath}: update hunk must include at least one changed line.`);
-    }
-
-    hunks.push({ anchors, lines: hunkLines });
+function parseUpdateSection(lines: string[], filePath: string): string[] {
+  if (lines.length === 0) {
+    throw new Error(`Invalid apply_patch input for ${filePath}: update section must include patch lines.`);
   }
 
-  if (hunks.length === 0) {
-    throw new Error(`Invalid apply_patch input for ${filePath}: update section must include at least one hunk.`);
+  if (!lines.some(line => line.startsWith('+') || line.startsWith('-'))) {
+    throw new Error(`Invalid apply_patch input for ${filePath}: update section must include at least one changed line.`);
   }
 
-  return hunks;
+  return lines;
 }
 
 function parseAddSection(lines: string[], filePath: string): string[] {
   const contentLines: string[] = [];
 
   for (const line of lines) {
-    if (line === '') {
-      contentLines.push('');
-      continue;
-    }
-
     if (!line.startsWith('+')) {
       throw new Error(`Invalid apply_patch input for ${filePath}: add file lines must start with '+'.`);
     }
@@ -163,96 +127,256 @@ function restoreLineEndings(text: string, lineEnding: '\n' | '\r\n'): string {
   return lineEnding === '\r\n' ? text.replace(/\n/g, '\r\n') : text;
 }
 
-function buildHunkSnippets(hunk: ApplyPatchHunk): { oldText: string; newText: string } {
-  const oldLines: string[] = [];
-  const newLines: string[] = [];
-
-  for (const line of hunk.lines) {
-    if (line.startsWith('-')) {
-      oldLines.push(line.slice(1));
-      continue;
-    }
-    if (line.startsWith('+')) {
-      newLines.push(line.slice(1));
-      continue;
-    }
-    oldLines.push(line);
-    newLines.push(line);
-  }
-
-  return {
-    oldText: oldLines.join('\n'),
-    newText: newLines.join('\n'),
-  };
+function isDone(state: ParserState, prefixes: readonly string[]): boolean {
+  if (state.index >= state.lines.length) return true;
+  return prefixes.some(prefix => state.lines[state.index]?.startsWith(prefix));
 }
 
-function findAnchorWindow(content: string, anchors: string[], filePath: string): { start: number; end: number; lastAnchor?: string } {
-  if (anchors.length === 0) {
-    return { start: 0, end: content.length };
+function readStr(state: ParserState, prefix: string): string {
+  const current = state.lines[state.index];
+  if (typeof current === 'string' && current.startsWith(prefix)) {
+    state.index += 1;
+    return current.slice(prefix.length);
   }
-
-  let offset = 0;
-  let lastAnchor = '';
-
-  for (const anchor of anchors) {
-    const index = content.indexOf(anchor, offset);
-    if (index === -1) {
-      throw new Error(`Could not find @@ anchor "${anchor}" while patching ${filePath}.`);
-    }
-    offset = index;
-    lastAnchor = anchor;
-  }
-
-  const nextAnchorIndex = lastAnchor
-    ? content.indexOf(lastAnchor, offset + Math.max(lastAnchor.length, 1))
-    : -1;
-
-  return {
-    start: offset,
-    end: nextAnchorIndex === -1 ? content.length : nextAnchorIndex,
-    lastAnchor,
-  };
+  return '';
 }
 
-function collectMatchPositions(content: string, needle: string, start = 0, end = content.length): number[] {
-  if (!needle) return [];
+function advanceCursorToAnchor(anchor: string, inputLines: string[], cursor: number, parser: ParserState): number {
+  let found = false;
 
-  const positions: number[] = [];
-  let index = content.indexOf(needle, start);
-  while (index !== -1 && index < end) {
-    positions.push(index);
-    index = content.indexOf(needle, index + 1);
-  }
-  return positions;
-}
-
-export function applyUpdateHunks(content: string, hunks: ApplyPatchHunk[], filePath: string): string {
-  const lineEnding = getLineEnding(content);
-  let updated = normalizeNewlines(content);
-
-  for (const hunk of hunks) {
-    const { oldText, newText } = buildHunkSnippets(hunk);
-    const anchorWindow = findAnchorWindow(updated, hunk.anchors, filePath);
-    const searchStart = Math.max(0, anchorWindow.start - oldText.length);
-    const windowMatches = collectMatchPositions(updated, oldText, searchStart, anchorWindow.end);
-
-    if (windowMatches.length === 0) {
-      const globalMatches = collectMatchPositions(updated, oldText, 0, updated.length).length;
-      if (globalMatches > 0 && hunk.anchors.length > 0) {
-        throw new Error(`Could not find matching patch hunk in ${filePath} near @@ anchors. The hunk text exists elsewhere in the file (${globalMatches} match${globalMatches === 1 ? '' : 'es'}), so the anchors/context may be too broad or stale.`);
+  if (!inputLines.slice(0, cursor).some(line => line === anchor)) {
+    for (let i = cursor; i < inputLines.length; i += 1) {
+      if (inputLines[i] === anchor) {
+        cursor = i + 1;
+        found = true;
+        break;
       }
-      throw new Error(`Could not find matching patch hunk in ${filePath}.`);
     }
-
-    if (windowMatches.length > 1) {
-      const scope = hunk.anchors.length > 0 ? 'within the @@ anchor region' : 'in the file';
-      throw new Error(`Patch hunk for ${filePath} is ambiguous: matched ${windowMatches.length} locations ${scope}. Add more unchanged context lines or a more specific @@ anchor.`);
-    }
-
-    const firstIndex = windowMatches[0];
-    updated = updated.slice(0, firstIndex) + newText + updated.slice(firstIndex + oldText.length);
   }
 
+  if (!found && !inputLines.slice(0, cursor).some(line => line.trim() === anchor.trim())) {
+    for (let i = cursor; i < inputLines.length; i += 1) {
+      if (inputLines[i].trim() === anchor.trim()) {
+        cursor = i + 1;
+        parser.fuzz += 1;
+        found = true;
+        break;
+      }
+    }
+  }
+
+  return cursor;
+}
+
+function readSection(lines: string[], startIndex: number, filePath: string): {
+  nextContext: string[];
+  sectionChunks: ApplyPatchChunk[];
+  endIndex: number;
+  eof: boolean;
+} {
+  const context: string[] = [];
+  let delLines: string[] = [];
+  let insLines: string[] = [];
+  const sectionChunks: ApplyPatchChunk[] = [];
+  let mode: 'keep' | 'add' | 'delete' = 'keep';
+  let index = startIndex;
+  const origIndex = index;
+
+  while (index < lines.length) {
+    const raw = lines[index];
+    if (raw.startsWith('@@') || raw.startsWith(END_PATCH) || raw.startsWith(END_FILE)) {
+      break;
+    }
+    if (raw === '***') break;
+    if (raw.startsWith('***')) {
+      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${raw}`);
+    }
+
+    index += 1;
+    const lastMode: 'keep' | 'add' | 'delete' = mode;
+    let line = raw;
+    if (line === '') line = ' ';
+
+    if (line[0] === '+') {
+      mode = 'add';
+    } else if (line[0] === '-') {
+      mode = 'delete';
+    } else if (line[0] === ' ') {
+      mode = 'keep';
+    } else {
+      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${line}`);
+    }
+
+    line = line.slice(1);
+
+    const switchingToContext = mode === 'keep' && lastMode !== mode;
+    if (switchingToContext && (insLines.length > 0 || delLines.length > 0)) {
+      sectionChunks.push({
+        origIndex: context.length - delLines.length,
+        delLines,
+        insLines,
+      });
+      delLines = [];
+      insLines = [];
+    }
+
+    if (mode === 'delete') {
+      delLines.push(line);
+      context.push(line);
+    } else if (mode === 'add') {
+      insLines.push(line);
+    } else {
+      context.push(line);
+    }
+  }
+
+  if (insLines.length > 0 || delLines.length > 0) {
+    sectionChunks.push({
+      origIndex: context.length - delLines.length,
+      delLines,
+      insLines,
+    });
+  }
+
+  if (index < lines.length && lines[index] === END_FILE) {
+    index += 1;
+    return { nextContext: context, sectionChunks, endIndex: index, eof: true };
+  }
+
+  if (index === origIndex) {
+    throw new Error(`Invalid apply_patch input for ${filePath}: empty update section near line ${index + 1}.`);
+  }
+
+  return { nextContext: context, sectionChunks, endIndex: index, eof: false };
+}
+
+function equalsSlice(source: string[], target: string[], start: number, mapFn: (value: string) => string): boolean {
+  if (start + target.length > source.length) return false;
+
+  for (let i = 0; i < target.length; i += 1) {
+    if (mapFn(source[start + i]) !== mapFn(target[i])) return false;
+  }
+
+  return true;
+}
+
+function findContextCore(lines: string[], context: string[], start: number): { newIndex: number; fuzz: number } {
+  if (context.length === 0) {
+    return { newIndex: start, fuzz: 0 };
+  }
+
+  for (let i = start; i < lines.length; i += 1) {
+    if (equalsSlice(lines, context, i, value => value)) {
+      return { newIndex: i, fuzz: 0 };
+    }
+  }
+
+  for (let i = start; i < lines.length; i += 1) {
+    if (equalsSlice(lines, context, i, value => value.trimEnd())) {
+      return { newIndex: i, fuzz: 1 };
+    }
+  }
+
+  for (let i = start; i < lines.length; i += 1) {
+    if (equalsSlice(lines, context, i, value => value.trim())) {
+      return { newIndex: i, fuzz: 100 };
+    }
+  }
+
+  return { newIndex: -1, fuzz: 0 };
+}
+
+function findContext(lines: string[], context: string[], start: number, eof: boolean): { newIndex: number; fuzz: number } {
+  if (eof) {
+    const endStart = Math.max(0, lines.length - context.length);
+    const endMatch = findContextCore(lines, context, endStart);
+    if (endMatch.newIndex !== -1) return endMatch;
+
+    const fallback = findContextCore(lines, context, start);
+    return { newIndex: fallback.newIndex, fuzz: fallback.fuzz + 10000 };
+  }
+
+  return findContextCore(lines, context, start);
+}
+
+function parseUpdateDiff(lines: string[], input: string, filePath: string): { chunks: ApplyPatchChunk[]; fuzz: number } {
+  const parser: ParserState = {
+    lines: [...lines, END_PATCH],
+    index: 0,
+    fuzz: 0,
+  };
+  const inputLines = input.split('\n');
+  const chunks: ApplyPatchChunk[] = [];
+  let cursor = 0;
+
+  while (!isDone(parser, UPDATE_SECTION_TERMINATORS)) {
+    const anchor = readStr(parser, '@@ ');
+    const hasBareAnchor = !anchor && parser.lines[parser.index] === '@@';
+    if (hasBareAnchor) parser.index += 1;
+
+    if (!(anchor || hasBareAnchor || cursor === 0)) {
+      throw new Error(`Invalid apply_patch input for ${filePath}: expected '@@' before line: ${parser.lines[parser.index]}`);
+    }
+
+    if (anchor.trim()) {
+      cursor = advanceCursorToAnchor(anchor, inputLines, cursor, parser);
+    }
+
+    const { nextContext, sectionChunks, endIndex, eof } = readSection(parser.lines, parser.index, filePath);
+    const nextContextText = nextContext.join('\n');
+    const { newIndex, fuzz } = findContext(inputLines, nextContext, cursor, eof);
+
+    if (newIndex === -1) {
+      if (eof) {
+        throw new Error(`Could not match EOF context while patching ${filePath} starting at line ${cursor + 1}:\n${nextContextText}`);
+      }
+      throw new Error(`Could not match patch context while patching ${filePath} starting at line ${cursor + 1}:\n${nextContextText}`);
+    }
+
+    parser.fuzz += fuzz;
+    for (const chunk of sectionChunks) {
+      chunks.push({ ...chunk, origIndex: chunk.origIndex + newIndex });
+    }
+
+    cursor = newIndex + nextContext.length;
+    parser.index = endIndex;
+  }
+
+  return { chunks, fuzz: parser.fuzz };
+}
+
+function applyChunks(input: string, chunks: ApplyPatchChunk[], filePath: string): string {
+  const origLines = input.split('\n');
+  const destLines: string[] = [];
+  let origIndex = 0;
+
+  for (const chunk of chunks) {
+    if (chunk.origIndex > origLines.length) {
+      throw new Error(`apply_patch failed for ${filePath}: chunk starts past end of file (${chunk.origIndex} > ${origLines.length}).`);
+    }
+    if (origIndex > chunk.origIndex) {
+      throw new Error(`apply_patch failed for ${filePath}: overlapping chunk at ${chunk.origIndex} (cursor ${origIndex}).`);
+    }
+
+    destLines.push(...origLines.slice(origIndex, chunk.origIndex));
+    origIndex = chunk.origIndex;
+
+    if (chunk.insLines.length > 0) {
+      destLines.push(...chunk.insLines);
+    }
+
+    origIndex += chunk.delLines.length;
+  }
+
+  destLines.push(...origLines.slice(origIndex));
+  return destLines.join('\n');
+}
+
+export function applyUpdatePatch(content: string, lines: string[], filePath: string): string {
+  const lineEnding = getLineEnding(content);
+  const normalizedContent = normalizeNewlines(content);
+  const { chunks } = parseUpdateDiff(lines, normalizedContent, filePath);
+  const updated = applyChunks(normalizedContent, chunks, filePath);
   return restoreLineEndings(updated, lineEnding);
 }
 

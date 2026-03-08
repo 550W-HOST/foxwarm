@@ -24,8 +24,12 @@ export interface FunctionResponse {
   tool_use_id: string;
   name: string;
   response: {
-    output?: string;
-    error?: string;
+    output?: any;
+    content?: any;
+    error?: any;
+    inlineData?: InlineData;
+    inlineDataItems?: InlineData[];
+    [key: string]: any;
   };
 }
 
