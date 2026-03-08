@@ -526,6 +526,7 @@ export const browse_list = tool_browse_list;
 export const browse_get = tool_browse_get;
 export const browse_close = tool_browse_close;
 export const browse_interact = tool_browse_interact;
+export const remote_node = tool_remote_node;
 export const node_tools = tool_remote_node;
 export const mcp_config = tool_mcp_config;
 export const call_mcp = tool_call_mcp;
