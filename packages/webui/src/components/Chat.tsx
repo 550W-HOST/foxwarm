@@ -1888,7 +1888,7 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
   return (
     <div className="flex flex-col h-full">
       {/* Header - Fixed at top */}
-      <div className="sticky top-0 z-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4">
+      <div className="sticky top-0 z-30 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
             {isMobile && onBack && (
@@ -1912,7 +1912,7 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
               <Menu size={20} />
             </button>
             {showMenu && (
-              <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-30 text-gray-900 dark:text-gray-100">
+              <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 text-gray-900 dark:text-gray-100">
                 <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
                   <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Theme</div>
                   <div className="flex gap-1">
@@ -2167,7 +2167,7 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
       {showScrollTopButton && (
         <button
           onClick={scrollToTop}
-          className="absolute right-6 top-24 z-20 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
+          className="absolute right-6 top-24 z-10 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
           aria-label="Scroll to top"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2180,7 +2180,7 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
       {showScrollButton && (
         <button
           onClick={scrollToBottom}
-          className="absolute right-6 bottom-24 z-20 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
+          className="absolute right-6 bottom-24 z-10 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
           aria-label="Scroll to bottom"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
