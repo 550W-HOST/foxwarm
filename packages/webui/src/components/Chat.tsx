@@ -289,6 +289,14 @@ const isSystemLikeText = (text: string): boolean => (
   text.startsWith('[SYSTEM:') || text.startsWith('[FROM:')
 )
 
+const isLightweightStructuredSystem = (system: string): boolean => (
+  system.startsWith('FROM:') || system.startsWith('current time =')
+)
+
+const isHeavySystemTextLine = (text: string): boolean => (
+  text.startsWith('[SYSTEM:') && !text.startsWith('[SYSTEM: current time')
+)
+
 const isCollapsibleSystemText = (text: string): boolean => (
   text.startsWith('[SYSTEM:') && !text.startsWith('[SYSTEM: current time')
 )
@@ -643,7 +651,20 @@ export default function Chat({ sessionId, onBack }: ChatProps) {
   }
 
   const isSystemLikeMessage = (msg: Message) => (
-    msg.parts.some(part => !!part.system) || msg.parts.some(part => !!part.text && isSystemLikeText(part.text))
+    msg.parts.some(part => !!part.system && !isLightweightStructuredSystem(part.system)) ||
+    msg.parts.some(part => !!part.text && part.text.split('\n').some(isHeavySystemTextLine))
+  )
+
+  const renderInlineMetaPart = (systemText: string, key: string, isUser: boolean) => (
+    <pre
+      key={key}
+      className={`whitespace-pre-wrap font-sans ${isUser ? 'text-white' : 'text-gray-500 dark:text-gray-400'}`}
+      style={{ fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }}
+    >
+      {systemText.split('\n').map((line, lineIdx) => (
+        <span key={lineIdx} style={{ display: 'block' }}>{line}</span>
+      ))}
+    </pre>
   )
 
   const renderSystemLikeMessage = (msg: Message, messageKey: string) => {
@@ -1962,7 +1983,7 @@ export default function Chat({ sessionId, onBack }: ChatProps) {
                       const messageKey = `${idx}-${partIdx}`
 
                       if (part.system) {
-                        return null
+                        return renderInlineMetaPart(formatStructuredSystemText(part.system), messageKey, true)
                       }
 
                       const text = part.text || ''
@@ -2017,8 +2038,9 @@ export default function Chat({ sessionId, onBack }: ChatProps) {
                 ) : (
                   <div className="flex flex-col">
                     {textLikeParts.map((part, partIdx) => {
+                      const messageKey = `${idx}-${partIdx}`
                       if (part.system) {
-                        return null
+                        return renderInlineMetaPart(formatStructuredSystemText(part.system), messageKey, false)
                       }
 
                       const text = part.text || ''
