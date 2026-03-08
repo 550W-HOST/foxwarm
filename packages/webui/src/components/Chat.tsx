@@ -285,6 +285,10 @@ const formatStructuredSystemText = (system: string): string => (
   system.startsWith('FROM:') ? `[${system}]` : `[SYSTEM: ${system}]`
 )
 
+const isSystemLikeText = (text: string): boolean => (
+  text.startsWith('[SYSTEM:') || text.startsWith('[FROM:')
+)
+
 const isCollapsibleSystemText = (text: string): boolean => (
   text.startsWith('[SYSTEM:') && !text.startsWith('[SYSTEM: current time')
 )
@@ -638,41 +642,67 @@ export default function Chat({ sessionId, onBack }: ChatProps) {
     localStorage.setItem('diffViewMode', newMode)
   }
 
-  const renderSystemPart = (systemText: string, messageKey: string, isUser: boolean) => {
+  const isSystemLikeMessage = (msg: Message) => (
+    msg.parts.some(part => !!part.system) || msg.parts.some(part => !!part.text && isSystemLikeText(part.text))
+  )
+
+  const renderSystemLikeMessage = (msg: Message, messageKey: string) => {
     const isExpanded = expandedSystemMessages.has(messageKey)
-    const shouldCollapse = isCollapsibleSystemText(systemText) && !isExpanded
+    const allLines = msg.parts.flatMap((part) => {
+      if (part.system) {
+        return formatStructuredSystemText(part.system).split('\n')
+      }
+      if (part.text) {
+        return part.text.split('\n')
+      }
+      return []
+    })
+
+    const renderedText = allLines.join('\n')
+    const shouldCollapse = !isExpanded
 
     return (
-      <div key={messageKey}>
-        <div
-          className={`${shouldCollapse ? 'overflow-hidden' : ''}`}
-          style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}
-        >
-          <pre
-            className={`whitespace-pre-wrap font-sans ${isUser ? 'text-white' : 'text-gray-500 dark:text-gray-400'}`}
-            style={{ fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }}
+      <div className="w-full max-w-[80%] overflow-x-hidden">
+        <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-3 text-slate-700 dark:text-slate-300">
+          <div
+            className={shouldCollapse ? 'overflow-hidden' : ''}
+            style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : undefined}
           >
-            {systemText.split('\n').map((line, lineIdx) => (
-              <span key={lineIdx} style={{ display: 'block' }}>{line}</span>
-            ))}
-          </pre>
+            <pre className="whitespace-pre-wrap font-sans text-sm" style={{ lineHeight: '1.5em' }}>
+              {renderedText.split('\n').map((line, lineIdx) => {
+                const isPrefix = isSystemLikeText(line)
+                return (
+                  <span
+                    key={lineIdx}
+                    style={isPrefix
+                      ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+                      : { display: 'block', opacity: 0.92 }
+                    }
+                  >
+                    {line}
+                  </span>
+                )
+              })}
+            </pre>
+          </div>
+          {allLines.length > 4 && (
+            <button
+              onClick={() => {
+                const newExpanded = new Set(expandedSystemMessages)
+                if (isExpanded) {
+                  newExpanded.delete(messageKey)
+                } else {
+                  newExpanded.add(messageKey)
+                }
+                setExpandedSystemMessages(newExpanded)
+              }}
+              className="text-xs mt-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 text-left"
+            >
+              {isExpanded ? '▲ Show less' : '▼ Show more'}
+            </button>
+          )}
         </div>
-        {isCollapsibleSystemText(systemText) && (
-          <button
-            onClick={() => {
-              const newExpanded = new Set(expandedSystemMessages)
-              if (isExpanded) {
-                newExpanded.delete(messageKey)
-              } else {
-                newExpanded.add(messageKey)
-              }
-              setExpandedSystemMessages(newExpanded)
-            }}
-            className={`text-xs mt-1 text-left ${isUser ? 'text-blue-200 hover:text-white' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
-          >
-            {isExpanded ? '▲ Show less' : '▼ Show more'}
-          </button>
-        )}
+        {renderImages(msg)}
       </div>
     )
   }
@@ -1899,37 +1929,40 @@ export default function Chat({ sessionId, onBack }: ChatProps) {
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4">
         {messages.map((msg, idx) => {
           const textLikeParts = msg.parts.filter(p => p.text || p.system)
+          const systemLikeMessage = isSystemLikeMessage(msg)
           
           // If current message is model/tool and previous message is also model/tool, stick them together
           const prevMsg = idx > 0 ? messages[idx - 1] : null
-          const shouldSkipMargin = (msg.role === 'model' || msg.role === 'tool') &&
+          const shouldSkipMargin = !systemLikeMessage && (msg.role === 'model' || msg.role === 'tool') &&
             (prevMsg?.role === 'model' || prevMsg?.role === 'tool')
           
           return (
             <div
               key={idx}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ${shouldSkipMargin ? '' : 'mt-4'}`}
+              className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${shouldSkipMargin ? '' : 'mt-4'}`}
             >
               <div
                 className={`${
-                  msg.role === 'user' 
-                    ? 'max-w-[80%]' 
-                    : isMobile 
-                      ? 'w-full' 
-                      : 'w-full max-w-[80%]'
+                  systemLikeMessage
+                    ? 'w-full max-w-[80%]'
+                    : msg.role === 'user'
+                      ? 'max-w-[80%]'
+                      : isMobile
+                        ? 'w-full'
+                        : 'w-full max-w-[80%]'
                 } ${
-                  msg.role === 'user'
+                  !systemLikeMessage && msg.role === 'user'
                     ? 'bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
                     : ''
                 } overflow-x-hidden`}
               >
-                {msg.role === 'user' ? (
+                {systemLikeMessage ? renderSystemLikeMessage(msg, `msg-${idx}`) : msg.role === 'user' ? (
                   <div className="flex flex-col">
                     {textLikeParts.map((part, partIdx) => {
                       const messageKey = `${idx}-${partIdx}`
 
                       if (part.system) {
-                        return renderSystemPart(formatStructuredSystemText(part.system), messageKey, true)
+                        return null
                       }
 
                       const text = part.text || ''
@@ -1984,9 +2017,8 @@ export default function Chat({ sessionId, onBack }: ChatProps) {
                 ) : (
                   <div className="flex flex-col">
                     {textLikeParts.map((part, partIdx) => {
-                      const messageKey = `${idx}-${partIdx}`
                       if (part.system) {
-                        return renderSystemPart(formatStructuredSystemText(part.system), messageKey, false)
+                        return null
                       }
 
                       const text = part.text || ''
