@@ -186,8 +186,13 @@ function buildHunkSnippets(hunk: ApplyPatchHunk): { oldText: string; newText: st
   };
 }
 
-function findAnchorOffset(content: string, anchors: string[], filePath: string): number {
+function findAnchorWindow(content: string, anchors: string[], filePath: string): { start: number; end: number; lastAnchor?: string } {
+  if (anchors.length === 0) {
+    return { start: 0, end: content.length };
+  }
+
   let offset = 0;
+  let lastAnchor = '';
 
   for (const anchor of anchors) {
     const index = content.indexOf(anchor, offset);
@@ -195,9 +200,30 @@ function findAnchorOffset(content: string, anchors: string[], filePath: string):
       throw new Error(`Could not find @@ anchor "${anchor}" while patching ${filePath}.`);
     }
     offset = index;
+    lastAnchor = anchor;
   }
 
-  return offset;
+  const nextAnchorIndex = lastAnchor
+    ? content.indexOf(lastAnchor, offset + Math.max(lastAnchor.length, 1))
+    : -1;
+
+  return {
+    start: offset,
+    end: nextAnchorIndex === -1 ? content.length : nextAnchorIndex,
+    lastAnchor,
+  };
+}
+
+function collectMatchPositions(content: string, needle: string, start = 0, end = content.length): number[] {
+  if (!needle) return [];
+
+  const positions: number[] = [];
+  let index = content.indexOf(needle, start);
+  while (index !== -1 && index < end) {
+    positions.push(index);
+    index = content.indexOf(needle, index + 1);
+  }
+  return positions;
 }
 
 export function applyUpdateHunks(content: string, hunks: ApplyPatchHunk[], filePath: string): string {
@@ -206,18 +232,24 @@ export function applyUpdateHunks(content: string, hunks: ApplyPatchHunk[], fileP
 
   for (const hunk of hunks) {
     const { oldText, newText } = buildHunkSnippets(hunk);
-    const searchStart = findAnchorOffset(updated, hunk.anchors, filePath);
-    const firstIndex = updated.indexOf(oldText, searchStart);
+    const anchorWindow = findAnchorWindow(updated, hunk.anchors, filePath);
+    const searchStart = Math.max(0, anchorWindow.start - oldText.length);
+    const windowMatches = collectMatchPositions(updated, oldText, searchStart, anchorWindow.end);
 
-    if (firstIndex === -1) {
+    if (windowMatches.length === 0) {
+      const globalMatches = collectMatchPositions(updated, oldText, 0, updated.length).length;
+      if (globalMatches > 0 && hunk.anchors.length > 0) {
+        throw new Error(`Could not find matching patch hunk in ${filePath} near @@ anchors. The hunk text exists elsewhere in the file (${globalMatches} match${globalMatches === 1 ? '' : 'es'}), so the anchors/context may be too broad or stale.`);
+      }
       throw new Error(`Could not find matching patch hunk in ${filePath}.`);
     }
 
-    const secondIndex = updated.indexOf(oldText, firstIndex + 1);
-    if (secondIndex !== -1) {
-      throw new Error(`Patch hunk for ${filePath} is ambiguous: matched multiple locations.`);
+    if (windowMatches.length > 1) {
+      const scope = hunk.anchors.length > 0 ? 'within the @@ anchor region' : 'in the file';
+      throw new Error(`Patch hunk for ${filePath} is ambiguous: matched ${windowMatches.length} locations ${scope}. Add more unchanged context lines or a more specific @@ anchor.`);
     }
 
+    const firstIndex = windowMatches[0];
     updated = updated.slice(0, firstIndex) + newText + updated.slice(firstIndex + oldText.length);
   }
 
