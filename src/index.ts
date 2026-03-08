@@ -29,6 +29,7 @@ import { HttpServer, setHttpServer } from './httpServer';
 import { registerNodeWebSocket } from './nodeWebSocket';
 import { scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
+import { initializeTimers } from './timers';
 
 // Check if TUI mode is enabled
 const ENABLE_TUI = process.env.ENABLE_TUI === 'true' || process.argv.includes('--tui');
@@ -267,6 +268,8 @@ async function start() {
             router.processSessionQueue(sessionId);
         }
     );
+
+    await initializeTimers();
 
     // Start Matrix channel (if configured)
     if (process.env.MATRIX_HOMESERVER && process.env.MATRIX_ACCESS_TOKEN && process.env.MATRIX_USER_ID) {

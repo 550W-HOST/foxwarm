@@ -9,6 +9,7 @@ import * as tools from './tools'
 import { estimateSessionTokens } from './tokenCount'
 import { CONTEXT_LIMIT, COMPACT_PERCENT, resolveModelConfig } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
+import * as timers from './timers'
 
 export type CommandDef = {
   description: string
@@ -20,6 +21,56 @@ export type CommandDef = {
 
 const messagesUsage = 'Usage: `/messages <num>` | `/messages <start> <end>`'
 const deleteMessagesUsage = 'Usage: `/delete-messages <num>` (positive: delete oldest, negative: delete newest)'
+
+function formatTimerDate(timestamp?: number | null): string {
+  if (!timestamp) return 'n/a'
+  const date = new Date(timestamp)
+  return Number.isNaN(date.getTime()) ? 'n/a' : date.toISOString()
+}
+
+function parseTimerFlags(tokens: string[]) {
+  let index = 0
+  let newSession = false
+  let sessionPrefix: string | undefined
+  let agentName: string | undefined
+
+  while (index < tokens.length) {
+    const token = tokens[index]
+    if (token === '--') break
+    if (token === '--new-session') {
+      newSession = true
+      index += 1
+      continue
+    }
+    if (token === '--prefix') {
+      if (index + 1 >= tokens.length) throw new Error('Missing value for --prefix')
+      sessionPrefix = tokens[index + 1]
+      index += 2
+      continue
+    }
+    if (token === '--agent') {
+      if (index + 1 >= tokens.length) throw new Error('Missing value for --agent')
+      agentName = tokens[index + 1]
+      index += 2
+      continue
+    }
+    break
+  }
+
+  return {
+    newSession,
+    sessionPrefix,
+    agentName,
+    index,
+  }
+}
+
+function parseTimerMessage(tokens: string[]): string {
+  if (tokens[0] === '--') {
+    return tokens.slice(1).join(' ')
+  }
+  return tokens.join(' ')
+}
 
 async function handleCompactCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) {
   if (!sessionId || !session) return
@@ -76,6 +127,176 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: true,
     handler: handleCompactCommand,
     showInTelegram: false,
+  },
+  '/timer': {
+    description: 'Manage session timers: help, list, create, delete',
+    requiresSession: true,
+    handler: async (ctx, args, sessionId, session) => {
+      if (!sessionId || !session) return
+
+      const subcommand = args[0]
+      const subArgs = args.slice(1)
+
+      if (!subcommand) {
+        let resp = '⏰ *Timer Commands*\n\n'
+        resp += '`/timer list` - List timers for current session\n'
+        resp += '`/timer delete <id>` - Delete a timer\n'
+        resp += '`/timer after <seconds> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>` - Create a one-time timer after N seconds\n'
+        resp += '`/timer at <ISO-time> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>` - Create a one-time timer at an absolute time\n'
+        resp += '`/timer cron <expr> [--new-session] [--prefix <prefix>] [--agent <agent>] -- <message>` - Create a recurring cron timer (5 or 6 field cron)\n'
+        ctx.reply(resp)
+        return
+      }
+
+      switch (subcommand) {
+        case 'list': {
+          const sessionTimers = timers.listTimers(sessionId)
+          if (sessionTimers.length === 0) {
+            ctx.reply('No timers found for this session.')
+            return
+          }
+
+          let resp = `⏰ *Timers* (${sessionTimers.length})\n\n`
+          for (const timer of sessionTimers) {
+            const nextRun = formatTimerDate(timer.nextRunAt)
+            const mode = timer.mode === 'cron' ? `cron: \`${timer.cron}\`` : `once: \`${formatTimerDate(timer.at)}\``
+            const target = timer.newSession
+              ? `new session (agent: \`${timer.agentName || 'main'}\`, prefix: \`${timer.sessionPrefix || 'timer'}\`)`
+              : 'current session'
+            resp += `- \`${timer.id}\` - ${mode} - next: ${nextRun} - ${target}\n`
+            resp += `  ${timer.message}\n`
+          }
+
+          ctx.reply(resp)
+          return
+        }
+
+        case 'delete': {
+          const timerId = subArgs[0]
+          if (!timerId) {
+            ctx.reply('Usage: /timer delete <id>')
+            return
+          }
+
+          try {
+            const deleted = await timers.deleteTimer(timerId, sessionId)
+            if (!deleted) {
+              ctx.reply(`❌ Timer \`${timerId}\` not found.`)
+              return
+            }
+
+            ctx.reply(`✅ Timer \`${timerId}\` deleted.`)
+          } catch (e: any) {
+            ctx.reply(`❌ Timer delete failed: ${e.message}`)
+          }
+          return
+        }
+
+        case 'after': {
+          if (subArgs.length < 2) {
+            ctx.reply('Usage: /timer after <seconds> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>')
+            return
+          }
+
+          const afterSeconds = parseFloat(subArgs[0])
+          try {
+            const flags = parseTimerFlags(subArgs.slice(1))
+            const message = parseTimerMessage(subArgs.slice(1 + flags.index))
+            if (!message) {
+              ctx.reply('Usage: /timer after <seconds> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>')
+              return
+            }
+
+            const timer = await timers.createTimer({
+              sessionId,
+              afterSeconds,
+              message,
+              newSession: flags.newSession,
+              sessionPrefix: flags.sessionPrefix,
+              agentName: flags.agentName,
+              currentNode: session.currentNode,
+              model: session.model,
+            })
+            ctx.reply(`✅ Timer created: \`${timer.id}\`\nNext run: ${formatTimerDate(timer.nextRunAt)}`)
+          } catch (e: any) {
+            ctx.reply(`❌ Timer create failed: ${e.message}`)
+          }
+          return
+        }
+
+        case 'at': {
+          if (subArgs.length < 2) {
+            ctx.reply('Usage: /timer at <ISO-time> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>')
+            return
+          }
+
+          const at = subArgs[0]
+          try {
+            const flags = parseTimerFlags(subArgs.slice(1))
+            const message = parseTimerMessage(subArgs.slice(1 + flags.index))
+            if (!message) {
+              ctx.reply('Usage: /timer at <ISO-time> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>')
+              return
+            }
+
+            const timer = await timers.createTimer({
+              sessionId,
+              at,
+              message,
+              newSession: flags.newSession,
+              sessionPrefix: flags.sessionPrefix,
+              agentName: flags.agentName,
+              currentNode: session.currentNode,
+              model: session.model,
+            })
+            ctx.reply(`✅ Timer created: \`${timer.id}\`\nNext run: ${formatTimerDate(timer.nextRunAt)}`)
+          } catch (e: any) {
+            ctx.reply(`❌ Timer create failed: ${e.message}`)
+          }
+          return
+        }
+
+        case 'cron': {
+          let cronEnd = 0
+          while (cronEnd < subArgs.length && subArgs[cronEnd] !== '--' && !subArgs[cronEnd].startsWith('--')) {
+            cronEnd += 1
+          }
+
+          const cron = subArgs.slice(0, cronEnd).join(' ')
+          if (!cron) {
+            ctx.reply('Usage: /timer cron <expr> [--new-session] [--prefix <prefix>] [--agent <agent>] -- <message>')
+            return
+          }
+
+          try {
+            const flags = parseTimerFlags(subArgs.slice(cronEnd))
+            const message = parseTimerMessage(subArgs.slice(cronEnd + flags.index))
+            if (!message) {
+              ctx.reply('Usage: /timer cron <expr> [--new-session] [--prefix <prefix>] [--agent <agent>] -- <message>')
+              return
+            }
+
+            const timer = await timers.createTimer({
+              sessionId,
+              cron,
+              message,
+              newSession: flags.newSession,
+              sessionPrefix: flags.sessionPrefix,
+              agentName: flags.agentName,
+              currentNode: session.currentNode,
+              model: session.model,
+            })
+            ctx.reply(`✅ Cron timer created: \`${timer.id}\`\nCron: \`${cron}\`\nNext run: ${formatTimerDate(timer.nextRunAt)}`)
+          } catch (e: any) {
+            ctx.reply(`❌ Timer create failed: ${e.message}`)
+          }
+          return
+        }
+
+        default:
+          ctx.reply('Usage: /timer | /timer list | /timer delete <id> | /timer after <seconds> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message> | /timer at <ISO-time> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message> | /timer cron <expr> [--new-session] [--prefix <prefix>] [--agent <agent>] -- <message>')
+      }
+    }
   },
   '/status': {
     description: 'Show current session status',

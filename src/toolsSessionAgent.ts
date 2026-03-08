@@ -2,6 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import * as sessionManager from './sessionManager';
 import * as skills from './skills';
+import * as timers from './timers';
 import { logger } from './common';
 import { COMPACT_PERCENT } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
@@ -13,6 +14,23 @@ interface ToolContext {
 }
 
 type ToolArgs = Record<string, any>;
+
+function formatTimerTimestamp(timestamp?: number | null): string {
+  if (!timestamp) return 'n/a';
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? 'n/a' : date.toISOString();
+}
+
+function formatTimerSummary(timer: timers.TimerView): string {
+  const mode = timer.mode === 'cron'
+    ? `cron: ${timer.cron}`
+    : `at: ${formatTimerTimestamp(timer.at)}`;
+  const target = timer.newSession
+    ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
+    : `session ${timer.sessionId}`;
+
+  return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}\nMessage: ${timer.message}`;
+}
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   const { suffix, fork = true, message, node, isolated } = args;
@@ -381,6 +399,74 @@ export async function tool_compress_session(args: ToolArgs, ctx: ToolContext) {
   }
 
   return `Compaction queued for session \`${targetSessionId}\` using ${mode}. Pending queue length: ${result.queueLength}`;
+}
+
+export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
+  const targetSessionId = args.sessionId || ctx.sessionId;
+  if (!targetSessionId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  const targetSession = await sessionManager.getExistingSession(targetSessionId);
+  if (!targetSession) {
+    throw new Error(`Session \`${targetSessionId}\` not found.`);
+  }
+
+  const timer = await timers.createTimer({
+    sessionId: targetSessionId,
+    at: args.at,
+    afterSeconds: args.afterSeconds,
+    cron: args.cron,
+    message: args.message,
+    newSession: args.newSession,
+    sessionPrefix: args.sessionPrefix,
+    agentName: args.agentName,
+    currentNode: targetSession.currentNode,
+    model: targetSession.model,
+  });
+
+  return formatTimerSummary(timer);
+}
+
+export async function tool_list_timers(args: ToolArgs, ctx: ToolContext) {
+  const targetSessionId = args.sessionId || ctx.sessionId;
+  const timerList = timers.listTimers(targetSessionId);
+
+  if (timerList.length === 0) {
+    return targetSessionId
+      ? `No timers found for session \`${targetSessionId}\`.`
+      : 'No timers found.';
+  }
+
+  let result = `Found ${timerList.length} timer(s):\n\n`;
+  for (const timer of timerList) {
+    const mode = timer.mode === 'cron'
+      ? `cron: ${timer.cron}`
+      : `at: ${formatTimerTimestamp(timer.at)}`;
+    const target = timer.newSession
+      ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
+      : `session ${timer.sessionId}`;
+    result += `- \`${timer.id}\` - ${mode} - next: ${formatTimerTimestamp(timer.nextRunAt)} - ${target}\n`;
+    result += `  ${timer.message}\n`;
+  }
+
+  return result.trimEnd();
+}
+
+export async function tool_delete_timer(args: ToolArgs, ctx: ToolContext) {
+  const { timerId } = args;
+  const targetSessionId = args.sessionId || ctx.sessionId;
+
+  if (!timerId || typeof timerId !== 'string') {
+    throw new Error('timerId is required');
+  }
+
+  const deleted = await timers.deleteTimer(timerId, targetSessionId);
+  if (!deleted) {
+    return `Timer \`${timerId}\` not found.`;
+  }
+
+  return `Timer \`${timerId}\` deleted.`;
 }
 
 export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {

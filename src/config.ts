@@ -27,6 +27,7 @@ export const NODE_TOKEN_FILE = path.join(STATE_DIR, 'node_token');
 export const SESSIONS_FILE = path.join(STATE_DIR, 'sessions.json');
 export const AGENTS_FILE = path.join(STATE_DIR, 'agents.json');
 export const CHANNELS_FILE = path.join(STATE_DIR, 'channels.json');
+export const TIMERS_FILE = path.join(STATE_DIR, 'timers.json');
 export const ONBOOT_FILE = path.join(MAIN_AGENT_MEMORY_DIR, 'ONBOOT.md');
 export const MCP_CONFIG_PATH = process.env.MCP_CONFIG_PATH || path.join(STATE_DIR, 'mcp.json');
 

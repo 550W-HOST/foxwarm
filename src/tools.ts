@@ -26,6 +26,9 @@ import {
     tool_update_session_name,
     tool_stop_session,
     tool_compress_session,
+    tool_create_timer,
+    tool_list_timers,
+    tool_delete_timer,
     tool_create_agent,
     tool_create_session,
     tool_set_agent_inherit,
@@ -235,13 +238,12 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
             if (!resolved) {
                 resolved = true;
                 const partialOutput = output || '(Command started, no output yet)';
-                const relativePath = path.relative(agentDir, logPath);
-                const result = `[Process running longer than 10s, switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification (unless working on other tasks in parallel).]\nPID: ${child.pid}\nLog file: ${relativePath}\n\nPartial Output:\n${partialOutput.substring(0, 2000)}${partialOutput.length > 2000 ? '\n...(truncated)' : ''}`;
+                const result = `[Process running longer than 10s, switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification (unless working on other tasks in parallel).]\nPID: ${child.pid}\nLog file: ${logPath}\n\nPartial Output:\n${partialOutput.substring(0, 2000)}${partialOutput.length > 2000 ? '\n...(truncated)' : ''}`;
 
                 // Keep track of background process
                 child.on('exit', (code, signal) => {
                     logStream.end();
-                    const finalMsg = `Background Process Finished\ncommand: \`${command}\`\nExit code: ${code}${signal ? `, Signal: ${signal}` : ''}\nFull output in ${relativePath}`;
+                    const finalMsg = `Background Process Finished\ncommand: \`${command}\`\nExit code: ${code}${signal ? `, Signal: ${signal}` : ''}\nFull output in ${logPath}`;
                     // Queue notification to session
                     if (ctx && ctx.sessionId) {
                         sessionManager.queueSessionSystemEvent(ctx.sessionId, finalMsg, 'background');
@@ -259,8 +261,7 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
                 resolved = true;
                 let finalOutput = output || '(No output)';
                 if (estimateTokenCount(finalOutput) > 10000) {
-                    const relativePath = path.relative(agentDir, logPath);
-                    finalOutput = `[OUTPUT TOO LONG]\n${finalOutput.substring(0, 5000)}\n\n[...TRUNCATED...]\n\n${finalOutput.substring(finalOutput.length - 5000)}\n\nFull output saved to: ${relativePath}`;
+                    finalOutput = `[OUTPUT TOO LONG]\n${finalOutput.substring(0, 5000)}\n\n[...TRUNCATED...]\n\n${finalOutput.substring(finalOutput.length - 5000)}\n\nFull output saved to: ${logPath}`;
                 }
                 resolve(finalOutput);
             }
@@ -453,7 +454,7 @@ async function tool_call_mcp(args: ToolArgs) {
         const logFileName = `mcp_${Date.now()}.log`;
         const logPath = path.join(tempDir, logFileName);
         await fs.writeFile(logPath, text);
-        return `[OUTPUT TOO LONG (~${tokens} tokens)]. Full output saved to: agent-folder/.temp/${logFileName}`;
+        return `[OUTPUT TOO LONG (~${tokens} tokens)]. Full output saved to: ${logPath}`;
     }
 
     return text;
@@ -517,6 +518,9 @@ export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
 export const stop_session = tool_stop_session;
 export const compress_session = tool_compress_session;
+export const create_timer = tool_create_timer;
+export const list_timers = tool_list_timers;
+export const delete_timer = tool_delete_timer;
 export const browse_open = tool_browse_open;
 export const browse_list = tool_browse_list;
 export const browse_get = tool_browse_get;
@@ -814,6 +818,46 @@ export const definitions = [
                     summary: { type: 'string', description: 'Required when compacting the current session/self. Optional for other sessions.' },
                     keepPercent: { type: 'number', description: 'How much recent history to keep. Use 0-1 fraction or 1-100 percentage. Optional.' }
                 }
+            }
+        },
+        {
+            name: 'create_timer',
+            description: 'Create a one-shot or recurring timer for a session. Timers persist across restarts and deliver structured system events when they fire.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Owner session ID (optional, default: current session)' },
+                    at: { type: ['string', 'number'], description: 'Absolute trigger time as ISO string or epoch milliseconds (one-shot)' },
+                    afterSeconds: { type: 'number', description: 'Trigger after N seconds (one-shot)' },
+                    cron: { type: 'string', description: 'Cron expression for recurring timers' },
+                    message: { type: 'string', description: 'Message delivered when the timer fires' },
+                    newSession: { type: 'boolean', description: 'If true, each trigger creates a new session instead of using the owner session' },
+                    sessionPrefix: { type: 'string', description: 'Prefix for newly created timer sessions (default: timer)' },
+                    agentName: { type: 'string', description: 'Target agent for new timer-created sessions (default: owner session agent)' }
+                },
+                required: ['message']
+            }
+        },
+        {
+            name: 'list_timers',
+            description: 'List timers for a session. Defaults to the current session.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Owner session ID (optional, default: current session)' }
+                }
+            }
+        },
+        {
+            name: 'delete_timer',
+            description: 'Delete a timer by ID. Defaults to the current session scope.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    timerId: { type: 'string', description: 'Timer ID to delete' },
+                    sessionId: { type: 'string', description: 'Owner session ID (optional, default: current session)' }
+                },
+                required: ['timerId']
             }
         },
         {

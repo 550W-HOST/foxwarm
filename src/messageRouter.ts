@@ -109,14 +109,14 @@ export class MessageRouter {
     return finalParts;
   }
 
-  private drainLeadingQueuedTurnParts(session: Session): MessagePart[] {
+  private drainLeadingQueuedMessageParts(session: Session): MessagePart[] {
     const queuedParts: MessagePart[] = [];
 
-    while (session.queue[0] && (session.queue[0].type === 'user' || session.queue[0].type === 'intersession')) {
+    while (session.queue[0] && session.queue[0].type !== 'compact') {
       const item = session.queue.shift();
       if (!item?.parts) continue;
 
-      if (item.type === 'user') {
+      if (item.source) {
         queuedParts.push(...this.prepareUserParts(item.parts, item.source));
         continue;
       }
@@ -151,12 +151,49 @@ export class MessageRouter {
     }
 
     await sessionManager.saveSession(session.id);
-    const nextItem = session.queue.shift();
-    if (!nextItem) {
+
+    if (session.queue[0]?.type === 'compact') {
+      const nextItem = session.queue.shift();
+      if (!nextItem) {
+        return false;
+      }
+
+      await this.processQueuedItem(session.id, session, nextItem);
+      return true;
+    }
+
+    const queuedParts = this.drainLeadingQueuedMessageParts(session);
+    if (queuedParts.length === 0) {
       return false;
     }
 
-    await this.processQueuedItem(session.id, session, nextItem);
+    await this.runSessionTurn(session.id, {
+      parts: queuedParts,
+      session,
+      preclaimed: true,
+    });
+    return true;
+  }
+
+  private async runPendingCompactionIfNeeded(sessionId: string, session: Session): Promise<boolean> {
+    const nextItem = session.queue[0];
+    if (nextItem?.type !== 'compact') {
+      return false;
+    }
+
+    session.queue.shift();
+
+    try {
+      if (nextItem.summary && nextItem.summary.trim()) {
+        await sessionManager.compactHistoryWithSummary(sessionId, nextItem.summary, nextItem.keepPercent);
+      } else {
+        await sessionManager.compactHistory(sessionId, nextItem.keepPercent);
+      }
+    } catch (e: any) {
+      logger.error({ err: e, sessionId }, 'In-turn queued compaction failed');
+      await this.sendSessionError(session, undefined, e);
+    }
+
     return true;
   }
 
@@ -324,7 +361,12 @@ export class MessageRouter {
       const { contextLimit } = resolveModelConfig(session.model);
 
       while (iteration < 500) {
-        const queuedParts = this.drainLeadingQueuedTurnParts(session);
+        if (await this.runPendingCompactionIfNeeded(sessionId, session)) {
+          parts = null;
+          continue;
+        }
+
+        const queuedParts = this.drainLeadingQueuedMessageParts(session);
         if (queuedParts.length > 0) {
           if (parts) {
             parts = [...parts, ...queuedParts];
@@ -370,6 +412,17 @@ export class MessageRouter {
         const toolResultMsg = await llm.executeTools(result.toolCalls, toolContext, session);
 
         await this.appendToolMessage(session, toolResultMsg.parts);
+
+        if (await this.runPendingCompactionIfNeeded(sessionId, session)) {
+          parts = null;
+          iteration++;
+          continue;
+        }
+
+        const queuedAfterTools = this.drainLeadingQueuedMessageParts(session);
+        if (queuedAfterTools.length > 0) {
+          await this.appendUserMessage(session, queuedAfterTools);
+        }
 
         if (result.usage) {
           const currentSize = sessionManager.getUsageTotalTokens(result.usage);
@@ -479,14 +532,12 @@ export class MessageRouter {
       const session = await sessionManager.getSession(sessionId);
       if (!this.tryClaimSession(session)) return;
 
-      const item = session.queue.shift();
-      if (!item) {
-        session.busy = false;
-        await sessionManager.saveSession(session.id);
+      if (await this.continueWithQueuedWork(session)) {
         return;
       }
 
-      await this.processQueuedItem(sessionId, session, item);
+      session.busy = false;
+      await sessionManager.saveSession(session.id);
     } finally {
       this.processingSessions.delete(sessionId);
     }

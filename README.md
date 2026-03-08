@@ -72,11 +72,8 @@ On first startup, Foxwarm will:
 3. Load model definitions from `state/models.yaml`
    - if missing, it falls back to `templates/models.example.yaml`
 4. Load session metadata and agent memory
-5. Load or generate runtime auth tokens:
-   - `state/token`
-   - `state/node_token`
-6. Start configured channels (Telegram / Matrix / WeChat Work / WebUI)
-7. Run `ONBOOT.md` if present and show `BOOTSTRAP.md` guidance for first-time setup
+5. Start configured channels (Telegram / Matrix / WeChat Work / WebUI)
+6. Run `ONBOOT.md` if present and show `BOOTSTRAP.md` guidance for first-time setup
 
 ## Configuration
 
@@ -185,7 +182,7 @@ foxwarm/
 ├── lib/                  # Compiled JavaScript
 ├── agents/               # Agent workspaces and memory
 ├── skills/               # Optional skill definitions
-├── state/                # Runtime state (tokens, logs, models, sessions, db)
+├── state/                # Runtime state, logs, models, sessions, db
 ├── templates/            # Tracked starter templates
 ├── packages/webui/       # Browser frontend
 ├── test/                 # Local test environment

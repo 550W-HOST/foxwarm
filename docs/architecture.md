@@ -29,8 +29,6 @@ Tools / Nodes
         ↓
 State + Memory
   ├─ agents/<agent>/memory/
-  ├─ state/token
-  ├─ state/node_token
   ├─ state/sessions*.json
   ├─ state/db/
   └─ state/models.yaml
@@ -143,8 +141,6 @@ skills/
     memory/
 
 state/
-  token
-  node_token
   agents.json
   channels.json
   models.yaml
