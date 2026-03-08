@@ -1271,18 +1271,16 @@ export async function sendToSession(targetSessionId: string, message: string, fr
     throw new Error('Isolated session can only communicate with parent/child sessions.');
   }
 
-  const parts: MessagePart[] = [
-    { system: fromSessionId ? `Message from other session \`${fromSessionId}\`` : 'SYSTEM MESSAGE' }
-  ];
+  const replyTarget = fromSessionId || 'unknown-session';
+  const prefix = fromSessionId
+    ? `[SYSTEM: Following message is from session \`${fromSessionId}\`, not direct end-user input. If you need to reply, use send_to_session({sessionId: \`${replyTarget}\`, message: "..."}).]`
+    : '[SYSTEM: Following message is system-delivered session content, not direct end-user input.]';
 
-  if (fromSessionId && (fromSession?.parentSessionId === targetSessionId || targetSession?.parentSessionId === fromSessionId)) {
-    const replyTarget = fromSessionId;
-    parts.push({ system: `You can reply using send_to_session({sessionId: \`${replyTarget}\`, message: "..."}).` });
-  }
+  const combinedText = message
+    ? `${prefix}\n${message}`
+    : prefix;
 
-  if (message) {
-    parts.push({ text: message });
-  }
+  const parts: MessagePart[] = [{ text: combinedText }];
 
   logger.info({ targetSessionId, fromSessionId }, 'Message sent to session');
   await enqueueSessionItem(targetSessionId, {

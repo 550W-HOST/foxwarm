@@ -450,7 +450,7 @@ function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
     const responseInput = [];
 
     const flushMessageContent = (
-        role: 'user' | 'assistant' | 'developer',
+        role: 'user' | 'assistant',
         content: Array<OpenAIResponsesContent>
     ) => {
         if (content.length === 0) return;
@@ -546,13 +546,12 @@ function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
 
         const role = msg.role === 'model' ? 'assistant' : 'user';
         const content: Array<OpenAIResponsesContent> = [];
-        const developerContent: Array<{ type: 'input_text'; text: string }> = [];
 
         for (const part of msg.parts || []) {
             if (part.system) {
-                developerContent.push({
-                    type: 'input_text',
-                    text: part.system
+                content.push({
+                    type: role === 'assistant' ? 'output_text' : 'input_text',
+                    text: `[SYSTEM: ${part.system}]`
                 });
             }
 
@@ -583,7 +582,6 @@ function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
             }
 
             if (part.functionCall) {
-                flushMessageContent('developer', developerContent);
                 flushMessageContent(role, content);
                 responseInput.push({
                     type: 'function_call',
@@ -594,7 +592,6 @@ function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
             }
         }
 
-        flushMessageContent('developer', developerContent);
         flushMessageContent(role, content);
     }
 
