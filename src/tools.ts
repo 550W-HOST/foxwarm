@@ -309,11 +309,22 @@ async function tool_search_memory({ query, limit = 5, scope = 'all' }: { query: 
         const date = ts ? new Date(ts) : null;
         const dateStr = (date && !isNaN(date.getTime())) ? date.toISOString() : 'unknown';
         const idStr = (r.id && typeof r.id === 'string') ? `${r.id.substring(0, 8)}...` : 'N/A';
+        const seqLabel = r.start_seq != null && r.end_seq != null && Number(r.start_seq) !== Number(r.end_seq)
+            ? `${r.start_seq}-${r.end_seq}`
+            : `${r.start_seq ?? r.seq}`;
+        const messageLabel = r.message_count > 1
+            ? `[messages: ${r.message_count}]`
+            : '';
         const chunkLabel = r.chunk_count > 1
             ? `[chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]`
             : '';
 
-        return `[${dateStr}] [session: ${r.session_id}] [seq: ${r.seq}] ${chunkLabel} [ID: ${idStr}]\n${r.text}`.trim();
+        return [
+            `[${dateStr}] [session: ${r.session_id}] [seq: ${seqLabel}]`,
+            messageLabel,
+            chunkLabel,
+            `[ID: ${idStr}]`,
+        ].filter(Boolean).join(' ') + `\n${r.text}`;
     }).join('\n\n---\n\n');
 }
 
@@ -326,11 +337,22 @@ async function tool_get_memory_context({ timestamp, limit = 10 }: { timestamp: n
         const date = ts ? new Date(ts) : null;
         const dateStr = (date && !isNaN(date.getTime())) ? date.toISOString() : 'unknown';
         const idStr = (r.id && typeof r.id === 'string') ? `${r.id.substring(0, 8)}...` : 'N/A';
+        const seqLabel = r.start_seq != null && r.end_seq != null && Number(r.start_seq) !== Number(r.end_seq)
+            ? `${r.start_seq}-${r.end_seq}`
+            : `${r.start_seq ?? r.seq}`;
+        const messageLabel = r.message_count > 1
+            ? `[messages: ${r.message_count}]`
+            : '';
         const chunkLabel = r.chunk_count > 1
             ? `[chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]`
             : '';
 
-        return `[${dateStr}] [session: ${r.session_id}] [seq: ${r.seq}] ${chunkLabel} [ID: ${idStr}]\n${r.text}`.trim();
+        return [
+            `[${dateStr}] [session: ${r.session_id}] [seq: ${seqLabel}]`,
+            messageLabel,
+            chunkLabel,
+            `[ID: ${idStr}]`,
+        ].filter(Boolean).join(' ') + `\n${r.text}`;
     }).join('\n\n---\n\n');
 }
 
