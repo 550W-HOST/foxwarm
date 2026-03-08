@@ -29,9 +29,51 @@ interface ContextMenuState {
 }
 
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
+const LEGACY_TOKEN_KEY = 'alphabot_token'
 
 const getStoredAuthToken = () => {
-  return localStorage.getItem(FOXWARM_TOKEN_KEY)
+  const foxwarmToken = localStorage.getItem(FOXWARM_TOKEN_KEY)
+  if (foxwarmToken) {
+    return foxwarmToken
+  }
+
+  const legacyToken = localStorage.getItem(LEGACY_TOKEN_KEY)
+  if (legacyToken) {
+    localStorage.setItem(FOXWARM_TOKEN_KEY, legacyToken)
+    localStorage.removeItem(LEGACY_TOKEN_KEY)
+    return legacyToken
+  }
+
+  return null
+}
+
+const findScrollableParent = (element: HTMLElement | null): HTMLElement | null => {
+  if (!element) return null
+
+  const taggedContainer = element.closest('[data-session-list-scroll-container]') as HTMLElement | null
+  if (taggedContainer) {
+    return taggedContainer
+  }
+
+  let current = element.parentElement || null
+
+  while (current) {
+    const style = window.getComputedStyle(current)
+    const overflowY = style.overflowY
+    if (overflowY === 'auto' || overflowY === 'scroll') {
+      return current
+    }
+    current = current.parentElement
+  }
+
+  return null
+}
+
+const isFullyVisibleInContainer = (element: HTMLElement, container: HTMLElement) => {
+  const elementRect = element.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+
+  return elementRect.top >= containerRect.top && elementRect.bottom <= containerRect.bottom
 }
 
 export default function SessionListCore({ sessions, currentSession, onSelectSession }: SessionListCoreProps) {
@@ -161,7 +203,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     if (!target) return
 
     const frame = window.requestAnimationFrame(() => {
-      target.scrollIntoView({ block: 'center' })
+      const scrollParent = findScrollableParent(target)
+
+      if (!scrollParent || !isFullyVisibleInContainer(target, scrollParent)) {
+        target.scrollIntoView({ block: 'nearest' })
+      }
+
       setPendingFocusSessionId(null)
     })
 
@@ -343,11 +390,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     return (
       <div
         key={session.id}
-        ref={(node) => {
-          sessionRefs.current.set(session.id, node)
-        }}
       >
         <div
+          ref={(node) => {
+            sessionRefs.current.set(session.id, node)
+          }}
           className={`flex items-center rounded cursor-pointer mt-1 ${
             isCurrentSession
               ? 'bg-blue-100 dark:bg-blue-900/30' 
@@ -386,11 +433,33 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 {displayId}
               </div>
             )}
-            <div className="text-xs text-gray-500 dark:text-gray-400">
-              {session.messageCount || 0} messages
-              {hasChildren && ` • ${children.length} child${children.length > 1 ? 'ren' : ''}`}
-              {session.busy && ' • busy'}
-              {!!session.queueLength && ` • ${session.queueLength} queued`}
+            <div className="text-xs text-gray-500 dark:text-gray-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+              {session.busy && (
+                <>
+                  <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-300">
+                    <span className="inline-flex items-center gap-0.5">
+                      <span className="w-1.5 h-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce"></span>
+                      <span className="w-1.5 h-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></span>
+                      <span className="w-1.5 h-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
+                    </span>
+                    <span>busy</span>
+                  </span>
+                  <span>•</span>
+                </>
+              )}
+              {!!session.queueLength && (
+                <>
+                  <span>{session.queueLength} queued</span>
+                  <span>•</span>
+                </>
+              )}
+              <span>{session.messageCount || 0} msgs</span>
+              {hasChildren && (
+                <>
+                  <span>•</span>
+                  <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
+                </>
+              )}
             </div>
           </div>
           {/* Menu button - only visible on mobile */}

@@ -1337,7 +1337,13 @@ export async function saveSession(sessionId: string): Promise<void> {
     await saveSessionsMetadata();
 
     // Schedule archive-based vector indexing (non-blocking)
-    vector.scheduleSessionArchiveIndex(sessionId, Math.max(0, (session.nextMessageSeq || 1) - 1))
+    const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
+    const lastMessage = session.history[session.history.length - 1];
+    const latestMessageTokenEstimate = lastMessage?.__meta?.seq === latestSeqHint
+      ? vector.estimateArchiveMessageTokenCount(lastMessage)
+      : undefined;
+
+    vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate)
       .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
     
     // Notify session list update

@@ -23,7 +23,7 @@ export default function Sidebar({ sessions, currentSession, onSelectSession, onC
         </button>
       </div>
       
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" data-session-list-scroll-container>
         <div className="p-2">
           <SessionListCore 
             sessions={sessions} 

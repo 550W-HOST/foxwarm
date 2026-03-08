@@ -1,6 +1,6 @@
-# Foxwarm WebUI
+# alphabot WebUI
 
-Web interface for Foxwarm.
+Web interface for alphabot.
 
 ## Setup
 
@@ -10,9 +10,9 @@ cd packages/webui
 npm install
 ```
 
-2. Configure the backend in the project root `.env` file. (HTTP API is enabled by default on port 3001)
+2. Configure backend in `betabot/.env`. (is enabled by default, port 3001)
 
-3. Start backend (from the Foxwarm project root):
+3. Start backend (from betabot root):
 ```bash
 npm start
 ```

@@ -292,15 +292,23 @@ const isSystemLikeText = (text: string): boolean => (
 )
 
 const isLightweightStructuredSystem = (system: string): boolean => (
-  system.startsWith('FROM:') || system.startsWith('current time =')
+  system.startsWith('FROM:') ||
+  system.startsWith('current time =') ||
+  system.startsWith('current session ID =')
+)
+
+const isLightweightSystemTextLine = (text: string): boolean => (
+  text.startsWith('[FROM:') ||
+  text.startsWith('[SYSTEM: current time') ||
+  text.startsWith('[SYSTEM: current session ID =')
 )
 
 const isHeavySystemTextLine = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') && !text.startsWith('[SYSTEM: current time')
+  text.startsWith('[SYSTEM:') && !isLightweightSystemTextLine(text)
 )
 
 const isCollapsibleSystemText = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') && !text.startsWith('[SYSTEM: current time')
+  text.startsWith('[SYSTEM:') && !isLightweightSystemTextLine(text)
 )
 
 const clampContentStyle = (lines: number): React.CSSProperties => ({

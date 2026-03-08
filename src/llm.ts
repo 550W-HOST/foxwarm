@@ -24,6 +24,26 @@ function formatSkillBlock(filePath: string, skillName: string, content: string):
     return `\nFILE: ${filePath}\n[SKILL: ${skillName}]\n${content}\n`;
 }
 
+function stringifyToolOutput(output: unknown): string {
+    if (output === undefined || output === null) {
+        return '';
+    }
+
+    if (typeof output === 'string') {
+        return output;
+    }
+
+    if (typeof output === 'object') {
+        try {
+            return JSON.stringify(output, null, 2);
+        } catch {
+            return '[unserializable object]';
+        }
+    }
+
+    return String(output);
+}
+
 async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited'): Promise<string> {
     const agentMemoryDir = getAgentMemoryDir(agentName);
     if (!await fs.pathExists(agentMemoryDir)) {
@@ -223,7 +243,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
                 const toolResult = {
                     type: 'tool_result',
                     tool_use_id: part.functionResponse.tool_use_id || part.toolUseId || 'unknown',
-                    content: String(output)
+                    content: stringifyToolOutput(output)
                 };
                 if (config.baseUrl?.startsWith('https://api.kimi.com/')) {
                     if (!content.find(x => x.type === 'thinking')) {
@@ -327,7 +347,7 @@ function convertToOpenAIFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    pushGroupPart(toolId, { type: 'text', text: String(output) });
+                    pushGroupPart(toolId, { type: 'text', text: stringifyToolOutput(output) });
                 }
             }
 
@@ -517,7 +537,7 @@ function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                     }
 
                     if (output !== '') {
-                        pushGroupPart(toolId, { type: 'input_text', text: String(output) });
+                        pushGroupPart(toolId, { type: 'input_text', text: stringifyToolOutput(output) });
                     }
                 }
             }

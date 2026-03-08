@@ -1,30 +1,14 @@
 import { Message } from '../types'
+import { formatMessagePreviewText, formatPrefixedMultilineText } from './messageFormat'
 
 export function getMessagePreview(msg: Message, previewLength: number = 100): string {
-  let preview = ''
-  for (const part of msg.parts || []) {
-    if (part.text) {
-      preview += part.text
-    } else if (part.thinking) {
-      preview += `[Thinking]`
-    } else if (part.functionCall) {
-      preview += `[Tool: ${part.functionCall.name}]`
-    } else if (part.functionResponse) {
-      preview += `[Tool Response]`
-    }
-  }
-
-  if (preview.length > previewLength) {
-    preview = preview.substring(0, previewLength) + '...'
-  }
-
-  return preview
+  return formatMessagePreviewText(msg, previewLength, { skipEphemeralSystem: true })
 }
 
 export function formatMessagePreviewLine(msg: Message, idx: number, previewLength: number = 100): string {
   const roleEmoji = msg.role === 'user' ? '👤' : msg.role === 'model' ? '🤖' : '🔧'
   const preview = getMessagePreview(msg, previewLength)
-  return `[${idx}] ${roleEmoji} ${msg.role}: ${preview}\n`
+  return `${formatPrefixedMultilineText(`[${idx}] ${roleEmoji} ${msg.role}: `, preview)}\n`
 }
 
 export function formatSessionMessagesPreview(

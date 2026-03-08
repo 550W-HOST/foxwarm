@@ -226,6 +226,8 @@ function App() {
     }
 
     ;(window as any).foxwarmTest = helper
+    // Temporary compatibility alias for existing test scripts
+    ;(window as any).alphabotTest = helper
   }, [currentSession])
 
   // Mobile view

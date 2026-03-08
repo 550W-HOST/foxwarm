@@ -3,22 +3,28 @@ import { Ollama } from 'ollama';
 import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
-import { Message, MessagePart } from './types';
+import { Message } from './types';
 import { estimateTokenCount } from './tokenCount';
 import { DB_DIR, SESSION_LOGS_DIR, getSessionArchiveLogPath } from './config';
 import { logger } from './common';
+import { formatMessageText } from './utils/messageFormat';
 
 const DB_PATH = DB_DIR;
 const TABLE_NAME = 'messages_v5';
 const CHECKPOINTS_PATH = path.join(DB_DIR, 'vector-index-checkpoints.json');
 const ollama = new Ollama({ host: process.env.OLLAMA_BASE_URL || 'http://localhost:11434' });
 
-const CHUNK_SIZE = 4000;
-const EMBEDDING_MAX_LENGTH = 4000;
+// Keep a conservative margin under the embedding model's real 4096-token limit
+// because estimateTokenCount() can undercount slightly on some inputs.
+const CHUNK_SIZE = 3000;
+const EMBEDDING_MAX_LENGTH = 3000;
+const ARCHIVE_INDEX_MIN_PENDING_MESSAGES = 50;
+const ARCHIVE_INDEX_MIN_PENDING_TOKENS = 8000;
 
 let table: any;
 let checkpoints: VectorIndexCheckpointFile = { version: 1, sessions: {} };
 const indexingChains = new Map<string, Promise<number>>();
+const archiveIndexBatchStates = new Map<string, SessionArchiveBatchState>();
 let checkpointSaveChain: Promise<void> = Promise.resolve();
 
 type VectorRow = {
@@ -62,6 +68,22 @@ type VectorIndexCheckpointFile = {
     sessions: Record<string, SessionArchiveCheckpoint>;
 };
 
+type SessionArchiveBatchState = {
+    latestSeqHint: number;
+    pendingEstimatedTokens: number;
+    flushQueued: boolean;
+    promise?: Promise<number>;
+    resolve?: (value: number) => void;
+    reject?: (reason?: unknown) => void;
+};
+
+type ArchiveIndexBatchDecision = {
+    shouldFlushNow: boolean;
+    pendingCount: number;
+    pendingEstimatedTokens: number;
+    reason?: 'message-threshold' | 'token-threshold';
+};
+
 function escapeFilterValue(value: string): string {
     return value.replace(/'/g, "''");
 }
@@ -86,87 +108,20 @@ function buildFilterPredicate(options?: SearchOptions): string | undefined {
     return clauses.join(' AND ');
 }
 
-function shouldSkipText(text: string): boolean {
-    if (!text || !text.trim()) return true;
-    if (text.includes('--- RELEVANT MEMORY SNIPPETS (RAG) ---')) return true;
-    return false;
-}
-
-function normalizeFunctionResponse(part: MessagePart): string | undefined {
-    const response = part.functionResponse?.response;
-    if (!response) return undefined;
-
-    if (response.error) {
-        return `[function_response:${part.functionResponse?.name || 'unknown'}] ERROR: ${response.error}`;
-    }
-
-    if (response.output) {
-        return `[function_response:${part.functionResponse?.name || 'unknown'}] ${response.output}`;
-    }
-
-    return `[function_response:${part.functionResponse?.name || 'unknown'}] ${JSON.stringify(response)}`;
-}
-
-function normalizePartText(part: MessagePart): string[] {
-    const lines: string[] = [];
-
-    if (typeof part.system === 'string') {
-        if (
-            part.system.startsWith('current time =') ||
-            part.system.startsWith('current session ID =') ||
-            part.system.startsWith('FROM:') ||
-            part.system.startsWith('Channel is in push-only mode.')
-        ) {
-            return lines;
-        }
-        lines.push(`[system] ${part.system}`);
-    }
-
-    if (typeof part.text === 'string' && !shouldSkipText(part.text)) {
-        lines.push(part.text);
-    }
-
-    if (typeof part.thinking === 'string' && part.thinking.trim()) {
-        lines.push(`[thinking] ${part.thinking}`);
-    }
-
-    if (part.functionCall) {
-        let args = '';
-        try {
-            args = JSON.stringify(part.functionCall.args);
-        } catch {
-            args = '[unserializable args]';
-        }
-        lines.push(`[function_call:${part.functionCall.name}] ${args}`);
-    }
-
-    const functionResponse = normalizeFunctionResponse(part);
-    if (functionResponse) {
-        lines.push(functionResponse);
-    }
-
-    const inlineDataRef = part.inlineDataRef as any;
-    if (inlineDataRef) {
-        const mimeType = inlineDataRef.mimeType || 'application/octet-stream';
-        const imageId = inlineDataRef.imageId || 'image';
-        lines.push(`[image:${mimeType}] ${imageId}`);
-    } else if (part.inlineData) {
-        const mimeType = part.inlineData.mimeType || part.inlineData.mime_type || 'application/octet-stream';
-        lines.push(`[image:${mimeType}]`);
-    }
-
-    return lines;
-}
-
 function normalizeMessageText(message: Message): string {
-    const partLines = message.parts.flatMap(normalizePartText).filter(Boolean);
-    if (partLines.length === 0) {
-        return '';
-    }
+    return formatMessageText(message, {
+        includeRolePrefix: true,
+        skipEphemeralSystem: true,
+        skipRagMemorySnippets: true,
+    });
+}
 
-    const [first, ...rest] = partLines;
-    const rolePrefix = `[${message.role}] `;
-    return [rolePrefix + first, ...rest].join('\n').trim();
+function estimateArchiveMessageTokenCount(message: Message): number {
+    const text = normalizeMessageText(message);
+    if (!text) {
+        return 0;
+    }
+    return estimateTokenCount(text);
 }
 
 function truncateToTokenLimit(text: string, limit: number): string {
@@ -302,6 +257,93 @@ async function setLastIndexedSeq(sessionId: string, lastIndexedSeq: number): Pro
     await saveCheckpoints();
 }
 
+function getOrCreateBatchState(sessionId: string): SessionArchiveBatchState {
+    let state = archiveIndexBatchStates.get(sessionId);
+    if (!state) {
+        state = {
+            latestSeqHint: getLastIndexedSeq(sessionId),
+            pendingEstimatedTokens: 0,
+            flushQueued: false,
+        };
+        archiveIndexBatchStates.set(sessionId, state);
+    }
+    return state;
+}
+
+function ensureBatchPromise(state: SessionArchiveBatchState): Promise<number> {
+    if (!state.promise) {
+        state.promise = new Promise<number>((resolve, reject) => {
+            state.resolve = resolve;
+            state.reject = reject;
+        });
+    }
+
+    return state.promise;
+}
+
+function clearBatchState(sessionId: string): void {
+    const state = archiveIndexBatchStates.get(sessionId);
+    if (!state) {
+        return;
+    }
+
+    archiveIndexBatchStates.delete(sessionId);
+}
+
+function resolveBatchState(sessionId: string, value: number): void {
+    const state = archiveIndexBatchStates.get(sessionId);
+    if (!state) {
+        return;
+    }
+
+    const resolve = state.resolve;
+    clearBatchState(sessionId);
+    resolve?.(value);
+}
+
+function rejectBatchState(sessionId: string, error: unknown): void {
+    const state = archiveIndexBatchStates.get(sessionId);
+    if (!state) {
+        return;
+    }
+
+    const reject = state.reject;
+    clearBatchState(sessionId);
+    reject?.(error);
+}
+
+function getArchiveIndexBatchDecision({
+    pendingCount,
+    pendingEstimatedTokens,
+}: {
+    pendingCount: number;
+    pendingEstimatedTokens: number;
+}): ArchiveIndexBatchDecision {
+    if (pendingCount >= ARCHIVE_INDEX_MIN_PENDING_MESSAGES) {
+        return {
+            shouldFlushNow: true,
+            pendingCount,
+            pendingEstimatedTokens,
+            reason: 'message-threshold',
+        };
+    }
+
+    if (pendingEstimatedTokens >= ARCHIVE_INDEX_MIN_PENDING_TOKENS) {
+        return {
+            shouldFlushNow: true,
+            pendingCount,
+            pendingEstimatedTokens,
+            reason: 'token-threshold',
+        };
+    }
+
+    return {
+        shouldFlushNow: false,
+        pendingCount,
+        pendingEstimatedTokens,
+    };
+}
+
 async function readArchiveLines(sessionId: string): Promise<ArchiveMessageLine[]> {
     const archivePath = getSessionArchiveLogPath(sessionId);
     if (!await fs.pathExists(archivePath)) {
@@ -372,11 +414,11 @@ async function indexSessionArchiveInternal(sessionId: string, latestSeqHint?: nu
     return newLastIndexedSeq;
 }
 
-async function scheduleSessionArchiveIndex(sessionId: string, latestSeqHint?: number): Promise<number> {
+function queueArchiveIndexRun(sessionId: string, targetLatestSeqHint?: number): Promise<number> {
     const previous = indexingChains.get(sessionId) || Promise.resolve(getLastIndexedSeq(sessionId));
     const next = previous
         .catch(() => getLastIndexedSeq(sessionId))
-        .then(() => indexSessionArchiveInternal(sessionId, latestSeqHint));
+        .then(() => indexSessionArchiveInternal(sessionId, targetLatestSeqHint));
 
     indexingChains.set(sessionId, next);
     next.finally(() => {
@@ -388,8 +430,143 @@ async function scheduleSessionArchiveIndex(sessionId: string, latestSeqHint?: nu
     return next;
 }
 
+function planSessionArchiveIndex(sessionId: string): Promise<number> {
+    const state = archiveIndexBatchStates.get(sessionId);
+    const lastIndexedSeq = getLastIndexedSeq(sessionId);
+
+    if (!state || state.latestSeqHint <= lastIndexedSeq) {
+        resolveBatchState(sessionId, lastIndexedSeq);
+        return Promise.resolve(lastIndexedSeq);
+    }
+
+    const promise = ensureBatchPromise(state);
+    const pendingCount = Math.max(0, state.latestSeqHint - lastIndexedSeq);
+    const decision = getArchiveIndexBatchDecision({
+        pendingCount,
+        pendingEstimatedTokens: state.pendingEstimatedTokens,
+    });
+
+    if (decision.shouldFlushNow) {
+        if (state.flushQueued) {
+            return promise;
+        }
+
+        state.flushQueued = true;
+
+        const targetLatestSeqHint = state.latestSeqHint;
+        state.pendingEstimatedTokens = 0;
+
+        logger.info({
+            sessionId,
+            pendingCount: decision.pendingCount,
+            pendingEstimatedTokens: decision.pendingEstimatedTokens,
+            reason: decision.reason,
+            targetLatestSeqHint,
+            lastIndexedSeq,
+        }, 'Queueing session archive indexing batch');
+
+        queueArchiveIndexRun(sessionId, targetLatestSeqHint)
+            .then((indexedSeq) => {
+                const currentState = archiveIndexBatchStates.get(sessionId);
+                if (!currentState) {
+                    return;
+                }
+
+                currentState.flushQueued = false;
+
+                if (indexedSeq < targetLatestSeqHint && currentState.latestSeqHint <= targetLatestSeqHint) {
+                    logger.warn({ sessionId, targetLatestSeqHint, indexedSeq }, 'Archive index batch made no progress; clearing pending batch hint');
+                    resolveBatchState(sessionId, indexedSeq);
+                    return;
+                }
+
+                if (currentState.latestSeqHint <= indexedSeq) {
+                    resolveBatchState(sessionId, indexedSeq);
+                    return;
+                }
+
+                void planSessionArchiveIndex(sessionId);
+            })
+            .catch((err) => {
+                const currentState = archiveIndexBatchStates.get(sessionId);
+                if (currentState) {
+                    currentState.flushQueued = false;
+                }
+                rejectBatchState(sessionId, err);
+            });
+
+        return promise;
+    }
+
+    return promise;
+}
+
+async function scheduleSessionArchiveIndex(sessionId: string, latestSeqHint?: number, latestMessageTokenEstimate?: number): Promise<number> {
+    const lastIndexedSeq = getLastIndexedSeq(sessionId);
+    if (latestSeqHint !== undefined && latestSeqHint <= lastIndexedSeq) {
+        return lastIndexedSeq;
+    }
+
+    const state = getOrCreateBatchState(sessionId);
+    const previousLatestSeqHint = state.latestSeqHint;
+
+    if (latestSeqHint !== undefined && latestSeqHint > state.latestSeqHint) {
+        state.latestSeqHint = latestSeqHint;
+
+        if (typeof latestMessageTokenEstimate === 'number' && latestMessageTokenEstimate > 0) {
+            const seqDelta = latestSeqHint - previousLatestSeqHint;
+            if (seqDelta === 1) {
+                state.pendingEstimatedTokens += latestMessageTokenEstimate;
+            }
+        }
+    }
+
+    return planSessionArchiveIndex(sessionId);
+}
+
 async function indexSessionArchive(sessionId: string, latestSeqHint?: number): Promise<number> {
-    return scheduleSessionArchiveIndex(sessionId, latestSeqHint);
+    const lastIndexedSeq = getLastIndexedSeq(sessionId);
+    const state = getOrCreateBatchState(sessionId);
+
+    if (latestSeqHint !== undefined && latestSeqHint > state.latestSeqHint) {
+        state.latestSeqHint = latestSeqHint;
+    }
+
+    if (state.latestSeqHint <= lastIndexedSeq) {
+        clearBatchState(sessionId);
+        return lastIndexedSeq;
+    }
+
+    ensureBatchPromise(state);
+    state.pendingEstimatedTokens = 0;
+    state.flushQueued = true;
+
+    try {
+        const targetLatestSeqHint = state.latestSeqHint;
+        const indexedSeq = await queueArchiveIndexRun(sessionId, targetLatestSeqHint);
+        const currentState = archiveIndexBatchStates.get(sessionId);
+
+        if (indexedSeq < targetLatestSeqHint && (!currentState || currentState.latestSeqHint <= targetLatestSeqHint)) {
+            logger.warn({ sessionId, targetLatestSeqHint, indexedSeq }, 'Forced archive index made no progress; clearing pending batch hint');
+            resolveBatchState(sessionId, indexedSeq);
+            return indexedSeq;
+        }
+
+        if (currentState && currentState.latestSeqHint > indexedSeq) {
+            currentState.flushQueued = false;
+            return planSessionArchiveIndex(sessionId);
+        }
+
+        resolveBatchState(sessionId, indexedSeq);
+        return indexedSeq;
+    } catch (err) {
+        const currentState = archiveIndexBatchStates.get(sessionId);
+        if (currentState) {
+            currentState.flushQueued = false;
+        }
+        rejectBatchState(sessionId, err);
+        throw err;
+    }
 }
 
 async function getAllArchiveSessionIds(): Promise<string[]> {
@@ -583,6 +760,8 @@ function getArchiveIndexStatus(sessionId: string): { lastIndexedSeq: number } {
 }
 
 export {
+    estimateArchiveMessageTokenCount,
+    getArchiveIndexBatchDecision,
     init,
     indexNewMessages,
     indexSessionArchive,

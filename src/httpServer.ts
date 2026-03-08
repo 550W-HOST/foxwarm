@@ -85,7 +85,7 @@ export class HttpServer {
 
   checkToken(req: express.Request): boolean {
     // Check cookie first
-    const cookieToken = req.cookies?.foxwarm_token;
+    const cookieToken = req.cookies?.foxwarm_token || req.cookies?.alphabot_token;
     if (cookieToken === this.token) {
       return true;
     }
