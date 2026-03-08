@@ -14,6 +14,7 @@ export const WORKSPACE_DIR = AGENTS_DIR; // Legacy alias for agent-folder
 
 // State subdirectories
 export const LOGS_DIR = path.join(STATE_DIR, 'logs');
+export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const DB_DIR = path.join(STATE_DIR, 'db');
 export const SESSIONS_DIR = path.join(STATE_DIR, 'sessions');
 export const PERSISTENT_MEMORY_DIR = path.join(STATE_DIR, 'persistent_memory'); // Legacy path for migration
@@ -44,6 +45,14 @@ export function getSkillDir(skillName: string): string {
 
 export function getSkillMemoryDir(skillName: string): string {
   return path.join(getSkillDir(skillName), 'memory');
+}
+
+export function getSessionArchiveLogPath(sessionId: string): string {
+  return path.join(SESSION_LOGS_DIR, `${sessionId}.jsonl`);
+}
+
+export function getSessionArchiveImagesDir(sessionId: string): string {
+  return path.join(LOGS_DIR, `${sessionId}.images`);
 }
 
 // Server configuration

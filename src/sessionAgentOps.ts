@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import * as llm from './llm';
-import { getAgentDir, getAgentMemoryDir, SESSIONS_DIR } from './config';
+import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, SESSIONS_DIR } from './config';
 import { Session } from './types';
 
 interface SessionAgentOpsDeps {
@@ -109,6 +109,20 @@ async function renameSessionIdentity(options: {
     await fs.move(oldHistoryFile, newHistoryFile, { overwrite: true });
   }
 
+  const oldArchiveLog = getSessionArchiveLogPath(oldRealId);
+  const newArchiveLog = getSessionArchiveLogPath(targetSessionId);
+  if (await fs.pathExists(oldArchiveLog)) {
+    await fs.ensureDir(path.dirname(newArchiveLog));
+    await fs.move(oldArchiveLog, newArchiveLog, { overwrite: true });
+  }
+
+  const oldArchiveImagesDir = getSessionArchiveImagesDir(oldRealId);
+  const newArchiveImagesDir = getSessionArchiveImagesDir(targetSessionId);
+  if (await fs.pathExists(oldArchiveImagesDir)) {
+    await fs.ensureDir(path.dirname(newArchiveImagesDir));
+    await fs.move(oldArchiveImagesDir, newArchiveImagesDir, { overwrite: true });
+  }
+
   const updatedChildren = await deps.updateChildSessionParentIds(oldRealId, targetSessionId);
 
   await deps.saveSession(targetSessionId);
@@ -164,6 +178,7 @@ export async function createSessionInAgent(options: {
     queue: [],
     meta: { lastMessageTime: Date.now() },
     vectorIndexPosition: 0,
+    nextMessageSeq: 1,
     parentSessionId,
     currentNode: currentNode || 'master',
     model,
@@ -272,6 +287,7 @@ export async function createAgentWithMainSession(options: {
     queue: [],
     meta: { lastMessageTime: Date.now() },
     vectorIndexPosition: 0,
+    nextMessageSeq: 1,
     currentNode: currentNode || sourceSession?.currentNode || 'master',
     model: model ?? sourceSession?.model,
   });

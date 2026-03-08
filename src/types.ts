@@ -43,6 +43,7 @@ export interface Message {
   parts: MessagePart[];
   __meta?: {
     timestamp?: number;
+    seq?: number;
     [key: string]: any;
   };
 }
@@ -106,6 +107,7 @@ export interface Session {
   vectorIndexPosition?: number; // Track last indexed message position
   indexingState?: IndexingState; // Track ongoing indexing operation
   historyVersion?: number; // Incremented on compact/clear to detect changes
+  nextMessageSeq?: number; // Next per-session sequence number for append-only archive logging
   parentSessionId?: string; // Parent session ID for child sessions
   broadcast?: SessionReply; // Broadcast message to all attached channels
 }

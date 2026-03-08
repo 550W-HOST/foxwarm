@@ -5,6 +5,7 @@
 
 import fs from 'fs-extra';
 import path from 'path';
+import { createHash } from 'crypto';
 import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply } from './types';
 import { logger } from './common';
 import { getChannelInstance } from './channel';
@@ -12,7 +13,7 @@ import * as llm from './llm';
 import { getSkillInfo, validateSkillName } from './skills';
 import { estimateSessionTokens, estimateSessionRangeTokens } from './tokenCount';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, CHANNELS_FILE, getAgentDir } from './config';
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, CHANNELS_FILE, getAgentDir, getSessionArchiveImagesDir, getSessionArchiveLogPath } from './config';
 import * as sessionAgentOps from './sessionAgentOps';
 
 // Agent metadata storage
@@ -76,6 +77,153 @@ function normalizeAgentMetadata(meta: AgentMetadata): AgentMetadata {
 
 function systemPart(system: string): MessagePart {
   return { system };
+}
+
+function getMessageTimestamp(message: Message): number {
+  return message.__meta?.timestamp || Date.now();
+}
+
+function getNextSessionMessageSeq(session: Session): number {
+  if (typeof session.nextMessageSeq === 'number' && session.nextMessageSeq > 0) {
+    return session.nextMessageSeq;
+  }
+
+  let maxSeq = 0;
+  for (const message of session.history) {
+    const seq = message.__meta?.seq;
+    if (typeof seq === 'number' && seq > maxSeq) {
+      maxSeq = seq;
+    }
+  }
+
+  session.nextMessageSeq = maxSeq + 1 || 1;
+  return session.nextMessageSeq;
+}
+
+function ensureMessageSeq(session: Session, message: Message): number {
+  const existingSeq = message.__meta?.seq;
+  if (typeof existingSeq === 'number' && existingSeq > 0) {
+    session.nextMessageSeq = Math.max(getNextSessionMessageSeq(session), existingSeq + 1);
+    return existingSeq;
+  }
+
+  const seq = getNextSessionMessageSeq(session);
+  message.__meta = {
+    ...(message.__meta || {}),
+    timestamp: getMessageTimestamp(message),
+    seq,
+  };
+  session.nextMessageSeq = seq + 1;
+  return seq;
+}
+
+function getInlineDataMimeType(part: MessagePart): string {
+  return part.inlineData?.mimeType || part.inlineData?.mime_type || 'application/octet-stream';
+}
+
+function getArchiveFileExtension(mimeType: string): string {
+  const lower = mimeType.toLowerCase();
+
+  if (lower === 'image/jpeg') return 'jpg';
+  if (lower === 'image/svg+xml') return 'svg';
+  if (lower.startsWith('image/')) return lower.slice('image/'.length) || 'bin';
+
+  const slashIndex = lower.indexOf('/');
+  if (slashIndex !== -1 && slashIndex + 1 < lower.length) {
+    return lower.slice(slashIndex + 1).replace(/[^a-z0-9]+/g, '-') || 'bin';
+  }
+
+  return 'bin';
+}
+
+async function buildArchiveRecord(session: Session, message: Message): Promise<any> {
+  const seq = ensureMessageSeq(session, message);
+  const timestamp = getMessageTimestamp(message);
+  const archiveParts = [];
+
+  for (let partIndex = 0; partIndex < message.parts.length; partIndex++) {
+    const part = message.parts[partIndex];
+
+    if (!part.inlineData?.data) {
+      archiveParts.push(part);
+      continue;
+    }
+
+    const mimeType = getInlineDataMimeType(part);
+    const extension = getArchiveFileExtension(mimeType);
+    const imageId = `msg${String(seq).padStart(8, '0')}_part${partIndex + 1}`;
+    const imageDir = getSessionArchiveImagesDir(session.id);
+    const fileName = `${imageId}.${extension}`;
+    const filePath = path.join(imageDir, fileName);
+    const binary = Buffer.from(part.inlineData.data, 'base64');
+    const sha256 = createHash('sha256').update(binary).digest('hex');
+
+    await fs.ensureDir(imageDir);
+    await fs.writeFile(filePath, binary);
+
+    const { inlineData, ...rest } = part;
+    archiveParts.push({
+      ...rest,
+      inlineDataRef: {
+        imageId,
+        format: extension,
+        path: path.relative(path.join(__dirname, '..'), filePath),
+        mimeType,
+        byteLength: binary.length,
+        sha256,
+      },
+    });
+  }
+
+  return {
+    v: 1,
+    kind: 'message',
+    sessionId: session.id,
+    agent: session.agent || 'main',
+    seq,
+    timestamp,
+    role: message.role,
+    message: {
+      ...message,
+      __meta: {
+        ...(message.__meta || {}),
+        timestamp,
+        seq,
+      },
+      parts: archiveParts,
+    },
+  };
+}
+
+async function appendMessagesToArchive(session: Session, messages: Message[]): Promise<void> {
+  if (messages.length === 0) {
+    return;
+  }
+
+  const archiveLogPath = getSessionArchiveLogPath(session.id);
+  await fs.ensureDir(path.dirname(archiveLogPath));
+
+  const lines: string[] = [];
+  for (const message of messages) {
+    const record = await buildArchiveRecord(session, message);
+    lines.push(JSON.stringify(record));
+  }
+
+  await fs.appendFile(archiveLogPath, `${lines.join('\n')}\n`);
+}
+
+function stripMessageSeq(message: Message): Message {
+  const clonedMessage = structuredClone(message);
+  if (!clonedMessage.__meta) {
+    return clonedMessage;
+  }
+
+  delete clonedMessage.__meta.seq;
+  if (Object.keys(clonedMessage.__meta).length === 0) {
+    delete clonedMessage.__meta;
+  }
+
+  return clonedMessage;
 }
 
 /**
@@ -540,6 +688,9 @@ export async function getSession(sessionId: string): Promise<Session> {
         if (historyData.busy !== undefined) {
           session.busy = historyData.busy;
         }
+        if (historyData.nextMessageSeq !== undefined) {
+          session.nextMessageSeq = historyData.nextMessageSeq;
+        }
         logger.info({ sessionId: realId, messageCount: session.history.length }, 'Session history loaded from file');
       } catch (e) {
         logger.error({ err: e, sessionId }, 'Failed to load session history');
@@ -565,6 +716,9 @@ export async function getSession(sessionId: string): Promise<Session> {
   if (session.busy === undefined) session.busy = false;
   if (!session.meta) session.meta = { lastMessageTime: Date.now() };
   if (!session.currentNode) session.currentNode = 'master'; // Default to master node
+  if (session.nextMessageSeq === undefined) {
+    session.nextMessageSeq = getNextSessionMessageSeq(session);
+  }
 
   // Setup broadcast function
   if (!session.broadcast) {
@@ -860,7 +1014,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 
   const forkedSession: Session = {
     id: newSessionId,
-    history: structuredClone(sourceSession.history),
+    history: sourceSession.history.map(stripMessageSeq),
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
     stats: {
       totalCachedTokens: 0,
@@ -872,6 +1026,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     queue: [],
     meta: { lastMessageTime: Date.now() },
     vectorIndexPosition: sourceSession.history.length, // Inherit parent's index position to avoid re-indexing
+    nextMessageSeq: 1,
     parentSessionId: isChildSession ? sourceSessionId : null,
     currentNode: options?.node || sourceSession.currentNode || 'master',
     isolated: options?.isolated ?? sourceSession.isolated,
@@ -879,6 +1034,8 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     verbose: sourceSession.verbose,
     model: sourceSession.model
   };
+
+  const appendedForkMessages: Message[] = [];
 
   // Check if the last message is a model message with tool calls (e.g., create_child_session)
   // If so, add tool responses for all tool calls:
@@ -898,7 +1055,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
       }
 
       // Add tool responses for all tool calls
-      forkedSession.history.push({
+      appendedForkMessages.push({
         role: 'user',
         parts: toolCalls.map((part, index) => ({
           functionResponse: {
@@ -917,7 +1074,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   }
 
   // Add separator message
-  forkedSession.history.push({
+  appendedForkMessages.push({
     role: 'user',
     parts: [systemPart('--- HISTORY ABOVE IS INHERITED FROM PARENT SESSION FOR REFERENCE ONLY --- FOLLOW THE INSTRUCTIONS BELOW')],
     __meta: { timestamp: Date.now() }
@@ -927,7 +1084,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     ? `You are a child session forked from parent session \`${sourceSessionId}\`. Your current session ID is \`${newSessionId}\`. When you finish the task, explicitly call send_to_session({sessionId: \`${sourceSessionId}\`, message: "..."}).`
     : `Session forked from ${sourceSessionId} by user command. Your current session ID is \`${newSessionId}\`.`;
 
-  forkedSession.history.push({
+  appendedForkMessages.push({
     role: 'user',
     parts: [systemPart(systemMessage)],
     __meta: { timestamp: Date.now() }
@@ -935,7 +1092,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 
   // Add a model acknowledgment to prevent LLM from re-processing inherited history
   if (isChildSession) {
-    forkedSession.history.push({
+    appendedForkMessages.push({
       role: 'model',
       parts: [{ text: 'Understood. I am a child session. Waiting for task from parent session.' }],
       __meta: { timestamp: Date.now() }
@@ -943,11 +1100,10 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   }
 
   sessions.set(newSessionId, forkedSession);
-  
-  
+  await appendSessionMessages(forkedSession, appendedForkMessages);
+
   logger.info({ sourceSessionId, newSessionId, isChildSession }, 'Session forked');
 
-  await saveSession(newSessionId);
   return newSessionId;
 }
 
@@ -984,23 +1140,23 @@ export async function createChildSession(parentSessionId: string, suffix: string
       queue: [],
       meta: { lastMessageTime: Date.now() },
       vectorIndexPosition: 0,
+      nextMessageSeq: 1,
       parentSessionId: parentSessionId,
       currentNode: options?.node || parentSession.currentNode || 'master',
       isolated: options?.isolated ?? parentSession.isolated,
       model: parentSession.model
     };
 
-    newSession.history.push({
+    const initialMessage: Message = {
       role: 'user',
       parts: [systemPart(`You are a child session (new, empty context) with parent session \`${parentSessionId}\`. Your current session ID is \`${childSessionId}\`. When you finish, explicitly call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}).`)],
       __meta: { timestamp: Date.now() }
-    });
+    };
 
     sessions.set(childSessionId, newSession);
+    await appendSessionMessage(newSession, initialMessage);
 
     logger.info({ parentSessionId, childSessionId, fork: false }, 'Child session created');
-
-    await saveSession(childSessionId);
     return childSessionId;
   }
 }
@@ -1280,7 +1436,8 @@ export async function saveSession(sessionId: string): Promise<void> {
       agent: session.agent,
       verbose: session.verbose,
       aliases: session.aliases,
-      busy: session.busy
+      busy: session.busy,
+      nextMessageSeq: session.nextMessageSeq
     }, { spaces: 2 });
     
     // Save metadata (lightweight operation)
@@ -1511,11 +1668,24 @@ async function finalizeCompaction(
   completionMarker: string,
 ): Promise<void> {
   const now = Date.now();
+  const compactedMarker: Message = {
+    role: 'user',
+    parts: [{ system: 'This session has been compacted. Messages before this are removed.' }],
+    __meta: { timestamp: now }
+  };
+  const completionMessage: Message = {
+    role: 'user',
+    parts: [{ system: completionMarker }],
+    __meta: { timestamp: now }
+  };
+  const archiveOnlySummaryMessages = summaryConversation.filter(message => message.__meta?.seq === undefined);
+  await appendMessagesToArchive(session, [compactedMarker, ...archiveOnlySummaryMessages, completionMessage]);
+
   const summaryMessages: Message[] = [
-    { role: 'user', parts: [{ system: 'This session has been compacted. Messages before this are removed.' }], __meta: { timestamp: now } },
+    compactedMarker,
     ...remaining,
     ...summaryConversation,
-    { role: 'user', parts: [{ system: completionMarker }], __meta: { timestamp: now } },
+    completionMessage,
   ];
 
   session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
@@ -1703,14 +1873,30 @@ export function notifyHistoryUpdate(sessionId: string, message: Message) {
   }
 }
 
-export async function appendSessionMessage(sessionOrId: Session | string, message: Message): Promise<void> {
+export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[]): Promise<void> {
   const session = typeof sessionOrId === 'string'
     ? await getSession(sessionOrId)
     : sessionOrId;
 
-  session.history.push(message);
+  if (messages.length === 0) {
+    return;
+  }
+
+  await appendMessagesToArchive(session, messages);
+
+  for (const message of messages) {
+    session.history.push(message);
+  }
+
   await saveSession(session.id);
-  notifyHistoryUpdate(session.id, message);
+
+  for (const message of messages) {
+    notifyHistoryUpdate(session.id, message);
+  }
+}
+
+export async function appendSessionMessage(sessionOrId: Session | string, message: Message): Promise<void> {
+  await appendSessionMessages(sessionOrId, [message]);
 }
 
 
