@@ -10,7 +10,7 @@ FOXWARM_DIR="$(dirname "$SCRIPT_DIR")"
 # Build first
 echo "Building foxwarm..."
 cd "$FOXWARM_DIR"
-npm run build || exit 1
+npm run build-all || exit 1
 
 # Check if session exists
 if tmux has-session -t $SESSION 2>/dev/null; then
