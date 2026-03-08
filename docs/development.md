@@ -55,7 +55,9 @@ foxwarm/
 │   └── channels/           # 各 channel 实现
 ├── agents/                 # Agent 工作区与长期记忆
 ├── skills/                 # Skill 定义（可选）
-├── state/                  # 运行时状态与日志
+├── state/                  # 运行时状态与日志（含 token 文件）
+│   ├── token
+│   ├── node_token
 │   ├── logs/
 │   ├── db/
 │   ├── sessions/
