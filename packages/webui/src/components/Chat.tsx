@@ -8,6 +8,8 @@ import { Eye, Code, FileJson, Menu } from 'lucide-react'
 interface ChatProps {
   sessionId: string
   onBack?: () => void
+  themeMode: 'auto' | 'light' | 'dark'
+  onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
 }
 
 // View mode for assistant messages
@@ -410,7 +412,7 @@ const toolEmojis: Record<string, string> = {
 
 const getToolEmoji = (name: string) => toolEmojis[name] || '🔧'
 
-export default function Chat({ sessionId, onBack }: ChatProps) {
+export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -1910,7 +1912,24 @@ export default function Chat({ sessionId, onBack }: ChatProps) {
               <Menu size={20} />
             </button>
             {showMenu && (
-              <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-30 text-gray-900 dark:text-gray-100">
+              <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-30 text-gray-900 dark:text-gray-100">
+                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                  <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Theme</div>
+                  <div className="flex gap-1">
+                    {(['auto', 'light', 'dark'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        onClick={() => {
+                          onThemeChange(mode)
+                          setShowMenu(false)
+                        }}
+                        className={`flex-1 px-2 py-1 text-xs rounded capitalize ${themeMode === mode ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <button
                   onClick={() => {
                     const newVerbose = !verbose

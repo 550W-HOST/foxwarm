@@ -4,6 +4,8 @@ import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
 import { API_BASE_PATH } from './config'
 
+type ThemeMode = 'auto' | 'light' | 'dark'
+
 function App() {
   const [sessions, setSessions] = useState<any[]>([])
   const [currentSession, setCurrentSession] = useState<string>(() => {
@@ -20,13 +22,18 @@ function App() {
     // Show session list if no hash (mobile only)
     return !window.location.hash
   })
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    // Check system preference
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      return true
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    const saved = localStorage.getItem('themeMode')
+    return saved === 'auto' || saved === 'light' || saved === 'dark' ? saved : 'auto'
+  })
+  const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => {
+    if (window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches
     }
     return false
   })
+
+  const darkMode = themeMode === 'dark' || (themeMode === 'auto' && systemPrefersDark)
   
   const globalSSERef = useRef<EventSource | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -42,10 +49,14 @@ function App() {
   }, [darkMode])
 
   useEffect(() => {
+    localStorage.setItem('themeMode', themeMode)
+  }, [themeMode])
+
+  useEffect(() => {
     // Listen for system theme changes
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
     const handleChange = (e: MediaQueryListEvent) => {
-      setDarkMode(e.matches)
+      setSystemPrefersDark(e.matches)
     }
     mediaQuery.addEventListener('change', handleChange)
     return () => mediaQuery.removeEventListener('change', handleChange)
@@ -233,6 +244,8 @@ function App() {
           key={currentSession}
           sessionId={currentSession} 
           onBack={handleBackToList}
+          themeMode={themeMode}
+          onThemeChange={setThemeMode}
         />
       </div>
     )
@@ -252,6 +265,8 @@ function App() {
           key={currentSession}
           sessionId={currentSession} 
           onBack={handleBackToList}
+          themeMode={themeMode}
+          onThemeChange={setThemeMode}
         />
       </div>
     </div>
