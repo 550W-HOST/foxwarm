@@ -6,6 +6,9 @@ import { API_BASE_PATH } from './config'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 
+const LIGHT_THEME_COLOR = '#f3f4f6'
+const DARK_THEME_COLOR = '#111827'
+
 function App() {
   const [sessions, setSessions] = useState<any[]>([])
   const [currentSession, setCurrentSession] = useState<string>(() => {
@@ -46,6 +49,11 @@ function App() {
     } else {
       document.documentElement.classList.remove('dark')
     }
+
+    document.querySelector('meta[name="theme-color"]')?.setAttribute(
+      'content',
+      darkMode ? DARK_THEME_COLOR : LIGHT_THEME_COLOR
+    )
   }, [darkMode])
 
   useEffect(() => {
