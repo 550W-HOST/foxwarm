@@ -185,9 +185,9 @@ export class MessageRouter {
 
     try {
       if (nextItem.summary && nextItem.summary.trim()) {
-        await sessionManager.compactHistoryWithSummary(sessionId, nextItem.summary, nextItem.keepPercent);
+        await sessionManager.compactHistoryWithSummary(sessionId, nextItem.summary, nextItem.keepPercent, 'Manual compaction completed. You can continue working now.');
       } else {
-        await sessionManager.compactHistory(sessionId, nextItem.keepPercent);
+        await sessionManager.compactHistory(sessionId, nextItem.keepPercent, 'Compaction completed. You can continue working now.');
       }
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'In-turn queued compaction failed');
@@ -428,7 +428,7 @@ export class MessageRouter {
           const currentSize = sessionManager.getUsageTotalTokens(result.usage);
           if (currentSize > contextLimit * 0.8) {
             logger.info({ currentSize, contextLimit, iteration }, 'Context size exceeded threshold during tool calls, triggering compact');
-            await sessionManager.compactHistory(session.id);
+            await sessionManager.compactHistory(session.id, undefined, 'Compaction completed. You can continue working now.');
             logger.info('Compact completed, continuing with updated history');
           }
         }

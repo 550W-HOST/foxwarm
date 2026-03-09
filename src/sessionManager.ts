@@ -1457,7 +1457,7 @@ export async function forceIndexSession(sessionId: string): Promise<void> {
   }
 }
 
-export async function compactHistory(sessionId: string, keepPercent: number = COMPACT_PERCENT): Promise<void> {
+export async function compactHistory(sessionId: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
   const session = sessions.get(sessionId);
   if (!session) return;
 
@@ -1498,13 +1498,13 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
       throw new Error('No summary message');
     }
 
-    await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, 'Compaction completed.');
+    await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, completionMarker);
   } catch (e) {
     logger.error(e, 'Compaction failed');
   }
 }
 
-export async function compactHistoryWithSummary(sessionId: string, summary: string, keepPercent: number = COMPACT_PERCENT): Promise<void> {
+export async function compactHistoryWithSummary(sessionId: string, summary: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
   const session = sessions.get(sessionId);
   if (!session) {
     throw new Error(`Session \`${sessionId}\` not found.`);
@@ -1541,7 +1541,7 @@ export async function compactHistoryWithSummary(sessionId: string, summary: stri
     { role: 'model', parts: [{ text: summary.trim() }], __meta: { timestamp: now } },
   ];
 
-  await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, 'Manual compaction completed.');
+  await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, completionMarker);
 }
 
 async function finalizeCompaction(
