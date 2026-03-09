@@ -291,6 +291,19 @@ async function refreshDirectAgentSessions(agentName: string): Promise<string[]> 
   return affectedSessions;
 }
 
+export async function refreshSessionSnapshot(sessionId: string): Promise<{ sessionId: string; agentName: string }> {
+  const session = await getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session "${sessionId}" not found.`);
+  }
+
+  const agentName = session.agent || 'main';
+  session.persistentMemorySnapshot = await llm.getPersistentMemory(agentName);
+  await saveSession(session.id);
+
+  return { sessionId: session.id, agentName };
+}
+
 export function getAgentInheritanceChain(agentName: string): string[] {
   const chain: string[] = [];
   const seen = new Set<string>();

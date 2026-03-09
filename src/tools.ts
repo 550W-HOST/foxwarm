@@ -24,6 +24,7 @@ import {
     tool_get_session_messages,
     tool_delete_session,
     tool_update_session_name,
+    tool_update_session_snapshot,
     tool_stop_session,
     tool_compress_session,
     tool_create_timer,
@@ -551,6 +552,7 @@ export const load_skill = tool_load_skill;
 export const get_session_messages = tool_get_session_messages;
 export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
+export const update_session_snapshot = tool_update_session_snapshot;
 export const stop_session = tool_stop_session;
 export const compress_session = tool_compress_session;
 export const create_timer = tool_create_timer;
@@ -831,6 +833,16 @@ export const definitions = [
                     name: { type: 'string', description: 'New display name for the session. Use empty string to clear the name.' }
                 },
                 required: ['name']
+            }
+        },
+        {
+            name: 'update_session_snapshot',
+            description: 'Refresh a session prompt snapshot from the latest agent memory, inheritance, and attached skills. Defaults to the current session.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Session ID (optional, default: current session)' }
+                }
             }
         },
         {

@@ -331,6 +331,18 @@ export async function tool_update_session_name(args: ToolArgs, ctx: ToolContext)
   return `Session \`${session.id}\` display name cleared.`;
 }
 
+export async function tool_update_session_snapshot(args: ToolArgs, ctx: ToolContext) {
+  const { sessionId } = args;
+  const targetId = sessionId || ctx?.sessionId;
+
+  if (!targetId) {
+    throw new Error('Session ID is required.');
+  }
+
+  const result = await sessionManager.refreshSessionSnapshot(targetId);
+  return `Session \`${result.sessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``;
+}
+
 export async function tool_stop_session(args: ToolArgs) {
   const { sessionId } = args;
 

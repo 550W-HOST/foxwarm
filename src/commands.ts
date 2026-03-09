@@ -347,6 +347,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         resp += '`/session delete <sessionId>` - Delete session\n'
         resp += '`/session clear` - Clear current session history\n'
         resp += '`/session rename <name>` - Rename session\n'
+        resp += '`/session update-snapshot [session-id]` - Refresh session prompt snapshot\n'
         resp += '`/session isolated [on|off] [node]` - Toggle isolated mode\n'
         resp += '`/session index` - Index messages to vector database\n'
         resp += '`/session move [agent/]<new-session-id>` - Move/rename session\n'
@@ -516,6 +517,23 @@ export const COMMANDS: Record<string, CommandDef> = {
             }
           } catch (e: any) {
             ctx.reply(`❌ Rename failed: ${e.message}`)
+          }
+          break
+        }
+
+        case 'update-snapshot': {
+          const targetSessionId = subArgs[0] || sessionId
+
+          if (!targetSessionId) {
+            ctx.reply('❌ No active session. Usage: /session update-snapshot [session-id]')
+            return
+          }
+
+          try {
+            const result = await sessionManager.refreshSessionSnapshot(targetSessionId)
+            ctx.reply(`✅ Session \`${result.sessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``)
+          } catch (e: any) {
+            ctx.reply(`❌ Snapshot update failed: ${e.message}`)
           }
           break
         }
