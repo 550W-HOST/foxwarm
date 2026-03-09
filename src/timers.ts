@@ -245,8 +245,19 @@ function normalizeCreateArgs(args: {
   model?: unknown;
 }) {
   const hasAt = args.at !== undefined && args.at !== null && args.at !== '';
-  const hasAfter = args.afterSeconds !== undefined && args.afterSeconds !== null && args.afterSeconds !== '';
+  const rawAfter = args.afterSeconds;
+  const hasRawAfter = rawAfter !== undefined && rawAfter !== null && rawAfter !== '';
+  const parsedAfterSeconds = hasRawAfter ? Number(rawAfter) : undefined;
+  const hasAfter = parsedAfterSeconds !== undefined && Number.isFinite(parsedAfterSeconds) && parsedAfterSeconds > 0;
   const hasCron = typeof args.cron === 'string' && args.cron.trim().length > 0;
+
+  // Some tool-calling paths may inject placeholder values like afterSeconds=0
+  // or at='' for omitted optional fields. Treat those placeholders as absent when
+  // another real timer mode is present, but still validate them when they are the
+  // only provided trigger field.
+  if (!hasAfter && !hasAt && !hasCron && hasRawAfter) {
+    throw new Error('`afterSeconds` must be a positive number.');
+  }
 
   const specifiedCount = [hasAt, hasAfter, hasCron].filter(Boolean).length;
   if (specifiedCount !== 1) {
@@ -268,7 +279,7 @@ function normalizeCreateArgs(args: {
   }
 
   if (hasAfter) {
-    const afterSeconds = Number(args.afterSeconds);
+    const afterSeconds = parsedAfterSeconds!;
     if (!Number.isFinite(afterSeconds) || afterSeconds <= 0) {
       throw new Error('`afterSeconds` must be a positive number.');
     }
