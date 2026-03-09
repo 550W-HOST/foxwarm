@@ -386,7 +386,23 @@ export class MessageRouter {
           break;
         }
 
-        const result = await llm.chat(parts, session, iteration);
+        let result;
+        try {
+          result = await llm.chat(parts, session, iteration);
+        } catch (e: any) {
+          if (session.stopping && llm.isAbortError(e)) {
+            logger.info({ sessionId: session.id }, 'In-flight LLM request aborted by stop signal');
+            session.stopping = false;
+            await sessionManager.saveSession(session.id);
+
+            finalResponse = finalResponse
+              ? finalResponse + '\n\n_[Execution stopped by user]_' 
+              : '_[Execution stopped by user]_';
+            break;
+          }
+          throw e;
+        }
+
         finalResponse = result.text;
         finalUsage = result.usage;
 

@@ -343,8 +343,11 @@ export async function tool_stop_session(args: ToolArgs) {
     return `Session \`${sessionId}\` is not currently running.`;
   }
 
-  session.stopping = true;
-  await sessionManager.saveSession(sessionId);
+  const { abortedInFlight } = await sessionManager.requestSessionStop(sessionId);
+
+  if (abortedInFlight) {
+    return `Stop signal sent to session \`${sessionId}\`. The in-flight LLM request was aborted.`;
+  }
 
   return `Stop signal sent to session \`${sessionId}\`. It will stop after the current tool call completes.`;
 }
