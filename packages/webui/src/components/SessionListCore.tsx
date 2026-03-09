@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Trash2 } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2 } from 'lucide-react'
 
 export interface Session {
   id: string
@@ -81,7 +81,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const [showMoreChildren, setShowMoreChildren] = useState<Set<string>>(new Set())
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renameSubmitting, setRenameSubmitting] = useState(false)
   const contextMenuRef = useRef<HTMLDivElement>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
   const sessionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const [pendingFocusSessionId, setPendingFocusSessionId] = useState<string | null>(null)
 
@@ -214,6 +218,17 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
     return () => window.cancelAnimationFrame(frame)
   }, [pendingFocusSessionId, expandedSessions, rootSessions.length])
+
+  useEffect(() => {
+    if (!renameSessionId) return
+
+    const frame = window.requestAnimationFrame(() => {
+      renameInputRef.current?.focus()
+      renameInputRef.current?.select()
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [renameSessionId])
 
   const toggleExpand = (sessionId: string) => {
     const newExpanded = new Set(expandedSessions)
@@ -373,6 +388,46 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     setContextMenu(null)
   }
 
+  const openRenameDialog = (sessionId: string) => {
+    const session = sessionMap.get(sessionId)
+    setRenameSessionId(sessionId)
+    setRenameValue(session?.displayName || '')
+    setContextMenu(null)
+  }
+
+  const renameSession = async () => {
+    if (!renameSessionId || renameSubmitting) return
+
+    try {
+      setRenameSubmitting(true)
+      const token = getStoredAuthToken()
+      const url = `${API_BASE_PATH}/sessions/${encodeURIComponent(renameSessionId)}/name`
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: renameValue })
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        alert(`Failed to rename session: ${error.error || 'Unknown error'}`)
+        return
+      }
+
+      setRenameSessionId(null)
+      setRenameValue('')
+    } catch (err) {
+      console.error('[RENAME] Exception:', err)
+      alert('Failed to rename session')
+    } finally {
+      setRenameSubmitting(false)
+    }
+  }
+
   const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null) => {
     const children = childrenMap.get(session.id) || []
     const hasChildren = children.length > 0
@@ -520,6 +575,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             return (
               <>
                 <button
+                  onClick={() => openRenameDialog(contextMenu.sessionId)}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 inline-flex items-center gap-2"
+                >
+                  <Pencil size={14} />
+                  <span>Rename</span>
+                </button>
+                <button
                   onClick={() => toggleArchive(contextMenu.sessionId, !isArchived)}
                   className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 inline-flex items-center gap-2"
                 >
@@ -546,6 +608,66 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </>
             )
           })()}
+        </div>
+      )}
+
+      {/* Rename Dialog */}
+      {renameSessionId && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
+              Rename Session
+            </h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Display name
+                </label>
+                <input
+                  ref={renameInputRef}
+                  type="text"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      renameSession()
+                    }
+                    if (e.key === 'Escape') {
+                      setRenameSessionId(null)
+                      setRenameValue('')
+                    }
+                  }}
+                  placeholder="Enter a custom chat name"
+                  className="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Session ID: <span className="font-mono text-xs">{renameSessionId}</span>
+                <br />
+                Leave the display name empty to clear it.
+              </p>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => {
+                  setRenameSessionId(null)
+                  setRenameValue('')
+                }}
+                className="px-4 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                disabled={renameSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => renameSession()}
+                className="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
+                disabled={renameSubmitting}
+              >
+                {renameSubmitting ? 'Saving...' : (renameValue.trim() ? 'Save' : 'Clear name')}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

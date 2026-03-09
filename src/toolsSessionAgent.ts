@@ -323,12 +323,12 @@ export async function tool_update_session_name(args: ToolArgs, ctx: ToolContext)
     session.displayName = undefined;
   }
 
-  await sessionManager.saveSession(targetId);
+  await sessionManager.saveSession(session.id);
 
   if (session.displayName) {
-    return `Session \`${targetId}\` renamed to "${session.displayName}".`;
+    return `Session \`${session.id}\` renamed to "${session.displayName}".`;
   }
-  return `Session \`${targetId}\` display name cleared.`;
+  return `Session \`${session.id}\` display name cleared.`;
 }
 
 export async function tool_stop_session(args: ToolArgs) {

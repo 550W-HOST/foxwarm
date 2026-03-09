@@ -21,6 +21,7 @@ import type { LucideIcon } from 'lucide-react'
 
 interface ChatProps {
   sessionId: string
+  sessionDisplayName?: string
   onBack?: () => void
   themeMode: 'auto' | 'light' | 'dark'
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
@@ -494,7 +495,7 @@ const ToolLabel = ({ name }: { name: string }) => {
   )
 }
 
-export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: ChatProps) {
+export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -2190,7 +2191,7 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
       {/* Header - Fixed at top */}
       <div className="sticky top-0 z-30 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-3 min-w-0">
             {isMobile && onBack && (
               <button
                 onClick={onBack}
@@ -2201,7 +2202,12 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
                 </svg>
               </button>
             )}
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{sessionId}</h2>
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white truncate">{sessionDisplayName || sessionId}</h2>
+              {sessionDisplayName && (
+                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">{sessionId}</div>
+              )}
+            </div>
           </div>
           <div className="relative">
             <button
