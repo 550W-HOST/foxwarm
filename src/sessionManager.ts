@@ -539,12 +539,49 @@ let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = n
 // Callback when session list is updated (for SSE broadcasting)
 let onSessionListUpdated: (() => void) | null = null;
 
+// Track active in-flight LLM requests so /stop can abort the underlying HTTP call.
+const sessionAbortControllers = new Map<string, AbortController>();
+
 export function setOnHistoryUpdated(callback: (sessionId: string, message: Message) => void) {
   onHistoryUpdated = callback;
 }
 
 export function setOnSessionListUpdated(callback: () => void) {
   onSessionListUpdated = callback;
+}
+
+export function registerSessionAbortController(sessionId: string, controller: AbortController): void {
+  sessionAbortControllers.set(sessionId, controller);
+}
+
+export function clearSessionAbortController(sessionId: string, controller?: AbortController): void {
+  const current = sessionAbortControllers.get(sessionId);
+  if (!current) return;
+  if (controller && current !== controller) return;
+  sessionAbortControllers.delete(sessionId);
+}
+
+export function abortSessionInFlight(sessionId: string): boolean {
+  const controller = sessionAbortControllers.get(sessionId);
+  if (!controller) {
+    return false;
+  }
+
+  sessionAbortControllers.delete(sessionId);
+  controller.abort();
+  return true;
+}
+
+export async function requestSessionStop(sessionId: string): Promise<{ abortedInFlight: boolean }> {
+  const session = await getSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
+
+  session.stopping = true;
+  const abortedInFlight = abortSessionInFlight(sessionId);
+  await saveSession(sessionId);
+  return { abortedInFlight };
 }
 
 function makeChannelKey(platform: string, channelUserId: string): string {
@@ -1367,38 +1404,198 @@ export async function saveSession(sessionId: string): Promise<void> {
   }
 }
 
+function stripSessionMetadataForSave(session: Session): Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'> {
+  const { history, persistentMemorySnapshot, broadcast, ...metadata } = session;
+  return metadata;
+}
+
+function getSessionsMetadataBackupPath(index: number): string {
+  return `${SESSIONS_FILE}.${index}.bak`;
+}
+
+function getSessionHistoryFilePath(sessionId: string): string {
+  return path.join(SESSIONS_DIR, `${sessionId}.json`);
+}
+
+function getSessionsMetadataCandidatePaths(): string[] {
+  return [
+    SESSIONS_FILE,
+    ...Array.from({ length: 5 }, (_, i) => getSessionsMetadataBackupPath(i + 1)),
+    `${SESSIONS_FILE}.bak`,
+  ];
+}
+
+async function readSessionsMetadataSnapshotFromFile(filePath: string): Promise<any | null> {
+  if (!await fs.pathExists(filePath)) {
+    return null;
+  }
+
+  const data = await fs.readJson(filePath);
+  if (!data || typeof data !== 'object') {
+    throw new Error(`Invalid sessions metadata payload in ${filePath}`);
+  }
+
+  const sessionsData = data.sessions || data;
+  if (!sessionsData || typeof sessionsData !== 'object') {
+    throw new Error(`Invalid sessions metadata object in ${filePath}`);
+  }
+
+  return data.sessions ? data : { sessions: sessionsData };
+}
+
+async function collectSessionHistoryFiles(dir: string): Promise<string[]> {
+  if (!await fs.pathExists(dir)) {
+    return [];
+  }
+
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await collectSessionHistoryFiles(fullPath));
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith('.json')) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function deriveSessionIdFromHistoryFile(historyFilePath: string): string {
+  return path.relative(SESSIONS_DIR, historyFilePath).replace(/\.json$/, '').split(path.sep).join('/');
+}
+
+function inferSessionLastMessageTime(history: Message[], historyFilePath: string): number {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const timestamp = history[i]?.__meta?.timestamp;
+    if (typeof timestamp === 'number' && !Number.isNaN(timestamp)) {
+      return timestamp;
+    }
+  }
+
+  try {
+    return fs.statSync(historyFilePath).mtimeMs;
+  } catch {
+    return Date.now();
+  }
+}
+
+async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
+  const data: any = { sessions: {} };
+  const historyFiles = await collectSessionHistoryFiles(SESSIONS_DIR);
+
+  for (const historyFilePath of historyFiles) {
+    try {
+      const historyData = await fs.readJson(historyFilePath);
+      const sessionId = deriveSessionIdFromHistoryFile(historyFilePath);
+      const history = Array.isArray(historyData.history) ? historyData.history : [];
+      const inferredAgent = historyData.agent || (sessionId.includes('/') ? sessionId.split('/').slice(0, -1).join('/') : 'main');
+      const inferredNextSeq = typeof historyData.nextMessageSeq === 'number'
+        ? historyData.nextMessageSeq
+        : Math.max(0, ...history.map((message: Message) => message?.__meta?.seq || 0)) + 1;
+
+      data.sessions[sessionId] = {
+        id: sessionId,
+        busy: historyData.busy ?? false,
+        queue: historyData.queue || [],
+        meta: {
+          lastMessageTime: inferSessionLastMessageTime(history, historyFilePath),
+          messageCount: history.length,
+        },
+        stats: {
+          totalCachedTokens: 0,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          lastUsage: null,
+        },
+        currentNode: historyData.currentNode || 'master',
+        agent: inferredAgent,
+        nextMessageSeq: inferredNextSeq > 0 ? inferredNextSeq : 1,
+        historyVersion: historyData.historyVersion ?? 0,
+        parentSessionId: historyData.parentSessionId,
+        displayName: historyData.displayName,
+        isolated: historyData.isolated,
+        model: historyData.model,
+        verbose: historyData.verbose,
+        aliases: historyData.aliases,
+        indexingState: historyData.indexingState,
+      };
+    } catch (e) {
+      logger.warn({ err: e, historyFilePath }, 'Failed to rebuild session metadata from history file');
+    }
+  }
+
+  return data;
+}
+
+async function loadSessionsMetadataSnapshot(): Promise<{ data: any; source: string }> {
+  for (const candidatePath of getSessionsMetadataCandidatePaths()) {
+    try {
+      const data = await readSessionsMetadataSnapshotFromFile(candidatePath);
+      if (data) {
+        return { data, source: candidatePath };
+      }
+    } catch (e) {
+      logger.warn({ err: e, candidatePath }, 'Failed to read sessions metadata candidate');
+    }
+  }
+
+  const rebuilt = await rebuildSessionsMetadataFromHistoryFiles();
+  return { data: rebuilt, source: 'rebuild' };
+}
+
+async function writeSessionsMetadataAtomically(data: any): Promise<void> {
+  await fs.ensureDir(path.dirname(SESSIONS_FILE));
+  const tempFile = `${SESSIONS_FILE}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeJson(tempFile, data, { spaces: 2 });
+
+  if (await fs.pathExists(SESSIONS_FILE)) {
+    try {
+      for (let i = 5; i >= 2; i--) {
+        const prevBackup = getSessionsMetadataBackupPath(i - 1);
+        const nextBackup = getSessionsMetadataBackupPath(i);
+        if (await fs.pathExists(prevBackup)) {
+          await fs.move(prevBackup, nextBackup, { overwrite: true });
+        }
+      }
+      await fs.copy(SESSIONS_FILE, getSessionsMetadataBackupPath(1), { overwrite: true });
+      await fs.copy(SESSIONS_FILE, `${SESSIONS_FILE}.bak`, { overwrite: true });
+    } catch (e) {
+      logger.warn({ err: e }, 'Failed to rotate sessions metadata backups');
+    }
+  }
+
+  await fs.move(tempFile, SESSIONS_FILE, { overwrite: true });
+}
+
 /**
  * Save sessions metadata (sessions.json)
  */
 export async function saveSessionsMetadata(): Promise<void> {
   try {
-    // Backup existing sessions.json
-    if (await fs.pathExists(SESSIONS_FILE)) {
-      try {
-        for (let i = 5; i >= 1; i--) {
-          const oldBak = i === 1 ? SESSIONS_FILE + '.bak' : SESSIONS_FILE + '.' + (i - 1) + '.bak';
-          const newBak = SESSIONS_FILE + '.' + i + '.bak';
-          if (await fs.pathExists(oldBak)) {
-            await fs.rename(oldBak, newBak);
-          }
-        }
-        await fs.rename(SESSIONS_FILE, SESSIONS_FILE + '.1.bak');
-      } catch (e) {
-        logger.warn(e, 'Failed to backup metadata');
+    const { data: snapshot, source } = await loadSessionsMetadataSnapshot();
+    const data: any = { sessions: {} };
+    const existingSessions = snapshot?.sessions && typeof snapshot.sessions === 'object'
+      ? snapshot.sessions
+      : {};
+
+    for (const [sessionId, metadata] of Object.entries(existingSessions)) {
+      if (sessions.has(sessionId) || await fs.pathExists(getSessionHistoryFilePath(sessionId))) {
+        data.sessions[sessionId] = metadata;
       }
     }
 
-    const data: any = {
-      sessions: {}
-    };
-
-    // Save session metadata (without history and persistentMemorySnapshot)
     for (const [sessionId, session] of sessions.entries()) {
-      const { history, persistentMemorySnapshot, broadcast, ...metadata } = session;
-      data.sessions[sessionId] = metadata;
+      data.sessions[sessionId] = stripSessionMetadataForSave(session);
     }
 
-    await fs.writeJson(SESSIONS_FILE, data, { spaces: 2 });
+    if (source !== SESSIONS_FILE) {
+      logger.warn({ source, inMemorySessionCount: sessions.size, savedSessionCount: Object.keys(data.sessions).length }, 'Saving sessions metadata using recovered baseline');
+    }
+
+    await writeSessionsMetadataAtomically(data);
   } catch (e) {
     logger.error(e, 'Failed to save metadata');
   }
@@ -1409,42 +1606,44 @@ export async function loadSessions(): Promise<void> {
     // Load agent metadata first
     await loadAgentMetadata();
     await loadChannels();
-    
-    if (await fs.pathExists(SESSIONS_FILE)) {
-      const data = await fs.readJson(SESSIONS_FILE);
 
-      // Load sessions metadata only (history will be loaded on-demand)
-      const sessionsData = data.sessions || data;
-      for (const sessionId in sessionsData) {
-        // Skip channelAttachments key if it exists in old format
-        if (sessionId === 'channelAttachments') continue;
-
-        const metadata = sessionsData[sessionId];
-        
-        // Create session with metadata but empty history (will be loaded on-demand)
-        const session: Session = {
-          id: sessionId,
-          busy: false,
-          meta: { lastMessageTime: Date.now() },
-          ...metadata,
-          history: [], // Empty, will be loaded when getSession is called
-          queue: metadata.queue || [],
-        };
-
-        sessions.set(sessionId, session);
-      }
-
-      // Load channel attachments (migrated to channels.json)
-      if (data.channelAttachments) {
-        for (const channelKey in data.channelAttachments) {
-          const sessionId = data.channelAttachments[channelKey];
-          channelAttachments.set(channelKey, { sessionId });
-        }
-        await saveChannels();
-      }
-
-      logger.info({ sessionCount: sessions.size, attachmentCount: channelAttachments.size }, 'Session metadata loaded');
+    const { data, source } = await loadSessionsMetadataSnapshot();
+    if (source !== SESSIONS_FILE) {
+      logger.warn({ source }, 'Recovering sessions metadata from fallback source');
+      await writeSessionsMetadataAtomically(data);
     }
+
+    // Load sessions metadata only (history will be loaded on-demand)
+    const sessionsData = data.sessions || data;
+    for (const sessionId in sessionsData) {
+      // Skip channelAttachments key if it exists in old format
+      if (sessionId === 'channelAttachments') continue;
+
+      const metadata = sessionsData[sessionId];
+
+      // Create session with metadata but empty history (will be loaded when getSession is called)
+      const session: Session = {
+        id: sessionId,
+        busy: false,
+        meta: { lastMessageTime: Date.now() },
+        ...metadata,
+        history: [], // Empty, will be loaded when getSession is called
+        queue: metadata.queue || [],
+      };
+
+      sessions.set(sessionId, session);
+    }
+
+    // Load channel attachments (migrated to channels.json)
+    if (data.channelAttachments) {
+      for (const channelKey in data.channelAttachments) {
+        const sessionId = data.channelAttachments[channelKey];
+        channelAttachments.set(channelKey, { sessionId });
+      }
+      await saveChannels();
+    }
+
+    logger.info({ sessionCount: sessions.size, attachmentCount: channelAttachments.size }, 'Session metadata loaded');
   } catch (e) {
     logger.error(e, 'Failed to load sessions');
   }
