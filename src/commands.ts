@@ -1066,9 +1066,12 @@ export const COMMANDS: Record<string, CommandDef> = {
       }
 
       try {
-        session.stopping = true
-        await sessionManager.saveSession(sessionId)
-        ctx.reply('🛑 Stop signal sent. The session will stop after the current tool call completes.')
+        const { abortedInFlight } = await sessionManager.requestSessionStop(sessionId)
+        if (abortedInFlight) {
+          ctx.reply('🛑 Stop signal sent. The in-flight LLM request was aborted.')
+        } else {
+          ctx.reply('🛑 Stop signal sent. The session will stop after the current tool call completes.')
+        }
       } catch (e: any) {
         ctx.reply(`❌ Stop failed: ${e.message}`)
       }

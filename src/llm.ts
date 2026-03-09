@@ -10,7 +10,42 @@ import * as sessionManager from './sessionManager';
 import { formatTime, getDatedLogPath } from './logRotation';
 import { loadSkillDocuments } from './skills';
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
+    const error = new Error(message) as Error & { code: string };
+    error.name = 'AbortError';
+    error.code = 'ERR_CANCELED';
+    return error;
+}
+
+function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) {
+        return Promise.reject(makeAbortError());
+    }
+
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+
+        const onAbort = () => {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', onAbort);
+            reject(makeAbortError());
+        };
+
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+export function isAbortError(error: any): boolean {
+    return !!(
+        axios.isCancel?.(error)
+        || error?.code === 'ERR_CANCELED'
+        || error?.name === 'AbortError'
+        || error?.name === 'CanceledError'
+    );
+}
 
 function getPromptCacheKey(session: Session): string {
     return `${session.id || 'default'}`;
@@ -975,41 +1010,52 @@ export async function chat(
     // Make API call with retries
     let response: AxiosResponse;
     const maxRetries = 3;
+    const abortController = new AbortController();
+    sessionManager.registerSessionAbortController(session.id, abortController);
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            response = await axios.post(url, data, { 
-                headers: { ...headers, ...modelEntry.extraHeaders },
-                timeout: 180000, // 3 minutes
-                validateStatus: () => true
-            });
-            await logResponse({
-                status: response.status + ' ' + response.statusText,
-                headers: response.headers,
-                body: response.data
-            }, iteration);
-            if (response.status !== 200) {
-                logger.error({
+    try {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                response = await axios.post(url, data, {
+                    headers: { ...headers, ...modelEntry.extraHeaders },
+                    timeout: 180000, // 3 minutes
+                    validateStatus: () => true,
+                    signal: abortController.signal,
+                });
+                await logResponse({
                     status: response.status + ' ' + response.statusText,
                     headers: response.headers,
                     body: response.data
-                }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
-                if (attempt === maxRetries) {
-                    return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts`);
+                }, iteration);
+                if (response.status !== 200) {
+                    logger.error({
+                        status: response.status + ' ' + response.statusText,
+                        headers: response.headers,
+                        body: response.data
+                    }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
+                    if (attempt === maxRetries) {
+                        return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts`);
+                    }
+                    await sleepWithSignal(2000, abortController.signal);
+                    continue;
                 }
-                await sleep(2000);
-                continue;
+                break;
+            } catch (e: any) {
+                if (isAbortError(e)) {
+                    throw e;
+                }
+
+                logger.error({ status: (e as AxiosResponse)?.status }, `LLM API Network Error (Attempt ${attempt}/${maxRetries})`);
+                if (attempt === maxRetries) {
+                    return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts: ${e?.message || e}`);
+                }
+                await sleepWithSignal(2000, abortController.signal);
             }
-            break;
-        } catch (e: any) {
-            logger.error({ status: (e as AxiosResponse)?.status }, `LLM API Network Error (Attempt ${attempt}/${maxRetries})`);
-            if (attempt === maxRetries) {
-                return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts: ${e?.message || e}`);
-            }
-            await sleep(2000);
         }
+    } finally {
+        sessionManager.clearSessionAbortController(session.id, abortController);
     }
-    
+
     const resp = response.data;
     
     // Extract response content blocks and tool calls
