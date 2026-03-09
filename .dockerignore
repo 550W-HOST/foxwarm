@@ -1,6 +1,10 @@
 node_modules/
+packages/webui/node_modules/
+packages/webui/dist/
 lib/
 state/
+agents/
+skills/
 .env
 *.log
 .DS_Store
@@ -14,3 +18,5 @@ build/
 coverage/
 .temp/
 .git/
+docs/
+test/
