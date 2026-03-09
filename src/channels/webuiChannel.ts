@@ -111,7 +111,7 @@ export class WebUIChannel implements Channel {
         }
       });
 
-      // Get all sessions
+      // Get available slash commands for WebUI autocomplete
       httpServerInstance.addRoute({
         path: '/api/commands',
         method: 'GET',
@@ -173,29 +173,6 @@ export class WebUIChannel implements Channel {
             res.json({ sessions });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get sessions');
-            res.status(500).json({ error: e.message });
-          }
-        },
-      });
-
-      // Get available slash commands for WebUI autocomplete
-      httpServerInstance.addRoute({
-        path: '/api/commands',
-        method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
-          try {
-            const commands = Object.entries(COMMANDS)
-              .map(([name, def]) => ({
-                name,
-                description: def.description,
-                usage: def.usage || null,
-                requiresSession: def.requiresSession !== false,
-              }))
-              .sort((a, b) => a.name.localeCompare(b.name));
-
-            res.json({ commands });
-          } catch (e: any) {
-            logger.error({ err: e }, 'Failed to get command list');
             res.status(500).json({ error: e.message });
           }
         },
