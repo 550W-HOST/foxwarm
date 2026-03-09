@@ -1,4 +1,5 @@
 const assert = require('assert');
+const path = require('path');
 const {
   convertToOpenAIResponsesFormat,
   convertToOpenAIFormat,
@@ -76,7 +77,7 @@ async function run() {
         id: 'call_current_alias',
         name: 'read',
         args: {
-          filePath: '/home/vivy/foxwarm/package.json',
+          filePath: path.join(__dirname, '..', 'package.json'),
           node: 'current',
           startLine: 200,
           endLine: 220,

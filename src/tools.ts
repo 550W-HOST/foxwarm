@@ -48,6 +48,8 @@ type ToolArgs = Record<string, any>;
 const WORKSPACE = WORKSPACE_DIR;
 fs.ensureDirSync(getAgentDir('main'));
 
+const OPTIONAL_NODE_DESCRIPTION = 'Optional. Empty = current node; avoid `current`.';
+
 // Helper function to resolve file path for agent
 function resolveAgentPath(filePath: string, agentName: string = 'main'): string {
     if (path.isAbsolute(filePath)) {
@@ -582,7 +584,7 @@ export const definitions = [
                 type: 'object',
                 properties: { 
                     filePath: { type: 'string' },
-                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' },
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION },
                     startLine: { type: 'number', description: 'Starting line number (1-indexed, optional)' },
                     endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional)' }
                 },
@@ -597,7 +599,7 @@ export const definitions = [
                 properties: { 
                     content: { type: 'string' },
                     filePath: { type: 'string' },
-                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' },
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION },
                     overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' }
                 },
                 required: ['filePath', 'content']
@@ -612,7 +614,7 @@ export const definitions = [
                     filePath: { type: 'string' },
                     oldText: { type: 'string', description: 'The exact text to find' },
                     newText: { type: 'string', description: 'The text to replace it with' },
-                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' }
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
                 },
                 required: ['filePath', 'oldText', 'newText']
             }
@@ -624,7 +626,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     input: { type: 'string', description: 'The apply_patch command text that you wish to execute.' },
-                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' }
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
                 },
                 required: ['input']
             }
@@ -871,7 +873,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     url: { type: 'string', description: 'URL to visit' },
-                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' }
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
                 },
                 required: ['url']
             }
@@ -882,7 +884,7 @@ export const definitions = [
             parameters: {
                 type: 'object',
                 properties: {
-                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' }
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
                 }
             }
         },
@@ -893,7 +895,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     tabId: { type: 'string', description: 'Tab ID (e.g., "tab1")' },
-                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' },
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION },
                     screenshot: { 
                         type: ['boolean', 'string'], 
                         description: 'If true, return screenshot to LLM for viewing. If a file path (string), save screenshot to that file. If false/omitted, return text content.',
@@ -910,7 +912,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     tabId: { type: 'string', description: 'Tab ID to close' },
-                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' }
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
                 },
                 required: ['tabId']
             }
@@ -927,7 +929,7 @@ export const definitions = [
                         description: 'Action to perform: click, type, fill, press, scroll, wait, evaluate, goto, back, forward, reload',
                         enum: ['click', 'type', 'fill', 'press', 'scroll', 'wait', 'evaluate', 'goto', 'back', 'forward', 'reload']
                     },
-                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' },
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION },
                     params: { 
                         type: 'object', 
                         description: 'Action parameters. Examples: {selector: "#id"}, {selector: "input", text: "hello"}, {key: "Enter"}, {y: 500}, {url: "https://..."}, {code: "document.title"}',
