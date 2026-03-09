@@ -856,6 +856,12 @@ export function setupSessionBroadcast(sessionId: string): void {
         continue;
       }
 
+      const channelConfig = getChannelConfig(channelInfo.platform, channelInfo.channelUserId);
+      if (channelConfig?.mode === 'push-only') {
+        logger.debug({ platform: channelInfo.platform, channelUserId: channelInfo.channelUserId, sessionId }, 'Skipping push-only channel during broadcast');
+        continue;
+      }
+
       const channel = getChannelInstance(channelInfo.platform);
       if (channel) {
         logger.debug({ platform: channelInfo.platform, channelUserId: channelInfo.channelUserId }, 'Calling channel.sendMessage');
