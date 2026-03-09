@@ -96,32 +96,23 @@ What `test.py` currently exercises:
 
 ---
 
-## Mode 2: dynamic registration into foxwarm / alphabot
+## Mode 2: dynamic registration into foxwarm
 
 Set `ALPHABOT_URL` to the backend node websocket URL.
-
-### alphabot test (3002)
-
-```bash
-cd packages/android-node
-. .venv/bin/activate
-export ALPHABOT_URL="ws://localhost:3002/node_ws?token=$(cat /home/ldmbot/git/alphabot/test/state/node_token)&id=android-e2e-test"
-python server.py
-```
 
 ### betabot (3001)
 
 ```bash
 cd packages/android-node
 . .venv/bin/activate
-export ALPHABOT_URL="ws://localhost:3001/node_ws?token=$(cat /home/ldmbot/betabot/state/node_token)&id=android-e2e"
+export ALPHABOT_URL="ws://localhost:3001/node_ws?token=$(cat ../../state/node_token)&id=android-e2e"
 python server.py
 ```
 
 If registration succeeds, the log will look like:
 
 ```text
-Connecting to Alphabot at ws://localhost:3002/node_ws?... 
+Connecting to Alphabot at ws://localhost:3001/node_ws?... 
 Sending node registration...
 ✅ Successfully registered as node: android-e2e-test
 Waiting for tool calls...
