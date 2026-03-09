@@ -582,7 +582,7 @@ export const definitions = [
                 type: 'object',
                 properties: { 
                     filePath: { type: 'string' },
-                    node: { type: 'string', description: 'Default: current node' },
+                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' },
                     startLine: { type: 'number', description: 'Starting line number (1-indexed, optional)' },
                     endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional)' }
                 },
@@ -597,7 +597,7 @@ export const definitions = [
                 properties: { 
                     content: { type: 'string' },
                     filePath: { type: 'string' },
-                    node: { type: 'string', description: 'Default: current node' },
+                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' },
                     overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' }
                 },
                 required: ['filePath', 'content']
@@ -612,7 +612,7 @@ export const definitions = [
                     filePath: { type: 'string' },
                     oldText: { type: 'string', description: 'The exact text to find' },
                     newText: { type: 'string', description: 'The text to replace it with' },
-                    node: { type: 'string', description: 'Default: current node' }
+                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' }
                 },
                 required: ['filePath', 'oldText', 'newText']
             }
@@ -624,7 +624,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     input: { type: 'string', description: 'The apply_patch command text that you wish to execute.' },
-                    node: { type: 'string', description: 'Default: current node' }
+                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' }
                 },
                 required: ['input']
             }
@@ -871,7 +871,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     url: { type: 'string', description: 'URL to visit' },
-                    node: { type: 'string', description: 'Default: current node' }
+                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' }
                 },
                 required: ['url']
             }
@@ -882,7 +882,7 @@ export const definitions = [
             parameters: {
                 type: 'object',
                 properties: {
-                    node: { type: 'string', description: 'Default: current node' }
+                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' }
                 }
             }
         },
@@ -893,7 +893,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     tabId: { type: 'string', description: 'Tab ID (e.g., "tab1")' },
-                    node: { type: 'string', description: 'Default: current node' },
+                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' },
                     screenshot: { 
                         type: ['boolean', 'string'], 
                         description: 'If true, return screenshot to LLM for viewing. If a file path (string), save screenshot to that file. If false/omitted, return text content.',
@@ -910,7 +910,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     tabId: { type: 'string', description: 'Tab ID to close' },
-                    node: { type: 'string', description: 'Default: current node' }
+                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' }
                 },
                 required: ['tabId']
             }
@@ -927,7 +927,7 @@ export const definitions = [
                         description: 'Action to perform: click, type, fill, press, scroll, wait, evaluate, goto, back, forward, reload',
                         enum: ['click', 'type', 'fill', 'press', 'scroll', 'wait', 'evaluate', 'goto', 'back', 'forward', 'reload']
                     },
-                    node: { type: 'string', description: 'Default: current node' },
+                    node: { type: 'string', description: 'Optional. Omit or use empty string to use the current session node. Do not pass the literal value `current`.' },
                     params: { 
                         type: 'object', 
                         description: 'Action parameters. Examples: {selector: "#id"}, {selector: "input", text: "hello"}, {key: "Enter"}, {y: 500}, {url: "https://..."}, {code: "document.title"}',
