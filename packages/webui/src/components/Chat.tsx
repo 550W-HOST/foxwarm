@@ -13,6 +13,7 @@ import {
   Wrench,
   Terminal,
   Paperclip,
+  Copy,
   Check,
   X,
 } from 'lucide-react'
@@ -288,6 +289,30 @@ const renderMarkdown = (text: string): string => {
   return sanitizeHtml(html)
 }
 
+const copyTextToClipboard = async (text: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+
+  const copied = document.execCommand('copy')
+  document.body.removeChild(textarea)
+
+  if (!copied) {
+    throw new Error('Copy command was rejected by the browser')
+  }
+}
+
 // Helper to format object: if single key, return value; otherwise return "key: value" pairs
 const formatObject = (obj: any): string => {
   if (!obj || typeof obj !== 'object') return String(obj)
@@ -521,7 +546,35 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
   })
   const [showMenu, setShowMenu] = useState(false)
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
+  const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const copyResetTimeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  const handleCopyRawText = async (messageKey: string, text: string) => {
+    try {
+      await copyTextToClipboard(text)
+      setCopiedMessageKey(messageKey)
+
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+      }
+
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopiedMessageKey(current => current === messageKey ? null : current)
+        copyResetTimeoutRef.current = null
+      }, 1500)
+    } catch (error) {
+      console.error('Failed to copy raw text:', error)
+    }
+  }
 
   // Helper to check if a message has text content
   const hasTextContent = (msg: any) => {
@@ -2312,6 +2365,7 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
                       const text = part.text || ''
                       const viewMode = messageViewModes.get(idx) || 'rendered'
                       const paddingClass = viewMode === 'rendered' ? 'px-2' : 'px-2 py-2'
+                      const copied = copiedMessageKey === messageKey
 
                       return (
                         <div key={partIdx} className={`bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${paddingClass} rounded-lg cursor-text relative group`}>
@@ -2338,6 +2392,17 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
                             >
                               <FileJson size={14} />
                             </IconToggleButton>
+                            <IconToggleButton
+                              onClick={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                void handleCopyRawText(messageKey, text)
+                              }}
+                              active={copied}
+                              title={copied ? 'Copied' : 'Copy Raw Text'}
+                            >
+                              {copied ? <Check size={12} /> : <Copy size={12} />}
+                            </IconToggleButton>
                           </div>
 
                           {/* Content based on view mode */}
@@ -2347,9 +2412,9 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
                               dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
                             />
                           ) : viewMode === 'raw' ? (
-                            <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 pr-24">{text}</pre>
+                            <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 pr-32">{text}</pre>
                           ) : (
-                            <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto pr-24">
+                            <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto pr-32">
                               {JSON.stringify(msg, null, 2)}
                             </pre>
                           )}
