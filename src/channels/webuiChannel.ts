@@ -236,6 +236,40 @@ export class WebUIChannel implements Channel {
         },
       });
 
+      // Update session display name
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/name',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const { name } = req.body;
+            const session = await sessionManager.getExistingSession(sessionId);
+
+            if (!session) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
+
+            if (typeof name === 'string' && name.trim()) {
+              session.displayName = name.trim();
+            } else {
+              session.displayName = undefined;
+            }
+
+            await sessionManager.saveSession(session.id);
+
+            res.json({
+              success: true,
+              sessionId: session.id,
+              displayName: session.displayName || null,
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to update session display name');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
       // Archive/unarchive session (must be before DELETE /:sessionId)
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/archive',

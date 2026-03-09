@@ -238,6 +238,8 @@ function App() {
     ;(window as any).alphabotTest = helper
   }, [currentSession])
 
+  const currentSessionRecord = sessions.find(session => session.id === currentSession || session.aliases?.includes(currentSession))
+
   // Mobile view
   if (isMobile) {
     if (showSessionList) {
@@ -252,7 +254,8 @@ function App() {
       <div className="fixed inset-0 bg-gray-100 dark:bg-gray-900 overflow-hidden">
         <Chat 
           key={currentSession}
-          sessionId={currentSession} 
+          sessionId={currentSession}
+          sessionDisplayName={currentSessionRecord?.displayName}
           onBack={handleBackToList}
           themeMode={themeMode}
           onThemeChange={setThemeMode}
@@ -273,7 +276,8 @@ function App() {
       <div className="flex-1 h-screen overflow-hidden">
         <Chat 
           key={currentSession}
-          sessionId={currentSession} 
+          sessionId={currentSession}
+          sessionDisplayName={currentSessionRecord?.displayName}
           onBack={handleBackToList}
           themeMode={themeMode}
           onThemeChange={setThemeMode}
