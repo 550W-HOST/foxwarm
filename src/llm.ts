@@ -44,6 +44,43 @@ function stringifyToolOutput(output: unknown): string {
     return String(output);
 }
 
+function extractToolResponseOutput(response: any): unknown {
+    if (response === undefined || response === null) {
+        return response;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(response, 'output')) {
+        return response.output;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(response, 'error')) {
+        return response.error;
+    }
+
+    return response;
+}
+
+function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string {
+    if (nodeParam === undefined || nodeParam === null) {
+        return currentNode;
+    }
+
+    if (typeof nodeParam !== 'string') {
+        return String(nodeParam) || currentNode;
+    }
+
+    const trimmed = nodeParam.trim();
+    if (!trimmed) {
+        return currentNode;
+    }
+
+    if (trimmed.toLowerCase() === 'current') {
+        return currentNode;
+    }
+
+    return trimmed;
+}
+
 async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited'): Promise<string> {
     const agentMemoryDir = getAgentMemoryDir(agentName);
     if (!await fs.pathExists(agentMemoryDir)) {
@@ -141,7 +178,7 @@ async function logResponse(data: any, iteration = 0) {
  * Also fix user/system inserted messages between tool calls, insert a dummy message.
  * This fix some kv cache problem.
  */
-function fixToolCalls(contents: Message[]): Message[] {
+export function fixToolCalls(contents: Message[]): Message[] {
     const fixed = [];
     
     for (let i = 0; i < contents.length; i++) {
@@ -239,7 +276,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
             // Handle function response
             if (part.functionResponse) {
                 const resp = part.functionResponse.response || {};
-                const output = resp.output ?? resp.error ?? '';
+                const output = extractToolResponseOutput(resp);
                 const toolResult = {
                     type: 'tool_result',
                     tool_use_id: part.functionResponse.tool_use_id || part.toolUseId || 'unknown',
@@ -288,7 +325,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
  * Internal format: { role: 'user'|'model'|'tool', parts: [{ text, thinking, functionCall, functionResponse }] }
  * OpenAI format: { role: 'user'|'assistant'|'tool', content: string | array, tool_calls?: array, reasoning_content?: string }
  */
-function convertToOpenAIFormat(contents: Message[]): any[] {
+export function convertToOpenAIFormat(contents: Message[]): any[] {
     const openaiMessages = [];
     
     for (const msg of contents) {
@@ -301,11 +338,15 @@ function convertToOpenAIFormat(contents: Message[]): any[] {
             const toolIdOrder: string[] = [];
             const pendingInlineWithoutId: any[] = [];
 
-            const pushGroupPart = (toolId: string, part: any) => {
+            const ensureGroup = (toolId: string) => {
                 if (!groupedByToolId.has(toolId)) {
                     groupedByToolId.set(toolId, []);
                     toolIdOrder.push(toolId);
                 }
+            };
+
+            const pushGroupPart = (toolId: string, part: any) => {
+                ensureGroup(toolId);
                 groupedByToolId.get(toolId)!.push(part);
             };
 
@@ -332,12 +373,14 @@ function convertToOpenAIFormat(contents: Message[]): any[] {
                 
                 if (part.functionResponse) {
                     const resp = part.functionResponse.response || {};
-                    const output = resp.output ?? resp.error ?? '';
+                    const output = extractToolResponseOutput(resp);
                     const toolId = part.functionResponse.tool_use_id || part.toolUseId;
                     if (!toolId) {
                         logger.warn({ part }, 'Skipping tool response without tool_call_id');
                         continue;
                     }
+
+                    ensureGroup(toolId);
 
                     // Attach orphaned inline images (if any) to this tool id.
                     if (pendingInlineWithoutId.length > 0) {
@@ -347,7 +390,10 @@ function convertToOpenAIFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    pushGroupPart(toolId, { type: 'text', text: stringifyToolOutput(output) });
+                    const outputText = stringifyToolOutput(output);
+                    if (outputText !== '') {
+                        pushGroupPart(toolId, { type: 'text', text: outputText });
+                    }
                 }
             }
 
@@ -358,10 +404,10 @@ function convertToOpenAIFormat(contents: Message[]): any[] {
 
             for (const toolId of toolIdOrder) {
                 const groupedParts = groupedByToolId.get(toolId) || [];
-                if (groupedParts.length === 0) continue;
-
                 const hasNonTextPart = groupedParts.some((x: any) => x.type !== 'text');
-                const content = !hasNonTextPart && groupedParts.length === 1
+                const content = groupedParts.length === 0
+                    ? ''
+                    : !hasNonTextPart && groupedParts.length === 1
                     ? groupedParts[0].text
                     : groupedParts;
 
@@ -466,7 +512,7 @@ function convertToOpenAIFormat(contents: Message[]): any[] {
  * - assistant messages => output_text message items + function_call items
  * - tool messages => function_call_output items
  */
-function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
+export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
     const responseInput = [];
 
     const flushMessageContent = (
@@ -495,11 +541,15 @@ function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
             const toolIdOrder: string[] = [];
             const pendingInlineWithoutId: any[] = [];
 
-            const pushGroupPart = (toolId: string, part: any) => {
+            const ensureGroup = (toolId: string) => {
                 if (!groupedByToolId.has(toolId)) {
                     groupedByToolId.set(toolId, []);
                     toolIdOrder.push(toolId);
                 }
+            };
+
+            const pushGroupPart = (toolId: string, part: any) => {
+                ensureGroup(toolId);
                 groupedByToolId.get(toolId)!.push(part);
             };
 
@@ -521,13 +571,15 @@ function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
 
                 if (part.functionResponse) {
                     const resp = part.functionResponse.response || {};
-                    const output = resp.output ?? resp.error ?? '';
+                    const output = extractToolResponseOutput(resp);
                     const toolId = part.functionResponse.tool_use_id || part.toolUseId;
 
                     if (!toolId) {
                         logger.warn({ part }, 'Skipping Responses tool output without call_id');
                         continue;
                     }
+
+                    ensureGroup(toolId);
 
                     if (pendingInlineWithoutId.length > 0) {
                         for (const imagePart of pendingInlineWithoutId) {
@@ -536,8 +588,9 @@ function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    if (output !== '') {
-                        pushGroupPart(toolId, { type: 'input_text', text: stringifyToolOutput(output) });
+                    const outputText = stringifyToolOutput(output);
+                    if (outputText !== '') {
+                        pushGroupPart(toolId, { type: 'input_text', text: outputText });
                     }
                 }
             }
@@ -703,9 +756,11 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const nodeParam = call.args?.node;
         const sessionId = toolContext.sessionId || 'main';
         const currentNode = await nodesManager.getCurrentNode(sessionId) || 'master';
-        
-        // Determine target node: explicit node param > current node > master
-        const targetNode = nodeParam || currentNode;
+
+        // Determine target node: explicit node param > current node > master.
+        // Treat literal "current" as an alias for the session's current node,
+        // since models sometimes emit node:"current" from schema wording.
+        const targetNode = normalizeRequestedNode(nodeParam, currentNode);
         
         // Remove node parameter from args before execution
         const toolArgs = { ...call.args };
