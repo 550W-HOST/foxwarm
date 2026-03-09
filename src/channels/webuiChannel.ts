@@ -11,6 +11,7 @@ import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
 import { BASE_DIR } from '../config';
 import { httpServer } from '../httpServer';
+import { COMMANDS } from '../commands';
 
 // Extend Express Request to include cookies
 declare global {
@@ -108,6 +109,30 @@ export class WebUIChannel implements Channel {
             res.status(401).json({ error: 'Invalid token' });
           }
         }
+      });
+
+      // Get available slash commands for WebUI autocomplete
+      httpServerInstance.addRoute({
+        path: '/api/commands',
+        method: 'GET',
+        handler: async (_req: express.Request, res: express.Response) => {
+          try {
+            const commands = Object.entries(COMMANDS)
+              .map(([name, def]) => ({
+                name,
+                description: def.description,
+                usage: def.usage || null,
+                requiresSession: def.requiresSession !== false,
+                showInTelegram: def.showInTelegram !== false,
+              }))
+              .sort((a, b) => a.name.localeCompare(b.name));
+
+            res.json({ commands });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get commands');
+            res.status(500).json({ error: e.message });
+          }
+        },
       });
 
       // Get all sessions
@@ -469,7 +494,7 @@ export class WebUIChannel implements Channel {
               platform: 'webui',
               reply: async (replyText: string) => {
                 // Check if this is a command response by checking if message starts with /
-                const messageText = text || finalParts.map((p: any) => p.text || '').join('\n');
+                const messageText = (text || finalParts.map((p: any) => p.text || '').join('\n')).trim();
                 const isCommand = messageText.startsWith('/');
                 
                 logger.info({ sessionId, isCommand, replyLength: replyText.length }, 'WebUI reply called');

@@ -12,6 +12,14 @@ interface ChatProps {
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
 }
 
+interface SlashCommandOption {
+  name: string
+  description: string
+  usage?: string | null
+  requiresSession?: boolean
+  showInTelegram?: boolean
+}
+
 // View mode for assistant messages
 type ViewMode = 'rendered' | 'raw' | 'json'
 
@@ -316,6 +324,21 @@ const clampContentStyle = (lines: number): React.CSSProperties => ({
   overflow: 'hidden',
 })
 
+const getSlashCommandQuery = (value: string): string | null => {
+  if (!value || value.includes('\n') || /^\s/.test(value)) {
+    return null
+  }
+
+  const match = value.match(/^\/([^\s]*)$/)
+  return match ? match[1] : null
+}
+
+const resizeTextarea = (textarea: HTMLTextAreaElement | null) => {
+  if (!textarea) return
+  textarea.style.height = 'auto'
+  textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px'
+}
+
 // ANSI color code parser
 const parseAnsi = (text: string): React.ReactNode[] => {
   const ansiRegex = /\x1b\[([0-9;]+)m/g
@@ -440,6 +463,11 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
   // View mode for each assistant message (messageIndex -> ViewMode)
   const [messageViewModes, setMessageViewModes] = useState<Map<number, ViewMode>>(new Map())
   const [toolViewModes, setToolViewModes] = useState<Map<string, ToolViewMode>>(new Map())
+  const [availableCommands, setAvailableCommands] = useState<SlashCommandOption[]>([])
+  const [commandsLoading, setCommandsLoading] = useState(false)
+  const [commandsError, setCommandsError] = useState<string | null>(null)
+  const [highlightedCommandIndex, setHighlightedCommandIndex] = useState(0)
+  const [dismissedSlashQuery, setDismissedSlashQuery] = useState<string | null>(null)
 
   const setMessageView = (messageIdx: number, mode: ViewMode) => {
     setMessageViewModes(prev => {
@@ -547,6 +575,7 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
   }
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const slashMenuRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const draftSaveTimerRef = useRef<NodeJS.Timeout | null>(null)
   const lastKnownTimestampRef = useRef<number>(0)
@@ -570,18 +599,77 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchCommands = async () => {
+      setCommandsLoading(true)
+      setCommandsError(null)
+
+      try {
+        const res = await fetch(`${API_BASE_PATH}/commands`)
+        if (!res.ok) {
+          throw new Error(`Failed to load commands (${res.status})`)
+        }
+
+        const data = await res.json()
+        if (!cancelled) {
+          setAvailableCommands(Array.isArray(data.commands) ? data.commands : [])
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.error('Failed to fetch commands:', e)
+          setCommandsError(e instanceof Error ? e.message : 'Failed to load commands')
+          setAvailableCommands([])
+        }
+      } finally {
+        if (!cancelled) {
+          setCommandsLoading(false)
+        }
+      }
+    }
+
+    fetchCommands()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const slashCommandQuery = getSlashCommandQuery(input)
+  const slashCommandSuggestions = slashCommandQuery === null
+    ? []
+    : availableCommands.filter((command) => command.name.slice(1).toLowerCase().startsWith(slashCommandQuery.toLowerCase()))
+  const showSlashCommandMenu = slashCommandQuery !== null && dismissedSlashQuery !== input && (commandsLoading || slashCommandSuggestions.length > 0 || !!commandsError)
+
+  useEffect(() => {
+    if (!showSlashCommandMenu) {
+      setHighlightedCommandIndex(0)
+      return
+    }
+
+    setHighlightedCommandIndex((current) => {
+      if (slashCommandSuggestions.length === 0) return 0
+      return Math.min(current, slashCommandSuggestions.length - 1)
+    })
+  }, [showSlashCommandMenu, slashCommandSuggestions.length])
+
+  useEffect(() => {
+    if (!showSlashCommandMenu) return
+    const activeItem = slashMenuRef.current?.querySelector<HTMLElement>('[data-active="true"]')
+    activeItem?.scrollIntoView({ block: 'nearest' })
+  }, [showSlashCommandMenu, highlightedCommandIndex])
+
   // Load draft from localStorage on mount
   useEffect(() => {
     const draftKey = `draft_${sessionId}`
     const savedDraft = localStorage.getItem(draftKey)
     if (savedDraft) {
       setInput(savedDraft)
+      setDismissedSlashQuery(null)
       // Auto-resize textarea after loading draft
       setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto'
-          textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
-        }
+        resizeTextarea(textareaRef.current)
       }, 0)
     }
   }, [sessionId])
@@ -1259,6 +1347,22 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
     }
   }
 
+  const applySlashCommand = (command: SlashCommandOption) => {
+    const nextValue = `${command.name} `
+    setInput(nextValue)
+    setHighlightedCommandIndex(0)
+    setDismissedSlashQuery(null)
+
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        resizeTextarea(textareaRef.current)
+        textareaRef.current.focus()
+        const caret = nextValue.length
+        textareaRef.current.setSelectionRange(caret, caret)
+      }
+    })
+  }
+
   const sendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     if ((!input.trim() && attachments.length === 0) || loading) return
@@ -1268,15 +1372,15 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
     setInput('')
     setAttachments([])
     setLoading(true)
+    setDismissedSlashQuery(null)
 
     // Clear draft from localStorage after sending
     const draftKey = `draft_${sessionId}`
     localStorage.removeItem(draftKey)
 
     // Reset textarea height
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
+    resizeTextarea(textareaRef.current)
+    textareaRef.current?.focus()
 
     // Record current timestamp before sending
     const sendTimestamp = Date.now()
@@ -1349,6 +1453,38 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showSlashCommandMenu) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        if (slashCommandSuggestions.length > 0) {
+          setHighlightedCommandIndex((current) => (current + 1) % slashCommandSuggestions.length)
+        }
+        return
+      }
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (slashCommandSuggestions.length > 0) {
+          setHighlightedCommandIndex((current) => (current - 1 + slashCommandSuggestions.length) % slashCommandSuggestions.length)
+        }
+        return
+      }
+
+      if ((e.key === 'Enter' || e.key === 'Tab') && !e.ctrlKey && !e.metaKey) {
+        if (slashCommandSuggestions.length > 0) {
+          e.preventDefault()
+          applySlashCommand(slashCommandSuggestions[highlightedCommandIndex])
+          return
+        }
+      }
+
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setDismissedSlashQuery(input)
+        return
+      }
+    }
+
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
       sendMessage()
@@ -1356,12 +1492,10 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
   }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value)
-    
-    // Auto-resize textarea
-    const textarea = e.target
-    textarea.style.height = 'auto'
-    textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px'
+    const nextValue = e.target.value
+    setInput(nextValue)
+    setDismissedSlashQuery(null)
+    resizeTextarea(e.target)
   }
 
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -1893,6 +2027,57 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
     )
   }
 
+  const renderSlashCommandMenu = () => {
+    if (!showSlashCommandMenu) return null
+
+    return (
+      <div className="mb-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-lg overflow-hidden">
+        <div className="px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2">
+          <span>Slash commands</span>
+          <span className="text-[11px]">↑↓ select · Enter/Tab apply · Esc dismiss</span>
+        </div>
+        <div ref={slashMenuRef} className="max-h-64 overflow-y-auto">
+          {commandsLoading && (
+            <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">Loading commands...</div>
+          )}
+          {!commandsLoading && commandsError && slashCommandSuggestions.length === 0 && (
+            <div className="px-3 py-2 text-sm text-red-600 dark:text-red-300">{commandsError}</div>
+          )}
+          {!commandsLoading && !commandsError && slashCommandSuggestions.length === 0 && (
+            <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">No matching commands.</div>
+          )}
+          {slashCommandSuggestions.map((command, index) => {
+            const isActive = index === highlightedCommandIndex
+            return (
+              <button
+                key={command.name}
+                type="button"
+                data-active={isActive ? 'true' : 'false'}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  applySlashCommand(command)
+                }}
+                onMouseEnter={() => setHighlightedCommandIndex(index)}
+                className={`w-full px-3 py-2 text-left border-b last:border-b-0 border-gray-100 dark:border-gray-800 transition ${isActive ? 'bg-blue-50 dark:bg-blue-900/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800/80'}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{command.name}</span>
+                  {command.requiresSession === false && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">global</span>
+                  )}
+                </div>
+                <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{command.description}</div>
+                {command.usage && (
+                  <div className="mt-1 font-mono text-[11px] text-gray-500 dark:text-gray-400">{command.usage}</div>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* Header - Fixed at top */}
@@ -2231,6 +2416,8 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
             ))}
           </div>
         )}
+
+        {renderSlashCommandMenu()}
         
         <form onSubmit={sendMessage} className="flex space-x-2">
           <input
