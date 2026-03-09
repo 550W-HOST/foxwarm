@@ -470,7 +470,13 @@ export async function getExistingSession(sessionId: string): Promise<Session | n
   const realId = await resolveSessionId(sessionId);
   
   const session = sessions.get(realId);
-  if (session) return session;
+  if (session) {
+    // Sessions loaded from sessions.json start as metadata-only placeholders
+    // with an empty history array. Delegate to getSession() so callers that
+    // later save or inspect the session do not accidentally operate on an
+    // unloaded placeholder and overwrite the on-disk history.
+    return await getSession(realId);
+  }
 
   // Check if session history file exists
   const historyFile = path.join(SESSIONS_DIR, `${realId}.json`);
