@@ -258,6 +258,8 @@ export class WebUIChannel implements Channel {
 
             await sessionManager.saveSession(session.id);
 
+            this.broadcastSessionListUpdate();
+
             res.json({
               success: true,
               sessionId: session.id,
