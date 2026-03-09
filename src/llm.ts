@@ -838,6 +838,15 @@ export async function chat(
         await sessionManager.appendSessionMessage(session, message);
     };
 
+    const appendTerminalModelTextAndReturn = async (text: string): Promise<ChatResult> => {
+        await appendMessage({
+            role: 'model',
+            parts: [{ text }],
+        });
+
+        return { text };
+    };
+
     // Get persistent context
     const agentName = session.agent || 'main';
     const systemPrompt = session.persistentMemorySnapshot || await getPersistentMemory(agentName);
@@ -986,7 +995,7 @@ export async function chat(
                     body: response.data
                 }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
                 if (attempt === maxRetries) {
-                    return { text: `Error: API request failed after ${maxRetries} attempts` };
+                    return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts`);
                 }
                 await sleep(2000);
                 continue;
@@ -995,7 +1004,7 @@ export async function chat(
         } catch (e: any) {
             logger.error({ status: (e as AxiosResponse)?.status }, `LLM API Network Error (Attempt ${attempt}/${maxRetries})`);
             if (attempt === maxRetries) {
-                return { text: `Error: API request failed after ${maxRetries} attempts: ${e?.message || e}` };
+                return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts: ${e?.message || e}`);
             }
             await sleep(2000);
         }
@@ -1011,7 +1020,7 @@ export async function chat(
         // Parse OpenAI response
         const choice = resp.choices?.[0];
         if (!choice) {
-            return { text: 'Error: No response from OpenAI API' };
+            return appendTerminalModelTextAndReturn('Error: No response from OpenAI API');
         }
         
         const message = choice.message;
@@ -1044,7 +1053,7 @@ export async function chat(
         const outputItems = Array.isArray(resp.output) ? resp.output : [];
 
         if (outputItems.length === 0) {
-            return { text: 'Error: No response from OpenAI Responses API' };
+            return appendTerminalModelTextAndReturn('Error: No response from OpenAI Responses API');
         }
 
         for (const item of outputItems) {

@@ -1,10 +1,38 @@
 import fs from 'fs-extra';
 import { MCP_CONFIG_PATH, STATE_DIR } from './config';
 
-const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
-const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
-const { SSEClientTransport } = require('@modelcontextprotocol/sdk/client/sse.js');
-const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+type McpSdkModules = {
+  Client: any;
+  StreamableHTTPClientTransport: any;
+  SSEClientTransport: any;
+  StdioClientTransport: any;
+};
+
+let cachedMcpSdk: McpSdkModules | null = null;
+
+function loadMcpSdk(): McpSdkModules {
+  if (cachedMcpSdk) {
+    return cachedMcpSdk;
+  }
+
+  try {
+    const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+    const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
+    const { SSEClientTransport } = require('@modelcontextprotocol/sdk/client/sse.js');
+    const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+
+    cachedMcpSdk = {
+      Client,
+      StreamableHTTPClientTransport,
+      SSEClientTransport,
+      StdioClientTransport,
+    };
+
+    return cachedMcpSdk;
+  } catch (e: any) {
+    throw new Error(`MCP SDK is unavailable: ${e?.message || e}. Install @modelcontextprotocol/sdk to use MCP tools.`);
+  }
+}
 
 export type McpTransport = 'streamable-http' | 'sse' | 'stdio' | 'auto';
 
@@ -176,6 +204,7 @@ function scheduleStdioIdleCleanup(entry: PooledStdioConnection) {
 }
 
 async function connectStreamableHttp(url: string, token?: string): Promise<StandardConnection> {
+  const { Client, StreamableHTTPClientTransport } = loadMcpSdk();
   const transport = new StreamableHTTPClientTransport(new URL(url), {
     requestInit: {
       headers: getAuthHeaders(token),
@@ -187,6 +216,7 @@ async function connectStreamableHttp(url: string, token?: string): Promise<Stand
 }
 
 async function connectSse(url: string, token?: string): Promise<StandardConnection> {
+  const { Client, SSEClientTransport } = loadMcpSdk();
   const headers = getAuthHeaders(token);
   const transport = new SSEClientTransport(new URL(url), {
     eventSourceInit: headers ? ({ headers } as any) : undefined,
@@ -198,6 +228,7 @@ async function connectSse(url: string, token?: string): Promise<StandardConnecti
 }
 
 async function connectStdio(config: McpServerConfig): Promise<StandardConnection> {
+  const { Client, StdioClientTransport } = loadMcpSdk();
   const transport = new StdioClientTransport({
     command: requireCommand(config),
     args: config.args,
