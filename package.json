@@ -29,6 +29,7 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@lancedb/lancedb": "^0.26.2",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@types/blessed": "^0.1.27",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.0.0",

@@ -425,11 +425,19 @@ async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
 }
 
 async function tool_mcp_config(args: ToolArgs) {
-    const { name, url, token, description, enable } = args;
-    if (!name || !url) {
-        throw new Error('mcp_config requires name and url');
+    const { name, url, command, args: commandArgs, env, cwd, stderr, token, description, enable, transport, type } = args;
+    const resolvedTransport = transport || type || 'auto';
+    if (!name) {
+        throw new Error('mcp_config requires name');
     }
-    await mcpClient.upsertServer(name, { url, token, description, enable });
+    if (resolvedTransport === 'stdio') {
+        if (!command) {
+            throw new Error('mcp_config with stdio transport requires command');
+        }
+    } else if (!url) {
+        throw new Error('mcp_config requires url for streamable-http, sse, or auto transport');
+    }
+    await mcpClient.upsertServer(name, { url, command, args: commandArgs, env, cwd, stderr, token, description, enable, transport, type });
     return `MCP server \"${name}\" saved${enable === false ? ' (disabled)' : ''}.`;
 }
 
@@ -979,12 +987,19 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     name: { type: 'string', description: 'Server name' },
-                    url: { type: 'string', description: 'MCP server URL (JSON-RPC endpoint)' },
+                    url: { type: 'string', description: 'Standard MCP server endpoint URL. Use the /mcp endpoint for streamable-http or auto, or the SSE endpoint for sse.' },
+                    command: { type: 'string', description: 'Executable to run when transport=stdio.' },
+                    args: { type: 'array', items: { type: 'string' }, description: 'Command line arguments for stdio transport.' },
+                    env: { type: 'object', description: 'Extra environment variables for stdio transport.' },
+                    cwd: { type: 'string', description: 'Working directory for stdio transport.' },
+                    stderr: { type: 'string', description: 'How to handle stdio server stderr: inherit, pipe, or ignore.' },
                     token: { type: 'string', description: 'Optional bearer token' },
+                    transport: { type: 'string', description: 'Transport type: streamable-http, sse, stdio, or auto. Defaults to auto.' },
+                    type: { type: 'string', description: 'Alias for transport (same supported values: streamable-http, sse, stdio, auto).' },
                     description: { type: 'string', description: 'Optional description' },
                     enable: { type: 'boolean', description: 'Enable/disable this server' }
                 },
-                required: ['name', 'url']
+                required: ['name']
             }
         },
         {
