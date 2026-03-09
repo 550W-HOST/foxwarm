@@ -63,6 +63,27 @@ Logs are written to:
 tail -f state/logs/foxwarm.log
 ```
 
+### Running with Docker Compose
+
+```bash
+cp .env.example .env
+mkdir -p state agents skills
+cp templates/models.example.yaml state/models.yaml
+
+docker compose up -d --build
+```
+
+Then open `http://localhost:3001` and use the token from `state/token` to log in.
+
+Useful commands:
+
+```bash
+docker compose logs -f
+docker compose down
+```
+
+The bundled `docker-compose.yml` mounts `state/`, `agents/`, and `skills/` from the host so your config, logs, and agent data persist across rebuilds. By default it also points `OLLAMA_BASE_URL` at `http://host.docker.internal:11434`; change that in `.env` if your embedding service runs elsewhere.
+
 ## First Run
 
 On first startup, Foxwarm will:

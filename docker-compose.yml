@@ -1,0 +1,33 @@
+# First-time setup:
+#   cp .env.example .env
+#   mkdir -p state agents skills
+#   cp templates/models.example.yaml state/models.yaml
+
+name: foxwarm
+
+services:
+  foxwarm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: foxwarm
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: production
+      HTTP_PORT: 3001
+      ENABLE_WEBUI: ${ENABLE_WEBUI:-true}
+      ENABLE_TRIGGER: ${ENABLE_TRIGGER:-true}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    ports:
+      - "${HTTP_PORT:-3001}:3001"
+    volumes:
+      - ./state:/app/state
+      - ./agents:/app/agents
+      - ./skills:/app/skills
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    stop_grace_period: 10s
