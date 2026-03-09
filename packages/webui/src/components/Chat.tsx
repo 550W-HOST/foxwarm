@@ -3,7 +3,20 @@ import { API_BASE_PATH } from '../config'
 import * as Diff from 'diff'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { Eye, Code, FileJson, Menu } from 'lucide-react'
+import {
+  Eye,
+  Code,
+  FileJson,
+  Menu,
+  BookOpen,
+  Pencil,
+  Wrench,
+  Terminal,
+  Paperclip,
+  Check,
+  X,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 interface ChatProps {
   sessionId: string
@@ -319,8 +332,10 @@ const isCollapsibleSystemText = (text: string): boolean => (
   text.startsWith('[SYSTEM:') && !isLightweightSystemTextLine(text)
 )
 
-const clampContentStyle = (lines: number): React.CSSProperties => ({
-  maxHeight: `calc(1.5em * ${lines})`,
+const clampContentStyle = (lines: number, extraHeightRem = 0): React.CSSProperties => ({
+  maxHeight: extraHeightRem > 0
+    ? `calc(1.5em * ${lines} + ${extraHeightRem}rem)`
+    : `calc(1.5em * ${lines})`,
   overflow: 'hidden',
 })
 
@@ -433,15 +448,26 @@ const parseAnsi = (text: string): React.ReactNode[] => {
   return parts.length > 0 ? parts : [text]
 }
 
-const toolEmojis: Record<string, string> = {
-  read: '📖',
-  write: '📝',
-  edit: '✏️',
-  apply_patch: '🩹',
-  exec: '▶️',
+const toolIcons: Record<string, LucideIcon> = {
+  read: BookOpen,
+  write: Pencil,
+  edit: Pencil,
+  apply_patch: Wrench,
+  exec: Terminal,
 }
 
-const getToolEmoji = (name: string) => toolEmojis[name] || '🔧'
+const getToolIcon = (name: string) => toolIcons[name] || Wrench
+
+const ToolLabel = ({ name }: { name: string }) => {
+  const Icon = getToolIcon(name)
+
+  return (
+    <span className="inline-flex h-[18px] items-center gap-1 rounded-md border border-gray-200 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none text-gray-600 dark:text-gray-300 align-middle">
+      <Icon size={12} />
+      <span>{name}</span>
+    </span>
+  )
+}
 
 export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
@@ -1570,7 +1596,6 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
     isExpanded: boolean
     viewMode: ToolViewMode
     callIdx: number
-    emoji: string
   }
 
   type ToolResponseRendererParams = {
@@ -1578,11 +1603,17 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
     isExpanded: boolean
   }
 
-  const defaultToolCallRenderer = ({ call, isExpanded, emoji }: ToolCallRendererParams) => {
+  const defaultToolCallRenderer = ({ call, isExpanded }: ToolCallRendererParams) => {
     const argsFormatted = formatObject(call.args)
-    const argsStr = `${emoji} ${call.name}\n${argsFormatted}`
-    const preview = argsStr.length > 200 ? argsStr.substring(0, 200) + '...' : argsStr
-    return { content: <div className="whitespace-pre-wrap break-all">{isExpanded ? argsStr : preview}</div> }
+    const preview = argsFormatted.length > 200 ? argsFormatted.substring(0, 200) + '...' : argsFormatted
+    return {
+      content: (
+        <div className="space-y-1">
+          <ToolLabel name={call.name} />
+          <div className="whitespace-pre-wrap break-all">{isExpanded ? argsFormatted : preview}</div>
+        </div>
+      )
+    }
   }
 
   const formatToolResponseText = (resp: FunctionResponse): string => {
@@ -1616,19 +1647,28 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
 
 
   const toolCallRenderers: Record<string, (params: ToolCallRendererParams) => { content: React.ReactNode }> = {
-    read: ({ call, emoji }) => {
-      const info = `${emoji} ${call.name} ${call.args.filePath}`
+    read: ({ call }) => {
       const extra = (call.args.startLine || call.args.endLine)
         ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
         : ''
-      return { content: <div>{info}{extra}</div> }
-    },
-    write: ({ call, isExpanded, emoji }) => {
-      const info = `${emoji} ${call.name} ${call.args.filePath}`
       return {
         content: (
-          <div>
-            <div>{info}</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <ToolLabel name={call.name} />
+            <span className="text-gray-700 dark:text-gray-200 break-all">{call.args.filePath}</span>
+            {extra && <span className="text-gray-500 dark:text-gray-400">{extra}</span>}
+          </div>
+        )
+      }
+    },
+    write: ({ call, isExpanded }) => {
+      return {
+        content: (
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <ToolLabel name={call.name} />
+              <span className="text-gray-700 dark:text-gray-200 break-all">{call.args.filePath}</span>
+            </div>
             {isExpanded && call.args.content && (
               <pre className="mt-2 whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">
                 {call.args.content}
@@ -1638,28 +1678,31 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
         )
       }
     },
-    edit: ({ call, isExpanded, callIdx, emoji }) => {
+    edit: ({ call, isExpanded, callIdx }) => {
       const hasLegacyDiff = typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
       const oldLines = hasLegacyDiff ? call.args.oldText.split('\n').length - (call.args.oldText.endsWith('\n') ? 1 : 0) : 0
       const newLines = hasLegacyDiff ? call.args.newText.split('\n').length - (call.args.newText.endsWith('\n') ? 1 : 0) : 0
 
-      const info = `${emoji} ${call.name}`
       const stats = hasLegacyDiff ? (
-        <span className="ml-2 text-xs">
+        <span className="text-xs">
           <span className="text-orange-600 dark:text-orange-400">-{oldLines}</span>
           <span className="mx-1 text-gray-500">/</span>
           <span className="text-blue-600 dark:text-blue-400">+{newLines}</span>
         </span>
       ) : (
-        <span className="ml-2 text-xs text-gray-500">legacy payload unavailable</span>
+        <span className="text-xs text-gray-500">legacy payload unavailable</span>
       )
       const path = <span className="text-gray-600 dark:text-gray-400">{call.args.filePath}</span>
 
       return {
         content: (
           <div>
-            <div className="flex items-center justify-between">
-              <span>{info}{stats} {path}</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 flex-wrap">
+                <ToolLabel name={call.name} />
+                {stats}
+                {path}
+              </span>
             </div>
             {isExpanded && (
               <div>
@@ -1689,7 +1732,7 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
         )
       }
     },
-    apply_patch: ({ call, isExpanded, callIdx, emoji }) => {
+    apply_patch: ({ call, isExpanded, callIdx }) => {
       try {
         const operations = parseApplyPatchPreview(call.args.input)
         const totalHunks = operations.reduce((sum, operation) => sum + (operation.action === 'update' ? operation.hunks.length : 0), 0)
@@ -1701,8 +1744,8 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
           content: (
             <div>
               <div className="flex items-center justify-between gap-2">
-                <span>
-                  {emoji} {call.name}
+                <span className="flex items-center gap-2 flex-wrap">
+                  <ToolLabel name={call.name} />
                   <span className="ml-2 text-xs text-gray-500">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
                   <span className="ml-2 text-gray-600 dark:text-gray-400">{fileSummary}</span>
                 </span>
@@ -1771,7 +1814,10 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
         return {
           content: (
             <div>
-              <div>{emoji} {call.name} <span className="text-xs text-red-500">invalid patch</span></div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <ToolLabel name={call.name} />
+                <span className="text-xs text-red-500">invalid patch</span>
+              </div>
               {isExpanded && (
                 <pre className="mt-2 whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">
                   {error}\n\n{call.args.input || JSON.stringify(call.args, null, 2)}
@@ -1782,10 +1828,16 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
         }
       }
     },
-    exec: ({ call, isExpanded, emoji }) => {
-      const argsStr = `${emoji} ${call.name} ${call.args.command}`
-      const preview = argsStr.length > 200 ? argsStr.substring(0, 200) + '...' : argsStr
-      return { content: <div className="break-all">{isExpanded ? argsStr : preview}</div> }
+    exec: ({ call, isExpanded }) => {
+      const preview = call.args.command.length > 200 ? call.args.command.substring(0, 200) + '...' : call.args.command
+      return {
+        content: (
+          <div className="space-y-1">
+            <ToolLabel name={call.name} />
+            <div className="break-all">{isExpanded ? call.args.command : preview}</div>
+          </div>
+        )
+      }
     }
   }
 
@@ -1844,7 +1896,6 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
           const toolKey = `${idx}-call-${callIdx}`
           const isExpanded = expandedTool === toolKey
           const viewMode = toolViewModes.get(toolKey) || 'default'
-          const emoji = getToolEmoji(call.name)
 
           let content: React.ReactNode
           if (viewMode === 'json') {
@@ -1855,7 +1906,7 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
             )
           } else {
             const renderer = toolCallRenderers[call.name] || defaultToolCallRenderer
-            content = renderer({ call, isExpanded, viewMode, callIdx, emoji }).content
+            content = renderer({ call, isExpanded, viewMode, callIdx }).content
           }
 
           const isFirst = callIdx === 0
@@ -1929,7 +1980,7 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
                 className="font-mono text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200"
                 onClick={() => setExpandedTool(isExpanded ? null : toolKey)}
               >
-                <div style={isExpanded ? undefined : clampContentStyle(1)}>
+                <div style={isExpanded ? undefined : clampContentStyle(1, 0.25)}>
                   {content}
                 </div>
               </div>
@@ -2010,7 +2061,10 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
                 className={`font-mono cursor-pointer ${isError ? 'text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300' : 'text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300'}`}
                 onClick={() => setExpandedTool(isExpanded ? null : toolKey)}
               >
-                {isError ? '✗' : '✓'} {resp.name}
+                <span className="inline-flex items-center gap-1.5">
+                  {isError ? <X size={12} /> : <Check size={12} />}
+                  <span>{resp.name}</span>
+                </span>
               </div>
               {content && (
                 <div
@@ -2134,8 +2188,8 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
                 >
                   <div className="flex items-center justify-between">
                     <span>Verbose Mode</span>
-                    <span>
-                      {verbose ? '✓' : ''}
+                    <span className="inline-flex items-center justify-center min-w-4">
+                      {verbose ? <Check size={14} /> : null}
                     </span>
                   </div>
                 </button>
@@ -2308,7 +2362,10 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
                         className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 font-mono text-gray-500 dark:text-gray-400"
                         onClick={() => setExpandedToolGroups(prev => new Set(prev).add(getToolGroupKey(idx)))}
                       >
-                        🔧 {getToolGroupNames(getToolGroupStartIdx(idx)).join(', ')}
+                        <span className="inline-flex items-center gap-1.5">
+                          <Wrench size={12} />
+                          <span>{getToolGroupNames(getToolGroupStartIdx(idx)).join(', ')}</span>
+                        </span>
                       </div>
                     )}
                     {!verbose && isInToolGroup(idx) && !expandedToolGroups.has(getToolGroupKey(idx)) ? null : renderToolCalls(msg, idx)}
@@ -2394,8 +2451,9 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
         {/* Drag overlay */}
         {isDragging && (
           <div className="absolute inset-0 flex items-center justify-center bg-blue-100/80 dark:bg-blue-900/40 pointer-events-none">
-            <div className="text-blue-600 dark:text-blue-300 text-lg font-semibold">
-              📎 Drop files here to upload
+            <div className="inline-flex items-center gap-2 rounded-lg border border-blue-300 dark:border-blue-700 bg-white/90 dark:bg-gray-900/80 px-4 py-3 text-blue-700 dark:text-blue-200 text-base font-semibold shadow-sm">
+              <Paperclip size={18} />
+              <span>Drop files here to upload</span>
             </div>
           </div>
         )}
@@ -2434,9 +2492,11 @@ export default function Chat({ sessionId, onBack, themeMode, onThemeChange }: Ch
           />
           <label
             htmlFor="file-upload"
-            className="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 cursor-pointer transition self-end flex items-center"
+            className="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 cursor-pointer transition self-end inline-flex items-center justify-center"
+            title="Attach files"
+            aria-label="Attach files"
           >
-            📎
+            <Paperclip size={16} />
           </label>
           <textarea
             ref={textareaRef}

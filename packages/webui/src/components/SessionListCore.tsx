@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Trash2 } from 'lucide-react'
 
 export interface Session {
   id: string
@@ -521,24 +521,27 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               <>
                 <button
                   onClick={() => toggleArchive(contextMenu.sessionId, !isArchived)}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 inline-flex items-center gap-2"
                 >
-                  {isArchived ? '📂 Unarchive' : '📦 Archive'}
+                  {isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+                  <span>{isArchived ? 'Unarchive' : 'Archive'}</span>
                 </button>
                 <button
                   onClick={() => forkSession(contextMenu.sessionId)}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 inline-flex items-center gap-2"
                 >
-                  🔀 Fork
+                  <GitFork size={14} />
+                  <span>Fork</span>
                 </button>
                 <button
                   onClick={() => {
                     setDeleteConfirm(contextMenu.sessionId)
                     setContextMenu(null)
                   }}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400"
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 inline-flex items-center gap-2"
                 >
-                  🗑️ Delete
+                  <Trash2 size={14} />
+                  <span>Delete</span>
                 </button>
               </>
             )
