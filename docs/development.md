@@ -107,7 +107,8 @@ foxwarm/
 ```text
 skills/
   my-skill/
-    skill.json
+    SKILL.md
+    skill.json  # optional fallback metadata
     memory/
       README.md
       METHOD.md

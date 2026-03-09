@@ -1137,8 +1137,8 @@ ${member.rolePrompt}
             if (skill.description) {
               resp += ` - ${skill.description}`
             }
-            if (skill.memoryFiles.length > 0) {
-              resp += ` (${skill.memoryFiles.length} file${skill.memoryFiles.length > 1 ? 's' : ''})`
+            if (skill.documentFiles.length > 0) {
+              resp += ` (${skill.documentFiles.length} file${skill.documentFiles.length > 1 ? 's' : ''})`
             }
             resp += '\n'
           }
@@ -1214,7 +1214,7 @@ ${member.rolePrompt}
             if (info.description) {
               resp += `\n${info.description}`
             }
-            resp += `\nManifest: \`${info.manifestPath}\``
+            resp += `\nMetadata: \`${info.metadataPath}\``
 
             if (documents.length === 0) {
               resp += '\n\n(No skill memory documents found.)'

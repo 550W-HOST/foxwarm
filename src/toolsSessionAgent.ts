@@ -156,8 +156,8 @@ export async function tool_list_skills() {
     if (skill.description) {
       result += ` - ${skill.description}`;
     }
-    if (skill.memoryFiles.length > 0) {
-      result += ` (${skill.memoryFiles.length} memory file${skill.memoryFiles.length > 1 ? 's' : ''})`;
+    if (skill.documentFiles.length > 0) {
+      result += ` (${skill.documentFiles.length} document${skill.documentFiles.length > 1 ? 's' : ''})`;
     }
     result += '\n';
   }
@@ -228,7 +228,7 @@ export async function tool_load_skill(args: ToolArgs) {
   if (info.description) {
     result += `\nDescription: ${info.description}`;
   }
-  result += `\nManifest: ${info.manifestPath}`;
+  result += `\nMetadata: ${info.metadataPath}`;
 
   if (documents.length === 0) {
     return result + '\n\n(No skill memory documents found.)';
