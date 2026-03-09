@@ -44,13 +44,16 @@ TOOL_DEFINITIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "fx": {"type": "number", "description": "From X coordinate"},
-                "fy": {"type": "number", "description": "From Y coordinate"},
-                "tx": {"type": "number", "description": "To X coordinate"},
-                "ty": {"type": "number", "description": "To Y coordinate"},
+                "fx": {"type": "number", "description": "From X coordinate (alias: x1)"},
+                "fy": {"type": "number", "description": "From Y coordinate (alias: y1)"},
+                "tx": {"type": "number", "description": "To X coordinate (alias: x2)"},
+                "ty": {"type": "number", "description": "To Y coordinate (alias: y2)"},
+                "x1": {"type": "number", "description": "Alias for fx (from X coordinate)"},
+                "y1": {"type": "number", "description": "Alias for fy (from Y coordinate)"},
+                "x2": {"type": "number", "description": "Alias for tx (to X coordinate)"},
+                "y2": {"type": "number", "description": "Alias for ty (to Y coordinate)"},
                 "duration": {"type": "number", "description": "Duration in seconds", "default": 0.5}
-            },
-            "required": ["fx", "fy", "tx", "ty"]
+            }
         }
     },
     {
@@ -247,9 +250,16 @@ class AndroidNode:
     
     async def swipe(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Swipe gesture"""
-        fx, fy = args.get("fx", 0), args.get("fy", 0)
-        tx, ty = args.get("tx", 0), args.get("ty", 0)
+        fx = args.get("fx", args.get("x1", 0))
+        fy = args.get("fy", args.get("y1", 0))
+        tx = args.get("tx", args.get("x2", 0))
+        ty = args.get("ty", args.get("y2", 0))
         duration = args.get("duration", 0.5)
+
+        if fx == 0 and fy == 0 and tx == 0 and ty == 0:
+            return {
+                "error": "Missing swipe coordinates. Provide fx/fy/tx/ty or x1/y1/x2/y2."
+            }
         
         self.device.swipe(fx, fy, tx, ty, duration=duration)
         return {"success": True, "action": "swipe", "from": [fx, fy], "to": [tx, ty]}
