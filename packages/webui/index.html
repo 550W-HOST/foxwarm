@@ -10,6 +10,18 @@
     <meta name="apple-mobile-web-app-title" content="Foxwarm" />
     <link rel="manifest" href="./manifest.json" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
+    <script>
+      (() => {
+        try {
+          const saved = localStorage.getItem('themeMode')
+          const themeMode = saved === 'light' || saved === 'dark' || saved === 'auto' ? saved : 'auto'
+          const darkMode = themeMode === 'dark' || (themeMode === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', darkMode)
+        } catch {
+          document.documentElement.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches)
+        }
+      })()
+    </script>
     <title>🦊 Foxwarm</title>
   </head>
   <body>
