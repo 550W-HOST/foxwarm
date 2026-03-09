@@ -258,6 +258,9 @@ export class WebUIChannel implements Channel {
 
             await sessionManager.saveSession(session.id);
 
+            // Broadcast session list update so all clients reflect the new display name
+            this.broadcastSessionListUpdate();
+
             res.json({
               success: true,
               sessionId: session.id,
