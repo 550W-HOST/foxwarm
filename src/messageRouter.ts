@@ -240,16 +240,12 @@ export class MessageRouter {
     });
   }
 
-  private async maybeQueueChildReminder(session: Session): Promise<void> {
-    if (!session.parentSessionId || session.history.length === 0) {
-      return;
-    }
-
-    const lastMessage = session.history[session.history.length - 1];
-    if (lastMessage.role !== 'model' || lastMessage.parts.some(p => p.functionCall)) {
-      return;
-    }
-
+  private getChildTurnState(session: Session): {
+    foundUser: boolean;
+    hasSendToSession: boolean;
+    hasNoAction: boolean;
+    hasUserFromPrefix: boolean;
+  } {
     const history = session.history;
     let idx = history.length - 1;
     let foundUser = false;
@@ -274,6 +270,48 @@ export class MessageRouter {
       }
       idx--;
     }
+
+    return {
+      foundUser,
+      hasSendToSession,
+      hasNoAction,
+      hasUserFromPrefix,
+    };
+  }
+
+  private async appendTerminalModelMessage(session: Session, text: string): Promise<void> {
+    await sessionManager.appendSessionMessage(session, {
+      role: 'model',
+      parts: [{ text }],
+    });
+  }
+
+  private async maybeAutoReportChildFailure(session: Session, response: string): Promise<boolean> {
+    if (!session.parentSessionId || !response || !response.startsWith('Error:')) {
+      return false;
+    }
+
+    const childState = this.getChildTurnState(session);
+    if (!childState.foundUser || childState.hasSendToSession || childState.hasNoAction || childState.hasUserFromPrefix) {
+      return false;
+    }
+
+    const message = `Child session \`${session.id}\` failed before reporting back.\n\n${response}`;
+    await sessionManager.sendToSession(session.parentSessionId, message, session.id);
+    return true;
+  }
+
+  private async maybeQueueChildReminder(session: Session): Promise<void> {
+    if (!session.parentSessionId || session.history.length === 0) {
+      return;
+    }
+
+    const lastMessage = session.history[session.history.length - 1];
+    if (lastMessage.role !== 'model' || lastMessage.parts.some(p => p.functionCall)) {
+      return;
+    }
+
+    const { foundUser, hasSendToSession, hasNoAction, hasUserFromPrefix } = this.getChildTurnState(session);
 
     if (foundUser && !hasNoAction && !hasSendToSession && !hasUserFromPrefix && session.queue.length === 0) {
       const reminder = `message ended without send_to_session call. If you want to report to parent, call send_to_session({sessionId: \`${session.parentSessionId}\`, message: "..."}). If you confirmed to not sending messages, reply "NO_ACTION"`;
@@ -464,11 +502,20 @@ export class MessageRouter {
         session.stats.lastUsage = usage;
       }
 
-      await this.maybeQueueChildReminder(session);
+      const autoReportedChildFailure = await this.maybeAutoReportChildFailure(session, response);
+      if (!autoReportedChildFailure) {
+        await this.maybeQueueChildReminder(session);
+      }
       await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted);
       await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
     } catch (e: any) {
       logger.error(e, 'Error handling message');
+      const errorText = `Error: ${e?.message || 'Unknown error'}`;
+      await this.appendTerminalModelMessage(session, errorText);
+      const autoReportedChildFailure = await this.maybeAutoReportChildFailure(session, errorText);
+      if (!autoReportedChildFailure) {
+        await this.maybeQueueChildReminder(session);
+      }
       await this.sendSessionError(session, options.sourceCtx, e);
     } finally {
       if (await this.continueWithQueuedWork(session)) {
