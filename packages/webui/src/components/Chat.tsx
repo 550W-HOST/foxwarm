@@ -1679,14 +1679,32 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
     isExpanded: boolean
   }
 
+  const renderInlineToolSummary = (name: string, summary: React.ReactNode, summaryClassName = 'text-gray-700 dark:text-gray-200') => (
+    <div className="flex items-center gap-2 min-w-0">
+      <ToolLabel name={name} />
+      <div className={`min-w-0 flex-1 ${summaryClassName}`}>
+        {summary}
+      </div>
+    </div>
+  )
+
   const defaultToolCallRenderer = ({ call, isExpanded }: ToolCallRendererParams) => {
     const argsFormatted = formatObject(call.args)
     const preview = argsFormatted.length > 200 ? argsFormatted.substring(0, 200) + '...' : argsFormatted
     return {
       content: (
         <div className="space-y-1">
-          <ToolLabel name={call.name} />
-          <div className="whitespace-pre-wrap break-all">{isExpanded ? argsFormatted : preview}</div>
+          {isExpanded
+            ? (
+              <>
+                <ToolLabel name={call.name} />
+                <div className="whitespace-pre-wrap break-all">{argsFormatted}</div>
+              </>
+            )
+            : renderInlineToolSummary(
+              call.name,
+              <div className="truncate whitespace-pre-wrap break-all">{preview}</div>
+            )}
         </div>
       )
     }
@@ -1723,17 +1741,29 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
 
 
   const toolCallRenderers: Record<string, (params: ToolCallRendererParams) => { content: React.ReactNode }> = {
-    read: ({ call }) => {
+    read: ({ call, isExpanded }) => {
       const extra = (call.args.startLine || call.args.endLine)
         ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
         : ''
       return {
         content: (
-          <div className="flex items-center gap-2 flex-wrap">
-            <ToolLabel name={call.name} />
-            <span className="text-gray-700 dark:text-gray-200 break-all">{call.args.filePath}</span>
-            {extra && <span className="text-gray-500 dark:text-gray-400">{extra}</span>}
-          </div>
+          isExpanded ? (
+            <div className="space-y-1">
+              {renderInlineToolSummary(
+                call.name,
+                <div className="whitespace-pre-wrap break-all">
+                  <span>{call.args.filePath}</span>
+                  {extra && <span className="ml-2 text-gray-500 dark:text-gray-400">{extra}</span>}
+                </div>
+              )}
+            </div>
+          ) : renderInlineToolSummary(
+            call.name,
+            <div className="truncate" title={`${call.args.filePath}${extra}`}>
+              <span>{call.args.filePath}</span>
+              {extra && <span className="ml-2 text-gray-500 dark:text-gray-400">{extra}</span>}
+            </div>
+          )
         )
       }
     },
@@ -1741,10 +1771,12 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
       return {
         content: (
           <div className="space-y-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <ToolLabel name={call.name} />
-              <span className="text-gray-700 dark:text-gray-200 break-all">{call.args.filePath}</span>
-            </div>
+            {renderInlineToolSummary(
+              call.name,
+              isExpanded
+                ? <div className="whitespace-pre-wrap break-all">{call.args.filePath}</div>
+                : <div className="truncate" title={call.args.filePath}>{call.args.filePath}</div>
+            )}
             {isExpanded && call.args.content && (
               <pre className="mt-2 whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">
                 {call.args.content}
@@ -1909,8 +1941,17 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
       return {
         content: (
           <div className="space-y-1">
-            <ToolLabel name={call.name} />
-            <div className="break-all">{isExpanded ? call.args.command : preview}</div>
+            {isExpanded
+              ? (
+                <>
+                  <ToolLabel name={call.name} />
+                  <div className="break-all">{call.args.command}</div>
+                </>
+              )
+              : renderInlineToolSummary(
+                call.name,
+                <div className="truncate font-mono" title={call.args.command}>{preview}</div>
+              )}
           </div>
         )
       }
