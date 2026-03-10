@@ -13,9 +13,7 @@ services:
     container_name: foxwarm
     restart: unless-stopped
     init: true
-    env_file:
-      - path: .env
-        required: false
+    env_file: .env
     environment:
       NODE_ENV: production
       HTTP_PORT: 3001
@@ -31,3 +29,22 @@ services:
     extra_hosts:
       - host.docker.internal:host-gateway
     stop_grace_period: 10s
+
+  sandbox-node:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: sandbox-node
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_URL: "ws://host.docker.internal:3001/node_ws"
+      NODE_TOKEN: "PLACEHOLDER_TOKEN"
+      NODE_ID: "sandbox-node"
+      WORKSPACE: "/workspace"
+    volumes:
+      - ./sandbox-workspace:/workspace
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      - foxwarm
