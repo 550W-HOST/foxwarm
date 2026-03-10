@@ -337,6 +337,10 @@ async function start() {
         sessionManager.setOnHistoryUpdated((sessionId, message) => {
             webuiChannel!.broadcastMessage(sessionId, message);
         });
+
+        sessionManager.setOnSessionEventUpdated((sessionId, event) => {
+            webuiChannel!.broadcastSessionEvent(sessionId, event);
+        });
         
         // Set up session list update callback for SSE
         sessionManager.setOnSessionListUpdated(() => {

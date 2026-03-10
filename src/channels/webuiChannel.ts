@@ -716,6 +716,20 @@ export class WebUIChannel implements Channel {
     }
   }
 
+  broadcastSessionEvent(sessionId: string, event: any) {
+    const clients = this.sseClients.get(sessionId);
+    if (clients && clients.length > 0) {
+      const data = JSON.stringify({ type: 'session-event', event });
+      clients.forEach(client => {
+        try {
+          client.write(`data: ${data}\n\n`);
+        } catch (e) {
+          logger.error({ err: e }, 'Failed to send SSE session event');
+        }
+      });
+    }
+  }
+
   // Broadcast session list update to all global SSE clients
   broadcastSessionListUpdate() {
     if (this.globalSseClients.length > 0) {
