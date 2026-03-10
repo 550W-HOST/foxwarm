@@ -219,7 +219,7 @@ async function main(): Promise<void> {
       assert(parent && child);
     });
 
-    await test('post-tool LLM failure leaves a visible terminal model message and auto-notifies parent', async () => {
+    await test('post-tool LLM failure leaves a visible terminal model message without auto-notifying parent', async () => {
       const parentId = makeSessionId('selftest_error_parent');
       const childId = makeSessionId('selftest_error_child');
       createdSessionIds.push(parentId, childId);
@@ -268,18 +268,14 @@ async function main(): Promise<void> {
       }
 
       const childAfter = await sessionManager.getSession(childId);
-      const parentAfterChildRun = await sessionManager.getSession(parentId);
       const lastChild = childAfter.history[childAfter.history.length - 1];
       const lastChildText = lastChild.parts.find(part => typeof part.text === 'string')?.text || '';
       assert.strictEqual(lastChild.role, 'model');
       assert(lastChildText.startsWith('Error: API request failed after 3 attempts'));
-      assert.strictEqual(parentAfterChildRun.queue.length, 1);
-
-      await router.processSessionQueue(parentId);
       const parentAfter = await sessionManager.getSession(parentId);
-      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes(`Child session \`${childId}\` failed before reporting back.`))));
-      assertLastModelText(parentAfter, 'parent received child failure');
-      assert.strictEqual(parentCallCount, 1);
+      assert.strictEqual(parentAfter.queue.length, 0);
+      assert(!parentAfter.history.some(msg => msg.parts.some(part => (part.text || '').includes(`Child session \`${childId}\` failed before reporting back.`))));
+      assert.strictEqual(parentCallCount, 0);
     });
   } finally {
     (llm as any).chat = originalChat;
