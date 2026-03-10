@@ -19,6 +19,7 @@ import {
     ENABLE_TRIGGER,
     ENABLE_WEBUI,
     HTTP_PORT,
+    LOGS_DIR,
     MAIN_AGENT_MEMORY_DIR,
     NODE_TOKEN_FILE,
     ONBOOT_FILE,
@@ -27,7 +28,7 @@ import {
 } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
 import { registerNodeWebSocket } from './nodeWebSocket';
-import { scheduleLogRotation } from './logRotation';
+import { cleanupLegacyTopLevelLogDirs, scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
 import { initializeTimers } from './timers';
 
@@ -116,6 +117,8 @@ async function start() {
 
     // Ensure agents directory exists
     await fs.ensureDir(AGENTS_DIR);
+
+    await cleanupLegacyTopLevelLogDirs(LOGS_DIR);
 
     // Check if migration is needed (old format)
     const oldMemoryExists = await fs.pathExists(PERSISTENT_MEMORY_DIR);
