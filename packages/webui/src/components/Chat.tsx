@@ -35,6 +35,8 @@ interface SlashCommandOption {
   showInTelegram?: boolean
 }
 
+type SendKeyMode = 'mod-enter' | 'enter'
+
 // View mode for assistant messages
 type ViewMode = 'rendered' | 'raw' | 'json'
 
@@ -520,6 +522,10 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
   const [commandsError, setCommandsError] = useState<string | null>(null)
   const [highlightedCommandIndex, setHighlightedCommandIndex] = useState(0)
   const [dismissedSlashQuery, setDismissedSlashQuery] = useState<string | null>(null)
+  const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>(() => {
+    const saved = localStorage.getItem('sendKeyMode')
+    return saved === 'enter' || saved === 'mod-enter' ? saved : 'mod-enter'
+  })
 
   const setMessageView = (messageIdx: number, mode: ViewMode) => {
     setMessageViewModes(prev => {
@@ -558,6 +564,10 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
       }
     }
   }, [])
+
+  useEffect(() => {
+    localStorage.setItem('sendKeyMode', sendKeyMode)
+  }, [sendKeyMode])
 
   const handleCopyRawText = async (messageKey: string, text: string) => {
     try {
@@ -1565,7 +1575,19 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
       }
     }
 
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    if (e.key !== 'Enter') {
+      return
+    }
+
+    if (sendKeyMode === 'mod-enter') {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        sendMessage()
+      }
+      return
+    }
+
+    if (!e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault()
       sendMessage()
     }
@@ -2236,6 +2258,34 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                     ))}
                   </div>
                 </div>
+                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                  <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Send key</div>
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      onClick={() => {
+                        setSendKeyMode('mod-enter')
+                        setShowMenu(false)
+                      }}
+                      className={`px-2 py-1 text-xs rounded ${sendKeyMode === 'mod-enter' ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                    >
+                      Ctrl/Cmd+Enter
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSendKeyMode('enter')
+                        setShowMenu(false)
+                      }}
+                      className={`px-2 py-1 text-xs rounded ${sendKeyMode === 'enter' ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                    >
+                      Enter
+                    </button>
+                  </div>
+                  <div className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
+                    {sendKeyMode === 'mod-enter'
+                      ? 'Default: Ctrl/Cmd+Enter sends, Enter inserts a new line.'
+                      : 'Enter sends, Shift/Ctrl/Cmd+Enter inserts a new line.'}
+                  </div>
+                </div>
                 <button
                   onClick={() => {
                     const newVerbose = !verbose
@@ -2592,7 +2642,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
             autoCapitalize="off"
             className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 resize-none overflow-y-auto"
             style={{ maxHeight: '200px', fontSize: '16px' }}
-            placeholder="Type a message... (Ctrl+Enter to send)"
+            placeholder={sendKeyMode === 'enter' ? 'Type a message... (Enter to send)' : 'Type a message... (Ctrl+Enter to send)'}
           />
           <button
             type="submit"
