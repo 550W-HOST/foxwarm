@@ -44,11 +44,13 @@ type ToolViewMode = 'default' | 'json'
 
 
 interface FunctionCall {
+  id?: string
   name: string
   args: any
 }
 
 interface FunctionResponse {
+  tool_use_id?: string
   name: string
   response: any
 }
@@ -59,6 +61,7 @@ interface MessagePart {
   thinking?: string
   functionCall?: FunctionCall
   functionResponse?: FunctionResponse
+  toolUseId?: string
   inlineData?: {
     data: string
     mimeType: string
@@ -958,7 +961,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
             </button>
           )}
         </div>
-        {renderImages(msg)}
+        {renderImages(msg, messageKey)}
       </div>
     )
   }
@@ -1691,9 +1694,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
     }
   }
 
-  // Render inline images from message parts
-  const renderImages = (msg: Message) => {
-    const imageParts = msg.parts.filter(p => p.inlineData)
+  const renderImageParts = (imageParts: MessagePart[], keyPrefix: string) => {
     if (imageParts.length === 0) return null
 
     return (
@@ -1702,7 +1703,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
           const { data, mimeType } = part.inlineData!
           const src = `data:${mimeType};base64,${data}`
           return (
-            <div key={idx} className="relative group cursor-pointer" onClick={() => window.open(src, '_blank')}>
+            <div key={`${keyPrefix}-${idx}`} className="relative group cursor-pointer" onClick={() => window.open(src, '_blank')}>
               <img
                 src={src}
                 alt={`Image ${idx + 1}`}
@@ -1714,6 +1715,12 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
         })}
       </div>
     )
+  }
+
+  // Render inline images from message parts
+  const renderImages = (msg: Message, keyPrefix: string) => {
+    const imageParts = msg.parts.filter(p => p.inlineData)
+    return renderImageParts(imageParts, keyPrefix)
   }
 
   type ToolCallRendererParams = {
@@ -2081,6 +2088,289 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
     }
   }
 
+  const getToolGroupMessages = (idx: number) => {
+    const nextMsg = idx < messages.length - 1 ? messages[idx + 1] : null
+    const functionCalls = messages[idx].parts.filter(p => p.functionCall).map(p => p.functionCall!)
+    const functionResponses = nextMsg?.role === 'tool'
+      ? nextMsg.parts.filter(p => p.functionResponse).map(p => p.functionResponse!)
+      : []
+
+    return {
+      nextMsg,
+      functionCalls,
+      functionResponses,
+      hasFollowingToolMsg: nextMsg?.role === 'tool' && functionResponses.length > 0,
+    }
+  }
+
+  const isToolMessageHandledByPreviousGroup = (idx: number) => {
+    const msg = messages[idx]
+    if (msg.role !== 'tool' || idx === 0) return false
+
+    const prevMsg = messages[idx - 1]
+    return prevMsg?.role === 'model' && prevMsg.parts.some(p => p.functionCall)
+  }
+
+  const renderToolCallItem = (
+    call: FunctionCall,
+    idx: number,
+    callIdx: number,
+    options: { hasFollowingContent: boolean }
+  ) => {
+    const toolKey = `${idx}-call-${callIdx}`
+    const isExpanded = expandedTool === toolKey
+    const viewMode = toolViewModes.get(toolKey) || 'default'
+
+    let content: React.ReactNode
+    if (viewMode === 'json') {
+      content = (
+        <pre className="whitespace-pre-wrap break-all cursor-text text-gray-600 dark:text-gray-300">
+          {JSON.stringify(call, null, 2)}
+        </pre>
+      )
+    } else {
+      const renderer = toolCallRenderers[call.name] || defaultToolCallRenderer
+      content = renderer({ call, isExpanded, viewMode, callIdx }).content
+    }
+
+    const roundedClass = callIdx === 0 ? 'rounded-t' : ''
+    const borderClass = options.hasFollowingContent ? 'border-b-0' : ''
+
+    return (
+      <div key={toolKey} className={`text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${roundedClass} p-2 ${borderClass} relative group`}>
+        <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          {call.name === 'edit' || call.name === 'apply_patch' ? (
+            <>
+              <MiniToggleButton
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (diffViewMode !== 'unified') toggleDiffView()
+                  setToolView(toolKey, 'default')
+                }}
+                active={viewMode !== 'json' && diffViewMode === 'unified'}
+                title="Unified"
+              >
+                Unified
+              </MiniToggleButton>
+              <MiniToggleButton
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (diffViewMode !== 'split') toggleDiffView()
+                  setToolView(toolKey, 'default')
+                }}
+                active={viewMode !== 'json' && diffViewMode === 'split'}
+                title="Split"
+              >
+                Split
+              </MiniToggleButton>
+              <MiniToggleButton
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setToolView(toolKey, 'json')
+                }}
+                active={viewMode === 'json'}
+                title="JSON"
+              >
+                JSON
+              </MiniToggleButton>
+            </>
+          ) : (
+            <>
+              <IconToggleButton
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setToolView(toolKey, 'default')
+                }}
+                active={viewMode === 'default'}
+                title="Default"
+              >
+                <Eye size={12} />
+              </IconToggleButton>
+              <IconToggleButton
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setToolView(toolKey, 'json')
+                }}
+                active={viewMode === 'json'}
+                title="JSON"
+              >
+                <FileJson size={14} />
+              </IconToggleButton>
+            </>
+          )}
+        </div>
+        <div
+          className="font-mono text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200"
+          onClick={() => setExpandedTool(isExpanded ? null : toolKey)}
+        >
+          <div style={isExpanded ? undefined : clampContentStyle(1, 0.25)}>
+            {content}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const renderToolResponseItem = (
+    resp: FunctionResponse,
+    idx: number,
+    respIdx: number,
+    options: { hasPrecedingCall: boolean; isLast: boolean }
+  ) => {
+    const toolKey = `${idx}-resp-${respIdx}`
+    const isExpanded = expandedTool === toolKey
+    const viewMode = toolViewModes.get(toolKey) || 'default'
+    const responseStatus = getToolResponseStatus(resp)
+    const isError = responseStatus === 'error'
+
+    let content: React.ReactNode | null
+    if (viewMode === 'json') {
+      content = (
+        <pre className="whitespace-pre-wrap break-all cursor-text text-green-700 dark:text-green-300">
+          {JSON.stringify(resp, null, 2)}
+        </pre>
+      )
+    } else {
+      const renderer = toolResponseRenderers[resp.name] || defaultToolResponseRenderer
+      content = renderer({ resp, isExpanded }).content
+    }
+
+    const roundedClass = options.hasPrecedingCall ? '' : 'rounded-t'
+    const roundedBottomClass = options.isLast ? 'rounded-b' : ''
+    const borderClass = options.isLast ? '' : 'border-b-0'
+
+    return (
+      <div key={toolKey} className={`text-xs ${isError ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'} border ${roundedClass} ${roundedBottomClass} p-2 ${borderClass} relative group`}>
+        <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <IconToggleButton
+            onClick={(e) => {
+              e.stopPropagation()
+              setToolView(toolKey, 'default')
+            }}
+            active={viewMode === 'default'}
+            title="Default"
+          >
+            <Eye size={12} />
+          </IconToggleButton>
+          <IconToggleButton
+            onClick={(e) => {
+              e.stopPropagation()
+              setToolView(toolKey, 'json')
+            }}
+            active={viewMode === 'json'}
+            title="JSON"
+          >
+            <FileJson size={14} />
+          </IconToggleButton>
+        </div>
+        <div
+          className={`font-mono cursor-pointer ${isError ? 'text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300' : 'text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300'}`}
+          onClick={() => setExpandedTool(isExpanded ? null : toolKey)}
+        >
+          <span className="inline-flex items-center gap-1.5">
+            {isError ? <X size={12} /> : <Check size={12} />}
+            <span>{resp.name}</span>
+          </span>
+        </div>
+        {content && (
+          <div
+            className={`font-mono mt-1 ${isError ? 'text-red-700 dark:text-red-300' : 'text-green-700 dark:text-green-300'}`}
+            style={isExpanded ? undefined : clampContentStyle(3)}
+          >
+            {content}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const renderInterleavedToolGroup = (idx: number) => {
+    const { nextMsg, functionCalls, functionResponses, hasFollowingToolMsg } = getToolGroupMessages(idx)
+    if (!hasFollowingToolMsg || !nextMsg) return null
+
+    const responseEntriesById = new Map<string, Array<{ resp: FunctionResponse; respIdx: number }>>()
+    const unmatchedResponses: Array<{ resp: FunctionResponse; respIdx: number }> = []
+
+    functionResponses.forEach((resp, respIdx) => {
+      const toolId = resp.tool_use_id
+      if (!toolId) {
+        unmatchedResponses.push({ resp, respIdx })
+        return
+      }
+      const entries = responseEntriesById.get(toolId) || []
+      entries.push({ resp, respIdx })
+      responseEntriesById.set(toolId, entries)
+    })
+
+    const imageEntriesById = new Map<string, MessagePart[]>()
+    const unmatchedImageParts: MessagePart[] = []
+
+    nextMsg.parts.filter(p => p.inlineData).forEach(part => {
+      if (part.toolUseId) {
+        const entries = imageEntriesById.get(part.toolUseId) || []
+        entries.push(part)
+        imageEntriesById.set(part.toolUseId, entries)
+      } else {
+        unmatchedImageParts.push(part)
+      }
+    })
+
+    const renderedResponseIndexes = new Set<number>()
+
+    return (
+      <div>
+        {functionCalls.map((call, callIdx) => {
+          const toolId = call.id
+          const responseEntries = toolId ? (responseEntriesById.get(toolId) || []) : []
+          const imageParts = toolId ? (imageEntriesById.get(toolId) || []) : []
+          const hasFollowingContent = responseEntries.length > 0 || imageParts.length > 0
+
+          responseEntries.forEach(({ respIdx }) => renderedResponseIndexes.add(respIdx))
+
+          return (
+            <div key={`${idx}-group-${toolId || callIdx}`}>
+              {renderToolCallItem(call, idx, callIdx, { hasFollowingContent })}
+              {responseEntries.map(({ resp, respIdx }, entryIdx) =>
+                renderToolResponseItem(resp, idx + 1, respIdx, {
+                  hasPrecedingCall: true,
+                  isLast: entryIdx === responseEntries.length - 1 && imageParts.length === 0,
+                })
+              )}
+              {imageParts.length > 0 && (
+                <div className="rounded-b border border-t-0 border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-2 pb-2">
+                  {renderImageParts(imageParts, `${idx + 1}-tool-image-${toolId || callIdx}`)}
+                </div>
+              )}
+            </div>
+          )
+        })}
+        {unmatchedResponses
+          .filter(({ respIdx }) => !renderedResponseIndexes.has(respIdx))
+          .map(({ resp, respIdx }, orphanIdx) =>
+            renderToolResponseItem(resp, idx + 1, respIdx, {
+              hasPrecedingCall: false,
+              isLast: orphanIdx === unmatchedResponses.length - 1 && unmatchedImageParts.length === 0,
+            })
+          )}
+        {Array.from(imageEntriesById.entries())
+          .filter(([toolId]) => !functionCalls.some(call => call.id === toolId))
+          .map(([toolId, imageParts], orphanIdx, orphaned) => (
+            <div
+              key={`${idx + 1}-orphan-matched-tool-image-${toolId}`}
+              className={`border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-2 pb-2 ${orphanIdx === orphaned.length - 1 && unmatchedImageParts.length === 0 ? 'rounded-b' : ''}`}
+            >
+              {renderImageParts(imageParts, `${idx + 1}-orphan-matched-tool-image-${toolId}`)}
+            </div>
+          ))}
+        {unmatchedImageParts.length > 0 && (
+          <div className="rounded-b border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-2 pb-2">
+            {renderImageParts(unmatchedImageParts, `${idx + 1}-orphan-tool-image`)}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const renderToolCalls = (msg: Message, idx: number) => {
     const functionCalls = msg.parts.filter(p => p.functionCall).map(p => p.functionCall!)
     if (functionCalls.length === 0) return null
@@ -2091,101 +2381,9 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
 
     return (
       <div>
-        {functionCalls.map((call, callIdx) => {
-          const toolKey = `${idx}-call-${callIdx}`
-          const isExpanded = expandedTool === toolKey
-          const viewMode = toolViewModes.get(toolKey) || 'default'
-
-          let content: React.ReactNode
-          if (viewMode === 'json') {
-            content = (
-              <pre className="whitespace-pre-wrap break-all cursor-text text-gray-600 dark:text-gray-300">
-                {JSON.stringify(msg, null, 2)}
-              </pre>
-            )
-          } else {
-            const renderer = toolCallRenderers[call.name] || defaultToolCallRenderer
-            content = renderer({ call, isExpanded, viewMode, callIdx }).content
-          }
-
-          const isFirst = callIdx === 0
-          const isLast = callIdx === functionCalls.length - 1
-          const roundedClass = isFirst ? 'rounded-t' : ''
-          const borderClass = (isLast && !hasFollowingToolMsg) ? '' : 'border-b-0'
-          return (
-            <div key={callIdx} className={`text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${roundedClass} p-2 ${borderClass} relative group`}>
-              <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                {call.name === 'edit' || call.name === 'apply_patch' ? (
-                  <>
-                    <MiniToggleButton
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (diffViewMode !== 'unified') toggleDiffView()
-                        setToolView(toolKey, 'default')
-                      }}
-                      active={viewMode !== 'json' && diffViewMode === 'unified'}
-                      title="Unified"
-                    >
-                      Unified
-                    </MiniToggleButton>
-                    <MiniToggleButton
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (diffViewMode !== 'split') toggleDiffView()
-                        setToolView(toolKey, 'default')
-                      }}
-                      active={viewMode !== 'json' && diffViewMode === 'split'}
-                      title="Split"
-                    >
-                      Split
-                    </MiniToggleButton>
-                    <MiniToggleButton
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setToolView(toolKey, 'json')
-                      }}
-                      active={viewMode === 'json'}
-                      title="JSON"
-                    >
-                      JSON
-                    </MiniToggleButton>
-                  </>
-                ) : (
-                  <>
-                    <IconToggleButton
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setToolView(toolKey, 'default')
-                      }}
-                      active={viewMode === 'default'}
-                      title="Default"
-                    >
-                      <Eye size={12} />
-                    </IconToggleButton>
-                    <IconToggleButton
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setToolView(toolKey, 'json')
-                      }}
-                      active={viewMode === 'json'}
-                      title="JSON"
-                    >
-                      <FileJson size={14} />
-                    </IconToggleButton>
-                  </>
-                )}
-              </div>
-              <div
-                className="font-mono text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200"
-                onClick={() => setExpandedTool(isExpanded ? null : toolKey)}
-              >
-                <div style={isExpanded ? undefined : clampContentStyle(1, 0.25)}>
-                  {content}
-                </div>
-              </div>
-            </div>
-          )
-        })}
+        {functionCalls.map((call, callIdx) => renderToolCallItem(call, idx, callIdx, {
+          hasFollowingContent: callIdx < functionCalls.length - 1 || hasFollowingToolMsg,
+        }))}
       </div>
     )
   }
@@ -2208,74 +2406,10 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
 
     return (
       <div>
-        {functionResponses.map((resp, respIdx) => {
-          const toolKey = `${idx}-resp-${respIdx}`
-          const isExpanded = expandedTool === toolKey
-          const viewMode = toolViewModes.get(toolKey) || 'default'
-          const responseStatus = getToolResponseStatus(resp)
-          const isError = responseStatus === 'error'
-
-          let content: React.ReactNode | null
-          if (viewMode === 'json') {
-            content = (
-              <pre className="whitespace-pre-wrap break-all cursor-text text-green-700 dark:text-green-300">
-                {JSON.stringify(resp, null, 2)}
-              </pre>
-            )
-          } else {
-            const renderer = toolResponseRenderers[resp.name] || defaultToolResponseRenderer
-            content = renderer({ resp, isExpanded }).content
-          }
-
-          const isFirst = respIdx === 0
-          const isLast = respIdx === functionResponses.length - 1
-          const roundedClass = (isFirst && !hasPrecedingCallMsg) ? 'rounded-t' : ''
-          const roundedBottomClass = isLast ? 'rounded-b' : ''
-          const borderClass = isLast ? '' : 'border-b-0'
-          return (
-            <div key={respIdx} className={`text-xs ${isError ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'} border ${roundedClass} ${roundedBottomClass} p-2 ${borderClass} relative group`}>
-              <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                <IconToggleButton
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setToolView(toolKey, 'default')
-                  }}
-                  active={viewMode === 'default'}
-                  title="Default"
-                >
-                  <Eye size={12} />
-                </IconToggleButton>
-                <IconToggleButton
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setToolView(toolKey, 'json')
-                  }}
-                  active={viewMode === 'json'}
-                  title="JSON"
-                >
-                  <FileJson size={14} />
-                </IconToggleButton>
-              </div>
-              <div
-                className={`font-mono cursor-pointer ${isError ? 'text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300' : 'text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300'}`}
-                onClick={() => setExpandedTool(isExpanded ? null : toolKey)}
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  {isError ? <X size={12} /> : <Check size={12} />}
-                  <span>{resp.name}</span>
-                </span>
-              </div>
-              {content && (
-                <div
-                  className={`font-mono mt-1 ${isError ? 'text-red-700 dark:text-red-300' : 'text-green-700 dark:text-green-300'}`}
-                  style={isExpanded ? undefined : clampContentStyle(3)}
-                >
-                  {content}
-                </div>
-              )}
-            </div>
-          )
-        })}
+        {functionResponses.map((resp, respIdx) => renderToolResponseItem(resp, idx, respIdx, {
+          hasPrecedingCall: respIdx === 0 && hasPrecedingCallMsg,
+          isLast: respIdx === functionResponses.length - 1,
+        }))}
       </div>
     )
   }
@@ -2447,8 +2581,13 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
       {/* Messages - With padding to avoid header and footer */}
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4">
         {messages.map((msg, idx) => {
+          if (isToolMessageHandledByPreviousGroup(idx)) {
+            return null
+          }
+
           const textLikeParts = msg.parts.filter(p => p.text || p.system)
           const systemLikeMessage = isSystemLikeMessage(msg)
+          const interleavedToolGroup = renderInterleavedToolGroup(idx)
           
           // If current message is model/tool and previous message is also model/tool, stick them together
           const prevMsg = idx > 0 ? messages[idx - 1] : null
@@ -2531,7 +2670,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                         </div>
                       )
                     })}
-                    {renderImages(msg)}
+                    {renderImages(msg, `user-${idx}`)}
                   </div>
                 ) : (
                   <div className="flex flex-col">
@@ -2600,7 +2739,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                         </div>
                       )
                     })}
-                    {renderImages(msg)}
+                    {renderImages(msg, `message-${idx}`)}
                     {!verbose && shouldRenderToolGroupSummary(idx) && !expandedToolGroups.has(getToolGroupKey(idx)) && (
                       <div
                         className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 font-mono text-gray-500 dark:text-gray-400"
@@ -2612,8 +2751,12 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                         </span>
                       </div>
                     )}
-                    {!verbose && isInToolGroup(idx) && !expandedToolGroups.has(getToolGroupKey(idx)) ? null : renderToolCalls(msg, idx)}
-                    {!verbose && isInToolGroup(idx) && !expandedToolGroups.has(getToolGroupKey(idx)) ? null : renderToolResponses(msg, idx)}
+                    {!verbose && isInToolGroup(idx) && !expandedToolGroups.has(getToolGroupKey(idx)) ? null : (
+                      interleavedToolGroup || renderToolCalls(msg, idx)
+                    )}
+                    {!verbose && isInToolGroup(idx) && !expandedToolGroups.has(getToolGroupKey(idx)) ? null : (
+                      interleavedToolGroup ? null : renderToolResponses(msg, idx)
+                    )}
                   </div>
                 )}
               </div>
