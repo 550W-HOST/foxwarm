@@ -5,6 +5,7 @@ import * as vector from './vector';
 import * as sessionManager from './sessionManager';
 import { estimateTokenCount } from './tokenCount';
 import { WORKSPACE_DIR, getAgentDir } from './config';
+import { checkPathAccess } from './isolatedCheck';
 import * as mcpClient from './mcpClient';
 import { browserManager } from './browser';
 import { logger } from './common';
@@ -215,6 +216,8 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     const agentName = ctx.session?.agent || 'main';
     const agentDir = getAgentDir(agentName);
     const tempDir = path.join(agentDir, '.temp', 'exec');
+
+    await fs.ensureDir(tempDir);
     await fs.ensureDir(tempDir);
     const logFileName = `exec_${formatTime()}.log`;
     const logPath = await getDatedLogPath(tempDir, logFileName);
@@ -413,6 +416,17 @@ async function tool_browse_interact(args: ToolArgs) {
 
 async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
     const { action, nodeId, tool, args: toolArgs } = args;
+    
+    // Get session for isolated check
+    const session = ctx.sessionId ? await sessionManager.getExistingSession(ctx.sessionId) : undefined;
+    
+    // Isolated sessions can only call tools on their bound node
+    if (session?.isolated && action === 'call') {
+        const currentNode = session.currentNode || 'master';
+        if (nodeId !== currentNode) {
+            throw new Error('Isolated session can only call tools on its bound node.');
+        }
+    }
     
     if (action === 'list') {
         // List all nodes and their tools
