@@ -303,18 +303,22 @@ export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
     throw new Error('Cannot delete current session. Use /clear to clear history or switch to another session first.');
   }
 
-  const session = await sessionManager.getSession(sessionId);
-  if (session && session.busy) {
-    session.stopping = true;
-    await sessionManager.saveSession(sessionId);
+  const prep = await sessionManager.prepareSessionForDestructiveAction(sessionId);
+  const session = prep.session;
+
+  if (prep.requiresRetry) {
+    const queueNote = prep.droppedQueueItems > 0
+      ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
+      : '';
+    if (prep.abortedInFlight) {
+      return `Stop signal sent to busy session \`${sessionId}\`. The in-flight LLM request was aborted.${queueNote} Retry delete after the session becomes idle.`;
+    }
+    return `Stop signal sent to busy session \`${sessionId}\`. It will stop after the current tool call completes.${queueNote} Retry delete after the session becomes idle.`;
   }
 
   const deleted = await sessionManager.deleteSession(sessionId);
 
   if (deleted) {
-    if (session && session.busy) {
-      return `Session \`${sessionId}\` was busy - stop signal sent and session deleted. It will stop after current tool call completes.`;
-    }
     return `Session \`${sessionId}\` deleted successfully.`;
   }
 

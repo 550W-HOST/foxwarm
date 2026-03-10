@@ -178,6 +178,34 @@ export class WebUIChannel implements Channel {
         },
       });
 
+      httpServerInstance.addRoute({
+        path: '/api/sessions',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            if (typeof req.body?.sessionId === 'string' && req.body.sessionId.trim()) {
+              return res.status(400).json({ error: 'Custom sessionId is not allowed.' });
+            }
+
+            const { session, created } = await sessionManager.createEmptySession();
+
+            if (!created) {
+              return res.status(409).json({ error: 'Session already exists', sessionId: session.id });
+            }
+
+            this.broadcastSessionListUpdate();
+
+            res.json({
+              success: true,
+              sessionId: session.id,
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to create session');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
       // Get agents tree (for multi-agent dashboard)
       httpServerInstance.addRoute({
         path: '/api/agents/tree',
@@ -227,7 +255,10 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            const session = await sessionManager.getSession(sessionId);
+            const session = await sessionManager.getExistingSession(sessionId);
+            if (!session) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
             res.json({ messages: session.history });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get history');
@@ -327,10 +358,25 @@ export class WebUIChannel implements Channel {
           try {
             const sessionId = req.params.sessionId as string;
             
-            // Prevent deleting session with active channels
-            const channel = sessionManager.getChannelBySession(sessionId);
-            if (channel) {
+            const blockingChannels = sessionManager
+              .getChannelsBySession(sessionId)
+              .filter(channel => channel.platform !== 'webui');
+
+            if (blockingChannels.length > 0) {
               return res.status(400).json({ error: 'Cannot delete active session. Detach channels first.' });
+            }
+
+            const prep = await sessionManager.prepareSessionForDestructiveAction(sessionId);
+            if (prep.requiresRetry) {
+              const queueNote = prep.droppedQueueItems > 0
+                ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
+                : '';
+              const stopNote = prep.abortedInFlight
+                ? ' The in-flight LLM request was aborted.'
+                : ' It will stop after the current tool call completes.';
+              return res.status(409).json({
+                error: `Session is busy. Stop signal sent.${stopNote}${queueNote} Retry delete after it becomes idle.`,
+              });
             }
             
             const deleted = await sessionManager.deleteSession(sessionId);
@@ -596,6 +642,11 @@ export class WebUIChannel implements Channel {
             }
             
             if (finalParts.length === 0) throw new Error('Missing message content');
+
+            const existingSession = await sessionManager.getExistingSession(sessionId);
+            if (!existingSession) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
 
             // Attach webui channel if not already attached
             // Use sessionId as channelUserId so each session has its own channel

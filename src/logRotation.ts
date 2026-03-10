@@ -28,6 +28,80 @@ export async function getDatedLogPath(baseDir: string, fileName: string, date: D
   return path.join(dateDir, fileName);
 }
 
+async function pruneDirectoryToMaxFiles(dir: string, maxFiles: number): Promise<void> {
+  await fs.ensureDir(dir);
+
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const files = entries.filter(entry => entry.isFile());
+  if (files.length < maxFiles) {
+    return;
+  }
+
+  const filesWithStat = await Promise.all(files.map(async file => {
+    const fullPath = path.join(dir, file.name);
+    try {
+      const stat = await fs.stat(fullPath);
+      return {
+        fullPath,
+        mtimeMs: stat.mtimeMs,
+      };
+    } catch {
+      return null;
+    }
+  }));
+
+  const removableFiles = filesWithStat
+    .filter((file): file is { fullPath: string; mtimeMs: number } => Boolean(file))
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+  while (removableFiles.length >= maxFiles) {
+    const oldest = removableFiles.shift();
+    if (!oldest) break;
+    try {
+      await fs.remove(oldest.fullPath);
+    } catch {
+      // Ignore delete failures here; race-condition cleanup is best effort only.
+    }
+  }
+}
+
+export async function getRecentLogPath(baseDir: string, fileName: string, maxFiles = 20): Promise<string> {
+  const recentDir = path.join(baseDir, 'recent');
+  await pruneDirectoryToMaxFiles(recentDir, maxFiles);
+  return path.join(recentDir, fileName);
+}
+
+export async function moveLogsToDateErrorDir(baseDir: string, filePaths: string[], date: Date = new Date()): Promise<void> {
+  const errorDir = path.join(baseDir, `${formatDate(date)}-error`);
+  await fs.ensureDir(errorDir);
+
+  for (const filePath of filePaths) {
+    if (!filePath) continue;
+    if (!await fs.pathExists(filePath)) continue;
+    try {
+      await fs.move(filePath, path.join(errorDir, path.basename(filePath)), { overwrite: true });
+    } catch (e) {
+      logger.warn({ err: e, filePath, errorDir }, 'Failed to move log file to error directory');
+    }
+  }
+}
+
+export async function cleanupLegacyTopLevelLogDirs(baseDir: string): Promise<void> {
+  try {
+    if (!await fs.pathExists(baseDir)) return;
+
+    const entries = await fs.readdir(baseDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === 'archives' || /^\d{4}-\d{2}-\d{2}$/.test(entry.name)) {
+        await fs.remove(path.join(baseDir, entry.name));
+      }
+    }
+  } catch (e) {
+    logger.error({ err: e, baseDir }, 'Failed to clean up legacy top-level log directories');
+  }
+}
+
 async function listDateDirs(baseDir: string): Promise<string[]> {
   if (!await fs.pathExists(baseDir)) return [];
   const entries = await fs.readdir(baseDir, { withFileTypes: true });

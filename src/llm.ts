@@ -7,8 +7,13 @@ import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session,
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir } from './config';
 import { nodesManager } from './nodesManager';
 import * as sessionManager from './sessionManager';
-import { formatTime, getDatedLogPath } from './logRotation';
+import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { loadSkillDocuments } from './skills';
+
+type LlmInteractionLogFiles = {
+    requestPath: string;
+    responsePath: string;
+};
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };
@@ -438,24 +443,36 @@ export async function getPersistentMemory(agentName: string = 'main') {
     }
 }
 
-async function logRequest(data: any, iteration = 0) {
+async function logRequest(data: any, iteration = 0): Promise<LlmInteractionLogFiles | null> {
     try {
         const timestamp = formatTime();
-        const logFile = await getDatedLogPath(LOGS_DIR, `${timestamp}_iter${iteration}_req.json`);
-        await fs.writeJson(logFile, data, { spaces: 2 });
+        const requestPath = await getRecentLogPath(LOGS_DIR, `${timestamp}_iter${iteration}_req.json`);
+        await fs.writeJson(requestPath, data, { spaces: 2 });
+        const responseFileName = `${timestamp}_iter${iteration}_res.json`;
+        return {
+            requestPath,
+            responsePath: path.join(LOGS_DIR, 'recent', responseFileName),
+        };
     } catch (e) {
         logger.error({ err: e }, 'Failed to log LLM interaction');
+        return null;
     }
 }
 
-async function logResponse(data: any, iteration = 0) {
+async function logResponse(data: any, logFiles: LlmInteractionLogFiles | null) {
+    if (!logFiles) return;
+
     try {
-        const timestamp = formatTime();
-        const logFile = await getDatedLogPath(LOGS_DIR, `${timestamp}_iter${iteration}_res.json`);
-        await fs.writeJson(logFile, data, { spaces: 2 });
+        logFiles.responsePath = await getRecentLogPath(LOGS_DIR, path.basename(logFiles.responsePath));
+        await fs.writeJson(logFiles.responsePath, data, { spaces: 2 });
     } catch (e) {
         logger.error({ err: e }, 'Failed to log LLM response');
     }
+}
+
+async function moveInteractionLogsToErrorDir(logFiles: LlmInteractionLogFiles | null) {
+    if (!logFiles) return;
+    await moveLogsToDateErrorDir(LOGS_DIR, [logFiles.requestPath, logFiles.responsePath]);
 }
 
 /**
@@ -1279,7 +1296,12 @@ export async function chat(
         Object.assign(data, extraFields);
     }
     
-    await logRequest(data, iteration);
+    const logFiles = await logRequest(data, iteration);
+    const responseAttempts: any[] = [];
+    const returnWithLoggedFailure = async (text: string): Promise<ChatResult> => {
+        await moveInteractionLogsToErrorDir(logFiles);
+        return appendTerminalModelTextAndReturn(text);
+    };
     
     // Make API call with retries
     let response: AxiosResponse;
@@ -1342,7 +1364,7 @@ export async function chat(
                         body: resp
                     }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
                     if (attempt === maxRetries) {
-                        return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts`);
+                        return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts`);
                     }
                     await sleepWithSignal(2000, abortController.signal);
                     continue;
@@ -1350,12 +1372,29 @@ export async function chat(
                 break;
             } catch (e: any) {
                 if (isAbortError(e)) {
+                    responseAttempts.push({
+                        attempt,
+                        kind: 'abort',
+                        error: e?.message || String(e),
+                        code: e?.code,
+                        name: e?.name,
+                    });
+                    await logResponse({ attempts: responseAttempts }, logFiles);
+                    await moveInteractionLogsToErrorDir(logFiles);
                     throw e;
                 }
 
+                responseAttempts.push({
+                    attempt,
+                    kind: 'network-error',
+                    error: e?.message || String(e),
+                    code: e?.code,
+                    name: e?.name,
+                });
+                await logResponse({ attempts: responseAttempts }, logFiles);
                 logger.error({ status: (e as AxiosResponse)?.status }, `LLM API Network Error (Attempt ${attempt}/${maxRetries})`);
                 if (attempt === maxRetries) {
-                    return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts: ${e?.message || e}`);
+                    return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts: ${e?.message || e}`);
                 }
                 await sleepWithSignal(2000, abortController.signal);
             }
@@ -1372,7 +1411,7 @@ export async function chat(
         const outputItems = Array.isArray(resp.output) ? resp.output : [];
 
         if (outputItems.length === 0) {
-            return appendTerminalModelTextAndReturn('Error: No response from OpenAI Responses API');
+            return returnWithLoggedFailure('Error: No response from OpenAI Responses API');
         }
 
         for (const item of outputItems) {

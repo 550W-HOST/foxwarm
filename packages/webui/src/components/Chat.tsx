@@ -564,6 +564,7 @@ const renderSystemTextWithSessionLinks = (text: string) => {
 
 export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
+  const [sessionMissing, setSessionMissing] = useState(false)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [sessionBusy, setSessionBusy] = useState(false)
@@ -1491,6 +1492,8 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
   }, [sessionId])
 
   useEffect(() => {
+    setSessionMissing(false)
+
     // Poll session busy status every 2 seconds
     const fetchBusyStatus = async () => {
       try {
@@ -1539,8 +1542,16 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
   const fetchHistory = async () => {
     try {
       const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history`)
+      if (res.status === 404) {
+        setSessionMissing(true)
+        setMessages([])
+        lastKnownTimestampRef.current = 0
+        return
+      }
+
       if (res.ok) {
         const data = await res.json()
+        setSessionMissing(false)
         setMessages(data.messages || [])
         setProcessingReasoningSummary('')
         // Update last known timestamp
@@ -1572,7 +1583,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
 
   const sendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
-    if ((!input.trim() && attachments.length === 0) || loading) return
+    if (sessionMissing || (!input.trim() && attachments.length === 0) || loading) return
 
     const userMessage = input.trim()
     const files = [...attachments]
@@ -2945,6 +2956,12 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
         )}
 
         {renderSlashCommandMenu()}
+
+        {sessionMissing && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
+            Session not found. Select an existing session from the list, or create a new session instead of opening a missing hash directly.
+          </div>
+        )}
         
         <form onSubmit={sendMessage} className="flex space-x-2">
           <input
@@ -2982,7 +2999,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                 localStorage.removeItem(draftKey)
               }
             }}
-            disabled={loading}
+            disabled={loading || sessionMissing}
             rows={1}
             inputMode="text"
             autoComplete="off"
@@ -2990,11 +3007,13 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
             autoCapitalize="off"
             className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 resize-none overflow-y-auto"
             style={{ maxHeight: '200px', fontSize: '16px' }}
-            placeholder={sendKeyMode === 'enter' ? 'Type a message... (Enter to send)' : 'Type a message... (Ctrl+Enter to send)'}
+            placeholder={sessionMissing
+              ? 'Session not found'
+              : (sendKeyMode === 'enter' ? 'Type a message... (Enter to send)' : 'Type a message... (Ctrl+Enter to send)')}
           />
           <button
             type="submit"
-            disabled={loading || (!input.trim() && attachments.length === 0)}
+            disabled={loading || sessionMissing || (!input.trim() && attachments.length === 0)}
             className="px-6 py-2 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 disabled:bg-gray-300 dark:disabled:bg-gray-700 disabled:cursor-not-allowed transition self-end"
           >
             Send

@@ -194,14 +194,28 @@ function App() {
   }
 
   const handleCreateSession = () => {
-    const now = new Date()
-    const mm = String(now.getMonth() + 1).padStart(2, '0')
-    const dd = String(now.getDate()).padStart(2, '0')
-    const rand = Math.random().toString(36).slice(2, 7)
-    const newSessionId = `${mm}${dd}_${rand}`
+    fetch(`${API_BASE_PATH}/sessions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({})
+    }).then(async (res) => {
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to create session')
+      }
 
-    // Switch to new session
-    handleSelectSession(newSessionId)
+      if (!data.sessionId) {
+        throw new Error('Missing sessionId in create response')
+      }
+
+      await fetchSessions()
+      handleSelectSession(data.sessionId)
+    }).catch((err) => {
+      console.error('Failed to create session:', err)
+      window.alert(`Failed to create session: ${err instanceof Error ? err.message : String(err)}`)
+    })
   }
 
   const handleBackToList = () => {
