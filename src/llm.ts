@@ -126,6 +126,42 @@ function parseSseEventBlock(block: string): any | null {
     return JSON.parse(payload);
 }
 
+function stripWrappingBlankLines(text: string): string {
+    return text.replace(/^\s*\n/, '').replace(/\n\s*$/, '');
+}
+
+function extractAnthropicThinkingTaggedParts(text: string): MessagePart[] | null {
+    if (!text.includes('<thinking>') || !text.includes('</thinking>')) {
+        return null;
+    }
+
+    const parts: MessagePart[] = [];
+    const thinkingTagPattern = /<thinking>([\s\S]*?)<\/thinking>/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = thinkingTagPattern.exec(text)) !== null) {
+        const textBefore = text.slice(lastIndex, match.index);
+        if (textBefore.trim()) {
+            parts.push({ text: stripWrappingBlankLines(textBefore) });
+        }
+
+        const thinkingText = stripWrappingBlankLines(match[1] || '');
+        if (thinkingText) {
+            parts.push({ thinking: thinkingText });
+        }
+
+        lastIndex = match.index + match[0].length;
+    }
+
+    const textAfter = text.slice(lastIndex);
+    if (textAfter.trim()) {
+        parts.push({ text: stripWrappingBlankLines(textAfter) });
+    }
+
+    return parts.length > 0 ? parts : null;
+}
+
 function buildReasoningSummaryText(summaryParts: Map<string, string>): string {
     return Array.from(summaryParts.entries())
         .sort(([leftKey], [rightKey]) => {
@@ -498,7 +534,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
         
         for (const part of msg.parts || []) {
             // Handle thinking (with signature support)
-            if (part.thinking) {
+            if (part.thinking && part.providerMeta?.signature) {
                 const thinkingBlock: AnthropicContentBlock = { type: 'thinking', thinking: part.thinking };
                 thinkingBlock.signature = part.providerMeta?.signature;
                 content.push(thinkingBlock);
@@ -1421,8 +1457,18 @@ export async function chat(
             for (const rawBlock of resp.content) {
                 const block = rawBlock as AnthropicContentBlock;
                 if (block.type === 'text') {
-                    responseText += block.text;
-                    allParts.push({ text: block.text });
+                    const extractedParts = block.text ? extractAnthropicThinkingTaggedParts(block.text) : null;
+                    if (extractedParts) {
+                        for (const part of extractedParts) {
+                            if (part.text) {
+                                responseText += part.text;
+                            }
+                            allParts.push(part);
+                        }
+                    } else {
+                        responseText += block.text;
+                        allParts.push({ text: block.text });
+                    }
                 } else if (block.type === 'thinking') {
                     const thinkingPart: MessagePart = { thinking: block.thinking };
                     if (block.signature) {
