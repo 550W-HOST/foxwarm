@@ -73,15 +73,32 @@ export async function tool_send_to_channel(args: ToolArgs) {
   return `Message sent to channel \`${channelId}\``;
 }
 
-export async function tool_list_sessions() {
+export async function tool_list_sessions(args: ToolArgs = {}) {
   const sessions = sessionManager.listSessions();
 
   if (sessions.length === 0) {
     return 'No sessions found.';
   }
 
-  let result = `Found ${sessions.length} session(s):\n\n`;
-  for (const s of sessions) {
+  const total = sessions.length;
+  const rawStart = typeof args.start === 'number' && !Number.isNaN(args.start) ? Math.trunc(args.start) : 0;
+  const rawCount = typeof args.count === 'number' && !Number.isNaN(args.count) ? Math.trunc(args.count) : 20;
+  const start = Math.max(0, Math.min(rawStart, total));
+  const count = Math.max(0, rawCount);
+  const pageSessions = sessions.slice(start, start + count);
+
+  if (pageSessions.length === 0) {
+    return `No sessions found in the requested range. Total sessions: ${total}.`;
+  }
+
+  const end = start + pageSessions.length;
+  let result = `Found ${total} session(s). Showing ${start + 1}-${end}.`;
+  if (end < total) {
+    result += ` Use \`start: ${end}\` to see the next page.`;
+  }
+  result += '\n\n';
+
+  for (const s of pageSessions) {
     const date = s.lastMessageTime ? new Date(s.lastMessageTime).toISOString() : 'never';
     const channel = s.hasChannel ? '📱' : '🤖';
     const displayName = s.displayName ? ` (${s.displayName})` : '';

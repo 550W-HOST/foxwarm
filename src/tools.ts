@@ -741,7 +741,10 @@ export const definitions = [
             description: 'Get list of all sessions with basic info (ID, message count, last message time, channel status)',
             parameters: {
                 type: 'object',
-                properties: {},
+                properties: {
+                    start: { type: 'number', description: 'Start index in the session list sorted by last activity desc. Default: 0' },
+                    count: { type: 'number', description: 'Number of sessions to return. Default: 20' }
+                },
                 required: [] as string[]
             }
         },
