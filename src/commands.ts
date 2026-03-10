@@ -488,7 +488,6 @@ export const COMMANDS: Record<string, CommandDef> = {
             return
           }
           await sessionManager.clearSession(sessionId)
-          sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
           ctx.reply('Session cleared.')
           break
         }

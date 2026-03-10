@@ -734,6 +734,18 @@ export async function getSession(sessionId: string): Promise<Session> {
   return session;
 }
 
+export async function createEmptySession(sessionId?: string): Promise<{ session: Session; created: boolean }> {
+  const targetSessionId = sessionId || generateSessionId();
+  const existingSession = await getExistingSession(targetSessionId);
+  if (existingSession) {
+    return { session: existingSession, created: false };
+  }
+
+  const session = await getSession(targetSessionId);
+  await saveSession(session.id);
+  return { session, created: true };
+}
+
 /**
  * Create a new session with given data
  */
@@ -1845,21 +1857,25 @@ export async function deleteMessages(sessionId: string, num: number): Promise<{ 
 }
 
 export async function clearSession(sessionId: string): Promise<void> {
-  const session = sessions.get(sessionId);
-  if (session) {
-    // Increment history version to invalidate ongoing indexing
-    session.historyVersion = (session.historyVersion || 0) + 1;
-    session.indexingState = undefined;
+  const session = await getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
   }
-  sessions.delete(sessionId);
-  
-  // Delete history file
-  const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
-  if (await fs.pathExists(historyFile)) {
-    await fs.remove(historyFile);
-  }
-  
-  await saveSessionsMetadata();
+
+  session.history = [];
+  session.queue = [];
+  session.stopping = false;
+  session.busy = false;
+  session.vectorIndexPosition = 0;
+  session.historyVersion = (session.historyVersion || 0) + 1;
+  session.indexingState = undefined;
+  session.meta = {
+    ...session.meta,
+    lastMessageTime: Date.now(),
+    messageCount: 0,
+  };
+
+  await saveSession(session.id);
 }
 
 export function getUsageTotalTokens(finalUsage?: Partial<TokenUsage> & {

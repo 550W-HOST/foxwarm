@@ -303,8 +303,12 @@ export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
     throw new Error('Cannot delete current session. Use /clear to clear history or switch to another session first.');
   }
 
-  const session = await sessionManager.getSession(sessionId);
-  if (session && session.busy) {
+  const session = await sessionManager.getExistingSession(sessionId);
+  if (!session) {
+    return `Session \`${sessionId}\` not found.`;
+  }
+
+  if (session.busy) {
     session.stopping = true;
     await sessionManager.saveSession(sessionId);
   }
