@@ -25,7 +25,7 @@ export async function checkToolPermission(
   if (!session?.isolated) return;
 
   // Tools that isolated session can use
-  const allowedTools = ['read', 'write', 'edit', 'apply_patch', 'exec', 'remote_node'];
+  const allowedTools = ['read', 'write', 'edit', 'apply_patch', 'exec', 'remote_node', 'send_to_session'];
   if (!allowedTools.includes(toolName)) {
     throw new Error(`Isolated session cannot use ${toolName} tool.`);
   }
