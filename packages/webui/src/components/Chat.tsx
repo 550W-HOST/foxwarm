@@ -497,6 +497,53 @@ const ToolLabel = ({ name }: { name: string }) => {
   )
 }
 
+const SessionHashLink = ({ sessionId, className = '' }: { sessionId: string, className?: string }) => (
+  <a
+    href={`#${sessionId}`}
+    className={`font-mono underline decoration-dotted underline-offset-2 hover:text-blue-600 dark:hover:text-blue-300 ${className}`.trim()}
+    title={`Open session ${sessionId}`}
+  >
+    {sessionId}
+  </a>
+)
+
+const renderSystemTextWithSessionLinks = (text: string) => {
+  const result: React.ReactNode[] = []
+  const pattern = /(sessionId:\s*`([^`]+)`|session\s*`([^`]+)`)/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(text)) !== null) {
+    const fullMatch = match[0]
+    const sessionId = match[2] || match[3]
+    const prefix = text.slice(lastIndex, match.index)
+
+    if (prefix) result.push(prefix)
+
+    if (fullMatch.startsWith('sessionId:')) {
+      result.push(
+        <span key={`session-link-${match.index}`}>
+          sessionId: <SessionHashLink sessionId={sessionId} />
+        </span>
+      )
+    } else {
+      result.push(
+        <span key={`session-link-${match.index}`}>
+          session <SessionHashLink sessionId={sessionId} />
+        </span>
+      )
+    }
+
+    lastIndex = match.index + fullMatch.length
+  }
+
+  if (lastIndex < text.length) {
+    result.push(text.slice(lastIndex))
+  }
+
+  return result.length > 0 ? result : [text]
+}
+
 export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -850,7 +897,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
       style={{ fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }}
     >
       {systemText.split('\n').map((line, lineIdx) => (
-        <span key={lineIdx} style={{ display: 'block' }}>{line}</span>
+        <span key={lineIdx} style={{ display: 'block' }}>{renderSystemTextWithSessionLinks(line)}</span>
       ))}
     </pre>
   )
@@ -888,7 +935,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                       : { display: 'block', opacity: 0.92 }
                     }
                   >
-                    {line}
+                    {renderSystemTextWithSessionLinks(line)}
                   </span>
                 )
               })}
@@ -1468,9 +1515,11 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
     const draftKey = `draft_${sessionId}`
     localStorage.removeItem(draftKey)
 
-    // Reset textarea height
-    resizeTextarea(textareaRef.current)
-    textareaRef.current?.focus()
+    // Reset textarea height after the controlled input clears
+    requestAnimationFrame(() => {
+      resizeTextarea(textareaRef.current)
+      textareaRef.current?.focus()
+    })
 
     // Record current timestamp before sending
     const sendTimestamp = Date.now()
@@ -1703,7 +1752,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
             )
             : renderInlineToolSummary(
               call.name,
-              <div className="truncate whitespace-pre-wrap break-all">{preview}</div>
+              <div className="truncate break-all">{preview}</div>
             )}
         </div>
       )
@@ -1951,6 +2000,39 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
               : renderInlineToolSummary(
                 call.name,
                 <div className="truncate font-mono" title={call.args.command}>{preview}</div>
+              )}
+          </div>
+        )
+      }
+    },
+    send_to_session: ({ call, isExpanded }) => {
+      const targetSessionId = String(call.args.sessionId || '')
+      const message = typeof call.args.message === 'string'
+        ? call.args.message
+        : formatObject(call.args.message)
+      const preview = message.length > 200 ? `${message.slice(0, 200)}...` : message
+
+      return {
+        content: (
+          <div className="space-y-1">
+            {isExpanded
+              ? (
+                <>
+                  {renderInlineToolSummary(
+                    call.name,
+                    <div className="whitespace-pre-wrap break-all">
+                      <SessionHashLink sessionId={targetSessionId} />
+                    </div>
+                  )}
+                  <div className="whitespace-pre-wrap break-all">{message}</div>
+                </>
+              )
+              : renderInlineToolSummary(
+                call.name,
+                <div className="truncate" title={`${targetSessionId}: ${message}`}>
+                  <SessionHashLink sessionId={targetSessionId} />
+                  <span>: {preview}</span>
+                </div>
               )}
           </div>
         )
