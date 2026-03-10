@@ -2408,9 +2408,6 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
         onClick={() => setExpandedToolGroups(prev => new Set(prev).add(getToolGroupKey(idx)))}
       >
         <div className="flex items-start gap-2">
-          <span className="mt-0.5 text-gray-400 dark:text-gray-500 shrink-0">
-            <Wrench size={12} />
-          </span>
           <ToolTagList names={toolNames} />
         </div>
       </div>
