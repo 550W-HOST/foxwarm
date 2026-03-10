@@ -489,16 +489,26 @@ const toolIcons: Record<string, LucideIcon> = {
 
 const getToolIcon = (name: string) => toolIcons[name] || Wrench
 
-const ToolLabel = ({ name }: { name: string }) => {
+const ToolTag = ({ name, className = '' }: { name: string, className?: string }) => {
   const Icon = getToolIcon(name)
 
   return (
-    <span className="inline-flex h-[18px] items-center gap-1 rounded-md border border-gray-200 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none text-gray-600 dark:text-gray-300 align-middle">
+    <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border border-gray-200 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none text-gray-600 dark:text-gray-300 align-middle ${className}`.trim()}>
       <Icon size={12} />
       <span>{name}</span>
     </span>
   )
 }
+
+const ToolLabel = ({ name }: { name: string }) => <ToolTag name={name} />
+
+const ToolTagList = ({ names }: { names: string[] }) => (
+  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+    {names.map((name, idx) => (
+      <ToolTag key={`${name}-${idx}`} name={name} />
+    ))}
+  </div>
+)
 
 const SessionHashLink = ({ sessionId, className = '' }: { sessionId: string, className?: string }) => (
   <a
@@ -2388,6 +2398,25 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
     )
   }
 
+  const renderToolGroupSummary = (idx: number) => {
+    const toolNames = getToolGroupNames(getToolGroupStartIdx(idx))
+    if (toolNames.length === 0) return null
+
+    return (
+      <div
+        className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+        onClick={() => setExpandedToolGroups(prev => new Set(prev).add(getToolGroupKey(idx)))}
+      >
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5 text-gray-400 dark:text-gray-500 shrink-0">
+            <Wrench size={12} />
+          </span>
+          <ToolTagList names={toolNames} />
+        </div>
+      </div>
+    )
+  }
+
   const renderToolResponses = (msg: Message, idx: number) => {
     const functionResponses = msg.parts.filter(p => p.functionResponse).map(p => p.functionResponse!)
     if (functionResponses.length === 0) return null
@@ -2740,17 +2769,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                       )
                     })}
                     {renderImages(msg, `message-${idx}`)}
-                    {!verbose && shouldRenderToolGroupSummary(idx) && !expandedToolGroups.has(getToolGroupKey(idx)) && (
-                      <div
-                        className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 font-mono text-gray-500 dark:text-gray-400"
-                        onClick={() => setExpandedToolGroups(prev => new Set(prev).add(getToolGroupKey(idx)))}
-                      >
-                        <span className="inline-flex items-center gap-1.5">
-                          <Wrench size={12} />
-                          <span>{getToolGroupNames(getToolGroupStartIdx(idx)).join(', ')}</span>
-                        </span>
-                      </div>
-                    )}
+                    {!verbose && shouldRenderToolGroupSummary(idx) && !expandedToolGroups.has(getToolGroupKey(idx)) && renderToolGroupSummary(idx)}
                     {!verbose && isInToolGroup(idx) && !expandedToolGroups.has(getToolGroupKey(idx)) ? null : (
                       interleavedToolGroup || renderToolCalls(msg, idx)
                     )}
