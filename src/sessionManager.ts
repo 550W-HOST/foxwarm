@@ -512,7 +512,11 @@ export async function getExistingSession(sessionId: string): Promise<Session | n
 
 // Channel attachment: channelKey (platform:userId) -> { sessionId, mode }
 export type ChannelMode = 'push-only' | undefined;
-interface ChannelConfig { sessionId: string; mode?: ChannelMode }
+interface ChannelConfig { 
+  sessionId: string; 
+  mode?: ChannelMode;
+  dangerouslyAllowAllGroupMembers?: boolean; // 允许所有群聊成员发送消息（但不执行命令）
+}
 const channelAttachments = new Map<string, ChannelConfig>();
 
 // Callback to trigger agent turn
@@ -864,6 +868,21 @@ export function setChannelMode(platform: string, channelUserId: string, mode: Ch
     throw new Error(`Channel ${channelKey} not attached`);
   }
   channelAttachments.set(channelKey, { ...existing, mode });
+  saveChannels().catch(err => logger.error({ err }, 'Failed to save channels'));
+}
+
+export function getChannelDangerouslyAllowAllGroupMembers(platform: string, channelUserId: string): boolean {
+  const channelKey = makeChannelKey(platform, channelUserId);
+  return channelAttachments.get(channelKey)?.dangerouslyAllowAllGroupMembers ?? false;
+}
+
+export function setChannelDangerouslyAllowAllGroupMembers(platform: string, channelUserId: string, value: boolean) {
+  const channelKey = makeChannelKey(platform, channelUserId);
+  const existing = channelAttachments.get(channelKey);
+  if (!existing) {
+    throw new Error(`Channel ${channelKey} not attached`);
+  }
+  channelAttachments.set(channelKey, { ...existing, dangerouslyAllowAllGroupMembers: value });
   saveChannels().catch(err => logger.error({ err }, 'Failed to save channels'));
 }
 
