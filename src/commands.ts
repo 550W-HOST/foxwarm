@@ -472,6 +472,23 @@ export const COMMANDS: Record<string, CommandDef> = {
             return
           }
 
+          try {
+            const prep = await sessionManager.prepareSessionForDestructiveAction(targetSessionId)
+            if (prep.requiresRetry) {
+              const queueNote = prep.droppedQueueItems > 0
+                ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
+                : ''
+              const stopNote = prep.abortedInFlight
+                ? ' The in-flight LLM request was aborted.'
+                : ' It will stop after the current tool call completes.'
+              ctx.reply(`🛑 Session \`${targetSessionId}\` is busy. Stop signal sent.${stopNote}${queueNote} Retry delete after it becomes idle.`)
+              return
+            }
+          } catch (e: any) {
+            ctx.reply(`❌ ${e.message}`)
+            return
+          }
+
           const deleted = await sessionManager.deleteSession(targetSessionId)
 
           if (deleted) {
@@ -487,6 +504,19 @@ export const COMMANDS: Record<string, CommandDef> = {
             ctx.reply('❌ No active session to clear.')
             return
           }
+
+          const prep = await sessionManager.prepareSessionForDestructiveAction(sessionId)
+          if (prep.requiresRetry) {
+            const queueNote = prep.droppedQueueItems > 0
+              ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
+              : ''
+            const stopNote = prep.abortedInFlight
+              ? ' The in-flight LLM request was aborted.'
+              : ' It will stop after the current tool call completes.'
+            ctx.reply(`🛑 Current session is busy. Stop signal sent.${stopNote}${queueNote} Retry /session clear after it becomes idle.`)
+            return
+          }
+
           await sessionManager.clearSession(sessionId)
           ctx.reply('Session cleared.')
           break

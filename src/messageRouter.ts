@@ -576,7 +576,10 @@ export class MessageRouter {
 
     this.processingSessions.add(sessionId);
     try {
-      const session = await sessionManager.getSession(sessionId);
+      const session = await sessionManager.getExistingSession(sessionId);
+      if (!session) {
+        return;
+      }
       if (!this.tryClaimSession(session)) return;
 
       if (await this.continueWithQueuedWork(session)) {

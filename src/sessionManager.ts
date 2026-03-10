@@ -586,7 +586,7 @@ export function abortSessionInFlight(sessionId: string): boolean {
 }
 
 export async function requestSessionStop(sessionId: string): Promise<{ abortedInFlight: boolean }> {
-  const session = await getSession(sessionId);
+  const session = await getExistingSession(sessionId);
   if (!session) {
     throw new Error(`Session \`${sessionId}\` not found.`);
   }
@@ -595,6 +595,45 @@ export async function requestSessionStop(sessionId: string): Promise<{ abortedIn
   const abortedInFlight = abortSessionInFlight(sessionId);
   await saveSession(sessionId);
   return { abortedInFlight };
+}
+
+export async function prepareSessionForDestructiveAction(sessionId: string): Promise<{
+  session: Session;
+  requiresRetry: boolean;
+  abortedInFlight: boolean;
+  droppedQueueItems: number;
+}> {
+  const session = await getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
+
+  const droppedQueueItems = session.queue?.length || 0;
+  const requiresRetry = !!session.busy;
+  let abortedInFlight = false;
+  let changed = false;
+
+  if (droppedQueueItems > 0) {
+    session.queue = [];
+    changed = true;
+  }
+
+  if (session.busy) {
+    session.stopping = true;
+    abortedInFlight = abortSessionInFlight(sessionId);
+    changed = true;
+  }
+
+  if (changed) {
+    await saveSession(session.id);
+  }
+
+  return {
+    session,
+    requiresRetry,
+    abortedInFlight,
+    droppedQueueItems,
+  };
 }
 
 function makeChannelKey(platform: string, channelUserId: string): string {

@@ -183,11 +183,11 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const requestedSessionId = typeof req.body?.sessionId === 'string' && req.body.sessionId.trim()
-              ? req.body.sessionId.trim()
-              : undefined;
+            if (typeof req.body?.sessionId === 'string' && req.body.sessionId.trim()) {
+              return res.status(400).json({ error: 'Custom sessionId is not allowed.' });
+            }
 
-            const { session, created } = await sessionManager.createEmptySession(requestedSessionId);
+            const { session, created } = await sessionManager.createEmptySession();
 
             if (!created) {
               return res.status(409).json({ error: 'Session already exists', sessionId: session.id });
@@ -364,6 +364,19 @@ export class WebUIChannel implements Channel {
 
             if (blockingChannels.length > 0) {
               return res.status(400).json({ error: 'Cannot delete active session. Detach channels first.' });
+            }
+
+            const prep = await sessionManager.prepareSessionForDestructiveAction(sessionId);
+            if (prep.requiresRetry) {
+              const queueNote = prep.droppedQueueItems > 0
+                ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
+                : '';
+              const stopNote = prep.abortedInFlight
+                ? ' The in-flight LLM request was aborted.'
+                : ' It will stop after the current tool call completes.';
+              return res.status(409).json({
+                error: `Session is busy. Stop signal sent.${stopNote}${queueNote} Retry delete after it becomes idle.`,
+              });
             }
             
             const deleted = await sessionManager.deleteSession(sessionId);
