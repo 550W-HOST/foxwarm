@@ -68,6 +68,11 @@ interface MessagePart {
   }
 }
 
+interface SessionStreamEvent {
+  type: 'reasoning-summary' | 'reasoning-summary-reset'
+  text?: string
+}
+
 type PatchPreviewHunk = {
   anchors: string[]
   lines: string[]
@@ -615,6 +620,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
   const [showMenu, setShowMenu] = useState(false)
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null)
+  const [processingReasoningSummary, setProcessingReasoningSummary] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const copyResetTimeoutRef = useRef<number | null>(null)
 
@@ -629,6 +635,16 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
   useEffect(() => {
     localStorage.setItem('sendKeyMode', sendKeyMode)
   }, [sendKeyMode])
+
+  useEffect(() => {
+    setProcessingReasoningSummary('')
+  }, [sessionId])
+
+  useEffect(() => {
+    if (!sessionBusy) {
+      setProcessingReasoningSummary('')
+    }
+  }, [sessionBusy])
 
   const handleCopyRawText = async (messageKey: string, text: string) => {
     try {
@@ -915,6 +931,32 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
       ))}
     </pre>
   )
+
+  const renderReasoningSummaryCard = (thinking: string, key: string, tone: 'message' | 'processing' = 'message') => {
+    if (!thinking.trim()) return null
+
+    const containerClass = tone === 'processing'
+      ? 'bg-white/80 dark:bg-gray-900/40 border-blue-200 dark:border-blue-700/60 text-blue-900 dark:text-blue-100'
+      : 'bg-slate-50 dark:bg-slate-900/30 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+    const labelClass = tone === 'processing'
+      ? 'text-blue-600 dark:text-blue-300'
+      : 'text-slate-500 dark:text-slate-400'
+    const bodyClass = tone === 'processing'
+      ? 'prose-blue dark:prose-invert prose-p:text-blue-900 dark:prose-p:text-blue-100 prose-headings:text-blue-900 dark:prose-headings:text-blue-100 prose-strong:text-blue-950 dark:prose-strong:text-white prose-li:text-blue-900 dark:prose-li:text-blue-100'
+      : 'prose-slate dark:prose-invert prose-p:text-slate-700 dark:prose-p:text-slate-300 prose-headings:text-slate-800 dark:prose-headings:text-slate-200 prose-strong:text-slate-900 dark:prose-strong:text-white prose-li:text-slate-700 dark:prose-li:text-slate-300'
+
+    return (
+      <div key={key} className={`rounded-lg border px-3 py-2 ${containerClass}`}>
+        <div className={`mb-1 text-[11px] font-medium uppercase tracking-wide ${labelClass}`}>
+          Reasoning Summary
+        </div>
+        <div
+          className={`foxwarm-markdown prose prose-sm max-w-none prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 ${bodyClass}`}
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(thinking) }}
+        />
+      </div>
+    )
+  }
 
   const renderSystemLikeMessage = (msg: Message, messageKey: string) => {
     const isExpanded = expandedSystemMessages.has(messageKey)
@@ -1296,9 +1338,23 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
       try {
         const data = JSON.parse(event.data)
         console.log('SSE message received:', data)
+        if (data.type === 'session-event') {
+          const sessionEvent = data.event as SessionStreamEvent
+          if (sessionEvent.type === 'reasoning-summary') {
+            setProcessingReasoningSummary(sessionEvent.text || '')
+          } else if (sessionEvent.type === 'reasoning-summary-reset') {
+            setProcessingReasoningSummary('')
+          }
+          return
+        }
+
         if (data.type === 'message') {
           const msgTimestamp = data.message.__meta?.timestamp
           const isCommandResponse = data.message.__meta?.isCommandResponse
+
+          if (data.message.role === 'model') {
+            setProcessingReasoningSummary('')
+          }
           
           // Skip timestamp check for command responses (they are temporary and always fresh)
           if (!isCommandResponse) {
@@ -1497,6 +1553,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
         const data = await res.json()
         setSessionMissing(false)
         setMessages(data.messages || [])
+        setProcessingReasoningSummary('')
         // Update last known timestamp
         const lastMsg = data.messages?.[data.messages.length - 1]
         if (lastMsg?.__meta?.timestamp) {
@@ -1533,6 +1590,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
     setInput('')
     setAttachments([])
     setLoading(true)
+    setProcessingReasoningSummary('')
     setDismissedSlashQuery(null)
 
     // Clear draft from localStorage after sending
@@ -2622,7 +2680,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
             return null
           }
 
-          const textLikeParts = msg.parts.filter(p => p.text || p.system)
+          const textLikeParts = msg.parts.filter(p => p.text || p.system || p.thinking)
           const systemLikeMessage = isSystemLikeMessage(msg)
           const interleavedToolGroup = renderInterleavedToolGroup(idx)
           
@@ -2716,6 +2774,9 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                       if (part.system) {
                         return renderInlineMetaPart(formatStructuredSystemText(part.system), messageKey, false)
                       }
+                      if (part.thinking) {
+                        return renderReasoningSummaryCard(part.thinking, messageKey)
+                      }
 
                       const text = part.text || ''
                       const viewMode = messageViewModes.get(idx) || 'rendered'
@@ -2801,6 +2862,11 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                 </div>
                 <span className="text-sm text-blue-600 dark:text-blue-300">Processing{sessionQueueLength > 0 ? ` • ${sessionQueueLength} queued` : ''}...</span>
               </div>
+              {processingReasoningSummary && (
+                <div className="mt-2">
+                  {renderReasoningSummaryCard(processingReasoningSummary, 'processing-reasoning', 'processing')}
+                </div>
+              )}
             </div>
           </div>
         )}

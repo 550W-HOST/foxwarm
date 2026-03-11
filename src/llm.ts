@@ -57,6 +57,258 @@ function getPromptCacheKey(session: Session): string {
     return `${session.id || 'default'}`;
 }
 
+function isOpenAIReasoningModel(modelName: string): boolean {
+    return /^gpt-5(?:[.-]|$)/.test(modelName)
+        || /^o[1-9](?:[.-]|$)/.test(modelName);
+}
+
+function shouldUseOpenAIResponsesApi(providerType: string, modelName: string): boolean {
+    return providerType === 'openai-responses'
+        || (providerType === 'openai' && isOpenAIReasoningModel(modelName));
+}
+
+function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
+    if (signal.aborted) {
+        return Promise.reject(makeAbortError());
+    }
+
+    return new Promise((resolve, reject) => {
+        let chunks = '';
+
+        const cleanup = () => {
+            signal.removeEventListener('abort', onAbort);
+            stream.off?.('data', onData);
+            stream.off?.('end', onEnd);
+            stream.off?.('error', onError);
+        };
+
+        const onAbort = () => {
+            cleanup();
+            try {
+                stream.destroy?.(makeAbortError());
+            } catch {}
+            reject(makeAbortError());
+        };
+
+        const onData = (chunk: any) => {
+            chunks += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        };
+
+        const onEnd = () => {
+            cleanup();
+            resolve(chunks);
+        };
+
+        const onError = (error: any) => {
+            cleanup();
+            reject(error);
+        };
+
+        signal.addEventListener('abort', onAbort, { once: true });
+        stream.on('data', onData);
+        stream.on('end', onEnd);
+        stream.on('error', onError);
+    });
+}
+
+function parseSseEventBlock(block: string): any | null {
+    const dataLines: string[] = [];
+
+    for (const rawLine of block.replace(/\r/g, '').split('\n')) {
+        if (rawLine.startsWith('data:')) {
+            dataLines.push(rawLine.slice(5).trimStart());
+        }
+    }
+
+    if (dataLines.length === 0) {
+        return null;
+    }
+
+    const payload = dataLines.join('\n');
+    if (!payload || payload === '[DONE]') {
+        return null;
+    }
+
+    return JSON.parse(payload);
+}
+
+function stripWrappingBlankLines(text: string): string {
+    return text.replace(/^\s*\n/, '').replace(/\n\s*$/, '');
+}
+
+function extractAnthropicThinkingTaggedParts(text: string): MessagePart[] | null {
+    if (!text.includes('<thinking>') || !text.includes('</thinking>')) {
+        return null;
+    }
+
+    const parts: MessagePart[] = [];
+    const thinkingTagPattern = /<thinking>([\s\S]*?)<\/thinking>/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = thinkingTagPattern.exec(text)) !== null) {
+        const textBefore = text.slice(lastIndex, match.index);
+        if (textBefore.trim()) {
+            parts.push({ text: stripWrappingBlankLines(textBefore) });
+        }
+
+        const thinkingText = stripWrappingBlankLines(match[1] || '');
+        if (thinkingText) {
+            parts.push({ thinking: thinkingText });
+        }
+
+        lastIndex = match.index + match[0].length;
+    }
+
+    const textAfter = text.slice(lastIndex);
+    if (textAfter.trim()) {
+        parts.push({ text: stripWrappingBlankLines(textAfter) });
+    }
+
+    return parts.length > 0 ? parts : null;
+}
+
+function buildReasoningSummaryText(summaryParts: Map<string, string>): string {
+    return Array.from(summaryParts.entries())
+        .sort(([leftKey], [rightKey]) => {
+            const [leftOutput = '0', leftSummary = '0'] = leftKey.split(':');
+            const [rightOutput = '0', rightSummary = '0'] = rightKey.split(':');
+            const outputDelta = Number(leftOutput) - Number(rightOutput);
+            if (outputDelta !== 0) {
+                return outputDelta;
+            }
+            return Number(leftSummary) - Number(rightSummary);
+        })
+        .map(([, text]) => text)
+        .filter(Boolean)
+        .join('\n');
+}
+
+async function collectOpenAIResponsesStream(stream: any, session: Session, signal: AbortSignal): Promise<any> {
+    if (signal.aborted) {
+        throw makeAbortError();
+    }
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let buffer = '';
+        let completedResponse: any = null;
+        let lastSummaryText = '';
+        const summaryParts = new Map<string, string>();
+
+        const cleanup = () => {
+            signal.removeEventListener('abort', onAbort);
+            stream.off?.('data', onData);
+            stream.off?.('end', onEnd);
+            stream.off?.('error', onError);
+        };
+
+        const finish = (callback: () => void) => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            cleanup();
+            callback();
+        };
+
+        const emitSummaryUpdate = () => {
+            const nextText = buildReasoningSummaryText(summaryParts);
+            if (nextText === lastSummaryText) {
+                return;
+            }
+
+            lastSummaryText = nextText;
+            sessionManager.notifySessionEvent(session.id, {
+                type: 'reasoning-summary',
+                text: nextText,
+            });
+        };
+
+        const handleEvent = (event: any) => {
+            const key = `${event.output_index ?? 0}:${event.summary_index ?? 0}`;
+
+            switch (event.type) {
+                case 'response.reasoning_summary_part.done':
+                    if (event.part?.text) {
+                        summaryParts.set(key, event.part.text);
+                        emitSummaryUpdate();
+                    }
+                    return;
+                case 'response.reasoning_summary_text.delta':
+                    summaryParts.set(key, `${summaryParts.get(key) || ''}${event.delta || ''}`);
+                    emitSummaryUpdate();
+                    return;
+                case 'response.reasoning_summary_text.done':
+                    summaryParts.set(key, event.text || summaryParts.get(key) || '');
+                    emitSummaryUpdate();
+                    return;
+                case 'response.completed':
+                    completedResponse = event.response;
+                    return;
+                case 'response.failed':
+                    finish(() => reject(new Error(event.response?.error?.message || 'OpenAI Responses request failed.')));
+                    return;
+                case 'response.error':
+                    finish(() => reject(new Error(event.error?.message || 'OpenAI Responses stream error.')));
+                    return;
+                default:
+                    return;
+            }
+        };
+
+        const onAbort = () => {
+            try {
+                stream.destroy?.(makeAbortError());
+            } catch {}
+            finish(() => reject(makeAbortError()));
+        };
+
+        const onData = (chunk: any) => {
+            buffer += (typeof chunk === 'string' ? chunk : chunk.toString('utf8')).replace(/\r\n/g, '\n');
+
+            let boundaryIndex = buffer.indexOf('\n\n');
+            while (boundaryIndex !== -1) {
+                const block = buffer.slice(0, boundaryIndex);
+                buffer = buffer.slice(boundaryIndex + 2);
+
+                try {
+                    const event = parseSseEventBlock(block);
+                    if (event) {
+                        handleEvent(event);
+                    }
+                } catch (error) {
+                    finish(() => reject(error));
+                    return;
+                }
+
+                boundaryIndex = buffer.indexOf('\n\n');
+            }
+        };
+
+        const onEnd = () => {
+            finish(() => {
+                if (completedResponse) {
+                    resolve(completedResponse);
+                    return;
+                }
+
+                reject(new Error('OpenAI Responses stream ended before response.completed.'));
+            });
+        };
+
+        const onError = (error: any) => {
+            finish(() => reject(error));
+        };
+
+        signal.addEventListener('abort', onAbort, { once: true });
+        stream.on('data', onData);
+        stream.on('end', onEnd);
+        stream.on('error', onError);
+    });
+}
+
 function formatMemoryBlock(filePath: string, agentName: string, kind: 'self' | 'inherited', content: string): string {
     return `\nFILE: ${filePath}\n[MEMORY: agent=${agentName}; ownership=${kind}]\n${content}\n`;
 }
@@ -300,7 +552,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
         
         for (const part of msg.parts || []) {
             // Handle thinking (with signature support)
-            if (part.thinking) {
+            if (part.thinking && part.providerMeta?.signature) {
                 const thinkingBlock: AnthropicContentBlock = { type: 'thinking', thinking: part.thinking };
                 thinkingBlock.signature = part.providerMeta?.signature;
                 content.push(thinkingBlock);
@@ -938,7 +1190,9 @@ export async function chat(
     const providerType = modelEntry?.provider || 'openai';
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
-    const modelName = modelEntry?.model || '';
+    const modelName = Array.isArray(modelEntry?.model)
+        ? (modelEntry.model[0] || '')
+        : (modelEntry?.model || '');
     const promptCacheKey = getPromptCacheKey(session);
 
     if (!baseUrl) {
@@ -947,13 +1201,49 @@ export async function chat(
 
     logger.info(`Requesting LLM (${modelKey}, type ${providerType}, iteration ${iteration})...`);
 
+    const useOpenAIResponsesApi = shouldUseOpenAIResponsesApi(providerType, modelName);
+
     const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh' :
                          THINKING_BUDGET >= 4000 ? 'high' :
                          THINKING_BUDGET >= 2000 ? 'medium' :
                          THINKING_BUDGET > 0 ? 'low'
                          : undefined;
 
-    if (providerType === 'openai') {
+    if (useOpenAIResponsesApi) {
+        messages = convertToOpenAIResponsesFormat(fixedContents);
+        url = `${baseUrl}/responses`;
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'user-agent': 'foxwarm/1.0',
+        };
+
+        data = {
+            model: modelName,
+            include: ['reasoning.encrypted_content'],
+            max_output_tokens: MAX_OUTPUT,
+            prompt_cache_key: promptCacheKey,
+            stream: true,
+            reasoning: {
+                summary: 'auto',
+                ...(openaiEffort ? { effort: openaiEffort } : {}),
+            },
+            input: [
+                {
+                    type: 'message',
+                    role: 'developer',
+                    content: [{ type: 'input_text', text: systemPrompt }]
+                },
+                ...messages
+            ],
+            tools: tools.definitions.length > 0 ? tools.definitions.map(fd => ({
+                type: 'function',
+                name: fd.name,
+                description: fd.description,
+                parameters: fd.parameters
+            })) : undefined
+        };
+    } else if (providerType === 'openai') {
         // OpenAI format
         messages = convertToOpenAIFormat(fixedContents);
         url = `${baseUrl}/chat/completions`;
@@ -979,36 +1269,6 @@ export async function chat(
                     description: fd.description,
                     parameters: fd.parameters
                 }
-            })) : undefined
-        };
-    } else if (providerType === 'openai-responses') {
-        messages = convertToOpenAIResponsesFormat(fixedContents);
-        url = `${baseUrl}/responses`;
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'user-agent': 'foxwarm/1.0',
-        };
-
-        data = {
-            model: modelName,
-            include: ['reasoning.encrypted_content'],
-            max_output_tokens: MAX_OUTPUT,
-            prompt_cache_key: promptCacheKey,
-            reasoning: openaiEffort ? { effort: openaiEffort } : undefined,
-            input: [
-                {
-                    type: 'message',
-                    role: 'developer',
-                    content: [{ type: 'input_text', text: systemPrompt }]
-                },
-                ...messages
-            ],
-            tools: tools.definitions.length > 0 ? tools.definitions.map(fd => ({
-                type: 'function',
-                name: fd.name,
-                description: fd.description,
-                parameters: fd.parameters
             })) : undefined
         };
     } else {
@@ -1037,7 +1297,21 @@ export async function chat(
         };
     }
 
-    Object.assign(data, modelEntry.extraFields);
+    const extraFields = modelEntry.extraFields || {};
+    if (useOpenAIResponsesApi && extraFields.reasoning && typeof extraFields.reasoning === 'object') {
+        const { reasoning: extraReasoning, ...restExtraFields } = extraFields;
+        const hasSummaryOverride = Object.prototype.hasOwnProperty.call(extraReasoning, 'summary');
+        Object.assign(data, restExtraFields);
+        data.reasoning = {
+            ...(data.reasoning || {}),
+            ...extraReasoning,
+            summary: hasSummaryOverride
+                ? extraReasoning.summary
+                : (data.reasoning?.summary || 'auto'),
+        };
+    } else {
+        Object.assign(data, extraFields);
+    }
     
     const logFiles = await logRequest(data, iteration);
     const responseAttempts: any[] = [];
@@ -1048,9 +1322,11 @@ export async function chat(
     
     // Make API call with retries
     let response: AxiosResponse;
+    let resp: any;
     const maxRetries = 3;
     const abortController = new AbortController();
     sessionManager.registerSessionAbortController(session.id, abortController);
+    sessionManager.notifySessionEvent(session.id, { type: 'reasoning-summary-reset' });
 
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -1060,20 +1336,49 @@ export async function chat(
                     timeout: 180000, // 3 minutes
                     validateStatus: () => true,
                     signal: abortController.signal,
+                    ...(useOpenAIResponsesApi ? { responseType: 'stream' as const } : {}),
                 });
-                responseAttempts.push({
-                    attempt,
-                    kind: 'http',
-                    status: response.status + ' ' + response.statusText,
-                    headers: response.headers,
-                    body: response.data,
-                });
-                await logResponse({ attempts: responseAttempts }, logFiles);
+
+                if (useOpenAIResponsesApi) {
+                    if (response.status !== 200) {
+                        const errorBody = await readStreamAsText(response.data, abortController.signal);
+                        await logResponse({
+                            status: response.status + ' ' + response.statusText,
+                            headers: response.headers,
+                            body: errorBody
+                        }, logFiles);
+                        logger.error({
+                            status: response.status + ' ' + response.statusText,
+                            headers: response.headers,
+                            body: errorBody
+                        }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
+                        if (attempt === maxRetries) {
+                            return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts`);
+                        }
+                        await sleepWithSignal(2000, abortController.signal);
+                        continue;
+                    }
+
+                    resp = await collectOpenAIResponsesStream(response.data, session, abortController.signal);
+                    await logResponse({
+                        status: response.status + ' ' + response.statusText,
+                        headers: response.headers,
+                        body: resp
+                    }, logFiles);
+                } else {
+                    resp = response.data;
+                    await logResponse({
+                        status: response.status + ' ' + response.statusText,
+                        headers: response.headers,
+                        body: resp
+                    }, logFiles);
+                }
+
                 if (response.status !== 200) {
                     logger.error({
                         status: response.status + ' ' + response.statusText,
                         headers: response.headers,
-                        body: response.data
+                        body: resp
                     }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
                     if (attempt === maxRetries) {
                         return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts`);
@@ -1114,47 +1419,12 @@ export async function chat(
     } finally {
         sessionManager.clearSessionAbortController(session.id, abortController);
     }
-
-    const resp = response.data;
     
     // Extract response content blocks and tool calls
     let responseText = '';
     const allParts: Message['parts'] = [];
 
-    if (providerType === 'openai') {
-        // Parse OpenAI response
-        const choice = resp.choices?.[0];
-        if (!choice) {
-            return returnWithLoggedFailure('Error: No response from OpenAI API');
-        }
-        
-        const message = choice.message;
-        
-        if (message.reasoning_content) {
-            logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
-            allParts.push({ thinking: message.reasoning_content });
-        }
-        
-        if (message.content) {
-            responseText = message.content;
-            allParts.push({ text: message.content });
-        }
-        
-        if (message.tool_calls) {
-            for (const toolCall of message.tool_calls) {
-                if (toolCall.type === 'function') {
-                    const args = JSON.parse(toolCall.function.arguments || '{}');
-                    allParts.push({ 
-                        functionCall: { 
-                            id: toolCall.id, 
-                            name: toolCall.function.name, 
-                            args: args 
-                        } 
-                    });
-                }
-            }
-        }
-    } else if (providerType === 'openai-responses') {
+    if (useOpenAIResponsesApi) {
         const outputItems = Array.isArray(resp.output) ? resp.output : [];
 
         if (outputItems.length === 0) {
@@ -1204,14 +1474,57 @@ export async function chat(
                 });
             }
         }
+    } else if (providerType === 'openai') {
+        // Parse OpenAI response
+        const choice = resp.choices?.[0];
+        if (!choice) {
+            return appendTerminalModelTextAndReturn('Error: No response from OpenAI API');
+        }
+        
+        const message = choice.message;
+        
+        if (message.reasoning_content) {
+            logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
+            allParts.push({ thinking: message.reasoning_content });
+        }
+        
+        if (message.content) {
+            responseText = message.content;
+            allParts.push({ text: message.content });
+        }
+        
+        if (message.tool_calls) {
+            for (const toolCall of message.tool_calls) {
+                if (toolCall.type === 'function') {
+                    const args = JSON.parse(toolCall.function.arguments || '{}');
+                    allParts.push({ 
+                        functionCall: { 
+                            id: toolCall.id, 
+                            name: toolCall.function.name, 
+                            args: args 
+                        } 
+                    });
+                }
+            }
+        }
     } else {
         // Parse Anthropic response
         if (resp.content) {
             for (const rawBlock of resp.content) {
                 const block = rawBlock as AnthropicContentBlock;
                 if (block.type === 'text') {
-                    responseText += block.text;
-                    allParts.push({ text: block.text });
+                    const extractedParts = block.text ? extractAnthropicThinkingTaggedParts(block.text) : null;
+                    if (extractedParts) {
+                        for (const part of extractedParts) {
+                            if (part.text) {
+                                responseText += part.text;
+                            }
+                            allParts.push(part);
+                        }
+                    } else {
+                        responseText += block.text;
+                        allParts.push({ text: block.text });
+                    }
                 } else if (block.type === 'thinking') {
                     const thinkingPart: MessagePart = { thinking: block.thinking };
                     if (block.signature) {
@@ -1227,18 +1540,18 @@ export async function chat(
     
     // Log token usage
     let usage: TokenUsage = null;
-    if (providerType === 'openai') {
-        usage = resp.usage ? {
-            inputTokens: resp.usage.prompt_tokens,
-            outputTokens: resp.usage.completion_tokens,
-            cachedTokens: 0
-        } : null;
-    } else if (providerType === 'openai-responses') {
+    if (useOpenAIResponsesApi) {
         const cached = resp.usage?.input_tokens_details?.cached_tokens || 0;
         usage = resp.usage ? {
             inputTokens: resp.usage.input_tokens - cached,
             outputTokens: resp.usage.output_tokens,
             cachedTokens: cached
+        } : null;
+    } else if (providerType === 'openai') {
+        usage = resp.usage ? {
+            inputTokens: resp.usage.prompt_tokens,
+            outputTokens: resp.usage.completion_tokens,
+            cachedTokens: 0
         } : null;
     } else {
         usage = resp.usage ? {

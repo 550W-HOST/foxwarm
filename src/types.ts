@@ -52,6 +52,11 @@ export interface Message {
   };
 }
 
+export interface SessionStreamEvent {
+  type: 'reasoning-summary' | 'reasoning-summary-reset';
+  text?: string;
+}
+
 // Session types
 export interface SessionStats {
   totalCachedTokens: number;

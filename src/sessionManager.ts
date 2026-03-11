@@ -6,7 +6,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { createHash } from 'crypto';
-import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply } from './types';
+import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { getChannelInstance } from './channel';
 import * as llm from './llm';
@@ -553,6 +553,9 @@ async function loadChannels(): Promise<void> {
 // Callback when history is updated (for SSE broadcasting)
 let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = null;
 
+// Callback when transient session events are updated (for SSE broadcasting)
+let onSessionEventUpdated: ((sessionId: string, event: SessionStreamEvent) => void) | null = null;
+
 // Callback when session list is updated (for SSE broadcasting)
 let onSessionListUpdated: (() => void) | null = null;
 
@@ -561,6 +564,10 @@ const sessionAbortControllers = new Map<string, AbortController>();
 
 export function setOnHistoryUpdated(callback: (sessionId: string, message: Message) => void) {
   onHistoryUpdated = callback;
+}
+
+export function setOnSessionEventUpdated(callback: (sessionId: string, event: SessionStreamEvent) => void) {
+  onSessionEventUpdated = callback;
 }
 
 export function setOnSessionListUpdated(callback: () => void) {
@@ -2048,6 +2055,12 @@ export async function queueSessionSystemEvent(sessionId: string, message: string
 export function notifyHistoryUpdate(sessionId: string, message: Message) {
   if (onHistoryUpdated) {
     onHistoryUpdated(sessionId, message);
+  }
+}
+
+export function notifySessionEvent(sessionId: string, event: SessionStreamEvent) {
+  if (onSessionEventUpdated) {
+    onSessionEventUpdated(sessionId, event);
   }
 }
 

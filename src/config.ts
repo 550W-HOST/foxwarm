@@ -146,7 +146,7 @@ function applyProviderDefaults(entry: ModelConfigEntry): ModelConfigEntry {
     };
   }
 
-  if (provider === 'openai') {
+  if (provider === 'openai' || provider === 'openai-responses') {
     return {
       ...entry,
       provider,
