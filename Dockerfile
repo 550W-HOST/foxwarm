@@ -17,7 +17,32 @@ RUN npm run build && npm --prefix packages/webui run build
 FROM node:22-bookworm-slim AS runtime
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        chromium \
+        curl \
+        dnsutils \
+        file \
+        git \
+        iproute2 \
+        iputils-ping \
+        jq \
+        less \
+        lsof \
+        netcat-openbsd \
+        procps \
+        python-is-python3 \
+        python3 \
+        python3-pip \
+        rsync \
+        ripgrep \
+        tmux \
+        unzip \
+        vim-tiny \
+        xz-utils \
+        zip \
+        build-essential \
+        pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production \
