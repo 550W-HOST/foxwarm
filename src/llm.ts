@@ -1329,7 +1329,7 @@ export async function chat(
                             status: response.status + ' ' + response.statusText,
                             headers: response.headers,
                             body: errorBody
-                        }, iteration);
+                        }, logFiles);
                         logger.error({
                             status: response.status + ' ' + response.statusText,
                             headers: response.headers,
@@ -1347,14 +1347,14 @@ export async function chat(
                         status: response.status + ' ' + response.statusText,
                         headers: response.headers,
                         body: resp
-                    }, iteration);
+                    }, logFiles);
                 } else {
                     resp = response.data;
                     await logResponse({
                         status: response.status + ' ' + response.statusText,
                         headers: response.headers,
                         body: resp
-                    }, iteration);
+                    }, logFiles);
                 }
 
                 if (response.status !== 200) {
