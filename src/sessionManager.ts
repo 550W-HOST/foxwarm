@@ -5,7 +5,6 @@
 
 import fs from 'fs-extra';
 import path from 'path';
-import { createHash } from 'crypto';
 import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { getChannelInstance } from './channel';
@@ -13,8 +12,10 @@ import * as llm from './llm';
 import { getSkillInfo, validateSkillName } from './skills';
 import { estimateSessionTokens } from './tokenCount';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, CHANNELS_FILE, getAgentDir, getSessionArchiveImagesDir, getSessionArchiveLogPath } from './config';
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, CHANNELS_FILE, getAgentDir } from './config';
 import * as sessionAgentOps from './sessionAgentOps';
+import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './sessionArchive';
+import { getSessionHistoryFilePath, loadSessionsMetadataSnapshot, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './sessionMetadataStore';
 
 // Agent metadata storage
 interface AgentMetadata {
@@ -77,153 +78,6 @@ function normalizeAgentMetadata(meta: AgentMetadata): AgentMetadata {
 
 function systemPart(system: string): MessagePart {
   return { system };
-}
-
-function getMessageTimestamp(message: Message): number {
-  return message.__meta?.timestamp || Date.now();
-}
-
-function getNextSessionMessageSeq(session: Session): number {
-  if (typeof session.nextMessageSeq === 'number' && session.nextMessageSeq > 0) {
-    return session.nextMessageSeq;
-  }
-
-  let maxSeq = 0;
-  for (const message of session.history) {
-    const seq = message.__meta?.seq;
-    if (typeof seq === 'number' && seq > maxSeq) {
-      maxSeq = seq;
-    }
-  }
-
-  session.nextMessageSeq = maxSeq + 1 || 1;
-  return session.nextMessageSeq;
-}
-
-function ensureMessageSeq(session: Session, message: Message): number {
-  const existingSeq = message.__meta?.seq;
-  if (typeof existingSeq === 'number' && existingSeq > 0) {
-    session.nextMessageSeq = Math.max(getNextSessionMessageSeq(session), existingSeq + 1);
-    return existingSeq;
-  }
-
-  const seq = getNextSessionMessageSeq(session);
-  message.__meta = {
-    ...(message.__meta || {}),
-    timestamp: getMessageTimestamp(message),
-    seq,
-  };
-  session.nextMessageSeq = seq + 1;
-  return seq;
-}
-
-function getInlineDataMimeType(part: MessagePart): string {
-  return part.inlineData?.mimeType || part.inlineData?.mime_type || 'application/octet-stream';
-}
-
-function getArchiveFileExtension(mimeType: string): string {
-  const lower = mimeType.toLowerCase();
-
-  if (lower === 'image/jpeg') return 'jpg';
-  if (lower === 'image/svg+xml') return 'svg';
-  if (lower.startsWith('image/')) return lower.slice('image/'.length) || 'bin';
-
-  const slashIndex = lower.indexOf('/');
-  if (slashIndex !== -1 && slashIndex + 1 < lower.length) {
-    return lower.slice(slashIndex + 1).replace(/[^a-z0-9]+/g, '-') || 'bin';
-  }
-
-  return 'bin';
-}
-
-async function buildArchiveRecord(session: Session, message: Message): Promise<any> {
-  const seq = ensureMessageSeq(session, message);
-  const timestamp = getMessageTimestamp(message);
-  const archiveParts = [];
-
-  for (let partIndex = 0; partIndex < message.parts.length; partIndex++) {
-    const part = message.parts[partIndex];
-
-    if (!part.inlineData?.data) {
-      archiveParts.push(part);
-      continue;
-    }
-
-    const mimeType = getInlineDataMimeType(part);
-    const extension = getArchiveFileExtension(mimeType);
-    const imageId = `msg${String(seq).padStart(8, '0')}_part${partIndex + 1}`;
-    const imageDir = getSessionArchiveImagesDir(session.id);
-    const fileName = `${imageId}.${extension}`;
-    const filePath = path.join(imageDir, fileName);
-    const binary = Buffer.from(part.inlineData.data, 'base64');
-    const sha256 = createHash('sha256').update(binary).digest('hex');
-
-    await fs.ensureDir(imageDir);
-    await fs.writeFile(filePath, binary);
-
-    const { inlineData, ...rest } = part;
-    archiveParts.push({
-      ...rest,
-      inlineDataRef: {
-        imageId,
-        format: extension,
-        path: path.relative(path.join(__dirname, '..'), filePath),
-        mimeType,
-        byteLength: binary.length,
-        sha256,
-      },
-    });
-  }
-
-  return {
-    v: 1,
-    kind: 'message',
-    sessionId: session.id,
-    agent: session.agent || 'main',
-    seq,
-    timestamp,
-    role: message.role,
-    message: {
-      ...message,
-      __meta: {
-        ...(message.__meta || {}),
-        timestamp,
-        seq,
-      },
-      parts: archiveParts,
-    },
-  };
-}
-
-async function appendMessagesToArchive(session: Session, messages: Message[]): Promise<void> {
-  if (messages.length === 0) {
-    return;
-  }
-
-  const archiveLogPath = getSessionArchiveLogPath(session.id);
-  await fs.ensureDir(path.dirname(archiveLogPath));
-
-  const lines: string[] = [];
-  for (const message of messages) {
-    const record = await buildArchiveRecord(session, message);
-    lines.push(JSON.stringify(record));
-  }
-
-  await fs.appendFile(archiveLogPath, `${lines.join('\n')}\n`);
-}
-
-function stripMessageSeq(message: Message): Message {
-  const clonedMessage = structuredClone(message);
-  if (!clonedMessage.__meta) {
-    return clonedMessage;
-  }
-
-  delete clonedMessage.__meta.seq;
-  if (Object.keys(clonedMessage.__meta).length === 0) {
-    delete clonedMessage.__meta;
-  }
-
-  return clonedMessage;
 }
 
 /**
@@ -1266,7 +1120,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
 }
 
 async function persistSessionMetadataUpdate(sessionId: string, updates: Partial<Session>): Promise<void> {
-  const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
+  const historyFile = getSessionHistoryFilePath(sessionId);
 
   if (await fs.pathExists(historyFile)) {
     const historyData = await fs.readJson(historyFile);
@@ -1504,172 +1358,6 @@ export async function saveSession(sessionId: string): Promise<void> {
   } catch (e) {
     logger.error({ err: e, sessionId }, 'Failed to save session');
   }
-}
-
-function stripSessionMetadataForSave(session: Session): Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'> {
-  const { history, persistentMemorySnapshot, broadcast, ...metadata } = session;
-  return metadata;
-}
-
-function getSessionsMetadataBackupPath(index: number): string {
-  return `${SESSIONS_FILE}.${index}.bak`;
-}
-
-function getSessionHistoryFilePath(sessionId: string): string {
-  return path.join(SESSIONS_DIR, `${sessionId}.json`);
-}
-
-function getSessionsMetadataCandidatePaths(): string[] {
-  return [
-    SESSIONS_FILE,
-    ...Array.from({ length: 5 }, (_, i) => getSessionsMetadataBackupPath(i + 1)),
-    `${SESSIONS_FILE}.bak`,
-  ];
-}
-
-async function readSessionsMetadataSnapshotFromFile(filePath: string): Promise<any | null> {
-  if (!await fs.pathExists(filePath)) {
-    return null;
-  }
-
-  const data = await fs.readJson(filePath);
-  if (!data || typeof data !== 'object') {
-    throw new Error(`Invalid sessions metadata payload in ${filePath}`);
-  }
-
-  const sessionsData = data.sessions || data;
-  if (!sessionsData || typeof sessionsData !== 'object') {
-    throw new Error(`Invalid sessions metadata object in ${filePath}`);
-  }
-
-  return data.sessions ? data : { sessions: sessionsData };
-}
-
-async function collectSessionHistoryFiles(dir: string): Promise<string[]> {
-  if (!await fs.pathExists(dir)) {
-    return [];
-  }
-
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await collectSessionHistoryFiles(fullPath));
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith('.json')) {
-      files.push(fullPath);
-    }
-  }
-  return files;
-}
-
-function deriveSessionIdFromHistoryFile(historyFilePath: string): string {
-  return path.relative(SESSIONS_DIR, historyFilePath).replace(/\.json$/, '').split(path.sep).join('/');
-}
-
-function inferSessionLastMessageTime(history: Message[], historyFilePath: string): number {
-  for (let i = history.length - 1; i >= 0; i--) {
-    const timestamp = history[i]?.__meta?.timestamp;
-    if (typeof timestamp === 'number' && !Number.isNaN(timestamp)) {
-      return timestamp;
-    }
-  }
-
-  try {
-    return fs.statSync(historyFilePath).mtimeMs;
-  } catch {
-    return Date.now();
-  }
-}
-
-async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
-  const data: any = { sessions: {} };
-  const historyFiles = await collectSessionHistoryFiles(SESSIONS_DIR);
-
-  for (const historyFilePath of historyFiles) {
-    try {
-      const historyData = await fs.readJson(historyFilePath);
-      const sessionId = deriveSessionIdFromHistoryFile(historyFilePath);
-      const history = Array.isArray(historyData.history) ? historyData.history : [];
-      const inferredAgent = historyData.agent || (sessionId.includes('/') ? sessionId.split('/').slice(0, -1).join('/') : 'main');
-      const inferredNextSeq = typeof historyData.nextMessageSeq === 'number'
-        ? historyData.nextMessageSeq
-        : Math.max(0, ...history.map((message: Message) => message?.__meta?.seq || 0)) + 1;
-
-      data.sessions[sessionId] = {
-        id: sessionId,
-        busy: historyData.busy ?? false,
-        queue: historyData.queue || [],
-        meta: {
-          lastMessageTime: inferSessionLastMessageTime(history, historyFilePath),
-          messageCount: history.length,
-        },
-        stats: {
-          totalCachedTokens: 0,
-          totalInputTokens: 0,
-          totalOutputTokens: 0,
-          lastUsage: null,
-        },
-        currentNode: historyData.currentNode || 'master',
-        agent: inferredAgent,
-        nextMessageSeq: inferredNextSeq > 0 ? inferredNextSeq : 1,
-        historyVersion: historyData.historyVersion ?? 0,
-        parentSessionId: historyData.parentSessionId,
-        displayName: historyData.displayName,
-        isolated: historyData.isolated,
-        model: historyData.model,
-        verbose: historyData.verbose,
-        aliases: historyData.aliases,
-        indexingState: historyData.indexingState,
-      };
-    } catch (e) {
-      logger.warn({ err: e, historyFilePath }, 'Failed to rebuild session metadata from history file');
-    }
-  }
-
-  return data;
-}
-
-async function loadSessionsMetadataSnapshot(): Promise<{ data: any; source: string }> {
-  for (const candidatePath of getSessionsMetadataCandidatePaths()) {
-    try {
-      const data = await readSessionsMetadataSnapshotFromFile(candidatePath);
-      if (data) {
-        return { data, source: candidatePath };
-      }
-    } catch (e) {
-      logger.warn({ err: e, candidatePath }, 'Failed to read sessions metadata candidate');
-    }
-  }
-
-  const rebuilt = await rebuildSessionsMetadataFromHistoryFiles();
-  return { data: rebuilt, source: 'rebuild' };
-}
-
-async function writeSessionsMetadataAtomically(data: any): Promise<void> {
-  await fs.ensureDir(path.dirname(SESSIONS_FILE));
-  const tempFile = `${SESSIONS_FILE}.tmp-${process.pid}-${Date.now()}`;
-  await fs.writeJson(tempFile, data, { spaces: 2 });
-
-  if (await fs.pathExists(SESSIONS_FILE)) {
-    try {
-      for (let i = 5; i >= 2; i--) {
-        const prevBackup = getSessionsMetadataBackupPath(i - 1);
-        const nextBackup = getSessionsMetadataBackupPath(i);
-        if (await fs.pathExists(prevBackup)) {
-          await fs.move(prevBackup, nextBackup, { overwrite: true });
-        }
-      }
-      await fs.copy(SESSIONS_FILE, getSessionsMetadataBackupPath(1), { overwrite: true });
-      await fs.copy(SESSIONS_FILE, `${SESSIONS_FILE}.bak`, { overwrite: true });
-    } catch (e) {
-      logger.warn({ err: e }, 'Failed to rotate sessions metadata backups');
-    }
-  }
-
-  await fs.move(tempFile, SESSIONS_FILE, { overwrite: true });
 }
 
 /**

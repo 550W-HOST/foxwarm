@@ -230,6 +230,7 @@ export const LOGS_DIR = path.join(STATE_DIR, 'logs');
 export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const DB_DIR = path.join(STATE_DIR, 'db');
 export const SESSIONS_DIR = path.join(STATE_DIR, 'sessions');
+export const SESSIONS_BLOB_DIR = path.join(STATE_DIR, 'sessions-blob');
 export const PERSISTENT_MEMORY_DIR = path.join(STATE_DIR, 'persistent_memory'); // Legacy path for migration
 export const MAIN_AGENT_DIR = path.join(AGENTS_DIR, 'main');
 export const MAIN_AGENT_MEMORY_DIR = path.join(MAIN_AGENT_DIR, 'memory');
@@ -266,7 +267,7 @@ export function getSessionArchiveLogPath(sessionId: string): string {
 }
 
 export function getSessionArchiveImagesDir(sessionId: string): string {
-  return path.join(LOGS_DIR, `${sessionId}.images`);
+  return path.join(SESSIONS_BLOB_DIR, `${sessionId}.images`);
 }
 
 // Server configuration
