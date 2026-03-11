@@ -915,10 +915,16 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
     localStorage.setItem('diffViewMode', newMode)
   }
 
-  const isSystemLikeMessage = (msg: Message) => (
-    msg.parts.some(part => !!part.system && !isLightweightStructuredSystem(part.system)) ||
-    msg.parts.some(part => !!part.text && part.text.split('\n').some(isHeavySystemTextLine))
-  )
+  const isSystemLikeMessage = (msg: Message) => {
+    if (msg.role === 'model') {
+      return false
+    }
+
+    return (
+      msg.parts.some(part => !!part.system && !isLightweightStructuredSystem(part.system)) ||
+      msg.parts.some(part => !!part.text && part.text.split('\n').some(isHeavySystemTextLine))
+    )
+  }
 
   const renderInlineMetaPart = (systemText: string, key: string, isUser: boolean) => (
     <pre
