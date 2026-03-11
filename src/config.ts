@@ -171,31 +171,21 @@ function buildConfigFromLegacyEnv(source: Record<string, string | undefined>): A
 }
 
 function migrateLegacyEnvIfNeeded(): void {
+  const legacyEnvPath = path.join(process.cwd(), '.env');
+
   if (fs.existsSync(APP_CONFIG_PATH)) {
+    if (fs.existsSync(legacyEnvPath)) {
+      console.warn(
+        `[config] Legacy .env business config at ${legacyEnvPath} is ignored because ${APP_CONFIG_PATH} already exists.`
+      );
+    }
     return;
   }
 
-  const legacyEnvPath = path.join(process.cwd(), '.env');
   let source: Record<string, string | undefined> | null = null;
-  let sourceFromFile = false;
 
   if (fs.existsSync(legacyEnvPath)) {
     source = dotenv.parse(fs.readFileSync(legacyEnvPath, 'utf8')) as Record<string, string>;
-    sourceFromFile = true;
-  } else {
-    const legacyKeys = [
-      'BOT_NAME', 'ENABLE_WEBUI', 'ENABLE_TRIGGER', 'HTTP_PORT', 'WEBUI_PORT', 'ENABLE_TUI',
-      'OLLAMA_BASE_URL', 'CONTEXT_LIMIT', 'COMPACT_PERCENT', 'MAX_OUTPUT', 'THINKING_BUDGET',
-      'OPENAI_BASE_URL', 'OPENAI_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY',
-      'AGENTS_DIR', 'SKILLS_DIR', 'MODELS_CONFIG_PATH', 'MCP_CONFIG_PATH',
-      'TELEGRAM_BOT_TOKEN', 'ALLOWED_USER_ID', 'TELEGRAM_ALLOWED_USERS',
-      'MATRIX_HOMESERVER', 'MATRIX_ACCESS_TOKEN', 'MATRIX_USER_ID', 'MATRIX_ALLOWED_USERS',
-      'WEWORK_WEBHOOK_URL', 'WEWORK_TOKEN', 'WEWORK_ENCODING_AES_KEY', 'WEWORK_LISTEN_PORT', 'WEWORK_LISTEN_PATH', 'WEWORK_ALLOWED_USERS'
-    ];
-    const found = legacyKeys.filter(key => process.env[key] !== undefined);
-    if (found.length > 0) {
-      source = Object.fromEntries(found.map(key => [key, process.env[key]]));
-    }
   }
 
   if (!source) {
@@ -205,16 +195,6 @@ function migrateLegacyEnvIfNeeded(): void {
   const migrated = buildConfigFromLegacyEnv(source);
   fs.ensureDirSync(path.dirname(APP_CONFIG_PATH));
   fs.writeFileSync(APP_CONFIG_PATH, yaml.dump(migrated, { noRefs: true, lineWidth: 120 }), 'utf8');
-
-  if (sourceFromFile) {
-    const backupPath = `${legacyEnvPath}.migrated-backup`;
-    try {
-      fs.moveSync(legacyEnvPath, backupPath, { overwrite: true });
-    } catch (e: any) {
-      fs.copyFileSync(legacyEnvPath, backupPath);
-      console.warn(`[config] Legacy .env migration created ${backupPath}, but could not rename original .env: ${e?.message || e}`);
-    }
-  }
 }
 
 function loadAppConfig(): AppConfig {
