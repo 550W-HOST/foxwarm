@@ -2982,7 +2982,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
 
       {/* Input - Fixed at bottom */}
       <div 
-        className={`sticky bottom-0 z-20 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md p-4 transition-colors ${
+        className={`sticky bottom-0 z-20 dark:bg-gray-900/80 backdrop-blur-md p-4 transition-colors ${
           isDragging ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-400 dark:border-blue-500' : ''
         }`}
         onDragOver={handleDragOver}
