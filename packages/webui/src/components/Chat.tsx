@@ -14,6 +14,9 @@ import {
   Wrench,
   Terminal,
   Paperclip,
+  Plus,
+  ChevronDown,
+  ArrowUp,
   Copy,
   Check,
   X,
@@ -2979,7 +2982,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
 
       {/* Input - Fixed at bottom */}
       <div 
-        className={`sticky bottom-0 z-20 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-4 transition-colors ${
+        className={`sticky bottom-0 z-20 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md p-4 transition-colors ${
           isDragging ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-400 dark:border-blue-500' : ''
         }`}
         onDragOver={handleDragOver}
@@ -2998,13 +3001,13 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
         
         {/* Attachments preview */}
         {attachments.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-2">
+          <div className="mb-3 flex flex-wrap gap-2">
             {attachments.map((file, idx) => (
-              <div key={idx} className="relative inline-flex items-center gap-2 px-3 py-1 bg-gray-100 dark:bg-gray-700 rounded text-sm">
+              <div key={idx} className="relative inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800">
                 <span className="text-gray-700 dark:text-gray-300">{file.name}</span>
                 <button
                   onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
-                  className="text-gray-500 hover:text-red-500"
+                  className="text-gray-400 transition hover:text-red-500"
                 >
                   ×
                 </button>
@@ -3021,7 +3024,10 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
           </div>
         )}
         
-        <form onSubmit={sendMessage} className="flex space-x-2">
+        <form
+          onSubmit={sendMessage}
+          className="rounded-[30px] border border-gray-200 bg-gray-50/95 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] transition focus-within:border-gray-300 focus-within:bg-white dark:border-gray-700 dark:bg-gray-800/95 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800"
+        >
           <input
             type="file"
             id="file-upload"
@@ -3034,14 +3040,6 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
             }}
             className="hidden"
           />
-          <label
-            htmlFor="file-upload"
-            className="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 cursor-pointer transition self-end inline-flex items-center justify-center"
-            title="Attach files"
-            aria-label="Attach files"
-          >
-            <Paperclip size={16} />
-          </label>
           <textarea
             ref={textareaRef}
             value={input}
@@ -3063,19 +3061,46 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
-            className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 resize-none overflow-y-auto"
+            className="mb-1.5 min-h-[60px] w-full resize-none overflow-y-auto border-0 bg-transparent px-3 py-1 text-[16px] leading-6 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-0 dark:text-white dark:placeholder:text-gray-500"
             style={{ maxHeight: '200px', fontSize: '16px' }}
             placeholder={sessionMissing
               ? 'Session not found'
-              : (sendKeyMode === 'enter' ? 'Type a message... (Enter to send)' : 'Type a message... (Ctrl+Enter to send)')}
+              : 'Ask Foxwarm anything, + to add files, / for commands'}
           />
-          <button
-            type="submit"
-            disabled={loading || sessionMissing || (!input.trim() && attachments.length === 0)}
-            className="px-6 py-2 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 disabled:bg-gray-300 dark:disabled:bg-gray-700 disabled:cursor-not-allowed transition self-end"
-          >
-            Send
-          </button>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pb-0.5">
+              <label
+                htmlFor="file-upload"
+                className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+                title="Attach files"
+                aria-label="Attach files"
+              >
+                <Plus size={18} />
+              </label>
+              <button
+                type="button"
+                onClick={() => setSendKeyMode(prev => prev === 'enter' ? 'mod-enter' : 'enter')}
+                className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-gray-600 transition hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+                title="Toggle send key"
+              >
+                <span>{sendKeyMode === 'enter' ? 'Enter to send' : 'Ctrl/Cmd+Enter'}</span>
+                <ChevronDown size={13} />
+              </button>
+              <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-gray-500 dark:text-gray-400">
+                <Paperclip size={13} />
+                <span>{attachments.length > 0 ? `${attachments.length} file${attachments.length > 1 ? 's' : ''}` : 'No files'}</span>
+              </div>
+            </div>
+            <button
+              type="submit"
+              disabled={loading || sessionMissing || (!input.trim() && attachments.length === 0)}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-900 text-white transition hover:bg-black disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed dark:bg-gray-200 dark:text-gray-900 dark:hover:bg-white dark:disabled:bg-gray-700 dark:disabled:text-gray-500"
+              aria-label="Send message"
+              title="Send message"
+            >
+              <ArrowUp size={18} />
+            </button>
+          </div>
         </form>
       </div>
     </div>
