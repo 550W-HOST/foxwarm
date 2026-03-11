@@ -1083,7 +1083,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         } else {
         
         // Tools that must run on master (node management tools, timers)
-        const masterOnlyTools = ['remote_node', 'list_nodes', 'node_tools', 'list_timers', 'delete_timer'];
+        const masterOnlyTools = ['remote_node', 'list_nodes', 'node_tools', 'create_timer', 'list_timers', 'delete_timer'];
         const forceMaster = masterOnlyTools.includes(call.name);
         
         if (targetNode !== 'master' && !forceMaster) {

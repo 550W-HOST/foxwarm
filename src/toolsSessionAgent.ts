@@ -6,7 +6,7 @@ import * as timers from './timers';
 import { logger } from './common';
 import { COMPACT_PERCENT } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
-import { requireNotIsolated, checkChannelPermission } from './isolatedCheck';
+import { requireNotIsolated, checkChannelPermission, checkTimerPermission } from './isolatedCheck';
 
 interface ToolContext {
   sessionId?: string;
@@ -452,6 +452,13 @@ export async function tool_compress_session(args: ToolArgs, ctx: ToolContext) {
 }
 
 export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
+  await checkTimerPermission(ctx, {
+    targetSessionId: args.sessionId,
+    newSession: args.newSession,
+    agentName: args.agentName,
+    sessionPrefix: args.sessionPrefix,
+  });
+
   const targetSessionId = args.sessionId || ctx.sessionId;
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
@@ -479,6 +486,8 @@ export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
 }
 
 export async function tool_list_timers(args: ToolArgs, ctx: ToolContext) {
+  await checkTimerPermission(ctx, { targetSessionId: args.sessionId });
+
   const targetSessionId = args.sessionId || ctx.sessionId;
   const timerList = timers.listTimers(targetSessionId);
 
@@ -504,6 +513,8 @@ export async function tool_list_timers(args: ToolArgs, ctx: ToolContext) {
 }
 
 export async function tool_delete_timer(args: ToolArgs, ctx: ToolContext) {
+  await checkTimerPermission(ctx, { targetSessionId: args.sessionId });
+
   const { timerId } = args;
   const targetSessionId = args.sessionId || ctx.sessionId;
 

@@ -10,6 +10,7 @@ import { estimateSessionTokens } from './tokenCount'
 import { CONTEXT_LIMIT, COMPACT_PERCENT, resolveModelConfig } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
+import { checkTimerPermission } from './isolatedCheck'
 
 export type CommandDef = {
   description: string
@@ -150,6 +151,8 @@ export const COMMANDS: Record<string, CommandDef> = {
 
       switch (subcommand) {
         case 'list': {
+          await checkTimerPermission(sessionId)
+
           const sessionTimers = timers.listTimers(sessionId)
           if (sessionTimers.length === 0) {
             ctx.reply('No timers found for this session.')
@@ -172,6 +175,8 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'delete': {
+          await checkTimerPermission(sessionId)
+
           const timerId = subArgs[0]
           if (!timerId) {
             ctx.reply('Usage: /timer delete <id>')
@@ -201,6 +206,11 @@ export const COMMANDS: Record<string, CommandDef> = {
           const afterSeconds = parseFloat(subArgs[0])
           try {
             const flags = parseTimerFlags(subArgs.slice(1))
+            await checkTimerPermission(sessionId, {
+              newSession: flags.newSession,
+              agentName: flags.agentName,
+              sessionPrefix: flags.sessionPrefix,
+            })
             const message = parseTimerMessage(subArgs.slice(1 + flags.index))
             if (!message) {
               ctx.reply('Usage: /timer after <seconds> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>')
@@ -233,6 +243,11 @@ export const COMMANDS: Record<string, CommandDef> = {
           const at = subArgs[0]
           try {
             const flags = parseTimerFlags(subArgs.slice(1))
+            await checkTimerPermission(sessionId, {
+              newSession: flags.newSession,
+              agentName: flags.agentName,
+              sessionPrefix: flags.sessionPrefix,
+            })
             const message = parseTimerMessage(subArgs.slice(1 + flags.index))
             if (!message) {
               ctx.reply('Usage: /timer at <ISO-time> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>')
@@ -270,6 +285,11 @@ export const COMMANDS: Record<string, CommandDef> = {
 
           try {
             const flags = parseTimerFlags(subArgs.slice(cronEnd))
+            await checkTimerPermission(sessionId, {
+              newSession: flags.newSession,
+              agentName: flags.agentName,
+              sessionPrefix: flags.sessionPrefix,
+            })
             const message = parseTimerMessage(subArgs.slice(cronEnd + flags.index))
             if (!message) {
               ctx.reply('Usage: /timer cron <expr> [--new-session] [--prefix <prefix>] [--agent <agent>] -- <message>')

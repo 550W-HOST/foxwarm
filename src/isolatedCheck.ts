@@ -24,6 +24,17 @@ export async function checkToolPermission(
   const session = await sessionManager.getExistingSession(sessionId);
   if (!session?.isolated) return;
 
+  const timerTools = ['create_timer', 'list_timers', 'delete_timer'];
+  if (timerTools.includes(toolName)) {
+    await checkTimerPermission(sessionId, {
+      targetSessionId: toolArgs?.sessionId,
+      newSession: toolArgs?.newSession,
+      agentName: toolArgs?.agentName,
+      sessionPrefix: toolArgs?.sessionPrefix,
+    });
+    return;
+  }
+
   // Tools that isolated session can use
   const allowedTools = ['read', 'write', 'edit', 'apply_patch', 'exec', 'remote_node', 'send_to_session'];
   if (!allowedTools.includes(toolName)) {
@@ -123,5 +134,37 @@ export async function checkChannelPermission(sessionIdOrCtx: string | { sessionI
   
   if (!attachedChannelIds.includes(channelId)) {
     throw new Error('Isolated session can only send messages to its own attached channel.');
+  }
+}
+
+/**
+ * Check whether an isolated session may manage a timer.
+ * Isolated sessions may only manage timers for the current session and may not
+ * use timer options that create or target new sessions/agents.
+ */
+export async function checkTimerPermission(
+  sessionIdOrCtx: string | { sessionId?: string },
+  options: {
+    targetSessionId?: string;
+    newSession?: unknown;
+    agentName?: unknown;
+    sessionPrefix?: unknown;
+  } = {}
+): Promise<void> {
+  const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
+  if (!sessionId) return;
+
+  const session = await sessionManager.getExistingSession(sessionId);
+  if (!session?.isolated) return;
+
+  const targetSessionId = options.targetSessionId || sessionId;
+  if (targetSessionId !== sessionId) {
+    throw new Error('Isolated session can only manage timers for its own current session.');
+  }
+
+  const hasAgentName = typeof options.agentName === 'string' && options.agentName.trim().length > 0;
+  const hasSessionPrefix = typeof options.sessionPrefix === 'string' && options.sessionPrefix.trim().length > 0;
+  if (options.newSession === true || hasAgentName || hasSessionPrefix) {
+    throw new Error('Isolated session timers can only target the current session; new-session/agent/prefix options are not allowed.');
   }
 }
