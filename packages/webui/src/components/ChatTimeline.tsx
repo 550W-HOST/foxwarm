@@ -223,7 +223,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
-  const jsonText = useMemo(() => JSON.stringify(message, null, 2), [message])
+  const jsonText = useMemo(() => viewMode === 'json' ? JSON.stringify(message, null, 2) : '', [message, viewMode])
 
   useEffect(() => {
     return () => {
@@ -887,8 +887,10 @@ const MessageRow = memo(function MessageRow({
   onExpandGroup,
 }: MessageRowProps) {
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
+  const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData), [msg.parts])
   const summaryTags = useMemo(() => summaryTagsKey ? summaryTagsKey.split('\u0000') : [], [summaryTagsKey])
   const isInToolGroup = summaryTags.length > 0
+  const hasVisibleTextContent = useMemo(() => msg.parts.some(p => (p.text && p.text.trim()) || (p.system && String(p.system).trim())), [msg.parts])
   const systemLikeMessage = useMemo(() => {
     if (msg.role === 'model') return false
     return (
@@ -929,7 +931,7 @@ const MessageRow = memo(function MessageRow({
                   : <CollapsibleUserText text={part.text || ''} />}
               </div>
             ))}
-            <ImageParts imageParts={msg.parts.filter(p => p.inlineData)} keyPrefix={`user-${idx}`} />
+            <ImageParts imageParts={imageParts} keyPrefix={`user-${idx}`} />
           </div>
         ) : (
           <div className="flex flex-col">
@@ -938,14 +940,14 @@ const MessageRow = memo(function MessageRow({
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }
               if (part.thinking) {
-                if (!verbose && !msg.parts.some(p => (p.text && p.text.trim()) || (p.system && String(p.system).trim())) && isInToolGroup && !groupExpanded) {
+                if (!verbose && !hasVisibleTextContent && isInToolGroup && !groupExpanded) {
                   return null
                 }
                 return <ReasoningSummaryCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
               }
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
             })}
-            <ImageParts imageParts={msg.parts.filter(p => p.inlineData)} keyPrefix={`message-${idx}`} />
+            <ImageParts imageParts={imageParts} keyPrefix={`message-${idx}`} />
             {!verbose && showToolGroupSummary && !groupExpanded && (
               <div
                 className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"

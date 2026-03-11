@@ -1,5 +1,5 @@
-import { memo, useMemo } from 'react'
-import { getCollapsedReasoningPreview, renderMarkdown } from './chatShared'
+import { memo, useEffect, useMemo, useState } from 'react'
+import { renderMarkdown } from './chatShared'
 
 interface ProcessingStatusProps {
   sessionBusy: boolean
@@ -10,8 +10,19 @@ interface ProcessingStatusProps {
 }
 
 const ProcessingReasoningCard = memo(function ProcessingReasoningCard({ thinking }: { thinking: string }) {
-  const html = useMemo(() => renderMarkdown(thinking), [thinking])
-  const collapsedPreview = useMemo(() => getCollapsedReasoningPreview(thinking), [thinking])
+  const [debouncedThinking, setDebouncedThinking] = useState(thinking)
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedThinking(thinking)
+    }, 80)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [thinking])
+
+  const html = useMemo(() => renderMarkdown(debouncedThinking), [debouncedThinking])
 
   if (!thinking.trim()) return null
 
@@ -21,9 +32,6 @@ const ProcessingReasoningCard = memo(function ProcessingReasoningCard({ thinking
         <div className="min-w-0 flex-1 text-[11px] font-medium uppercase tracking-wide text-blue-600 dark:text-blue-300">
           <div className="flex min-w-0 items-baseline gap-2">
             <span className="shrink-0">Reasoning</span>
-            <span className="min-w-0 flex-1 truncate normal-case text-sm font-normal tracking-normal" title={collapsedPreview}>
-              {collapsedPreview}
-            </span>
           </div>
         </div>
       </div>
