@@ -1289,11 +1289,6 @@ async function checkIsolatedPermission(
   targetSessionId: string,
   operation: string
 ): Promise<void> {
-  // If source session is isolated, deny all cross-session operations
-  if (sourceSession?.isolated) {
-    throw new Error(`Isolated session cannot use ${operation} tool.`);
-  }
-
   // Get target session
   const targetSession = await getExistingSession(targetSessionId);
   if (!targetSession) {
@@ -1307,6 +1302,10 @@ async function checkIsolatedPermission(
 
   const sourceAgent = sourceSession.agent || 'main';
   const targetAgent = targetSession.agent || 'main';
+
+  // Session-level isolated routing rules are enforced by sendToSession()
+  // using direct parent/child relationship checks. This helper keeps the
+  // broader agent-isolation guardrails aligned underneath that rule.
 
   // Check source agent isolation
   const sourceAgentMeta = getAgentMetadata(sourceAgent);
@@ -1327,11 +1326,10 @@ async function checkIsolatedPermission(
  * @param message Message text
  * @param fromSessionId Optional source session ID for tracking
  */
-function isRelatedSession(a: Session | undefined, b: Session | undefined): boolean {
+function isDirectSessionLink(a: Session | undefined, b: Session | undefined): boolean {
   if (!a || !b) return false;
   if (a.id === b.id) return true;
   if (a.parentSessionId === b.id || b.parentSessionId === a.id) return true;
-  if (a.parentSessionId && a.parentSessionId === b.parentSessionId) return true;
   return false;
 }
 
@@ -1348,8 +1346,8 @@ export async function sendToSession(targetSessionId: string, message: string, fr
   // Check isolated permissions
   await checkIsolatedPermission(fromSession, targetSessionId, 'send_to_session');
 
-  if ((fromSession?.isolated || targetSession?.isolated) && !isRelatedSession(fromSession, targetSession)) {
-    throw new Error('Isolated session can only communicate with parent/child sessions.');
+  if ((fromSession?.isolated || targetSession?.isolated) && fromSession && !isDirectSessionLink(fromSession, targetSession)) {
+    throw new Error('Isolated sessions can only communicate with themselves or their direct parent/child sessions.');
   }
 
   const replyTarget = fromSessionId || 'unknown-session';

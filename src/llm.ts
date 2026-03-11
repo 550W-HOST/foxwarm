@@ -804,7 +804,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         
         // Check isolated session tool permission (includes path access check for master)
         try {
-            await checkToolPermission(call.name, sessionId, nodeParam, toolArgs);
+            await checkToolPermission(call.name, sessionId, targetNode, toolArgs);
         } catch (e: any) {
             result = { error: e.message || String(e) };
         }

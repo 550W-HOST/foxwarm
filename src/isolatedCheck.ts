@@ -11,14 +11,14 @@ import * as path from 'path';
  * Check if isolated session can use a specific tool
  * @param toolName Tool name
  * @param sessionId Session ID
- * @param nodeParam Optional node parameter from tool call
+ * @param executionNode Resolved execution node for the tool call
  * @param toolArgs Tool arguments (for path-based tools)
  * @throws Error if not allowed
  */
 export async function checkToolPermission(
   toolName: string,
   sessionId: string,
-  nodeParam?: string,
+  executionNode?: string,
   toolArgs?: Record<string, any>
 ): Promise<void> {
   const session = await sessionManager.getExistingSession(sessionId);
@@ -30,22 +30,27 @@ export async function checkToolPermission(
     throw new Error(`Isolated session cannot use ${toolName} tool.`);
   }
 
-  // For tools that support node parameter, check node permission
+  // For tools that execute on a node, check node permission.
+  // Isolated sessions may still access files on master within their own
+  // agent directory, but must never run shell exec on master.
   const nodeDependentTools = ['read', 'write', 'edit', 'apply_patch', 'exec'];
-  if (nodeDependentTools.includes(toolName) && nodeParam) {
+  if (nodeDependentTools.includes(toolName) && executionNode) {
     const currentNode = session.currentNode || 'master';
-    
-    // Isolated session can only use:
-    // - master (for accessing agent-dir)
-    // - its bound node (for local execution)
-    const allowedNodes = ['master', currentNode];
-    if (!allowedNodes.includes(nodeParam)) {
-      throw new Error(`Isolated session cannot specify node "${nodeParam}". Allowed: master, ${currentNode}`);
+
+    if (toolName === 'exec' && executionNode === 'master') {
+      throw new Error('Isolated session cannot run exec on master node. Bind it to a non-master node first.');
+    }
+
+    const allowsMaster = toolName !== 'exec';
+    const allowedNodes = allowsMaster ? ['master', currentNode] : [currentNode];
+    if (!allowedNodes.includes(executionNode)) {
+      const allowedText = allowsMaster ? `master, ${currentNode}` : currentNode;
+      throw new Error(`Isolated session cannot run ${toolName} on node "${executionNode}". Allowed: ${allowedText}`);
     }
   }
   
   // Check path access for path-based tools on master
-  if (nodeParam === 'master' && toolArgs?.filePath) {
+  if (executionNode === 'master' && toolArgs?.filePath) {
     const fullPath = path.join(process.cwd(), 'agents', session.agent || 'main', toolArgs.filePath);
     checkPathAccess(fullPath, session.agent || 'main');
   }
