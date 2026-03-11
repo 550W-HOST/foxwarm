@@ -390,6 +390,15 @@ const resizeTextarea = (textarea: HTMLTextAreaElement | null) => {
   textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px'
 }
 
+const getCollapsedReasoningPreview = (thinking: string): string => {
+  const lines = thinking
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  return lines.length > 0 ? lines[lines.length - 1] : thinking.trim()
+}
+
 // ANSI color code parser
 const parseAnsi = (text: string): React.ReactNode[] => {
   const ansiRegex = /\x1b\[([0-9;]+)m/g
@@ -571,6 +580,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
   const [sessionQueueLength, setSessionQueueLength] = useState(0)
   const [expandedTool, setExpandedTool] = useState<string | null>(null)
   const [expandedSystemMessages, setExpandedSystemMessages] = useState<Set<string>>(new Set())
+  const [expandedReasoningSummaries, setExpandedReasoningSummaries] = useState<Set<string>>(new Set())
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
     return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
   })
@@ -950,16 +960,43 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
     const bodyClass = tone === 'processing'
       ? 'prose-blue dark:prose-invert prose-p:text-blue-900 dark:prose-p:text-blue-100 prose-headings:text-blue-900 dark:prose-headings:text-blue-100 prose-strong:text-blue-950 dark:prose-strong:text-white prose-li:text-blue-900 dark:prose-li:text-blue-100'
       : 'prose-slate dark:prose-invert prose-p:text-slate-700 dark:prose-p:text-slate-300 prose-headings:text-slate-800 dark:prose-headings:text-slate-200 prose-strong:text-slate-900 dark:prose-strong:text-white prose-li:text-slate-700 dark:prose-li:text-slate-300'
+    const isProcessing = tone === 'processing'
+    const isExpanded = isProcessing || expandedReasoningSummaries.has(key)
+    const collapsedPreview = getCollapsedReasoningPreview(thinking)
 
     return (
       <div key={key} className={`rounded-lg border px-3 py-2 ${containerClass}`}>
-        <div className={`mb-1 text-[11px] font-medium uppercase tracking-wide ${labelClass}`}>
-          Reasoning Summary
+        <div className="mb-1 flex items-start justify-between gap-3">
+          <div className={`text-[11px] font-medium uppercase tracking-wide ${labelClass}`}>
+            Reasoning Summary
+          </div>
+          {!isProcessing && (
+            <button
+              onClick={() => {
+                const next = new Set(expandedReasoningSummaries)
+                if (isExpanded) {
+                  next.delete(key)
+                } else {
+                  next.add(key)
+                }
+                setExpandedReasoningSummaries(next)
+              }}
+              className="shrink-0 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+            >
+              {isExpanded ? '▲ Show less' : '▼ Show more'}
+            </button>
+          )}
         </div>
-        <div
-          className={`foxwarm-markdown prose prose-sm max-w-none prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 ${bodyClass}`}
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(thinking) }}
-        />
+        {isExpanded ? (
+          <div
+            className={`foxwarm-markdown prose prose-sm max-w-none prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 ${bodyClass}`}
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(thinking) }}
+          />
+        ) : (
+          <div className="text-sm leading-6 truncate" title={collapsedPreview}>
+            {collapsedPreview}
+          </div>
+        )}
       </div>
     )
   }
