@@ -4,14 +4,14 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Message } from './types';
 import { estimateTokenCount } from './tokenCount';
-import { DB_DIR, SESSION_LOGS_DIR, getSessionArchiveLogPath } from './config';
+import { DB_DIR, OLLAMA_BASE_URL, SESSION_LOGS_DIR, getSessionArchiveLogPath } from './config';
 import { logger } from './common';
 import { formatMessageText } from './utils/messageFormat';
 
 const DB_PATH = DB_DIR;
 const TABLE_NAME = 'messages_v6';
 const CHECKPOINTS_PATH = path.join(DB_DIR, 'vector-index-checkpoints-v2.json');
-const ollama = new Ollama({ host: process.env.OLLAMA_BASE_URL || 'http://localhost:11434' });
+const ollama = new Ollama({ host: OLLAMA_BASE_URL });
 
 // Keep a conservative margin under the embedding model's real 4096-token limit
 // because estimateTokenCount() can undercount slightly on some inputs.

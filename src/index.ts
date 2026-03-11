@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import { logger } from './common';
 import { TelegramChannel } from './channels/telegramChannel';
 import { MatrixChannel } from './channels/matrixChannel';
@@ -15,25 +14,27 @@ import crypto from 'crypto';
 import path from 'path';
 import {
     AGENTS_DIR,
+    BOT_NAME,
     BASE_DIR,
+    ENABLE_TUI,
     ENABLE_TRIGGER,
     ENABLE_WEBUI,
     HTTP_PORT,
     LOGS_DIR,
+    MATRIX_CONFIG,
     MAIN_AGENT_MEMORY_DIR,
     NODE_TOKEN_FILE,
     ONBOOT_FILE,
     PERSISTENT_MEMORY_DIR,
+    TELEGRAM_CONFIG,
     TOKEN_FILE,
+    WEWORK_CONFIG,
 } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
 import { registerNodeWebSocket } from './nodeWebSocket';
 import { cleanupLegacyTopLevelLogDirs, scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
 import { initializeTimers } from './timers';
-
-// Check if TUI mode is enabled
-const ENABLE_TUI = process.env.ENABLE_TUI === 'true' || process.argv.includes('--tui');
 
 // Global error handlers
 process.on('unhandledRejection', (reason: any, promise) => {
@@ -71,7 +72,7 @@ process.on('uncaughtException', (error) => {
 });
 
 if (!ENABLE_TUI) {
-    logger.info(`Starting ${process.env.BOT_NAME || 'foxwarm'}...`);
+    logger.info(`Starting ${BOT_NAME}...`);
 }
 
 async function ensureToken(): Promise<string> {
@@ -204,12 +205,16 @@ async function start() {
     // Create message router with authorized users
     const authorizedUsers: Array<{ platform: string; userId: string }> = [];
     
-    if (process.env.ALLOWED_USER_ID) {
-        authorizedUsers.push({ platform: 'telegram', userId: process.env.ALLOWED_USER_ID });
+    const telegramAllowedUsers = TELEGRAM_CONFIG.allowedUsers || [];
+    const matrixAllowedUsers = MATRIX_CONFIG.allowedUsers || [];
+    const weworkAllowedUsers = WEWORK_CONFIG.allowedUsers || [];
+
+    for (const userId of telegramAllowedUsers) {
+        authorizedUsers.push({ platform: 'telegram', userId });
     }
     
-    if (process.env.MATRIX_USER_ID) {
-        authorizedUsers.push({ platform: 'matrix', userId: process.env.MATRIX_USER_ID });
+    if (MATRIX_CONFIG.botUserId) {
+        authorizedUsers.push({ platform: 'matrix', userId: MATRIX_CONFIG.botUserId });
     }
     
     // Always allow WebUI and TUI
@@ -217,21 +222,15 @@ async function start() {
     authorizedUsers.push({ platform: 'tui', userId: 'tui' });
     
     // Add additional Matrix users from env
-    if (process.env.MATRIX_ALLOWED_USERS) {
-        const users = process.env.MATRIX_ALLOWED_USERS.split(',').map(u => u.trim()).filter(u => u);
-        for (const user of users) {
-            authorizedUsers.push({ platform: 'matrix', userId: user });
-            logger.info({ user }, 'Added Matrix user to whitelist');
-        }
+    for (const user of matrixAllowedUsers) {
+        authorizedUsers.push({ platform: 'matrix', userId: user });
+        logger.info({ user }, 'Added Matrix user to whitelist');
     }
     
     // Add WeWork users from env
-    if (process.env.WEWORK_ALLOWED_USERS) {
-        const users = process.env.WEWORK_ALLOWED_USERS.split(',').map(u => u.trim()).filter(u => u);
-        for (const user of users) {
-            authorizedUsers.push({ platform: 'wework', userId: user });
-            logger.info({ user }, 'Added WeWork user to whitelist');
-        }
+    for (const user of weworkAllowedUsers) {
+        authorizedUsers.push({ platform: 'wework', userId: user });
+        logger.info({ user }, 'Added WeWork user to whitelist');
     }
     
     const router = new MessageRouter(authorizedUsers);
@@ -248,17 +247,17 @@ async function start() {
 
     // Start Telegram channel (if configured)
     let telegramChannel: TelegramChannel | null = null;
-    if (process.env.TELEGRAM_BOT_TOKEN) {
+    if (TELEGRAM_CONFIG.enabled !== false && TELEGRAM_CONFIG.botToken) {
         telegramChannel = await startWithRetry('telegram', async () => {
-            const channel = new TelegramChannel(process.env.TELEGRAM_BOT_TOKEN!);
+            const channel = new TelegramChannel(TELEGRAM_CONFIG.botToken!);
             channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
             channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
             await channel.start();
             registerChannel('telegram', channel);
             logger.info('Telegram channel initialized');
 
-            if (process.env.ALLOWED_USER_ID) {
-                sessionManager.attachChannel('telegram', process.env.ALLOWED_USER_ID, 'main');
+            if (TELEGRAM_CONFIG.mainAttachUser) {
+                sessionManager.attachChannel('telegram', TELEGRAM_CONFIG.mainAttachUser, 'main');
             }
 
             return channel;
@@ -275,32 +274,32 @@ async function start() {
     await initializeTimers();
 
     // Start Matrix channel (if configured)
-    if (process.env.MATRIX_HOMESERVER && process.env.MATRIX_ACCESS_TOKEN && process.env.MATRIX_USER_ID) {
+    if (MATRIX_CONFIG.enabled !== false && MATRIX_CONFIG.homeserver && MATRIX_CONFIG.accessToken && MATRIX_CONFIG.botUserId) {
         await startWithRetry('matrix', async () => {
             const matrixChannel = new MatrixChannel(
-                process.env.MATRIX_HOMESERVER!,
-                process.env.MATRIX_ACCESS_TOKEN!,
-                process.env.MATRIX_USER_ID!
+                MATRIX_CONFIG.homeserver!,
+                MATRIX_CONFIG.accessToken!,
+                MATRIX_CONFIG.botUserId!
             );
             matrixChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
             await matrixChannel.start();
             registerChannel('matrix', matrixChannel);
             logger.info('Matrix channel initialized');
 
-            sessionManager.attachChannel('matrix', process.env.MATRIX_USER_ID!, 'main');
+            sessionManager.attachChannel('matrix', MATRIX_CONFIG.botUserId!, 'main');
             return matrixChannel;
         }, { retries: 1, delayMs: 3000 });
     }
 
     // Start WeWork Webhook channel (if configured)
-    if (process.env.WEWORK_WEBHOOK_URL) {
+    if (WEWORK_CONFIG.enabled !== false && WEWORK_CONFIG.webhookUrl) {
         await startWithRetry('wework', async () => {
             const weworkChannel = new WeWorkWebhookChannel({
-                webhookUrl: process.env.WEWORK_WEBHOOK_URL!,
-                token: process.env.WEWORK_TOKEN,
-                encodingAESKey: process.env.WEWORK_ENCODING_AES_KEY,
-                listenPort: process.env.WEWORK_LISTEN_PORT ? parseInt(process.env.WEWORK_LISTEN_PORT) : undefined,
-                listenPath: process.env.WEWORK_LISTEN_PATH
+                webhookUrl: WEWORK_CONFIG.webhookUrl!,
+                token: WEWORK_CONFIG.token,
+                encodingAESKey: WEWORK_CONFIG.encodingAESKey,
+                listenPort: WEWORK_CONFIG.listenPort,
+                listenPath: WEWORK_CONFIG.listenPath
             });
             weworkChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
             await weworkChannel.start();
@@ -380,9 +379,9 @@ async function handleOnboot(telegramChannel: TelegramChannel | null) {
                 await new Promise(r => setTimeout(r, 3000));
 
                 // Send notification via Telegram if available
-                if (telegramChannel && process.env.ALLOWED_USER_ID) {
+                if (telegramChannel && TELEGRAM_CONFIG.mainAttachUser) {
                     // Don't await, let it run in background
-                    telegramChannel.sendMessage(process.env.ALLOWED_USER_ID, '📋 ONBOOT: ' + onbootContent);
+                    telegramChannel.sendMessage(TELEGRAM_CONFIG.mainAttachUser, '📋 ONBOOT: ' + onbootContent);
                 }
 
                 // Queue ONBOOT as a session event (don't await processing to avoid blocking startup)
