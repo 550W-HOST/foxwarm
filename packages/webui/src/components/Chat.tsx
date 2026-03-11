@@ -517,6 +517,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
           sessionQueueLength={sessionQueueLength}
           loading={loading}
           processingReasoningSummary={processingReasoningSummary}
+          isMobile={isMobile}
         />
         <div className="h-32" />
       </div>
