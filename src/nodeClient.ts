@@ -44,6 +44,32 @@ const NODE_CAPABILITIES = {
       }
     },
     {
+      name: 'edit',
+      description: 'Replace exact text in a file using oldText/newText.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filePath: { type: 'string' },
+          oldText: { type: 'string' },
+          newText: { type: 'string' },
+          node: { type: 'string' }
+        },
+        required: ['filePath', 'oldText', 'newText']
+      }
+    },
+    {
+      name: 'apply_patch',
+      description: 'Apply an OpenAI-style patch envelope to modify files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          input: { type: 'string' },
+          node: { type: 'string' }
+        },
+        required: ['input']
+      }
+    },
+    {
       name: 'exec',
       description: 'Execute a shell command in agent-folder.',
       parameters: {
