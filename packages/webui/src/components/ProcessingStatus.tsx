@@ -15,7 +15,7 @@ const ProcessingReasoningCard = memo(function ProcessingReasoningCard({ thinking
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       setDebouncedThinking(thinking)
-    }, 80)
+    }, 30)
 
     return () => {
       window.clearTimeout(timeout)
