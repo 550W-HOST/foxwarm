@@ -65,7 +65,47 @@ export type AppConfig = {
 
 // Base directories
 export const BASE_DIR = path.join(__dirname, '..');
-export const STATE_DIR = path.join(BASE_DIR, 'state');
+
+function expandUserPath(value: string): string {
+  if (value === '~') {
+    return process.env.HOME || value;
+  }
+
+  if (value.startsWith('~/')) {
+    const home = process.env.HOME;
+    if (home) {
+      return path.join(home, value.slice(2));
+    }
+  }
+
+  return value;
+}
+
+function resolveBaseRelativePath(value: string): string {
+  const expanded = expandUserPath(value.trim());
+  return path.isAbsolute(expanded) ? expanded : path.resolve(BASE_DIR, expanded);
+}
+
+const DATA_DIR_FILE = path.join(BASE_DIR, 'data_dir');
+
+function resolveDataRootDir(): string {
+  const envValue = process.env.FOXWARM_DATA_DIR?.trim();
+  if (envValue) {
+    return resolveBaseRelativePath(envValue);
+  }
+
+  if (fs.existsSync(DATA_DIR_FILE)) {
+    const fileValue = fs.readFileSync(DATA_DIR_FILE, 'utf8').trim();
+    if (fileValue) {
+      return resolveBaseRelativePath(fileValue);
+    }
+  }
+
+  return BASE_DIR;
+}
+
+export const DATA_ROOT_DIR = resolveDataRootDir();
+export const STATE_DIR = path.join(DATA_ROOT_DIR, 'state');
 
 const CONFIG_PATH_ENV = process.env.FOXWARM_CONFIG_PATH || process.env.CONFIG_PATH;
 export const APP_CONFIG_PATH = CONFIG_PATH_ENV
@@ -171,7 +211,7 @@ function buildConfigFromLegacyEnv(source: Record<string, string | undefined>): A
 }
 
 function migrateLegacyEnvIfNeeded(): void {
-  const legacyEnvPath = path.join(process.cwd(), '.env');
+  const legacyEnvPath = path.join(BASE_DIR, '.env');
 
   if (fs.existsSync(APP_CONFIG_PATH)) {
     if (fs.existsSync(legacyEnvPath)) {
@@ -210,7 +250,7 @@ function loadAppConfig(): AppConfig {
 
 function resolvePathValue(value: string | undefined, fallback: string): string {
   if (!value) return fallback;
-  return path.isAbsolute(value) ? value : path.resolve(BASE_DIR, value);
+  return resolveBaseRelativePath(value);
 }
 
 export const APP_CONFIG = loadAppConfig();
@@ -221,7 +261,7 @@ export const MATRIX_CONFIG: MatrixConfig = APP_CONFIG.channels?.matrix || {};
 export const WEWORK_CONFIG: WeWorkConfig = APP_CONFIG.channels?.wework || {};
 export const OLLAMA_BASE_URL = APP_CONFIG.llm?.ollamaBaseUrl || 'http://localhost:11434';
 
-export const AGENTS_DIR = resolvePathValue(APP_CONFIG.paths?.agentsDir, path.join(BASE_DIR, 'agents'));
+export const AGENTS_DIR = resolvePathValue(APP_CONFIG.paths?.agentsDir, path.join(DATA_ROOT_DIR, 'agents'));
 export const SKILLS_DIR = resolvePathValue(APP_CONFIG.paths?.skillsDir, path.join(BASE_DIR, 'skills'));
 export const WORKSPACE_DIR = AGENTS_DIR; // Legacy alias for agent-folder
 

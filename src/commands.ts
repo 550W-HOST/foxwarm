@@ -7,7 +7,7 @@ import * as sessionManager from './sessionManager'
 import * as skills from './skills'
 import * as tools from './tools'
 import { estimateSessionTokens } from './tokenCount'
-import { CONTEXT_LIMIT, COMPACT_PERCENT, resolveModelConfig } from './config'
+import { AGENTS_DIR, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, resolveModelConfig } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
 
@@ -832,7 +832,7 @@ export const COMMANDS: Record<string, CommandDef> = {
 
       switch (subcommand) {
         case 'list': {
-          const agentsDir = path.join(process.cwd(), 'agents')
+          const agentsDir = AGENTS_DIR
           
           if (!await fs.pathExists(agentsDir)) {
             ctx.reply('No agents found.')
@@ -965,7 +965,7 @@ export const COMMANDS: Record<string, CommandDef> = {
             return
           }
 
-          const agentDir = path.join(process.cwd(), 'agents', agentName)
+          const agentDir = getAgentDir(agentName)
           
           if (!await fs.pathExists(agentDir)) {
             ctx.reply(`❌ Agent "${agentName}" not found.`)

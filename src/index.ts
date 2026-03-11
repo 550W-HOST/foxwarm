@@ -16,6 +16,7 @@ import {
     AGENTS_DIR,
     BOT_NAME,
     BASE_DIR,
+    DATA_ROOT_DIR,
     ENABLE_TUI,
     ENABLE_TRIGGER,
     ENABLE_WEBUI,
@@ -114,7 +115,11 @@ async function ensureNodeToken(): Promise<string> {
 async function start() {
     // Migrate legacy pre-agent storage into agents/main if needed
     const templatesDir = path.join(BASE_DIR, 'templates', 'main', 'memory');
-    const oldWorkspacePath = path.join(BASE_DIR, 'workspace');
+    const oldWorkspacePath = path.join(DATA_ROOT_DIR, 'workspace');
+
+    if (DATA_ROOT_DIR !== BASE_DIR) {
+        logger.info(`Using experimental external data root: ${DATA_ROOT_DIR}`);
+    }
 
     // Ensure agents directory exists
     await fs.ensureDir(AGENTS_DIR);

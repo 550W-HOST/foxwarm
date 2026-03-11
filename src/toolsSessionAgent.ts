@@ -4,7 +4,7 @@ import * as sessionManager from './sessionManager';
 import * as skills from './skills';
 import * as timers from './timers';
 import { logger } from './common';
-import { COMPACT_PERCENT } from './config';
+import { AGENTS_DIR, COMPACT_PERCENT } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { requireNotIsolated, checkChannelPermission, checkTimerPermission } from './isolatedCheck';
 
@@ -122,7 +122,7 @@ export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext)
 
 export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'list_agents');
-  const agentsDir = path.join(process.cwd(), 'agents');
+  const agentsDir = AGENTS_DIR;
 
   if (!await fs.pathExists(agentsDir)) {
     return 'No agents directory found.';

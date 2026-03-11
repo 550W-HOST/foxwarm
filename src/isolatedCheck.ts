@@ -4,7 +4,7 @@
  */
 
 import * as sessionManager from './sessionManager';
-import { getAgentDir } from './config';
+import { AGENTS_DIR, getAgentDir } from './config';
 import * as path from 'path';
 
 /**
@@ -62,7 +62,7 @@ export async function checkToolPermission(
   
   // Check path access for path-based tools on master
   if (executionNode === 'master' && toolArgs?.filePath) {
-    const fullPath = path.join(process.cwd(), 'agents', session.agent || 'main', toolArgs.filePath);
+    const fullPath = path.join(getAgentDir(session.agent || 'main'), toolArgs.filePath);
     checkPathAccess(fullPath, session.agent || 'main');
   }
 }
@@ -75,9 +75,8 @@ export async function checkToolPermission(
  * @throws Error if path is not allowed
  */
 export function checkPathAccess(fullPath: string, agentName: string): void {
-  const cwd = process.cwd();
   const agentDir = getAgentDir(agentName);
-  const agentsDir = path.join(cwd, 'agents');
+  const agentsDir = AGENTS_DIR;
 
   const normalizedPath = path.normalize(fullPath);
   const normalizedAgentDir = path.normalize(agentDir);
