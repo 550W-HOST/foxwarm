@@ -1,6 +1,7 @@
 import axios, { AxiosResponse } from 'axios';
 import fs from 'fs-extra';
 import path from 'path';
+import { StringDecoder } from 'string_decoder';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, OpenAIResponsesContent, TokenUsage } from './types';
@@ -74,6 +75,7 @@ function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
 
     return new Promise((resolve, reject) => {
         let chunks = '';
+        const decoder = new StringDecoder('utf8');
 
         const cleanup = () => {
             signal.removeEventListener('abort', onAbort);
@@ -91,10 +93,13 @@ function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
         };
 
         const onData = (chunk: any) => {
-            chunks += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+            chunks += typeof chunk === 'string'
+                ? chunk
+                : decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         };
 
         const onEnd = () => {
+            chunks += decoder.end();
             cleanup();
             resolve(chunks);
         };
@@ -195,6 +200,7 @@ async function collectOpenAIResponsesStream(stream: any, session: Session, signa
         let completedResponse: any = null;
         let lastSummaryText = '';
         const summaryParts = new Map<string, string>();
+        const decoder = new StringDecoder('utf8');
 
         const cleanup = () => {
             signal.removeEventListener('abort', onAbort);
@@ -258,15 +264,13 @@ async function collectOpenAIResponsesStream(stream: any, session: Session, signa
             }
         };
 
-        const onAbort = () => {
-            try {
-                stream.destroy?.(makeAbortError());
-            } catch {}
-            finish(() => reject(makeAbortError()));
-        };
+        const appendDecodedText = (text: string) => {
+            if (!text) {
+                return;
+            }
 
-        const onData = (chunk: any) => {
-            buffer += (typeof chunk === 'string' ? chunk : chunk.toString('utf8')).replace(/\r\n/g, '\n');
+            buffer += text;
+            buffer = buffer.replace(/\r\n/g, '\n');
 
             let boundaryIndex = buffer.indexOf('\n\n');
             while (boundaryIndex !== -1) {
@@ -287,7 +291,23 @@ async function collectOpenAIResponsesStream(stream: any, session: Session, signa
             }
         };
 
+        const onAbort = () => {
+            try {
+                stream.destroy?.(makeAbortError());
+            } catch {}
+            finish(() => reject(makeAbortError()));
+        };
+
+        const onData = (chunk: any) => {
+            appendDecodedText(
+                typeof chunk === 'string'
+                    ? chunk
+                    : decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+            );
+        };
+
         const onEnd = () => {
+            appendDecodedText(decoder.end());
             finish(() => {
                 if (completedResponse) {
                     resolve(completedResponse);
