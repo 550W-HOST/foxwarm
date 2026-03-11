@@ -4,9 +4,78 @@ import { Message, Session } from './types';
 import { logger } from './common';
 import { SESSIONS_DIR, SESSIONS_FILE } from './config';
 
+const SESSION_HISTORY_STATE_FIELDS = [
+  'queue',
+  'parentSessionId',
+  'indexingState',
+  'historyVersion',
+  'displayName',
+  'currentNode',
+  'isolated',
+  'model',
+  'agent',
+  'verbose',
+  'aliases',
+  'busy',
+  'nextMessageSeq',
+] as const;
+
+const SESSION_METADATA_FIELDS = [
+  'id',
+  'agent',
+  'aliases',
+  'stats',
+  'busy',
+  'stopping',
+  'queue',
+  'meta',
+  'displayName',
+  'archived',
+  'currentNode',
+  'isolated',
+  'model',
+  'verbose',
+  'vectorIndexPosition',
+  'indexingState',
+  'historyVersion',
+  'nextMessageSeq',
+  'parentSessionId',
+] as const;
+
+function pickDefinedFields<T extends readonly string[]>(source: Record<string, any>, fields: T): Record<T[number], any> {
+  const result: Record<string, any> = {};
+
+  for (const field of fields) {
+    if (source[field] !== undefined) {
+      result[field] = source[field];
+    }
+  }
+
+  return result as Record<T[number], any>;
+}
+
+export function serializeSessionHistoryPayload(session: Session): Record<string, any> {
+  return {
+    history: session.history,
+    persistentMemorySnapshot: session.persistentMemorySnapshot,
+    ...pickDefinedFields(session as Record<string, any>, SESSION_HISTORY_STATE_FIELDS),
+  };
+}
+
+export function applySessionHistoryState(target: Session, historyData: Record<string, any>): void {
+  Object.assign(target, pickDefinedFields(historyData, SESSION_HISTORY_STATE_FIELDS));
+
+  if (target.currentNode === undefined) {
+    target.currentNode = 'master';
+  }
+
+  if (!Array.isArray(target.queue)) {
+    target.queue = [];
+  }
+}
+
 export function stripSessionMetadataForSave(session: Session): Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'> {
-  const { history, persistentMemorySnapshot, broadcast, ...metadata } = session;
-  return metadata;
+  return pickDefinedFields(session as Record<string, any>, SESSION_METADATA_FIELDS) as Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'>;
 }
 
 export function getSessionsMetadataBackupPath(index: number): string {
@@ -82,6 +151,36 @@ export function inferSessionLastMessageTime(history: Message[], historyFilePath:
   }
 }
 
+export function buildRecoveredSessionMetadata(sessionId: string, historyData: Record<string, any>, history: Message[]): Record<string, any> {
+  const recovered = pickDefinedFields(historyData, SESSION_METADATA_FIELDS);
+  const inferredAgent = historyData.agent || (sessionId.includes('/') ? sessionId.split('/').slice(0, -1).join('/') : 'main');
+  const inferredNextSeq = typeof historyData.nextMessageSeq === 'number'
+    ? historyData.nextMessageSeq
+    : Math.max(0, ...history.map((message: Message) => message?.__meta?.seq || 0)) + 1;
+
+  return {
+    ...recovered,
+    id: sessionId,
+    busy: historyData.busy ?? false,
+    queue: historyData.queue || [],
+    meta: {
+      ...(historyData.meta || {}),
+      lastMessageTime: inferSessionLastMessageTime(history, getSessionHistoryFilePath(sessionId)),
+      messageCount: history.length,
+    },
+    stats: historyData.stats || {
+      totalCachedTokens: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      lastUsage: null,
+    },
+    currentNode: historyData.currentNode || 'master',
+    agent: inferredAgent,
+    nextMessageSeq: inferredNextSeq > 0 ? inferredNextSeq : 1,
+    historyVersion: historyData.historyVersion ?? 0,
+  };
+}
+
 export async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
   const data: any = { sessions: {} };
   const historyFiles = await collectSessionHistoryFiles(SESSIONS_DIR);
@@ -91,37 +190,7 @@ export async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
       const historyData = await fs.readJson(historyFilePath);
       const sessionId = deriveSessionIdFromHistoryFile(historyFilePath);
       const history = Array.isArray(historyData.history) ? historyData.history : [];
-      const inferredAgent = historyData.agent || (sessionId.includes('/') ? sessionId.split('/').slice(0, -1).join('/') : 'main');
-      const inferredNextSeq = typeof historyData.nextMessageSeq === 'number'
-        ? historyData.nextMessageSeq
-        : Math.max(0, ...history.map((message: Message) => message?.__meta?.seq || 0)) + 1;
-
-      data.sessions[sessionId] = {
-        id: sessionId,
-        busy: historyData.busy ?? false,
-        queue: historyData.queue || [],
-        meta: {
-          lastMessageTime: inferSessionLastMessageTime(history, historyFilePath),
-          messageCount: history.length,
-        },
-        stats: {
-          totalCachedTokens: 0,
-          totalInputTokens: 0,
-          totalOutputTokens: 0,
-          lastUsage: null,
-        },
-        currentNode: historyData.currentNode || 'master',
-        agent: inferredAgent,
-        nextMessageSeq: inferredNextSeq > 0 ? inferredNextSeq : 1,
-        historyVersion: historyData.historyVersion ?? 0,
-        parentSessionId: historyData.parentSessionId,
-        displayName: historyData.displayName,
-        isolated: historyData.isolated,
-        model: historyData.model,
-        verbose: historyData.verbose,
-        aliases: historyData.aliases,
-        indexingState: historyData.indexingState,
-      };
+      data.sessions[sessionId] = buildRecoveredSessionMetadata(sessionId, historyData, history);
     } catch (e) {
       logger.warn({ err: e, historyFilePath }, 'Failed to rebuild session metadata from history file');
     }

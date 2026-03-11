@@ -15,7 +15,7 @@ import * as vector from './vector';
 import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, CHANNELS_FILE, getAgentDir } from './config';
 import * as sessionAgentOps from './sessionAgentOps';
 import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './sessionArchive';
-import { getSessionHistoryFilePath, loadSessionsMetadataSnapshot, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './sessionMetadataStore';
+import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './sessionMetadataStore';
 
 // Agent metadata storage
 interface AgentMetadata {
@@ -555,51 +555,10 @@ export async function getSession(sessionId: string): Promise<Session> {
         if (historyData.persistentMemorySnapshot) {
           session.persistentMemorySnapshot = historyData.persistentMemorySnapshot;
         }
-        if (historyData.parentSessionId !== undefined) {
-          session.parentSessionId = historyData.parentSessionId;
-        }
-        if (historyData.queue !== undefined) {
-          session.queue = historyData.queue;
-        }
-        if (historyData.historyVersion !== undefined) {
-          session.historyVersion = historyData.historyVersion;
-        }
-        if (historyData.displayName !== undefined) {
-          session.displayName = historyData.displayName;
-        }
+        applySessionHistoryState(session, historyData);
         if (historyData.indexingState) {
-          session.indexingState = historyData.indexingState;
           // Check if indexing was interrupted
           await resumeIndexingIfNeeded(sessionId, session);
-        }
-        if (historyData.displayName !== undefined) {
-          session.displayName = historyData.displayName;
-        }
-        if (historyData.currentNode !== undefined) {
-          session.currentNode = historyData.currentNode;
-        } else {
-          session.currentNode = 'master';
-        }
-        if (historyData.isolated !== undefined) {
-          session.isolated = historyData.isolated;
-        }
-        if (historyData.model !== undefined) {
-          session.model = historyData.model;
-        }
-        if (historyData.agent !== undefined) {
-          session.agent = historyData.agent;
-        }
-        if (historyData.verbose !== undefined) {
-          session.verbose = historyData.verbose;
-        }
-        if (historyData.aliases !== undefined) {
-          session.aliases = historyData.aliases;
-        }
-        if (historyData.busy !== undefined) {
-          session.busy = historyData.busy;
-        }
-        if (historyData.nextMessageSeq !== undefined) {
-          session.nextMessageSeq = historyData.nextMessageSeq;
         }
         logger.info({ sessionId: realId, messageCount: session.history.length }, 'Session history loaded from file');
       } catch (e) {
@@ -1320,23 +1279,7 @@ export async function saveSession(sessionId: string): Promise<void> {
     // Save history, persistentMemorySnapshot, parentSessionId, indexingState, historyVersion, displayName, currentNode, agent to separate file
     const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
     await fs.ensureDir(path.dirname(historyFile));
-    await fs.writeJson(historyFile, { 
-      history: session.history,
-      queue: session.queue,
-      persistentMemorySnapshot: session.persistentMemorySnapshot,
-      parentSessionId: session.parentSessionId,
-      indexingState: session.indexingState,
-      historyVersion: session.historyVersion,
-      displayName: session.displayName,
-      currentNode: session.currentNode,
-      isolated: session.isolated,
-      model: session.model,
-      agent: session.agent,
-      verbose: session.verbose,
-      aliases: session.aliases,
-      busy: session.busy,
-      nextMessageSeq: session.nextMessageSeq
-    }, { spaces: 2 });
+    await fs.writeJson(historyFile, serializeSessionHistoryPayload(session), { spaces: 2 });
     
     // Save metadata (lightweight operation)
     await saveSessionsMetadata();
