@@ -8,6 +8,7 @@ import {
   Code,
   FileJson,
   Menu,
+  Brain,
   BookOpen,
   Pencil,
   Wrench,
@@ -494,6 +495,7 @@ const parseAnsi = (text: string): React.ReactNode[] => {
 }
 
 const toolIcons: Record<string, LucideIcon> = {
+  reasoning: Brain,
   read: BookOpen,
   write: Pencil,
   edit: Pencil,
@@ -737,11 +739,31 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
     return names
   }
 
+  const groupHasReasoningSummary = (startIdx: number) => {
+    for (let i = startIdx; i < messages.length; i++) {
+      const m = messages[i]
+
+      if (m.role !== 'model' && m.role !== 'tool') break
+      if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
+
+      if (m.parts.some((p: any) => !!p.thinking && p.thinking.trim())) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  const getToolGroupSummaryTags = (startIdx: number) => {
+    const names = getToolGroupNames(startIdx)
+    return groupHasReasoningSummary(startIdx) ? ['reasoning', ...names] : names
+  }
+
   const shouldRenderToolGroupSummary = (idx: number) => {
     if (verbose) return false
     const startIdx = getToolGroupStartIdx(idx)
     if (idx !== startIdx) return false
-    const names = getToolGroupNames(startIdx)
+    const names = getToolGroupSummaryTags(startIdx)
     return names.length > 0
   }
 
@@ -967,8 +989,15 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
     return (
       <div key={key} className={`rounded-lg border px-3 py-2 ${containerClass}`}>
         <div className="mb-1 flex items-start justify-between gap-3">
-          <div className={`text-[11px] font-medium uppercase tracking-wide ${labelClass}`}>
-            Reasoning Summary
+          <div className={`min-w-0 flex-1 text-[11px] font-medium uppercase tracking-wide ${labelClass}`}>
+            <div className="flex min-w-0 items-baseline gap-2">
+              <span className="shrink-0">Reasoning</span>
+              {!isExpanded && (
+                <span className="min-w-0 flex-1 truncate normal-case text-sm font-normal tracking-normal" title={collapsedPreview}>
+                  {collapsedPreview}
+                </span>
+              )}
+            </div>
           </div>
           {!isProcessing && (
             <button
@@ -992,11 +1021,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
             className={`foxwarm-markdown prose prose-sm max-w-none prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 ${bodyClass}`}
             dangerouslySetInnerHTML={{ __html: renderMarkdown(thinking) }}
           />
-        ) : (
-          <div className="text-sm leading-6 truncate" title={collapsedPreview}>
-            {collapsedPreview}
-          </div>
-        )}
+        ) : null}
       </div>
     )
   }
@@ -2511,7 +2536,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
   }
 
   const renderToolGroupSummary = (idx: number) => {
-    const toolNames = getToolGroupNames(getToolGroupStartIdx(idx))
+    const toolNames = getToolGroupSummaryTags(getToolGroupStartIdx(idx))
     if (toolNames.length === 0) return null
 
     return (
@@ -2818,6 +2843,9 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                         return renderInlineMetaPart(formatStructuredSystemText(part.system), messageKey, false)
                       }
                       if (part.thinking) {
+                        if (!verbose && shouldRenderToolGroupSummary(idx) && !expandedToolGroups.has(getToolGroupKey(idx))) {
+                          return null
+                        }
                         return renderReasoningSummaryCard(part.thinking, messageKey)
                       }
 
