@@ -351,12 +351,14 @@ const isSystemLikeText = (text: string): boolean => (
 
 const isLightweightStructuredSystem = (system: string): boolean => (
   system.startsWith('FROM:') ||
+  system.startsWith('The following message is a direct user message via channel;') ||
   system.startsWith('current time =') ||
   system.startsWith('current session ID =')
 )
 
 const isLightweightSystemTextLine = (text: string): boolean => (
   text.startsWith('[FROM:') ||
+  text.startsWith('[SYSTEM: The following message is a direct user message via channel;') ||
   text.startsWith('[SYSTEM: current time') ||
   text.startsWith('[SYSTEM: current session ID =')
 )
