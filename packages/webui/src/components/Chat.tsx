@@ -717,8 +717,9 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
 
   const getToolGroupKey = (idx: number) => `${getToolGroupStartIdx(idx)}-toolgroup`
 
-  // Get all tool names in a group starting from startIdx
-  const getToolGroupNames = (startIdx: number) => {
+  // Get the merged summary tag sequence for a tool group, preserving the order
+  // of reasoning summaries and tool calls as they appear in the message stream.
+  const getToolGroupSummaryTags = (startIdx: number) => {
     const names: string[] = []
     
     for (let i = startIdx; i < messages.length; i++) {
@@ -730,33 +731,17 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
       // Stop at model messages with text (except the start message)
       if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
       
-      // Collect function call names
       m.parts.forEach((p: any) => {
-        if (p.functionCall) names.push(p.functionCall.name)
+        if (p.thinking && p.thinking.trim()) {
+          names.push('reasoning')
+        }
+        if (p.functionCall) {
+          names.push(p.functionCall.name)
+        }
       })
     }
     
     return names
-  }
-
-  const groupHasReasoningSummary = (startIdx: number) => {
-    for (let i = startIdx; i < messages.length; i++) {
-      const m = messages[i]
-
-      if (m.role !== 'model' && m.role !== 'tool') break
-      if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
-
-      if (m.parts.some((p: any) => !!p.thinking && p.thinking.trim())) {
-        return true
-      }
-    }
-
-    return false
-  }
-
-  const getToolGroupSummaryTags = (startIdx: number) => {
-    const names = getToolGroupNames(startIdx)
-    return groupHasReasoningSummary(startIdx) ? ['reasoning', ...names] : names
   }
 
   const shouldRenderToolGroupSummary = (idx: number) => {
@@ -770,7 +755,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
   const isInToolGroup = (idx: number) => {
     if (verbose) return false
     const startIdx = getToolGroupStartIdx(idx)
-    return getToolGroupNames(startIdx).length > 0
+    return getToolGroupSummaryTags(startIdx).length > 0
   }
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
