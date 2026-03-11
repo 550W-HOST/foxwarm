@@ -718,7 +718,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
   const getToolGroupKey = (idx: number) => `${getToolGroupStartIdx(idx)}-toolgroup`
 
   // Get the merged summary tag sequence for a tool group, preserving the order
-  // of reasoning summaries and tool calls as they appear in the message stream.
+  // of hidden reasoning summaries and tool calls as they appear in the message stream.
   const getToolGroupSummaryTags = (startIdx: number) => {
     const names: string[] = []
     
@@ -732,7 +732,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
       if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
       
       m.parts.forEach((p: any) => {
-        if (p.thinking && p.thinking.trim()) {
+        if (p.thinking && p.thinking.trim() && !hasTextContent(m)) {
           names.push('reasoning')
         }
         if (p.functionCall) {
@@ -2828,7 +2828,7 @@ export default function Chat({ sessionId, sessionDisplayName, onBack, themeMode,
                         return renderInlineMetaPart(formatStructuredSystemText(part.system), messageKey, false)
                       }
                       if (part.thinking) {
-                        if (!verbose && shouldRenderToolGroupSummary(idx) && !expandedToolGroups.has(getToolGroupKey(idx))) {
+                        if (!verbose && !hasTextContent(msg) && isInToolGroup(idx) && !expandedToolGroups.has(getToolGroupKey(idx))) {
                           return null
                         }
                         return renderReasoningSummaryCard(part.thinking, messageKey)
