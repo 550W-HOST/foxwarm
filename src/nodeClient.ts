@@ -14,6 +14,124 @@ interface NodeClientOptions {
   token: string;
 }
 
+const NODE_CAPABILITIES = {
+  tools: [
+    {
+      name: 'read',
+      description: 'Read a file from agent-folder.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filePath: { type: 'string' },
+          node: { type: 'string' },
+          startLine: { type: 'number' },
+          endLine: { type: 'number' }
+        },
+        required: ['filePath']
+      }
+    },
+    {
+      name: 'write',
+      description: 'Write a file to agent-folder.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filePath: { type: 'string' },
+          content: { type: 'string' },
+          overwrite: { type: 'boolean' }
+        },
+        required: ['filePath', 'content']
+      }
+    },
+    {
+      name: 'exec',
+      description: 'Execute a shell command in agent-folder.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string' }
+        },
+        required: ['command']
+      }
+    },
+    {
+      name: 'browse_open',
+      description: 'Open a new browser tab and navigate to URL. Returns tab ID for future operations.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string' },
+          node: { type: 'string' }
+        },
+        required: ['url']
+      }
+    },
+    {
+      name: 'browse_list',
+      description: 'List all open browser tabs with their IDs, titles, and URLs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          node: { type: 'string' }
+        }
+      }
+    },
+    {
+      name: 'browse_get',
+      description: 'Get content or screenshot from a browser tab.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tabId: { type: 'string' },
+          node: { type: 'string' },
+          screenshot: { type: ['boolean', 'string'], default: false }
+        },
+        required: ['tabId']
+      }
+    },
+    {
+      name: 'browse_close',
+      description: 'Close a browser tab.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tabId: { type: 'string' },
+          node: { type: 'string' }
+        },
+        required: ['tabId']
+      }
+    },
+    {
+      name: 'browse_interact',
+      description: 'Interact with a browser tab. Supports: click, type, fill, press, scroll, wait, evaluate, goto, back, forward, reload.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tabId: { type: 'string' },
+          action: {
+            type: 'string',
+            enum: ['click', 'type', 'fill', 'press', 'scroll', 'wait', 'evaluate', 'goto', 'back', 'forward', 'reload']
+          },
+          node: { type: 'string' },
+          params: {
+            type: 'object',
+            properties: {
+              selector: { type: 'string' },
+              text: { type: 'string' },
+              key: { type: 'string' },
+              y: { type: 'number' },
+              url: { type: 'string' },
+              code: { type: 'string' },
+              timeout: { type: 'number' }
+            }
+          }
+        },
+        required: ['tabId', 'action']
+      }
+    }
+  ]
+};
+
 class NodeClient {
   private ws: WebSocket | null = null;
   private host: string;
@@ -48,13 +166,7 @@ class NodeClient {
       this.send({
         type: 'node_register',
         nodeType: 'sandbox',
-        capabilities: {
-          tools: [
-            { name: 'read', description: 'Read a file from agent-folder.', parameters: { type: 'object', properties: { filePath: { type: 'string' }, node: { type: 'string' }, startLine: { type: 'number' }, endLine: { type: 'number' } }, required: ['filePath'] } },
-            { name: 'write', description: 'Write a file to agent-folder.', parameters: { type: 'object', properties: { filePath: { type: 'string' }, content: { type: 'string' }, overwrite: { type: 'boolean' } }, required: ['filePath', 'content'] } },
-            { name: 'exec', description: 'Execute a shell command in agent-folder.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } }
-          ]
-        }
+        capabilities: NODE_CAPABILITIES
       });
     });
     
