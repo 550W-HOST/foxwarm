@@ -14,6 +14,7 @@ const EPHEMERAL_SYSTEM_PREFIXES = [
   'current time =',
   'current session ID =',
   'FROM:',
+  'The following message is a direct user message via channel;',
   'Channel is in push-only mode.',
 ];
 

@@ -49,7 +49,6 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
               customNodeId || undefined
             );
             nodeRegistered = true;
-            logger.info({ nodeId, nodeType, toolCount: capabilities.tools.length }, 'Node registered with capabilities');
             break;
           }
           case 'tool_call_response':

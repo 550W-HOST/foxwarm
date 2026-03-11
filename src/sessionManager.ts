@@ -1040,20 +1040,34 @@ function findAttachedChannel(
 }
 
 function parseSourceSystemPart(system?: string): { platform: string; channelUserId: string } | undefined {
-  if (!system?.startsWith('FROM: ')) return undefined;
+  if (!system) return undefined;
 
-  const raw = system.slice('FROM: '.length);
-  const firstColon = raw.indexOf(':');
-  if (firstColon === -1) return undefined;
+  if (system.startsWith('FROM: ')) {
+    const raw = system.slice('FROM: '.length);
+    const firstColon = raw.indexOf(':');
+    if (firstColon === -1) return undefined;
 
-  const platform = raw.slice(0, firstColon);
-  let channelUserId = raw.slice(firstColon + 1);
+    const platform = raw.slice(0, firstColon);
+    let channelUserId = raw.slice(firstColon + 1);
 
-  const userInfoMatch = channelUserId.match(/^(.*)\s\([^)]*\)$/);
-  if (userInfoMatch) {
-    channelUserId = userInfoMatch[1];
+    const userInfoMatch = channelUserId.match(/^(.*)\s\([^)]*\)$/);
+    if (userInfoMatch) {
+      channelUserId = userInfoMatch[1];
+    }
+
+    if (!platform || !channelUserId) return undefined;
+    return { platform, channelUserId };
   }
 
+  const channelIdMatch = system.match(/channel_id:\s*`([^`]+)`/);
+  if (!channelIdMatch) return undefined;
+
+  const rawChannelId = channelIdMatch[1];
+  const firstColon = rawChannelId.indexOf(':');
+  if (firstColon === -1) return undefined;
+
+  const platform = rawChannelId.slice(0, firstColon);
+  const channelUserId = rawChannelId.slice(firstColon + 1);
   if (!platform || !channelUserId) return undefined;
   return { platform, channelUserId };
 }
@@ -1076,7 +1090,7 @@ export function getChannelBySession(sessionId: string): { platform: string; chan
         const msg = session.history[i];
         if (msg.role !== 'user') continue;
 
-        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && part.system.startsWith('FROM: '));
+        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && (part.system.startsWith('FROM: ') || part.system.includes('channel_id: `')));
         const parsedChannel = parseSourceSystemPart(sourcePart?.system);
         const attachedChannel = findAttachedChannel(channels, parsedChannel);
         if (attachedChannel) {
@@ -1410,8 +1424,8 @@ export async function sendToSession(targetSessionId: string, message: string, fr
 
   const replyTarget = fromSessionId || 'unknown-session';
   const prefix = fromSessionId
-    ? `[SYSTEM: Following message is from session \`${fromSessionId}\`, not direct end-user input. If you need to reply, use send_to_session({sessionId: \`${replyTarget}\`, message: "..."}).]`
-    : '[SYSTEM: Following message is system-delivered session content, not direct end-user input.]';
+    ? `[SYSTEM: The following message is an inter-agent message from another session, not from the direct user; source_session_id: \`${fromSessionId}\`; reply_via: send_to_session({sessionId: \`${replyTarget}\`, message: "..."}).]`
+    : '[SYSTEM: The following message is system-delivered session content, not from the direct user.]';
 
   const combinedText = message
     ? `${prefix}\n${message}`

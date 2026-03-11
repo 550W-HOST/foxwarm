@@ -47,8 +47,9 @@ export class MessageRouter {
     }
 
     const systemParts: MessagePart[] = [];
-    const userInfo = source.username ? ` (${source.username})` : '';
-    systemParts.push({ system: `FROM: ${source.platform}:${source.channelUserId}${userInfo}` });
+    const channelId = `${source.platform}:${source.channelUserId}`;
+    const senderInfo = source.username ? `; sender: \`${source.username}\`` : '';
+    systemParts.push({ system: `The following message is a direct user message via channel; channel_id: \`${channelId}\`; channel_type: \`${source.platform}\`${senderInfo}` });
 
     // Push-only channel notice
     if (source.channelUserId) {
@@ -258,7 +259,7 @@ export class MessageRouter {
       if (msg.parts?.some(p => p.text === 'NO_ACTION')) {
         hasNoAction = true;
       }
-      if (msg.parts?.some(p => typeof p.system === 'string' && p.system.startsWith('FROM:'))) {
+      if (msg.parts?.some(p => typeof p.system === 'string' && (p.system.startsWith('FROM:') || p.system.startsWith('The following message is a direct user message via channel;')))) {
         hasUserFromPrefix = true;
       }
       if (msg.role === 'user') {
