@@ -245,25 +245,6 @@ async function start() {
         tuiChannel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
     }
 
-    // Start Telegram channel (if configured)
-    let telegramChannel: TelegramChannel | null = null;
-    if (TELEGRAM_CONFIG.enabled !== false && TELEGRAM_CONFIG.botToken) {
-        telegramChannel = await startWithRetry('telegram', async () => {
-            const channel = new TelegramChannel(TELEGRAM_CONFIG.botToken!);
-            channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-            channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
-            await channel.start();
-            registerChannel('telegram', channel);
-            logger.info('Telegram channel initialized');
-
-            if (TELEGRAM_CONFIG.mainAttachUser) {
-                sessionManager.attachChannel('telegram', TELEGRAM_CONFIG.mainAttachUser, 'main');
-            }
-
-            return channel;
-        }, { retries: 3, delayMs: 5000 });
-    }
-
     // Set up session event callbacks (for background processes, child sessions, etc.)
     sessionManager.setSessionTriggerCallback(
         (sessionId) => {
@@ -272,42 +253,6 @@ async function start() {
     );
 
     await initializeTimers();
-
-    // Start Matrix channel (if configured)
-    if (MATRIX_CONFIG.enabled !== false && MATRIX_CONFIG.homeserver && MATRIX_CONFIG.accessToken && MATRIX_CONFIG.botUserId) {
-        await startWithRetry('matrix', async () => {
-            const matrixChannel = new MatrixChannel(
-                MATRIX_CONFIG.homeserver!,
-                MATRIX_CONFIG.accessToken!,
-                MATRIX_CONFIG.botUserId!
-            );
-            matrixChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-            await matrixChannel.start();
-            registerChannel('matrix', matrixChannel);
-            logger.info('Matrix channel initialized');
-
-            sessionManager.attachChannel('matrix', MATRIX_CONFIG.botUserId!, 'main');
-            return matrixChannel;
-        }, { retries: 1, delayMs: 3000 });
-    }
-
-    // Start WeWork Webhook channel (if configured)
-    if (WEWORK_CONFIG.enabled !== false && WEWORK_CONFIG.webhookUrl) {
-        await startWithRetry('wework', async () => {
-            const weworkChannel = new WeWorkWebhookChannel({
-                webhookUrl: WEWORK_CONFIG.webhookUrl!,
-                token: WEWORK_CONFIG.token,
-                encodingAESKey: WEWORK_CONFIG.encodingAESKey,
-                listenPort: WEWORK_CONFIG.listenPort,
-                listenPath: WEWORK_CONFIG.listenPath
-            });
-            weworkChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-            await weworkChannel.start();
-            registerChannel('wework', weworkChannel);
-            logger.info('WeWork Webhook channel initialized');
-            return weworkChannel;
-        }, { retries: 1, delayMs: 3000 });
-    }
 
     // Start unified HTTP server (WebUI + Trigger + Nodes)
     let webuiChannel: WebUIChannel | null = null;
@@ -352,6 +297,57 @@ async function start() {
         logger.info('HTTP server disabled (both WebUI and Trigger are disabled)');
     }
 
+    const telegramChannelPromise: Promise<TelegramChannel | null> = (TELEGRAM_CONFIG.enabled !== false && TELEGRAM_CONFIG.botToken)
+        ? startWithRetry('telegram', async () => {
+            const channel = new TelegramChannel(TELEGRAM_CONFIG.botToken!);
+            channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
+            channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
+            await channel.start();
+            registerChannel('telegram', channel);
+            logger.info('Telegram channel initialized');
+
+            if (TELEGRAM_CONFIG.mainAttachUser) {
+                sessionManager.attachChannel('telegram', TELEGRAM_CONFIG.mainAttachUser, 'main');
+            }
+
+            return channel;
+        }, { retries: 3, delayMs: 5000 })
+        : Promise.resolve(null);
+
+    if (MATRIX_CONFIG.enabled !== false && MATRIX_CONFIG.homeserver && MATRIX_CONFIG.accessToken && MATRIX_CONFIG.botUserId) {
+        void startWithRetry('matrix', async () => {
+            const matrixChannel = new MatrixChannel(
+                MATRIX_CONFIG.homeserver!,
+                MATRIX_CONFIG.accessToken!,
+                MATRIX_CONFIG.botUserId!
+            );
+            matrixChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
+            await matrixChannel.start();
+            registerChannel('matrix', matrixChannel);
+            logger.info('Matrix channel initialized');
+
+            sessionManager.attachChannel('matrix', MATRIX_CONFIG.botUserId!, 'main');
+            return matrixChannel;
+        }, { retries: 1, delayMs: 3000 });
+    }
+
+    if (WEWORK_CONFIG.enabled !== false && WEWORK_CONFIG.webhookUrl) {
+        void startWithRetry('wework', async () => {
+            const weworkChannel = new WeWorkWebhookChannel({
+                webhookUrl: WEWORK_CONFIG.webhookUrl!,
+                token: WEWORK_CONFIG.token,
+                encodingAESKey: WEWORK_CONFIG.encodingAESKey,
+                listenPort: WEWORK_CONFIG.listenPort,
+                listenPath: WEWORK_CONFIG.listenPath
+            });
+            weworkChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
+            await weworkChannel.start();
+            registerChannel('wework', weworkChannel);
+            logger.info('WeWork Webhook channel initialized');
+            return weworkChannel;
+        }, { retries: 1, delayMs: 3000 });
+    }
+
     logger.info('Foxwarm started successfully');
 
     // Resume busy sessions after restart (must be after callback is set)
@@ -361,7 +357,7 @@ async function start() {
     scheduleLogRotation();
 
     // Handle ONBOOT.md
-    await handleOnboot(telegramChannel);
+    await handleOnboot(telegramChannelPromise);
     
     // In TUI mode, keep the process running
     if (ENABLE_TUI) {
@@ -370,7 +366,7 @@ async function start() {
     }
 }
 
-async function handleOnboot(telegramChannel: TelegramChannel | null) {
+async function handleOnboot(telegramChannelPromise: Promise<TelegramChannel | null>) {
     try {
         if (await fs.pathExists(ONBOOT_FILE)) {
             const onbootContent = await fs.readFile(ONBOOT_FILE, 'utf8');
@@ -378,10 +374,18 @@ async function handleOnboot(telegramChannel: TelegramChannel | null) {
                 logger.info('ONBOOT.md found, triggering auto-run after 3 seconds...');
                 await new Promise(r => setTimeout(r, 3000));
 
-                // Send notification via Telegram if available
-                if (telegramChannel && TELEGRAM_CONFIG.mainAttachUser) {
-                    // Don't await, let it run in background
-                    telegramChannel.sendMessage(TELEGRAM_CONFIG.mainAttachUser, '📋 ONBOOT: ' + onbootContent);
+                // Send notification via Telegram if available.
+                // The telegram channel may still be starting in the background.
+                if (TELEGRAM_CONFIG.mainAttachUser) {
+                    void telegramChannelPromise.then((telegramChannel) => {
+                        if (!telegramChannel) {
+                            return;
+                        }
+
+                        return telegramChannel.sendMessage(TELEGRAM_CONFIG.mainAttachUser!, '📋 ONBOOT: ' + onbootContent);
+                    }).catch((err: Error) => {
+                        logger.error({ err }, 'Failed to send ONBOOT notification via Telegram');
+                    });
                 }
 
                 // Queue ONBOOT as a session event (don't await processing to avoid blocking startup)
