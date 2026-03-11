@@ -322,8 +322,11 @@ export class MessageRouter {
   private async handleCommandIfNeeded(ctx: ChannelContext, messageText: string): Promise<boolean> {
     if (!this.commandHandler) return false;
 
-    // If channel allows all group members, disable commands
-    if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(ctx.platform, ctx.channelUserId) && !this.isAuthorized(ctx.platform, ctx.channelUserId, ctx.senderId)) {
+    // When allow-all-group-members is enabled, keep command access for directly
+    // authorized users only. Other group members may chat normally but cannot use
+    // slash commands.
+    if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(ctx.platform, ctx.channelUserId)
+      && !this.isDirectlyAuthorized(ctx.platform, ctx.channelUserId, ctx.senderId)) {
       return false;
     }
 
@@ -520,18 +523,22 @@ export class MessageRouter {
     this.commandHandler = handler;
   }
 
+  private isDirectlyAuthorized(platform: string, channelUserId: string, senderId?: string): boolean {
+    if (platform === 'internal') return true;
+    if (platform === 'webui') return true;
+
+    const checkId = (platform === 'wework' && senderId) ? senderId : channelUserId;
+    return this.authorizedUsers.has(`${platform}:${checkId}`);
+  }
+
   isAuthorized(platform: string, channelUserId: string, senderId?: string): boolean {
-    if (platform === 'internal') return true; // Child sessions always authorized
-    if (platform === 'webui') return true; // WebUI always authorized (uses sessionId as channelUserId)
+    if (this.isDirectlyAuthorized(platform, channelUserId, senderId)) return true;
     
     // Check if channel allows all group members
     if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(platform, channelUserId)) {
       return true;
     }
-    
-    // wecom 平台使用 senderId（用户ID）进行权限检查，而不是 channelUserId（chatId）
-    const checkId = (platform === 'wework' && senderId) ? senderId : channelUserId;
-    if (this.authorizedUsers.has(`${platform}:${checkId}`)) return true;
+
     return false;
   }
 
