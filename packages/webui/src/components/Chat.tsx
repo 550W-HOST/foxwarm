@@ -401,8 +401,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
 
   return (
     <div className="flex flex-col h-full">
-      <div className="sticky top-0 z-30 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4">
-        <div className="flex items-center justify-between">
+      <div className="sticky top-0 z-30 h-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4">
+        <div className="flex h-full items-center justify-between">
           <div className="flex items-center space-x-3 min-w-0">
             {isMobile && onBack && (
               <button
@@ -525,7 +525,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       {showScrollTopButton && (
         <button
           onClick={scrollToTop}
-          className="absolute right-6 top-24 z-10 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
+          className="fixed right-6 top-24 z-30 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
           aria-label="Scroll to top"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -537,7 +537,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       {showScrollButton && (
         <button
           onClick={scrollToBottom}
-          className="absolute right-6 bottom-24 z-10 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
+          className="fixed right-6 bottom-[10.5rem] z-30 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
           aria-label="Scroll to bottom"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
