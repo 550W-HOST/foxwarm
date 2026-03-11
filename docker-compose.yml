@@ -23,6 +23,12 @@ services:
     ports:
       - "${HTTP_PORT:-3001}:3001"
     volumes:
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
       - ./state:/app/state
       - ./agents:/app/agents
       - ./skills:/app/skills
