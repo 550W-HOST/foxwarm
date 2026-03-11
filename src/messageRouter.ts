@@ -527,7 +527,7 @@ export class MessageRouter {
     if (platform === 'internal') return true;
     if (platform === 'webui') return true;
 
-    const checkId = (platform === 'wework' && senderId) ? senderId : channelUserId;
+    const checkId = senderId || channelUserId;
     return this.authorizedUsers.has(`${platform}:${checkId}`);
   }
 

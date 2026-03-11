@@ -50,7 +50,19 @@ export class TelegramChannel implements Channel {
     this.bot.on('text', async (ctx) => {
       if (ctx.message.from.is_bot) return;
 
-      const text = ctx.message.text;
+      let text = ctx.message.text;
+
+      if (text.startsWith('/')) {
+        const commandToken = text.split(' ')[0];
+        const mentionIndex = commandToken.indexOf('@');
+        if (mentionIndex !== -1) {
+          const mention = commandToken.slice(mentionIndex + 1).toLowerCase();
+          const botUsername = (ctx.botInfo?.username || '').toLowerCase();
+          if (botUsername && mention === botUsername) {
+            text = commandToken.slice(0, mentionIndex) + text.slice(commandToken.length);
+          }
+        }
+      }
 
       // Check if it's a command
       if (text.startsWith('/') && this.commandHandler) {
@@ -69,8 +81,8 @@ export class TelegramChannel implements Channel {
 
       const channelCtx = this.makeChannelContext(ctx);
       const message: ChannelMessage = {
-        parts: [{ text: ctx.message.text }],
-        channelUserId: ctx.from.id.toString(),
+        parts: [{ text }],
+        channelUserId: ctx.chat.id.toString(),
         username: ctx.from.username
       };
 
@@ -96,7 +108,7 @@ export class TelegramChannel implements Channel {
       const channelCtx = this.makeChannelContext(ctx);
       const message: ChannelMessage = {
         parts,
-        channelUserId: ctx.from.id.toString(),
+        channelUserId: ctx.chat.id.toString(),
         username: ctx.from.username
       };
 
@@ -122,7 +134,7 @@ export class TelegramChannel implements Channel {
         const channelCtx = this.makeChannelContext(ctx);
         const message: ChannelMessage = {
           parts,
-          channelUserId: ctx.from.id.toString(),
+          channelUserId: ctx.chat.id.toString(),
           username: ctx.from.username
         };
 
@@ -134,7 +146,7 @@ export class TelegramChannel implements Channel {
         const channelCtx = this.makeChannelContext(ctx);
         const message: ChannelMessage = {
           parts,
-          channelUserId: ctx.from.id.toString(),
+          channelUserId: ctx.chat.id.toString(),
           username: ctx.from.username
         };
 
@@ -145,9 +157,10 @@ export class TelegramChannel implements Channel {
 
   private makeChannelContext(ctx: any): ChannelContext {
     return {
-      channelUserId: ctx.from.id.toString(),
+      channelUserId: ctx.chat.id.toString(),
       username: ctx.from.username,
       platform: this.platform,
+      senderId: ctx.from.id.toString(),
       reply: (text: string, options?: any) => {
         const opts = options || {};
         if (!opts.parse_mode) {
