@@ -43,6 +43,19 @@ class NodeClient {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
+
+      // Register node with capabilities
+      this.send({
+        type: 'node_register',
+        nodeType: 'sandbox',
+        capabilities: {
+          tools: [
+            { name: 'read', description: 'Read a file from agent-folder.', parameters: { type: 'object', properties: { filePath: { type: 'string' }, node: { type: 'string' }, startLine: { type: 'number' }, endLine: { type: 'number' } }, required: ['filePath'] } },
+            { name: 'write', description: 'Write a file to agent-folder.', parameters: { type: 'object', properties: { filePath: { type: 'string' }, content: { type: 'string' }, overwrite: { type: 'boolean' } }, required: ['filePath', 'content'] } },
+            { name: 'exec', description: 'Execute a shell command in agent-folder.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } }
+          ]
+        }
+      });
     });
     
     this.ws.on('message', async (data: Buffer) => {

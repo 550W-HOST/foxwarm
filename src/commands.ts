@@ -1371,7 +1371,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: false,
     handler: async (ctx, args) => {
       if (args.length === 0) {
-        ctx.reply('Usage: /channel mode <push-only|normal>')
+        ctx.reply('Usage: /channel mode <push-only|normal>\n       /channel dangerously-allow-all-group-members <yes|no>')
         return
       }
 
@@ -1398,8 +1398,28 @@ export const COMMANDS: Record<string, CommandDef> = {
         } catch (e: any) {
           ctx.reply(`❌ Failed to set channel mode: ${e.message}`)
         }
+      } else if (subcommand === 'dangerously-allow-all-group-members') {
+        if (args.length < 2) {
+          // Show current setting
+          const currentValue = sessionManager.getChannelDangerouslyAllowAllGroupMembers(ctx.platform, ctx.channelUserId)
+          ctx.reply(`Current dangerouslyAllowAllGroupMembers: *${currentValue ? 'yes' : 'no'}*\nUsage: /channel dangerously-allow-all-group-members <yes|no>`)
+          return
+        }
+
+        const value = args[1].toLowerCase()
+        if (value !== 'yes' && value !== 'no') {
+          ctx.reply('Invalid value. Use: yes or no')
+          return
+        }
+
+        try {
+          sessionManager.setChannelDangerouslyAllowAllGroupMembers(ctx.platform, ctx.channelUserId, value === 'yes')
+          ctx.reply(`✅ dangerouslyAllowAllGroupMembers set to *${value}*`)
+        } catch (e: any) {
+          ctx.reply(`❌ Failed to set dangerouslyAllowAllGroupMembers: ${e.message}`)
+        }
       } else {
-        ctx.reply('Unknown subcommand. Usage: /channel mode <push-only|normal>')
+        ctx.reply('Unknown subcommand. Usage: /channel mode <push-only|normal>\n       /channel dangerously-allow-all-group-members <yes|no>')
       }
     }
   }

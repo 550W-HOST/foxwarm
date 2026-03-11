@@ -9,6 +9,7 @@ import { nodesManager } from './nodesManager';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { loadSkillDocuments } from './skills';
+import { checkToolPermission, checkPathAccess } from './isolatedCheck';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -807,18 +808,33 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         // Check if tool has node parameter
         const nodeParam = call.args?.node;
         const sessionId = toolContext.sessionId || 'main';
+        
+        // Get current node for this session
         const currentNode = await nodesManager.getCurrentNode(sessionId) || 'master';
-
+        
         // Determine target node: explicit node param > current node > master.
-        // Treat literal "current" as an alias for the session's current node,
-        // since models sometimes emit node:"current" from schema wording.
         const targetNode = normalizeRequestedNode(nodeParam, currentNode);
         
         // Remove node parameter from args before execution
         const toolArgs = { ...call.args };
         delete toolArgs.node;
         
-        if (targetNode !== 'master') {
+        // Check isolated session tool permission (includes path access check for master)
+        try {
+            await checkToolPermission(call.name, sessionId, targetNode, toolArgs);
+        } catch (e: any) {
+            result = { error: e.message || String(e) };
+        }
+        
+        if (result?.error) {
+            // Skip tool execution if permission check failed
+        } else {
+        
+        // Tools that must run on master (node management tools, timers)
+        const masterOnlyTools = ['remote_node', 'list_nodes', 'node_tools', 'list_timers', 'delete_timer'];
+        const forceMaster = masterOnlyTools.includes(call.name);
+        
+        if (targetNode !== 'master' && !forceMaster) {
             // Execute on remote node
             try {
                 result = normalizeToolResult(await nodesManager.executeTool(targetNode, call.name, toolArgs, sessionId));
@@ -835,6 +851,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         } else {
             result = { error: `Unknown tool: ${call.name}` };
         }
+        } // End if (result?.error)
 
         result = consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
 

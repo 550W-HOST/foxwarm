@@ -6,6 +6,7 @@ import * as timers from './timers';
 import { logger } from './common';
 import { COMPACT_PERCENT } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
+import { requireNotIsolated, checkChannelPermission } from './isolatedCheck';
 
 interface ToolContext {
   sessionId?: string;
@@ -33,6 +34,7 @@ function formatTimerSummary(timer: timers.TimerView): string {
 }
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
+  await requireNotIsolated(ctx, 'create_child_session');
   const { suffix, fork = true, message, node, isolated } = args;
 
   if (!ctx || !ctx.sessionId) {
@@ -60,7 +62,7 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
   return `Message sent to session \`${sessionId}\``;
 }
 
-export async function tool_send_to_channel(args: ToolArgs) {
+export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
   const { channelId, message } = args;
   if (!channelId || typeof channelId !== 'string') {
     throw new Error('channelId is required (format: platform:userId)');
@@ -69,11 +71,17 @@ export async function tool_send_to_channel(args: ToolArgs) {
     throw new Error('message is required');
   }
 
+  // Check isolated session channel permission
+  if (ctx?.sessionId) {
+    await checkChannelPermission(ctx.sessionId, channelId);
+  }
+
   await sessionManager.sendToChannelById(channelId, message);
   return `Message sent to channel \`${channelId}\``;
 }
 
-export async function tool_list_sessions(args: ToolArgs = {}) {
+export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'list_sessions');
   const sessions = sessionManager.listSessions();
 
   if (sessions.length === 0) {
@@ -112,7 +120,8 @@ export async function tool_list_sessions(args: ToolArgs = {}) {
   return result;
 }
 
-export async function tool_list_agents() {
+export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'list_agents');
   const agentsDir = path.join(process.cwd(), 'agents');
 
   if (!await fs.pathExists(agentsDir)) {
@@ -182,7 +191,8 @@ export async function tool_list_skills() {
   return result;
 }
 
-export async function tool_attach_agent_skill(args: ToolArgs) {
+export async function tool_attach_agent_skill(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'attach_agent_skill');
   const { agentName, skillName } = args;
 
   if (!agentName || typeof agentName !== 'string') {
@@ -207,7 +217,8 @@ export async function tool_attach_agent_skill(args: ToolArgs) {
   return message;
 }
 
-export async function tool_detach_agent_skill(args: ToolArgs) {
+export async function tool_detach_agent_skill(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'detach_agent_skill');
   const { agentName, skillName } = args;
 
   if (!agentName || typeof agentName !== 'string') {
@@ -232,7 +243,8 @@ export async function tool_detach_agent_skill(args: ToolArgs) {
   return message;
 }
 
-export async function tool_load_skill(args: ToolArgs) {
+export async function tool_load_skill(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'load_skill');
   const { skillName } = args;
 
   if (!skillName || typeof skillName !== 'string') {
@@ -259,7 +271,8 @@ export async function tool_load_skill(args: ToolArgs) {
   return result.trimEnd();
 }
 
-export async function tool_get_session_messages(args: ToolArgs) {
+export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'get_session_messages');
   const { sessionId, start, count, previewLength = 100 } = args;
 
   const session = await sessionManager.getExistingSession(sessionId);
@@ -297,6 +310,7 @@ export async function tool_get_session_messages(args: ToolArgs) {
 }
 
 export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
+  await requireNotIsolated(ctx, 'delete_session');
   const { sessionId } = args;
 
   if (ctx && ctx.sessionId === sessionId) {
@@ -506,6 +520,7 @@ export async function tool_delete_timer(args: ToolArgs, ctx: ToolContext) {
 }
 
 export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
+  await requireNotIsolated(ctx, 'create_agent');
   const {
     agentName,
     inheritMemory = false,
@@ -561,6 +576,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
 }
 
 export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
+  await requireNotIsolated(ctx, 'create_session');
   const { agentName, sessionName, displayName, parentSessionId } = args;
 
   if (!agentName || typeof agentName !== 'string') {
@@ -589,7 +605,8 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   return message;
 }
 
-export async function tool_set_agent_inherit(args: ToolArgs) {
+export async function tool_set_agent_inherit(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'set_agent_inherit');
   const { agentName, inheritAgentName } = args;
 
   if (!agentName || typeof agentName !== 'string') {

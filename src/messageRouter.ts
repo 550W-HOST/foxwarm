@@ -322,6 +322,11 @@ export class MessageRouter {
   private async handleCommandIfNeeded(ctx: ChannelContext, messageText: string): Promise<boolean> {
     if (!this.commandHandler) return false;
 
+    // If channel allows all group members, disable commands
+    if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(ctx.platform, ctx.channelUserId) && !this.isAuthorized(ctx.platform, ctx.channelUserId, ctx.senderId)) {
+      return false;
+    }
+
     const mentionCommandRegex = /^(?:@[a-zA-Z_\-.]+\s+)?(\/[a-zA-Z_\-.]+)(?:\s+(.*))?$/s;
     const commandMatch = messageText.match(mentionCommandRegex);
     if (!commandMatch) return false;
@@ -518,6 +523,12 @@ export class MessageRouter {
   isAuthorized(platform: string, channelUserId: string, senderId?: string): boolean {
     if (platform === 'internal') return true; // Child sessions always authorized
     if (platform === 'webui') return true; // WebUI always authorized (uses sessionId as channelUserId)
+    
+    // Check if channel allows all group members
+    if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(platform, channelUserId)) {
+      return true;
+    }
+    
     // wecom 平台使用 senderId（用户ID）进行权限检查，而不是 channelUserId（chatId）
     const checkId = (platform === 'wework' && senderId) ? senderId : channelUserId;
     if (this.authorizedUsers.has(`${platform}:${checkId}`)) return true;
