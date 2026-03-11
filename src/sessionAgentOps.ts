@@ -332,8 +332,12 @@ export async function moveSessionToTarget(options: {
 
   const oldRealId = sourceSession.id;
 
-  if (newSessionId && newSessionId.includes('/')) {
-    throw new Error('newSessionId cannot contain "/" character.');
+  if (newSessionId !== undefined) {
+    validateSessionName(newSessionId);
+  }
+
+  if (newAgentName !== undefined) {
+    validateAgentName(newAgentName);
   }
 
   let targetAgent: string;

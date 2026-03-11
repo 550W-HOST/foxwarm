@@ -72,6 +72,30 @@ function parseTimerMessage(tokens: string[]): string {
   return tokens.join(' ')
 }
 
+function parseSessionMoveTarget(rawTarget: string): { newSessionId: string; newAgentName?: string } {
+  const target = rawTarget.trim()
+
+  if (!target) {
+    throw new Error('Missing move target.')
+  }
+
+  const slashCount = (target.match(/\//g) || []).length
+  if (slashCount === 0) {
+    sessionManager.validateSessionName(target)
+    return { newSessionId: target }
+  }
+
+  if (slashCount !== 1) {
+    throw new Error('Move target must be `<new-session-id>` or `<existing-agent>/<new-session-id>`.')
+  }
+
+  const [newAgentName, newSessionId] = target.split('/')
+  sessionManager.validateAgentName(newAgentName)
+  sessionManager.validateSessionName(newSessionId)
+
+  return { newAgentName, newSessionId }
+}
+
 async function handleCompactCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) {
   if (!sessionId || !session) return
   if (session.history.length === 0) {
@@ -350,7 +374,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         resp += '`/session update-snapshot [session-id]` - Refresh session prompt snapshot\n'
         resp += '`/session isolated [on|off] [node]` - Toggle isolated mode\n'
         resp += '`/session index` - Index messages to vector database\n'
-        resp += '`/session move [agent/]<new-session-id>` - Move/rename session\n'
+        resp += '`/session move <new-session-id>|<existing-agent>/<new-session-id>` - Move/rename session\n'
         resp += '`/session parent <parent-session-id> [child-session-id]` - Set parent session\n'
         resp += '`/session unparent [child-session-id]` - Remove parent session\n'
         resp += '`/session archive [session-id]` - Archive session (default: current)\n'
@@ -631,16 +655,18 @@ export const COMMANDS: Record<string, CommandDef> = {
             return
           }
           if (subArgs.length === 0) {
-            ctx.reply('Usage: /session move [agent/]<new-session-id>\nExample: /session move my-project\nExample: /session move my-agent/main')
+            ctx.reply('Usage: /session move <new-session-id>|<existing-agent>/<new-session-id>\nExample: /session move my-project\nExample: /session move my-agent/main\nNote: /session move only renames the current session or moves it to an existing agent. It does not create agents.')
             return
           }
 
           const targetId = subArgs[0]
           
           try {
+            const { newSessionId, newAgentName } = parseSessionMoveTarget(targetId)
             await tools.move_session({ 
               sessionId: sessionId,
-              newSessionId: targetId 
+              newSessionId,
+              newAgentName,
             }, { 
               session,
               sessionId: sessionId,

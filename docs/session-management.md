@@ -15,7 +15,8 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 /session create <agent> <session>
 /session fork
 /session rename <name>
-/session move [agent/]<new-session-id>
+/session move <new-session-id>
+/session move <existing-agent>/<new-session-id>
 /session clear
 /session delete <sessionId>
 /session archive [session-id]
@@ -38,6 +39,12 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 /agent inherit <agent> <parent-agent|none>
 /skill list
 ```
+
+`/session move` 说明：
+
+- `/session move my-project`：在当前 agent 内重命名当前 session
+- `/session move my-agent/main`：把当前 session 移动到**已存在的** agent `my-agent` 下，并改名为 `main`
+- 该命令**不会创建 agent**；如果目标 agent 不存在，请先用 `/agent create`
 
 ## 持久化结构
 
