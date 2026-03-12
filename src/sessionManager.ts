@@ -7,15 +7,15 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, SessionStreamEvent } from './types';
 import { logger } from './common';
-import { getChannelInstance } from './channel';
 import * as llm from './llm';
 import { getSkillInfo, validateSkillName } from './skills';
 import { estimateSessionTokens } from './tokenCount';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, CHANNELS_FILE, getAgentDir } from './config';
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, getAgentDir } from './config';
 import * as sessionAgentOps from './sessionAgentOps';
 import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './sessionArchive';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './sessionMetadataStore';
+import * as sessionChannels from './sessionChannels';
 
 // Agent metadata storage
 interface AgentMetadata {
@@ -364,45 +364,10 @@ export async function getExistingSession(sessionId: string): Promise<Session | n
   return null;
 }
 
-// Channel attachment: channelKey (platform:userId) -> { sessionId, mode }
-export type ChannelMode = 'push-only' | undefined;
-interface ChannelConfig { 
-  sessionId: string; 
-  mode?: ChannelMode;
-  dangerouslyAllowAllGroupMembers?: boolean; // 允许所有群聊成员发送消息（但不执行命令）
-}
-const channelAttachments = new Map<string, ChannelConfig>();
+export type ChannelMode = sessionChannels.ChannelMode;
 
 // Callback to trigger agent turn
 let onSessionTriggered: ((sessionId: string) => void) | null = null;
-
-async function saveChannels(): Promise<void> {
-  try {
-    const data: any = { channels: {} };
-    for (const [channelKey, config] of channelAttachments.entries()) {
-      data.channels[channelKey] = config;
-    }
-    await fs.writeJson(CHANNELS_FILE, data, { spaces: 2 });
-  } catch (e) {
-    logger.error(e, 'Failed to save channels');
-  }
-}
-
-async function loadChannels(): Promise<void> {
-  if (await fs.pathExists(CHANNELS_FILE)) {
-    try {
-      const data = await fs.readJson(CHANNELS_FILE);
-      if (data.channels) {
-        for (const [channelKey, config] of Object.entries(data.channels)) {
-          channelAttachments.set(channelKey, config as ChannelConfig);
-        }
-      }
-      logger.info({ attachmentCount: channelAttachments.size }, 'Channels loaded');
-    } catch (e) {
-      logger.error(e, 'Failed to load channels');
-    }
-  }
-}
 
 // Callback when history is updated (for SSE broadcasting)
 let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = null;
@@ -499,10 +464,6 @@ export async function prepareSessionForDestructiveAction(sessionId: string): Pro
     abortedInFlight,
     droppedQueueItems,
   };
-}
-
-function makeChannelKey(platform: string, channelUserId: string): string {
-  return `${platform}:${channelUserId}`;
 }
 
 export function generateSessionId(): string {
@@ -618,6 +579,14 @@ export async function createSession(sessionId: string, sessionData: any): Promis
   logger.info({ sessionId }, 'Session created');
 }
 
+async function saveChannels(): Promise<void> {
+  await sessionChannels.saveChannels();
+}
+
+async function loadChannels(): Promise<void> {
+  await sessionChannels.loadChannels();
+}
+
 export const validateAgentName = sessionAgentOps.validateAgentName;
 export const validateSessionName = sessionAgentOps.validateSessionName;
 
@@ -710,71 +679,39 @@ export async function moveSessionToTarget(options: {
  * @returns The session ID
  */
 export function attachChannel(platform: string, channelUserId: string, sessionId?: string): string {
-  const channelKey = makeChannelKey(platform, channelUserId);
-
   if (!sessionId) {
     sessionId = generateSessionId();
   }
 
-  channelAttachments.set(channelKey, { sessionId });
-  saveChannels().catch(err => logger.error({ err }, 'Failed to save channels'));
-  logger.info({ platform, channelUserId, sessionId }, 'Channel attached to session');
-  return sessionId;
+  return sessionChannels.attachChannel(platform, channelUserId, sessionId);
 }
 
 export function getSessionByChannel(platform: string, channelUserId: string): string | undefined {
-  const channelKey = makeChannelKey(platform, channelUserId);
-  return channelAttachments.get(channelKey)?.sessionId;
+  return sessionChannels.getSessionByChannel(platform, channelUserId);
 }
 
-export function getChannelConfig(platform: string, channelUserId: string): ChannelConfig | undefined {
-  const channelKey = makeChannelKey(platform, channelUserId);
-  return channelAttachments.get(channelKey);
+export function getChannelConfig(platform: string, channelUserId: string): sessionChannels.ChannelConfig | undefined {
+  return sessionChannels.getChannelConfig(platform, channelUserId);
 }
 
 export function setChannelMode(platform: string, channelUserId: string, mode: ChannelMode | undefined) {
-  const channelKey = makeChannelKey(platform, channelUserId);
-  const existing = channelAttachments.get(channelKey);
-  if (!existing) {
-    throw new Error(`Channel ${channelKey} not attached`);
-  }
-  channelAttachments.set(channelKey, { ...existing, mode });
-  saveChannels().catch(err => logger.error({ err }, 'Failed to save channels'));
+  sessionChannels.setChannelMode(platform, channelUserId, mode);
 }
 
 export function getChannelDangerouslyAllowAllGroupMembers(platform: string, channelUserId: string): boolean {
-  const channelKey = makeChannelKey(platform, channelUserId);
-  return channelAttachments.get(channelKey)?.dangerouslyAllowAllGroupMembers ?? false;
+  return sessionChannels.getChannelDangerouslyAllowAllGroupMembers(platform, channelUserId);
 }
 
 export function setChannelDangerouslyAllowAllGroupMembers(platform: string, channelUserId: string, value: boolean) {
-  const channelKey = makeChannelKey(platform, channelUserId);
-  const existing = channelAttachments.get(channelKey);
-  if (!existing) {
-    throw new Error(`Channel ${channelKey} not attached`);
-  }
-  channelAttachments.set(channelKey, { ...existing, dangerouslyAllowAllGroupMembers: value });
-  saveChannels().catch(err => logger.error({ err }, 'Failed to save channels'));
+  sessionChannels.setChannelDangerouslyAllowAllGroupMembers(platform, channelUserId, value);
 }
 
 export function detachChannel(platform: string, channelUserId: string): void {
-  const channelKey = makeChannelKey(platform, channelUserId);
-  channelAttachments.delete(channelKey);
-  saveChannels().catch(err => logger.error({ err }, 'Failed to save channels'));
-  logger.info({ platform, channelUserId }, 'Channel detached from session');
+  sessionChannels.detachChannel(platform, channelUserId);
 }
 
 export async function sendToChannelById(channelId: string, message: string): Promise<void> {
-  const [platform, ...rest] = channelId.split(':');
-  const channelUserId = rest.join(':');
-  if (!platform || !channelUserId) {
-    throw new Error('Invalid channelId format. Use platform:userId');
-  }
-  const channel = getChannelInstance(platform);
-  if (!channel) {
-    throw new Error(`Channel platform "${platform}" not found`);
-  }
-  await channel.sendMessage(channelUserId, message);
+  await sessionChannels.sendToChannelById(channelId, message);
 }
 
 /**
@@ -785,54 +722,14 @@ export function setupSessionBroadcast(sessionId: string): void {
   const session = sessions.get(sessionId);
   if (!session) return;
 
-  const broadcast: SessionReply = (text: string, options?: any) => {
-    const channels = getChannelsBySession(sessionId);
-    const excludePlatforms = options?.excludePlatforms || [];
-    logger.debug({ sessionId, channelCount: channels.length, excludePlatforms, textPreview: text.substring(0, 50) }, 'Broadcasting message');
-
-    for (const channelInfo of channels) {
-      if (excludePlatforms.includes(channelInfo.platform)) {
-        logger.debug({ platform: channelInfo.platform, channelUserId: channelInfo.channelUserId }, 'Skipping excluded platform');
-        continue;
-      }
-
-      const channelConfig = getChannelConfig(channelInfo.platform, channelInfo.channelUserId);
-      if (channelConfig?.mode === 'push-only') {
-        logger.debug({ platform: channelInfo.platform, channelUserId: channelInfo.channelUserId, sessionId }, 'Skipping push-only channel during broadcast');
-        continue;
-      }
-
-      const channel = getChannelInstance(channelInfo.platform);
-      if (channel) {
-        logger.debug({ platform: channelInfo.platform, channelUserId: channelInfo.channelUserId }, 'Calling channel.sendMessage');
-        channel.sendMessage(channelInfo.channelUserId, text, options)?.catch((e: any) => {
-          logger.error({ err: e, platform: channelInfo.platform, channelUserId: channelInfo.channelUserId }, 'Failed to broadcast message');
-        });
-      } else {
-        logger.debug({ platform: channelInfo.platform }, 'Channel instance not found');
-      }
-    }
-  };
-
-  session.broadcast = broadcast;
+  session.broadcast = sessionChannels.createSessionBroadcast(sessionId);
 }
 
 /**
  * Get all channels attached to a session
  */
 export function getChannelsBySession(sessionId: string): Array<{ platform: string; channelUserId: string }> {
-  const channels: { platform: string; channelUserId: string }[] = [];
-  for (const [channelKey, info] of channelAttachments.entries()) {
-    if (info.sessionId === sessionId) {
-      const separatorIndex = channelKey.indexOf(':');
-      if (separatorIndex === -1) continue;
-
-      const platform = channelKey.slice(0, separatorIndex);
-      const channelUserId = channelKey.slice(separatorIndex + 1);
-      channels.push({ platform, channelUserId });
-    }
-  }
-  return channels;
+  return sessionChannels.getChannelsBySession(sessionId);
 }
 
 export function getChildSessionIds(parentSessionId: string): string[] {
@@ -841,79 +738,8 @@ export function getChildSessionIds(parentSessionId: string): string[] {
     .map(([sessionId]) => sessionId);
 }
 
-function findAttachedChannel(
-  channels: Array<{ platform: string; channelUserId: string }>,
-  target?: { platform: string; channelUserId: string }
-): { platform: string; channelUserId: string } | undefined {
-  if (!target) return undefined;
-  return channels.find(channel => (
-    channel.platform === target.platform &&
-    channel.channelUserId === target.channelUserId
-  ));
-}
-
-function parseSourceSystemPart(system?: string): { platform: string; channelUserId: string } | undefined {
-  if (!system) return undefined;
-
-  if (system.startsWith('FROM: ')) {
-    const raw = system.slice('FROM: '.length);
-    const firstColon = raw.indexOf(':');
-    if (firstColon === -1) return undefined;
-
-    const platform = raw.slice(0, firstColon);
-    let channelUserId = raw.slice(firstColon + 1);
-
-    const userInfoMatch = channelUserId.match(/^(.*)\s\([^)]*\)$/);
-    if (userInfoMatch) {
-      channelUserId = userInfoMatch[1];
-    }
-
-    if (!platform || !channelUserId) return undefined;
-    return { platform, channelUserId };
-  }
-
-  const channelIdMatch = system.match(/channel_id:\s*`([^`]+)`/);
-  if (!channelIdMatch) return undefined;
-
-  const rawChannelId = channelIdMatch[1];
-  const firstColon = rawChannelId.indexOf(':');
-  if (firstColon === -1) return undefined;
-
-  const platform = rawChannelId.slice(0, firstColon);
-  const channelUserId = rawChannelId.slice(firstColon + 1);
-  if (!platform || !channelUserId) return undefined;
-  return { platform, channelUserId };
-}
-
 export function getChannelBySession(sessionId: string): { platform: string; channelUserId: string } | undefined {
-  const channels = getChannelsBySession(sessionId);
-
-  if (channels.length === 0) return undefined;
-  if (channels.length === 1) return channels[0];
-
-  const session = sessions.get(sessionId);
-  if (session) {
-    const lastChannel = findAttachedChannel(channels, session.meta?.lastChannel);
-    if (lastChannel) {
-      return lastChannel;
-    }
-
-    if (session.history.length > 0) {
-      for (let i = session.history.length - 1; i >= 0; i--) {
-        const msg = session.history[i];
-        if (msg.role !== 'user') continue;
-
-        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && (part.system.startsWith('FROM: ') || part.system.includes('channel_id: `')));
-        const parsedChannel = parseSourceSystemPart(sourcePart?.system);
-        const attachedChannel = findAttachedChannel(channels, parsedChannel);
-        if (attachedChannel) {
-          return attachedChannel;
-        }
-      }
-    }
-  }
-
-  return channels[0];
+  return sessionChannels.getChannelBySession(sessionId, sessions.get(sessionId));
 }
 
 /**
@@ -1369,14 +1195,10 @@ export async function loadSessions(): Promise<void> {
 
     // Load channel attachments (migrated to channels.json)
     if (data.channelAttachments) {
-      for (const channelKey in data.channelAttachments) {
-        const sessionId = data.channelAttachments[channelKey];
-        channelAttachments.set(channelKey, { sessionId });
-      }
-      await saveChannels();
+      await sessionChannels.importLegacyChannelAttachments(data.channelAttachments);
     }
 
-    logger.info({ sessionCount: sessions.size, attachmentCount: channelAttachments.size }, 'Session metadata loaded');
+    logger.info({ sessionCount: sessions.size, attachmentCount: sessionChannels.getAllAttachments().size }, 'Session metadata loaded');
   } catch (e) {
     logger.error(e, 'Failed to load sessions');
   }
@@ -1620,8 +1442,8 @@ export function getAllSessions(): Map<string, Session> {
   return sessions;
 }
 
-export function getAllAttachments(): Map<string, ChannelConfig> {
-  return channelAttachments;
+export function getAllAttachments(): Map<string, sessionChannels.ChannelConfig> {
+  return sessionChannels.getAllAttachments();
 }
 
 /**
@@ -1798,12 +1620,7 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
   sessions.delete(sessionId);
   
   // Remove channel attachments
-  for (const [key, info] of channelAttachments.entries()) {
-    if (info.sessionId === sessionId) {
-      channelAttachments.delete(key);
-    }
-  }
-  saveChannels().catch(err => logger.error({ err }, 'Failed to save channels'));
+  sessionChannels.detachChannelsForSession(sessionId);
   
   // Delete session file
   const sessionFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
