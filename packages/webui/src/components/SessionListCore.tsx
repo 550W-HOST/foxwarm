@@ -4,6 +4,7 @@ import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2 } from '
 
 export interface Session {
   id: string
+  agent?: string
   messageCount: number
   lastMessageTime: number
   parentSessionId: string | null
@@ -13,6 +14,8 @@ export interface Session {
   queueLength?: number
   displayName?: string
   archived?: boolean
+  currentNode?: string
+  isolated?: boolean
 }
 
 interface SessionListCoreProps {

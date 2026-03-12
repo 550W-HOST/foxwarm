@@ -1,15 +1,24 @@
-import { Plus } from 'lucide-react'
+import { GitBranch, Plus } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 
 interface SessionListProps {
   sessions: Session[]
   currentSession?: string
+  currentView: 'chat' | 'architecture'
   onSelectSession: (sessionId: string) => void
+  onSelectArchitecture: () => void
   onCreateSession: () => void
 }
 
-export default function SessionList({ sessions, currentSession, onSelectSession, onCreateSession }: SessionListProps) {
+export default function SessionList({
+  sessions,
+  currentSession,
+  currentView,
+  onSelectSession,
+  onSelectArchitecture,
+  onCreateSession,
+}: SessionListProps) {
   return (
     <div className="fixed inset-0 bg-gray-100 dark:bg-gray-900 flex flex-col">
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
@@ -26,6 +35,17 @@ export default function SessionList({ sessions, currentSession, onSelectSession,
             <Plus className="w-6 h-6 text-gray-600 dark:text-gray-400" />
           </button>
         </div>
+        <button
+          onClick={onSelectArchitecture}
+          className={`mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition-colors ${
+            currentView === 'architecture'
+              ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700'
+          }`}
+        >
+          <GitBranch className="w-4 h-4" />
+          <span>Architecture overview</span>
+        </button>
       </div>
       
       <div className="flex-1 overflow-y-auto" data-session-list-scroll-container>

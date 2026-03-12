@@ -157,6 +157,7 @@ export class WebUIChannel implements Channel {
             const sessions = Array.from(allSessions.entries())
               .map(([id, session]) => ({
                 id,
+                agent: session.agent || 'main',
                 messageCount: session.meta?.messageCount ?? session.history.length,
                 lastMessageTime: session.meta?.lastMessageTime ?? (session.history.length > 0 
                   ? session.history[session.history.length - 1].__meta?.timestamp || 0
@@ -167,7 +168,9 @@ export class WebUIChannel implements Channel {
                 busy: session.busy || false,
                 queueLength: session.queue?.length || 0,
                 displayName: session.displayName || null,
-                archived: session.archived || false
+                archived: session.archived || false,
+                currentNode: session.currentNode || 'master',
+                isolated: session.isolated || false,
               }))
               .sort((a, b) => b.lastMessageTime - a.lastMessageTime); // Sort by lastMessageTime descending
             res.json({ sessions });

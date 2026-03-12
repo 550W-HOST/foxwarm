@@ -1,25 +1,36 @@
 import { useState, useEffect, useRef } from 'react'
 import Chat from './components/Chat'
+import ArchitectureView from './components/ArchitectureView'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
+import type { Session } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
+type AppView = 'chat' | 'architecture'
 
 const LIGHT_THEME_COLOR = '#f3f4f6'
 const DARK_THEME_COLOR = '#111827'
+const ARCHITECTURE_HASH = '__architecture__'
+
+const getHashState = (): { view: AppView; sessionId: string } => {
+  const hash = decodeURIComponent(window.location.hash.slice(1))
+
+  if (!hash || hash.startsWith('token=')) {
+    return { view: 'chat', sessionId: 'main' }
+  }
+
+  if (hash === ARCHITECTURE_HASH) {
+    return { view: 'architecture', sessionId: 'main' }
+  }
+
+  return { view: 'chat', sessionId: hash }
+}
 
 function App() {
-  const [sessions, setSessions] = useState<any[]>([])
-  const [currentSession, setCurrentSession] = useState<string>(() => {
-    // Read from hash on initial load
-    const hash = window.location.hash.slice(1) // Remove #
-    // Ignore token parameter
-    if (hash.startsWith('token=')) {
-      return 'main'
-    }
-    return hash || 'main'
-  })
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [currentView, setCurrentView] = useState<AppView>(() => getHashState().view)
+  const [currentSession, setCurrentSession] = useState<string>(() => getHashState().sessionId)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [showSessionList, setShowSessionList] = useState<boolean>(() => {
     // Show session list if no hash (mobile only)
@@ -159,14 +170,20 @@ function App() {
   // Listen for hash changes
   useEffect(() => {
     const handleHashChange = () => {
-      const hash = window.location.hash.slice(1)
-      if (hash && !hash.startsWith('token=')) {
-        setCurrentSession(hash)
+      const nextState = getHashState()
+
+      if (window.location.hash) {
+        setCurrentView(nextState.view)
+        setCurrentSession(nextState.sessionId)
         if (isMobile) {
           setShowSessionList(false)
         }
-      } else if (isMobile) {
-        setShowSessionList(true)
+      } else {
+        setCurrentView('chat')
+        setCurrentSession('main')
+        if (isMobile) {
+          setShowSessionList(true)
+        }
       }
     }
     window.addEventListener('hashchange', handleHashChange)
@@ -186,8 +203,17 @@ function App() {
   }
 
   const handleSelectSession = (sessionId: string) => {
-    window.location.hash = sessionId
+    window.location.hash = encodeURIComponent(sessionId)
+    setCurrentView('chat')
     setCurrentSession(sessionId)
+    if (isMobile) {
+      setShowSessionList(false)
+    }
+  }
+
+  const handleSelectArchitecture = () => {
+    window.location.hash = ARCHITECTURE_HASH
+    setCurrentView('architecture')
     if (isMobile) {
       setShowSessionList(false)
     }
@@ -260,10 +286,26 @@ function App() {
       return <SessionList 
         sessions={sessions} 
         currentSession={currentSession}
+        currentView={currentView}
         onSelectSession={handleSelectSession}
+        onSelectArchitecture={handleSelectArchitecture}
         onCreateSession={handleCreateSession}
       />
     }
+
+    if (currentView === 'architecture') {
+      return (
+        <div className="fixed inset-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
+          <ArchitectureView
+            sessions={sessions}
+            currentSession={currentSession}
+            onSelectSession={handleSelectSession}
+            onBack={handleBackToList}
+          />
+        </div>
+      )
+    }
+
     return (
       <div className="fixed inset-0 bg-gray-100 dark:bg-gray-900 overflow-hidden">
         <Chat 
@@ -284,18 +326,28 @@ function App() {
       <Sidebar 
         sessions={sessions}
         currentSession={currentSession}
+        currentView={currentView}
         onSelectSession={handleSelectSession}
+        onSelectArchitecture={handleSelectArchitecture}
         onCreateSession={handleCreateSession}
       />
       <div className="flex-1 h-screen overflow-hidden">
-        <Chat 
-          key={currentSession}
-          sessionId={currentSession}
-          sessionDisplayName={currentSessionRecord?.displayName}
-          onBack={handleBackToList}
-          themeMode={themeMode}
-          onThemeChange={setThemeMode}
-        />
+        {currentView === 'architecture' ? (
+          <ArchitectureView
+            sessions={sessions}
+            currentSession={currentSession}
+            onSelectSession={handleSelectSession}
+          />
+        ) : (
+          <Chat 
+            key={currentSession}
+            sessionId={currentSession}
+            sessionDisplayName={currentSessionRecord?.displayName}
+            onBack={handleBackToList}
+            themeMode={themeMode}
+            onThemeChange={setThemeMode}
+          />
+        )}
       </div>
     </div>
   )
