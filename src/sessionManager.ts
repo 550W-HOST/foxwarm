@@ -1799,12 +1799,22 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
     system: 'COMPACTION STARTED: PAUSE YOUR WORK before compation done. Please summarize the entire session history above concisely NOW. Preserve key information and important context. The earlier part of the session will be removed to save space. Update memory if needed.'
   };
 
-  try {
-    const beforeCompactIndex = session.history.length;
+  let beforeCompactIndex = session.history.length;
 
+  try {
     // Don't change snapshot and history before compacting LLM request,
     // to prevent recomputing whole history.
-    await llm.chat([summaryPrompt], session, 0);
+    const result = await llm.chat([summaryPrompt], session, 0);
+
+    if (!result.text?.trim()) {
+      throw new Error('Compaction summary is empty.');
+    }
+    if (result.text.trim().startsWith('Error:')) {
+      throw new Error(`Compaction summary failed: ${result.text.trim()}`);
+    }
+    if (result.toolCalls && result.toolCalls.length > 0) {
+      throw new Error('Compaction summary unexpectedly produced tool calls.');
+    }
 
     const summaryConversation = session.history.slice(beforeCompactIndex);
     if (summaryConversation.length < 2 /* summary system message + summary */) {
@@ -1813,7 +1823,12 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
 
     await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, completionMarker);
   } catch (e) {
+    if (session.history.length > beforeCompactIndex) {
+      session.history = session.history.slice(0, beforeCompactIndex);
+      await saveSession(sessionId);
+    }
     logger.error(e, 'Compaction failed');
+    throw e;
   }
 }
 
