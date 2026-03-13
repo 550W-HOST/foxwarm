@@ -328,6 +328,210 @@ const getToolResponseStatus = (resp: FunctionResponse): 'success' | 'error' => {
   return 'success'
 }
 
+const getToolPairStatus = (responses: FunctionResponse[], imageParts: MessagePart[] = []): 'success' | 'error' | 'neutral' => {
+  if (responses.some((resp) => getToolResponseStatus(resp) === 'error')) {
+    return 'error'
+  }
+  if (responses.length > 0 || imageParts.length > 0) {
+    return 'success'
+  }
+  return 'neutral'
+}
+
+const formatSingleLinePreview = (text: string, maxLength = 200): string => {
+  const normalized = text.replace(/\s*\n\s*/g, ' ↵ ').trim()
+  if (!normalized) return ''
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized
+}
+
+const renderToolCallPreview = (call: FunctionCall): ReactNode => {
+  if (call.name === 'read') {
+    const extra = (call.args.startLine || call.args.endLine)
+      ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
+      : ''
+    return <span title={`${call.args.filePath}${extra}`}>{call.args.filePath}{extra}</span>
+  }
+
+  if (call.name === 'write') {
+    return <span title={call.args.filePath}>{call.args.filePath}</span>
+  }
+
+  if (call.name === 'edit') {
+    const hasLegacyDiff = typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
+    const oldLines = hasLegacyDiff ? call.args.oldText.split('\n').length - (call.args.oldText.endsWith('\n') ? 1 : 0) : 0
+    const newLines = hasLegacyDiff ? call.args.newText.split('\n').length - (call.args.newText.endsWith('\n') ? 1 : 0) : 0
+    return (
+      <span className="flex items-center gap-2 min-w-0">
+        {hasLegacyDiff ? (
+          <span className="shrink-0 text-xs"><span className="text-orange-600 dark:text-orange-400">-{oldLines}</span><span className="mx-1 text-gray-500">/</span><span className="text-blue-600 dark:text-blue-400">+{newLines}</span></span>
+        ) : (
+          <span className="shrink-0 text-xs text-gray-500">legacy payload unavailable</span>
+        )}
+        <span className="truncate">{call.args.filePath}</span>
+      </span>
+    )
+  }
+
+  if (call.name === 'apply_patch') {
+    try {
+      const operations = parseApplyPatchPreview(call.args.input)
+      const totalHunks = operations.reduce((sum, operation) => sum + (operation.action === 'update' ? operation.hunks.length : 0), 0)
+      const fileSummary = operations.length === 1 ? operations[0].filePath : `${operations[0].filePath} +${operations.length - 1} more`
+      return (
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="shrink-0 text-xs text-gray-500">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
+          <span className="truncate">{fileSummary}</span>
+        </span>
+      )
+    } catch {
+      return <span className="text-red-500">invalid patch</span>
+    }
+  }
+
+  if (call.name === 'exec') {
+    const preview = call.args.command.length > 200 ? `${call.args.command.substring(0, 200)}...` : call.args.command
+    return <span className="truncate font-mono" title={call.args.command}>{preview}</span>
+  }
+
+  if (call.name === 'send_to_session') {
+    const targetSessionId = String(call.args.sessionId || '')
+    const message = typeof call.args.message === 'string' ? call.args.message : formatObject(call.args.message)
+    const preview = message.length > 160 ? `${message.slice(0, 160)}...` : message
+    return <span className="truncate" title={`${targetSessionId}: ${message}`}>{targetSessionId}: {preview}</span>
+  }
+
+  const argsFormatted = formatObject(call.args)
+  const preview = argsFormatted.length > 200 ? `${argsFormatted.substring(0, 200)}...` : argsFormatted
+  return <span className="truncate break-all">{preview}</span>
+}
+
+const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split') => {
+  if (call.name === 'read') {
+    const extra = (call.args.startLine || call.args.endLine)
+      ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
+      : ''
+    return <div className="whitespace-pre-wrap break-all"><span>{call.args.filePath}</span>{extra && <span className="ml-2 text-gray-500 dark:text-gray-400">{extra}</span>}</div>
+  }
+
+  if (call.name === 'write') {
+    return (
+      <div className="space-y-2">
+        <div className="whitespace-pre-wrap break-all">{call.args.filePath}</div>
+        {call.args.content && (
+          <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{call.args.content}</pre>
+        )}
+      </div>
+    )
+  }
+
+  if (call.name === 'edit') {
+    const hasLegacyDiff = typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
+    return hasLegacyDiff ? (
+      <div className="space-y-2">
+        <div className="text-xs text-gray-600 dark:text-gray-300">{call.args.filePath}</div>
+        <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} />
+      </div>
+    ) : (
+      <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{JSON.stringify(call.args, null, 2)}</pre>
+    )
+  }
+
+  if (call.name === 'apply_patch') {
+    try {
+      const operations = parseApplyPatchPreview(call.args.input)
+      return (
+        <div className="space-y-4">
+          {operations.map((operation, operationIdx) => {
+            if (operation.action === 'update') {
+              return (
+                <div key={operationIdx} className="space-y-3">
+                  <div className="text-xs font-semibold text-gray-600 dark:text-gray-300">Update {operation.filePath}</div>
+                  {operation.hunks.map((hunk, hunkIdx) => {
+                    const snippets = buildPatchHunkSnippets(hunk)
+                    return (
+                      <div key={hunkIdx} className="space-y-1">
+                        {hunk.anchors.length > 0 && (
+                          <div className="text-[11px] text-gray-500 dark:text-gray-400">{hunk.anchors.map((anchor, anchorIdx) => <div key={anchorIdx}>@@ {anchor}</div>)}</div>
+                        )}
+                        <DiffPreview oldText={snippets.oldText} newText={snippets.newText} diffViewMode={diffViewMode} />
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            }
+            if (operation.action === 'add') {
+              return (
+                <div key={operationIdx} className="space-y-1">
+                  <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">Add {operation.filePath}</div>
+                  <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} />
+                </div>
+              )
+            }
+            return <div key={operationIdx} className="rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-xs text-red-700 dark:text-red-300">Delete {operation.filePath}</div>
+          })}
+        </div>
+      )
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e)
+      return <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{error}\n\n{call.args.input || JSON.stringify(call.args, null, 2)}</pre>
+    }
+  }
+
+  if (call.name === 'exec') {
+    return <div className="break-all">{call.args.command}</div>
+  }
+
+  if (call.name === 'send_to_session') {
+    const targetSessionId = String(call.args.sessionId || '')
+    const message = typeof call.args.message === 'string' ? call.args.message : formatObject(call.args.message)
+    return (
+      <div className="space-y-1">
+        <div className="whitespace-pre-wrap break-all"><SessionHashLink sessionId={targetSessionId} /></div>
+        <div className="whitespace-pre-wrap break-all">{message}</div>
+      </div>
+    )
+  }
+
+  return <div className="whitespace-pre-wrap break-all">{formatObject(call.args)}</div>
+}
+
+const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): ReactNode | null => {
+  if (resp.name === 'read') {
+    const fileContent = resp.response.content || resp.response.output || JSON.stringify(resp.response)
+    return expanded
+      ? <pre className="whitespace-pre-wrap text-xs overflow-x-auto cursor-text">{fileContent}</pre>
+      : <div className="whitespace-pre-wrap break-all cursor-text">{formatSingleLinePreview(fileContent, 240) || 'Completed'}</div>
+  }
+
+  if (resp.name === 'edit' && getToolResponseStatus(resp) !== 'success') {
+    const raw = formatToolResponseText(resp)
+    const preview = raw.length > 400 ? `${raw.substring(0, 400)}...` : raw
+    return <pre className="whitespace-pre-wrap break-all cursor-text text-red-700 dark:text-red-300">{expanded ? raw : preview}</pre>
+  }
+
+  if (resp.name === 'exec') {
+    const output = resp.response.output || ''
+    const preview = output.length > 400 ? `${output.substring(0, 400)}...` : output
+    const displayStr = expanded ? output : preview
+    return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
+  }
+
+  const primaryText = getPrimaryToolResponseText(resp)
+  if (primaryText !== null) {
+    const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
+    return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : formatSingleLinePreview(preview, 240)}</div>
+  }
+
+  if (getToolResponseStatus(resp) === 'success') {
+    return expanded ? <div className="text-gray-500 dark:text-gray-400">Completed</div> : <div>Completed</div>
+  }
+
+  const respFormatted = formatToolResponseText(resp)
+  const preview = respFormatted.length > 400 ? `${respFormatted.substring(0, 400)}...` : respFormatted
+  return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : formatSingleLinePreview(preview, 240)}</div>
+}
+
 const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }: { oldText: string; newText: string; diffViewMode: 'unified' | 'split' }) {
   const lineChanges = useMemo(() => Diff.diffLines(oldText, newText), [oldText, newText])
   const diffOldScrollRefs = useRef<HTMLDivElement | null>(null)
@@ -763,6 +967,123 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
   )
 })
 
+const ToolCallResponseItem = memo(function ToolCallResponseItem({
+  call,
+  responses,
+  imageParts,
+}: {
+  call: FunctionCall
+  responses: FunctionResponse[]
+  imageParts: MessagePart[]
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [viewMode, setViewMode] = useState<ToolViewMode>('default')
+  const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
+    return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
+  })
+
+  const setDiffMode = useCallback((mode: 'unified' | 'split') => {
+    setDiffViewMode(mode)
+    localStorage.setItem('diffViewMode', mode)
+  }, [])
+
+  const pairStatus = getToolPairStatus(responses, imageParts)
+  const isError = pairStatus === 'error'
+  const outerToneClass = pairStatus === 'error'
+    ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+    : pairStatus === 'success'
+      ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+      : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'
+
+  const responsePreview = useMemo(() => {
+    const firstResponse = responses[0]
+    if (firstResponse) {
+      const previewNode = renderToolResponseContent(firstResponse, false)
+      if (responses.length > 1) {
+        return (
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="min-w-0 flex-1">{previewNode}</div>
+            <span className="shrink-0 text-[11px] opacity-70">+{responses.length - 1} more</span>
+          </div>
+        )
+      }
+      return previewNode
+    }
+    if (imageParts.length > 0) {
+      return <div>{imageParts.length} image{imageParts.length > 1 ? 's' : ''}</div>
+    }
+    return <div>Waiting for result…</div>
+  }, [imageParts.length, responses])
+
+  const jsonText = useMemo(() => JSON.stringify({ call, responses, imageParts }, null, 2), [call, imageParts, responses])
+
+  return (
+    <div className={`text-xs border rounded p-2 relative group cursor-pointer ${outerToneClass}`} onClick={() => setExpanded((current) => !current)}>
+      <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+      </div>
+
+      {viewMode === 'json' ? (
+        <div className="font-mono pr-10">
+          <div className="flex items-center gap-2 min-w-0">
+            <ToolLabel name={call.name} />
+          </div>
+          <pre className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : clampContentStyle(6)}>{jsonText}</pre>
+        </div>
+      ) : (
+        <div className="font-mono pr-10">
+          {!expanded ? (
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 min-w-0">
+                <ToolLabel name={call.name} />
+                <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>
+              </div>
+              <div className={`${isError ? 'text-red-700 dark:text-red-300' : 'text-gray-700 dark:text-gray-200'}`} style={clampContentStyle(1)}>{responsePreview}</div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <ToolLabel name={call.name} />
+              </div>
+
+              <div className="space-y-2 cursor-default" onClick={(e) => e.stopPropagation()}>
+                <div className="rounded border border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-gray-900/60 p-2 text-gray-700 dark:text-gray-200">
+                  {(call.name === 'edit' || call.name === 'apply_patch') && (
+                    <div className="mb-2 flex gap-1 justify-end">
+                      <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
+                      <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
+                    </div>
+                  )}
+                  {renderToolCallExpandedContent(call, diffViewMode)}
+                </div>
+
+                <div className={`border-t ${isError ? 'border-red-200 dark:border-red-800' : 'border-green-200 dark:border-green-800'} opacity-70`} />
+
+                <div className={`rounded border p-2 ${isError ? 'border-red-200 dark:border-red-800 bg-white/80 dark:bg-gray-900/60 text-red-700 dark:text-red-300' : 'border-green-200 dark:border-green-800 bg-white/80 dark:bg-gray-900/60 text-gray-700 dark:text-gray-200'}`}>
+                  <div className="space-y-2">
+                    {responses.length > 0 ? responses.map((resp, idx) => (
+                      <div key={`${resp.tool_use_id || call.id || call.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
+                        {renderToolResponseContent(resp, true)}
+                      </div>
+                    )) : <div className="text-gray-500 dark:text-gray-400">Waiting for result…</div>}
+
+                    {imageParts.length > 0 && (
+                      <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
+                        <ImageParts imageParts={imageParts} keyPrefix={`tool-pair-${call.id || call.name}`} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+})
+
 const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix }: { msg: Message; nextMsg: Message; messageKeyPrefix: string }) {
   const { functionCalls, functionResponses, imageEntriesById, unmatchedResponses, unmatchedImageParts } = useMemo(() => {
     const functionCalls = msg.parts.filter(p => p.functionCall).map(p => p.functionCall!)
@@ -809,19 +1130,14 @@ const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, 
 
         return (
           <div key={`${messageKeyPrefix}-group-${toolId || callIdx}`}>
-            <ToolCallItem call={call} callIdx={callIdx} hasFollowingContent={hasFollowingContent} />
-            {responseEntries.map(({ resp }, entryIdx) => (
-              <ToolResponseItem
-                key={`${messageKeyPrefix}-resp-${toolId || callIdx}-${entryIdx}`}
-                resp={resp}
-                hasPrecedingCall={true}
-                isLast={entryIdx === responseEntries.length - 1 && imageParts.length === 0}
+            {hasFollowingContent ? (
+              <ToolCallResponseItem
+                call={call}
+                responses={responseEntries.map(({ resp }) => resp)}
+                imageParts={imageParts}
               />
-            ))}
-            {imageParts.length > 0 && (
-              <div className="rounded-b border border-t-0 border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-2 pb-2">
-                <ImageParts imageParts={imageParts} keyPrefix={`${messageKeyPrefix}-tool-image-${toolId || callIdx}`} />
-              </div>
+            ) : (
+              <ToolCallItem call={call} callIdx={callIdx} hasFollowingContent={false} />
             )}
           </div>
         )
