@@ -2,6 +2,7 @@ import axios, { AxiosResponse } from 'axios';
 import fs from 'fs-extra';
 import path from 'path';
 import { StringDecoder } from 'string_decoder';
+import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, OpenAIResponsesContent, TokenUsage } from './types';
@@ -16,6 +17,25 @@ type LlmInteractionLogFiles = {
     requestPath: string;
     responsePath: string;
 };
+
+function maybeCompressLlmRequestBody(data: any, modelEntry: ModelConfigEntry) {
+    if (!modelEntry.requestCompression) {
+        return { requestBody: data, requestHeaders: {} as Record<string, string> };
+    }
+
+    const jsonBuffer = Buffer.from(JSON.stringify(data));
+    const compressed = modelEntry.requestCompression === 'br'
+        ? zlib.brotliCompressSync(jsonBuffer)
+        : zlib.gzipSync(jsonBuffer);
+
+    return {
+        requestBody: compressed,
+        requestHeaders: {
+            'Content-Encoding': modelEntry.requestCompression,
+            'Content-Length': String(compressed.length),
+        },
+    };
+}
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };

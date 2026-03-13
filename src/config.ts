@@ -338,6 +338,7 @@ export type ModelConfigEntry = {
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
+  requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
 };

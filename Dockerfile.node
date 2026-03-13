@@ -35,11 +35,14 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.json ./
 COPY src ./src
 COPY templates ./templates
+COPY scripts/start-sandbox-node.sh ./scripts/start-sandbox-node.sh
 
 # Install and build
 RUN npm ci && npm run build
 
+RUN chmod +x /app/scripts/start-sandbox-node.sh
+
 # Set environment
 ENV NODE_ENV=production
 
-CMD ["node", "lib/nodeClient.js", "--host", "http://host.docker.internal:3001", "--id", "sandbox-node", "--token", "PLACEHOLDER_TOKEN"]
+CMD ["/app/scripts/start-sandbox-node.sh"]

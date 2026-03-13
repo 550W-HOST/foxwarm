@@ -4,6 +4,7 @@
 
 import { logger } from './common';
 import { ChannelContext, ChannelMessage } from './channel';
+import { buildChildReminder, isModelNoActionSignal } from './childSessionReminder';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
@@ -256,7 +257,7 @@ export class MessageRouter {
 
     while (idx >= 0) {
       const msg = history[idx];
-      if (msg.parts?.some(p => p.text === 'NO_ACTION')) {
+      if (isModelNoActionSignal(msg)) {
         hasNoAction = true;
       }
       if (msg.parts?.some(p => typeof p.system === 'string' && (p.system.startsWith('FROM:') || p.system.startsWith('The following message is a direct user message via channel;')))) {
@@ -305,7 +306,7 @@ export class MessageRouter {
     const { foundUser, hasSendToSession, hasNoAction, hasUserFromPrefix } = this.getChildTurnState(session);
 
     if (foundUser && !hasNoAction && !hasSendToSession && !hasUserFromPrefix && session.queue.length === 0) {
-      const reminder = `message ended without send_to_session call. If you want to report to parent, call send_to_session({sessionId: \`${session.parentSessionId}\`, message: "..."}). If you confirmed to not sending messages, reply "NO_ACTION"`;
+      const reminder = buildChildReminder(session.parentSessionId);
       await sessionManager.queueSessionSystemEvent(session.id, reminder, 'background');
     }
   }

@@ -9,6 +9,7 @@ import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, Ses
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from './channel';
 import * as llm from './llm';
+import { buildChildCompletionInstruction } from './childSessionReminder';
 import { getSkillInfo, validateSkillName } from './skills';
 import { estimateSessionTokens } from './tokenCount';
 import * as vector from './vector';
@@ -896,7 +897,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   });
 
   const systemMessage = isChildSession
-    ? `You are a child session forked from parent session \`${sourceSessionId}\`. Your current session ID is \`${newSessionId}\`. When you finish the task, explicitly call send_to_session({sessionId: \`${sourceSessionId}\`, message: "..."}).`
+    ? `You are a child session forked from parent session \`${sourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${buildChildCompletionInstruction(sourceSessionId)}`
     : `Session forked from ${sourceSessionId} by user command. Your current session ID is \`${newSessionId}\`.`;
 
   appendedForkMessages.push({
@@ -964,7 +965,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
 
     const initialMessage: Message = {
       role: 'user',
-      parts: [systemPart(`You are a child session (new, empty context) with parent session \`${parentSessionId}\`. Your current session ID is \`${childSessionId}\`. When you finish, explicitly call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}).`)],
+      parts: [systemPart(`You are a child session (new, empty context) with parent session \`${parentSessionId}\`. Your current session ID is \`${childSessionId}\`. ${buildChildCompletionInstruction(parentSessionId)}`)],
       __meta: { timestamp: Date.now() }
     };
 
@@ -1324,12 +1325,22 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
     system: 'COMPACTION STARTED: PAUSE YOUR WORK before compation done. Please summarize the entire session history above concisely NOW. Preserve key information and important context. The earlier part of the session will be removed to save space. Update memory if needed.'
   };
 
-  try {
-    const beforeCompactIndex = session.history.length;
+  let beforeCompactIndex = session.history.length;
 
+  try {
     // Don't change snapshot and history before compacting LLM request,
     // to prevent recomputing whole history.
-    await llm.chat([summaryPrompt], session, 0);
+    const result = await llm.chat([summaryPrompt], session, 0);
+
+    if (!result.text?.trim()) {
+      throw new Error('Compaction summary is empty.');
+    }
+    if (result.text.trim().startsWith('Error:')) {
+      throw new Error(`Compaction summary failed: ${result.text.trim()}`);
+    }
+    if (result.toolCalls && result.toolCalls.length > 0) {
+      throw new Error('Compaction summary unexpectedly produced tool calls.');
+    }
 
     const summaryConversation = session.history.slice(beforeCompactIndex);
     if (summaryConversation.length < 2 /* summary system message + summary */) {
@@ -1338,7 +1349,12 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
 
     await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, completionMarker);
   } catch (e) {
+    if (session.history.length > beforeCompactIndex) {
+      session.history = session.history.slice(0, beforeCompactIndex);
+      await saveSession(sessionId);
+    }
     logger.error(e, 'Compaction failed');
+    throw e;
   }
 }
 
