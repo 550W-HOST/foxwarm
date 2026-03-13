@@ -31,8 +31,12 @@ type ParsedMarkdownMetadata = {
 };
 
 export function validateSkillName(skillName: string): void {
-  if (!/^[a-zA-Z0-9_-]+$/.test(skillName)) {
-    throw new Error('Invalid skill name. Use only alphanumeric characters, hyphens, and underscores.');
+  // Allow nested skills like "tencent/vision-analyzer"
+  const parts = skillName.split('/');
+  for (const part of parts) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(part)) {
+      throw new Error('Invalid skill name. Use only alphanumeric characters, hyphens, underscores, and forward slashes for nested skills.');
+    }
   }
 }
 
@@ -237,21 +241,55 @@ export async function getSkillInfo(skillName: string): Promise<SkillInfo> {
   };
 }
 
+/**
+ * Recursively find all skill directories (containing SKILL.md or skill.json)
+ */
+async function findSkillDirectories(baseDir: string, relativePath: string = ''): Promise<string[]> {
+  const skillDirs: string[] = [];
+  
+  if (!await fs.pathExists(baseDir)) {
+    return skillDirs;
+  }
+
+  const entries = await fs.readdir(baseDir, { withFileTypes: true });
+  
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    
+    const entryPath = path.join(baseDir, entry.name);
+    const skillName = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+    
+    // Check if this directory is a skill (has SKILL.md or skill.json)
+    const hasSkillMd = await fs.pathExists(path.join(entryPath, 'SKILL.md'));
+    const hasSkillJson = await fs.pathExists(path.join(entryPath, 'skill.json'));
+    
+    if (hasSkillMd || hasSkillJson) {
+      skillDirs.push(skillName);
+    }
+    
+    // Always recurse into subdirectories to find nested skills
+    const nestedSkills = await findSkillDirectories(entryPath, skillName);
+    skillDirs.push(...nestedSkills);
+  }
+  
+  return skillDirs;
+}
+
 export async function listSkills(): Promise<SkillInfo[]> {
   if (!await fs.pathExists(SKILLS_DIR)) {
     return [];
   }
 
-  const entries = await fs.readdir(SKILLS_DIR, { withFileTypes: true });
+  const skillNames = await findSkillDirectories(SKILLS_DIR);
+  skillNames.sort((a, b) => a.localeCompare(b));
+  
   const skills: SkillInfo[] = [];
 
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!entry.isDirectory()) continue;
-
+  for (const skillName of skillNames) {
     try {
-      skills.push(await getSkillInfo(entry.name));
+      skills.push(await getSkillInfo(skillName));
     } catch (e) {
-      logger.warn({ err: e, skillName: entry.name }, 'Skipping invalid skill directory');
+      logger.warn({ err: e, skillName }, 'Skipping invalid skill directory');
     }
   }
 

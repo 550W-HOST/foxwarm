@@ -44,6 +44,7 @@ export type McpServerConfig = {
   cwd?: string;
   stderr?: 'inherit' | 'pipe' | 'ignore';
   token?: string;
+  headers?: Record<string, string>;
   description?: string;
   enable?: boolean;
   transport?: McpTransport;
@@ -144,11 +145,20 @@ async function getServerConfig(name?: string): Promise<{ name: string; config: M
   return { name: serverName, config: server };
 }
 
-function getAuthHeaders(token?: string): Record<string, string> | undefined {
-  if (!token) return undefined;
-  return {
-    Authorization: `Bearer ${token}`,
-  };
+function getHeaders(config: McpServerConfig): Record<string, string> | undefined {
+  const headers: Record<string, string> = {};
+  
+  // Add custom headers first
+  if (config.headers && typeof config.headers === 'object') {
+    Object.assign(headers, config.headers);
+  }
+  
+  // Add Authorization header from token (can be overridden by custom headers)
+  if (config.token) {
+    headers['Authorization'] = `Bearer ${config.token}`;
+  }
+  
+  return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 function requireUrl(config: McpServerConfig, transport: McpTransport): string {
@@ -203,11 +213,12 @@ function scheduleStdioIdleCleanup(entry: PooledStdioConnection) {
   entry.idleTimer.unref?.();
 }
 
-async function connectStreamableHttp(url: string, token?: string): Promise<StandardConnection> {
+async function connectStreamableHttp(url: string, config: McpServerConfig): Promise<StandardConnection> {
   const { Client, StreamableHTTPClientTransport } = loadMcpSdk();
+  const headers = getHeaders(config);
   const transport = new StreamableHTTPClientTransport(new URL(url), {
     requestInit: {
-      headers: getAuthHeaders(token),
+      headers,
     } as any,
   });
   const client = new Client({ name: 'foxwarm-mcp-client', version: '1.0.0' });
@@ -215,9 +226,9 @@ async function connectStreamableHttp(url: string, token?: string): Promise<Stand
   return { client, transport, transportKind: 'streamable-http' };
 }
 
-async function connectSse(url: string, token?: string): Promise<StandardConnection> {
+async function connectSse(url: string, config: McpServerConfig): Promise<StandardConnection> {
   const { Client, SSEClientTransport } = loadMcpSdk();
-  const headers = getAuthHeaders(token);
+  const headers = getHeaders(config);
   const transport = new SSEClientTransport(new URL(url), {
     eventSourceInit: headers ? ({ headers } as any) : undefined,
     requestInit: headers ? ({ headers } as any) : undefined,
@@ -303,11 +314,11 @@ async function connectStandardTransport(config: McpServerConfig): Promise<Standa
   const transport = normalizeTransport(config);
 
   if (transport === 'streamable-http') {
-    return connectStreamableHttp(requireUrl(config, transport), config.token);
+    return connectStreamableHttp(requireUrl(config, transport), config);
   }
 
   if (transport === 'sse') {
-    return connectSse(requireUrl(config, transport), config.token);
+    return connectSse(requireUrl(config, transport), config);
   }
 
   if (transport === 'stdio') {
@@ -316,10 +327,10 @@ async function connectStandardTransport(config: McpServerConfig): Promise<Standa
 
   if (transport === 'auto') {
     try {
-      return await connectStreamableHttp(requireUrl(config, transport), config.token);
+      return await connectStreamableHttp(requireUrl(config, transport), config);
     } catch (streamableError: any) {
       try {
-        return await connectSse(requireUrl(config, transport), config.token);
+        return await connectSse(requireUrl(config, transport), config);
       } catch (sseError: any) {
         throw new Error(
           `Failed to connect MCP server using auto transport. Streamable HTTP error: ${streamableError?.message || streamableError}. SSE error: ${sseError?.message || sseError}`

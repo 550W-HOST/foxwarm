@@ -465,7 +465,7 @@ async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
 }
 
 async function tool_mcp_config(args: ToolArgs) {
-    const { name, url, command, args: commandArgs, env, cwd, stderr, token, description, enable, transport, type } = args;
+    const { name, url, command, args: commandArgs, env, cwd, stderr, token, headers, description, enable, transport, type } = args;
     const resolvedTransport = transport || type || 'auto';
     if (!name) {
         throw new Error('mcp_config requires name');
@@ -477,7 +477,7 @@ async function tool_mcp_config(args: ToolArgs) {
     } else if (!url) {
         throw new Error('mcp_config requires url for streamable-http, sse, or auto transport');
     }
-    await mcpClient.upsertServer(name, { url, command, args: commandArgs, env, cwd, stderr, token, description, enable, transport, type });
+    await mcpClient.upsertServer(name, { url, command, args: commandArgs, env, cwd, stderr, token, headers, description, enable, transport, type });
     return `MCP server \"${name}\" saved${enable === false ? ' (disabled)' : ''}.`;
 }
 
@@ -1063,7 +1063,8 @@ export const definitions = [
                     env: { type: 'object', description: 'Extra environment variables for stdio transport.' },
                     cwd: { type: 'string', description: 'Working directory for stdio transport.' },
                     stderr: { type: 'string', description: 'How to handle stdio server stderr: inherit, pipe, or ignore.' },
-                    token: { type: 'string', description: 'Optional bearer token' },
+                    token: { type: 'string', description: 'Optional bearer token (sets Authorization: Bearer <token>)' },
+                    headers: { type: 'object', description: 'Custom HTTP headers as key-value pairs. Overrides token header if both specified.' },
                     transport: { type: 'string', description: 'Transport type: streamable-http, sse, stdio, or auto. Defaults to auto.' },
                     type: { type: 'string', description: 'Alias for transport (same supported values: streamable-http, sse, stdio, auto).' },
                     description: { type: 'string', description: 'Optional description' },
