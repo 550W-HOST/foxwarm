@@ -17,6 +17,44 @@ export interface SlashCommandOption {
   usage?: string | null
   requiresSession?: boolean
   showInTelegram?: boolean
+  autocomplete?: SlashCommandAutocomplete | null
+}
+
+export interface SlashCommandAutocompleteNode {
+  value: string
+  kind?: 'literal' | 'placeholder'
+  description?: string
+  usage?: string | null
+  insertValue?: string
+  children?: SlashCommandAutocompleteNode[]
+}
+
+export interface SlashCommandAutocomplete {
+  children?: SlashCommandAutocompleteNode[]
+}
+
+export interface SlashCommandSuggestion {
+  key: string
+  label: string
+  description?: string
+  usage?: string | null
+  insertValue: string
+  requiresSession?: boolean
+}
+
+export interface SlashCommandHint {
+  key: string
+  label: string
+  description?: string
+  usage?: string | null
+}
+
+export interface SlashCommandCompletion {
+  suggestions: SlashCommandSuggestion[]
+  hints: SlashCommandHint[]
+  tokens: string[]
+  currentIndex: number
+  trailingSpace: boolean
 }
 
 export type SendKeyMode = 'mod-enter' | 'enter'
@@ -188,13 +226,129 @@ export const clampContentStyle = (lines: number, extraHeightRem = 0): CSSPropert
   overflow: 'hidden',
 })
 
-export const getSlashCommandQuery = (value: string): string | null => {
+const isSlashCommandValue = (value: string): boolean => {
   if (!value || value.includes('\n') || /^\s/.test(value)) {
+    return false
+  }
+
+  return value.trimStart().startsWith('/')
+}
+
+const findAutocompleteNodeMatch = (nodes: SlashCommandAutocompleteNode[], token: string): SlashCommandAutocompleteNode | null => {
+  const normalizedToken = token.toLowerCase()
+  const exactLiteral = nodes.find((node) => (node.kind ?? 'literal') === 'literal' && node.value.toLowerCase() === normalizedToken)
+  if (exactLiteral) return exactLiteral
+
+  return nodes.find((node) => (node.kind ?? 'literal') === 'placeholder') || null
+}
+
+export const getSlashCommandCompletion = (value: string, commands: SlashCommandOption[]): SlashCommandCompletion | null => {
+  if (!isSlashCommandValue(value)) {
     return null
   }
 
-  const match = value.match(/^\/([^\s]*)$/)
-  return match ? match[1] : null
+  const trailingSpace = /\s$/.test(value)
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('/')) return null
+
+  const tokens = trimmed.split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return null
+
+  const currentIndex = trailingSpace ? tokens.length : tokens.length - 1
+  const currentToken = trailingSpace ? '' : (tokens[currentIndex] || '')
+
+  if (currentIndex === 0) {
+    const normalizedPrefix = currentToken.toLowerCase()
+    const suggestions = commands
+      .filter((command) => command.name.toLowerCase().startsWith(normalizedPrefix))
+      .map((command) => ({
+        key: command.name,
+        label: command.name,
+        description: command.description,
+        usage: command.usage,
+        insertValue: command.name,
+        requiresSession: command.requiresSession,
+      }))
+
+    return {
+      suggestions,
+      hints: [],
+      tokens,
+      currentIndex,
+      trailingSpace,
+    }
+  }
+
+  const command = commands.find((item) => item.name.toLowerCase() === tokens[0].toLowerCase())
+  if (!command) {
+    return {
+      suggestions: [],
+      hints: [],
+      tokens,
+      currentIndex,
+      trailingSpace,
+    }
+  }
+
+  let candidateNodes = command.autocomplete?.children || []
+  let matchedNode: SlashCommandAutocompleteNode | null = null
+
+  for (const token of tokens.slice(1, currentIndex)) {
+    const nextNode = findAutocompleteNodeMatch(candidateNodes, token)
+    if (!nextNode) {
+      candidateNodes = []
+      matchedNode = null
+      break
+    }
+    matchedNode = nextNode
+    candidateNodes = nextNode.children || []
+  }
+
+  const normalizedPrefix = currentToken.toLowerCase()
+  const suggestions = candidateNodes
+    .filter((node) => (node.kind ?? 'literal') === 'literal')
+    .filter((node) => node.value.toLowerCase().startsWith(normalizedPrefix))
+    .map((node) => ({
+      key: `${tokens[0]}:${node.value}`,
+      label: node.value,
+      description: node.description,
+      usage: node.usage || null,
+      insertValue: node.insertValue || node.value,
+    }))
+
+  const placeholderHints = candidateNodes
+    .filter((node) => (node.kind ?? 'literal') === 'placeholder')
+    .map((node) => ({
+      key: `${tokens[0]}:hint:${node.value}`,
+      label: node.value,
+      description: node.description,
+      usage: node.usage || null,
+    }))
+
+  const fallbackHints = placeholderHints.length === 0 && suggestions.length === 0 && (matchedNode?.usage || command.usage)
+    ? [{
+        key: `${tokens[0]}:usage`,
+        label: 'usage',
+        description: matchedNode?.description || command.description,
+        usage: matchedNode?.usage || command.usage || null,
+      }]
+    : []
+
+  return {
+    suggestions,
+    hints: placeholderHints.length > 0 ? placeholderHints : fallbackHints,
+    tokens,
+    currentIndex,
+    trailingSpace,
+  }
+}
+
+export const applySlashCommandSuggestion = (completion: SlashCommandCompletion, suggestion: SlashCommandSuggestion): string => {
+  const nextTokens = completion.trailingSpace
+    ? [...completion.tokens, suggestion.insertValue]
+    : [...completion.tokens.slice(0, completion.currentIndex), suggestion.insertValue]
+
+  return `${nextTokens.join(' ')} `
 }
 
 export const resizeTextarea = (textarea: HTMLTextAreaElement | null) => {

@@ -1,7 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUp, ChevronDown, Paperclip, Plus } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
-import { getSlashCommandQuery, resizeTextarea, type SendKeyMode, type SlashCommandOption } from './chatShared'
+import {
+  applySlashCommandSuggestion,
+  getSlashCommandCompletion,
+  resizeTextarea,
+  type SendKeyMode,
+  type SlashCommandOption,
+  type SlashCommandSuggestion,
+} from './chatShared'
 
 interface ChatComposerProps {
   sessionId: string
@@ -103,13 +110,16 @@ const ChatComposer = memo(function ChatComposer({
     }
   }, [input, sessionId])
 
-  const slashCommandQuery = useMemo(() => getSlashCommandQuery(input), [input])
-  const slashCommandSuggestions = useMemo(() => {
-    if (slashCommandQuery === null) return []
-    return availableCommands.filter((command) => command.name.slice(1).toLowerCase().startsWith(slashCommandQuery.toLowerCase()))
-  }, [availableCommands, slashCommandQuery])
+  const slashCompletion = useMemo(() => getSlashCommandCompletion(input, availableCommands), [availableCommands, input])
+  const slashCommandSuggestions = slashCompletion?.suggestions || []
+  const slashCommandHints = slashCompletion?.hints || []
 
-  const showSlashCommandMenu = slashCommandQuery !== null && dismissedSlashQuery !== input && (commandsLoading || slashCommandSuggestions.length > 0 || !!commandsError)
+  const showSlashCommandMenu = slashCompletion !== null && dismissedSlashQuery !== input && (
+    commandsLoading ||
+    slashCommandSuggestions.length > 0 ||
+    slashCommandHints.length > 0 ||
+    !!commandsError
+  )
 
   useEffect(() => {
     if (!showSlashCommandMenu) {
@@ -129,8 +139,10 @@ const ChatComposer = memo(function ChatComposer({
     activeItem?.scrollIntoView({ block: 'nearest' })
   }, [showSlashCommandMenu, highlightedCommandIndex])
 
-  const applySlashCommand = useCallback((command: SlashCommandOption) => {
-    const nextValue = `${command.name} `
+  const applySlashCommand = useCallback((suggestion: SlashCommandSuggestion) => {
+    if (!slashCompletion) return
+
+    const nextValue = applySlashCommandSuggestion(slashCompletion, suggestion)
     setInput(nextValue)
     setHighlightedCommandIndex(0)
     setDismissedSlashQuery(null)
@@ -143,7 +155,7 @@ const ChatComposer = memo(function ChatComposer({
         textareaRef.current.setSelectionRange(caret, caret)
       }
     })
-  }, [])
+  }, [slashCompletion])
 
   const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
@@ -305,17 +317,17 @@ const ChatComposer = memo(function ChatComposer({
             {commandsLoading && (
               <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">Loading commands...</div>
             )}
-            {!commandsLoading && commandsError && slashCommandSuggestions.length === 0 && (
+            {!commandsLoading && commandsError && slashCommandSuggestions.length === 0 && slashCommandHints.length === 0 && (
               <div className="px-3 py-2 text-sm text-red-600 dark:text-red-300">{commandsError}</div>
             )}
-            {!commandsLoading && !commandsError && slashCommandSuggestions.length === 0 && (
+            {!commandsLoading && !commandsError && slashCommandSuggestions.length === 0 && slashCommandHints.length === 0 && (
               <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">No matching commands.</div>
             )}
             {slashCommandSuggestions.map((command, index) => {
               const isActive = index === highlightedCommandIndex
               return (
                 <button
-                  key={command.name}
+                  key={command.key}
                   type="button"
                   data-active={isActive ? 'true' : 'false'}
                   onMouseDown={(e) => {
@@ -326,7 +338,7 @@ const ChatComposer = memo(function ChatComposer({
                   className={`w-full px-3 py-2 text-left border-b last:border-b-0 border-gray-100 dark:border-gray-800 transition ${isActive ? 'bg-blue-50 dark:bg-blue-900/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800/80'}`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{command.name}</span>
+                    <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{command.label}</span>
                     {command.requiresSession === false && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">global</span>
                     )}
@@ -338,6 +350,20 @@ const ChatComposer = memo(function ChatComposer({
                 </button>
               )
             })}
+            {slashCommandHints.map((hint, index) => (
+              <div
+                key={hint.key}
+                className={`px-3 py-2 text-left ${slashCommandSuggestions.length > 0 || index > 0 ? 'border-t border-gray-100 dark:border-gray-800' : ''}`}
+              >
+                <div className="font-mono text-sm text-gray-700 dark:text-gray-200">{hint.label}</div>
+                {hint.description && (
+                  <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{hint.description}</div>
+                )}
+                {hint.usage && (
+                  <div className="mt-1 font-mono text-[11px] text-gray-500 dark:text-gray-400">{hint.usage}</div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}

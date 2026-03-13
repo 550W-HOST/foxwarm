@@ -124,6 +124,7 @@ export class WebUIChannel implements Channel {
                 usage: def.usage || null,
                 requiresSession: def.requiresSession !== false,
                 showInTelegram: def.showInTelegram !== false,
+                autocomplete: def.autocomplete || null,
               }))
               .sort((a, b) => a.name.localeCompare(b.name));
 
