@@ -3,10 +3,12 @@ import path from 'path';
 import * as sessionManager from './sessionManager';
 import * as skills from './skills';
 import * as timers from './timers';
+import type { ChannelFile } from './channel';
+import { getAgentDir } from './config';
 import { logger } from './common';
 import { AGENTS_DIR, COMPACT_PERCENT } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
-import { requireNotIsolated, checkChannelPermission, checkTimerPermission } from './isolatedCheck';
+import { requireNotIsolated, checkChannelPermission, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
 
 interface ToolContext {
   sessionId?: string;
@@ -15,6 +17,23 @@ interface ToolContext {
 }
 
 type ToolArgs = Record<string, any>;
+
+const MIME_TYPE_BY_EXT: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+  '.zip': 'application/zip',
+  '.tar': 'application/x-tar',
+  '.gz': 'application/gzip',
+};
 
 function formatTimerTimestamp(timestamp?: number | null): string {
   if (!timestamp) return 'n/a';
@@ -31,6 +50,68 @@ function formatTimerSummary(timer: timers.TimerView): string {
     : `session ${timer.sessionId}`;
 
   return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}\nMessage: ${timer.message}`;
+}
+
+function resolveAgentPath(filePath: string, agentName: string = 'main'): string {
+  if (path.isAbsolute(filePath)) {
+    return filePath;
+  }
+
+  const agentDir = getAgentDir(agentName);
+  const resolved = path.resolve(agentDir, filePath);
+  if (!(resolved === agentDir || resolved.startsWith(agentDir + path.sep))) {
+    throw new Error('Path traversal detected: cannot access files outside agent folder');
+  }
+
+  return resolved;
+}
+
+function detectMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  return MIME_TYPE_BY_EXT[ext] || 'application/octet-stream';
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+async function prepareChannelFile(filePath: string, ctx?: ToolContext): Promise<ChannelFile> {
+  const agentName = ctx?.session?.agent || 'main';
+  const fullPath = resolveAgentPath(filePath, agentName);
+  const stats = await fs.stat(fullPath);
+  if (!stats.isFile()) {
+    throw new Error(`Not a file: ${filePath}`);
+  }
+
+  const mimeType = detectMimeType(fullPath);
+  return {
+    path: fullPath,
+    name: path.basename(fullPath),
+    mimeType,
+    sizeBytes: stats.size,
+    isImage: mimeType.startsWith('image/'),
+  };
+}
+
+function formatSendFileSessionResult(targetSessionId: string, file: ChannelFile, result: sessionManager.FileDeliveryResult): string {
+  const lines = [
+    `File \`${file.name}\` sent for session \`${targetSessionId}\`.`,
+    `Delivered: ${result.deliveredChannels.length}`,
+  ];
+
+  if (result.deliveredChannels.length) {
+    lines.push(`Channels: ${result.deliveredChannels.map(id => `\`${id}\``).join(', ')}`);
+  }
+
+  if (result.skippedChannels.length) {
+    lines.push(`Skipped: ${result.skippedChannels.map(item => `\`${item.channelId}\` (${item.reason})`).join(', ')}`);
+  }
+
+  if (result.failedChannels.length) {
+    lines.push(`Failed: ${result.failedChannels.map(item => `\`${item.channelId}\` (${item.error})`).join(', ')}`);
+  }
+
+  return lines.join('\n');
 }
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
@@ -78,6 +159,46 @@ export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
 
   await sessionManager.sendToChannelById(channelId, message);
   return `Message sent to channel \`${channelId}\``;
+}
+
+export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
+  const { sessionId, channelId, filePath } = args;
+  const hasSessionId = isNonEmptyString(sessionId);
+  const hasChannelId = isNonEmptyString(channelId);
+
+  if (hasSessionId === hasChannelId) {
+    throw new Error('Exactly one of sessionId or channelId is required');
+  }
+  if (!isNonEmptyString(filePath)) {
+    throw new Error('filePath is required');
+  }
+
+  const caption = isNonEmptyString(args.caption)
+    ? args.caption.trim()
+    : (isNonEmptyString(args.text) ? args.text.trim() : undefined);
+
+  if (ctx?.sessionId) {
+    await checkSendFilePermission(ctx.sessionId, {
+      channelId: hasChannelId ? channelId.trim() : undefined,
+      targetSessionId: hasSessionId ? sessionId.trim() : undefined,
+    });
+  }
+
+  const file = await prepareChannelFile(filePath.trim(), ctx);
+
+  if (hasChannelId) {
+    const normalizedChannelId = channelId.trim();
+    await sessionManager.sendFileToChannelById(normalizedChannelId, file, { caption });
+    return `File \`${file.name}\` sent to channel \`${normalizedChannelId}\``;
+  }
+
+  const normalizedSessionId = sessionId.trim();
+  const result = await sessionManager.sendFileToSession(normalizedSessionId, file, { caption });
+  if (result.deliveredChannels.length === 0) {
+    throw new Error(formatSendFileSessionResult(normalizedSessionId, file, result));
+  }
+
+  return formatSendFileSessionResult(normalizedSessionId, file, result);
 }
 
 export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext) {

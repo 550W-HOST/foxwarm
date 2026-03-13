@@ -2,7 +2,8 @@
  * Matrix Channel Implementation
  */
 
-import { Channel, ChannelContext, ChannelMessage } from '../channel';
+import fs from 'fs-extra';
+import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { MessagePart } from '../types';
 import { logger } from '../common';
 
@@ -186,6 +187,39 @@ export class MatrixChannel implements Channel {
       content.format = 'org.matrix.custom.html';
       content.formatted_body = this.markdownToHtml(text);
     }
+
+    await this.client.sendEvent(channelUserId, 'm.room.message', content);
+  }
+
+  async sendFile(channelUserId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+    if (options?.caption) {
+      await this.sendMessage(channelUserId, options.caption, { parse_mode: options?.parse_mode });
+    }
+
+    const buffer = await fs.readFile(file.path);
+    const uploadResult = await this.client.uploadContent(buffer, {
+      type: file.mimeType,
+      name: file.name,
+    });
+
+    const contentUri = typeof uploadResult === 'string'
+      ? uploadResult
+      : uploadResult?.content_uri || uploadResult?.contentUri;
+
+    if (!contentUri) {
+      throw new Error('Matrix upload did not return content_uri');
+    }
+
+    const content: any = {
+      msgtype: file.isImage ? 'm.image' : 'm.file',
+      body: file.name,
+      filename: file.name,
+      url: contentUri,
+      info: {
+        mimetype: file.mimeType,
+        size: file.sizeBytes,
+      }
+    };
 
     await this.client.sendEvent(channelUserId, 'm.room.message', content);
   }

@@ -2,9 +2,10 @@
  * Telegram Channel Implementation
  */
 
+import fs from 'fs';
 import { Telegraf } from 'telegraf';
 import axios from 'axios';
-import { Channel, ChannelContext, ChannelMessage } from '../channel';
+import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { COMMANDS } from '../commands';
 import { MessagePart } from '../types';
 import { logger } from '../common';
@@ -239,6 +240,42 @@ export class TelegramChannel implements Channel {
       } else {
         throw err;
       }
+    }
+  }
+
+  async sendFile(channelUserId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+    const chatId = parseInt(channelUserId);
+    const caption = typeof options?.caption === 'string' && options.caption.trim().length > 0
+      ? options.caption
+      : undefined;
+    const parseMode = options?.parse_mode || (caption ? 'Markdown' : undefined);
+
+    const send = async (currentParseMode?: string) => {
+      const sendOptions: any = {};
+      if (caption) {
+        sendOptions.caption = caption;
+      }
+      if (currentParseMode) {
+        sendOptions.parse_mode = currentParseMode;
+      }
+
+      const source = { source: fs.createReadStream(file.path), filename: file.name };
+      if (file.isImage) {
+        await tgRetry(() => this.bot.telegram.sendPhoto(chatId, source as any, sendOptions));
+      } else {
+        await tgRetry(() => this.bot.telegram.sendDocument(chatId, source as any, sendOptions));
+      }
+    };
+
+    try {
+      await send(parseMode);
+    } catch (err: any) {
+      if (caption && (err.response?.error_code === 400 || err.message?.includes('can\'t parse entities'))) {
+        logger.warn({ error: err.message }, 'Telegram file caption markdown failed, retrying with plain text');
+        await send(undefined);
+        return;
+      }
+      throw err;
     }
   }
 

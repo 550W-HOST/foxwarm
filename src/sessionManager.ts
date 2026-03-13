@@ -7,6 +7,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, SessionStreamEvent } from './types';
 import { logger } from './common';
+import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from './channel';
 import * as llm from './llm';
 import { getSkillInfo, validateSkillName } from './skills';
 import { estimateSessionTokens } from './tokenCount';
@@ -712,6 +713,77 @@ export function detachChannel(platform: string, channelUserId: string): void {
 
 export async function sendToChannelById(channelId: string, message: string): Promise<void> {
   await sessionChannels.sendToChannelById(channelId, message);
+}
+
+export interface FileDeliveryResult {
+  deliveredChannels: string[];
+  skippedChannels: Array<{ channelId: string; reason: string }>;
+  failedChannels: Array<{ channelId: string; error: string }>;
+}
+
+export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+  const [platform, ...rest] = channelId.split(':');
+  const channelUserId = rest.join(':');
+  if (!platform || !channelUserId) {
+    throw new Error('Invalid channelId format. Use platform:userId');
+  }
+
+  const channel = getChannelInstance(platform);
+  if (!channel) {
+    throw new Error(`Channel platform "${platform}" not found`);
+  }
+  if (!channel.sendFile) {
+    throw new Error(`Channel platform "${platform}" does not support file sending yet`);
+  }
+
+  await channel.sendFile(channelUserId, file, options);
+}
+
+export async function sendFileToSession(sessionId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<FileDeliveryResult> {
+  const session = await getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found`);
+  }
+
+  const channels = getChannelsBySession(sessionId);
+  if (channels.length === 0) {
+    throw new Error(`Session \`${sessionId}\` has no attached channels`);
+  }
+
+  const result: FileDeliveryResult = {
+    deliveredChannels: [],
+    skippedChannels: [],
+    failedChannels: [],
+  };
+
+  for (const channelInfo of channels) {
+    const channelId = `${channelInfo.platform}:${channelInfo.channelUserId}`;
+    const channelConfig = getChannelConfig(channelInfo.platform, channelInfo.channelUserId);
+    if (channelConfig?.mode === 'push-only') {
+      result.skippedChannels.push({ channelId, reason: 'push-only' });
+      continue;
+    }
+
+    const channel = getChannelInstance(channelInfo.platform);
+    if (!channel) {
+      result.failedChannels.push({ channelId, error: `Channel platform "${channelInfo.platform}" not found` });
+      continue;
+    }
+
+    if (!channel.sendFile) {
+      result.skippedChannels.push({ channelId, reason: 'channel does not support file sending yet' });
+      continue;
+    }
+
+    try {
+      await channel.sendFile(channelInfo.channelUserId, file, options);
+      result.deliveredChannels.push(channelId);
+    } catch (err: any) {
+      result.failedChannels.push({ channelId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  return result;
 }
 
 /**

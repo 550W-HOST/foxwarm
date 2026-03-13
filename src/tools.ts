@@ -16,6 +16,7 @@ import {
     tool_create_child_session,
     tool_send_to_session,
     tool_send_to_channel,
+    tool_send_file,
     tool_list_sessions,
     tool_list_agents,
     tool_list_skills,
@@ -557,6 +558,7 @@ export const set_agent_inherit = tool_set_agent_inherit;
 export const move_session = tool_move_session;
 export const send_to_session = tool_send_to_session;
 export const send_to_channel = tool_send_to_channel;
+export const send_file = tool_send_file;
 export const list_sessions = tool_list_sessions;
 export const list_agents = tool_list_agents;
 export const list_skills = tool_list_skills;
@@ -748,6 +750,21 @@ export const definitions = [
                     message: { type: 'string', description: 'Message to send' }
                 },
                 required: ['channelId', 'message']
+            }
+        },
+        {
+            name: 'send_file',
+            description: 'Send a local file or image to a specific channel, or to all non-push-only channels attached to a session. Exactly one of sessionId or channelId is required.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Target session ID whose attached channels should receive the file' },
+                    channelId: { type: 'string', description: 'Target channel ID in format platform:userId' },
+                    filePath: { type: 'string', description: 'Local file path. Relative paths are resolved under the current agent folder; absolute paths are also accepted.' },
+                    caption: { type: 'string', description: 'Optional caption/text sent with the file where supported' },
+                    text: { type: 'string', description: 'Alias of caption for convenience' }
+                },
+                required: ['filePath']
             }
         },
         {

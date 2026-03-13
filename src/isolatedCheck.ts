@@ -36,7 +36,7 @@ export async function checkToolPermission(
   }
 
   // Tools that isolated session can use
-  const allowedTools = ['read', 'write', 'edit', 'apply_patch', 'exec', 'remote_node', 'send_to_session'];
+  const allowedTools = ['read', 'write', 'edit', 'apply_patch', 'exec', 'remote_node', 'send_to_session', 'send_file'];
   if (!allowedTools.includes(toolName)) {
     throw new Error(`Isolated session cannot use ${toolName} tool.`);
   }
@@ -61,8 +61,12 @@ export async function checkToolPermission(
   }
   
   // Check path access for path-based tools on master
-  if (executionNode === 'master' && toolArgs?.filePath) {
-    const fullPath = path.join(getAgentDir(session.agent || 'main'), toolArgs.filePath);
+  const pathBoundTools = ['read', 'write', 'edit', 'apply_patch', 'send_file'];
+  if (pathBoundTools.includes(toolName) && toolArgs?.filePath && (!executionNode || executionNode === 'master')) {
+    const requestedPath = String(toolArgs.filePath);
+    const fullPath = path.isAbsolute(requestedPath)
+      ? requestedPath
+      : path.join(getAgentDir(session.agent || 'main'), requestedPath);
     checkPathAccess(fullPath, session.agent || 'main');
   }
 }
@@ -133,6 +137,31 @@ export async function checkChannelPermission(sessionIdOrCtx: string | { sessionI
   
   if (!attachedChannelIds.includes(channelId)) {
     throw new Error('Isolated session can only send messages to its own attached channel.');
+  }
+}
+
+/**
+ * Check if isolated session can use send_file for the given target.
+ * For channel targets, reuse the attached-channel check.
+ * For session targets, only allow the current isolated session itself so the
+ * caller cannot relay files through another session's attached channels.
+ */
+export async function checkSendFilePermission(
+  sessionIdOrCtx: string | { sessionId?: string },
+  options: { channelId?: string; targetSessionId?: string }
+): Promise<void> {
+  const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
+  if (!sessionId) return;
+
+  const session = await sessionManager.getExistingSession(sessionId);
+  if (!session?.isolated) return;
+
+  if (options.channelId) {
+    await checkChannelPermission(sessionId, options.channelId);
+  }
+
+  if (options.targetSessionId && options.targetSessionId !== sessionId) {
+    throw new Error('Isolated session can only send files via its own current session attachments.');
   }
 }
 

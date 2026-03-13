@@ -31,6 +31,20 @@ export interface MessageSource {
   username: string;
 }
 
+export interface ChannelFile {
+  path: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  isImage: boolean;
+}
+
+export interface ChannelSendFileOptions {
+  caption?: string;
+  parse_mode?: string;
+  [key: string]: any;
+}
+
 export interface Channel {
   readonly name: string;
   readonly platform: string;
@@ -49,6 +63,12 @@ export interface Channel {
    * Send a message to a user
    */
   sendMessage(channelUserId: string, text: string, options?: any): Promise<void>;
+
+  /**
+   * Send a local file to a user/channel. Optional because some channels only
+   * support text responses.
+   */
+  sendFile?(channelUserId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void>;
 
   /**
    * Send typing indicator

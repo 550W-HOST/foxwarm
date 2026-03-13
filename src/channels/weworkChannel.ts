@@ -5,9 +5,10 @@
 
 import axios from 'axios';
 import express from 'express';
+import fs from 'fs-extra';
 import xml2js from 'xml2js';
 import crypto from 'crypto';
-import { Channel, ChannelContext, ChannelMessage } from '../channel';
+import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { logger } from '../common';
 
 export interface WeWorkWebhookConfig {
@@ -323,6 +324,83 @@ export class WeWorkWebhookChannel implements Channel {
     this.messageHandler = handler;
   }
 
+  private getEffectiveChatId(userId: string, options?: any): string | undefined {
+    return options?.chatId || (userId.startsWith('wok') || userId.startsWith('wrk') ? userId : undefined);
+  }
+
+  private async postWebhookPayload(webhookUrl: string, payload: any, userId: string, context: Record<string, any> = {}): Promise<void> {
+    const maxRetries = 3;
+    const retryDelay = 1000;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await axios.post(webhookUrl, payload, {
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        });
+
+        if (response.data.errcode !== 0) {
+          const errorMsg = `WeWork API error: ${response.data.errmsg} (code: ${response.data.errcode})`;
+          logger.error({ response: response.data, payload, userId, ...context }, errorMsg);
+          throw new Error(errorMsg);
+        }
+
+        logger.debug({ response: response.data, userId, attempt, ...context }, 'WeWork payload sent successfully');
+        return;
+      } catch (error: any) {
+        const statusCode = error.response?.status;
+        if (attempt < maxRetries && (statusCode >= 500 || !statusCode)) {
+          logger.warn({ attempt, maxRetries, statusCode, error: error.message, userId, ...context }, 'WeWork send failed, retrying...');
+          await new Promise(r => setTimeout(r, retryDelay * attempt));
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private buildMultipartBody(file: ChannelFile, buffer: Buffer, boundary: string): Buffer {
+    const header = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="media"; filename="${file.name}"\r\n` +
+      `Content-Type: ${file.mimeType}\r\n\r\n`,
+      'utf8'
+    );
+    const footer = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+    return Buffer.concat([header, buffer, footer]);
+  }
+
+  private async uploadMedia(webhookUrl: string, file: ChannelFile): Promise<string> {
+    const url = new URL(webhookUrl);
+    const key = url.searchParams.get('key');
+    if (!key) {
+      throw new Error('WeWork webhook URL is missing key, cannot upload media');
+    }
+
+    const uploadUrl = `${url.origin}/cgi-bin/webhook/upload_media?key=${encodeURIComponent(key)}&type=file`;
+    const buffer = await fs.readFile(file.path);
+    const boundary = `foxwarm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const body = this.buildMultipartBody(file, buffer, boundary);
+
+    const response = await axios.post(uploadUrl, body, {
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String(body.length),
+      },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      timeout: 20000,
+    });
+
+    if (response.data.errcode !== 0 || !response.data.media_id) {
+      throw new Error(`WeWork media upload failed: ${response.data.errmsg || 'missing media_id'} (code: ${response.data.errcode ?? 'unknown'})`);
+    }
+
+    return response.data.media_id;
+  }
+
   async sendMessage(userId: string, text: string, options?: any): Promise<void> {
     try {
       // 企业微信群机器人支持多种消息类型，默认使用 markdown
@@ -359,7 +437,7 @@ export class WeWorkWebhookChannel implements Channel {
 
       // 如果有 chatId，添加到 payload 中以支持私聊回复
       // userId 在 wecom 场景下实际是 chatId（群聊 wrk 开头，私聊 wok 开头）
-      const effectiveChatId = options?.chatId || (userId.startsWith('wok') || userId.startsWith('wrk') ? userId : undefined);
+      const effectiveChatId = this.getEffectiveChatId(userId, options);
       if (effectiveChatId) {
         payload = { ...payload, chatid: effectiveChatId };
       }
@@ -371,53 +449,10 @@ export class WeWorkWebhookChannel implements Channel {
         originalUserId: userId
       }, 'Sending WeWork message');
 
-      // Retry logic for 5xx errors
-      const maxRetries = 3;
-      const retryDelay = 1000; // 1 second
-      let lastError: any;
-      
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          const response = await axios.post(webhookUrl, payload, {
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            timeout: 10000 // 10 seconds timeout
-          });
-
-          if (response.data.errcode !== 0) {
-            const errorMsg = `WeWork API error: ${response.data.errmsg} (code: ${response.data.errcode})`;
-            logger.error({ 
-              response: response.data,
-              payload,
-              userId 
-            }, errorMsg);
-            throw new Error(errorMsg);
-          }
-
-          logger.debug({ response: response.data, userId, attempt }, 'WeWork message sent successfully');
-          return; // Success, exit retry loop
-        } catch (error: any) {
-          lastError = error;
-          const statusCode = error.response?.status;
-          
-          // Only retry on 5xx errors or network errors
-          if (attempt < maxRetries && (statusCode >= 500 || !statusCode)) {
-            logger.warn({ 
-              attempt, 
-              maxRetries, 
-              statusCode, 
-              error: error.message,
-              userId 
-            }, 'WeWork send failed, retrying...');
-            await new Promise(r => setTimeout(r, retryDelay * attempt)); // Exponential backoff
-            continue;
-          }
-          
-          // Don't retry on 4xx errors or last attempt failed
-          throw error;
-        }
-      }
+      await this.postWebhookPayload(webhookUrl, payload, userId, {
+        chatId: effectiveChatId,
+        chatType: options?.chatType,
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorStack = error instanceof Error ? error.stack : undefined;
@@ -433,6 +468,60 @@ export class WeWorkWebhookChannel implements Channel {
       // Re-throw with more context
       throw new Error(`Failed to send WeWork message: ${errorMessage}`);
     }
+  }
+
+  async sendFile(userId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+    const webhookUrl = options?.webhookUrl || this.webhookUrl;
+    const effectiveChatId = this.getEffectiveChatId(userId, options);
+
+    if (options?.caption) {
+      await this.sendMessage(userId, options.caption, {
+        ...options,
+        messageType: 'text',
+        webhookUrl,
+        chatId: effectiveChatId,
+      });
+    }
+
+    if (file.isImage) {
+      const buffer = await fs.readFile(file.path);
+      const payload: any = {
+        msgtype: 'image',
+        image: {
+          base64: buffer.toString('base64'),
+          md5: crypto.createHash('md5').update(buffer).digest('hex')
+        }
+      };
+
+      if (effectiveChatId) {
+        payload.chatid = effectiveChatId;
+      }
+
+      await this.postWebhookPayload(webhookUrl, payload, userId, {
+        chatId: effectiveChatId,
+        fileName: file.name,
+        kind: 'image',
+      });
+      return;
+    }
+
+    const mediaId = await this.uploadMedia(webhookUrl, file);
+    const payload: any = {
+      msgtype: 'file',
+      file: {
+        media_id: mediaId
+      }
+    };
+
+    if (effectiveChatId) {
+      payload.chatid = effectiveChatId;
+    }
+
+    await this.postWebhookPayload(webhookUrl, payload, userId, {
+      chatId: effectiveChatId,
+      fileName: file.name,
+      kind: 'file',
+    });
   }
 
   async sendTyping(userId: string): Promise<void> {
