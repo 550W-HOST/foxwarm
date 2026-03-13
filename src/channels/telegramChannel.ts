@@ -6,6 +6,7 @@ import fs from 'fs';
 import { Telegraf } from 'telegraf';
 import axios from 'axios';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
+import { buildSavedFileText, saveInboundChannelFile } from '../channelFiles';
 import { COMMANDS } from '../commands';
 import { MessagePart } from '../types';
 import { logger } from '../common';
@@ -98,12 +99,20 @@ export class TelegramChannel implements Channel {
       const photo = ctx.message.photo.pop()!;
       const fileLink = await ctx.telegram.getFileLink(photo.file_id);
       const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
-      const base64 = Buffer.from(response.data).toString('base64');
+      const buffer = Buffer.from(response.data);
       const text = ctx.message.caption || '';
+      const saved = await saveInboundChannelFile({
+        platform: this.platform,
+        channelUserId: ctx.chat.id.toString(),
+        buffer,
+        fileName: `telegram-photo-${photo.file_unique_id || photo.file_id}.jpg`,
+        mimeType: 'image/jpeg',
+        isImage: true,
+      });
 
       const parts: MessagePart[] = [
-        { text: text || 'Received image.' },
-        { inlineData: { mimeType: 'image/jpeg', data: base64 } }
+        { text: buildSavedFileText(saved, 'image', text) },
+        { inlineData: { mimeType: saved.mimeType, data: buffer.toString('base64') } }
       ];
 
       const channelCtx = this.makeChannelContext(ctx);
@@ -121,15 +130,22 @@ export class TelegramChannel implements Channel {
 
       const doc = ctx.message.document;
       const fileLink = await ctx.telegram.getFileLink(doc.file_id);
+      const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
+      const buffer = Buffer.from(response.data);
+      const saved = await saveInboundChannelFile({
+        platform: this.platform,
+        channelUserId: ctx.chat.id.toString(),
+        buffer,
+        fileName: doc.file_name || `telegram-document-${doc.file_unique_id || doc.file_id}`,
+        mimeType: doc.mime_type || 'application/octet-stream',
+        isImage: doc.mime_type?.startsWith('image/'),
+      });
+      const caption = ctx.message.caption || '';
 
       if (doc.mime_type?.startsWith('image/')) {
-        const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
-        const base64 = Buffer.from(response.data).toString('base64');
-        const text = ctx.message.caption || '';
-
         const parts: MessagePart[] = [
-          { text: text || 'Received image.' },
-          { inlineData: { mimeType: doc.mime_type, data: base64 } }
+          { text: buildSavedFileText(saved, 'image', caption) },
+          { inlineData: { mimeType: saved.mimeType, data: buffer.toString('base64') } }
         ];
 
         const channelCtx = this.makeChannelContext(ctx);
@@ -141,7 +157,7 @@ export class TelegramChannel implements Channel {
 
         this.messageHandler(channelCtx, message);
       } else {
-        const text = `Received file: ${doc.file_name} (${doc.mime_type}). URL: ${fileLink.href}\n\nCaption: ${ctx.message.caption || ''}`;
+        const text = buildSavedFileText(saved, 'file', caption);
         const parts: MessagePart[] = [{ text }];
 
         const channelCtx = this.makeChannelContext(ctx);

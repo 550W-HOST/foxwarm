@@ -4,6 +4,7 @@
 
 import fs from 'fs-extra';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
+import { buildSavedFileText, saveInboundChannelFile } from '../channelFiles';
 import { MessagePart } from '../types';
 import { logger } from '../common';
 
@@ -82,12 +83,18 @@ export class MatrixChannel implements Channel {
           // Download image and convert to base64
           const response = await fetch(httpUrl);
           const buffer = await response.arrayBuffer();
-          const base64 = Buffer.from(buffer).toString('base64');
-
-          const text = content.body || 'Received image.';
+          const binary = Buffer.from(buffer);
+          const saved = await saveInboundChannelFile({
+            platform: this.platform,
+            channelUserId: roomId,
+            buffer: binary,
+            fileName: content.body || 'matrix-image',
+            mimeType: content.info?.mimetype || 'image/jpeg',
+            isImage: true,
+          });
           const parts: MessagePart[] = [
-            { text },
-            { inlineData: { mimeType: content.info?.mimetype || 'image/jpeg', data: base64 } }
+            { text: buildSavedFileText(saved, 'image') },
+            { inlineData: { mimeType: saved.mimeType, data: binary.toString('base64') } }
           ];
 
           const channelCtx = this.makeChannelContext(roomId, sender);
@@ -104,18 +111,31 @@ export class MatrixChannel implements Channel {
       }
       // Handle file messages
       else if (content.msgtype === 'm.file') {
-        const mxcUrl = content.url;
-        const httpUrl = this.client.mxcUrlToHttp(mxcUrl);
-        const text = `Received file: ${content.body} (${content.info?.mimetype || 'unknown'}). URL: ${httpUrl}`;
+        try {
+          const mxcUrl = content.url;
+          const httpUrl = this.client.mxcUrlToHttp(mxcUrl);
+          const response = await fetch(httpUrl);
+          const buffer = Buffer.from(await response.arrayBuffer());
+          const saved = await saveInboundChannelFile({
+            platform: this.platform,
+            channelUserId: roomId,
+            buffer,
+            fileName: content.filename || content.body || 'matrix-file',
+            mimeType: content.info?.mimetype || 'application/octet-stream',
+            isImage: false,
+          });
 
-        const channelCtx = this.makeChannelContext(roomId, sender);
-        const message: ChannelMessage = {
-          parts: [{ text }],
-          channelUserId: sender,
-          username: sender
-        };
+          const channelCtx = this.makeChannelContext(roomId, sender);
+          const message: ChannelMessage = {
+            parts: [{ text: buildSavedFileText(saved, 'file') }],
+            channelUserId: sender,
+            username: sender
+          };
 
-        await this.messageHandler(channelCtx, message);
+          await this.messageHandler(channelCtx, message);
+        } catch (e) {
+          logger.error({ err: e }, 'Failed to process Matrix file');
+        }
       }
     });
 

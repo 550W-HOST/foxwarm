@@ -9,7 +9,9 @@ import fs from 'fs-extra';
 import xml2js from 'xml2js';
 import crypto from 'crypto';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
+import { buildSavedFileText, saveInboundChannelFile } from '../channelFiles';
 import { logger } from '../common';
+import { MessagePart } from '../types';
 
 export interface WeWorkWebhookConfig {
   webhookUrl: string;  // 企业微信群机器人 webhook URL
@@ -185,10 +187,12 @@ export class WeWorkWebhookChannel implements Channel {
         let chatType = 'unknown'; // 'single' = 私聊, 'group' = 群聊
         let chatId = '';
         let replyWebhookUrl = this.webhookUrl;
+        let parts: MessagePart[] | null = null;
 
         // Check for standard webhook format (msgtype)
         if (body.msgtype === 'text' && body.text?.content) {
           content = body.text.content;
+          parts = [{ text: content }];
           userId = body.from?.userid || 'unknown';
           userName = body.from?.name || userId;
         }
@@ -200,39 +204,13 @@ export class WeWorkWebhookChannel implements Channel {
           chatType = xmlData.ChatType || 'unknown';
           chatId = xmlData.ChatId || '';
           replyWebhookUrl = xmlData.WebhookUrl || this.webhookUrl;
-          
-          // Handle different message types
-          if (xmlData.MsgType === 'text' && (xmlData.Content || xmlData.Text?.Content)) {
-            content = xmlData.Content || xmlData.Text?.Content || '';
-            logger.debug({ content, userId, userName, chatType, chatId }, 'Extracted text content from WeWork XML');
-          } else if (xmlData.MsgType === 'event') {
-            logger.info('Ignored WeWork event');
-            // Handle events - could be used for triggers or status updates
-            // const eventType = xmlData.Event?.EventType;
-            // content = `[Event: ${eventType}]`;
-            // logger.info({ 
-            //   eventType, 
-            //   userId, 
-            //   userName, 
-            //   chatId: xmlData.ChatId,
-            //   msgId: xmlData.MsgId
-            // }, 'Received WeWork event message');
-          } else {
-            // Other message types (image, file, etc.)
-            content = `[${xmlData.MsgType || 'Unknown'} message]`;
-            logger.info({ 
-              msgType: xmlData.MsgType,
-              userId, 
-              userName,
-              chatType,
-              chatId,
-              msgId: xmlData.MsgId
-            }, 'Received WeWork non-text message');
-          }
+
+          parts = await this.buildInboundMessageParts(xmlData, chatId || userId, replyWebhookUrl);
+          content = parts?.map(part => part.text).filter(Boolean).join('\n') || '';
         }
 
         // Only process if we have content and user info
-        if (content && userId !== 'unknown') {
+        if ((parts?.length || content) && userId !== 'unknown') {
           logger.debug({ content, userId, userName, chatType, chatId }, 'Processing WeWork message');
           
           // Get WebhookUrl from message for reply (already set above)
@@ -262,7 +240,7 @@ export class WeWorkWebhookChannel implements Channel {
             };
 
             const message: ChannelMessage = {
-              parts: [{ text: content }],
+              parts: parts && parts.length ? parts : [{ text: content }],
               channelUserId: channelUserId,
               username: userName
             };
@@ -322,6 +300,113 @@ export class WeWorkWebhookChannel implements Channel {
 
   onMessage(handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>): void {
     this.messageHandler = handler;
+  }
+
+  private extractWebhookKey(webhookUrl: string): string | undefined {
+    try {
+      return new URL(webhookUrl).searchParams.get('key') || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async downloadInboundMedia(options: {
+    webhookUrl: string;
+    directUrl?: string;
+    mediaId?: string;
+  }): Promise<Buffer> {
+    if (options.directUrl) {
+      const response = await axios.get(options.directUrl, {
+        responseType: 'arraybuffer',
+        timeout: 20000,
+      });
+      return Buffer.from(response.data);
+    }
+
+    if (options.mediaId) {
+      const key = this.extractWebhookKey(options.webhookUrl);
+      if (!key) {
+        throw new Error('WeWork webhook URL is missing key, cannot download media by media_id');
+      }
+
+      const url = new URL(options.webhookUrl);
+      const downloadUrl = `${url.origin}/cgi-bin/webhook/get_media?key=${encodeURIComponent(key)}&media_id=${encodeURIComponent(options.mediaId)}`;
+      const response = await axios.get(downloadUrl, {
+        responseType: 'arraybuffer',
+        timeout: 20000,
+      });
+
+      const contentType = String(response.headers['content-type'] || '');
+      if (contentType.includes('application/json')) {
+        const payload = JSON.parse(Buffer.from(response.data).toString('utf8'));
+        if (payload.errcode !== 0) {
+          throw new Error(`WeWork media download failed: ${payload.errmsg || 'unknown'} (code: ${payload.errcode ?? 'unknown'})`);
+        }
+      }
+
+      return Buffer.from(response.data);
+    }
+
+    throw new Error('No WeWork media download source available');
+  }
+
+  private async buildInboundMessageParts(xmlData: any, channelUserId: string, replyWebhookUrl: string): Promise<MessagePart[] | null> {
+    if (xmlData.MsgType === 'text' && (xmlData.Content || xmlData.Text?.Content)) {
+      const content = xmlData.Content || xmlData.Text?.Content || '';
+      logger.debug({ content, userId: xmlData.From?.UserId, chatId: xmlData.ChatId }, 'Extracted text content from WeWork XML');
+      return [{ text: content }];
+    }
+
+    if (xmlData.MsgType === 'image') {
+      const buffer = await this.downloadInboundMedia({
+        webhookUrl: replyWebhookUrl,
+        directUrl: xmlData.ImageUrl || xmlData.PicUrl || xmlData.Url,
+        mediaId: xmlData.MediaId,
+      });
+      const saved = await saveInboundChannelFile({
+        platform: this.platform,
+        channelUserId,
+        buffer,
+        fileName: xmlData.FileName || `wework-image-${xmlData.MsgId || xmlData.MediaId || 'upload'}.jpg`,
+        mimeType: xmlData.MimeType || 'image/jpeg',
+        isImage: true,
+      });
+      return [
+        { text: buildSavedFileText(saved, 'image') },
+        { inlineData: { mimeType: saved.mimeType, data: buffer.toString('base64') } }
+      ];
+    }
+
+    if (xmlData.MsgType === 'file') {
+      const buffer = await this.downloadInboundMedia({
+        webhookUrl: replyWebhookUrl,
+        directUrl: xmlData.Url,
+        mediaId: xmlData.MediaId,
+      });
+      const saved = await saveInboundChannelFile({
+        platform: this.platform,
+        channelUserId,
+        buffer,
+        fileName: xmlData.FileName || `wework-file-${xmlData.MsgId || xmlData.MediaId || 'upload'}`,
+        mimeType: xmlData.MimeType || 'application/octet-stream',
+        isImage: false,
+      });
+      return [{ text: buildSavedFileText(saved, 'file') }];
+    }
+
+    if (xmlData.MsgType === 'event') {
+      logger.info('Ignored WeWork event');
+      return null;
+    }
+
+    logger.info({
+      msgType: xmlData.MsgType,
+      userId: xmlData.From?.UserId,
+      chatType: xmlData.ChatType,
+      chatId: xmlData.ChatId,
+      msgId: xmlData.MsgId
+    }, 'Received unsupported WeWork message type');
+    return [{ text: `[${xmlData.MsgType || 'Unknown'} message]` }];
   }
 
   private getEffectiveChatId(userId: string, options?: any): string | undefined {
