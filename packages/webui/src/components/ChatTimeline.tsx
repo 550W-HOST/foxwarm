@@ -304,6 +304,19 @@ const formatToolResponseText = (resp: FunctionResponse): string => {
   return formatObject(resp.response)
 }
 
+const getPrimaryToolResponseText = (resp: FunctionResponse): string | null => {
+  if (resp.response?.error !== undefined && resp.response?.error !== null) {
+    return typeof resp.response.error === 'string' ? resp.response.error : JSON.stringify(resp.response.error, null, 2)
+  }
+  if (resp.response?.output !== undefined && resp.response?.output !== null) {
+    return typeof resp.response.output === 'string' ? resp.response.output : JSON.stringify(resp.response.output, null, 2)
+  }
+  if (resp.response?.content !== undefined && resp.response?.content !== null) {
+    return typeof resp.response.content === 'string' ? resp.response.content : JSON.stringify(resp.response.content, null, 2)
+  }
+  return null
+}
+
 const getToolResponseStatus = (resp: FunctionResponse): 'success' | 'error' => {
   if (resp.response?.error !== undefined && resp.response?.error !== null) {
     return 'error'
@@ -714,6 +727,12 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
       const preview = output.length > 400 ? `${output.substring(0, 400)}...` : output
       const displayStr = expanded ? output : preview
       return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
+    }
+
+    const primaryText = getPrimaryToolResponseText(resp)
+    if (primaryText !== null) {
+      const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
+      return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
     }
 
     if (getToolResponseStatus(resp) === 'success') {
