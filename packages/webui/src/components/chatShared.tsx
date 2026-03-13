@@ -460,11 +460,24 @@ const toolIcons: Record<string, LucideIcon> = {
 
 const getToolIcon = (name: string) => toolIcons[name] || Wrench
 
-export const ToolTag = ({ name, className = '' }: { name: string; className?: string }) => {
+export type ToolTagTone = 'neutral' | 'success' | 'error'
+
+export interface ToolTagItem {
+  name: string
+  tone?: ToolTagTone
+}
+
+const toolTagToneClasses: Record<ToolTagTone, string> = {
+  neutral: 'border-gray-200 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 text-gray-600 dark:text-gray-300',
+  success: 'border-green-200 dark:border-green-800 bg-green-50/80 dark:bg-green-900/20 text-green-700 dark:text-green-300',
+  error: 'border-red-200 dark:border-red-800 bg-red-50/80 dark:bg-red-900/20 text-red-700 dark:text-red-300',
+}
+
+export const ToolTag = ({ name, tone = 'neutral', className = '' }: { name: string; tone?: ToolTagTone; className?: string }) => {
   const Icon = getToolIcon(name)
 
   return (
-    <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border border-gray-200 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none text-gray-600 dark:text-gray-300 align-middle ${className}`.trim()}>
+    <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
       <Icon size={12} />
       <span>{name}</span>
     </span>
@@ -473,10 +486,10 @@ export const ToolTag = ({ name, className = '' }: { name: string; className?: st
 
 export const ToolLabel = ({ name }: { name: string }) => <ToolTag name={name} />
 
-export const ToolTagList = ({ names }: { names: string[] }) => (
+export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
   <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-    {names.map((name, idx) => (
-      <ToolTag key={`${name}-${idx}`} name={name} />
+    {items.map((item, idx) => (
+      <ToolTag key={`${item.name}-${idx}`} name={item.name} tone={item.tone} />
     ))}
   </div>
 )

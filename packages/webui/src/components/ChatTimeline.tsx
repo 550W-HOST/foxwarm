@@ -26,6 +26,7 @@ import {
   type FunctionResponse,
   type Message,
   type MessagePart,
+  type ToolTagItem,
   type ToolViewMode,
   type ViewMode,
 } from './chatShared'
@@ -886,7 +887,7 @@ interface MessageRowProps {
   isMobile: boolean
   verbose: boolean
   groupKey: string
-  summaryTagsKey: string
+  summaryTagItemsKey: string
   showToolGroupSummary: boolean
   groupExpanded: boolean
   onExpandGroup: (groupKey: string) => void
@@ -900,15 +901,22 @@ const MessageRow = memo(function MessageRow({
   isMobile,
   verbose,
   groupKey,
-  summaryTagsKey,
+  summaryTagItemsKey,
   showToolGroupSummary,
   groupExpanded,
   onExpandGroup,
 }: MessageRowProps) {
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
   const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData), [msg.parts])
-  const summaryTags = useMemo(() => summaryTagsKey ? summaryTagsKey.split('\u0000') : [], [summaryTagsKey])
-  const isInToolGroup = summaryTags.length > 0
+  const summaryTagItems = useMemo<ToolTagItem[]>(() => {
+    if (!summaryTagItemsKey) return []
+    try {
+      return JSON.parse(summaryTagItemsKey) as ToolTagItem[]
+    } catch {
+      return []
+    }
+  }, [summaryTagItemsKey])
+  const isInToolGroup = summaryTagItems.length > 0
   const hasVisibleTextContent = useMemo(() => msg.parts.some(p => (p.text && p.text.trim()) || (p.system && String(p.system).trim())), [msg.parts])
   const systemLikeMessage = useMemo(() => {
     if (msg.role === 'model') return false
@@ -973,7 +981,7 @@ const MessageRow = memo(function MessageRow({
                 onClick={() => onExpandGroup(groupKey)}
               >
                 <div className="flex items-start gap-2">
-                  <ToolTagList names={summaryTags} />
+                  <ToolTagList items={summaryTagItems} />
                 </div>
               </div>
             )}
@@ -991,7 +999,7 @@ const MessageRow = memo(function MessageRow({
   prev.isMobile === next.isMobile &&
   prev.verbose === next.verbose &&
   prev.groupKey === next.groupKey &&
-  prev.summaryTagsKey === next.summaryTagsKey &&
+  prev.summaryTagItemsKey === next.summaryTagItemsKey &&
   prev.showToolGroupSummary === next.showToolGroupSummary &&
   prev.groupExpanded === next.groupExpanded
 ))
@@ -1021,8 +1029,27 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
       return start
     }
 
-    const getToolGroupSummaryTags = (startIdx: number) => {
-      const names: string[] = []
+    const getToolGroupSummaryItems = (startIdx: number): ToolTagItem[] => {
+      const items: ToolTagItem[] = []
+      const toolStatusById = new Map<string, 'success' | 'error'>()
+
+      for (let i = startIdx; i < messages.length; i++) {
+        const m = messages[i]
+        if (m.role !== 'model' && m.role !== 'tool') break
+        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
+
+        m.parts.forEach((p) => {
+          if (p.functionResponse?.tool_use_id) {
+            const nextStatus = getToolResponseStatus(p.functionResponse)
+            const prevStatus = toolStatusById.get(p.functionResponse.tool_use_id)
+            toolStatusById.set(
+              p.functionResponse.tool_use_id,
+              prevStatus === 'error' || nextStatus === 'error' ? 'error' : 'success'
+            )
+          }
+        })
+      }
+
       for (let i = startIdx; i < messages.length; i++) {
         const m = messages[i]
         if (m.role !== 'model' && m.role !== 'tool') break
@@ -1030,21 +1057,28 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
 
         m.parts.forEach((p) => {
           if (p.thinking && p.thinking.trim() && !hasTextContent(m)) {
-            names.push('reasoning')
+            items.push({ name: 'reasoning', tone: 'neutral' })
           }
           if (p.functionCall) {
-            names.push(p.functionCall.name)
+            const status = p.functionCall.id ? toolStatusById.get(p.functionCall.id) : undefined
+            items.push({
+              name: p.functionCall.name,
+              tone: status === 'error' ? 'error' : status === 'success' ? 'success' : 'neutral',
+            })
           }
         })
       }
-      return names
+      return items
     }
 
     const startIdxByIndex = messages.map((_, idx) => getToolGroupStartIdx(idx))
-    const summaryTagsKeyByStart = new Map<number, string>()
+    const summaryTagItemsByStart = new Map<number, ToolTagItem[]>()
+    const summaryTagItemsKeyByStart = new Map<number, string>()
     startIdxByIndex.forEach((startIdx) => {
-      if (!summaryTagsKeyByStart.has(startIdx)) {
-        summaryTagsKeyByStart.set(startIdx, getToolGroupSummaryTags(startIdx).join('\u0000'))
+      if (!summaryTagItemsKeyByStart.has(startIdx)) {
+        const items = getToolGroupSummaryItems(startIdx)
+        summaryTagItemsByStart.set(startIdx, items)
+        summaryTagItemsKeyByStart.set(startIdx, JSON.stringify(items))
       }
     })
 
@@ -1055,8 +1089,8 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
         return prevMsg?.role === 'model' && prevMsg.parts.some(p => p.functionCall)
       }),
       groupKeyByIndex: startIdxByIndex.map((startIdx) => `${startIdx}-toolgroup`),
-      summaryTagsKeyByIndex: startIdxByIndex.map((startIdx) => summaryTagsKeyByStart.get(startIdx) || ''),
-      shouldRenderSummary: startIdxByIndex.map((startIdx, idx) => idx === startIdx && (summaryTagsKeyByStart.get(startIdx) || '').length > 0),
+      summaryTagItemsKeyByIndex: startIdxByIndex.map((startIdx) => summaryTagItemsKeyByStart.get(startIdx) || ''),
+      shouldRenderSummary: startIdxByIndex.map((startIdx, idx) => idx === startIdx && (summaryTagItemsByStart.get(startIdx)?.length || 0) > 0),
     }
   }, [messages])
 
@@ -1086,7 +1120,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
             isMobile={isMobile}
             verbose={verbose}
             groupKey={groupKey}
-            summaryTagsKey={toolGroupMeta.summaryTagsKeyByIndex[idx]}
+            summaryTagItemsKey={toolGroupMeta.summaryTagItemsKeyByIndex[idx]}
             showToolGroupSummary={toolGroupMeta.shouldRenderSummary[idx]}
             groupExpanded={expandedToolGroups.has(groupKey)}
             onExpandGroup={handleExpandGroup}
