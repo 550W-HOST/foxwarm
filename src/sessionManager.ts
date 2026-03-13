@@ -10,6 +10,7 @@ import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, Ses
 import { logger } from './common';
 import { getChannelInstance } from './channel';
 import * as llm from './llm';
+import { buildChildCompletionInstruction } from './childSessionReminder';
 import { getSkillInfo, validateSkillName } from './skills';
 import { estimateSessionTokens } from './tokenCount';
 import * as vector from './vector';
@@ -1185,7 +1186,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   });
 
   const systemMessage = isChildSession
-    ? `You are a child session forked from parent session \`${sourceSessionId}\`. Your current session ID is \`${newSessionId}\`. When you finish the task, explicitly call send_to_session({sessionId: \`${sourceSessionId}\`, message: "..."}).`
+    ? `You are a child session forked from parent session \`${sourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${buildChildCompletionInstruction(sourceSessionId)}`
     : `Session forked from ${sourceSessionId} by user command. Your current session ID is \`${newSessionId}\`.`;
 
   appendedForkMessages.push({
@@ -1253,7 +1254,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
 
     const initialMessage: Message = {
       role: 'user',
-      parts: [systemPart(`You are a child session (new, empty context) with parent session \`${parentSessionId}\`. Your current session ID is \`${childSessionId}\`. When you finish, explicitly call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}).`)],
+      parts: [systemPart(`You are a child session (new, empty context) with parent session \`${parentSessionId}\`. Your current session ID is \`${childSessionId}\`. ${buildChildCompletionInstruction(parentSessionId)}`)],
       __meta: { timestamp: Date.now() }
     };
 
