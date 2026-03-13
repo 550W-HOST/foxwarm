@@ -990,10 +990,10 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const pairStatus = getToolPairStatus(responses, imageParts)
   const isError = pairStatus === 'error'
   const outerToneClass = pairStatus === 'error'
-    ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+    ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
     : pairStatus === 'success'
-      ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
-      : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'
+      ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+      : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
 
   const responsePreview = useMemo(() => {
     const firstResponse = responses[0]
@@ -1039,7 +1039,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                 <ToolLabel name={call.name} />
                 <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>
               </div>
-              <div className={`${isError ? 'text-red-700 dark:text-red-300' : 'text-gray-700 dark:text-gray-200'}`} style={clampContentStyle(1)}>{responsePreview}</div>
+              <div className="text-gray-700 dark:text-gray-200" style={clampContentStyle(1)}>{responsePreview}</div>
             </div>
           ) : (
             <div className="space-y-2">
@@ -1060,7 +1060,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
                 <div className={`border-t ${isError ? 'border-red-200 dark:border-red-800' : 'border-green-200 dark:border-green-800'} opacity-70`} />
 
-                <div className={`rounded border p-2 ${isError ? 'border-red-200 dark:border-red-800 bg-white/80 dark:bg-gray-900/60 text-red-700 dark:text-red-300' : 'border-green-200 dark:border-green-800 bg-white/80 dark:bg-gray-900/60 text-gray-700 dark:text-gray-200'}`}>
+                <div className={`rounded border p-2 ${isError ? 'border-red-200 dark:border-red-800 bg-white/80 dark:bg-gray-900/60' : 'border-green-200 dark:border-green-800 bg-white/80 dark:bg-gray-900/60'} text-gray-700 dark:text-gray-200`}>
                   <div className="space-y-2">
                     {responses.length > 0 ? responses.map((resp, idx) => (
                       <div key={`${resp.tool_use_id || call.id || call.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
