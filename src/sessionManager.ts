@@ -237,7 +237,7 @@ export async function attachAgentSkill(agentName: string, skillName: string): Pr
     throw new Error(`Agent "${agentName}" does not exist.`);
   }
 
-  await getSkillInfo(skillName);
+  await getSkillInfo(skillName, { agentName });
 
   const currentMeta = getAgentMetadata(agentName);
   const currentSkills = getAgentSkills(agentName);

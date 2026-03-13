@@ -16,8 +16,215 @@ export type CommandDef = {
   usage?: string
   requiresSession?: boolean
   showInTelegram?: boolean
+  autocomplete?: CommandAutocomplete
   handler: (ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) => Promise<void>
 }
+
+export type CommandAutocompleteNode = {
+  value: string
+  kind?: 'literal' | 'placeholder'
+  description?: string
+  usage?: string
+  insertValue?: string
+  children?: CommandAutocompleteNode[]
+}
+
+export type CommandAutocomplete = {
+  children?: CommandAutocompleteNode[]
+}
+
+function literalNode(value: string, description: string, extras: Partial<CommandAutocompleteNode> = {}): CommandAutocompleteNode {
+  return {
+    value,
+    kind: 'literal',
+    description,
+    ...extras,
+  }
+}
+
+function placeholderNode(value: string, description: string, extras: Partial<CommandAutocompleteNode> = {}): CommandAutocompleteNode {
+  return {
+    value,
+    kind: 'placeholder',
+    description,
+    ...extras,
+  }
+}
+
+const TIMER_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('list', 'List timers for the current session'),
+  literalNode('delete', 'Delete a timer by id', {
+    usage: '/timer delete <id>',
+    children: [placeholderNode('<id>', 'Timer identifier')],
+  }),
+  literalNode('after', 'Create a one-time timer after N seconds', {
+    usage: '/timer after <seconds> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>',
+    children: [placeholderNode('<seconds>', 'Delay in seconds')],
+  }),
+  literalNode('at', 'Create a one-time timer at an absolute time', {
+    usage: '/timer at <ISO-time> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>',
+    children: [placeholderNode('<ISO-time>', 'Absolute time like 2026-03-13T12:00:00Z')],
+  }),
+  literalNode('cron', 'Create a recurring cron timer', {
+    usage: '/timer cron <expr> [--new-session] [--prefix <prefix>] [--agent <agent>] -- <message>',
+    children: [placeholderNode('<expr>', 'Cron expression (5 or 6 fields)')],
+  }),
+]
+
+const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('list', 'List all sessions', {
+    usage: '/session list [page]',
+    children: [placeholderNode('[page]', 'Optional page number')],
+  }),
+  literalNode('new', 'Create a new ad-hoc session'),
+  literalNode('create', 'Create a session under an existing agent', {
+    usage: '/session create <agent> <session>',
+    children: [
+      placeholderNode('<agent>', 'Existing agent name', {
+        children: [placeholderNode('<session>', 'New session name')],
+      }),
+    ],
+  }),
+  literalNode('fork', 'Fork the current session'),
+  literalNode('delete', 'Delete a session', {
+    usage: '/session delete <sessionId>',
+    children: [placeholderNode('<sessionId>', 'Target session id')],
+  }),
+  literalNode('clear', 'Clear the current session history'),
+  literalNode('rename', 'Set a session display name', {
+    usage: '/session rename <name>',
+    children: [placeholderNode('<name>', 'New display name')],
+  }),
+  literalNode('update-snapshot', 'Refresh a session prompt snapshot', {
+    usage: '/session update-snapshot [session-id]',
+    children: [placeholderNode('[session-id]', 'Defaults to the current session')],
+  }),
+  literalNode('isolated', 'Toggle isolated mode', {
+    usage: '/session isolated [on|off] [node]',
+    children: [
+      literalNode('on', 'Enable isolated mode', {
+        children: [placeholderNode('[node]', 'Optional node to bind while isolated')],
+      }),
+      literalNode('off', 'Disable isolated mode'),
+    ],
+  }),
+  literalNode('index', 'Force archive indexing for the current session'),
+  literalNode('move', 'Rename the current session or move it to an existing agent', {
+    usage: '/session move <new-session-id>|<existing-agent>/<new-session-id>',
+    children: [placeholderNode('<new-session-id|agent/session>', 'Rename target or existing-agent/new-session-id')],
+  }),
+  literalNode('parent', 'Set a parent session', {
+    usage: '/session parent <parent-session-id> [child-session-id]',
+    children: [
+      placeholderNode('<parent-session-id>', 'Parent session id', {
+        children: [placeholderNode('[child-session-id]', 'Defaults to the current session')],
+      }),
+    ],
+  }),
+  literalNode('unparent', 'Remove a parent session', {
+    usage: '/session unparent [child-session-id]',
+    children: [placeholderNode('[child-session-id]', 'Defaults to the current session')],
+  }),
+  literalNode('archive', 'Archive a session', {
+    usage: '/session archive [session-id]',
+    children: [placeholderNode('[session-id]', 'Defaults to the current session')],
+  }),
+  literalNode('unarchive', 'Unarchive a session', {
+    usage: '/session unarchive [session-id]',
+    children: [placeholderNode('[session-id]', 'Defaults to the current session')],
+  }),
+]
+
+const AGENT_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('list', 'List all agents'),
+  literalNode('create', 'Create a new agent', {
+    usage: '/agent create <name> [--no-main]',
+    children: [
+      placeholderNode('<name>', 'New agent name', {
+        children: [literalNode('--no-main', 'Create the agent without a main session')],
+      }),
+    ],
+  }),
+  literalNode('inherit', 'Set or clear shared-memory inheritance', {
+    usage: '/agent inherit <agent> <parent-agent|none>',
+    children: [
+      placeholderNode('<agent>', 'Agent to update', {
+        children: [placeholderNode('<parent-agent|none>', 'Parent agent name or none')],
+      }),
+    ],
+  }),
+  literalNode('delete', 'Delete an agent and all its sessions', {
+    usage: '/agent delete <name> [--confirm]',
+    children: [
+      placeholderNode('<name>', 'Agent to delete', {
+        children: [literalNode('--confirm', 'Required confirmation flag')],
+      }),
+    ],
+  }),
+]
+
+const SKILL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('list', 'List available skills'),
+  literalNode('attach', 'Attach a skill to an agent', {
+    usage: '/skill attach <agent> <skill>',
+    children: [
+      placeholderNode('<agent>', 'Target agent', {
+        children: [placeholderNode('<skill>', 'Skill name')],
+      }),
+    ],
+  }),
+  literalNode('detach', 'Detach a skill from an agent', {
+    usage: '/skill detach <agent> <skill>',
+    children: [
+      placeholderNode('<agent>', 'Target agent', {
+        children: [placeholderNode('<skill>', 'Skill name')],
+      }),
+    ],
+  }),
+  literalNode('show', 'Show skill documents', {
+    usage: '/skill show <skill>',
+    children: [placeholderNode('<skill>', 'Skill name')],
+  }),
+]
+
+const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  placeholderNode('<node-id>', 'Existing node id; omit it to list nodes'),
+]
+
+const MESSAGES_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  placeholderNode('<num>', 'Positive = oldest messages, negative = newest', {
+    children: [placeholderNode('[end]', 'Optional end index for a range')],
+  }),
+]
+
+const MODEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('default', 'Reset to the default model'),
+  placeholderNode('<name>', 'Model name or partial model name'),
+]
+
+const DELETE_MESSAGES_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  placeholderNode('<num>', 'Positive = oldest, negative = newest'),
+]
+
+const VERBOSE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('on', 'Show tool calls and verbose details'),
+  literalNode('off', 'Hide tool calls and verbose details'),
+]
+
+const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('mode', 'Set channel mode', {
+    children: [
+      literalNode('push-only', 'Only accept direct/push-style messages'),
+      literalNode('normal', 'Normal interactive mode'),
+    ],
+  }),
+  literalNode('dangerously-allow-all-group-members', 'Allow all group members to use commands', {
+    children: [
+      literalNode('yes', 'Enable allow-all mode'),
+      literalNode('no', 'Disable allow-all mode'),
+    ],
+  }),
+]
 
 const messagesUsage = 'Usage: `/messages <num>` | `/messages <start> <end>`'
 const deleteMessagesUsage = 'Usage: `/delete-messages <num>` (positive: delete oldest, negative: delete newest)'
@@ -144,17 +351,24 @@ export const COMMANDS: Record<string, CommandDef> = {
   '/compact': {
     description: 'Compact history. `args: [keep%]`',
     requiresSession: true,
+    autocomplete: {
+      children: [placeholderNode('[keep%]', 'Optional keep percentage, e.g. 20 or 50')],
+    },
     handler: handleCompactCommand,
   },
   '/compress': {
     description: 'Alias of /compact. `args: [keep%]`',
     requiresSession: true,
+    autocomplete: {
+      children: [placeholderNode('[keep%]', 'Optional keep percentage, e.g. 20 or 50')],
+    },
     handler: handleCompactCommand,
     showInTelegram: false,
   },
   '/timer': {
     description: 'Manage session timers: help, list, create, delete',
     requiresSession: true,
+    autocomplete: { children: TIMER_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
 
@@ -350,6 +564,7 @@ export const COMMANDS: Record<string, CommandDef> = {
   '/session': {
     description: 'Manage sessions: list, fork, move, parent/unparent, archive',
     requiresSession: false,
+    autocomplete: { children: SESSION_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       // Manually get session for subcommands that need it
       if (!sessionId) {
@@ -793,6 +1008,9 @@ export const COMMANDS: Record<string, CommandDef> = {
   '/attach': {
     description: 'Attach to session. `args: <sessionId>`',
     requiresSession: false,
+    autocomplete: {
+      children: [placeholderNode('<sessionId>', 'Existing session id')],
+    },
     handler: async (ctx, args) => {
       if (args.length === 0) {
         ctx.reply('Usage: /attach <sessionId>\nUse /sessions to see available sessions.')
@@ -816,6 +1034,7 @@ export const COMMANDS: Record<string, CommandDef> = {
   '/agent': {
     description: 'Manage agents',
     requiresSession: false,
+    autocomplete: { children: AGENT_AUTOCOMPLETE },
     handler: async (ctx, args) => {
       const subcommand = args[0]
       const subArgs = args.slice(1)
@@ -1000,9 +1219,11 @@ export const COMMANDS: Record<string, CommandDef> = {
   '/skill': {
     description: 'Manage skills: list, attach, detach, show',
     requiresSession: false,
-    handler: async (ctx, args) => {
+    autocomplete: { children: SKILL_AUTOCOMPLETE },
+    handler: async (ctx, args, _sessionId, session) => {
       const subcommand = args[0]
       const subArgs = args.slice(1)
+      const agentName = session?.agent || 'main'
 
       if (!subcommand) {
         let resp = '🧩 *Skill Commands*\n\n'
@@ -1016,15 +1237,16 @@ export const COMMANDS: Record<string, CommandDef> = {
 
       switch (subcommand) {
         case 'list': {
-          const skillList = await skills.listSkills()
+          const skillList = await skills.listSkills({ agentName })
           if (skillList.length === 0) {
-            ctx.reply('No skills found.')
+            ctx.reply(`No skills found for agent \`${agentName}\`.`)
             return
           }
 
-          let resp = `🧩 *Skills* (${skillList.length})\n\n`
+          let resp = `🧩 *Skills for ${agentName}* (${skillList.length})\n\n`
           for (const skill of skillList) {
             resp += `\`${skill.name}\``
+            resp += ` [${skills.formatSkillSourceLabel(skill)}]`
             if (skill.description) {
               resp += ` - ${skill.description}`
             }
@@ -1100,11 +1322,12 @@ export const COMMANDS: Record<string, CommandDef> = {
           const skillName = subArgs[0]
 
           try {
-            const { info, documents } = await skills.loadSkillDocuments(skillName)
+            const { info, documents } = await skills.loadSkillDocuments(skillName, { agentName })
             let resp = `🧩 *Skill:* \`${info.name}\``
             if (info.description) {
               resp += `\n${info.description}`
             }
+            resp += `\nSource: \`${skills.formatSkillSourceLabel(info)}\``
             resp += `\nMetadata: \`${info.metadataPath}\``
 
             if (documents.length === 0) {
@@ -1176,6 +1399,7 @@ export const COMMANDS: Record<string, CommandDef> = {
   '/node': {
     description: 'List or switch node. `args: [node-id]`',
     requiresSession: true,
+    autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
       
@@ -1228,6 +1452,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     description: 'Show message previews. `args: <num> | <start> <end>`',
     requiresSession: true,
     showInTelegram: false,
+    autocomplete: { children: MESSAGES_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
       const totalMessages = session.history.length
@@ -1287,6 +1512,7 @@ export const COMMANDS: Record<string, CommandDef> = {
   '/model': {
     description: 'List or switch model. `args: [name|default]`',
     requiresSession: true,
+    autocomplete: { children: MODEL_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
       const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(session.model)
@@ -1348,6 +1574,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     description: 'Delete messages from current session. `args: <num>` (positive: oldest, negative: newest)',
     requiresSession: true,
     showInTelegram: false,
+    autocomplete: { children: DELETE_MESSAGES_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId) => {
       if (!sessionId) return
       if (args.length === 0) {
@@ -1368,6 +1595,7 @@ export const COMMANDS: Record<string, CommandDef> = {
   '/verbose': {
     description: 'Toggle verbose mode (show tool calls). `args: [on|off]`',
     requiresSession: true,
+    autocomplete: { children: VERBOSE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId) => {
       if (!sessionId) return
       const session = await sessionManager.getSession(sessionId)
@@ -1395,6 +1623,7 @@ export const COMMANDS: Record<string, CommandDef> = {
   '/channel': {
     description: 'Manage channel settings. `args: mode <push-only|normal>`',
     requiresSession: false,
+    autocomplete: { children: CHANNEL_AUTOCOMPLETE },
     handler: async (ctx, args) => {
       if (args.length === 0) {
         ctx.reply('Usage: /channel mode <push-only|normal>\n       /channel dangerously-allow-all-group-members <yes|no>')

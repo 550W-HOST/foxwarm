@@ -423,7 +423,7 @@ async function appendSkillFilesForAgent(agentName: string): Promise<string> {
     let combined = '';
     for (const skillName of skills) {
         try {
-            const { documents } = await loadSkillDocuments(skillName);
+            const { documents } = await loadSkillDocuments(skillName, { agentName });
             for (const document of documents) {
                 combined += formatSkillBlock(document.filePath, skillName, document.content);
             }

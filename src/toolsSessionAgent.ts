@@ -290,16 +290,20 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
   return result;
 }
 
-export async function tool_list_skills() {
-  const skillList = await skills.listSkills();
+export async function tool_list_skills(args: ToolArgs = {}, ctx?: ToolContext) {
+  const agentName = typeof args.agentName === 'string' && args.agentName.trim()
+    ? args.agentName.trim()
+    : (ctx?.session?.agent || 'main');
+  const skillList = await skills.listSkills({ agentName });
 
   if (skillList.length === 0) {
-    return 'No skills found.';
+    return `No skills found for agent "${agentName}".`;
   }
 
-  let result = `Found ${skillList.length} skill(s):\n\n`;
+  let result = `Found ${skillList.length} skill(s) for agent "${agentName}":\n\n`;
   for (const skill of skillList) {
     result += `- **${skill.name}**`;
+    result += ` [${skills.formatSkillSourceLabel(skill)}]`;
     if (skill.description) {
       result += ` - ${skill.description}`;
     }
@@ -367,17 +371,21 @@ export async function tool_detach_agent_skill(args: ToolArgs, ctx?: ToolContext)
 export async function tool_load_skill(args: ToolArgs, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'load_skill');
   const { skillName } = args;
+  const agentName = typeof args.agentName === 'string' && args.agentName.trim()
+    ? args.agentName.trim()
+    : (ctx?.session?.agent || 'main');
 
   if (!skillName || typeof skillName !== 'string') {
     throw new Error('skillName is required');
   }
 
-  const { info, documents } = await skills.loadSkillDocuments(skillName);
+  const { info, documents } = await skills.loadSkillDocuments(skillName, { agentName });
 
   let result = `Skill: ${info.name}`;
   if (info.description) {
     result += `\nDescription: ${info.description}`;
   }
+  result += `\nSource: ${skills.formatSkillSourceLabel(info)}`;
   result += `\nMetadata: ${info.metadataPath}`;
 
   if (documents.length === 0) {

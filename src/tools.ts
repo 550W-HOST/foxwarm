@@ -790,10 +790,12 @@ export const definitions = [
         },
         {
             name: 'list_skills',
-            description: 'List all available skills and their descriptions.',
+            description: 'List available skills for the current session agent (or an optionally specified agent), including agent-local, inherited-agent, and global skills.',
             parameters: {
                 type: 'object',
-                properties: {},
+                properties: {
+                    agentName: { type: 'string', description: 'Optional agent name whose visible skills should be listed. Defaults to the current session agent.' }
+                },
                 required: [] as string[]
             }
         },
@@ -823,11 +825,12 @@ export const definitions = [
         },
         {
             name: 'load_skill',
-            description: 'Load skill documentation content. This only returns skill documents and metadata; it does not dynamically add tools.',
+            description: 'Load skill documentation content using the current session agent skill resolution (or an optionally specified agent). This only returns skill documents and metadata; it does not dynamically add tools.',
             parameters: {
                 type: 'object',
                 properties: {
-                    skillName: { type: 'string', description: 'Skill name to load' }
+                    skillName: { type: 'string', description: 'Skill name to load' },
+                    agentName: { type: 'string', description: 'Optional agent name whose skill search path should be used. Defaults to the current session agent.' }
                 },
                 required: ['skillName']
             }
