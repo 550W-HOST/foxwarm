@@ -278,7 +278,7 @@ async function main(): Promise<void> {
       assertLastModelText(parentAfter, 'parent received end-turn handoff');
     });
 
-    await test('compact_session retries invalid compact plans inside the restricted compact flow', async () => {
+    await test('compact_session retries invalid compact plans and then resumes with compacted history', async () => {
       const sessionId = makeSessionId('selftest_compact_current');
       createdSessionIds.push(sessionId);
       await ensureSession(sessionId);
@@ -341,7 +341,15 @@ async function main(): Promise<void> {
           return { text: '', toolCalls: [toolCall] };
         }
 
-        throw new Error(`compact_session self-request should stop after the dedicated compaction flow, got LLM call ${llmCallCount}`);
+        if (llmCallCount === 4) {
+          assert.strictEqual(parts, null);
+          assert(activeSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
+          assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('compacted summary'))));
+          await appendStubModelMessage(activeSession, [{ text: 'continued after compact' }]);
+          return { text: 'continued after compact' };
+        }
+
+        throw new Error(`compact_session self-request should resume after the dedicated compaction flow, got LLM call ${llmCallCount}`);
       };
 
       await (router as any).runSessionTurn(sessionId, {
@@ -349,11 +357,85 @@ async function main(): Promise<void> {
       });
 
       const finalSession = await sessionManager.getSession(sessionId);
-      assert.strictEqual(llmCallCount, 3);
+      assert.strictEqual(llmCallCount, 4);
       assert.strictEqual(finalSession.busy, false);
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('compacted summary'))));
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed'))));
+      assertLastModelText(finalSession, 'continued after compact');
+    });
+
+    await test('automatic in-turn compaction after tool calls resumes with compacted history', async () => {
+      const sessionId = makeSessionId('selftest_auto_compact_current');
+      createdSessionIds.push(sessionId);
+      await ensureSession(sessionId);
+
+      const sampleFile = path.join(tempRoot, 'auto-compact-read.txt');
+      await fs.writeFile(sampleFile, 'auto compact\n');
+
+      let llmCallCount = 0;
+      (sessionManager as any).compactHistory = async (targetSessionId: string) => {
+        assert.strictEqual(targetSessionId, sessionId);
+        const targetSession = await sessionManager.getSession(targetSessionId);
+        targetSession.history = [
+          {
+            role: 'user',
+            parts: [{ system: 'This session has been compacted. Messages before this are removed.' }],
+            __meta: { timestamp: Date.now() }
+          },
+          {
+            role: 'model',
+            parts: [{ text: 'auto compact summary' }],
+            __meta: { timestamp: Date.now() }
+          },
+          {
+            role: 'user',
+            parts: [{ system: 'Compaction completed. You can continue working now.' }],
+            __meta: { timestamp: Date.now() }
+          },
+        ];
+        await sessionManager.saveSession(targetSessionId);
+      };
+
+      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+        assert.strictEqual(activeSession.id, sessionId);
+        await appendStubUserMessage(activeSession, parts);
+        llmCallCount += 1;
+
+        if (llmCallCount === 1) {
+          const toolCall = { id: 'auto-compact-read', name: 'read', args: { filePath: sampleFile } };
+          await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+          return {
+            text: '',
+            toolCalls: [toolCall],
+            usage: { inputTokens: 10 ** 9, outputTokens: 0, cachedTokens: 0 },
+          };
+        }
+
+        if (llmCallCount === 2) {
+          assert.strictEqual(parts, null);
+          assert(activeSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
+          assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary'))));
+          await appendStubModelMessage(activeSession, [{ text: 'continued after auto compact' }]);
+          return { text: 'continued after auto compact' };
+        }
+
+        throw new Error(`automatic in-turn compaction should resume exactly once after compaction, got LLM call ${llmCallCount}`);
+      };
+
+      try {
+        await (router as any).runSessionTurn(sessionId, {
+          parts: [{ text: 'trigger auto compact now' }],
+        });
+      } finally {
+        (sessionManager as any).compactHistory = originalCompactHistory;
+      }
+
+      const finalSession = await sessionManager.getSession(sessionId);
+      assert.strictEqual(llmCallCount, 2);
+      assert.strictEqual(finalSession.busy, false);
+      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary'))));
+      assertLastModelText(finalSession, 'continued after auto compact');
     });
 
     await test('post-tool LLM failure leaves a visible terminal model message without auto-notifying parent', async () => {
