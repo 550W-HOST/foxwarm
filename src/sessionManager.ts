@@ -11,14 +11,13 @@ import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from './chann
 import * as llm from './llm';
 import { buildChildCompletionInstruction } from './childSessionReminder';
 import { getSkillInfo, validateSkillName } from './skills';
-import { estimateSessionTokens } from './tokenCount';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, getAgentDir } from './config';
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, AGENTS_FILE, getAgentDir } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './session/archive';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
-import { buildCompactCandidateBlocks, buildCompactPlanValidationFeedback, buildCompactPromptText, COMPACT_PLAN_TOOL_DEFINITION, COMPACT_PLAN_TOOL_NAME, CompactPlanValidationError, describeBlockRanges, formatSeqRange, validateCompactPlanArgs } from './compactPlan';
+import * as sessionHistory from './session/history';
 
 // Agent metadata storage
 interface AgentMetadata {
@@ -607,6 +606,14 @@ function getSessionAgentOpsDeps() {
     getAgentMetadata,
     getSessionsMap: getAllSessions,
     getAttachmentsMap: getAllAttachments,
+  };
+}
+
+function getSessionHistoryDeps() {
+  return {
+    getSessionById: (sessionId: string) => sessions.get(sessionId),
+    getExistingSession,
+    saveSession,
   };
 }
 
@@ -1279,286 +1286,23 @@ export async function loadSessions(): Promise<void> {
 }
 
 export async function forceIndexSession(sessionId: string): Promise<void> {
-  const session = sessions.get(sessionId);
-  if (!session) {
-    throw new Error('Session not found');
-  }
-
-  try {
-    const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
-    logger.info({ sessionId, latestSeqHint }, 'Force indexing session archive');
-    await vector.indexSessionArchive(sessionId, latestSeqHint);
-    session.vectorIndexPosition = session.history.length;
-    session.indexingState = undefined;
-    await saveSession(sessionId);
-  } catch (e) {
-    logger.error({ err: e, sessionId }, 'Failed to force index session archive');
-    throw e;
-  }
-}
-
-type CompactionRunOptions = {
-  keepPercent?: number;
-  completionMarker?: string;
-  compactGuidance?: string;
-  startLogMessage?: string;
-  startBroadcastMessage?: string;
-};
-
-async function runCompaction(sessionId: string, options: CompactionRunOptions = {}): Promise<void> {
-  const session = sessions.get(sessionId);
-  if (!session) return;
-
-  const keepPercent = typeof options.keepPercent === 'number' ? options.keepPercent : COMPACT_PERCENT;
-  const completionMarker = options.completionMarker || 'Compaction completed.';
-  const compactGuidance = options.compactGuidance?.trim();
-
-  const history = session.history;
-  if (history.length < 1) return;
-  const originalHistoryLength = history.length;
-
-  // Notify user that compaction is starting
-  logger.info({ sessionId, hasBroadcast: !!session.broadcast }, options.startLogMessage || 'Compaction starting');
-  if (session.broadcast && options.startBroadcastMessage) {
-    session.broadcast(options.startBroadcastMessage);
-  }
-
-  let splitIndex = Math.floor(history.length * (1 - keepPercent));
-
-  if (keepPercent > 0) {
-    while (splitIndex < history.length && history[splitIndex].role === 'tool') {
-      splitIndex++;
-    }
-  } else {
-    splitIndex = history.length;
-  }
-
-  if (splitIndex <= 0) {
-    logger.info({ sessionId, keepPercent }, 'Compaction skipped because there are no older messages to compact');
-    return;
-  }
-
-  const olderMessages = history.slice(0, splitIndex);
-  const forceKeptRecentMessages = splitIndex < history.length ? history.slice(splitIndex) : [];
-  const candidateBlocks = buildCompactCandidateBlocks(olderMessages);
-
-  if (candidateBlocks.length === 0) {
-    logger.info({ sessionId, splitIndex }, 'Compaction skipped because no candidate blocks were produced');
-    return;
-  }
-
-  const forcedKeptStartSeq = forceKeptRecentMessages[0]?.__meta?.seq;
-  const forcedKeptEndSeq = forceKeptRecentMessages[forceKeptRecentMessages.length - 1]?.__meta?.seq;
-  const summaryPrompt: MessagePart = {
-    system: buildCompactPromptText({
-      forcedKeptCount: forceKeptRecentMessages.length,
-      forcedKeptStartSeq,
-      forcedKeptEndSeq,
-      candidateBlocks,
-      guidance: compactGuidance,
-    })
-  };
-
-  let beforeCompactIndex = session.history.length;
-
-  try {
-    // Don't change snapshot and history before compacting LLM request,
-    // to prevent recomputing whole history.
-    const maxCompactAttempts = 3;
-    let nextPromptParts: MessagePart[] = [summaryPrompt];
-    let compactPlan = null;
-
-    for (let attempt = 1; attempt <= maxCompactAttempts; attempt++) {
-      const result = await llm.chat(nextPromptParts, session, attempt - 1, {
-        toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION],
-      });
-
-      if (!result.toolCalls?.length) {
-        throw new Error(`Compaction failed because the model did not call ${COMPACT_PLAN_TOOL_NAME}.`);
-      }
-      if (result.toolCalls.length !== 1 || result.toolCalls[0].name !== COMPACT_PLAN_TOOL_NAME) {
-        throw new Error(`Compaction failed because the model returned an unexpected tool plan instead of a single ${COMPACT_PLAN_TOOL_NAME} call.`);
-      }
-
-      try {
-        compactPlan = validateCompactPlanArgs(result.toolCalls[0].args || {}, candidateBlocks);
-        break;
-      } catch (e) {
-        if (!(e instanceof CompactPlanValidationError)) {
-          throw e;
-        }
-
-        const attemptsRemaining = maxCompactAttempts - attempt;
-        if (attemptsRemaining <= 0) {
-          throw new Error(`Compaction failed after ${maxCompactAttempts} invalid ${COMPACT_PLAN_TOOL_NAME} submissions: ${e.message}`);
-        }
-
-        logger.warn({ sessionId, attempt, attemptsRemaining, validationError: e.message }, 'Compaction plan validation failed; retrying compact flow');
-        nextPromptParts = [{
-          system: buildCompactPlanValidationFeedback(e, attemptsRemaining),
-        }];
-      }
-    }
-
-    if (!compactPlan) {
-      throw new Error(`Compaction failed because no valid ${COMPACT_PLAN_TOOL_NAME} plan was produced.`);
-    }
-
-    const candidateById = new Map(candidateBlocks.map(block => [block.id, block]));
-    const keptOlderMessages = compactPlan.keepBlockIds.flatMap(blockId => candidateById.get(blockId)?.messages || []);
-    const retainedMessages = [...keptOlderMessages, ...forceKeptRecentMessages];
-
-    const now = Date.now();
-    const summaryConversation: Message[] = [
-      {
-        role: 'user',
-        parts: [{
-          system: [
-            'Compaction plan applied via submit_compact_plan.',
-            `Older blocks kept verbatim: ${describeBlockRanges(candidateBlocks, compactPlan.keepBlockIds)}.`,
-            `Older blocks dropped from working history only: ${describeBlockRanges(candidateBlocks, compactPlan.dropBlockIds)}.`,
-            `Recent force-kept messages: ${forceKeptRecentMessages.length > 0 ? `${forceKeptRecentMessages.length} message(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)}` : 'none'}.`,
-          ].join(' ')
-        }],
-        __meta: { timestamp: now }
-      },
-      {
-        role: 'model',
-        parts: [{ text: compactPlan.summary }],
-        __meta: { timestamp: now }
-      },
-    ];
-
-    await finalizeCompaction(sessionId, session, retainedMessages, summaryConversation, completionMarker, originalHistoryLength - retainedMessages.length);
-  } catch (e) {
-    if (session.history.length > beforeCompactIndex) {
-      session.history = session.history.slice(0, beforeCompactIndex);
-      await saveSession(sessionId);
-    }
-    logger.error(e, 'Compaction failed');
-    throw e;
-  }
+  await sessionHistory.forceIndexSession(getSessionHistoryDeps(), sessionId);
 }
 
 export async function compactHistory(sessionId: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
-  await runCompaction(sessionId, {
-    keepPercent,
-    completionMarker,
-    startLogMessage: 'Compaction starting',
-    startBroadcastMessage: '⚠️ Context size limit reached, compacting history...',
-  });
+  await sessionHistory.compactHistory(getSessionHistoryDeps(), sessionId, keepPercent, completionMarker);
 }
 
 export async function compactHistoryWithSummary(sessionId: string, summary: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
-  if (!summary || !summary.trim()) {
-    throw new Error('Summary is required for manual compaction.');
-  }
-
-  await runCompaction(sessionId, {
-    keepPercent,
-    completionMarker,
-    compactGuidance: `Manual compaction hint from requester: ${summary.trim()}`,
-    startLogMessage: 'Manual compaction starting',
-    startBroadcastMessage: '⚠️ Manual compaction starting...',
-  });
-}
-
-async function finalizeCompaction(
-  sessionId: string,
-  session: Session,
-  retainedMessages: Message[],
-  summaryConversation: Message[],
-  completionMarker: string,
-  removedMessageCount: number,
-): Promise<void> {
-  const now = Date.now();
-  const compactedMarker: Message = {
-    role: 'user',
-    parts: [{ system: 'This session has been compacted. Messages before this are removed.' }],
-    __meta: { timestamp: now }
-  };
-  const completionMessage: Message = {
-    role: 'user',
-    parts: [{ system: completionMarker }],
-    __meta: { timestamp: now }
-  };
-  const archiveOnlySummaryMessages = summaryConversation.filter(message => message.__meta?.seq === undefined);
-  await appendMessagesToArchive(session, [compactedMarker, ...archiveOnlySummaryMessages, completionMessage]);
-
-  const summaryMessages: Message[] = [
-    compactedMarker,
-    ...retainedMessages,
-    ...summaryConversation,
-    completionMessage,
-  ];
-
-  session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
-  session.history = summaryMessages;
-  // Reset vector index position to 0 since history was compacted
-  session.vectorIndexPosition = 0;
-  // Increment history version to invalidate ongoing indexing
-  session.historyVersion = (session.historyVersion || 0) + 1;
-  // Clear indexing state
-  session.indexingState = undefined;
-
-  await saveSession(sessionId);
-  logger.info({ removedMessageCount, retainedCount: retainedMessages.length }, 'History compacted successfully');
-
-  if (session.broadcast) {
-    session.broadcast(`Compaction completed. Removed ${removedMessageCount} messages.`);
-  }
+  await sessionHistory.compactHistoryWithSummary(getSessionHistoryDeps(), sessionId, summary, keepPercent, completionMarker);
 }
 
 export async function deleteMessages(sessionId: string, num: number): Promise<{ deleted: number; remaining: number }> {
-  const session = sessions.get(sessionId);
-  if (!session) return { deleted: 0, remaining: 0 };
-  if (!num || isNaN(num)) return { deleted: 0, remaining: session.history.length };
-
-  const originalLen = session.history.length;
-  let deleted = 0;
-
-  if (num > 0) {
-    deleted = Math.min(num, session.history.length);
-    session.history = session.history.slice(deleted);
-    if (session.vectorIndexPosition !== undefined) {
-      session.vectorIndexPosition = Math.max(0, session.vectorIndexPosition - deleted);
-    }
-  } else if (num < 0) {
-    const absNum = Math.min(Math.abs(num), session.history.length);
-    deleted = absNum;
-    session.history = session.history.slice(0, session.history.length - absNum);
-    if (session.vectorIndexPosition !== undefined) {
-      session.vectorIndexPosition = Math.min(session.vectorIndexPosition, session.history.length);
-    }
-  }
-
-  session.historyVersion = (session.historyVersion || 0) + 1;
-  session.indexingState = undefined;
-
-  await saveSession(sessionId);
-  return { deleted, remaining: session.history.length };
+  return sessionHistory.deleteMessages(getSessionHistoryDeps(), sessionId, num);
 }
 
 export async function clearSession(sessionId: string): Promise<void> {
-  const session = await getExistingSession(sessionId);
-  if (!session) {
-    throw new Error(`Session \`${sessionId}\` not found.`);
-  }
-
-  session.history = [];
-  session.queue = [];
-  session.stopping = false;
-  session.busy = false;
-  session.vectorIndexPosition = 0;
-  session.historyVersion = (session.historyVersion || 0) + 1;
-  session.indexingState = undefined;
-  session.meta = {
-    ...session.meta,
-    lastMessageTime: Date.now(),
-    messageCount: 0,
-  };
-
-  await saveSession(session.id);
+  await sessionHistory.clearSession(getSessionHistoryDeps(), sessionId);
 }
 
 export function getUsageTotalTokens(finalUsage?: Partial<TokenUsage> & {
@@ -1566,29 +1310,11 @@ export function getUsageTotalTokens(finalUsage?: Partial<TokenUsage> & {
   promptTokenCount?: number;
   candidatesTokenCount?: number;
 }): number {
-  if (!finalUsage) return 0;
-
-  const cachedTokens = finalUsage.cachedTokens ?? finalUsage.cachedContentTokenCount ?? 0;
-  const inputTokens = finalUsage.inputTokens ?? finalUsage.promptTokenCount ?? 0;
-  const outputTokens = finalUsage.outputTokens ?? finalUsage.candidatesTokenCount ?? 0;
-
-  return cachedTokens + inputTokens + outputTokens;
+  return sessionHistory.getUsageTotalTokens(finalUsage);
 }
 
 export async function checkAndCompactIfNeeded(sessionId: string, finalUsage?: Partial<TokenUsage>) {
-  const session = sessions.get(sessionId);
-  if (!session) return;
-
-  const currentSize = finalUsage
-    ? getUsageTotalTokens(finalUsage)
-    : estimateSessionTokens(session);
-
-  const { contextLimit } = resolveModelConfig(session.model);
-
-  if (currentSize > contextLimit * 0.8) {
-    logger.info({ currentSize, contextLimit }, 'Auto compact')
-    await compactHistory(sessionId).catch(e => logger.error(e, 'Auto-compact failed'));
-  }
+  await sessionHistory.checkAndCompactIfNeeded(getSessionHistoryDeps(), sessionId, finalUsage);
 }
 
 export function getAllSessions(): Map<string, Session> {
@@ -1655,21 +1381,7 @@ export async function requestSessionCompaction(
 }
 
 export async function processSessionCompactionRequest(sessionId: string, item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>): Promise<void> {
-  if (item.compactGuidance?.trim()) {
-    await compactHistoryWithSummary(
-      sessionId,
-      item.compactGuidance,
-      item.keepPercent,
-      item.completionMarker || 'Compaction completed.'
-    );
-    return;
-  }
-
-  await compactHistory(
-    sessionId,
-    item.keepPercent,
-    item.completionMarker || 'Compaction completed.'
-  );
+  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item);
 }
 
 /**
