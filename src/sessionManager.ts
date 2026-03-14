@@ -18,6 +18,7 @@ import * as sessionAgentOps from './sessionAgentOps';
 import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './sessionArchive';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './sessionMetadataStore';
 import * as sessionChannels from './sessionChannels';
+import { buildCompactCandidateBlocks, buildCompactPromptText, COMPACT_PLAN_TOOL_DEFINITION, COMPACT_PLAN_TOOL_NAME, describeBlockRanges, formatSeqRange, validateCompactPlanArgs } from './compactPlan';
 
 // Agent metadata storage
 interface AgentMetadata {
@@ -1302,6 +1303,7 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
 
   const history = session.history;
   if (history.length < 1) return;
+  const originalHistoryLength = history.length;
 
   // Notify user that compaction is starting
   logger.info({ sessionId, hasBroadcast: !!session.broadcast }, 'Compaction starting');
@@ -1319,10 +1321,29 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
     splitIndex = history.length;
   }
 
-  const remaining = splitIndex < history.length ? history.slice(splitIndex) : [];
+  if (splitIndex <= 0) {
+    logger.info({ sessionId, keepPercent }, 'Compaction skipped because there are no older messages to compact');
+    return;
+  }
 
+  const olderMessages = history.slice(0, splitIndex);
+  const forceKeptRecentMessages = splitIndex < history.length ? history.slice(splitIndex) : [];
+  const candidateBlocks = buildCompactCandidateBlocks(olderMessages);
+
+  if (candidateBlocks.length === 0) {
+    logger.info({ sessionId, splitIndex }, 'Compaction skipped because no candidate blocks were produced');
+    return;
+  }
+
+  const forcedKeptStartSeq = forceKeptRecentMessages[0]?.__meta?.seq;
+  const forcedKeptEndSeq = forceKeptRecentMessages[forceKeptRecentMessages.length - 1]?.__meta?.seq;
   const summaryPrompt: MessagePart = {
-    system: 'COMPACTION STARTED: PAUSE YOUR WORK before compation done. Please summarize the entire session history above concisely NOW. Preserve key information and important context. The earlier part of the session will be removed to save space. Update memory if needed.'
+    system: buildCompactPromptText({
+      forcedKeptCount: forceKeptRecentMessages.length,
+      forcedKeptStartSeq,
+      forcedKeptEndSeq,
+      candidateBlocks,
+    })
   };
 
   let beforeCompactIndex = session.history.length;
@@ -1330,24 +1351,46 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
   try {
     // Don't change snapshot and history before compacting LLM request,
     // to prevent recomputing whole history.
-    const result = await llm.chat([summaryPrompt], session, 0);
+    const result = await llm.chat([summaryPrompt], session, 0, {
+      toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION],
+    });
 
-    if (!result.text?.trim()) {
-      throw new Error('Compaction summary is empty.');
+    if (!result.toolCalls?.length) {
+      throw new Error(`Compaction failed because the model did not call ${COMPACT_PLAN_TOOL_NAME}.`);
     }
-    if (result.text.trim().startsWith('Error:')) {
-      throw new Error(`Compaction summary failed: ${result.text.trim()}`);
+    if (result.toolCalls.length !== 1 || result.toolCalls[0].name !== COMPACT_PLAN_TOOL_NAME) {
+      throw new Error(`Compaction failed because the model returned an unexpected tool plan instead of a single ${COMPACT_PLAN_TOOL_NAME} call.`);
     }
-    if (result.toolCalls && result.toolCalls.length > 0) {
-      throw new Error('Compaction summary unexpectedly produced tool calls.');
-    }
+    const compactPlanCall = result.toolCalls[0];
 
-    const summaryConversation = session.history.slice(beforeCompactIndex);
-    if (summaryConversation.length < 2 /* summary system message + summary */) {
-      throw new Error('No summary message');
-    }
+    const compactPlan = validateCompactPlanArgs(compactPlanCall.args || {}, candidateBlocks);
+    const candidateById = new Map(candidateBlocks.map(block => [block.id, block]));
+    const keptOlderMessages = compactPlan.keepBlockIds.flatMap(blockId => candidateById.get(blockId)?.messages || []);
+    const retainedMessages = [...keptOlderMessages, ...forceKeptRecentMessages];
 
-    await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, completionMarker);
+    const now = Date.now();
+    const summaryConversation: Message[] = [
+      {
+        role: 'user',
+        parts: [{
+          system: [
+            'Compaction plan applied via submit_compact_plan.',
+            `Older blocks kept verbatim: ${describeBlockRanges(candidateBlocks, compactPlan.keepBlockIds)}.`,
+            `Older blocks summarized: ${describeBlockRanges(candidateBlocks, compactPlan.summarizeBlockIds)}.`,
+            `Older blocks dropped from working history only: ${describeBlockRanges(candidateBlocks, compactPlan.dropBlockIds)}.`,
+            `Recent force-kept messages: ${forceKeptRecentMessages.length > 0 ? `${forceKeptRecentMessages.length} message(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)}` : 'none'}.`,
+          ].join(' ')
+        }],
+        __meta: { timestamp: now }
+      },
+      {
+        role: 'model',
+        parts: [{ text: compactPlan.summary }],
+        __meta: { timestamp: now }
+      },
+    ];
+
+    await finalizeCompaction(sessionId, session, retainedMessages, summaryConversation, completionMarker, originalHistoryLength - retainedMessages.length);
   } catch (e) {
     if (session.history.length > beforeCompactIndex) {
       session.history = session.history.slice(0, beforeCompactIndex);
@@ -1395,16 +1438,16 @@ export async function compactHistoryWithSummary(sessionId: string, summary: stri
     { role: 'model', parts: [{ text: summary.trim() }], __meta: { timestamp: now } },
   ];
 
-  await finalizeCompaction(sessionId, session, splitIndex, remaining, summaryConversation, completionMarker);
+  await finalizeCompaction(sessionId, session, remaining, summaryConversation, completionMarker, history.length - remaining.length);
 }
 
 async function finalizeCompaction(
   sessionId: string,
   session: Session,
-  splitIndex: number,
-  remaining: Message[],
+  retainedMessages: Message[],
   summaryConversation: Message[],
   completionMarker: string,
+  removedMessageCount: number,
 ): Promise<void> {
   const now = Date.now();
   const compactedMarker: Message = {
@@ -1422,7 +1465,7 @@ async function finalizeCompaction(
 
   const summaryMessages: Message[] = [
     compactedMarker,
-    ...remaining,
+    ...retainedMessages,
     ...summaryConversation,
     completionMessage,
   ];
@@ -1437,10 +1480,10 @@ async function finalizeCompaction(
   session.indexingState = undefined;
 
   await saveSession(sessionId);
-  logger.info({ splitIndex, remainingCount: remaining.length }, 'History compacted successfully');
+  logger.info({ removedMessageCount, retainedCount: retainedMessages.length }, 'History compacted successfully');
 
   if (session.broadcast) {
-    session.broadcast(`Compaction completed. Removed ${splitIndex} messages.`);
+    session.broadcast(`Compaction completed. Removed ${removedMessageCount} messages.`);
   }
 }
 

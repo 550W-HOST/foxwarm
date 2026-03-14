@@ -36,5 +36,7 @@ test('child instructions and reminders mention the bracketed marker', () => {
 
   assert.match(completion, /\[NO_ACTION\]/);
   assert.match(reminder, /\[NO_ACTION\]/);
+  assert.match(completion, /noFurtherAssistantReply/);
+  assert.match(reminder, /noFurtherAssistantReply/);
   assert.doesNotMatch(reminder, /reply "NO_ACTION"/);
 });

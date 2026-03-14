@@ -219,6 +219,63 @@ async function main(): Promise<void> {
       assert(parent && child);
     });
 
+    await test('send_to_session with noFurtherAssistantReply stops the current turn without an extra LLM round', async () => {
+      const parentId = makeSessionId('selftest_parent_endturn');
+      const childId = makeSessionId('selftest_child_endturn');
+      createdSessionIds.push(parentId, childId);
+      await ensureSession(parentId);
+      await ensureSession(childId, parentId);
+
+      let childCallCount = 0;
+      let parentCallCount = 0;
+      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+        await appendStubUserMessage(activeSession, parts);
+
+        if (activeSession.id === childId) {
+          childCallCount += 1;
+          if (childCallCount === 1) {
+            const toolCall = {
+              id: 'child-report-endturn',
+              name: 'send_to_session',
+              args: { sessionId: parentId, message: 'child-endturn-ok', noFurtherAssistantReply: true },
+            };
+            await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+            return { text: '', toolCalls: [toolCall] };
+          }
+
+          throw new Error(`child session should not receive a second LLM call, got ${childCallCount}`);
+        }
+
+        if (activeSession.id === parentId) {
+          parentCallCount += 1;
+          await appendStubModelMessage(activeSession, [{ text: 'parent received end-turn handoff' }]);
+          return { text: 'parent received end-turn handoff' };
+        }
+
+        throw new Error(`unexpected session in end-turn selftest: ${activeSession.id}`);
+      };
+
+      await (router as any).runSessionTurn(childId, {
+        parts: [{ text: 'child task with immediate handoff' }],
+      });
+
+      const childAfter = await sessionManager.getSession(childId);
+      const parentAfterChildRun = await sessionManager.getSession(parentId);
+      assert.strictEqual(childCallCount, 1);
+      assert.strictEqual(childAfter.busy, false);
+      assert.strictEqual(parentAfterChildRun.queue.length, 1);
+      assert.strictEqual(childAfter.history[childAfter.history.length - 1]?.role, 'tool');
+      assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'send_to_session')));
+
+      await router.processSessionQueue(parentId);
+
+      const parentAfter = await sessionManager.getSession(parentId);
+      assert.strictEqual(parentCallCount, 1);
+      assert.strictEqual(parentAfter.queue.length, 0);
+      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes('child-endturn-ok'))));
+      assertLastModelText(parentAfter, 'parent received end-turn handoff');
+    });
+
     await test('post-tool LLM failure leaves a visible terminal model message without auto-notifying parent', async () => {
       const parentId = makeSessionId('selftest_error_parent');
       const childId = makeSessionId('selftest_error_child');

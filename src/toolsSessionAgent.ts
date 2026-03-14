@@ -116,7 +116,7 @@ function formatSendFileSessionResult(targetSessionId: string, file: ChannelFile,
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  const { suffix, fork = true, message, node, isolated } = args;
+  const { suffix, fork = true, message, node, isolated, noFurtherAssistantReply } = args;
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
@@ -129,18 +129,27 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
     sessionManager.sendToSession(childSessionId, message, currentSessionId).catch(err => {
       logger.error({ err, childSessionId }, 'Failed to send initial message to child session');
     });
-    return `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Initial message sent.`;
+    const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Initial message sent.`;
+    return noFurtherAssistantReply
+      ? { output, __toolLoopControl: { stopCurrentTurn: true } }
+      : output;
   }
 
-  return `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'})`;
+  const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'})`;
+  return noFurtherAssistantReply
+    ? { output, __toolLoopControl: { stopCurrentTurn: true } }
+    : output;
 }
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
-  const { sessionId, message } = args;
+  const { sessionId, message, noFurtherAssistantReply } = args;
   const fromSessionId = ctx?.sessionId;
 
   await sessionManager.sendToSession(sessionId, message, fromSessionId);
-  return `Message sent to session \`${sessionId}\``;
+  const output = `Message sent to session \`${sessionId}\``;
+  return noFurtherAssistantReply
+    ? { output, __toolLoopControl: { stopCurrentTurn: true } }
+    : output;
 }
 
 export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
