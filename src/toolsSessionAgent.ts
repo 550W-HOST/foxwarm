@@ -580,7 +580,10 @@ export async function tool_compact_session(args: ToolArgs, ctx: ToolContext) {
     completionMarker: isSelf
       ? 'Compaction completed. You can continue working now.'
       : 'Compaction completed.',
-    stopAfterCurrentTurn: !!isSelf,
+    // Self-compaction requested from inside an active agent turn should resume
+    // the normal loop with the newly compacted history instead of halting after
+    // the compact flow finishes.
+    stopAfterCurrentTurn: false,
     requestedBy: compactGuidance ? 'manual' : 'tool',
   });
 
