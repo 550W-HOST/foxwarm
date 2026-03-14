@@ -7,6 +7,7 @@ export type FormatMessageTextOptions = {
   toolCharLimit?: number;
   skipEphemeralSystem?: boolean;
   skipRagMemorySnippets?: boolean;
+  skipThinking?: boolean;
   continuationPrefix?: string;
 };
 
@@ -30,22 +31,32 @@ function truncateText(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}...`;
 }
 
-export function formatPrefixedMultilineText(prefix: string, text: string, continuationPrefix: string = '> '): string {
+function formatMultilineText(text: string, continuationPrefix: string = '> '): string {
   const normalized = text.trim();
   if (!normalized) {
-    return prefix;
+    return '';
   }
 
   const lines = normalized.split('\n');
   const [firstLine, ...restLines] = lines;
   if (restLines.length === 0) {
-    return `${prefix}${firstLine}`;
+    return firstLine;
   }
 
   return [
-    `${prefix}${firstLine}`,
+    firstLine,
     ...restLines.map(line => `${continuationPrefix}${line}`),
   ].join('\n');
+}
+
+export function formatPrefixedMultilineText(prefix: string, text: string, continuationPrefix: string = '> '): string {
+  const normalized = formatMultilineText(text, continuationPrefix);
+  if (!normalized) {
+    return prefix;
+  }
+
+  const lines = normalized.split('\n');
+  return `${prefix}${lines.join('\n')}`;
 }
 
 function stringifyFunctionArgs(part: MessagePart): string {
@@ -98,8 +109,10 @@ function formatPartLines(message: Message, part: MessagePart, options: Required<
   }
 
   if (typeof part.thinking === 'string' && part.thinking.trim()) {
-    const thinking = isBodyRole ? part.thinking : truncateText(part.thinking, toolCharLimit);
-    lines.push(`[thinking] ${thinking}`);
+    if (!options.skipThinking) {
+      const thinking = isBodyRole ? part.thinking : truncateText(part.thinking, toolCharLimit);
+      lines.push(`[thinking] ${thinking}`);
+    }
   }
 
   if (part.functionCall) {
@@ -131,6 +144,7 @@ export function formatMessageText(message: Message, options: FormatMessageTextOp
     toolCharLimit: options.toolCharLimit ?? DEFAULT_TOOL_CONTENT_CHAR_LIMIT,
     skipEphemeralSystem: options.skipEphemeralSystem ?? false,
     skipRagMemorySnippets: options.skipRagMemorySnippets ?? false,
+    skipThinking: options.skipThinking ?? false,
     continuationPrefix: options.continuationPrefix ?? '> ',
   };
 
@@ -140,7 +154,7 @@ export function formatMessageText(message: Message, options: FormatMessageTextOp
   }
 
   if (!resolved.includeRolePrefix) {
-    return content;
+    return formatMultilineText(content, resolved.continuationPrefix);
   }
 
   return formatPrefixedMultilineText(`[${message.role}] `, content, resolved.continuationPrefix);
