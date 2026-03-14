@@ -18,7 +18,7 @@ import * as sessionAgentOps from './sessionAgentOps';
 import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './sessionArchive';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './sessionMetadataStore';
 import * as sessionChannels from './sessionChannels';
-import { buildCompactCandidateBlocks, buildCompactPromptText, COMPACT_PLAN_TOOL_DEFINITION, COMPACT_PLAN_TOOL_NAME, describeBlockRanges, formatSeqRange, validateCompactPlanArgs } from './compactPlan';
+import { buildCompactCandidateBlocks, buildCompactPlanValidationFeedback, buildCompactPromptText, COMPACT_PLAN_TOOL_DEFINITION, COMPACT_PLAN_TOOL_NAME, CompactPlanValidationError, describeBlockRanges, formatSeqRange, validateCompactPlanArgs } from './compactPlan';
 
 // Agent metadata storage
 interface AgentMetadata {
@@ -1364,19 +1364,46 @@ async function runCompaction(sessionId: string, options: CompactionRunOptions = 
   try {
     // Don't change snapshot and history before compacting LLM request,
     // to prevent recomputing whole history.
-    const result = await llm.chat([summaryPrompt], session, 0, {
-      toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION],
-    });
+    const maxCompactAttempts = 3;
+    let nextPromptParts: MessagePart[] = [summaryPrompt];
+    let compactPlan = null;
 
-    if (!result.toolCalls?.length) {
-      throw new Error(`Compaction failed because the model did not call ${COMPACT_PLAN_TOOL_NAME}.`);
-    }
-    if (result.toolCalls.length !== 1 || result.toolCalls[0].name !== COMPACT_PLAN_TOOL_NAME) {
-      throw new Error(`Compaction failed because the model returned an unexpected tool plan instead of a single ${COMPACT_PLAN_TOOL_NAME} call.`);
-    }
-    const compactPlanCall = result.toolCalls[0];
+    for (let attempt = 1; attempt <= maxCompactAttempts; attempt++) {
+      const result = await llm.chat(nextPromptParts, session, attempt - 1, {
+        toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION],
+      });
 
-    const compactPlan = validateCompactPlanArgs(compactPlanCall.args || {}, candidateBlocks);
+      if (!result.toolCalls?.length) {
+        throw new Error(`Compaction failed because the model did not call ${COMPACT_PLAN_TOOL_NAME}.`);
+      }
+      if (result.toolCalls.length !== 1 || result.toolCalls[0].name !== COMPACT_PLAN_TOOL_NAME) {
+        throw new Error(`Compaction failed because the model returned an unexpected tool plan instead of a single ${COMPACT_PLAN_TOOL_NAME} call.`);
+      }
+
+      try {
+        compactPlan = validateCompactPlanArgs(result.toolCalls[0].args || {}, candidateBlocks);
+        break;
+      } catch (e) {
+        if (!(e instanceof CompactPlanValidationError)) {
+          throw e;
+        }
+
+        const attemptsRemaining = maxCompactAttempts - attempt;
+        if (attemptsRemaining <= 0) {
+          throw new Error(`Compaction failed after ${maxCompactAttempts} invalid ${COMPACT_PLAN_TOOL_NAME} submissions: ${e.message}`);
+        }
+
+        logger.warn({ sessionId, attempt, attemptsRemaining, validationError: e.message }, 'Compaction plan validation failed; retrying compact flow');
+        nextPromptParts = [{
+          system: buildCompactPlanValidationFeedback(e, attemptsRemaining),
+        }];
+      }
+    }
+
+    if (!compactPlan) {
+      throw new Error(`Compaction failed because no valid ${COMPACT_PLAN_TOOL_NAME} plan was produced.`);
+    }
+
     const candidateById = new Map(candidateBlocks.map(block => [block.id, block]));
     const keptOlderMessages = compactPlan.keepBlockIds.flatMap(blockId => candidateById.get(blockId)?.messages || []);
     const retainedMessages = [...keptOlderMessages, ...forceKeptRecentMessages];

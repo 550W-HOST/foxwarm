@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildCompactPlanValidationFeedback,
   buildCompactCandidateBlocks,
   buildCompactPromptText,
   COMPACT_PLAN_TOOL_NAME,
+  CompactPlanValidationError,
   validateCompactPlanArgs,
 } from './compactPlan';
 import { Message } from './types';
@@ -86,12 +88,31 @@ test('validateCompactPlanArgs rejects missing or duplicated block classification
     keepBlockIds: [],
     summarizeBlockIds: [],
     dropBlockIds: [],
-  }, blocks), /did not classify every block/i);
+  }, blocks), /missing block ids/i);
 
   assert.throws(() => validateCompactPlanArgs({
     summary: 'summary',
     keepBlockIds: [blocks[0].id],
     summarizeBlockIds: [blocks[0].id],
     dropBlockIds: [],
-  }, blocks), /more than once/i);
+  }, blocks), /duplicate block ids/i);
+});
+
+test('buildCompactPlanValidationFeedback explains invalid compact plans with structured details', () => {
+  const error = new CompactPlanValidationError({
+    summaryErrors: ['must be a non-empty string'],
+    arrayErrors: ['keepBlockIds must be an array of block ids.'],
+    unknownBlockIds: ['block_x'],
+    duplicateBlockIds: ['block_01'],
+    missingBlockIds: ['block_02'],
+  });
+
+  const feedback = buildCompactPlanValidationFeedback(error, 2);
+  assert.match(feedback, /COMPACT PLAN INVALID/);
+  assert.match(feedback, /summary: must be a non-empty string/);
+  assert.match(feedback, /keepBlockIds must be an array of block ids/);
+  assert.match(feedback, /unknown block ids: block_x/);
+  assert.match(feedback, /duplicate block ids: block_01/);
+  assert.match(feedback, /missing block ids: block_02/);
+  assert.match(feedback, /Attempts remaining after this feedback: 2/);
 });

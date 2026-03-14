@@ -26,6 +26,24 @@ export interface CompactPlan {
   dropBlockIds: string[];
 }
 
+export interface CompactPlanValidationDetails {
+  summaryErrors: string[];
+  arrayErrors: string[];
+  unknownBlockIds: string[];
+  duplicateBlockIds: string[];
+  missingBlockIds: string[];
+}
+
+export class CompactPlanValidationError extends Error {
+  details: CompactPlanValidationDetails;
+
+  constructor(details: CompactPlanValidationDetails) {
+    super(buildCompactPlanValidationSummary(details));
+    this.name = 'CompactPlanValidationError';
+    this.details = details;
+  }
+}
+
 export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   name: COMPACT_PLAN_TOOL_NAME,
   description: 'Submit the compaction plan for older candidate blocks. Every candidate block must appear exactly once in keepBlockIds, summarizeBlockIds, or dropBlockIds. Also provide the replacement working summary that future turns should read after compaction.',
@@ -236,51 +254,114 @@ export function buildCompactPromptText(options: {
   return lines.join('\n');
 }
 
-function normalizeStringArray(value: unknown, fieldName: string): string[] {
+function normalizeStringArray(value: unknown, fieldName: string, arrayErrors: string[]): string[] {
   if (!Array.isArray(value)) {
-    throw new Error(`${fieldName} must be an array of block ids.`);
+    arrayErrors.push(`${fieldName} must be an array of block ids.`);
+    return [];
   }
 
-  return value.map((item, index) => {
+  const normalized: string[] = [];
+  value.forEach((item, index) => {
     if (typeof item !== 'string' || !item.trim()) {
-      throw new Error(`${fieldName}[${index}] must be a non-empty string.`);
+      arrayErrors.push(`${fieldName}[${index}] must be a non-empty string.`);
+      return;
     }
-    return item.trim();
+    normalized.push(item.trim());
   });
+
+  return normalized;
 }
 
-export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateBlocks: CompactCandidateBlock[]): CompactPlan {
-  const summary = typeof rawArgs?.summary === 'string' ? rawArgs.summary.trim() : '';
-  if (!summary) {
-    throw new Error('Compaction plan summary is empty.');
-  }
-  if (summary.startsWith('Error:')) {
-    throw new Error(`Compaction plan summary failed: ${summary}`);
+function buildCompactPlanValidationSummary(details: CompactPlanValidationDetails): string {
+  const issueCount = details.summaryErrors.length
+    + details.arrayErrors.length
+    + details.unknownBlockIds.length
+    + details.duplicateBlockIds.length
+    + details.missingBlockIds.length;
+
+  if (issueCount === 0) {
+    return 'Compaction plan validation failed.';
   }
 
-  const keepBlockIds = normalizeStringArray(rawArgs?.keepBlockIds, 'keepBlockIds');
-  const summarizeBlockIds = normalizeStringArray(rawArgs?.summarizeBlockIds, 'summarizeBlockIds');
-  const dropBlockIds = normalizeStringArray(rawArgs?.dropBlockIds, 'dropBlockIds');
+  const lines: string[] = [];
+  if (details.summaryErrors.length) {
+    lines.push(`summary: ${details.summaryErrors.join('; ')}`);
+  }
+  if (details.arrayErrors.length) {
+    lines.push(...details.arrayErrors);
+  }
+  if (details.unknownBlockIds.length) {
+    lines.push(`unknown block ids: ${Array.from(new Set(details.unknownBlockIds)).join(', ')}`);
+  }
+  if (details.duplicateBlockIds.length) {
+    lines.push(`duplicate block ids: ${Array.from(new Set(details.duplicateBlockIds)).join(', ')}`);
+  }
+  if (details.missingBlockIds.length) {
+    lines.push(`missing block ids: ${details.missingBlockIds.join(', ')}`);
+  }
+
+  return lines.join(' | ');
+}
+
+function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidateBlocks: CompactCandidateBlock[]): CompactPlanValidationDetails {
+  const details: CompactPlanValidationDetails = {
+    summaryErrors: [],
+    arrayErrors: [],
+    unknownBlockIds: [],
+    duplicateBlockIds: [],
+    missingBlockIds: [],
+  };
+
+  const summary = typeof rawArgs?.summary === 'string' ? rawArgs.summary.trim() : '';
+  if (!summary) {
+    details.summaryErrors.push('must be a non-empty string');
+  } else if (summary.startsWith('Error:')) {
+    details.summaryErrors.push('must not start with `Error:`');
+  }
+
+  const keepBlockIds = normalizeStringArray(rawArgs?.keepBlockIds, 'keepBlockIds', details.arrayErrors);
+  const summarizeBlockIds = normalizeStringArray(rawArgs?.summarizeBlockIds, 'summarizeBlockIds', details.arrayErrors);
+  const dropBlockIds = normalizeStringArray(rawArgs?.dropBlockIds, 'dropBlockIds', details.arrayErrors);
 
   const knownIds = new Set(candidateBlocks.map(block => block.id));
   const seenIds = new Set<string>();
-
   for (const blockId of [...keepBlockIds, ...summarizeBlockIds, ...dropBlockIds]) {
     if (!knownIds.has(blockId)) {
-      throw new Error(`Compaction plan referenced unknown block id: ${blockId}`);
+      details.unknownBlockIds.push(blockId);
+      continue;
     }
     if (seenIds.has(blockId)) {
-      throw new Error(`Compaction plan assigned the same block more than once: ${blockId}`);
+      details.duplicateBlockIds.push(blockId);
+      continue;
     }
     seenIds.add(blockId);
   }
 
-  if (seenIds.size !== candidateBlocks.length) {
-    const missing = candidateBlocks
-      .map(block => block.id)
-      .filter(blockId => !seenIds.has(blockId));
-    throw new Error(`Compaction plan did not classify every block. Missing: ${missing.join(', ')}`);
+  details.missingBlockIds = candidateBlocks
+    .map(block => block.id)
+    .filter(blockId => !seenIds.has(blockId));
+
+  return details;
+}
+
+function hasCompactPlanValidationIssues(details: CompactPlanValidationDetails): boolean {
+  return details.summaryErrors.length > 0
+    || details.arrayErrors.length > 0
+    || details.unknownBlockIds.length > 0
+    || details.duplicateBlockIds.length > 0
+    || details.missingBlockIds.length > 0;
+}
+
+export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateBlocks: CompactCandidateBlock[]): CompactPlan {
+  const summary = typeof rawArgs?.summary === 'string' ? rawArgs.summary.trim() : '';
+  const details = getCompactPlanValidationDetails(rawArgs, candidateBlocks);
+  if (hasCompactPlanValidationIssues(details)) {
+    throw new CompactPlanValidationError(details);
   }
+
+  const keepBlockIds = (rawArgs.keepBlockIds as string[]).map(id => id.trim());
+  const summarizeBlockIds = (rawArgs.summarizeBlockIds as string[]).map(id => id.trim());
+  const dropBlockIds = (rawArgs.dropBlockIds as string[]).map(id => id.trim());
 
   return {
     summary,
@@ -288,6 +369,35 @@ export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateB
     summarizeBlockIds,
     dropBlockIds,
   };
+}
+
+export function buildCompactPlanValidationFeedback(error: CompactPlanValidationError, attemptsRemaining: number): string {
+  const lines: string[] = [
+    `COMPACT PLAN INVALID: your last ${COMPACT_PLAN_TOOL_NAME} call had validation errors.`,
+    'Fix only the compact plan and call submit_compact_plan again. Do not switch back to normal conversation and do not call any other tool.',
+    'Validation problems:',
+  ];
+
+  if (error.details.summaryErrors.length) {
+    lines.push(`- summary: ${error.details.summaryErrors.join('; ')}`);
+  }
+  for (const issue of error.details.arrayErrors) {
+    lines.push(`- ${issue}`);
+  }
+  if (error.details.unknownBlockIds.length) {
+    lines.push(`- unknown block ids: ${Array.from(new Set(error.details.unknownBlockIds)).join(', ')}`);
+  }
+  if (error.details.duplicateBlockIds.length) {
+    lines.push(`- duplicate block ids: ${Array.from(new Set(error.details.duplicateBlockIds)).join(', ')}`);
+  }
+  if (error.details.missingBlockIds.length) {
+    lines.push(`- missing block ids: ${error.details.missingBlockIds.join(', ')}`);
+  }
+
+  lines.push('Rules reminder: every candidate block id must appear exactly once in keepBlockIds, summarizeBlockIds, or dropBlockIds.');
+  lines.push(`Attempts remaining after this feedback: ${attemptsRemaining}.`);
+
+  return lines.join('\n');
 }
 
 export function describeBlockRanges(blocks: CompactCandidateBlock[], blockIds: string[]): string {
