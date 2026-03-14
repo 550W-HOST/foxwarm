@@ -57,6 +57,20 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
           case 'tool_call_error':
             nodesManager.handleToolError(data.callId, data.error);
             break;
+          case 'session_event':
+            if (!data.sessionId || typeof data.message !== 'string') {
+              ws.send(JSON.stringify({
+                type: 'error',
+                error: 'Invalid session_event message: missing sessionId or message'
+              }));
+              break;
+            }
+            await nodesManager.handleSessionEvent(
+              String(data.sessionId),
+              data.message,
+              data.eventType === 'trigger' || data.eventType === 'onboot' ? data.eventType : 'background'
+            );
+            break;
           case 'list_nodes': {
             const nodes = nodesManager.listNodes();
             ws.send(JSON.stringify({ type: 'nodes_list', nodes }));

@@ -6,7 +6,7 @@
 import WebSocket from 'ws';
 import { logger } from './common';
 import * as tools from './tools';
-import * as sessionManager from './sessionManager';
+import { initializeExecManager } from './execManager';
 
 interface NodeClientOptions {
   host: string;
@@ -248,6 +248,12 @@ class NodeClient {
 
   private async handleToolCall(message: any): Promise<void> {
     const { callId, tool, args } = message;
+    const sessionId = typeof message.sessionId === 'string'
+      ? message.sessionId
+      : (typeof args?.sessionId === 'string' ? args.sessionId : 'node');
+    const agentName = typeof message.agentName === 'string' && message.agentName.trim().length > 0
+      ? message.agentName
+      : 'main';
     
     logger.info({ callId, tool }, 'Executing tool');
     
@@ -260,8 +266,13 @@ class NodeClient {
       
       // Create minimal context
       const ctx = {
-        sessionId: args.sessionId || 'node',
-        session: await sessionManager.getSession(args.sessionId || 'node'),
+        sessionId,
+        session: {
+          id: sessionId,
+          agent: agentName,
+          currentNode: this.nodeId,
+        },
+        runtimeNodeId: this.nodeId,
         broadcast: async (text: string) => {
           // Send broadcast back to master
           this.send({
@@ -269,6 +280,9 @@ class NodeClient {
             callId,
             text
           });
+        },
+        queueSystemEvent: async (text: string, eventType: 'background' | 'trigger' | 'onboot' = 'background') => {
+          await this.sendSessionEvent(sessionId, text, eventType);
         }
       };
       
@@ -324,6 +338,23 @@ class NodeClient {
     }
   }
 
+  async sendSessionEvent(sessionId: string, message: string, eventType: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('Remote node is not connected to master');
+    }
+
+    this.send({
+      type: 'session_event',
+      sessionId,
+      eventType,
+      message,
+    });
+  }
+
   async disconnect(): Promise<void> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -373,6 +404,15 @@ function parseArgs(): NodeClientOptions {
 async function main() {
   const options = parseArgs();
   const client = new NodeClient(options);
+
+  await initializeExecManager({
+    completionDispatcher: async (entry, _status, message) => {
+      if (!entry.sessionId) {
+        return;
+      }
+      await client.sendSessionEvent(entry.sessionId, message, 'background');
+    }
+  });
   
   await client.connect();
   

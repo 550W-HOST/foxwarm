@@ -36,6 +36,7 @@ import { registerNodeWebSocket } from './nodeWebSocket';
 import { cleanupLegacyTopLevelLogDirs, scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
 import { initializeTimers } from './timers';
+import { initializeExecManager } from './execManager';
 
 // Global error handlers
 process.on('unhandledRejection', (reason: any, promise) => {
@@ -202,6 +203,8 @@ async function start() {
 
     // Load sessions
     await sessionManager.loadSessions();
+
+    await initializeExecManager();
 
     // Ensure "main" session exists
     await sessionManager.getSession('main');

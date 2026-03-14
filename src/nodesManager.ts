@@ -252,6 +252,8 @@ export class NodesManager {
     if (!node) {
       throw new Error(`Node \`${nodeId}\` not found`);
     }
+
+    const session = await sessionManager.getSession(sessionId);
     
     if (!node.tools.has(toolName)) {
       throw new Error(`Tool \`${toolName}\` not available on node \`${nodeId}\``);
@@ -283,7 +285,9 @@ export class NodesManager {
         type: 'tool_call',
         callId: callId,
         tool: toolName,
-        args: args
+        args: args,
+        sessionId,
+        agentName: session.agent || 'main'
       }));
       
       // Set timeout (30 seconds default)
@@ -324,6 +328,11 @@ export class NodesManager {
     }
   }
 
+  async handleSessionEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+    await sessionManager.queueSessionSystemEvent(sessionId, message, type);
+    logger.info({ sessionId, type }, 'Session event received from remote node');
+  }
+
   /**
    * Update node activity
    */
@@ -362,6 +371,7 @@ export class NodesManager {
     const ctx = {
       sessionId,
       session: await sessionManager.getSession(sessionId),
+      runtimeNodeId: 'master',
       broadcast: async (text: string) => {
         // Broadcast via session
         const session = await sessionManager.getSession(sessionId);
