@@ -8,7 +8,7 @@ import {
   CompactPlanValidationError,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { Message } from './types';
+import { Message } from '../types';
 
 function makeMessage(seq: number, role: 'user' | 'model' | 'tool', text: string): Message {
   return {

@@ -9,7 +9,7 @@ import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, Ses
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from './channel';
 import * as llm from './llm';
-import { buildChildCompletionInstruction } from './childSessionReminder';
+import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { getSkillInfo, validateSkillName } from './skills';
 import * as vector from './vector';
 import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, AGENTS_FILE, getAgentDir } from './config';

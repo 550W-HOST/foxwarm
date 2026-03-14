@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import fs from 'fs-extra'
 import path from 'path'
 import { WebSocket } from 'ws'
-import { NODES_FILE } from './config'
+import { NODES_FILE } from '../config'
 
 export type NodeToolDefinition = {
   name: string

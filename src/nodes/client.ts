@@ -6,9 +6,9 @@
 import fs from 'fs-extra';
 import path from 'path';
 import WebSocket from 'ws';
-import { logger } from './common';
-import * as tools from './tools';
-import { initializeExecManager } from './execManager';
+import { logger } from '../common';
+import * as tools from '../tools';
+import { initializeExecManager } from '../execManager';
 
 interface NodeClientOptions {
   host: string;

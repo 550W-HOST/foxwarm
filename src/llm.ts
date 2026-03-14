@@ -7,7 +7,7 @@ import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, OpenAIResponsesContent, TokenUsage, ToolDefinition } from './types';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir } from './config';
-import { nodesManager } from './nodesManager';
+import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { loadSkillDocuments } from './skills';

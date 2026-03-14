@@ -14,7 +14,7 @@ import {
   describeBlockRanges,
   formatSeqRange,
   validateCompactPlanArgs,
-} from '../compactPlan';
+} from './compactPlan';
 import { Message, QueueItem, Session, TokenUsage } from '../types';
 
 type SessionHistoryDeps = {
