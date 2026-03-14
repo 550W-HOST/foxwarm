@@ -12,6 +12,7 @@ import { WORKSPACE_DIR } from './config';
 import * as sessionManager from './sessionManager';
 import * as browser from './browser';
 import { WebSocket } from 'ws';
+import { isReservedNodeId } from './nodeRegistry';
 
 interface ToolDefinition {
   name: string;
@@ -107,6 +108,9 @@ export class NodesManager {
    * Register a new node
    */
   registerNode(ws: WebSocket, req: http.IncomingMessage, customNodeId?: string): string {
+    if (customNodeId && isReservedNodeId(customNodeId)) {
+      throw new Error(`Node id \`${customNodeId}\` is reserved`);
+    }
     const nodeId = customNodeId || `node_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
     
     // Check if node already exists (reconnection case)
@@ -141,6 +145,9 @@ export class NodesManager {
    * Register a new node with capabilities (dynamic tools)
    */
   registerNodeWithTools(ws: WebSocket, req: http.IncomingMessage, nodeType: string, capabilities: NodeCapabilities, customNodeId?: string): string {
+    if (customNodeId && isReservedNodeId(customNodeId)) {
+      throw new Error(`Node id \`${customNodeId}\` is reserved`);
+    }
     const nodeId = customNodeId || `node_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
     
     // Check if node already exists (reconnection case)

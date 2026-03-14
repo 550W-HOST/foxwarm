@@ -1,8 +1,10 @@
 /**
  * Node Client - Connect to foxwarm master and execute tools
- * Usage: npm run node -- --host http://master:3001/ --id my-node --token <token>
+ * Usage: npm run node -- --host http://master:3001/ --id my-node --token <pairing-token>
  */
 
+import fs from 'fs-extra';
+import path from 'path';
 import WebSocket from 'ws';
 import { logger } from './common';
 import * as tools from './tools';
@@ -11,7 +13,15 @@ import { initializeExecManager } from './execManager';
 interface NodeClientOptions {
   host: string;
   nodeId?: string;
-  token: string;
+  token?: string;
+  authToken?: string;
+  credentialsFile?: string;
+}
+
+type StoredNodeCredentials = {
+  nodeId: string;
+  authToken: string;
+  pairedAt: number;
 }
 
 const NODE_CAPABILITIES = {
@@ -161,41 +171,101 @@ const NODE_CAPABILITIES = {
 class NodeClient {
   private ws: WebSocket | null = null;
   private host: string;
-  private nodeId: string;
-  private token: string;
+  private requestedName: string;
+  private pairingToken?: string;
+  private credentialsFile?: string;
+  private connectedNodeId: string | null = null;
+  private authToken?: string;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectDelay = 5000; // 5 seconds
+  private forceImmediateReconnect = false;
+  private pairingRejected = false;
 
   constructor(options: NodeClientOptions) {
     this.host = options.host;
-    this.nodeId = options.nodeId || `node_${Date.now()}`;
-    this.token = options.token;
+    this.requestedName = options.nodeId || `node_${Date.now()}`;
+    this.pairingToken = options.token;
+    this.credentialsFile = options.credentialsFile;
+    this.connectedNodeId = options.authToken && options.nodeId ? options.nodeId : null;
+    this.authToken = options.authToken;
+  }
+
+  private get isAuthenticatedMode(): boolean {
+    return !!(this.connectedNodeId && this.authToken);
+  }
+
+  private async loadStoredCredentials(): Promise<void> {
+    if (!this.credentialsFile || !await fs.pathExists(this.credentialsFile)) {
+      return;
+    }
+
+    const stored = await fs.readJSON(this.credentialsFile) as StoredNodeCredentials;
+    if (stored?.nodeId && stored?.authToken) {
+      this.connectedNodeId = stored.nodeId;
+      this.authToken = stored.authToken;
+    }
+  }
+
+  private async saveStoredCredentials(nodeId: string, authToken: string): Promise<void> {
+    if (!this.credentialsFile) {
+      return;
+    }
+
+    await fs.ensureDir(path.dirname(this.credentialsFile));
+    await fs.writeJSON(this.credentialsFile, {
+      nodeId,
+      authToken,
+      pairedAt: Date.now(),
+    }, { spaces: 2 });
+  }
+
+  private async clearStoredCredentials(): Promise<void> {
+    this.connectedNodeId = null;
+    this.authToken = undefined;
+    if (this.credentialsFile && await fs.pathExists(this.credentialsFile)) {
+      await fs.remove(this.credentialsFile);
+    }
   }
 
   async connect(): Promise<void> {
-    const wsUrl = this.host.replace(/^http/, 'ws') + `/node_ws?token=${encodeURIComponent(this.token)}&id=${encodeURIComponent(this.nodeId)}`;
-    
-    logger.info({ host: this.host, nodeId: this.nodeId }, 'Connecting to foxwarm master...');
-    
+    await this.loadStoredCredentials();
+
+    if (!this.isAuthenticatedMode && !this.pairingToken) {
+      throw new Error('Node client needs either stored/auth credentials or a pairing token');
+    }
+
+    const wsUrl = this.isAuthenticatedMode
+      ? this.host.replace(/^http/, 'ws') + `/node_ws?id=${encodeURIComponent(String(this.connectedNodeId))}&auth=${encodeURIComponent(String(this.authToken))}`
+      : this.host.replace(/^http/, 'ws') + `/node_ws?token=${encodeURIComponent(String(this.pairingToken))}`;
+
+    logger.info({ host: this.host, nodeId: this.connectedNodeId, requestedName: this.requestedName, mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' }, 'Connecting to foxwarm master...');
+
     this.ws = new WebSocket(wsUrl);
-    
+
     this.ws.on('open', () => {
-      logger.info({ nodeId: this.nodeId }, 'Connected to foxwarm master');
-      
-      // Clear reconnect timer
+      logger.info({ nodeId: this.connectedNodeId, mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' }, 'Connected to foxwarm master');
+
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
 
-      // Register node with capabilities
-      this.send({
-        type: 'node_register',
-        nodeType: 'sandbox',
-        capabilities: NODE_CAPABILITIES
-      });
+      if (this.isAuthenticatedMode) {
+        this.send({
+          type: 'node_register',
+          nodeType: 'sandbox',
+          capabilities: NODE_CAPABILITIES
+        });
+      } else {
+        this.send({
+          type: 'pair_request',
+          requestedName: this.requestedName,
+          nodeType: 'sandbox',
+          capabilities: NODE_CAPABILITIES,
+        });
+      }
     });
-    
+
     this.ws.on('message', async (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
@@ -204,12 +274,21 @@ class NodeClient {
         logger.error({ err: e }, 'Error handling message from master');
       }
     });
-    
-    this.ws.on('close', (code: number, reason: string) => {
-      logger.warn({ code, reason }, 'Disconnected from master');
+
+    this.ws.on('close', async (code: number, reason: Buffer) => {
+      const reasonText = reason.toString();
+      logger.warn({ code, reason: reasonText }, 'Disconnected from master');
+      if (this.pairingRejected) {
+        logger.warn('Pairing was rejected; not reconnecting automatically');
+        return;
+      }
+      if (code === 1008 && reasonText.includes('Invalid node credentials') && this.pairingToken) {
+        logger.warn('Clearing stored node credentials after auth failure; falling back to pairing token');
+        await this.clearStoredCredentials();
+      }
       this.scheduleReconnect();
     });
-    
+
     this.ws.on('error', (err: Error) => {
       logger.error({ err }, 'WebSocket error');
     });
@@ -217,30 +296,45 @@ class NodeClient {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer) {
-      return; // Already scheduled
+      return;
     }
-    
-    logger.info({ delay: this.reconnectDelay }, 'Scheduling reconnect...');
+
+    const delay = this.forceImmediateReconnect ? 250 : this.reconnectDelay;
+    this.forceImmediateReconnect = false;
+    logger.info({ delay }, 'Scheduling reconnect...');
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect().catch(err => {
         logger.error({ err }, 'Reconnect failed');
         this.scheduleReconnect();
       });
-    }, this.reconnectDelay);
+    }, delay);
   }
 
   private async handleMessage(message: any): Promise<void> {
     switch (message.type) {
       case 'registered':
         logger.info({ nodeId: message.nodeId }, 'Node registered');
-        this.nodeId = message.nodeId;
+        this.connectedNodeId = message.nodeId;
         break;
-        
+      case 'pair_pending':
+        logger.info({ pendingId: message.pendingId, pairCode: message.pairCode, requestedName: message.requestedName }, 'Node pairing pending approval');
+        break;
+      case 'pair_approved':
+        logger.info({ nodeId: message.nodeId }, 'Node pairing approved, storing credentials');
+        await this.saveStoredCredentials(String(message.nodeId), String(message.authToken));
+        this.connectedNodeId = String(message.nodeId);
+        this.authToken = String(message.authToken);
+        this.forceImmediateReconnect = true;
+        this.ws?.close(1000, 'Reconnect with node credentials');
+        break;
+      case 'pair_rejected':
+        logger.warn({ pendingId: message.pendingId, reason: message.reason }, 'Node pairing rejected');
+        this.pairingRejected = true;
+        break;
       case 'tool_call':
         await this.handleToolCall(message);
         break;
-        
       default:
         logger.warn({ type: message.type }, 'Unknown message type from master');
     }
@@ -254,27 +348,24 @@ class NodeClient {
     const agentName = typeof message.agentName === 'string' && message.agentName.trim().length > 0
       ? message.agentName
       : 'main';
-    
+
     logger.info({ callId, tool }, 'Executing tool');
-    
+
     try {
-      // Get tool function
       const toolFn = (tools as any)[tool];
       if (!toolFn) {
         throw new Error(`Tool \`${tool}\` not found`);
       }
-      
-      // Create minimal context
+
       const ctx = {
         sessionId,
         session: {
           id: sessionId,
           agent: agentName,
-          currentNode: this.nodeId,
+          currentNode: this.connectedNodeId || this.requestedName,
         },
-        runtimeNodeId: this.nodeId,
+        runtimeNodeId: this.connectedNodeId || this.requestedName,
         broadcast: async (text: string) => {
-          // Send broadcast back to master
           this.send({
             type: 'broadcast',
             callId,
@@ -285,23 +376,20 @@ class NodeClient {
           await this.sendSessionEvent(sessionId, text, eventType);
         }
       };
-      
-      // Execute tool
+
       const rawResult = await toolFn(args, ctx);
       const result = this.normalizeToolResult(rawResult);
-      
-      // Send response
+
       this.send({
         type: 'tool_call_response',
         callId,
         result
       });
-      
+
       logger.info({ callId, tool }, 'Tool executed successfully');
     } catch (e: any) {
       logger.error({ err: e, callId, tool }, 'Tool execution failed');
-      
-      // Send error
+
       this.send({
         type: 'tool_call_error',
         callId,
@@ -360,7 +448,7 @@ class NodeClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    
+
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -368,39 +456,40 @@ class NodeClient {
   }
 }
 
-// Parse command line arguments
 function parseArgs(): NodeClientOptions {
   const args = process.argv.slice(2);
   const options: any = {};
-  
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    
+
     if (arg === '--host' && i + 1 < args.length) {
       options.host = args[++i];
     } else if (arg === '--id' && i + 1 < args.length) {
       options.nodeId = args[++i];
     } else if (arg === '--token' && i + 1 < args.length) {
       options.token = args[++i];
+    } else if (arg === '--auth-token' && i + 1 < args.length) {
+      options.authToken = args[++i];
+    } else if (arg === '--credentials-file' && i + 1 < args.length) {
+      options.credentialsFile = args[++i];
     }
   }
-  
+
   if (!options.host) {
     console.error('Error: --host is required');
-    console.error('Usage: npm run node -- --host http://master:3001/ --id my-node --token <token>');
+    console.error('Usage: npm run node -- --host http://master:3001/ --id requested-name --token <pairing-token> [--credentials-file path]');
     process.exit(1);
   }
-  
-  if (!options.token) {
-    console.error('Error: --token is required');
-    console.error('Usage: npm run node -- --host http://master:3001/ --id my-node --token <token>');
+
+  if (!options.token && !(options.authToken && options.nodeId) && !options.credentialsFile) {
+    console.error('Error: provide --token, or (--auth-token with --id), or --credentials-file with stored node credentials');
     process.exit(1);
   }
-  
+
   return options as NodeClientOptions;
 }
 
-// Main
 async function main() {
   const options = parseArgs();
   const client = new NodeClient(options);
@@ -413,16 +502,15 @@ async function main() {
       await client.sendSessionEvent(entry.sessionId, message, 'background');
     }
   });
-  
+
   await client.connect();
-  
-  // Handle graceful shutdown
+
   process.on('SIGINT', async () => {
     logger.info('Shutting down...');
     await client.disconnect();
     process.exit(0);
   });
-  
+
   process.on('SIGTERM', async () => {
     logger.info('Shutting down...');
     await client.disconnect();

@@ -5,6 +5,7 @@ set -eu
 NODE_MASTER_URL="${NODE_URL:-http://foxwarm:3001}"
 NODE_IDENTIFIER="${NODE_ID:-sandbox-node}"
 NODE_TOKEN_PATH="${NODE_TOKEN_FILE:-/app/state/node_token}"
+NODE_CREDENTIALS_PATH="${NODE_CREDENTIALS_FILE:-/app/state/node_credentials.json}"
 EXPLICIT_NODE_TOKEN="${NODE_TOKEN:-}"
 
 if [ -n "$EXPLICIT_NODE_TOKEN" ] && [ "$EXPLICIT_NODE_TOKEN" != "PLACEHOLDER_TOKEN" ]; then
@@ -25,4 +26,5 @@ done
 exec node lib/nodeClient.js \
   --host "$NODE_MASTER_URL" \
   --id "$NODE_IDENTIFIER" \
-  --token "$RESOLVED_NODE_TOKEN"
+  --token "$RESOLVED_NODE_TOKEN" \
+  --credentials-file "$NODE_CREDENTIALS_PATH"

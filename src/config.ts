@@ -278,6 +278,7 @@ export const MAIN_AGENT_MEMORY_DIR = path.join(MAIN_AGENT_DIR, 'memory');
 // Files
 export const TOKEN_FILE = path.join(STATE_DIR, 'token');
 export const NODE_TOKEN_FILE = path.join(STATE_DIR, 'node_token');
+export const NODES_FILE = path.join(STATE_DIR, 'nodes.json');
 export const SESSIONS_FILE = path.join(STATE_DIR, 'sessions.json');
 export const AGENTS_FILE = path.join(STATE_DIR, 'agents.json');
 export const CHANNELS_FILE = path.join(STATE_DIR, 'channels.json');
