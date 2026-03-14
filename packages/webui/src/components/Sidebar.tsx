@@ -1,4 +1,4 @@
-import { GitBranch, MessageSquare, Plus } from 'lucide-react'
+import { Plus, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 
@@ -33,36 +33,24 @@ export default function Sidebar({
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => onSelectSession(currentSession)}
-            className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              currentView === 'chat'
-                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
-            }`}
-            title="Open current session"
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span>Chats</span>
-          </button>
+        <div className="space-y-2">
           <button
             onClick={onSelectArchitecture}
-            className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+            className={`inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
               currentView === 'architecture'
                 ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
             }`}
             title="Open architecture overview"
           >
-            <GitBranch className="w-4 h-4" />
+            <Workflow className="w-4 h-4" />
             <span>Architecture</span>
           </button>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto" data-session-list-scroll-container>
-        <div className="p-2">
+        <div className="border-t border-gray-200 dark:border-gray-700 p-2">
           <SessionListCore
             sessions={sessions}
             currentSession={currentSession}

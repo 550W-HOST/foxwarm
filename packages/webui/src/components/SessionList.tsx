@@ -1,4 +1,4 @@
-import { GitBranch, Plus } from 'lucide-react'
+import { Plus, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 
@@ -43,13 +43,13 @@ export default function SessionList({
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700'
           }`}
         >
-          <GitBranch className="w-4 h-4" />
-          <span>Architecture overview</span>
+          <Workflow className="w-4 h-4" />
+          <span>Architecture</span>
         </button>
       </div>
       
       <div className="flex-1 overflow-y-auto" data-session-list-scroll-container>
-        <div className="max-w-4xl mx-auto p-4">
+        <div className="border-t border-gray-200 dark:border-gray-700 max-w-4xl mx-auto p-4">
           <SessionListCore 
             sessions={sessions} 
             currentSession={currentSession}
