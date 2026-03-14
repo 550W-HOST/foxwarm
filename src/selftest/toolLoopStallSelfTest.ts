@@ -310,7 +310,6 @@ async function main(): Promise<void> {
             args: {
               summary: '',
               keepBlockIds: [] as string[],
-              summarizeBlockIds: blockIds.slice(0, 1),
               dropBlockIds: [] as string[],
             },
           };
@@ -333,8 +332,7 @@ async function main(): Promise<void> {
             args: {
               summary: 'compacted summary',
               keepBlockIds: [] as string[],
-              summarizeBlockIds: blockIds,
-              dropBlockIds: [] as string[],
+              dropBlockIds: blockIds,
             },
           };
           await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
