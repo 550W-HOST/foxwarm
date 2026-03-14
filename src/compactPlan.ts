@@ -117,6 +117,7 @@ function buildBlockPreview(messages: Message[]): string {
     const preview = formatMessagePreviewText(message, DEFAULT_PREVIEW_CHAR_LIMIT, {
       skipEphemeralSystem: true,
       skipRagMemorySnippets: true,
+      skipThinking: true,
     }).trim();
     return `${seqLabel}${preview || '[empty message]'}`;
   });

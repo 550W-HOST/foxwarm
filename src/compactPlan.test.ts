@@ -37,6 +37,24 @@ test('buildCompactCandidateBlocks groups older history into seq-based blocks wit
   assert.match(blocks[0].preview, /first request/);
 });
 
+test('compact block preview skips thinking and prefixes continuation lines with > ', () => {
+  const messages: Message[] = [
+    {
+      role: 'model',
+      parts: [{
+        text: 'visible line 1\nvisible line 2',
+        thinking: 'hidden reasoning should not appear',
+      }],
+      __meta: { seq: 11, timestamp: 11000 },
+    },
+  ];
+
+  const blocks = buildCompactCandidateBlocks(messages);
+  assert.equal(blocks.length, 1);
+  assert.match(blocks[0].preview, /#11 visible line 1\n> visible line 2/);
+  assert.doesNotMatch(blocks[0].preview, /hidden reasoning should not appear/);
+});
+
 test('buildCompactPromptText tells the model to use the compact plan tool and references force-kept recent messages', () => {
   const blocks = buildCompactCandidateBlocks([
     makeMessage(1, 'user', 'alpha'),
