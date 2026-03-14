@@ -79,6 +79,7 @@ export class NodesManager {
       'delete_session',
       'update_session_name',
       'stop_session',
+      'compact_session',
       'compress_session',
       'browse_open',
       'browse_list',

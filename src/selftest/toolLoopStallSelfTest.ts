@@ -84,6 +84,8 @@ async function main(): Promise<void> {
 
   const originalChat = llm.chat;
   const originalAxiosPost = axios.post;
+  const originalCompactHistory = (sessionManager as any).compactHistory;
+  const originalCompactHistoryWithSummary = (sessionManager as any).compactHistoryWithSummary;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
 
@@ -276,6 +278,61 @@ async function main(): Promise<void> {
       assertLastModelText(parentAfter, 'parent received end-turn handoff');
     });
 
+    await test('compact_session on the current session enters compact flow without another normal LLM reply', async () => {
+      const sessionId = makeSessionId('selftest_compact_current');
+      createdSessionIds.push(sessionId);
+      await ensureSession(sessionId);
+
+      let llmCallCount = 0;
+
+      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+        await appendStubUserMessage(activeSession, parts);
+        llmCallCount += 1;
+
+        if (llmCallCount === 1) {
+          const toolCall = {
+            id: 'compact-now',
+            name: 'compact_session',
+            args: { keepPercent: 0.25 },
+          };
+          await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+          return { text: '', toolCalls: [toolCall] };
+        }
+
+        if (llmCallCount === 2) {
+          const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
+          assert.match(systemText, /COMPACTION STARTED/);
+          const blockIds = Array.from(systemText.matchAll(/- (block_[^\n]+)/g)).map(match => match[1]);
+          assert(blockIds.length > 0, 'expected compaction prompt to include at least one block id');
+          const toolCall = {
+            id: 'compact-plan',
+            name: 'submit_compact_plan',
+            args: {
+              summary: 'compacted summary',
+              keepBlockIds: [] as string[],
+              summarizeBlockIds: blockIds,
+              dropBlockIds: [] as string[],
+            },
+          };
+          await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+          return { text: '', toolCalls: [toolCall] };
+        }
+
+        throw new Error(`compact_session self-request should stop after the dedicated compaction flow, got LLM call ${llmCallCount}`);
+      };
+
+      await (router as any).runSessionTurn(sessionId, {
+        parts: [{ text: 'compact this session now' }],
+      });
+
+      const finalSession = await sessionManager.getSession(sessionId);
+      assert.strictEqual(llmCallCount, 2);
+      assert.strictEqual(finalSession.busy, false);
+      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
+      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('compacted summary'))));
+      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed'))));
+    });
+
     await test('post-tool LLM failure leaves a visible terminal model message without auto-notifying parent', async () => {
       const parentId = makeSessionId('selftest_error_parent');
       const childId = makeSessionId('selftest_error_child');
@@ -337,6 +394,8 @@ async function main(): Promise<void> {
   } finally {
     (llm as any).chat = originalChat;
     (axios as any).post = originalAxiosPost;
+    (sessionManager as any).compactHistory = originalCompactHistory;
+    (sessionManager as any).compactHistoryWithSummary = originalCompactHistoryWithSummary;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     await cleanupSessions(createdSessionIds);
     await fs.remove(tempRoot);

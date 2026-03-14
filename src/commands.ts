@@ -337,7 +337,7 @@ async function handleCompactCommand(ctx: ChannelContext, args: string[], session
     }
   }
 
-  const result = await sessionManager.requestSessionCompaction(sessionId, { keepPercent })
+  const result = await sessionManager.requestSessionCompaction(sessionId, { keepPercent, requestedBy: 'command' })
 
   if (result.alreadyQueued) {
     ctx.reply('ℹ️ Compaction is already queued for this session.')

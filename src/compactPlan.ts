@@ -199,8 +199,9 @@ export function buildCompactPromptText(options: {
   forcedKeptStartSeq?: number;
   forcedKeptEndSeq?: number;
   candidateBlocks: CompactCandidateBlock[];
+  guidance?: string;
 }): string {
-  const { forcedKeptCount, forcedKeptStartSeq, forcedKeptEndSeq, candidateBlocks } = options;
+  const { forcedKeptCount, forcedKeptStartSeq, forcedKeptEndSeq, candidateBlocks, guidance } = options;
   const lines: string[] = [
     'COMPACTION STARTED: stop any previous task and focus only on compaction.',
     `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} message(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. Do not spend block selections on them.`,
@@ -212,6 +213,11 @@ export function buildCompactPromptText(options: {
     '- Use dropBlockIds only for low-value older content that can leave working history. Archive still keeps everything.',
     '- The summary should be concise but sufficient for future turns to continue work safely.',
     '',
+    ...(guidance ? [
+      'Additional requester guidance for this compaction:',
+      guidance,
+      '',
+    ] : []),
     'Older compact candidates:',
   ];
 

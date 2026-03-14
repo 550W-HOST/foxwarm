@@ -177,7 +177,7 @@ export class MessageRouter {
     return true;
   }
 
-  private async runPendingCompactionIfNeeded(sessionId: string, session: Session): Promise<boolean> {
+  private async runPendingCompactionIfNeeded(sessionId: string, session: Session): Promise<'continued' | 'stop' | false> {
     const nextItem = session.queue[0];
     if (nextItem?.type !== 'compact') {
       return false;
@@ -186,26 +186,26 @@ export class MessageRouter {
     session.queue.shift();
 
     try {
-      if (nextItem.summary && nextItem.summary.trim()) {
-        await sessionManager.compactHistoryWithSummary(sessionId, nextItem.summary, nextItem.keepPercent, 'Manual compaction completed. You can continue working now.');
-      } else {
-        await sessionManager.compactHistory(sessionId, nextItem.keepPercent, 'Compaction completed. You can continue working now.');
-      }
+      await sessionManager.processSessionCompactionRequest(sessionId, {
+        keepPercent: nextItem.keepPercent,
+        compactGuidance: nextItem.compactGuidance,
+        completionMarker: nextItem.completionMarker || 'Compaction completed. You can continue working now.',
+      });
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'In-turn queued compaction failed');
       await this.sendSessionError(session, undefined, e);
     }
 
-    return true;
+    return nextItem.stopAfterCurrentTurn ? 'stop' : 'continued';
   }
 
   private async runQueuedCompaction(sessionId: string, session: Session, item: QueueItem): Promise<void> {
     try {
-      if (item.summary && item.summary.trim()) {
-        await sessionManager.compactHistoryWithSummary(sessionId, item.summary, item.keepPercent);
-      } else {
-        await sessionManager.compactHistory(sessionId, item.keepPercent);
-      }
+      await sessionManager.processSessionCompactionRequest(sessionId, {
+        keepPercent: item.keepPercent,
+        compactGuidance: item.compactGuidance,
+        completionMarker: item.completionMarker || 'Compaction completed.',
+      });
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'Queued compaction failed');
       await this.sendSessionError(session, undefined, e);
@@ -399,7 +399,11 @@ export class MessageRouter {
       const { contextLimit } = resolveModelConfig(session.model);
 
       while (iteration < 500) {
-        if (await this.runPendingCompactionIfNeeded(sessionId, session)) {
+        const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
+        if (pendingCompaction === 'stop') {
+          break;
+        }
+        if (pendingCompaction === 'continued') {
           parts = null;
           continue;
         }
@@ -468,11 +472,15 @@ export class MessageRouter {
         await this.appendToolMessage(session, toolResultMsg.parts);
 
         if ((toolResultMsg as any).__toolLoopControl?.stopCurrentTurn) {
-          logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop after handoff');
+          logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
           break;
         }
 
-        if (await this.runPendingCompactionIfNeeded(sessionId, session)) {
+        const compactionAfterTools = await this.runPendingCompactionIfNeeded(sessionId, session);
+        if (compactionAfterTools === 'stop') {
+          break;
+        }
+        if (compactionAfterTools === 'continued') {
           parts = null;
           iteration++;
           continue;
