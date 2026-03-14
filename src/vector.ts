@@ -145,6 +145,7 @@ function normalizeMessageText(message: Message): string {
         includeRolePrefix: true,
         skipEphemeralSystem: true,
         skipRagMemorySnippets: true,
+        skipThinking: true,
     });
 }
 

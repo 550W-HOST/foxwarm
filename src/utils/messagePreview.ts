@@ -2,7 +2,7 @@ import { Message } from '../types'
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './messageFormat'
 
 export function getMessagePreview(msg: Message, previewLength: number = 100): string {
-  return formatMessagePreviewText(msg, previewLength, { skipEphemeralSystem: true })
+  return formatMessagePreviewText(msg, previewLength, { skipEphemeralSystem: true, skipThinking: true })
 }
 
 export function formatMessagePreviewLine(msg: Message, idx: number, previewLength: number = 100): string {
