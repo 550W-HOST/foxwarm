@@ -278,7 +278,7 @@ async function main(): Promise<void> {
       assertLastModelText(parentAfter, 'parent received end-turn handoff');
     });
 
-    await test('compact_session on the current session enters compact flow without another normal LLM reply', async () => {
+    await test('compact_session retries invalid compact plans inside the restricted compact flow', async () => {
       const sessionId = makeSessionId('selftest_compact_current');
       createdSessionIds.push(sessionId);
       await ensureSession(sessionId);
@@ -305,6 +305,29 @@ async function main(): Promise<void> {
           const blockIds = Array.from(systemText.matchAll(/- (block_[^\n]+)/g)).map(match => match[1]);
           assert(blockIds.length > 0, 'expected compaction prompt to include at least one block id');
           const toolCall = {
+            id: 'compact-plan-invalid',
+            name: 'submit_compact_plan',
+            args: {
+              summary: '',
+              keepBlockIds: [] as string[],
+              summarizeBlockIds: blockIds.slice(0, 1),
+              dropBlockIds: [] as string[],
+            },
+          };
+          await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+          return { text: '', toolCalls: [toolCall] };
+        }
+
+        if (llmCallCount === 3) {
+          const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
+          assert.match(systemText, /COMPACT PLAN INVALID/);
+          assert.match(systemText, /summary: must be a non-empty string/);
+          const originalPrompt = activeSession.history
+            .find(msg => msg.role === 'user' && msg.parts.some(part => typeof part.system === 'string' && part.system.includes('COMPACTION STARTED')))
+            ?.parts.find(part => typeof part.system === 'string')?.system || '';
+          const blockIds = Array.from(originalPrompt.matchAll(/- (block_[^\n]+)/g)).map(match => match[1]);
+          assert(blockIds.length > 0, 'expected original compaction prompt to remain available in history');
+          const toolCall = {
             id: 'compact-plan',
             name: 'submit_compact_plan',
             args: {
@@ -326,7 +349,7 @@ async function main(): Promise<void> {
       });
 
       const finalSession = await sessionManager.getSession(sessionId);
-      assert.strictEqual(llmCallCount, 2);
+      assert.strictEqual(llmCallCount, 3);
       assert.strictEqual(finalSession.busy, false);
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('compacted summary'))));
