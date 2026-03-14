@@ -467,6 +467,11 @@ export class MessageRouter {
 
         await this.appendToolMessage(session, toolResultMsg.parts);
 
+        if ((toolResultMsg as any).__toolLoopControl?.stopCurrentTurn) {
+          logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop after handoff');
+          break;
+        }
+
         if (await this.runPendingCompactionIfNeeded(sessionId, session)) {
           parts = null;
           iteration++;

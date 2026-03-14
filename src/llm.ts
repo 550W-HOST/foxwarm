@@ -5,7 +5,7 @@ import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
-import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, OpenAIResponsesContent, TokenUsage } from './types';
+import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, OpenAIResponsesContent, TokenUsage, ToolDefinition } from './types';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir } from './config';
 import { nodesManager } from './nodesManager';
 import * as sessionManager from './sessionManager';
@@ -1021,6 +1021,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
  */
 export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
     const parts = [];
+    let stopCurrentTurn = false;
 
     const normalizeToolResult = (rawResult: any): any => {
         if (rawResult === undefined) return { output: '(No output)' };
@@ -1058,6 +1059,16 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         if (rest.output === undefined) {
             rest.output = fallbackLabel;
         }
+        return rest;
+    };
+
+    const extractToolLoopControl = (result: any): any => {
+        if (!result || typeof result !== 'object' || !result.__toolLoopControl || typeof result.__toolLoopControl !== 'object') {
+            return result;
+        }
+
+        stopCurrentTurn = stopCurrentTurn || !!result.__toolLoopControl.stopCurrentTurn;
+        const { __toolLoopControl, ...rest } = result;
         return rest;
     };
     
@@ -1145,6 +1156,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         }
         } // End if (result?.error)
 
+        result = extractToolLoopControl(result);
         result = consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
 
         // Backward-compat fallback for older tools/nodes still returning marker strings.
@@ -1177,10 +1189,16 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         });
     }
     
-    return {
+    const toolMessage: Message = {
         role: 'tool',
         parts: parts
     };
+
+    if (stopCurrentTurn) {
+        (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true };
+    }
+
+    return toolMessage;
 }
 
 /**
@@ -1194,6 +1212,9 @@ export async function chat(
     parts: MessagePart[] | null, 
     session: Session,
     iteration = 0,
+    options?: {
+        toolDefinitions?: ToolDefinition[];
+    },
 ): Promise<ChatResult> {
     const appendMessage = async (message: Message) => {
         await sessionManager.appendSessionMessage(session, message);
@@ -1242,6 +1263,7 @@ export async function chat(
     logger.info(`Requesting LLM (${modelKey}, type ${providerType}, iteration ${iteration})...`);
 
     const useOpenAIResponsesApi = shouldUseOpenAIResponsesApi(providerType, modelName);
+    const availableToolDefinitions = options?.toolDefinitions ?? tools.definitions;
 
     const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh' :
                          THINKING_BUDGET >= 4000 ? 'high' :
@@ -1276,7 +1298,7 @@ export async function chat(
                 },
                 ...messages
             ],
-            tools: tools.definitions.length > 0 ? tools.definitions.map(fd => ({
+            tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
                 type: 'function',
                 name: fd.name,
                 description: fd.description,
@@ -1302,7 +1324,7 @@ export async function chat(
                 { role: 'system', content: systemPrompt },
                 ...messages
             ],
-            tools: tools.definitions.length > 0 ? tools.definitions.map(fd => ({
+            tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
                 type: 'function',
                 function: {
                     name: fd.name,
@@ -1329,7 +1351,7 @@ export async function chat(
             thinking: THINKING_BUDGET ? { type: "enabled", budget_tokens: THINKING_BUDGET } : undefined,
             system: systemPrompt,
             messages: messages,
-            tools: tools.definitions.length > 0 ? tools.definitions.map(fd => ({
+            tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
                 name: fd.name,
                 description: fd.description,
                 input_schema: fd.parameters

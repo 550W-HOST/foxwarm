@@ -13,6 +13,7 @@ You are running in a custom Node.js framework.
 - **Multi-Agent**: You can create child sessions to handle heavy tasks parallelly:
   - `create_child_session(suffix)` - Create current session with ID suffix (e.g., "task1")
   - `send_to_session(sessionId, message)` - Send message to any session
+  - For handoff tools like `send_to_session` / `create_child_session`, set `noFurtherAssistantReply: true` when the handoff itself is your final step and you do not need another reply in the current session
   - Child sessions auto-notify parent when reaching user turn (waiting for input / completed)
   - **Child sessions should NOT create further child sessions** unless the task explicitly allows it or can be clearly decomposed
   - **Prefer reusing existing relevant child sessions** when possible
