@@ -1297,18 +1297,30 @@ export async function forceIndexSession(sessionId: string): Promise<void> {
   }
 }
 
-export async function compactHistory(sessionId: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
+type CompactionRunOptions = {
+  keepPercent?: number;
+  completionMarker?: string;
+  compactGuidance?: string;
+  startLogMessage?: string;
+  startBroadcastMessage?: string;
+};
+
+async function runCompaction(sessionId: string, options: CompactionRunOptions = {}): Promise<void> {
   const session = sessions.get(sessionId);
   if (!session) return;
+
+  const keepPercent = typeof options.keepPercent === 'number' ? options.keepPercent : COMPACT_PERCENT;
+  const completionMarker = options.completionMarker || 'Compaction completed.';
+  const compactGuidance = options.compactGuidance?.trim();
 
   const history = session.history;
   if (history.length < 1) return;
   const originalHistoryLength = history.length;
 
   // Notify user that compaction is starting
-  logger.info({ sessionId, hasBroadcast: !!session.broadcast }, 'Compaction starting');
-  if (session.broadcast) {
-    session.broadcast('⚠️ Context size limit reached, compacting history...');
+  logger.info({ sessionId, hasBroadcast: !!session.broadcast }, options.startLogMessage || 'Compaction starting');
+  if (session.broadcast && options.startBroadcastMessage) {
+    session.broadcast(options.startBroadcastMessage);
   }
 
   let splitIndex = Math.floor(history.length * (1 - keepPercent));
@@ -1343,6 +1355,7 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
       forcedKeptStartSeq,
       forcedKeptEndSeq,
       candidateBlocks,
+      guidance: compactGuidance,
     })
   };
 
@@ -1401,44 +1414,27 @@ export async function compactHistory(sessionId: string, keepPercent: number = CO
   }
 }
 
-export async function compactHistoryWithSummary(sessionId: string, summary: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
-  const session = sessions.get(sessionId);
-  if (!session) {
-    throw new Error(`Session \`${sessionId}\` not found.`);
-  }
+export async function compactHistory(sessionId: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
+  await runCompaction(sessionId, {
+    keepPercent,
+    completionMarker,
+    startLogMessage: 'Compaction starting',
+    startBroadcastMessage: '⚠️ Context size limit reached, compacting history...',
+  });
+}
 
+export async function compactHistoryWithSummary(sessionId: string, summary: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
   if (!summary || !summary.trim()) {
     throw new Error('Summary is required for manual compaction.');
   }
 
-  const history = session.history;
-  if (history.length < 1) {
-    throw new Error('History is empty.');
-  }
-
-  logger.info({ sessionId, hasBroadcast: !!session.broadcast }, 'Manual compaction starting');
-  if (session.broadcast) {
-    session.broadcast('⚠️ Manual compaction starting...');
-  }
-
-  let splitIndex = Math.floor(history.length * (1 - keepPercent));
-
-  if (keepPercent > 0) {
-    while (splitIndex < history.length && history[splitIndex].role === 'tool') {
-      splitIndex++;
-    }
-  } else {
-    splitIndex = history.length;
-  }
-
-  const remaining = splitIndex < history.length ? history.slice(splitIndex) : [];
-  const now = Date.now();
-  const summaryConversation: Message[] = [
-    { role: 'user', parts: [{ system: 'Manual compaction summary provided.' }], __meta: { timestamp: now } },
-    { role: 'model', parts: [{ text: summary.trim() }], __meta: { timestamp: now } },
-  ];
-
-  await finalizeCompaction(sessionId, session, remaining, summaryConversation, completionMarker, history.length - remaining.length);
+  await runCompaction(sessionId, {
+    keepPercent,
+    completionMarker,
+    compactGuidance: `Manual compaction hint from requester: ${summary.trim()}`,
+    startLogMessage: 'Manual compaction starting',
+    startBroadcastMessage: '⚠️ Manual compaction starting...',
+  });
 }
 
 async function finalizeCompaction(
@@ -1597,7 +1593,13 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
 
 export async function requestSessionCompaction(
   sessionId: string,
-  options: { summary?: string; keepPercent?: number } = {}
+  options: {
+    compactGuidance?: string;
+    keepPercent?: number;
+    completionMarker?: string;
+    stopAfterCurrentTurn?: boolean;
+    requestedBy?: 'auto' | 'command' | 'tool' | 'manual';
+  } = {}
 ): Promise<{ alreadyQueued: boolean; startedImmediately: boolean; queueLength: number }> {
   const session = await getSession(sessionId);
 
@@ -1612,8 +1614,11 @@ export async function requestSessionCompaction(
   const startedImmediately = !session.busy && session.queue.length === 0;
   await enqueueSessionItem(sessionId, {
     type: 'compact',
-    summary: options.summary,
     keepPercent: options.keepPercent,
+    compactGuidance: options.compactGuidance,
+    completionMarker: options.completionMarker,
+    stopAfterCurrentTurn: options.stopAfterCurrentTurn,
+    requestedBy: options.requestedBy,
   });
 
   return {
@@ -1621,6 +1626,24 @@ export async function requestSessionCompaction(
     startedImmediately,
     queueLength: session.queue.length,
   };
+}
+
+export async function processSessionCompactionRequest(sessionId: string, item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>): Promise<void> {
+  if (item.compactGuidance?.trim()) {
+    await compactHistoryWithSummary(
+      sessionId,
+      item.compactGuidance,
+      item.keepPercent,
+      item.completionMarker || 'Compaction completed.'
+    );
+    return;
+  }
+
+  await compactHistory(
+    sessionId,
+    item.keepPercent,
+    item.completionMarker || 'Compaction completed.'
+  );
 }
 
 /**

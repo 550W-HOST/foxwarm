@@ -92,8 +92,11 @@ export interface QueueItem {
   type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact';
   source?: QueueSource;
   parts?: MessagePart[];
-  summary?: string;
   keepPercent?: number;
+  compactGuidance?: string;
+  completionMarker?: string;
+  stopAfterCurrentTurn?: boolean;
+  requestedBy?: 'auto' | 'command' | 'tool' | 'manual';
 }
 
 export interface Session {

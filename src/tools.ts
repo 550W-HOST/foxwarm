@@ -28,6 +28,7 @@ import {
     tool_update_session_name,
     tool_update_session_snapshot,
     tool_stop_session,
+    tool_compact_session,
     tool_compress_session,
     tool_create_timer,
     tool_list_timers,
@@ -570,6 +571,7 @@ export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
 export const update_session_snapshot = tool_update_session_snapshot;
 export const stop_session = tool_stop_session;
+export const compact_session = tool_compact_session;
 export const compress_session = tool_compress_session;
 export const create_timer = tool_create_timer;
 export const list_timers = tool_list_timers;
@@ -896,13 +898,25 @@ export const definitions = [
             }
         },
         {
-            name: 'compress_session',
-            description: 'Queue a session compaction task. If compressing the current session/self, summary is required. For other sessions, a provided summary is optional; if omitted, automatic summary generation will be used when the queued compaction runs.',
+            name: 'compact_session',
+            description: 'Request a compaction flow for the current session or another idle session. This does not return compact candidates directly. Instead, the target session enters a dedicated compaction planning flow where the model must call submit_compact_plan. Use summary only as optional extra guidance for the compaction prompt, not as the final compacted summary.',
             parameters: {
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID (optional, default: current session)' },
-                    summary: { type: 'string', description: 'Required when compacting the current session/self. Optional for other sessions.' },
+                    summary: { type: 'string', description: 'Optional extra guidance for the compaction prompt. The model must still submit the actual keep/summarize/drop plan and final summary via submit_compact_plan.' },
+                    keepPercent: { type: 'number', description: 'How much recent history to keep. Use 0-1 fraction or 1-100 percentage. Optional.' }
+                }
+            }
+        },
+        {
+            name: 'compress_session',
+            description: 'Compatibility alias of compact_session.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Target session ID (optional, default: current session)' },
+                    summary: { type: 'string', description: 'Optional extra guidance for the compaction prompt. The model must still submit the actual keep/summarize/drop plan and final summary via submit_compact_plan.' },
                     keepPercent: { type: 'number', description: 'How much recent history to keep. Use 0-1 fraction or 1-100 percentage. Optional.' }
                 }
             }

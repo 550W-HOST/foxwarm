@@ -46,11 +46,13 @@ test('buildCompactPromptText tells the model to use the compact plan tool and re
     forcedKeptStartSeq: 50,
     forcedKeptEndSeq: 60,
     candidateBlocks: blocks,
+    guidance: 'Prefer keeping unresolved implementation details.',
   });
 
   assert.match(prompt, new RegExp(COMPACT_PLAN_TOOL_NAME));
   assert.match(prompt, /force-kept/i);
   assert.match(prompt, /#50-#60/);
+  assert.match(prompt, /unresolved implementation details/);
   assert.match(prompt, new RegExp(blocks[0].id));
 });
 

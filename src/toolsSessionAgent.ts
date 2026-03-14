@@ -553,9 +553,11 @@ function normalizeKeepPercent(value: unknown, defaultPercent = COMPACT_PERCENT):
   return defaultPercent;
 }
 
-export async function tool_compress_session(args: ToolArgs, ctx: ToolContext) {
+export async function tool_compact_session(args: ToolArgs, ctx: ToolContext) {
   const targetSessionId = args.sessionId || ctx.sessionId;
-  const summary = typeof args.summary === 'string' ? args.summary : undefined;
+  const compactGuidance = typeof args.summary === 'string' && args.summary.trim()
+    ? args.summary.trim()
+    : undefined;
   const keepPercent = normalizeKeepPercent(args.keepPercent);
 
   if (!targetSessionId) {
@@ -568,26 +570,33 @@ export async function tool_compress_session(args: ToolArgs, ctx: ToolContext) {
   }
 
   const isSelf = targetSessionId === ctx.sessionId;
-  if (isSelf && (!summary || !summary.trim())) {
-    throw new Error('Self compaction requires a non-empty summary.');
+  if (!isSelf && (targetSession.busy || targetSession.queue.length > 0)) {
+    throw new Error(`Session \`${targetSessionId}\` must be idle with an empty queue before another session can request compaction.`);
   }
 
   const result = await sessionManager.requestSessionCompaction(targetSessionId, {
-    summary: summary?.trim() || undefined,
+    compactGuidance,
     keepPercent,
+    completionMarker: isSelf
+      ? 'Compaction completed. You can continue working now.'
+      : 'Compaction completed.',
+    stopAfterCurrentTurn: !!isSelf,
+    requestedBy: compactGuidance ? 'manual' : 'tool',
   });
 
   if (result.alreadyQueued) {
     return `Compaction is already queued for session \`${targetSessionId}\`.`;
   }
 
-  const mode = summary && summary.trim() ? 'provided summary' : 'automatic summary';
+  const mode = compactGuidance ? 'guided compaction plan' : 'automatic compaction plan';
   if (result.startedImmediately) {
-    return `Compaction started for session \`${targetSessionId}\` using ${mode}.`;
+    return `Compaction requested for session \`${targetSessionId}\`. It is entering the compact planning flow now using ${mode}.`;
   }
 
-  return `Compaction queued for session \`${targetSessionId}\` using ${mode}. Pending queue length: ${result.queueLength}`;
+  return `Compaction requested for session \`${targetSessionId}\` using ${mode}. Pending queue length: ${result.queueLength}`;
 }
+
+export const tool_compress_session = tool_compact_session;
 
 export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
   await checkTimerPermission(ctx, {
