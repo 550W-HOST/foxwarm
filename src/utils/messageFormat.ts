@@ -168,6 +168,7 @@ export function formatMessagePreviewText(
   const preview = formatMessageText(message, {
     ...options,
     includeRolePrefix: false,
+    skipThinking: options.skipThinking ?? true,
   });
 
   if (preview.length <= previewLength) {
