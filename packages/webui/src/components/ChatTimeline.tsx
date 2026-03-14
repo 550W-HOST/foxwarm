@@ -6,6 +6,7 @@ import {
   IconToggleButton,
   MiniToggleButton,
   ToolLabel,
+  ToolTag,
   ToolTagList,
   SessionHashLink,
   buildPatchHunkSnippets,
@@ -994,6 +995,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     : pairStatus === 'success'
       ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
       : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
+  const tagTone = pairStatus === 'error' ? 'error' : pairStatus === 'success' ? 'success' : 'neutral'
 
   const responsePreview = useMemo(() => {
     const firstResponse = responses[0]
@@ -1016,6 +1018,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   }, [imageParts.length, responses])
 
   const jsonText = useMemo(() => JSON.stringify({ call, responses, imageParts }, null, 2), [call, imageParts, responses])
+  const baseTextClass = 'font-mono text-gray-700 dark:text-gray-300'
 
   return (
     <div className={`text-xs border rounded p-2 relative group cursor-pointer ${outerToneClass}`} onClick={() => setExpanded((current) => !current)}>
@@ -1025,59 +1028,59 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       </div>
 
       {viewMode === 'json' ? (
-        <div className="font-mono pr-10">
+        <div className={`${baseTextClass} ${expanded ? '' : 'pr-10'}`}>
           <div className="flex items-center gap-2 min-w-0">
-            <ToolLabel name={call.name} />
+            <ToolTag name={call.name} tone={tagTone} />
           </div>
           <pre className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : clampContentStyle(6)}>{jsonText}</pre>
         </div>
-      ) : (
-        <div className="font-mono pr-10">
-          {!expanded ? (
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 min-w-0">
-                <ToolLabel name={call.name} />
-                <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>
-              </div>
-              <div className="text-gray-700 dark:text-gray-200" style={clampContentStyle(1)}>{responsePreview}</div>
+      ) : !expanded ? (
+        <div className={`${baseTextClass} pr-10`}>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <ToolTag name={call.name} tone={tagTone} />
+              <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>
             </div>
-          ) : (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <ToolLabel name={call.name} />
+            <div className="text-gray-700 dark:text-gray-300" style={clampContentStyle(1)}>{responsePreview}</div>
+          </div>
+        </div>
+      ) : (
+        <div className={baseTextClass}>
+          <div>
+            <div className="flex items-center gap-2 min-w-0">
+              <ToolTag name={call.name} tone={tagTone} />
+            </div>
+
+            <div className="mt-2 cursor-default" onClick={(e) => e.stopPropagation()}>
+              <div className="bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300">
+                {(call.name === 'edit' || call.name === 'apply_patch') && (
+                  <div className="mb-2 flex gap-1 justify-end">
+                    <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
+                    <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
+                  </div>
+                )}
+                {renderToolCallExpandedContent(call, diffViewMode)}
               </div>
 
-              <div className="space-y-2 cursor-default" onClick={(e) => e.stopPropagation()}>
-                <div className="rounded border border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-gray-900/60 p-2 text-gray-700 dark:text-gray-200">
-                  {(call.name === 'edit' || call.name === 'apply_patch') && (
-                    <div className="mb-2 flex gap-1 justify-end">
-                      <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
-                      <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
+              <div className={`my-2 border-t ${isError ? 'border-red-200 dark:border-red-800' : 'border-green-200 dark:border-green-800'} opacity-70`} />
+
+              <div className="bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300">
+                <div>
+                  {responses.length > 0 ? responses.map((resp, idx) => (
+                    <div key={`${resp.tool_use_id || call.id || call.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
+                      {renderToolResponseContent(resp, true)}
+                    </div>
+                  )) : <div className="text-gray-500 dark:text-gray-400">Waiting for result…</div>}
+
+                  {imageParts.length > 0 && (
+                    <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
+                      <ImageParts imageParts={imageParts} keyPrefix={`tool-pair-${call.id || call.name}`} />
                     </div>
                   )}
-                  {renderToolCallExpandedContent(call, diffViewMode)}
-                </div>
-
-                <div className={`border-t ${isError ? 'border-red-200 dark:border-red-800' : 'border-green-200 dark:border-green-800'} opacity-70`} />
-
-                <div className={`rounded border p-2 ${isError ? 'border-red-200 dark:border-red-800 bg-white/80 dark:bg-gray-900/60' : 'border-green-200 dark:border-green-800 bg-white/80 dark:bg-gray-900/60'} text-gray-700 dark:text-gray-200`}>
-                  <div className="space-y-2">
-                    {responses.length > 0 ? responses.map((resp, idx) => (
-                      <div key={`${resp.tool_use_id || call.id || call.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
-                        {renderToolResponseContent(resp, true)}
-                      </div>
-                    )) : <div className="text-gray-500 dark:text-gray-400">Waiting for result…</div>}
-
-                    {imageParts.length > 0 && (
-                      <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
-                        <ImageParts imageParts={imageParts} keyPrefix={`tool-pair-${call.id || call.name}`} />
-                      </div>
-                    )}
-                  </div>
                 </div>
               </div>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>
@@ -1204,6 +1207,7 @@ interface MessageRowProps {
   verbose: boolean
   groupKey: string
   summaryTagItemsKey: string
+  keepToolGroupExpanded: boolean
   showToolGroupSummary: boolean
   groupExpanded: boolean
   onExpandGroup: (groupKey: string) => void
@@ -1218,6 +1222,7 @@ const MessageRow = memo(function MessageRow({
   verbose,
   groupKey,
   summaryTagItemsKey,
+  keepToolGroupExpanded,
   showToolGroupSummary,
   groupExpanded,
   onExpandGroup,
@@ -1242,7 +1247,7 @@ const MessageRow = memo(function MessageRow({
     )
   }, [msg])
   const shouldSkipMargin = !systemLikeMessage && (msg.role === 'model' || msg.role === 'tool') && (prevMsg?.role === 'model' || prevMsg?.role === 'tool')
-  const isCollapsedToolGroup = !verbose && isInToolGroup && !groupExpanded
+  const isCollapsedToolGroup = !verbose && isInToolGroup && !groupExpanded && !keepToolGroupExpanded
   const hasInterleavedToolGroup = !!(nextMsg && nextMsg.role === 'tool' && nextMsg.parts.some(p => p.functionResponse) && msg.parts.some(p => p.functionCall))
   const hasPrecedingCallMsg = !!(prevMsg?.role === 'model' && prevMsg.parts.some(p => p.functionCall))
 
@@ -1291,7 +1296,7 @@ const MessageRow = memo(function MessageRow({
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${idx}`} />
-            {!verbose && showToolGroupSummary && !groupExpanded && (
+            {!verbose && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
               <div
                 className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
                 onClick={() => onExpandGroup(groupKey)}
@@ -1316,6 +1321,7 @@ const MessageRow = memo(function MessageRow({
   prev.verbose === next.verbose &&
   prev.groupKey === next.groupKey &&
   prev.summaryTagItemsKey === next.summaryTagItemsKey &&
+  prev.keepToolGroupExpanded === next.keepToolGroupExpanded &&
   prev.showToolGroupSummary === next.showToolGroupSummary &&
   prev.groupExpanded === next.groupExpanded
 ))
@@ -1387,14 +1393,27 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
       return items
     }
 
+    const getToolGroupEndIdx = (startIdx: number) => {
+      let endIdx = startIdx
+      for (let i = startIdx; i < messages.length; i++) {
+        const m = messages[i]
+        if (m.role !== 'model' && m.role !== 'tool') break
+        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
+        endIdx = i
+      }
+      return endIdx
+    }
+
     const startIdxByIndex = messages.map((_, idx) => getToolGroupStartIdx(idx))
     const summaryTagItemsByStart = new Map<number, ToolTagItem[]>()
     const summaryTagItemsKeyByStart = new Map<number, string>()
+    const keepExpandedByStart = new Map<number, boolean>()
     startIdxByIndex.forEach((startIdx) => {
       if (!summaryTagItemsKeyByStart.has(startIdx)) {
         const items = getToolGroupSummaryItems(startIdx)
         summaryTagItemsByStart.set(startIdx, items)
         summaryTagItemsKeyByStart.set(startIdx, JSON.stringify(items))
+        keepExpandedByStart.set(startIdx, getToolGroupEndIdx(startIdx) === messages.length - 1)
       }
     })
 
@@ -1406,6 +1425,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
       }),
       groupKeyByIndex: startIdxByIndex.map((startIdx) => `${startIdx}-toolgroup`),
       summaryTagItemsKeyByIndex: startIdxByIndex.map((startIdx) => summaryTagItemsKeyByStart.get(startIdx) || ''),
+      keepExpandedByIndex: startIdxByIndex.map((startIdx) => keepExpandedByStart.get(startIdx) || false),
       shouldRenderSummary: startIdxByIndex.map((startIdx, idx) => idx === startIdx && (summaryTagItemsByStart.get(startIdx)?.length || 0) > 0),
     }
   }, [messages])
@@ -1437,6 +1457,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
             verbose={verbose}
             groupKey={groupKey}
             summaryTagItemsKey={toolGroupMeta.summaryTagItemsKeyByIndex[idx]}
+            keepToolGroupExpanded={toolGroupMeta.keepExpandedByIndex[idx]}
             showToolGroupSummary={toolGroupMeta.shouldRenderSummary[idx]}
             groupExpanded={expandedToolGroups.has(groupKey)}
             onExpandGroup={handleExpandGroup}
