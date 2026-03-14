@@ -1,9 +1,9 @@
 import fs from 'fs-extra';
 import path from 'path';
-import { getChannelInstance } from './channel';
-import { logger } from './common';
-import { CHANNELS_FILE } from './config';
-import { Session, SessionReply } from './types';
+import { getChannelInstance } from '../channel';
+import { logger } from '../common';
+import { CHANNELS_FILE } from '../config';
+import { Session, SessionReply } from '../types';
 
 export type ChannelMode = 'push-only' | undefined;
 

@@ -14,10 +14,10 @@ import { getSkillInfo, validateSkillName } from './skills';
 import { estimateSessionTokens } from './tokenCount';
 import * as vector from './vector';
 import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, getAgentDir } from './config';
-import * as sessionAgentOps from './sessionAgentOps';
-import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './sessionArchive';
-import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './sessionMetadataStore';
-import * as sessionChannels from './sessionChannels';
+import * as sessionAgentOps from './session/agentOps';
+import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './session/archive';
+import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './session/metadataStore';
+import * as sessionChannels from './session/channels';
 import { buildCompactCandidateBlocks, buildCompactPlanValidationFeedback, buildCompactPromptText, COMPACT_PLAN_TOOL_DEFINITION, COMPACT_PLAN_TOOL_NAME, CompactPlanValidationError, describeBlockRanges, formatSeqRange, validateCompactPlanArgs } from './compactPlan';
 
 // Agent metadata storage
