@@ -87,7 +87,6 @@ test('validateCompactPlanArgs accepts complete non-overlapping block assignments
   const plan = validateCompactPlanArgs({
     summary: 'short working summary',
     keepBlockIds: [blocks[0].id],
-    summarizeBlockIds: [],
     dropBlockIds: [],
   }, blocks);
 
@@ -104,15 +103,13 @@ test('validateCompactPlanArgs rejects missing or duplicated block classification
   assert.throws(() => validateCompactPlanArgs({
     summary: 'summary',
     keepBlockIds: [],
-    summarizeBlockIds: [],
     dropBlockIds: [],
   }, blocks), /missing block ids/i);
 
   assert.throws(() => validateCompactPlanArgs({
     summary: 'summary',
     keepBlockIds: [blocks[0].id],
-    summarizeBlockIds: [blocks[0].id],
-    dropBlockIds: [],
+    dropBlockIds: [blocks[0].id],
   }, blocks), /duplicate block ids/i);
 });
 

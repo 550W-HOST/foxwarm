@@ -22,7 +22,6 @@ export interface CompactCandidateBlock {
 export interface CompactPlan {
   summary: string;
   keepBlockIds: string[];
-  summarizeBlockIds: string[];
   dropBlockIds: string[];
 }
 
@@ -46,22 +45,17 @@ export class CompactPlanValidationError extends Error {
 
 export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   name: COMPACT_PLAN_TOOL_NAME,
-  description: 'Submit the compaction plan for older candidate blocks. Every candidate block must appear exactly once in keepBlockIds, summarizeBlockIds, or dropBlockIds. Also provide the replacement working summary that future turns should read after compaction.',
+  description: 'Submit the compaction plan for older candidate blocks. Every candidate block must appear exactly once in keepBlockIds or dropBlockIds. Also provide the replacement working summary that future turns should read after compaction.',
   parameters: {
     type: 'object',
     properties: {
       summary: {
         type: 'string',
-        description: 'Concise working summary for future turns. Cover all summarizeBlockIds, plus any critical context needed to understand the retained recent messages.'
+        description: 'Concise working summary for future turns. Preserve the critical older context that future turns still need after dropped blocks leave working history, plus any context needed to understand the retained recent messages.'
       },
       keepBlockIds: {
         type: 'array',
         description: 'Older block ids to keep verbatim in working history. Use sparingly for exact instructions, unresolved tasks, or details that should remain word-for-word.',
-        items: { type: 'string' }
-      },
-      summarizeBlockIds: {
-        type: 'array',
-        description: 'Older block ids that may leave working history after their important content is captured in summary.',
         items: { type: 'string' }
       },
       dropBlockIds: {
@@ -70,7 +64,7 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
         items: { type: 'string' }
       }
     },
-    required: ['summary', 'keepBlockIds', 'summarizeBlockIds', 'dropBlockIds']
+    required: ['summary', 'keepBlockIds', 'dropBlockIds']
   }
 };
 
@@ -226,9 +220,8 @@ export function buildCompactPromptText(options: {
     `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} message(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. Do not spend block selections on them.`,
     `Review the older candidate blocks below and respond by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
     'Rules:',
-    '- Every candidate block id must appear exactly once in keepBlockIds, summarizeBlockIds, or dropBlockIds.',
+    '- Every candidate block id must appear exactly once in keepBlockIds or dropBlockIds.',
     '- Use keepBlockIds only for older content that must stay verbatim in working history.',
-    '- Use summarizeBlockIds for older content whose important information should survive only through the summary.',
     '- Use dropBlockIds only for low-value older content that can leave working history. Archive still keeps everything.',
     '- The summary should be concise but sufficient for future turns to continue work safely.',
     '',
@@ -321,12 +314,11 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
   }
 
   const keepBlockIds = normalizeStringArray(rawArgs?.keepBlockIds, 'keepBlockIds', details.arrayErrors);
-  const summarizeBlockIds = normalizeStringArray(rawArgs?.summarizeBlockIds, 'summarizeBlockIds', details.arrayErrors);
   const dropBlockIds = normalizeStringArray(rawArgs?.dropBlockIds, 'dropBlockIds', details.arrayErrors);
 
   const knownIds = new Set(candidateBlocks.map(block => block.id));
   const seenIds = new Set<string>();
-  for (const blockId of [...keepBlockIds, ...summarizeBlockIds, ...dropBlockIds]) {
+  for (const blockId of [...keepBlockIds, ...dropBlockIds]) {
     if (!knownIds.has(blockId)) {
       details.unknownBlockIds.push(blockId);
       continue;
@@ -361,13 +353,11 @@ export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateB
   }
 
   const keepBlockIds = (rawArgs.keepBlockIds as string[]).map(id => id.trim());
-  const summarizeBlockIds = (rawArgs.summarizeBlockIds as string[]).map(id => id.trim());
   const dropBlockIds = (rawArgs.dropBlockIds as string[]).map(id => id.trim());
 
   return {
     summary,
     keepBlockIds,
-    summarizeBlockIds,
     dropBlockIds,
   };
 }
@@ -395,7 +385,7 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
     lines.push(`- missing block ids: ${error.details.missingBlockIds.join(', ')}`);
   }
 
-  lines.push('Rules reminder: every candidate block id must appear exactly once in keepBlockIds, summarizeBlockIds, or dropBlockIds.');
+  lines.push('Rules reminder: every candidate block id must appear exactly once in keepBlockIds or dropBlockIds.');
   lines.push(`Attempts remaining after this feedback: ${attemptsRemaining}.`);
 
   return lines.join('\n');

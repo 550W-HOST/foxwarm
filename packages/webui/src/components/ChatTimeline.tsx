@@ -1057,7 +1057,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
             </div>
 
             <div className="mt-2 cursor-default" onClick={(e) => e.stopPropagation()}>
-              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(call.name === 'edit' || call.name === 'apply_patch') ? 'relative' : ''}`}>
+              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(call.name === 'edit' || call.name === 'apply_patch') ? 'relative pr-24' : ''}`}>
                 {(call.name === 'edit' || call.name === 'apply_patch') && (
                   <div className="absolute top-1 right-0 flex gap-1" onClick={(e) => e.stopPropagation()}>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>

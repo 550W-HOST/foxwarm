@@ -2,6 +2,7 @@ import fs from 'fs-extra'
 import path from 'path'
 import { ChannelContext } from './channel'
 import { nodesManager } from './nodesManager'
+import { approvePendingPairing, listApprovedNodes, listPendingPairings, rejectPendingPairing } from './nodeRegistry'
 import { Session } from './types'
 import * as sessionManager from './sessionManager'
 import * as skills from './skills'
@@ -188,6 +189,24 @@ const SKILL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 ]
 
 const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('pair', 'Manage pending node pairing requests', {
+    children: [
+      literalNode('list', 'List pending node pairing requests'),
+      literalNode('approve', 'Approve a pending node pairing request', {
+        usage: '/node pair approve <pending-id> [node-id]',
+        children: [
+          placeholderNode('<pending-id>', 'Pending pairing id', {
+            children: [placeholderNode('[node-id]', 'Optional final node id')],
+          }),
+        ],
+      }),
+      literalNode('reject', 'Reject a pending node pairing request', {
+        usage: '/node pair reject <pending-id>',
+        children: [placeholderNode('<pending-id>', 'Pending pairing id')],
+      }),
+    ],
+  }),
+  literalNode('known', 'List approved nodes, including offline ones'),
   placeholderNode('<node-id>', 'Existing node id; omit it to list nodes'),
 ]
 
@@ -1402,6 +1421,88 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
+
+      if (args[0] === 'pair') {
+        const sub = args[1]
+
+        if (!sub || sub === 'list') {
+          const pending = await listPendingPairings()
+          if (pending.length === 0) {
+            ctx.reply('📭 No pending node pairing requests.')
+            return
+          }
+
+          let reply = `📥 **Pending Node Pairings** (${pending.length})\n\n`
+          for (const entry of pending) {
+            const requestedName = entry.requestedName ? ` requested=\`${entry.requestedName}\`` : ''
+            const connected = entry.connected ? ' online' : ' offline'
+            reply += `- \`${entry.id}\` [${entry.nodeType}]${requestedName} code=\`${entry.pairCode}\`${connected}\n`
+          }
+          reply += '\nApprove: `/node pair approve <pending-id> [node-id]`\nReject: `/node pair reject <pending-id>`'
+          ctx.reply(reply)
+          return
+        }
+
+        if (sub === 'approve') {
+          const pendingId = args[2]
+          const requestedNodeId = args[3]
+          if (!pendingId) {
+            ctx.reply('Usage: `/node pair approve <pending-id> [node-id]`')
+            return
+          }
+
+          try {
+            const approved = await approvePendingPairing(pendingId, requestedNodeId)
+            ctx.reply(
+              `✅ Approved pending pairing \`${pendingId}\`\n\n` +
+              `Node id: \`${approved.nodeId}\`\n` +
+              `Requested name: \`${approved.pending.requestedName || '-'}\`\n` +
+              `Delivered live: \`${approved.deliveredLive ? 'yes' : 'no'}\`\n\n` +
+              `Per-node token (save securely):\n\`${approved.authToken}\``
+            )
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to approve pairing: ${e.message}`)
+          }
+          return
+        }
+
+        if (sub === 'reject') {
+          const pendingId = args[2]
+          if (!pendingId) {
+            ctx.reply('Usage: `/node pair reject <pending-id>`')
+            return
+          }
+
+          try {
+            await rejectPendingPairing(pendingId)
+            ctx.reply(`✅ Rejected pending pairing \`${pendingId}\``)
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to reject pairing: ${e.message}`)
+          }
+          return
+        }
+
+        ctx.reply('Usage: `/node pair list` | `/node pair approve <pending-id> [node-id]` | `/node pair reject <pending-id>`')
+        return
+      }
+
+      if (args[0] === 'known') {
+        const approved = await listApprovedNodes()
+        if (approved.length === 0) {
+          ctx.reply('📋 No approved nodes yet.')
+          return
+        }
+
+        let reply = `📋 **Approved Nodes** (${approved.length})\n\n`
+        for (const node of approved) {
+          const online = nodesManager.getNode(node.nodeId) ? 'online' : 'offline'
+          const requestedName = node.requestedName ? ` requested=\`${node.requestedName}\`` : ''
+          const lastSeen = node.lastSeenAt ? ` lastSeen=${new Date(node.lastSeenAt).toLocaleString()}` : ''
+          reply += `- \`${node.nodeId}\` [${node.nodeType}] ${online}${requestedName}${lastSeen}\n`
+        }
+        ctx.reply(reply)
+        return
+      }
       
       // No args: list nodes
       if (args.length === 0) {

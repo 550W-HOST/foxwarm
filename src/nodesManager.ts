@@ -12,6 +12,7 @@ import { WORKSPACE_DIR } from './config';
 import * as sessionManager from './sessionManager';
 import * as browser from './browser';
 import { WebSocket } from 'ws';
+import { isReservedNodeId } from './nodeRegistry';
 
 interface ToolDefinition {
   name: string;
@@ -108,6 +109,9 @@ export class NodesManager {
    * Register a new node
    */
   registerNode(ws: WebSocket, req: http.IncomingMessage, customNodeId?: string): string {
+    if (customNodeId && isReservedNodeId(customNodeId)) {
+      throw new Error(`Node id \`${customNodeId}\` is reserved`);
+    }
     const nodeId = customNodeId || `node_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
     
     // Check if node already exists (reconnection case)
@@ -142,6 +146,9 @@ export class NodesManager {
    * Register a new node with capabilities (dynamic tools)
    */
   registerNodeWithTools(ws: WebSocket, req: http.IncomingMessage, nodeType: string, capabilities: NodeCapabilities, customNodeId?: string): string {
+    if (customNodeId && isReservedNodeId(customNodeId)) {
+      throw new Error(`Node id \`${customNodeId}\` is reserved`);
+    }
     const nodeId = customNodeId || `node_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
     
     // Check if node already exists (reconnection case)
@@ -253,6 +260,8 @@ export class NodesManager {
     if (!node) {
       throw new Error(`Node \`${nodeId}\` not found`);
     }
+
+    const session = await sessionManager.getSession(sessionId);
     
     if (!node.tools.has(toolName)) {
       throw new Error(`Tool \`${toolName}\` not available on node \`${nodeId}\``);
@@ -284,7 +293,9 @@ export class NodesManager {
         type: 'tool_call',
         callId: callId,
         tool: toolName,
-        args: args
+        args: args,
+        sessionId,
+        agentName: session.agent || 'main'
       }));
       
       // Set timeout (30 seconds default)
@@ -325,6 +336,11 @@ export class NodesManager {
     }
   }
 
+  async handleSessionEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+    await sessionManager.queueSessionSystemEvent(sessionId, message, type);
+    logger.info({ sessionId, type }, 'Session event received from remote node');
+  }
+
   /**
    * Update node activity
    */
@@ -363,6 +379,7 @@ export class NodesManager {
     const ctx = {
       sessionId,
       session: await sessionManager.getSession(sessionId),
+      runtimeNodeId: 'master',
       broadcast: async (text: string) => {
         // Broadcast via session
         const session = await sessionManager.getSession(sessionId);

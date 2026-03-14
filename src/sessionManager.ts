@@ -1416,7 +1416,6 @@ async function runCompaction(sessionId: string, options: CompactionRunOptions = 
           system: [
             'Compaction plan applied via submit_compact_plan.',
             `Older blocks kept verbatim: ${describeBlockRanges(candidateBlocks, compactPlan.keepBlockIds)}.`,
-            `Older blocks summarized: ${describeBlockRanges(candidateBlocks, compactPlan.summarizeBlockIds)}.`,
             `Older blocks dropped from working history only: ${describeBlockRanges(candidateBlocks, compactPlan.dropBlockIds)}.`,
             `Recent force-kept messages: ${forceKeptRecentMessages.length > 0 ? `${forceKeptRecentMessages.length} message(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)}` : 'none'}.`,
           ].join(' ')

@@ -33,9 +33,11 @@ import {
 } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
 import { registerNodeWebSocket } from './nodeWebSocket';
+import { initializeNodeRegistry } from './nodeRegistry';
 import { cleanupLegacyTopLevelLogDirs, scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
 import { initializeTimers } from './timers';
+import { initializeExecManager } from './execManager';
 
 // Global error handlers
 process.on('unhandledRejection', (reason: any, promise) => {
@@ -101,11 +103,11 @@ async function ensureNodeToken(): Promise<string> {
         return token.trim();
     } catch (err: any) {
         if (err.code === 'ENOENT') {
-            // Generate new node token
+            // Generate new node pairing token
             const newToken = crypto.randomBytes(32).toString('hex');
             await fs.ensureDir(path.dirname(NODE_TOKEN_FILE));
             await fs.writeFile(NODE_TOKEN_FILE, newToken);
-            logger.info('Generated new node token file');
+            logger.info('Generated new node pairing token file');
             return newToken;
         }
         throw err;
@@ -203,6 +205,8 @@ async function start() {
     // Load sessions
     await sessionManager.loadSessions();
 
+    await initializeExecManager();
+
     // Ensure "main" session exists
     await sessionManager.getSession('main');
     logger.info('Main session initialized');
@@ -264,6 +268,7 @@ async function start() {
     if (ENABLE_WEBUI || ENABLE_TRIGGER) {
         const token = await ensureToken();
         const nodeToken = await ensureNodeToken();
+        await initializeNodeRegistry();
         
         // Create HTTP server instance
         const httpServerInstance = new HttpServer(HTTP_PORT, token);

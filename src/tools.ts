@@ -1,5 +1,4 @@
 import fs from 'fs-extra';
-import { spawn } from 'child_process';
 import path from 'path';
 import * as vector from './vector';
 import * as sessionManager from './sessionManager';
@@ -10,7 +9,14 @@ import * as mcpClient from './mcpClient';
 import { browserManager } from './browser';
 import { logger } from './common';
 import { nodesManager } from './nodesManager';
-import { formatTime, getDatedLogPath } from './logRotation';
+import {
+    buildBackgroundTimeoutResult,
+    buildForegroundExecResult,
+    finalizeForegroundExec,
+    markExecForBackgroundNotification,
+    startPersistentExec,
+    waitForExecCompletion,
+} from './execManager';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from './applyPatch';
 import {
     tool_create_child_session,
@@ -44,6 +50,8 @@ interface ToolContext {
     sessionId?: string;
     session?: any;
     broadcast?: (text: string, options?: any) => Promise<void>;
+    queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot') => Promise<void>;
+    runtimeNodeId?: string;
 }
 
 // Tool function type
@@ -216,78 +224,25 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     }
 
     const agentName = ctx.session?.agent || 'main';
-    const agentDir = getAgentDir(agentName);
-    const tempDir = path.join(agentDir, '.temp', 'exec');
-
-    await fs.ensureDir(tempDir);
-    await fs.ensureDir(tempDir);
-    const logFileName = `exec_${formatTime()}.log`;
-    const logPath = await getDatedLogPath(tempDir, logFileName);
-    const logStream = fs.createWriteStream(logPath);
-
-    return new Promise((resolve, reject) => {
-        // Use setsid to detach from controlling terminal
-        const child = spawn('setsid', ['bash', '-c', command], {
-            cwd: agentDir,
-            env: { ...process.env, TERM: 'xterm-256color' },
-            stdio: ['ignore', 'pipe', 'pipe'], // stdin: ignore, stdout: pipe, stderr: pipe
-            detached: false, // Keep in same process group for signal handling
-            shell: false
-        });
-
-        let output = '';
-        const appendOutput = (data: Buffer) => {
-            const str = data.toString();
-            output += str;
-            logStream.write(data);
-        };
-
-        child.stdout.on('data', appendOutput);
-        child.stderr.on('data', appendOutput);
-
-        let resolved = false;
-        const timeout = setTimeout(() => {
-            if (!resolved) {
-                resolved = true;
-                const partialOutput = output || '(Command started, no output yet)';
-                const result = `[Process running longer than 10s, switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification (unless working on other tasks in parallel).]\nPID: ${child.pid}\nLog file: ${logPath}\n\nPartial Output:\n${partialOutput.substring(0, 2000)}${partialOutput.length > 2000 ? '\n...(truncated)' : ''}`;
-
-                // Keep track of background process
-                child.on('exit', (code, signal) => {
-                    logStream.end();
-                    const finalMsg = `Background Process Finished\ncommand: \`${command}\`\nExit code: ${code}${signal ? `, Signal: ${signal}` : ''}\nFull output in ${logPath}`;
-                    // Queue notification to session
-                    if (ctx && ctx.sessionId) {
-                        sessionManager.queueSessionSystemEvent(ctx.sessionId, finalMsg, 'background');
-                    }
-                });
-
-                resolve(result);
-            }
-        }, 10000);
-
-        child.on('exit', (code, signal) => {
-            clearTimeout(timeout);
-            logStream.end();
-            if (!resolved) {
-                resolved = true;
-                let finalOutput = output || '(No output)';
-                if (estimateTokenCount(finalOutput) > 10000) {
-                    finalOutput = `[OUTPUT TOO LONG]\n${finalOutput.substring(0, 5000)}\n\n[...TRUNCATED...]\n\n${finalOutput.substring(finalOutput.length - 5000)}\n\nFull output saved to: ${logPath}`;
-                }
-                resolve(finalOutput);
-            }
-        });
-
-        child.on('error', (err) => {
-            clearTimeout(timeout);
-            logStream.end();
-            if (!resolved) {
-                resolved = true;
-                resolve(`Error: ${err.message}`);
-            }
-        });
+    const nodeId = ctx.runtimeNodeId || 'master';
+    const execEntry = await startPersistentExec({
+        command,
+        sessionId: ctx.sessionId,
+        agentName,
+        nodeId,
     });
+
+    const status = await waitForExecCompletion(execEntry.id, 10000);
+    if (status) {
+        try {
+            return await buildForegroundExecResult(execEntry, status);
+        } finally {
+            await finalizeForegroundExec(execEntry.id);
+        }
+    }
+
+    await markExecForBackgroundNotification(execEntry.id);
+    return await buildBackgroundTimeoutResult(execEntry);
 }
 
 async function tool_search_memory({ query, limit = 5, scope = 'all' }: { query: string; limit?: number; scope?: 'all' | 'current-session' | 'current-agent' }, ctx?: ToolContext) {
