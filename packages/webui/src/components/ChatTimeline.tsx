@@ -339,10 +339,9 @@ const getToolPairStatus = (responses: FunctionResponse[], imageParts: MessagePar
   return 'neutral'
 }
 
-const formatSingleLinePreview = (text: string, maxLength = 200): string => {
-  const normalized = text.replace(/\s*\n\s*/g, ' ↵ ').trim()
-  if (!normalized) return ''
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized
+const truncatePreviewText = (text: string, maxLength = 400): string => {
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, maxLength)}...`
 }
 
 const renderToolCallPreview = (call: FunctionCall): ReactNode => {
@@ -398,7 +397,13 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
     const targetSessionId = String(call.args.sessionId || '')
     const message = typeof call.args.message === 'string' ? call.args.message : formatObject(call.args.message)
     const preview = message.length > 160 ? `${message.slice(0, 160)}...` : message
-    return <span className="truncate" title={`${targetSessionId}: ${message}`}>{targetSessionId}: {preview}</span>
+    return (
+      <span className="flex items-center gap-1 min-w-0" title={`${targetSessionId}: ${message}`}>
+        <span className="shrink-0 text-gray-500 dark:text-gray-400">To</span>
+        <span className="shrink-0"><SessionHashLink sessionId={targetSessionId} /></span>
+        <span className="truncate">: {preview}</span>
+      </span>
+    )
   }
 
   const argsFormatted = formatObject(call.args)
@@ -488,7 +493,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     const message = typeof call.args.message === 'string' ? call.args.message : formatObject(call.args.message)
     return (
       <div className="space-y-1">
-        <div className="whitespace-pre-wrap break-all"><SessionHashLink sessionId={targetSessionId} /></div>
+        <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">To</span><SessionHashLink sessionId={targetSessionId} /><span>:</span></div>
         <div className="whitespace-pre-wrap break-all">{message}</div>
       </div>
     )
@@ -502,7 +507,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): R
     const fileContent = resp.response.content || resp.response.output || JSON.stringify(resp.response)
     return expanded
       ? <pre className="whitespace-pre-wrap text-xs overflow-x-auto cursor-text">{fileContent}</pre>
-      : <div className="whitespace-pre-wrap break-all cursor-text">{formatSingleLinePreview(fileContent, 240) || 'Completed'}</div>
+      : <div className="whitespace-pre-wrap break-all cursor-text">{truncatePreviewText(fileContent, 400) || 'Completed'}</div>
   }
 
   if (resp.name === 'edit' && getToolResponseStatus(resp) !== 'success') {
@@ -513,15 +518,15 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): R
 
   if (resp.name === 'exec') {
     const output = resp.response.output || ''
-    const preview = output.length > 400 ? `${output.substring(0, 400)}...` : output
+    const preview = truncatePreviewText(output, 400)
     const displayStr = expanded ? output : preview
     return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
   }
 
   const primaryText = getPrimaryToolResponseText(resp)
   if (primaryText !== null) {
-    const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
-    return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : formatSingleLinePreview(preview, 240)}</div>
+    const preview = truncatePreviewText(primaryText, 400)
+    return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
   }
 
   if (getToolResponseStatus(resp) === 'success') {
@@ -529,8 +534,8 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): R
   }
 
   const respFormatted = formatToolResponseText(resp)
-  const preview = respFormatted.length > 400 ? `${respFormatted.substring(0, 400)}...` : respFormatted
-  return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : formatSingleLinePreview(preview, 240)}</div>
+  const preview = truncatePreviewText(respFormatted, 400)
+  return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : preview}</div>
 }
 
 const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }: { oldText: string; newText: string; diffViewMode: 'unified' | 'split' }) {
@@ -1036,12 +1041,12 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         </div>
       ) : !expanded ? (
         <div className={`${baseTextClass} pr-10`}>
-          <div className="space-y-1">
+            <div className="space-y-1">
             <div className="flex items-center gap-2 min-w-0">
               <ToolTag name={call.name} tone={tagTone} />
               <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>
             </div>
-            <div className="text-gray-700 dark:text-gray-300" style={clampContentStyle(1)}>{responsePreview}</div>
+            <div className="text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>
           </div>
         </div>
       ) : (
@@ -1332,8 +1337,41 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
   const toolGroupMeta = useMemo(() => {
     const hasTextContent = (msg: Message) => msg.parts.some((p) => (p.text && p.text.trim()) || (p.system && String(p.system).trim()))
     const hasToolCalls = (msg: Message) => msg.parts.some((p) => p.functionCall)
+    const hasToolResponses = (msg: Message) => msg.parts.some((p) => p.functionResponse)
+
+    const lastIdx = messages.length - 1
+    const finalStandaloneStartIdx = (() => {
+      if (lastIdx < 0) return -1
+
+      const lastMsg = messages[lastIdx]
+      if (!lastMsg) return -1
+
+      if (lastMsg.role === 'tool' && hasToolResponses(lastMsg)) {
+        if (lastIdx > 0) {
+          const prevMsg = messages[lastIdx - 1]
+          if (prevMsg?.role === 'model' && hasToolCalls(prevMsg)) {
+            return lastIdx - 1
+          }
+        }
+        return lastIdx
+      }
+
+      if (lastMsg.role === 'model' && hasToolCalls(lastMsg)) {
+        return lastIdx
+      }
+
+      return -1
+    })()
+
+    const shouldStopAtIdx = (startIdx: number, idx: number) => (
+      finalStandaloneStartIdx !== -1 && startIdx < finalStandaloneStartIdx && idx >= finalStandaloneStartIdx
+    )
 
     const getToolGroupStartIdx = (idx: number) => {
+      if (finalStandaloneStartIdx !== -1 && idx >= finalStandaloneStartIdx) {
+        return finalStandaloneStartIdx
+      }
+
       const currentMsg = messages[idx]
       if (currentMsg.role === 'model' && hasTextContent(currentMsg)) {
         return idx
@@ -1356,6 +1394,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
       const toolStatusById = new Map<string, 'success' | 'error'>()
 
       for (let i = startIdx; i < messages.length; i++) {
+        if (shouldStopAtIdx(startIdx, i)) break
         const m = messages[i]
         if (m.role !== 'model' && m.role !== 'tool') break
         if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
@@ -1373,6 +1412,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
       }
 
       for (let i = startIdx; i < messages.length; i++) {
+        if (shouldStopAtIdx(startIdx, i)) break
         const m = messages[i]
         if (m.role !== 'model' && m.role !== 'tool') break
         if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
@@ -1393,17 +1433,6 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
       return items
     }
 
-    const getToolGroupEndIdx = (startIdx: number) => {
-      let endIdx = startIdx
-      for (let i = startIdx; i < messages.length; i++) {
-        const m = messages[i]
-        if (m.role !== 'model' && m.role !== 'tool') break
-        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
-        endIdx = i
-      }
-      return endIdx
-    }
-
     const startIdxByIndex = messages.map((_, idx) => getToolGroupStartIdx(idx))
     const summaryTagItemsByStart = new Map<number, ToolTagItem[]>()
     const summaryTagItemsKeyByStart = new Map<number, string>()
@@ -1413,7 +1442,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
         const items = getToolGroupSummaryItems(startIdx)
         summaryTagItemsByStart.set(startIdx, items)
         summaryTagItemsKeyByStart.set(startIdx, JSON.stringify(items))
-        keepExpandedByStart.set(startIdx, getToolGroupEndIdx(startIdx) === messages.length - 1)
+        keepExpandedByStart.set(startIdx, startIdx === finalStandaloneStartIdx)
       }
     })
 
