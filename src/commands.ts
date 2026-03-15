@@ -100,6 +100,14 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
     usage: '/session update-snapshot [session-id]',
     children: [placeholderNode('[session-id]', 'Defaults to the current session')],
   }),
+  literalNode('compact-threshold', 'Get/set the auto-compact threshold override for the current session', {
+    usage: '/session compact-threshold [tokens|Nk|clear|unset]',
+    children: [
+      placeholderNode('[tokens|Nk]', 'Examples: 8000, 8k'),
+      literalNode('clear', 'Clear the session override and inherit the default threshold'),
+      literalNode('unset', 'Alias of clear'),
+    ],
+  }),
   literalNode('isolated', 'Toggle isolated mode', {
     usage: '/session isolated [on|off] [node]',
     children: [
@@ -320,6 +328,26 @@ function parseSessionMoveTarget(rawTarget: string): { newSessionId: string; newA
   sessionManager.validateSessionName(newSessionId)
 
   return { newAgentName, newSessionId }
+}
+
+function parseCompactThresholdInput(raw: string): number | null {
+  const value = raw.trim().toLowerCase()
+  if (!value) {
+    throw new Error('Compact threshold cannot be empty.')
+  }
+
+  const match = value.match(/^(\d+(?:\.\d+)?)(k)?$/)
+  if (!match) {
+    throw new Error('Compact threshold must be a positive integer token count or use the `k` suffix, e.g. `8000` or `8k`.')
+  }
+
+  const base = parseFloat(match[1])
+  if (!isFinite(base) || base <= 0) {
+    throw new Error('Compact threshold must be greater than 0.')
+  }
+
+  const multiplier = match[2] ? 1000 : 1
+  return Math.floor(base * multiplier)
 }
 
 async function handleCompactCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) {
@@ -635,6 +663,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         resp += '`/session clear` - Clear current session history\n'
         resp += '`/session rename <name>` - Rename session\n'
         resp += '`/session update-snapshot [session-id]` - Refresh session prompt snapshot\n'
+        resp += '`/session compact-threshold [tokens|Nk|clear|unset]` - Get/set auto-compact threshold override for current session\n'
         resp += '`/session isolated [on|off] [node]` - Toggle isolated mode\n'
         resp += '`/session index` - Index messages to vector database\n'
         resp += '`/session move <new-session-id>|<existing-agent>/<new-session-id>` - Move/rename session\n'
@@ -850,6 +879,39 @@ export const COMMANDS: Record<string, CommandDef> = {
             ctx.reply(`✅ Session \`${result.sessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``)
           } catch (e: any) {
             ctx.reply(`❌ Snapshot update failed: ${e.message}`)
+          }
+          break
+        }
+
+        case 'compact-threshold': {
+          if (!sessionId || !session) {
+            ctx.reply('❌ No active session.')
+            return
+          }
+
+          if (subArgs.length === 0) {
+            const effective = sessionManager.getEffectiveCompactThresholdTokens(session)
+            if (typeof session.compactThresholdTokens === 'number') {
+              ctx.reply(`🧮 Compact threshold override: \`${session.compactThresholdTokens}\` tokens\nEffective auto-compact threshold: \`${effective}\` tokens`)
+            } else {
+              ctx.reply(`🧮 Compact threshold override: inherit global default\nEffective auto-compact threshold: \`${effective}\` tokens`)
+            }
+            return
+          }
+
+          const rawValue = subArgs[0].trim().toLowerCase()
+          try {
+            if (rawValue === 'clear' || rawValue === 'unset') {
+              const result = await sessionManager.setSessionCompactThreshold(sessionId)
+              ctx.reply(`✅ Compact threshold override cleared.\nEffective auto-compact threshold: \`${result.effectiveThresholdTokens}\` tokens`)
+              return
+            }
+
+            const thresholdTokens = parseCompactThresholdInput(subArgs[0])
+            const result = await sessionManager.setSessionCompactThreshold(sessionId, thresholdTokens)
+            ctx.reply(`✅ Compact threshold updated to \`${result.thresholdTokens}\` tokens.\nEffective auto-compact threshold: \`${result.effectiveThresholdTokens}\` tokens`)
+          } catch (e: any) {
+            ctx.reply(`❌ Compact threshold update failed: ${e.message}`)
           }
           break
         }

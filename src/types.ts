@@ -130,6 +130,7 @@ export interface Session {
   nextMessageSeq?: number; // Next per-session sequence number for append-only archive logging
   parentSessionId?: string; // Parent session ID for child sessions
   todoState?: SessionTodoState; // Session-local todo reminder configuration
+  compactThresholdTokens?: number; // Optional per-session auto-compact threshold override in tokens
   broadcast?: SessionReply; // Broadcast message to all attached channels
 }
 

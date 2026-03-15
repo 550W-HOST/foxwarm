@@ -34,6 +34,7 @@ import {
     tool_delete_session,
     tool_update_session_name,
     tool_set_todo,
+    tool_set_session_compact_threshold,
     tool_update_session_snapshot,
     tool_stop_session,
     tool_compact_session,
@@ -528,6 +529,7 @@ export const get_archived_messages = tool_get_archived_messages;
 export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
 export const set_todo = tool_set_todo;
+export const set_session_compact_threshold = tool_set_session_compact_threshold;
 export const update_session_snapshot = tool_update_session_snapshot;
 export const stop_session = tool_stop_session;
 export const compact_session = tool_compact_session;
@@ -857,6 +859,18 @@ export const definitions = [
                     todo: { type: 'string', description: 'Markdown checklist text like `- [ ] first item`. Use empty string to clear.' },
                     remindEvery: { type: 'number', description: 'Remind after this many later non-reminder session messages.' },
                     clear: { type: 'boolean', description: 'If true, clear the current session todo reminder.' }
+                }
+            }
+        },
+        {
+            name: 'set_session_compact_threshold',
+            description: 'Set, clear, or inspect the per-session auto-compact threshold override in tokens. When unset, the session inherits the default threshold derived from the active model context window.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
+                    thresholdTokens: { type: 'number', description: 'Positive token threshold override for auto-compaction. Omit to inspect current status.' },
+                    clear: { type: 'boolean', description: 'If true, clear the session override and inherit the default threshold again.' }
                 }
             }
         },

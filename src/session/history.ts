@@ -41,6 +41,19 @@ export interface ToolNoiseCompactionResult {
   thresholdTokens: number;
 }
 
+export function getDefaultCompactThresholdTokens(session: Pick<Session, 'model'>): number {
+  const { contextLimit } = resolveModelConfig(session.model);
+  return Math.max(1, Math.floor(contextLimit * 0.8));
+}
+
+export function getEffectiveCompactThresholdTokens(session: Pick<Session, 'model' | 'compactThresholdTokens'>): number {
+  if (typeof session.compactThresholdTokens === 'number' && Number.isFinite(session.compactThresholdTokens) && session.compactThresholdTokens > 0) {
+    return Math.floor(session.compactThresholdTokens);
+  }
+
+  return getDefaultCompactThresholdTokens(session);
+}
+
 type SessionHistoryDeps = {
   getSessionById: (sessionId: string) => Session | undefined;
   getExistingSession: (sessionId: string) => Promise<Session | null>;
@@ -598,10 +611,10 @@ export async function checkAndCompactIfNeeded(deps: SessionHistoryDeps, sessionI
     ? getUsageTotalTokens(finalUsage)
     : estimateSessionTokens(session);
 
-  const { contextLimit } = resolveModelConfig(session.model);
+  const compactThreshold = getEffectiveCompactThresholdTokens(session);
 
-  if (currentSize > contextLimit * 0.8) {
-    logger.info({ currentSize, contextLimit }, 'Auto compact');
+  if (currentSize > compactThreshold) {
+    logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens }, 'Auto compact');
     await compactHistory(deps, sessionId).catch(e => logger.error(e, 'Auto-compact failed'));
   }
 }
