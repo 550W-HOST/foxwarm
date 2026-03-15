@@ -6,6 +6,17 @@ import ChatTimeline from './ChatTimeline'
 import ProcessingStatus from './ProcessingStatus'
 import type { Message, MessagePart, SendKeyMode, SessionStreamEvent } from './chatShared'
 
+function getAsrServiceBaseUrl() {
+  const override = localStorage.getItem('foxwarm_asr_url')?.trim()
+  if (override) {
+    return override.replace(/\/+$/, '')
+  }
+
+  const protocol = window.location.protocol || 'http:'
+  const hostname = window.location.hostname || 'localhost'
+  return `${protocol}//${hostname}:8091`
+}
+
 interface ChatProps {
   sessionId: string
   sessionDisplayName?: string
@@ -59,11 +70,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
 
     const fetchAsrStatus = async () => {
       try {
-        const res = await fetch(`${API_BASE_PATH}/asr/status`)
+        const res = await fetch(`${getAsrServiceBaseUrl()}/health`)
         if (!res.ok) return
         const data = await res.json()
         if (!cancelled) {
-          setAsrAvailable(Boolean(data?.configured && data?.available))
+          setAsrAvailable(Boolean(data?.ok && data?.qwenAsrBinExists && data?.modelDirExists))
         }
       } catch (e) {
         if (!cancelled) {
@@ -431,7 +442,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       formData.append('context', context.trim())
     }
 
-    const response = await fetch(`${API_BASE_PATH}/asr/transcribe`, {
+    const response = await fetch(`${getAsrServiceBaseUrl()}/transcribe`, {
       method: 'POST',
       body: formData,
     })

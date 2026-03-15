@@ -25,6 +25,17 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
+
 function commandExists(command) {
   return new Promise((resolve) => {
     const child = spawn('bash', ['-lc', `command -v ${JSON.stringify(command)} >/dev/null 2>&1`], {

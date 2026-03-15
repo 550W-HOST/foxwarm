@@ -9,6 +9,7 @@ This is a minimal prototype for running `Qwen3-ASR-0.6B` as an independent local
 - shells out to the local `qwen_asr` CPU binary
 - supports WAV directly
 - supports other audio formats only if `ffmpeg` is installed on the service host
+- includes permissive CORS headers so Foxwarm WebUI on port 3002 can call it directly from the browser
 
 ## Service start
 
@@ -21,7 +22,7 @@ node experimental/asr/qwen-asr-service.js
 Optional environment variables:
 
 ```bash
-QWEN_ASR_SERVICE_HOST=127.0.0.1
+QWEN_ASR_SERVICE_HOST=0.0.0.0
 QWEN_ASR_SERVICE_PORT=8091
 QWEN_ASR_BIN=/home/ldmbot/experiments/qwen-asr/qwen_asr
 QWEN_ASR_MODEL_DIR=/home/ldmbot/experiments/qwen-asr/qwen3-asr-0.6b
@@ -46,23 +47,23 @@ curl -X POST http://127.0.0.1:8091/transcribe \
 
 ## Foxwarm integration
 
-Foxwarm backend can proxy to this service when one of these environment variables is set:
+Foxwarm WebUI talks to this service directly from the browser.
 
-- `FOXWARM_ASR_SERVICE_URL`
-- `ASR_SERVICE_URL`
+Default frontend target:
 
-Example:
-
-```bash
-export FOXWARM_ASR_SERVICE_URL=http://127.0.0.1:8091
+```text
+${window.location.protocol}//${window.location.hostname}:8091
 ```
 
-When configured, WebUI exposes:
+You can override it in the browser with:
 
-- `GET /api/asr/status`
-- `POST /api/asr/transcribe`
+```js
+localStorage.setItem('foxwarm_asr_url', 'http://10.12.6.40:8091')
+```
 
-And the chat composer shows a small `ASR` button that uploads an audio file to the proxy and inserts the transcript back into the draft.
+Then refresh the page.
+
+The chat composer shows a small `ASR` button when the direct service health check succeeds. It uploads an audio file directly to the ASR service and inserts the transcript back into the draft.
 
 ## Current limits
 
