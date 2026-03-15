@@ -1761,11 +1761,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         const remoteNodes = nodes.filter(node => node.id !== 'master')
         const currentNode = session.currentNode || 'master'
 
-        if (remoteNodes.length === 0) {
-          ctx.reply('📋 No remote nodes registered.\n\n✅ Master node (local) is always available.')
-          return
-        }
-
         let reply = `📋 **Available Nodes** (${remoteNodes.length + 1} total):\n\n`
 
         reply += currentNode === 'master' ? '✅ ' : '  '
@@ -1776,7 +1771,11 @@ export const COMMANDS: Record<string, CommandDef> = {
           reply += `\`${node.id}\` - Last activity: ${new Date(node.lastActivity).toLocaleString()}\n`
         }
 
-        reply += `\n💡 Current node: \`${currentNode}\``
+        if (remoteNodes.length === 0) {
+          reply += '\n(No remote nodes currently online)'
+        }
+
+        reply += `\n\n💡 Current node: \`${currentNode}\``
 
         ctx.reply(reply)
         return
