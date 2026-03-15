@@ -329,6 +329,23 @@ async function handleCompactCommand(ctx: ChannelContext, args: string[], session
     return
   }
 
+  if (args[0] === 'tools') {
+    let keepPercent = COMPACT_PERCENT
+    if (args.length >= 2) {
+      const pct = parseFloat(args[1])
+      if (!isNaN(pct) && pct > 0 && pct <= 100) {
+        keepPercent = pct / 100
+      }
+    }
+
+    const result = await sessionManager.compactSessionToolMessages(sessionId, keepPercent)
+    ctx.reply(
+      `🧹 Tool-noise compaction finished. Replaced ${result.replacedFunctionCalls} tool call(s) and ${result.replacedFunctionResponses} tool response(s) across ${result.touchedMessages} message(s). `
+      + `Inspected ${result.inspectedMessages} older message(s); kept the most recent ${Math.max(0, session.history.length - result.keepStartIndex)} message(s) untouched.`
+    )
+    return
+  }
+
   let keepPercent = COMPACT_PERCENT
   if (args.length >= 1) {
     const pct = parseFloat(args[0])
@@ -368,18 +385,30 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/compact': {
-    description: 'Compact history. `args: [keep%]`',
+    description: 'Compact history. `args: [keep%]` or `/compact tools [keep%]`',
     requiresSession: true,
     autocomplete: {
-      children: [placeholderNode('[keep%]', 'Optional keep percentage, e.g. 20 or 50')],
+      children: [
+        placeholderNode('[keep%]', 'Optional keep percentage, e.g. 20 or 50'),
+        literalNode('tools', 'Compact oversized historical tool calls/results without running full history compaction', {
+          usage: '/compact tools [keep%]',
+          children: [placeholderNode('[keep%]', 'Optional keep percentage for recent messages left untouched')],
+        }),
+      ],
     },
     handler: handleCompactCommand,
   },
   '/compress': {
-    description: 'Alias of /compact. `args: [keep%]`',
+    description: 'Alias of /compact. `args: [keep%]` or `/compress tools [keep%]`',
     requiresSession: true,
     autocomplete: {
-      children: [placeholderNode('[keep%]', 'Optional keep percentage, e.g. 20 or 50')],
+      children: [
+        placeholderNode('[keep%]', 'Optional keep percentage, e.g. 20 or 50'),
+        literalNode('tools', 'Compact oversized historical tool calls/results without running full history compaction', {
+          usage: '/compress tools [keep%]',
+          children: [placeholderNode('[keep%]', 'Optional keep percentage for recent messages left untouched')],
+        }),
+      ],
     },
     handler: handleCompactCommand,
     showInTelegram: false,

@@ -3,6 +3,18 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { Message, MessagePart, Session } from '../types';
 import { getSessionArchiveImagesDir, getSessionArchiveLogPath } from '../config';
+import { logger } from '../common';
+
+export interface ArchiveMessageRecord {
+  v: number;
+  kind: 'message';
+  sessionId: string;
+  agent: string;
+  seq: number;
+  timestamp: number;
+  role: Message['role'];
+  message: Message;
+}
 
 export function getMessageTimestamp(message: Message): number {
   return message.__meta?.timestamp || Date.now();
@@ -135,6 +147,35 @@ export async function appendMessagesToArchive(session: Session, messages: Messag
   }
 
   await fs.appendFile(archiveLogPath, `${lines.join('\n')}\n`);
+}
+
+export async function readArchiveMessages(sessionId: string): Promise<ArchiveMessageRecord[]> {
+  const archiveLogPath = getSessionArchiveLogPath(sessionId);
+  if (!await fs.pathExists(archiveLogPath)) {
+    return [];
+  }
+
+  const raw = await fs.readFile(archiveLogPath, 'utf8');
+  const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
+  const parsed: ArchiveMessageRecord[] = [];
+
+  for (const line of lines) {
+    try {
+      const record = JSON.parse(line);
+      if (
+        record?.kind === 'message'
+        && typeof record.sessionId === 'string'
+        && typeof record.seq === 'number'
+        && record.message
+      ) {
+        parsed.push(record as ArchiveMessageRecord);
+      }
+    } catch (e) {
+      logger.warn({ err: e, sessionId }, 'Skipping malformed archive log line');
+    }
+  }
+
+  return parsed.sort((a, b) => a.seq - b.seq);
 }
 
 export function stripMessageSeq(message: Message): Message {

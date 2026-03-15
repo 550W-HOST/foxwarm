@@ -30,6 +30,7 @@ import {
     tool_detach_agent_skill,
     tool_load_skill,
     tool_get_session_messages,
+    tool_get_archived_messages,
     tool_delete_session,
     tool_update_session_name,
     tool_update_session_snapshot,
@@ -522,6 +523,7 @@ export const attach_agent_skill = tool_attach_agent_skill;
 export const detach_agent_skill = tool_detach_agent_skill;
 export const load_skill = tool_load_skill;
 export const get_session_messages = tool_get_session_messages;
+export const get_archived_messages = tool_get_archived_messages;
 export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
 export const update_session_snapshot = tool_update_session_snapshot;
@@ -809,6 +811,21 @@ export const definitions = [
             }
         },
         {
+            name: 'get_archived_messages',
+            description: 'Read archived session messages from the JSONL archive by seq range. This queries archived history, not just the current working history.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
+                    startSeq: { type: 'number', description: 'Optional inclusive starting seq number' },
+                    endSeq: { type: 'number', description: 'Optional inclusive ending seq number' },
+                    offset: { type: 'number', description: 'Optional number of matched archived messages to skip (default: 0)' },
+                    limit: { type: 'number', description: 'Optional max number of archived messages to return (default: 20, max: 200)' },
+                    previewLength: { type: 'number', description: 'Maximum preview length per archived message (default: 100)' }
+                }
+            }
+        },
+        {
             name: 'delete_session',
             description: 'Delete a session permanently. Cannot delete current session.',
             parameters: {
@@ -859,7 +876,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID (optional, default: current session)' },
-                    summary: { type: 'string', description: 'Optional extra guidance for the compaction prompt. The model must still submit the actual keep/summarize/drop plan and final summary via submit_compact_plan.' },
+                    summary: { type: 'string', description: 'Optional extra guidance for the compaction prompt. The model must still submit the actual keep/drop plan and final summary via submit_compact_plan.' },
                     keepPercent: { type: 'number', description: 'How much recent history to keep. Use 0-1 fraction or 1-100 percentage. Optional.' }
                 }
             }
@@ -871,7 +888,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID (optional, default: current session)' },
-                    summary: { type: 'string', description: 'Optional extra guidance for the compaction prompt. The model must still submit the actual keep/summarize/drop plan and final summary via submit_compact_plan.' },
+                    summary: { type: 'string', description: 'Optional extra guidance for the compaction prompt. The model must still submit the actual keep/drop plan and final summary via submit_compact_plan.' },
                     keepPercent: { type: 'number', description: 'How much recent history to keep. Use 0-1 fraction or 1-100 percentage. Optional.' }
                 }
             }
