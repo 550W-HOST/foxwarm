@@ -69,6 +69,12 @@ interface ChatProps {
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
 }
 
+type StreamingAsrSession = {
+  sendAudioChunk: (chunk: ArrayBuffer) => void
+  stop: () => void
+  cancel: () => void
+}
+
 const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
@@ -507,6 +513,108 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     return typeof data?.text === 'string' ? data.text : ''
   }, [messages])
 
+  const handleCreateStreamingTranscriber = useCallback(async ({
+    draftText,
+    onPartial,
+    onFinal,
+    onError,
+  }: {
+    draftText: string
+    onPartial: (text: string) => void
+    onFinal: (text: string) => void
+    onError: (message: string) => void
+  }): Promise<StreamingAsrSession> => {
+    const httpBaseUrl = getAsrServiceBaseUrl()
+    const wsBaseUrl = httpBaseUrl.replace(/^http/i, 'ws')
+    const context = buildAsrContext(messages, draftText)
+
+    return await new Promise<StreamingAsrSession>((resolve, reject) => {
+      const socket = new WebSocket(`${wsBaseUrl}/ws/stream`)
+      let resolved = false
+      let settled = false
+
+      const fail = (message: string) => {
+        onError(message)
+        if (!settled) {
+          settled = true
+          if (!resolved) {
+            reject(new Error(message))
+          }
+        }
+        try {
+          socket.close()
+        } catch {}
+      }
+
+      socket.binaryType = 'arraybuffer'
+
+      socket.onopen = () => {
+        socket.send(JSON.stringify({
+          type: 'start',
+          context,
+        }))
+      }
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(String(event.data))
+          if (payload.type === 'ready') {
+            if (resolved) return
+            resolved = true
+            settled = true
+            resolve({
+              sendAudioChunk: (chunk: ArrayBuffer) => {
+                if (socket.readyState === WebSocket.OPEN) {
+                  socket.send(chunk)
+                }
+              },
+              stop: () => {
+                if (socket.readyState === WebSocket.OPEN) {
+                  socket.send(JSON.stringify({ type: 'stop' }))
+                }
+              },
+              cancel: () => {
+                try {
+                  socket.close()
+                } catch {}
+              },
+            })
+            return
+          }
+
+          if (payload.type === 'partial') {
+            onPartial(typeof payload.text === 'string' ? payload.text : '')
+            return
+          }
+
+          if (payload.type === 'final') {
+            onFinal(typeof payload.text === 'string' ? payload.text : '')
+            try {
+              socket.close()
+            } catch {}
+            return
+          }
+
+          if (payload.type === 'error') {
+            fail(payload.error || 'Streaming ASR failed')
+          }
+        } catch (error) {
+          fail(error instanceof Error ? error.message : 'Invalid streaming ASR response')
+        }
+      }
+
+      socket.onerror = () => {
+        fail('Failed to connect to streaming ASR service')
+      }
+
+      socket.onclose = () => {
+        if (!resolved && !settled) {
+          reject(new Error('Streaming ASR connection closed before ready'))
+        }
+      }
+    })
+  }, [messages])
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
       <div className="sticky top-0 z-30 h-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4">
@@ -663,6 +771,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         onToggleSendKeyMode={toggleSendKeyMode}
         onSend={handleSend}
         onTranscribeAudio={handleTranscribeAudio}
+        onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
       />
     </div>
   )

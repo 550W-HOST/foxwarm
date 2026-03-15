@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = Number(process.env.QWEN_ASR_SERVICE_PORT || process.env.PORT || 8091);
 const HOST = process.env.QWEN_ASR_SERVICE_HOST || '127.0.0.1';
@@ -181,8 +182,164 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   }
 });
 
-app.listen(PORT, HOST, () => {
+function createStreamingArgs({ context, language }) {
+  const args = ['-d', QWEN_ASR_MODEL_DIR, '--stdin', '--stream', '-t', QWEN_ASR_THREADS];
+  if (context) {
+    args.push('--prompt', context);
+  }
+  if (language) {
+    args.push('--language', language);
+  }
+  return args;
+}
+
+function createStreamSession(ws) {
+  const state = {
+    child: null,
+    text: '',
+    startedAt: 0,
+    stopped: false,
+  };
+
+  const sendJson = (payload) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
+    }
+  };
+
+  const cleanupChild = () => {
+    if (state.child) {
+      state.child.stdout?.removeAllListeners();
+      state.child.stderr?.removeAllListeners();
+      state.child.removeAllListeners();
+      state.child = null;
+    }
+  };
+
+  const stopChild = () => {
+    state.stopped = true;
+    if (state.child && !state.child.stdin.destroyed) {
+      state.child.stdin.end();
+    }
+  };
+
+  const fail = (message) => {
+    sendJson({ type: 'error', error: message });
+  };
+
+  ws.on('message', async (message, isBinary) => {
+    try {
+      if (isBinary) {
+        if (!state.child) {
+          fail('Streaming session not started yet');
+          return;
+        }
+        if (!state.child.stdin.destroyed) {
+          state.child.stdin.write(message);
+        }
+        return;
+      }
+
+      const payload = JSON.parse(message.toString());
+      if (payload.type === 'start') {
+        if (state.child) {
+          fail('Streaming session already started');
+          return;
+        }
+
+        if (!(await fs.pathExists(QWEN_ASR_BIN))) {
+          fail(`Qwen ASR binary not found: ${QWEN_ASR_BIN}`);
+          return;
+        }
+
+        if (!(await fs.pathExists(QWEN_ASR_MODEL_DIR))) {
+          fail(`Qwen ASR model dir not found: ${QWEN_ASR_MODEL_DIR}`);
+          return;
+        }
+
+        const context = String(payload.context || '').trim();
+        const language = String(payload.language || '').trim();
+        const args = createStreamingArgs({ context, language });
+        const child = spawn(QWEN_ASR_BIN, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+
+        state.child = child;
+        state.startedAt = Date.now();
+        state.text = '';
+        state.stopped = false;
+
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
+
+        let stderrText = '';
+
+        child.stdout.on('data', (chunk) => {
+          state.text += chunk;
+          sendJson({
+            type: 'partial',
+            text: state.text,
+          });
+        });
+
+        child.stderr.on('data', (chunk) => {
+          stderrText += chunk;
+        });
+
+        child.on('error', (error) => {
+          fail(error instanceof Error ? error.message : String(error));
+          cleanupChild();
+        });
+
+        child.on('close', (code) => {
+          const finalText = state.text.trim();
+          if (code === 0) {
+            sendJson({
+              type: 'final',
+              text: finalText,
+              elapsedMs: Date.now() - state.startedAt,
+            });
+          } else {
+            fail(`${QWEN_ASR_BIN} exited with code ${code}${stderrText ? `\n${stderrText.trim()}` : ''}`);
+          }
+          cleanupChild();
+        });
+
+        sendJson({ type: 'ready' });
+        return;
+      }
+
+      if (payload.type === 'stop') {
+        stopChild();
+        return;
+      }
+
+      if (payload.type === 'ping') {
+        sendJson({ type: 'pong' });
+        return;
+      }
+
+      fail(`Unknown websocket message type: ${payload.type || 'unknown'}`);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  ws.on('close', () => {
+    if (state.child) {
+      try {
+        state.child.kill('SIGTERM');
+      } catch {}
+    }
+    cleanupChild();
+  });
+}
+
+const server = app.listen(PORT, HOST, () => {
   console.log(`qwen-asr-service listening on http://${HOST}:${PORT}`);
   console.log(`binary=${QWEN_ASR_BIN}`);
   console.log(`model=${QWEN_ASR_MODEL_DIR}`);
+});
+
+const wss = new WebSocketServer({ server, path: '/ws/stream' });
+wss.on('connection', (ws) => {
+  createStreamSession(ws);
 });

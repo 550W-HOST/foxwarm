@@ -19,6 +19,16 @@ interface ChatComposerProps {
   onToggleSendKeyMode: () => void
   onSend: (payload: { text: string; attachments: File[] }) => Promise<boolean>
   onTranscribeAudio: (file: File, context: string) => Promise<string>
+  onCreateStreamingTranscriber: (options: {
+    draftText: string
+    onPartial: (text: string) => void
+    onFinal: (text: string) => void
+    onError: (message: string) => void
+  }) => Promise<{
+    sendAudioChunk: (chunk: ArrayBuffer) => void
+    stop: () => void
+    cancel: () => void
+  }>
 }
 
 const ChatComposer = memo(function ChatComposer({
@@ -30,6 +40,7 @@ const ChatComposer = memo(function ChatComposer({
   onToggleSendKeyMode,
   onSend,
   onTranscribeAudio,
+  onCreateStreamingTranscriber,
 }: ChatComposerProps) {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<File[]>([])
@@ -37,6 +48,7 @@ const ChatComposer = memo(function ChatComposer({
   const [isRecordingAudio, setIsRecordingAudio] = useState(false)
   const [transcribingAudio, setTranscribingAudio] = useState(false)
   const [transcribeError, setTranscribeError] = useState<string | null>(null)
+  const [liveTranscriptionPreview, setLiveTranscriptionPreview] = useState('')
   const [availableCommands, setAvailableCommands] = useState<SlashCommandOption[]>([])
   const [commandsLoading, setCommandsLoading] = useState(false)
   const [commandsError, setCommandsError] = useState<string | null>(null)
@@ -51,9 +63,13 @@ const ChatComposer = memo(function ChatComposer({
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
   const audioGainRef = useRef<GainNode | null>(null)
   const audioStreamRef = useRef<MediaStream | null>(null)
-  const audioChunksRef = useRef<Float32Array[]>([])
   const audioSampleRateRef = useRef<number>(16000)
   const recordingActiveRef = useRef(false)
+  const streamingSessionRef = useRef<{
+    sendAudioChunk: (chunk: ArrayBuffer) => void
+    stop: () => void
+    cancel: () => void
+  } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -99,6 +115,7 @@ const ChatComposer = memo(function ChatComposer({
     setAttachments([])
     setIsRecordingAudio(false)
     setTranscribeError(null)
+    setLiveTranscriptionPreview('')
     setDismissedSlashQuery(null)
 
     setTimeout(() => {
@@ -147,6 +164,8 @@ const ChatComposer = memo(function ChatComposer({
 
   useEffect(() => {
     return () => {
+      streamingSessionRef.current?.cancel()
+      streamingSessionRef.current = null
       void cleanupRecording()
     }
   }, [cleanupRecording])
@@ -333,17 +352,6 @@ const ChatComposer = memo(function ChatComposer({
     })
   }, [])
 
-  const mergeAudioChunks = useCallback((chunks: Float32Array[]) => {
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-    const merged = new Float32Array(totalLength)
-    let offset = 0
-    for (const chunk of chunks) {
-      merged.set(chunk, offset)
-      offset += chunk.length
-    }
-    return merged
-  }, [])
-
   const downsampleTo16k = useCallback((inputData: Float32Array, inputSampleRate: number) => {
     if (inputSampleRate === 16000) {
       return inputData
@@ -371,54 +379,15 @@ const ChatComposer = memo(function ChatComposer({
     return output
   }, [])
 
-  const encodeWav = useCallback((samples: Float32Array, sampleRate: number) => {
-    const buffer = new ArrayBuffer(44 + samples.length * 2)
-    const view = new DataView(buffer)
-
-    const writeString = (offset: number, value: string) => {
-      for (let i = 0; i < value.length; i++) {
-        view.setUint8(offset + i, value.charCodeAt(i))
-      }
+  const floatChunkToPcm16Buffer = useCallback((inputData: Float32Array, inputSampleRate: number) => {
+    const downsampled = downsampleTo16k(inputData, inputSampleRate)
+    const pcm16 = new Int16Array(downsampled.length)
+    for (let i = 0; i < downsampled.length; i++) {
+      const sample = Math.max(-1, Math.min(1, downsampled[i]))
+      pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
     }
-
-    writeString(0, 'RIFF')
-    view.setUint32(4, 36 + samples.length * 2, true)
-    writeString(8, 'WAVE')
-    writeString(12, 'fmt ')
-    view.setUint32(16, 16, true)
-    view.setUint16(20, 1, true)
-    view.setUint16(22, 1, true)
-    view.setUint32(24, sampleRate, true)
-    view.setUint32(28, sampleRate * 2, true)
-    view.setUint16(32, 2, true)
-    view.setUint16(34, 16, true)
-    writeString(36, 'data')
-    view.setUint32(40, samples.length * 2, true)
-
-    let offset = 44
-    for (let i = 0; i < samples.length; i++) {
-      const sample = Math.max(-1, Math.min(1, samples[i]))
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
-      offset += 2
-    }
-
-    return new Blob([buffer], { type: 'audio/wav' })
-  }, [])
-
-  const stopRecordingAndBuildFile = useCallback(async () => {
-    await cleanupRecording()
-
-    const merged = mergeAudioChunks(audioChunksRef.current)
-    audioChunksRef.current = []
-
-    if (merged.length === 0) {
-      throw new Error('No recorded audio captured')
-    }
-
-    const downsampled = downsampleTo16k(merged, audioSampleRateRef.current)
-    const wavBlob = encodeWav(downsampled, 16000)
-    return new File([wavBlob], `recording-${Date.now()}.wav`, { type: 'audio/wav' })
-  }, [cleanupRecording, downsampleTo16k, encodeWav, mergeAudioChunks])
+    return pcm16.buffer
+  }, [downsampleTo16k])
 
   const handleAudioPick = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return
@@ -451,16 +420,11 @@ const ChatComposer = memo(function ChatComposer({
       setTranscribeError(null)
 
       try {
-        const file = await stopRecordingAndBuildFile()
-        const transcript = await onTranscribeAudio(file, input)
-        if (!transcript.trim()) {
-          throw new Error('ASR returned empty text')
-        }
-        appendTranscriptToDraft(transcript)
+        await cleanupRecording()
+        streamingSessionRef.current?.stop()
       } catch (e) {
-        console.error('Audio recording transcription failed:', e)
-        setTranscribeError(e instanceof Error ? e.message : 'Audio recording transcription failed')
-      } finally {
+        console.error('Failed to stop streaming audio recording:', e)
+        setTranscribeError(e instanceof Error ? e.message : 'Failed to stop streaming audio recording')
         setTranscribingAudio(false)
       }
       return
@@ -473,7 +437,35 @@ const ChatComposer = memo(function ChatComposer({
 
     try {
       setTranscribeError(null)
+      setLiveTranscriptionPreview('')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const streamingSession = await onCreateStreamingTranscriber({
+        draftText: input,
+        onPartial: (text) => {
+          setLiveTranscriptionPreview(text)
+        },
+        onFinal: (text) => {
+          setLiveTranscriptionPreview(text)
+          if (text.trim()) {
+            appendTranscriptToDraft(text)
+          }
+          setTranscribingAudio(false)
+          setIsRecordingAudio(false)
+          streamingSessionRef.current = null
+          setTimeout(() => {
+            setLiveTranscriptionPreview('')
+          }, 1200)
+        },
+        onError: (message) => {
+          setTranscribeError(message)
+          setTranscribingAudio(false)
+          setIsRecordingAudio(false)
+          setLiveTranscriptionPreview('')
+          streamingSessionRef.current = null
+          void cleanupRecording()
+        },
+      })
+
       const audioContext = new AudioContext()
       await audioContext.resume().catch(() => {})
       const source = audioContext.createMediaStreamSource(stream)
@@ -481,16 +473,17 @@ const ChatComposer = memo(function ChatComposer({
       const gain = audioContext.createGain()
       gain.gain.value = 0
 
-      audioChunksRef.current = []
       audioSampleRateRef.current = audioContext.sampleRate
       recordingActiveRef.current = true
+      streamingSessionRef.current = streamingSession
 
       processor.onaudioprocess = (event) => {
         if (!recordingActiveRef.current) {
           return
         }
         const channelData = event.inputBuffer.getChannelData(0)
-        audioChunksRef.current.push(new Float32Array(channelData))
+        const chunk = new Float32Array(channelData)
+        streamingSession.sendAudioChunk(floatChunkToPcm16Buffer(chunk, audioSampleRateRef.current))
       }
 
       source.connect(processor)
@@ -506,10 +499,12 @@ const ChatComposer = memo(function ChatComposer({
     } catch (e) {
       console.error('Failed to start microphone recording:', e)
       setTranscribeError(e instanceof Error ? e.message : 'Failed to start microphone recording')
+      streamingSessionRef.current?.cancel()
+      streamingSessionRef.current = null
       await cleanupRecording()
       setIsRecordingAudio(false)
     }
-  }, [appendTranscriptToDraft, cleanupRecording, input, isRecordingAudio, onTranscribeAudio, stopRecordingAndBuildFile, transcribingAudio])
+  }, [appendTranscriptToDraft, cleanupRecording, floatChunkToPcm16Buffer, input, isRecordingAudio, onCreateStreamingTranscriber, transcribingAudio])
 
   return (
     <div
@@ -547,6 +542,22 @@ const ChatComposer = memo(function ChatComposer({
         {transcribeError && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
             ASR 实验入口失败：{transcribeError}
+          </div>
+        )}
+
+        {(isRecordingAudio || transcribingAudio || liveTranscriptionPreview) && (
+          <div className="mb-3 flex justify-start">
+            <div className="max-w-[min(100%,36rem)] rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 shadow-sm dark:border-blue-800/80 dark:bg-blue-900/20 dark:text-blue-100">
+              <div className="mb-1 flex items-center gap-2 text-xs font-medium text-blue-700 dark:text-blue-300">
+                <span>{isRecordingAudio ? 'Live ASR preview' : 'ASR finalizing'}</span>
+              </div>
+              <div className="whitespace-pre-wrap break-words">
+                {liveTranscriptionPreview || (isRecordingAudio ? 'Listening…' : 'Waiting for final transcript…')}
+              </div>
+              <div className="mt-2 text-[11px] text-blue-600/90 dark:text-blue-300/80">
+                Preview only — final text will be appended to the draft when recording ends. It will not auto-send.
+              </div>
+            </div>
           </div>
         )}
 
