@@ -22,16 +22,12 @@ const TOOL_NOISE_TOKEN_THRESHOLD = 200;
 export interface ArchivedMessagesQueryOptions {
   startSeq?: number;
   endSeq?: number;
-  offset?: number;
-  limit?: number;
 }
 
 export interface ArchivedMessagesQueryResult {
   records: Array<{ seq: number; message: Message }>;
   totalMatched: number;
   returnedCount: number;
-  offset: number;
-  limit: number;
   availableRange: { startSeq?: number; endSeq?: number };
   requestedRange: { startSeq?: number; endSeq?: number };
 }
@@ -449,9 +445,6 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
 
 export async function getArchivedMessages(sessionId: string, options: ArchivedMessagesQueryOptions = {}): Promise<ArchivedMessagesQueryResult> {
   const { startSeq, endSeq } = normalizeSeqRange(options.startSeq, options.endSeq);
-  const offset = Math.max(0, Math.floor(options.offset || 0));
-  const requestedLimit = Math.floor(options.limit || 20);
-  const limit = Math.max(1, Math.min(200, requestedLimit));
 
   const archiveMessages = await readArchiveMessages(sessionId);
   const availableRange = {
@@ -469,7 +462,7 @@ export async function getArchivedMessages(sessionId: string, options: ArchivedMe
     return true;
   });
 
-  const sliced = matched.slice(offset, offset + limit).map(record => ({
+  const sliced = matched.map(record => ({
     seq: record.seq,
     message: record.message,
   }));
@@ -478,8 +471,6 @@ export async function getArchivedMessages(sessionId: string, options: ArchivedMe
     records: sliced,
     totalMatched: matched.length,
     returnedCount: sliced.length,
-    offset,
-    limit,
     availableRange,
     requestedRange: { startSeq, endSeq },
   };

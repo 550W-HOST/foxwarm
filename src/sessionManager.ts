@@ -1090,8 +1090,6 @@ export async function getSessionMessages(sessionId: string, start?: number, coun
 export async function getArchivedMessages(sessionId: string, options: {
   startSeq?: number;
   endSeq?: number;
-  offset?: number;
-  limit?: number;
 } = {}) {
   return sessionHistory.getArchivedMessages(sessionId, options);
 }

@@ -819,9 +819,7 @@ export const definitions = [
                     sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
                     startSeq: { type: 'number', description: 'Optional inclusive starting seq number' },
                     endSeq: { type: 'number', description: 'Optional inclusive ending seq number' },
-                    offset: { type: 'number', description: 'Optional number of matched archived messages to skip (default: 0)' },
-                    limit: { type: 'number', description: 'Optional max number of archived messages to return (default: 20, max: 200)' },
-                    previewLength: { type: 'number', description: 'Maximum preview length per archived message (default: 100)' }
+                    previewLength: { type: 'number', description: 'Maximum preview length per archived message (default: 1000)' }
                 }
             }
         },
