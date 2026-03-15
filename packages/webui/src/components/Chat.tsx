@@ -17,6 +17,50 @@ function getAsrServiceBaseUrl() {
   return `${protocol}//${hostname}:8091`
 }
 
+const ASR_CONTEXT_MAX_CHARS = 2400
+const ASR_CONTEXT_MAX_MESSAGES = 8
+
+function getMessagePlainText(message: Message): string {
+  return message.parts
+    .map((part) => part.text?.trim() || '')
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
+
+function buildAsrContext(messages: Message[], draftText: string): string {
+  const recentMessages = messages
+    .filter((message) => (message.role === 'user' || message.role === 'model') && !message.__meta?.temporary)
+    .map((message) => ({
+      role: message.role,
+      text: getMessagePlainText(message),
+    }))
+    .filter((message) => Boolean(message.text))
+    .slice(-ASR_CONTEXT_MAX_MESSAGES)
+
+  const blocks = recentMessages.map((message) => (
+    `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.text}`
+  ))
+
+  const trimmedDraft = draftText.trim()
+  if (trimmedDraft) {
+    blocks.push(`Current draft: ${trimmedDraft}`)
+  }
+
+  let combined = blocks.join('\n\n').trim()
+  if (combined.length <= ASR_CONTEXT_MAX_CHARS) {
+    return combined
+  }
+
+  combined = combined.slice(combined.length - ASR_CONTEXT_MAX_CHARS)
+  const newlineIndex = combined.indexOf('\n')
+  if (newlineIndex > 0 && newlineIndex < 200) {
+    combined = combined.slice(newlineIndex + 1)
+  }
+
+  return `[recent session context]\n${combined}`
+}
+
 interface ChatProps {
   sessionId: string
   sessionDisplayName?: string
@@ -435,9 +479,10 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     setSendKeyMode(prev => prev === 'enter' ? 'mod-enter' : 'enter')
   }, [])
 
-  const handleTranscribeAudio = useCallback(async (file: File, context: string) => {
+  const handleTranscribeAudio = useCallback(async (file: File, draftText: string) => {
     const formData = new FormData()
     formData.append('audio', file)
+    const context = buildAsrContext(messages, draftText)
     if (context.trim()) {
       formData.append('context', context.trim())
     }
@@ -460,7 +505,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     }
 
     return typeof data?.text === 'string' ? data.text : ''
-  }, [])
+  }, [messages])
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
