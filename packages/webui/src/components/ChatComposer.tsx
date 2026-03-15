@@ -599,6 +599,28 @@ const ChatComposer = memo(function ChatComposer({
           </div>
         )}
 
+        {(isRecordingAudio || transcribingAudio || liveTranscriptionPreview) && (
+          <div className="mb-3 flex justify-start">
+            <div className="max-w-[min(100%,32rem)] rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 shadow-sm dark:border-blue-800/80 dark:bg-blue-900/20 dark:text-blue-100">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-blue-700 dark:text-blue-300">
+                <span>{isRecordingAudio ? 'Live ASR preview' : 'ASR finalizing'}</span>
+              </div>
+              <div className="mb-2 flex h-10 items-end gap-1">
+                {waveformBars.map((value, index) => (
+                  <div
+                    key={index}
+                    className={`flex-1 rounded-full transition-all duration-75 ${isRecordingAudio ? 'bg-blue-500/70 dark:bg-blue-300/70' : 'bg-blue-300/70 dark:bg-blue-500/50'}`}
+                    style={{ height: `${Math.max(12, Math.round(value * 100))}%` }}
+                  />
+                ))}
+              </div>
+              <div className="whitespace-pre-wrap break-words">
+                {liveTranscriptionPreview || (isRecordingAudio ? 'Listening…' : 'Waiting for final transcript…')}
+              </div>
+            </div>
+          </div>
+        )}
+
         {showSlashCommandMenu && (
           <div className="mb-2 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-900">
             <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 text-xs font-medium text-gray-500 dark:border-gray-700 dark:text-gray-400">
@@ -739,26 +761,7 @@ const ChatComposer = memo(function ChatComposer({
                 >
                   <span>{transcribingAudio ? 'ASR…' : 'ASR'}</span>
                 </label>
-                <div className="relative inline-flex shrink-0">
-                  {(isRecordingAudio || transcribingAudio || liveTranscriptionPreview) && (
-                    <div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-[min(22rem,70vw)] -translate-x-1/2 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 shadow-lg dark:border-blue-800/80 dark:bg-blue-900/20 dark:text-blue-100">
-                      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-blue-700 dark:text-blue-300">
-                        <span>{isRecordingAudio ? 'Live ASR preview' : 'ASR finalizing'}</span>
-                      </div>
-                      <div className="mb-2 flex h-10 items-end gap-1">
-                        {waveformBars.map((value, index) => (
-                          <div
-                            key={index}
-                            className={`flex-1 rounded-full transition-all duration-75 ${isRecordingAudio ? 'bg-blue-500/70 dark:bg-blue-300/70' : 'bg-blue-300/70 dark:bg-blue-500/50'}`}
-                            style={{ height: `${Math.max(12, Math.round(value * 100))}%` }}
-                          />
-                        ))}
-                      </div>
-                      <div className="whitespace-pre-wrap break-words">
-                        {liveTranscriptionPreview || (isRecordingAudio ? 'Listening…' : 'Waiting for final transcript…')}
-                      </div>
-                    </div>
-                  )}
+                <div className="inline-flex shrink-0">
                   <button
                     type="button"
                     onClick={() => void handleRecordToggle()}
