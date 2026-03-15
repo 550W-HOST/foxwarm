@@ -50,27 +50,13 @@ function formatMultilineText(text: string, continuationPrefix: string = '> '): s
 }
 
 export function formatPrefixedMultilineText(prefix: string, text: string, continuationPrefix: string = '> '): string {
-  const normalized = formatMultilineText(text, continuationPrefix);
+  const normalized = text.trim();
   if (!normalized) {
     return prefix;
   }
 
   const lines = normalized.split('\n');
   return `${prefix}${lines.join('\n')}`;
-}
-
-export function prefixAlreadyFormattedText(prefix: string, text: string): string {
-  if (!text.trim()) {
-    return prefix;
-  }
-
-  const lines = text.split('\n');
-  const [firstLine, ...restLines] = lines;
-  if (restLines.length === 0) {
-    return `${prefix}${firstLine}`;
-  }
-
-  return `${prefix}${firstLine}\n${restLines.join('\n')}`;
 }
 
 function stringifyFunctionArgs(part: MessagePart): string {
@@ -171,7 +157,11 @@ export function formatMessageText(message: Message, options: FormatMessageTextOp
     return formatMultilineText(content, resolved.continuationPrefix);
   }
 
-  return formatPrefixedMultilineText(`[${message.role}] `, content, resolved.continuationPrefix);
+  return formatPrefixedMultilineText(
+    `[${message.role}] `,
+    formatMultilineText(content, resolved.continuationPrefix),
+    resolved.continuationPrefix,
+  );
 }
 
 export function formatMessagePreviewText(

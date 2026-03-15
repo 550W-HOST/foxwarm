@@ -8,7 +8,7 @@ import { getAgentDir } from './config';
 import { logger } from './common';
 import { AGENTS_DIR, COMPACT_PERCENT } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
-import { formatMessagePreviewText, prefixAlreadyFormattedText } from './utils/messageFormat';
+import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
 import { requireNotIsolated, checkChannelPermission, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
 
 interface ToolContext {
@@ -106,7 +106,7 @@ function formatArchivedMessagePreview(
       skipRagMemorySnippets: true,
       skipThinking: true,
     });
-    result += `${prefixAlreadyFormattedText(`[#${record.seq}] ${roleEmoji} ${record.message.role}: `, preview)}\n`;
+    result += `${formatPrefixedMultilineText(`[#${record.seq}] ${roleEmoji} ${record.message.role}: `, preview)}\n`;
   }
   return result;
 }
