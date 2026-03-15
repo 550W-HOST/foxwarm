@@ -7,6 +7,7 @@ import type { ChannelFile } from './channel';
 import { getAgentDir } from './config';
 import { logger } from './common';
 import { AGENTS_DIR, COMPACT_PERCENT } from './config';
+import { clearSessionTodo, normalizeRemindEvery, normalizeTodoText, setSessionTodo } from './session/todo';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
 import { requireNotIsolated, checkChannelPermission, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
@@ -578,6 +579,44 @@ export async function tool_update_session_snapshot(args: ToolArgs, ctx: ToolCont
 
   const result = await sessionManager.refreshSessionSnapshot(targetId);
   return `Session \`${result.sessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``;
+}
+
+export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
+  const targetId = ctx?.sessionId;
+  if (!targetId) {
+    throw new Error('Current session context is required.');
+  }
+
+  const session = ctx.session ?? await sessionManager.getSession(targetId);
+  const clear = args.clear === true;
+
+  if (clear) {
+    const cleared = clearSessionTodo(session);
+    await sessionManager.saveSession(session.id);
+    return cleared
+      ? `Cleared todo reminder for session \`${session.id}\`.`
+      : `Session \`${session.id}\` has no todo reminder to clear.`;
+  }
+
+  const todo = normalizeTodoText(args.todo);
+  if (!todo) {
+    const cleared = clearSessionTodo(session);
+    await sessionManager.saveSession(session.id);
+    return cleared
+      ? `Cleared todo reminder for session \`${session.id}\` via empty todo.`
+      : `Ignored empty todo because session \`${session.id}\` has no todo reminder configured.`;
+  }
+
+  const remindEvery = normalizeRemindEvery(args.remindEvery);
+  setSessionTodo(session, todo, remindEvery);
+  await sessionManager.saveSession(session.id);
+
+  return [
+    `Todo reminder updated for session \`${session.id}\`.`,
+    `remindEvery: ${remindEvery}`,
+    'todo:',
+    todo,
+  ].join('\n');
 }
 
 export async function tool_stop_session(args: ToolArgs) {

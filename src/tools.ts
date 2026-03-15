@@ -33,6 +33,7 @@ import {
     tool_get_archived_messages,
     tool_delete_session,
     tool_update_session_name,
+    tool_set_todo,
     tool_update_session_snapshot,
     tool_stop_session,
     tool_compact_session,
@@ -526,6 +527,7 @@ export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
 export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
+export const set_todo = tool_set_todo;
 export const update_session_snapshot = tool_update_session_snapshot;
 export const stop_session = tool_stop_session;
 export const compact_session = tool_compact_session;
@@ -844,6 +846,18 @@ export const definitions = [
                     name: { type: 'string', description: 'New display name for the session. Use empty string to clear the name.' }
                 },
                 required: ['name']
+            }
+        },
+        {
+            name: 'set_todo',
+            description: 'Set or clear a todo reminder for the current session. Reminders are injected as system messages after enough later session messages have passed, including tool-loop progress.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    todo: { type: 'string', description: 'Markdown checklist text like `- [ ] first item`. Use empty string to clear.' },
+                    remindEvery: { type: 'number', description: 'Remind after this many later non-reminder session messages.' },
+                    clear: { type: 'boolean', description: 'If true, clear the current session todo reminder.' }
+                }
             }
         },
         {

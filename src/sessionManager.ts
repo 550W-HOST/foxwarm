@@ -19,6 +19,7 @@ import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetada
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
+import { clearTodoBusySuppression, maybeBuildTodoReminderMessage } from './session/todo';
 
 function systemPart(system: string): MessagePart {
   return { system };
@@ -764,6 +765,10 @@ export async function saveSession(sessionId: string): Promise<void> {
       session.historyVersion = 0;
     }
 
+    if (!session.busy) {
+      clearTodoBusySuppression(session);
+    }
+
     // Update message count in metadata
     session.meta.messageCount = session.history.length;
 
@@ -1025,9 +1030,17 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
     session.history.push(message);
   }
 
+  const todoReminderMessage = maybeBuildTodoReminderMessage(session);
+  const messagesToNotify = [...messages];
+  if (todoReminderMessage) {
+    await appendMessagesToArchive(session, [todoReminderMessage]);
+    session.history.push(todoReminderMessage);
+    messagesToNotify.push(todoReminderMessage);
+  }
+
   await saveSession(session.id);
 
-  for (const message of messages) {
+  for (const message of messagesToNotify) {
     notifyHistoryUpdate(session.id, message);
   }
 }

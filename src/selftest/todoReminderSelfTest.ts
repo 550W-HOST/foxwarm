@@ -1,0 +1,160 @@
+import assert from 'assert';
+import fs from 'fs-extra';
+import * as sessionManager from '../sessionManager';
+import * as vector from '../vector';
+import { Message, Session } from '../types';
+import { tool_set_todo } from '../toolsSessionAgent';
+import { getSessionHistoryFilePath } from '../session/metadataStore';
+
+function makeSessionId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createBaseSession(id: string): Session {
+  return {
+    id,
+    agent: 'main',
+    history: [],
+    persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false,
+    queue: [],
+    meta: { lastMessageTime: Date.now() },
+  };
+}
+
+async function ensureSession(id: string): Promise<Session> {
+  const existing = await sessionManager.getSession(id);
+  Object.assign(existing, createBaseSession(id));
+  await sessionManager.saveSession(id);
+  return existing;
+}
+
+async function cleanupSessions(sessionIds: string[]): Promise<void> {
+  for (const sessionId of sessionIds) {
+    try {
+      await sessionManager.deleteSession(sessionId);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+async function append(session: Session, message: Message): Promise<void> {
+  await sessionManager.appendSessionMessage(session, message);
+}
+
+function countTodoReminders(session: Session): number {
+  return session.history.filter(message => message.__meta?.todoReminder === true).length;
+}
+
+async function test(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+    console.log(`PASS ${name}`);
+  } catch (error) {
+    console.error(`FAIL ${name}`);
+    throw error;
+  }
+}
+
+async function main(): Promise<void> {
+  await sessionManager.loadSessions();
+
+  const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
+  (vector as any).scheduleSessionArchiveIndex = async () => 0;
+  const createdSessionIds: string[] = [];
+
+  try {
+    await test('set_todo persists configuration and clears cleanly', async () => {
+      const sessionId = makeSessionId('selftest_todo_persist');
+      createdSessionIds.push(sessionId);
+      const session = await ensureSession(sessionId);
+
+      const result = await tool_set_todo({ todo: '- [ ] write docs', remindEvery: 3 }, { sessionId, session });
+      assert.match(String(result), /Todo reminder updated/);
+      assert.strictEqual(session.todoState?.todo, '- [ ] write docs');
+      assert.strictEqual(session.todoState?.remindEvery, 3);
+
+      const historyPayload = await fs.readJson(getSessionHistoryFilePath(sessionId));
+      assert.strictEqual(historyPayload.todoState?.todo, '- [ ] write docs');
+      assert.strictEqual(historyPayload.todoState?.remindEvery, 3);
+
+      const cleared = await tool_set_todo({ clear: true }, { sessionId, session });
+      assert.match(String(cleared), /Cleared todo reminder/);
+      assert.strictEqual(session.todoState, undefined);
+    });
+
+    await test('todo reminder counts later messages including tool-loop progress but only fires once per busy turn', async () => {
+      const sessionId = makeSessionId('selftest_todo_loop');
+      createdSessionIds.push(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await append(session, {
+        role: 'model',
+        parts: [{ functionCall: { id: 'set-todo-1', name: 'set_todo', args: { todo: '- [ ] ship feature', remindEvery: 2 } } }],
+      });
+
+      session.busy = true;
+      await tool_set_todo({ todo: '- [ ] ship feature', remindEvery: 2 }, { sessionId, session });
+      assert.strictEqual(session.todoState?.anchorSeq, 2);
+
+      await append(session, {
+        role: 'tool',
+        parts: [{ functionResponse: { tool_use_id: 'set-todo-1', name: 'set_todo', response: { output: 'ok' } } }],
+      });
+      await append(session, {
+        role: 'model',
+        parts: [{ text: 'Working on it.' }],
+      });
+      assert.strictEqual(countTodoReminders(session), 0);
+
+      await append(session, {
+        role: 'tool',
+        parts: [{ functionResponse: { tool_use_id: 'other-1', name: 'read', response: { output: 'done' } } }],
+      });
+      assert.strictEqual(countTodoReminders(session), 1);
+      const firstReminder = session.history[session.history.length - 1];
+      assert.strictEqual(firstReminder.__meta?.todoReminder, true);
+      assert.match(firstReminder.parts[0].system || '', /TODO reminder for this session/);
+      assert.match(firstReminder.parts[0].system || '', /- \[ \] ship feature/);
+
+      await append(session, {
+        role: 'model',
+        parts: [{ text: 'Still busy in same turn.' }],
+      });
+      assert.strictEqual(countTodoReminders(session), 1);
+
+      session.busy = false;
+      await sessionManager.saveSession(sessionId);
+      session.busy = true;
+
+      await append(session, {
+        role: 'user',
+        parts: [{ text: 'next turn message' }],
+      });
+      assert.strictEqual(countTodoReminders(session), 2);
+    });
+
+    await test('set_todo rejects non-checklist todo text', async () => {
+      const sessionId = makeSessionId('selftest_todo_validate');
+      createdSessionIds.push(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await assert.rejects(
+        () => tool_set_todo({ todo: 'plain text', remindEvery: 2 }, { sessionId, session }),
+        /markdown checklist item/
+      );
+    });
+
+    console.log('todo reminder selftest passed');
+  } finally {
+    (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
+    await cleanupSessions(createdSessionIds);
+  }
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
