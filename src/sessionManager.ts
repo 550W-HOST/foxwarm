@@ -1111,6 +1111,44 @@ export async function compactSessionToolMessages(sessionId: string, keepPercent:
   return sessionHistory.compactToolMessages(getSessionHistoryDeps(), sessionId, keepPercent, thresholdTokens);
 }
 
+export function getDefaultCompactThresholdTokens(session: Pick<Session, 'model'>): number {
+  return sessionHistory.getDefaultCompactThresholdTokens(session);
+}
+
+export function getEffectiveCompactThresholdTokens(session: Pick<Session, 'model' | 'compactThresholdTokens'>): number {
+  return sessionHistory.getEffectiveCompactThresholdTokens(session);
+}
+
+export async function setSessionCompactThreshold(sessionId: string, thresholdTokens?: number): Promise<{
+  sessionId: string;
+  thresholdTokens?: number;
+  inherited: boolean;
+  effectiveThresholdTokens: number;
+}> {
+  const session = await getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
+
+  if (typeof thresholdTokens === 'number') {
+    if (!Number.isFinite(thresholdTokens) || thresholdTokens <= 0) {
+      throw new Error('compact threshold must be a positive number of tokens.');
+    }
+    session.compactThresholdTokens = Math.floor(thresholdTokens);
+  } else {
+    delete session.compactThresholdTokens;
+  }
+
+  await saveSession(session.id);
+
+  return {
+    sessionId: session.id,
+    thresholdTokens: session.compactThresholdTokens,
+    inherited: typeof session.compactThresholdTokens !== 'number',
+    effectiveThresholdTokens: getEffectiveCompactThresholdTokens(session),
+  };
+}
+
 /**
  * Delete a session
  */

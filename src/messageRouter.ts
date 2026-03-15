@@ -8,7 +8,6 @@ import { buildChildReminder, isModelNoActionSignal } from './session/childSessio
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
-import { resolveModelConfig } from './config';
 
 function formatCurrentTimeForPrompt(date: Date): string {
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -396,8 +395,6 @@ export class MessageRouter {
       let finalResponse = '';
       let finalUsage = null;
       let lastTextBroadcasted = false;
-      const { contextLimit } = resolveModelConfig(session.model);
-
       while (iteration < 500) {
         const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
         if (pendingCompaction === 'stop') {
@@ -493,8 +490,9 @@ export class MessageRouter {
 
         if (result.usage) {
           const currentSize = sessionManager.getUsageTotalTokens(result.usage);
-          if (currentSize > contextLimit * 0.8) {
-            logger.info({ currentSize, contextLimit, iteration }, 'Context size exceeded threshold during tool calls, triggering compact');
+          const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
+          if (currentSize > compactThreshold) {
+            logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration }, 'Context size exceeded threshold during tool calls, triggering compact');
             await sessionManager.compactHistory(session.id, undefined, 'Compaction completed. You can continue working now.');
             logger.info('Compact completed, continuing with updated history');
           }

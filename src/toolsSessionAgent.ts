@@ -619,6 +619,45 @@ export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
   ].join('\n');
 }
 
+export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: ToolContext) {
+  const targetId = args.sessionId || ctx?.sessionId;
+  if (!targetId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  const clear = args.clear === true;
+  if (clear) {
+    const result = await sessionManager.setSessionCompactThreshold(targetId);
+    return [
+      `Session \`${result.sessionId}\` compact threshold cleared.`,
+      `Now inheriting default auto-compact threshold: ${result.effectiveThresholdTokens} tokens.`,
+    ].join('\n');
+  }
+
+  if (typeof args.thresholdTokens !== 'number' || !Number.isFinite(args.thresholdTokens) || args.thresholdTokens <= 0) {
+    const session = await sessionManager.getExistingSession(targetId);
+    if (!session) {
+      throw new Error(`Session \`${targetId}\` not found.`);
+    }
+    const effective = sessionManager.getEffectiveCompactThresholdTokens(session);
+    const override = typeof session.compactThresholdTokens === 'number'
+      ? `${session.compactThresholdTokens} tokens`
+      : 'inherit global default';
+    return [
+      `Session \`${session.id}\` compact threshold status:`,
+      `override: ${override}`,
+      `effective: ${effective} tokens`,
+    ].join('\n');
+  }
+
+  const result = await sessionManager.setSessionCompactThreshold(targetId, args.thresholdTokens);
+  return [
+    `Session \`${result.sessionId}\` compact threshold updated.`,
+    `override: ${result.thresholdTokens} tokens`,
+    `effective: ${result.effectiveThresholdTokens} tokens`,
+  ].join('\n');
+}
+
 export async function tool_stop_session(args: ToolArgs) {
   const { sessionId } = args;
 

@@ -400,7 +400,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   }, [])
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="relative flex h-full flex-col overflow-hidden">
       <div className="sticky top-0 z-30 h-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4">
         <div className="flex h-full items-center justify-between">
           <div className="flex items-center space-x-3 min-w-0">
@@ -510,7 +510,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         </div>
       )}
 
-      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 pb-56 md:pb-52">
         <ChatTimeline messages={messages} isMobile={isMobile} verbose={verbose} />
         <ProcessingStatus
           sessionBusy={sessionBusy}
@@ -519,7 +519,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
           processingReasoningSummary={processingReasoningSummary}
           isMobile={isMobile}
         />
-        <div className="h-32" />
+        <div className="h-56 md:h-52" />
       </div>
 
       {showScrollTopButton && (
@@ -537,7 +537,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       {showScrollButton && (
         <button
           onClick={scrollToBottom}
-          className="fixed right-6 bottom-[10.5rem] z-30 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
+          className="fixed right-6 bottom-32 z-30 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center md:bottom-28"
           aria-label="Scroll to bottom"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
