@@ -68,6 +68,7 @@ const ChatComposer = memo(function ChatComposer({
   const audioSampleRateRef = useRef<number>(16000)
   const recordingActiveRef = useRef(false)
   const waveformFrameRef = useRef<number | null>(null)
+  const waveformPeakRef = useRef<number>(0.12)
   const streamingSessionRef = useRef<{
     sendAudioChunk: (chunk: ArrayBuffer) => void
     stop: () => void
@@ -165,6 +166,7 @@ const ChatComposer = memo(function ChatComposer({
     audioGainRef.current = null
     audioAnalyserRef.current = null
     audioStreamRef.current = null
+    waveformPeakRef.current = 0.12
     setWaveformBars(Array.from({ length: 5 }, () => 0.22))
 
     if (audioContextRef.current) {
@@ -406,6 +408,8 @@ const ChatComposer = memo(function ChatComposer({
 
     const data = new Uint8Array(analyser.frequencyBinCount)
     const barCount = 5
+    const minVoiceHz = 120
+    const maxVoiceHz = 4000
 
     const tick = () => {
       const activeAnalyser = audioAnalyserRef.current
@@ -415,17 +419,33 @@ const ChatComposer = memo(function ChatComposer({
       }
 
       activeAnalyser.getByteFrequencyData(data)
-      const binsPerBar = Math.max(1, Math.floor(data.length / barCount))
-      const nextBars = Array.from({ length: barCount }, (_, index) => {
-        const start = index * binsPerBar
-        const end = Math.min(data.length, start + binsPerBar)
+      const sampleRate = activeAnalyser.context.sampleRate || 16000
+      const binHz = sampleRate / activeAnalyser.fftSize
+      const startBin = Math.max(0, Math.floor(minVoiceHz / binHz))
+      const endBinExclusive = Math.max(startBin + 1, Math.min(data.length, Math.ceil(maxVoiceHz / binHz)))
+      const voiceBinCount = Math.max(1, endBinExclusive - startBin)
+      const binsPerBar = Math.max(1, Math.floor(voiceBinCount / barCount))
+
+      const rawBars = Array.from({ length: barCount }, (_, index) => {
+        const start = startBin + index * binsPerBar
+        const end = index === barCount - 1
+          ? endBinExclusive
+          : Math.min(endBinExclusive, start + binsPerBar)
         let sum = 0
         for (let i = start; i < end; i++) {
           sum += data[i]
         }
         const avg = end > start ? sum / (end - start) : 0
-        return Math.max(0.22, Math.min(1, avg / 255))
+        return avg / 255
       })
+
+      const framePeak = rawBars.reduce((max, value) => Math.max(max, value), 0)
+      waveformPeakRef.current = Math.max(framePeak, waveformPeakRef.current * 0.92, 0.06)
+
+      // Auto-normalize quiet input for display only, capped at +20 dB (~10x amplitude).
+      const targetPeak = 0.78
+      const normalizationScale = Math.min(10, targetPeak / waveformPeakRef.current)
+      const nextBars = rawBars.map((value) => Math.max(0.22, Math.min(1, value * normalizationScale)))
 
       setWaveformBars(nextBars)
       waveformFrameRef.current = requestAnimationFrame(tick)
