@@ -268,7 +268,7 @@ async function tool_list_files(args: ToolArgs, ctx: ToolContext) {
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(dirPath, agentName);
 
-    if (sessionManager.isSessionEffectivelyIsolated(ctx.session) && (!ctx.runtimeNodeId || ctx.runtimeNodeId === 'master')) {
+    if (sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
         checkPathAccess(fullPath, agentName);
     }
 
@@ -304,7 +304,7 @@ async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName);
 
-    if (sessionManager.isSessionEffectivelyIsolated(ctx.session) && (!ctx.runtimeNodeId || ctx.runtimeNodeId === 'master')) {
+    if (sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
         checkPathAccess(fullPath, agentName);
     }
 
