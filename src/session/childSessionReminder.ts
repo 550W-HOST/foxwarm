@@ -1,4 +1,4 @@
-import { Message, MessagePart } from './types';
+import { Message, MessagePart } from '../types';
 
 export const NO_ACTION_MARKER = '[NO_ACTION]';
 const LEGACY_NO_ACTION_MARKER = 'NO_ACTION';

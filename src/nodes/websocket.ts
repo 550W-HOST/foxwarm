@@ -1,15 +1,15 @@
 import http from 'http';
 import { WebSocket } from 'ws';
-import { HttpServer } from './httpServer';
-import { nodesManager } from './nodesManager';
-import { logger } from './common';
+import { HttpServer } from '../httpServer';
+import { nodesManager } from './manager';
+import { logger } from '../common';
 import {
   attachPendingPairingSocket,
   authenticateApprovedNode,
   createPendingPairing,
   detachPendingPairingSocket,
   touchApprovedNode,
-} from './nodeRegistry';
+} from './registry';
 
 export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string): void {
   httpServer.addWebSocket('/node_ws', async (ws: WebSocket, req: http.IncomingMessage) => {

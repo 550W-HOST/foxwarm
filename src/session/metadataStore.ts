@@ -1,8 +1,8 @@
 import fs from 'fs-extra';
 import path from 'path';
-import { Message, Session } from './types';
-import { logger } from './common';
-import { SESSIONS_DIR, SESSIONS_FILE } from './config';
+import { Message, Session } from '../types';
+import { logger } from '../common';
+import { SESSIONS_DIR, SESSIONS_FILE } from '../config';
 
 const SESSION_HISTORY_STATE_FIELDS = [
   'queue',

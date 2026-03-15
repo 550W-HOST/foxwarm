@@ -1,8 +1,8 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { createHash } from 'crypto';
-import { Message, MessagePart, Session } from './types';
-import { getSessionArchiveImagesDir, getSessionArchiveLogPath } from './config';
+import { Message, MessagePart, Session } from '../types';
+import { getSessionArchiveImagesDir, getSessionArchiveLogPath } from '../config';
 
 export function getMessageTimestamp(message: Message): number {
   return message.__meta?.timestamp || Date.now();

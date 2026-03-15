@@ -32,8 +32,8 @@ import {
     WEWORK_CONFIG,
 } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
-import { registerNodeWebSocket } from './nodeWebSocket';
-import { initializeNodeRegistry } from './nodeRegistry';
+import { registerNodeWebSocket } from './nodes/websocket';
+import { initializeNodeRegistry } from './nodes/registry';
 import { cleanupLegacyTopLevelLogDirs, scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
 import { initializeTimers } from './timers';

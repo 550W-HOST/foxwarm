@@ -8,7 +8,7 @@ import { checkPathAccess } from './isolatedCheck';
 import * as mcpClient from './mcpClient';
 import { browserManager } from './browser';
 import { logger } from './common';
-import { nodesManager } from './nodesManager';
+import { nodesManager } from './nodes/manager';
 import {
     buildBackgroundTimeoutResult,
     buildForegroundExecResult,

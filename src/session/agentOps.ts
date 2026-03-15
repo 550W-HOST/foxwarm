@@ -1,8 +1,8 @@
 import fs from 'fs-extra';
 import path from 'path';
-import * as llm from './llm';
-import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, SESSIONS_DIR } from './config';
-import { Session } from './types';
+import * as llm from '../llm';
+import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, SESSIONS_DIR } from '../config';
+import { Session } from '../types';
 
 interface SessionAgentOpsDeps {
   getSession: (sessionId: string) => Promise<Session>;

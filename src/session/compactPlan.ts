@@ -1,6 +1,6 @@
-import { estimateMessageTokens } from './tokenCount';
-import { Message, ToolDefinition } from './types';
-import { formatMessagePreviewText } from './utils/messageFormat';
+import { estimateMessageTokens } from '../tokenCount';
+import { Message, ToolDefinition } from '../types';
+import { formatMessagePreviewText } from '../utils/messageFormat';
 
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
 const DEFAULT_BLOCK_TOKEN_TARGET = 1200;

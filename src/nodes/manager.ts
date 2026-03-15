@@ -7,12 +7,12 @@ import http from 'http';
 import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs-extra';
-import { logger } from './common';
-import { WORKSPACE_DIR } from './config';
-import * as sessionManager from './sessionManager';
-import * as browser from './browser';
+import { logger } from '../common';
+import { WORKSPACE_DIR } from '../config';
+import * as sessionManager from '../sessionManager';
+import * as browser from '../browser';
 import { WebSocket } from 'ws';
-import { isReservedNodeId } from './nodeRegistry';
+import { isReservedNodeId } from './registry';
 
 interface ToolDefinition {
   name: string;

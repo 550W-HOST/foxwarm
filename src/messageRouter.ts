@@ -4,7 +4,7 @@
 
 import { logger } from './common';
 import { ChannelContext, ChannelMessage } from './channel';
-import { buildChildReminder, isModelNoActionSignal } from './childSessionReminder';
+import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';

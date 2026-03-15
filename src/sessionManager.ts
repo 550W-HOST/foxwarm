@@ -7,275 +7,23 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, SessionStreamEvent } from './types';
 import { logger } from './common';
-import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from './channel';
+import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
-import { buildChildCompletionInstruction } from './childSessionReminder';
-import { getSkillInfo, validateSkillName } from './skills';
-import { estimateSessionTokens } from './tokenCount';
+import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, resolveModelConfig, AGENTS_FILE, getAgentDir } from './config';
-import * as sessionAgentOps from './sessionAgentOps';
-import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './sessionArchive';
-import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './sessionMetadataStore';
-import * as sessionChannels from './sessionChannels';
-import { buildCompactCandidateBlocks, buildCompactPlanValidationFeedback, buildCompactPromptText, COMPACT_PLAN_TOOL_DEFINITION, COMPACT_PLAN_TOOL_NAME, CompactPlanValidationError, describeBlockRanges, formatSeqRange, validateCompactPlanArgs } from './compactPlan';
-
-// Agent metadata storage
-interface AgentMetadata {
-  isolated?: boolean;
-  inherit?: string;
-  skills?: string[];
-  [key: string]: any;
-}
-
-const agentMetadata = new Map<string, AgentMetadata>();
-
-function normalizeAgentSkills(skills: unknown): string[] | undefined {
-  if (!Array.isArray(skills)) {
-    return undefined;
-  }
-
-  const normalized: string[] = [];
-  const seen = new Set<string>();
-
-  for (const rawSkill of skills) {
-    if (typeof rawSkill !== 'string') {
-      continue;
-    }
-
-    const skillName = rawSkill.trim();
-    if (!skillName) {
-      continue;
-    }
-
-    try {
-      validateSkillName(skillName);
-    } catch (e) {
-      logger.warn({ err: e, skillName }, 'Skipping invalid skill in agent metadata');
-      continue;
-    }
-
-    if (seen.has(skillName)) {
-      continue;
-    }
-
-    seen.add(skillName);
-    normalized.push(skillName);
-  }
-
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-function normalizeAgentMetadata(meta: AgentMetadata): AgentMetadata {
-  const nextMeta = { ...meta };
-  const normalizedSkills = normalizeAgentSkills(meta.skills);
-
-  if (normalizedSkills) {
-    nextMeta.skills = normalizedSkills;
-  } else {
-    delete nextMeta.skills;
-  }
-
-  return nextMeta;
-}
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir } from './config';
+import * as sessionAgentOps from './session/agentOps';
+import * as sessionAgentMetadata from './session/agentMetadata';
+import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './session/archive';
+import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './session/metadataStore';
+import * as sessionChannels from './session/channels';
+import * as sessionHistory from './session/history';
+import * as sessionRelations from './session/relations';
 
 function systemPart(system: string): MessagePart {
   return { system };
 }
 
-/**
- * Load agent metadata from disk
- */
-async function loadAgentMetadata(): Promise<void> {
-  if (await fs.pathExists(AGENTS_FILE)) {
-    try {
-      const data = await fs.readJson(AGENTS_FILE);
-      for (const [agentName, meta] of Object.entries(data)) {
-        agentMetadata.set(agentName, normalizeAgentMetadata(meta as AgentMetadata));
-      }
-      logger.info({ count: agentMetadata.size }, 'Agent metadata loaded');
-    } catch (e) {
-      logger.error({ err: e }, 'Failed to load agent metadata');
-    }
-  }
-}
-
-/**
- * Save agent metadata to disk
- */
-async function saveAgentMetadata(): Promise<void> {
-  const data: Record<string, AgentMetadata> = {};
-  for (const [agentName, meta] of agentMetadata.entries()) {
-    data[agentName] = meta;
-  }
-  await fs.writeJson(AGENTS_FILE, data, { spaces: 2 });
-}
-
-/**
- * Get agent metadata
- */
-export function getAgentMetadata(agentName: string): AgentMetadata {
-  return agentMetadata.get(agentName) || {};
-}
-
-/**
- * Set agent metadata
- */
-export async function setAgentMetadata(agentName: string, meta: AgentMetadata): Promise<void> {
-  agentMetadata.set(agentName, normalizeAgentMetadata(meta));
-  await saveAgentMetadata();
-}
-
-export function getAgentSkills(agentName: string): string[] {
-  return [...(getAgentMetadata(agentName).skills || [])];
-}
-
-async function refreshDirectAgentSessions(agentName: string): Promise<string[]> {
-  const affectedSessions: string[] = [];
-
-  for (const [sessionId, sessionMeta] of sessions.entries()) {
-    const sessionAgent = sessionMeta.agent || 'main';
-    if (sessionAgent !== agentName) {
-      continue;
-    }
-
-    const session = await getSession(sessionId);
-    session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
-    await saveSession(sessionId);
-    affectedSessions.push(sessionId);
-  }
-
-  return affectedSessions;
-}
-
-export async function refreshSessionSnapshot(sessionId: string): Promise<{ sessionId: string; agentName: string }> {
-  const session = await getExistingSession(sessionId);
-  if (!session) {
-    throw new Error(`Session "${sessionId}" not found.`);
-  }
-
-  const agentName = session.agent || 'main';
-  session.persistentMemorySnapshot = await llm.getPersistentMemory(agentName);
-  await saveSession(session.id);
-
-  return { sessionId: session.id, agentName };
-}
-
-export function getAgentInheritanceChain(agentName: string): string[] {
-  const chain: string[] = [];
-  const seen = new Set<string>();
-  let current: string | undefined = agentName;
-
-  while (current) {
-    if (seen.has(current)) {
-      logger.warn({ agentName, current, chain }, 'Circular agent inheritance detected, stopping at first repeat');
-      break;
-    }
-
-    seen.add(current);
-    chain.unshift(current);
-    current = getAgentMetadata(current).inherit;
-  }
-
-  return chain;
-}
-
-export async function setAgentInherit(agentName: string, inheritAgentName?: string): Promise<{ affectedSessions: string[] }> {
-  validateAgentName(agentName);
-
-  const agentDir = getAgentDir(agentName);
-  if (!await fs.pathExists(agentDir)) {
-    throw new Error(`Agent "${agentName}" does not exist.`);
-  }
-
-  if (inheritAgentName) {
-    validateAgentName(inheritAgentName);
-    if (inheritAgentName === agentName) {
-      throw new Error('Agent cannot inherit from itself.');
-    }
-
-    const inheritAgentDir = getAgentDir(inheritAgentName);
-    if (!await fs.pathExists(inheritAgentDir)) {
-      throw new Error(`Inherited agent "${inheritAgentName}" does not exist.`);
-    }
-
-    const parentChain = getAgentInheritanceChain(inheritAgentName);
-    if (parentChain.includes(agentName)) {
-      throw new Error(`Circular inheritance detected: "${agentName}" already appears in "${inheritAgentName}" inherit chain.`);
-    }
-  }
-
-  const currentMeta = getAgentMetadata(agentName);
-  const nextMeta = { ...currentMeta };
-  if (inheritAgentName) {
-    nextMeta.inherit = inheritAgentName;
-  } else {
-    delete nextMeta.inherit;
-  }
-  await setAgentMetadata(agentName, nextMeta);
-
-  const affectedSessions: string[] = [];
-  for (const [sessionId, sessionMeta] of sessions.entries()) {
-    const sessionAgent = sessionMeta.agent || 'main';
-    if (!getAgentInheritanceChain(sessionAgent).includes(agentName)) {
-      continue;
-    }
-
-    const session = await getSession(sessionId);
-    session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
-    await saveSession(sessionId);
-    affectedSessions.push(sessionId);
-  }
-
-  return { affectedSessions };
-}
-
-export async function attachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
-  validateAgentName(agentName);
-  validateSkillName(skillName);
-
-  const agentDir = getAgentDir(agentName);
-  if (!await fs.pathExists(agentDir)) {
-    throw new Error(`Agent "${agentName}" does not exist.`);
-  }
-
-  await getSkillInfo(skillName, { agentName });
-
-  const currentMeta = getAgentMetadata(agentName);
-  const currentSkills = getAgentSkills(agentName);
-  if (currentSkills.includes(skillName)) {
-    return { skills: currentSkills, affectedSessions: [], changed: false };
-  }
-
-  const nextSkills = [...currentSkills, skillName];
-  await setAgentMetadata(agentName, { ...currentMeta, skills: nextSkills });
-  const affectedSessions = await refreshDirectAgentSessions(agentName);
-
-  return { skills: nextSkills, affectedSessions, changed: true };
-}
-
-export async function detachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
-  validateAgentName(agentName);
-  validateSkillName(skillName);
-
-  const agentDir = getAgentDir(agentName);
-  if (!await fs.pathExists(agentDir)) {
-    throw new Error(`Agent "${agentName}" does not exist.`);
-  }
-
-  const currentMeta = getAgentMetadata(agentName);
-  const currentSkills = getAgentSkills(agentName);
-  const nextSkills = currentSkills.filter(existingSkill => existingSkill !== skillName);
-
-  if (nextSkills.length === currentSkills.length) {
-    return { skills: currentSkills, affectedSessions: [], changed: false };
-  }
-
-  await setAgentMetadata(agentName, { ...currentMeta, skills: nextSkills });
-  const affectedSessions = await refreshDirectAgentSessions(agentName);
-
-  return { skills: nextSkills, affectedSessions, changed: true };
-}
 
 // Session storage: sessionId -> Session
 const sessions = new Map<string, Session>();
@@ -610,6 +358,60 @@ function getSessionAgentOpsDeps() {
   };
 }
 
+function getSessionHistoryDeps() {
+  return {
+    getSessionById: (sessionId: string) => sessions.get(sessionId),
+    getExistingSession,
+    saveSession,
+  };
+}
+
+function notifySessionListUpdated() {
+  onSessionListUpdated?.();
+}
+
+function getAgentMetadataDeps() {
+  return {
+    getSession,
+    getExistingSession,
+    saveSession,
+    getSessionsMap: getAllSessions,
+    validateAgentName,
+  };
+}
+
+export function getAgentMetadata(agentName: string): sessionAgentMetadata.AgentMetadata {
+  return sessionAgentMetadata.getAgentMetadata(agentName);
+}
+
+export async function setAgentMetadata(agentName: string, meta: sessionAgentMetadata.AgentMetadata): Promise<void> {
+  await sessionAgentMetadata.setAgentMetadata(agentName, meta);
+}
+
+export function getAgentSkills(agentName: string): string[] {
+  return sessionAgentMetadata.getAgentSkills(agentName);
+}
+
+export async function refreshSessionSnapshot(sessionId: string): Promise<{ sessionId: string; agentName: string }> {
+  return sessionAgentMetadata.refreshSessionSnapshot(getAgentMetadataDeps(), sessionId);
+}
+
+export function getAgentInheritanceChain(agentName: string): string[] {
+  return sessionAgentMetadata.getAgentInheritanceChain(agentName);
+}
+
+export async function setAgentInherit(agentName: string, inheritAgentName?: string): Promise<{ affectedSessions: string[] }> {
+  return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName);
+}
+
+export async function attachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
+  return sessionAgentMetadata.attachAgentSkill(getAgentMetadataDeps(), agentName, skillName);
+}
+
+export async function detachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
+  return sessionAgentMetadata.detachAgentSkill(getAgentMetadataDeps(), agentName, skillName);
+}
+
 export async function createAgentWithMainSession(options: {
   agentName: string;
   inheritMemory?: boolean;
@@ -717,75 +519,14 @@ export async function sendToChannelById(channelId: string, message: string): Pro
   await sessionChannels.sendToChannelById(channelId, message);
 }
 
-export interface FileDeliveryResult {
-  deliveredChannels: string[];
-  skippedChannels: Array<{ channelId: string; reason: string }>;
-  failedChannels: Array<{ channelId: string; error: string }>;
-}
+export type FileDeliveryResult = sessionChannels.FileDeliveryResult;
 
 export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
-  const [platform, ...rest] = channelId.split(':');
-  const channelUserId = rest.join(':');
-  if (!platform || !channelUserId) {
-    throw new Error('Invalid channelId format. Use platform:userId');
-  }
-
-  const channel = getChannelInstance(platform);
-  if (!channel) {
-    throw new Error(`Channel platform "${platform}" not found`);
-  }
-  if (!channel.sendFile) {
-    throw new Error(`Channel platform "${platform}" does not support file sending yet`);
-  }
-
-  await channel.sendFile(channelUserId, file, options);
+  await sessionChannels.sendFileToChannelById(channelId, file, options);
 }
 
 export async function sendFileToSession(sessionId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<FileDeliveryResult> {
-  const session = await getExistingSession(sessionId);
-  if (!session) {
-    throw new Error(`Session \`${sessionId}\` not found`);
-  }
-
-  const channels = getChannelsBySession(sessionId);
-  if (channels.length === 0) {
-    throw new Error(`Session \`${sessionId}\` has no attached channels`);
-  }
-
-  const result: FileDeliveryResult = {
-    deliveredChannels: [],
-    skippedChannels: [],
-    failedChannels: [],
-  };
-
-  for (const channelInfo of channels) {
-    const channelId = `${channelInfo.platform}:${channelInfo.channelUserId}`;
-    const channelConfig = getChannelConfig(channelInfo.platform, channelInfo.channelUserId);
-    if (channelConfig?.mode === 'push-only') {
-      result.skippedChannels.push({ channelId, reason: 'push-only' });
-      continue;
-    }
-
-    const channel = getChannelInstance(channelInfo.platform);
-    if (!channel) {
-      result.failedChannels.push({ channelId, error: `Channel platform "${channelInfo.platform}" not found` });
-      continue;
-    }
-
-    if (!channel.sendFile) {
-      result.skippedChannels.push({ channelId, reason: 'channel does not support file sending yet' });
-      continue;
-    }
-
-    try {
-      await channel.sendFile(channelInfo.channelUserId, file, options);
-      result.deliveredChannels.push(channelId);
-    } catch (err: any) {
-      result.failedChannels.push({ channelId, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  return result;
+  return sessionChannels.sendFileToSession({ getExistingSession }, sessionId, file, options);
 }
 
 /**
@@ -807,9 +548,7 @@ export function getChannelsBySession(sessionId: string): Array<{ platform: strin
 }
 
 export function getChildSessionIds(parentSessionId: string): string[] {
-  return Array.from(sessions.entries())
-    .filter(([, session]) => session.parentSessionId === parentSessionId)
-    .map(([sessionId]) => sessionId);
+  return sessionRelations.getChildSessionIds(sessions, parentSessionId);
 }
 
 export function getChannelBySession(sessionId: string): { platform: string; channelUserId: string } | undefined {
@@ -978,179 +717,34 @@ export async function createChildSession(parentSessionId: string, suffix: string
   }
 }
 
-async function persistSessionMetadataUpdate(sessionId: string, updates: Partial<Session>): Promise<void> {
-  const historyFile = getSessionHistoryFilePath(sessionId);
-
-  if (await fs.pathExists(historyFile)) {
-    const historyData = await fs.readJson(historyFile);
-    await fs.writeJson(historyFile, { ...historyData, ...updates }, { spaces: 2 });
-    return;
-  }
-
-  await saveSession(sessionId);
-}
-
 export async function setSessionParent(childSessionId: string, parentSessionId?: string): Promise<{
   childSessionId: string;
   parentSessionId?: string;
   previousParentSessionId?: string;
 }> {
-  const childSession = await getExistingSession(childSessionId);
-  if (!childSession) {
-    throw new Error(`Session "${childSessionId}" not found.`);
-  }
-
-  const realChildId = childSession.id;
-  const previousParentSessionId = childSession.parentSessionId || undefined;
-
-  let realParentId: string | undefined;
-  if (parentSessionId) {
-    const parentSession = await getExistingSession(parentSessionId);
-    if (!parentSession) {
-      throw new Error(`Session "${parentSessionId}" not found.`);
-    }
-
-    realParentId = parentSession.id;
-    if (realParentId === realChildId) {
-      throw new Error('A session cannot be its own parent.');
-    }
-  }
-
-  if (previousParentSessionId === realParentId) {
-    return {
-      childSessionId: realChildId,
-      parentSessionId: realParentId,
-      previousParentSessionId,
-    };
-  }
-
-  childSession.parentSessionId = realParentId;
-  await persistSessionMetadataUpdate(realChildId, { parentSessionId: realParentId });
-  await saveSessionsMetadata();
-
-  if (onSessionListUpdated) {
-    onSessionListUpdated();
-  }
-
-  return {
-    childSessionId: realChildId,
-    parentSessionId: realParentId,
-    previousParentSessionId,
-  };
+  return sessionRelations.setSessionParent({
+    getExistingSession,
+    saveSession,
+    saveSessionsMetadata,
+    notifySessionListUpdated,
+  }, childSessionId, parentSessionId);
 }
 
 export async function updateChildSessionParentIds(oldParentSessionId: string, newParentSessionId: string): Promise<string[]> {
-  const updatedChildIds: string[] = [];
-
-  for (const [sessionId, session] of sessions.entries()) {
-    if (session.parentSessionId !== oldParentSessionId) {
-      continue;
-    }
-
-    session.parentSessionId = newParentSessionId;
-    await persistSessionMetadataUpdate(sessionId, { parentSessionId: newParentSessionId });
-    updatedChildIds.push(sessionId);
-  }
-
-  if (updatedChildIds.length > 0) {
-    await saveSessionsMetadata();
-
-    if (onSessionListUpdated) {
-      onSessionListUpdated();
-    }
-  }
-
-  return updatedChildIds;
-}
-
-/**
- * Check if a session operation is allowed based on isolated rules
- * @param sourceSession Source session (or undefined for system operations)
- * @param targetSessionId Target session ID
- * @param operation Operation name for error messages
- */
-async function checkIsolatedPermission(
-  sourceSession: Session | undefined,
-  targetSessionId: string,
-  operation: string
-): Promise<void> {
-  // Get target session
-  const targetSession = await getExistingSession(targetSessionId);
-  if (!targetSession) {
-    throw new Error(`Session "${targetSessionId}" not found.`);
-  }
-
-  // If no source session (system operation), allow
-  if (!sourceSession) {
-    return;
-  }
-
-  const sourceAgent = sourceSession.agent || 'main';
-  const targetAgent = targetSession.agent || 'main';
-
-  // Session-level isolated routing rules are enforced by sendToSession()
-  // using direct parent/child relationship checks. This helper keeps the
-  // broader agent-isolation guardrails aligned underneath that rule.
-
-  // Check source agent isolation
-  const sourceAgentMeta = getAgentMetadata(sourceAgent);
-  if (sourceAgentMeta.isolated && sourceAgent !== targetAgent) {
-    throw new Error(`Agent "${sourceAgent}" is isolated and cannot operate on sessions in other agents.`);
-  }
-
-  // Check target agent isolation
-  const targetAgentMeta = getAgentMetadata(targetAgent);
-  if (targetAgentMeta.isolated && sourceAgent !== targetAgent) {
-    throw new Error(`Agent "${targetAgent}" is isolated and cannot be accessed from other agents.`);
-  }
-}
-
-/**
- * Send a message to a session (add to queue)
- * @param targetSessionId Target session ID
- * @param message Message text
- * @param fromSessionId Optional source session ID for tracking
- */
-function isDirectSessionLink(a: Session | undefined, b: Session | undefined): boolean {
-  if (!a || !b) return false;
-  if (a.id === b.id) return true;
-  if (a.parentSessionId === b.id || b.parentSessionId === a.id) return true;
-  return false;
+  return sessionRelations.updateChildSessionParentIds({
+    saveSession,
+    saveSessionsMetadata,
+    getSessionsMap: getAllSessions,
+    notifySessionListUpdated,
+  }, oldParentSessionId, newParentSessionId);
 }
 
 export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string): Promise<void> {
-  const targetSession = await getExistingSession(targetSessionId);
-  if (!targetSession) {
-    throw new Error(`Session \"${targetSessionId}\" not found.`);
-  }
-  const fromSession = fromSessionId ? await getExistingSession(fromSessionId) : undefined;
-  if (fromSessionId && !fromSession) {
-    throw new Error(`Session \"${fromSessionId}\" not found.`);
-  }
-
-  // Check isolated permissions
-  await checkIsolatedPermission(fromSession, targetSessionId, 'send_to_session');
-
-  if ((fromSession?.isolated || targetSession?.isolated) && fromSession && !isDirectSessionLink(fromSession, targetSession)) {
-    throw new Error('Isolated sessions can only communicate with themselves or their direct parent/child sessions.');
-  }
-
-  const replyTarget = fromSessionId || 'unknown-session';
-  const prefix = fromSessionId
-    ? `[SYSTEM: The following message is an inter-agent message from another session, not from the direct user; source_session_id: \`${fromSessionId}\`; reply_via: send_to_session({sessionId: \`${replyTarget}\`, message: "..."}).]`
-    : '[SYSTEM: The following message is system-delivered session content, not from the direct user.]';
-
-  const combinedText = message
-    ? `${prefix}\n${message}`
-    : prefix;
-
-  const parts: MessagePart[] = [{ text: combinedText }];
-
-  logger.info({ targetSessionId, fromSessionId }, 'Message sent to session');
-  await enqueueSessionItem(targetSessionId, {
-    type: 'intersession',
-    parts,
-  });
+  await sessionRelations.sendToSession({
+    getExistingSession,
+    getAgentMetadata,
+    enqueueSessionItem,
+  }, targetSessionId, message, fromSessionId);
 }
 
 
@@ -1237,7 +831,7 @@ export async function saveSessionsMetadata(): Promise<void> {
 export async function loadSessions(): Promise<void> {
   try {
     // Load agent metadata first
-    await loadAgentMetadata();
+    await sessionAgentMetadata.loadAgentMetadata();
     await loadChannels();
 
     const { data, source } = await loadSessionsMetadataSnapshot();
@@ -1279,286 +873,23 @@ export async function loadSessions(): Promise<void> {
 }
 
 export async function forceIndexSession(sessionId: string): Promise<void> {
-  const session = sessions.get(sessionId);
-  if (!session) {
-    throw new Error('Session not found');
-  }
-
-  try {
-    const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
-    logger.info({ sessionId, latestSeqHint }, 'Force indexing session archive');
-    await vector.indexSessionArchive(sessionId, latestSeqHint);
-    session.vectorIndexPosition = session.history.length;
-    session.indexingState = undefined;
-    await saveSession(sessionId);
-  } catch (e) {
-    logger.error({ err: e, sessionId }, 'Failed to force index session archive');
-    throw e;
-  }
-}
-
-type CompactionRunOptions = {
-  keepPercent?: number;
-  completionMarker?: string;
-  compactGuidance?: string;
-  startLogMessage?: string;
-  startBroadcastMessage?: string;
-};
-
-async function runCompaction(sessionId: string, options: CompactionRunOptions = {}): Promise<void> {
-  const session = sessions.get(sessionId);
-  if (!session) return;
-
-  const keepPercent = typeof options.keepPercent === 'number' ? options.keepPercent : COMPACT_PERCENT;
-  const completionMarker = options.completionMarker || 'Compaction completed.';
-  const compactGuidance = options.compactGuidance?.trim();
-
-  const history = session.history;
-  if (history.length < 1) return;
-  const originalHistoryLength = history.length;
-
-  // Notify user that compaction is starting
-  logger.info({ sessionId, hasBroadcast: !!session.broadcast }, options.startLogMessage || 'Compaction starting');
-  if (session.broadcast && options.startBroadcastMessage) {
-    session.broadcast(options.startBroadcastMessage);
-  }
-
-  let splitIndex = Math.floor(history.length * (1 - keepPercent));
-
-  if (keepPercent > 0) {
-    while (splitIndex < history.length && history[splitIndex].role === 'tool') {
-      splitIndex++;
-    }
-  } else {
-    splitIndex = history.length;
-  }
-
-  if (splitIndex <= 0) {
-    logger.info({ sessionId, keepPercent }, 'Compaction skipped because there are no older messages to compact');
-    return;
-  }
-
-  const olderMessages = history.slice(0, splitIndex);
-  const forceKeptRecentMessages = splitIndex < history.length ? history.slice(splitIndex) : [];
-  const candidateBlocks = buildCompactCandidateBlocks(olderMessages);
-
-  if (candidateBlocks.length === 0) {
-    logger.info({ sessionId, splitIndex }, 'Compaction skipped because no candidate blocks were produced');
-    return;
-  }
-
-  const forcedKeptStartSeq = forceKeptRecentMessages[0]?.__meta?.seq;
-  const forcedKeptEndSeq = forceKeptRecentMessages[forceKeptRecentMessages.length - 1]?.__meta?.seq;
-  const summaryPrompt: MessagePart = {
-    system: buildCompactPromptText({
-      forcedKeptCount: forceKeptRecentMessages.length,
-      forcedKeptStartSeq,
-      forcedKeptEndSeq,
-      candidateBlocks,
-      guidance: compactGuidance,
-    })
-  };
-
-  let beforeCompactIndex = session.history.length;
-
-  try {
-    // Don't change snapshot and history before compacting LLM request,
-    // to prevent recomputing whole history.
-    const maxCompactAttempts = 3;
-    let nextPromptParts: MessagePart[] = [summaryPrompt];
-    let compactPlan = null;
-
-    for (let attempt = 1; attempt <= maxCompactAttempts; attempt++) {
-      const result = await llm.chat(nextPromptParts, session, attempt - 1, {
-        toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION],
-      });
-
-      if (!result.toolCalls?.length) {
-        throw new Error(`Compaction failed because the model did not call ${COMPACT_PLAN_TOOL_NAME}.`);
-      }
-      if (result.toolCalls.length !== 1 || result.toolCalls[0].name !== COMPACT_PLAN_TOOL_NAME) {
-        throw new Error(`Compaction failed because the model returned an unexpected tool plan instead of a single ${COMPACT_PLAN_TOOL_NAME} call.`);
-      }
-
-      try {
-        compactPlan = validateCompactPlanArgs(result.toolCalls[0].args || {}, candidateBlocks);
-        break;
-      } catch (e) {
-        if (!(e instanceof CompactPlanValidationError)) {
-          throw e;
-        }
-
-        const attemptsRemaining = maxCompactAttempts - attempt;
-        if (attemptsRemaining <= 0) {
-          throw new Error(`Compaction failed after ${maxCompactAttempts} invalid ${COMPACT_PLAN_TOOL_NAME} submissions: ${e.message}`);
-        }
-
-        logger.warn({ sessionId, attempt, attemptsRemaining, validationError: e.message }, 'Compaction plan validation failed; retrying compact flow');
-        nextPromptParts = [{
-          system: buildCompactPlanValidationFeedback(e, attemptsRemaining),
-        }];
-      }
-    }
-
-    if (!compactPlan) {
-      throw new Error(`Compaction failed because no valid ${COMPACT_PLAN_TOOL_NAME} plan was produced.`);
-    }
-
-    const candidateById = new Map(candidateBlocks.map(block => [block.id, block]));
-    const keptOlderMessages = compactPlan.keepBlockIds.flatMap(blockId => candidateById.get(blockId)?.messages || []);
-    const retainedMessages = [...keptOlderMessages, ...forceKeptRecentMessages];
-
-    const now = Date.now();
-    const summaryConversation: Message[] = [
-      {
-        role: 'user',
-        parts: [{
-          system: [
-            'Compaction plan applied via submit_compact_plan.',
-            `Older blocks kept verbatim: ${describeBlockRanges(candidateBlocks, compactPlan.keepBlockIds)}.`,
-            `Older blocks dropped from working history only: ${describeBlockRanges(candidateBlocks, compactPlan.dropBlockIds)}.`,
-            `Recent force-kept messages: ${forceKeptRecentMessages.length > 0 ? `${forceKeptRecentMessages.length} message(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)}` : 'none'}.`,
-          ].join(' ')
-        }],
-        __meta: { timestamp: now }
-      },
-      {
-        role: 'model',
-        parts: [{ text: compactPlan.summary }],
-        __meta: { timestamp: now }
-      },
-    ];
-
-    await finalizeCompaction(sessionId, session, retainedMessages, summaryConversation, completionMarker, originalHistoryLength - retainedMessages.length);
-  } catch (e) {
-    if (session.history.length > beforeCompactIndex) {
-      session.history = session.history.slice(0, beforeCompactIndex);
-      await saveSession(sessionId);
-    }
-    logger.error(e, 'Compaction failed');
-    throw e;
-  }
+  await sessionHistory.forceIndexSession(getSessionHistoryDeps(), sessionId);
 }
 
 export async function compactHistory(sessionId: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
-  await runCompaction(sessionId, {
-    keepPercent,
-    completionMarker,
-    startLogMessage: 'Compaction starting',
-    startBroadcastMessage: '⚠️ Context size limit reached, compacting history...',
-  });
+  await sessionHistory.compactHistory(getSessionHistoryDeps(), sessionId, keepPercent, completionMarker);
 }
 
 export async function compactHistoryWithSummary(sessionId: string, summary: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
-  if (!summary || !summary.trim()) {
-    throw new Error('Summary is required for manual compaction.');
-  }
-
-  await runCompaction(sessionId, {
-    keepPercent,
-    completionMarker,
-    compactGuidance: `Manual compaction hint from requester: ${summary.trim()}`,
-    startLogMessage: 'Manual compaction starting',
-    startBroadcastMessage: '⚠️ Manual compaction starting...',
-  });
-}
-
-async function finalizeCompaction(
-  sessionId: string,
-  session: Session,
-  retainedMessages: Message[],
-  summaryConversation: Message[],
-  completionMarker: string,
-  removedMessageCount: number,
-): Promise<void> {
-  const now = Date.now();
-  const compactedMarker: Message = {
-    role: 'user',
-    parts: [{ system: 'This session has been compacted. Messages before this are removed.' }],
-    __meta: { timestamp: now }
-  };
-  const completionMessage: Message = {
-    role: 'user',
-    parts: [{ system: completionMarker }],
-    __meta: { timestamp: now }
-  };
-  const archiveOnlySummaryMessages = summaryConversation.filter(message => message.__meta?.seq === undefined);
-  await appendMessagesToArchive(session, [compactedMarker, ...archiveOnlySummaryMessages, completionMessage]);
-
-  const summaryMessages: Message[] = [
-    compactedMarker,
-    ...retainedMessages,
-    ...summaryConversation,
-    completionMessage,
-  ];
-
-  session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
-  session.history = summaryMessages;
-  // Reset vector index position to 0 since history was compacted
-  session.vectorIndexPosition = 0;
-  // Increment history version to invalidate ongoing indexing
-  session.historyVersion = (session.historyVersion || 0) + 1;
-  // Clear indexing state
-  session.indexingState = undefined;
-
-  await saveSession(sessionId);
-  logger.info({ removedMessageCount, retainedCount: retainedMessages.length }, 'History compacted successfully');
-
-  if (session.broadcast) {
-    session.broadcast(`Compaction completed. Removed ${removedMessageCount} messages.`);
-  }
+  await sessionHistory.compactHistoryWithSummary(getSessionHistoryDeps(), sessionId, summary, keepPercent, completionMarker);
 }
 
 export async function deleteMessages(sessionId: string, num: number): Promise<{ deleted: number; remaining: number }> {
-  const session = sessions.get(sessionId);
-  if (!session) return { deleted: 0, remaining: 0 };
-  if (!num || isNaN(num)) return { deleted: 0, remaining: session.history.length };
-
-  const originalLen = session.history.length;
-  let deleted = 0;
-
-  if (num > 0) {
-    deleted = Math.min(num, session.history.length);
-    session.history = session.history.slice(deleted);
-    if (session.vectorIndexPosition !== undefined) {
-      session.vectorIndexPosition = Math.max(0, session.vectorIndexPosition - deleted);
-    }
-  } else if (num < 0) {
-    const absNum = Math.min(Math.abs(num), session.history.length);
-    deleted = absNum;
-    session.history = session.history.slice(0, session.history.length - absNum);
-    if (session.vectorIndexPosition !== undefined) {
-      session.vectorIndexPosition = Math.min(session.vectorIndexPosition, session.history.length);
-    }
-  }
-
-  session.historyVersion = (session.historyVersion || 0) + 1;
-  session.indexingState = undefined;
-
-  await saveSession(sessionId);
-  return { deleted, remaining: session.history.length };
+  return sessionHistory.deleteMessages(getSessionHistoryDeps(), sessionId, num);
 }
 
 export async function clearSession(sessionId: string): Promise<void> {
-  const session = await getExistingSession(sessionId);
-  if (!session) {
-    throw new Error(`Session \`${sessionId}\` not found.`);
-  }
-
-  session.history = [];
-  session.queue = [];
-  session.stopping = false;
-  session.busy = false;
-  session.vectorIndexPosition = 0;
-  session.historyVersion = (session.historyVersion || 0) + 1;
-  session.indexingState = undefined;
-  session.meta = {
-    ...session.meta,
-    lastMessageTime: Date.now(),
-    messageCount: 0,
-  };
-
-  await saveSession(session.id);
+  await sessionHistory.clearSession(getSessionHistoryDeps(), sessionId);
 }
 
 export function getUsageTotalTokens(finalUsage?: Partial<TokenUsage> & {
@@ -1566,29 +897,11 @@ export function getUsageTotalTokens(finalUsage?: Partial<TokenUsage> & {
   promptTokenCount?: number;
   candidatesTokenCount?: number;
 }): number {
-  if (!finalUsage) return 0;
-
-  const cachedTokens = finalUsage.cachedTokens ?? finalUsage.cachedContentTokenCount ?? 0;
-  const inputTokens = finalUsage.inputTokens ?? finalUsage.promptTokenCount ?? 0;
-  const outputTokens = finalUsage.outputTokens ?? finalUsage.candidatesTokenCount ?? 0;
-
-  return cachedTokens + inputTokens + outputTokens;
+  return sessionHistory.getUsageTotalTokens(finalUsage);
 }
 
 export async function checkAndCompactIfNeeded(sessionId: string, finalUsage?: Partial<TokenUsage>) {
-  const session = sessions.get(sessionId);
-  if (!session) return;
-
-  const currentSize = finalUsage
-    ? getUsageTotalTokens(finalUsage)
-    : estimateSessionTokens(session);
-
-  const { contextLimit } = resolveModelConfig(session.model);
-
-  if (currentSize > contextLimit * 0.8) {
-    logger.info({ currentSize, contextLimit }, 'Auto compact')
-    await compactHistory(sessionId).catch(e => logger.error(e, 'Auto-compact failed'));
-  }
+  await sessionHistory.checkAndCompactIfNeeded(getSessionHistoryDeps(), sessionId, finalUsage);
 }
 
 export function getAllSessions(): Map<string, Session> {
@@ -1655,21 +968,7 @@ export async function requestSessionCompaction(
 }
 
 export async function processSessionCompactionRequest(sessionId: string, item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>): Promise<void> {
-  if (item.compactGuidance?.trim()) {
-    await compactHistoryWithSummary(
-      sessionId,
-      item.compactGuidance,
-      item.keepPercent,
-      item.completionMarker || 'Compaction completed.'
-    );
-    return;
-  }
-
-  await compactHistory(
-    sessionId,
-    item.keepPercent,
-    item.completionMarker || 'Compaction completed.'
-  );
+  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item);
 }
 
 /**
