@@ -59,6 +59,20 @@ export function formatPrefixedMultilineText(prefix: string, text: string, contin
   return `${prefix}${lines.join('\n')}`;
 }
 
+export function prefixAlreadyFormattedText(prefix: string, text: string): string {
+  if (!text.trim()) {
+    return prefix;
+  }
+
+  const lines = text.split('\n');
+  const [firstLine, ...restLines] = lines;
+  if (restLines.length === 0) {
+    return `${prefix}${firstLine}`;
+  }
+
+  return `${prefix}${firstLine}\n${restLines.join('\n')}`;
+}
+
 function stringifyFunctionArgs(part: MessagePart): string {
   try {
     return JSON.stringify(part.functionCall?.args);
