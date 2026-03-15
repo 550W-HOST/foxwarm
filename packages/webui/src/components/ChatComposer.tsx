@@ -375,7 +375,7 @@ const ChatComposer = memo(function ChatComposer({
 
         <form
           onSubmit={handleSubmit}
-          className={`rounded-[30px] border border-gray-200 bg-gray-50/95 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] transition focus-within:border-gray-300 focus-within:bg-white dark:border-gray-700 dark:bg-gray-800/95 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800 ${
+          className={`rounded-[30px] border border-gray-200/90 bg-gray-50/75 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] backdrop-blur-[5px] transition focus-within:border-gray-300 focus-within:bg-white/92 dark:border-gray-700/90 dark:bg-gray-800/70 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800/92 ${
             isDragging ? 'border-blue-400 dark:border-blue-500' : ''
           }`}
         >
