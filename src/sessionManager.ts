@@ -385,6 +385,18 @@ export function getAgentMetadata(agentName: string): sessionAgentMetadata.AgentM
   return sessionAgentMetadata.getAgentMetadata(agentName);
 }
 
+export function getAgentIsolationNode(agentName: string): string | undefined {
+  return sessionAgentMetadata.getAgentIsolationNode(agentName);
+}
+
+export function isAgentIsolated(agentName: string): boolean {
+  return sessionAgentMetadata.isAgentIsolated(agentName);
+}
+
+export function isSessionEffectivelyIsolated(session?: Session | null): boolean {
+  return sessionAgentMetadata.isSessionEffectivelyIsolated(session);
+}
+
 export async function setAgentMetadata(agentName: string, meta: sessionAgentMetadata.AgentMetadata): Promise<void> {
   await sessionAgentMetadata.setAgentMetadata(agentName, meta);
 }
@@ -403,6 +415,10 @@ export function getAgentInheritanceChain(agentName: string): string[] {
 
 export async function setAgentInherit(agentName: string, inheritAgentName?: string): Promise<{ affectedSessions: string[] }> {
   return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName);
+}
+
+export async function setAgentIsolation(agentName: string, isolatedNode?: string): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
+  return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, isolatedNode);
 }
 
 export async function attachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
@@ -424,6 +440,7 @@ export async function createAgentWithMainSession(options: {
   model?: string;
   createMainSession?: boolean;
   inherit?: string;
+  isolatedNode?: string;
 }): Promise<{
   agentDir: string;
   mainSessionId: string;
@@ -432,10 +449,14 @@ export async function createAgentWithMainSession(options: {
   updatedChildren: string[];
   createdMainSession: boolean;
 }> {
-  const { inherit, ...createOptions } = options;
+  const { inherit, isolatedNode, ...createOptions } = options;
   const normalizedInherit = inherit && String(inherit).trim() ? String(inherit).trim() : undefined;
+  const normalizedIsolatedNode = isolatedNode && String(isolatedNode).trim() ? String(isolatedNode).trim() : undefined;
 
   if (normalizedInherit !== undefined) {
+    if (normalizedIsolatedNode) {
+      throw new Error('Isolated agent cannot also inherit shared memory.');
+    }
     validateAgentName(normalizedInherit);
     if (!await fs.pathExists(getAgentDir(normalizedInherit))) {
       throw new Error(`Inherited agent "${normalizedInherit}" does not exist.`);
@@ -443,6 +464,9 @@ export async function createAgentWithMainSession(options: {
   }
 
   const result = await sessionAgentOps.createAgentWithMainSession(createOptions, getSessionAgentOpsDeps());
+  if (normalizedIsolatedNode !== undefined) {
+    await setAgentIsolation(options.agentName, normalizedIsolatedNode);
+  }
   if (normalizedInherit !== undefined) {
     await setAgentInherit(options.agentName, normalizedInherit);
   }

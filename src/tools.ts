@@ -45,6 +45,7 @@ import {
     tool_create_agent,
     tool_create_session,
     tool_set_agent_inherit,
+    tool_set_agent_isolated,
     tool_move_session,
 } from './toolsSessionAgent';
 
@@ -248,26 +249,67 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     return await buildBackgroundTimeoutResult(execEntry);
 }
 
-async function tool_search_memory({ query, limit = 5, scope = 'all' }: { query: string; limit?: number; scope?: 'all' | 'current-session' | 'current-agent' }, ctx?: ToolContext) {
-    let searchOptions: { sessionIds?: string[]; agent?: string } | undefined;
-
-    if (scope === 'current-session') {
-        if (!ctx?.sessionId) {
-            throw new Error('scope=current-session requires an active session context.');
-        }
-
-        const session = await sessionManager.getSession(ctx.sessionId);
-        searchOptions = { sessionIds: [session.id, ...(session.aliases || [])] };
-    } else if (scope === 'current-agent') {
-        if (!ctx?.sessionId) {
-            throw new Error('scope=current-agent requires an active session context.');
-        }
-
-        const session = await sessionManager.getSession(ctx.sessionId);
-        searchOptions = { agent: session.agent || 'main' };
+export async function resolveMemorySearchOptions(
+    request: {
+        scope?: 'all' | 'current-session' | 'current-agent';
+        targetSessionId?: string;
+        targetAgentName?: string;
+    },
+    ctx?: ToolContext,
+): Promise<{ searchOptions: { sessionIds?: string[]; agent?: string }; effectiveScope: 'current-session' | 'current-agent' }> {
+    if (!ctx?.sessionId) {
+        throw new Error('search_memory requires an active session context.');
     }
 
-    const results = await vector.search(query, limit, false, searchOptions);
+    const session = await sessionManager.getSession(ctx.sessionId);
+    const agentName = session.agent || 'main';
+    const effectiveIsolated = sessionManager.isSessionEffectivelyIsolated(session);
+
+    if (effectiveIsolated) {
+        if (request.targetAgentName && request.targetAgentName !== agentName) {
+            throw new Error('Isolated session can only search the current session.');
+        }
+        if (request.targetSessionId && request.targetSessionId !== session.id && !(session.aliases || []).includes(request.targetSessionId)) {
+            throw new Error('Isolated session can only search the current session.');
+        }
+        return {
+            searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+            effectiveScope: 'current-session',
+        };
+    }
+
+    if (request.targetAgentName && request.targetAgentName !== agentName) {
+        throw new Error('search_memory cannot access memories outside the current agent.');
+    }
+
+    if (request.targetSessionId) {
+        const targetSession = await sessionManager.getExistingSession(request.targetSessionId);
+        if (!targetSession) {
+            throw new Error(`Session \`${request.targetSessionId}\` not found.`);
+        }
+        if ((targetSession.agent || 'main') !== agentName) {
+            throw new Error('search_memory cannot access memories outside the current agent.');
+        }
+        return {
+            searchOptions: { sessionIds: [targetSession.id, ...(targetSession.aliases || [])] },
+            effectiveScope: 'current-session',
+        };
+    }
+
+    if (request.scope === 'current-session') {
+        return {
+            searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+            effectiveScope: 'current-session',
+        };
+    }
+
+    return {
+        searchOptions: { agent: agentName },
+        effectiveScope: 'current-agent',
+    };
+}
+
+export function formatMemorySearchResults(results: any): string {
     if (!results || !Array.isArray(results) || results.length === 0) return 'No relevant memories found.';
 
     return results.map(r => {
@@ -292,6 +334,17 @@ async function tool_search_memory({ query, limit = 5, scope = 'all' }: { query: 
             `[ID: ${idStr}]`,
         ].filter(Boolean).join(' ') + `\n${r.text}`;
     }).join('\n\n---\n\n');
+}
+
+async function tool_search_memory({ query, limit = 5, scope = 'all', sessionId, agentName }: { query: string; limit?: number; scope?: 'all' | 'current-session' | 'current-agent'; sessionId?: string; agentName?: string }, ctx?: ToolContext) {
+    const { searchOptions } = await resolveMemorySearchOptions({
+        scope,
+        targetSessionId: sessionId,
+        targetAgentName: agentName,
+    }, ctx);
+
+    const results = await vector.search(query, limit, false, searchOptions);
+    return formatMemorySearchResults(results);
 }
 
 async function tool_get_memory_context({ timestamp, limit = 10 }: { timestamp: number; limit?: number }) {
@@ -381,8 +434,8 @@ async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
     const session = ctx.sessionId ? await sessionManager.getExistingSession(ctx.sessionId) : undefined;
     
     // Isolated sessions can only call tools on their bound node
-    if (session?.isolated && action === 'call') {
-        const currentNode = session.currentNode || 'master';
+    if (sessionManager.isSessionEffectivelyIsolated(session) && action === 'call') {
+        const currentNode = sessionManager.getAgentIsolationNode(session?.agent || 'main') || session?.currentNode || 'master';
         if (nodeId !== currentNode) {
             throw new Error('Isolated session can only call tools on its bound node.');
         }
@@ -514,6 +567,7 @@ export const create_child_session = tool_create_child_session;
 export const create_agent = tool_create_agent;
 export const create_session = tool_create_session;
 export const set_agent_inherit = tool_set_agent_inherit;
+export const set_agent_isolated = tool_set_agent_isolated;
 export const move_session = tool_move_session;
 export const send_to_session = tool_send_to_session;
 export const send_to_channel = tool_send_to_channel;
@@ -574,7 +628,7 @@ export const change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
   }
 
   const session = await sessionManager.getSession(ctx.sessionId);
-  if (session.isolated) {
+  if (sessionManager.isSessionEffectivelyIsolated(session)) {
     throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
   }
   
@@ -653,13 +707,15 @@ export const definitions = [
         },
         {
             name: 'search_memory',
-            description: 'Search for relevant past conversations in the vector memory. Supports all/current-session/current-agent scope filtering.',
+            description: 'Search for relevant past conversations in vector memory within the caller\'s allowed scope. Non-isolated sessions are limited to the current agent; isolated sessions are limited to the current session.',
             parameters: {
                 type: 'object',
                 properties: { 
                     query: { type: 'string', description: 'The search query' },
                     limit: { type: 'number' },
-                    scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: 'Search scope. Defaults to all.' }
+                    scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: 'Requested scope. It will be capped to the caller\'s allowed range.' },
+                    sessionId: { type: 'string', description: 'Optional specific session id, limited to your allowed scope.' },
+                    agentName: { type: 'string', description: 'Optional agent name, limited to your current agent.' }
                 },
                 required: ['query']
             }
@@ -1142,6 +1198,7 @@ export const definitions = [
                     agentName: { type: 'string', description: 'Agent name (alphanumeric, hyphens, underscores only)' },
                     inheritMemory: { type: 'boolean', description: 'Legacy compatibility: copy memory files from the source agent into the new agent directory.' },
                     inherit: { type: 'string', description: 'Optional shared-memory parent agent name for agent.inherit.' },
+                    isolatedNode: { type: 'string', description: 'Optional non-master node id to make the agent isolated and bound to that node.' },
                     createMainSession: { type: 'boolean', description: 'Whether to also create {agentName}/main (default: true).' },
                     sourceSessionId: { type: 'string', description: 'Optional source session ID to inherit current node/model from (default: current session)' },
                     convertSession: { type: 'boolean', description: 'If true, convert an existing session into the agent main session (requires createMainSession=true).' }
@@ -1171,6 +1228,18 @@ export const definitions = [
                 properties: {
                     agentName: { type: 'string', description: 'Agent whose shared memory inheritance should be updated.' },
                     inheritAgentName: { type: 'string', description: 'Parent agent to inherit shared memory from. Use empty string to clear inheritance.' }
+                },
+                required: ['agentName']
+            }
+        },
+        {
+            name: 'set_agent_isolated',
+            description: 'Set or clear agent-level isolation. Isolated agents are bound to a non-master node and their sessions inherit isolated restrictions.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    agentName: { type: 'string', description: 'Agent whose isolation setting should be updated.' },
+                    nodeId: { type: 'string', description: 'Bound non-master node id. Use empty string to clear isolation.' }
                 },
                 required: ['agentName']
             }

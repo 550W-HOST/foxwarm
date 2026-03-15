@@ -147,10 +147,23 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 const AGENT_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('list', 'List all agents'),
   literalNode('create', 'Create a new agent', {
-    usage: '/agent create <name> [--no-main]',
+    usage: '/agent create <name> [--no-main] [--isolated <node-id>]',
     children: [
       placeholderNode('<name>', 'New agent name', {
-        children: [literalNode('--no-main', 'Create the agent without a main session')],
+        children: [
+          literalNode('--no-main', 'Create the agent without a main session'),
+          literalNode('--isolated', 'Create the agent in isolated mode bound to a node', {
+            children: [placeholderNode('<node-id>', 'Bound non-master node id')],
+          }),
+        ],
+      }),
+    ],
+  }),
+  literalNode('isolated', 'Set or clear agent-level isolation', {
+    usage: '/agent isolated <agent> <node-id|off>',
+    children: [
+      placeholderNode('<agent>', 'Agent name', {
+        children: [placeholderNode('<node-id|off>', 'Bind to node id or disable isolation with off')],
       }),
     ],
   }),
@@ -253,8 +266,29 @@ const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   }),
 ]
 
+const SEARCH_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('--session', 'Restrict search to one session in your allowed scope', {
+    children: [placeholderNode('<session-id>', 'Session id within your allowed scope')],
+  }),
+  literalNode('--agent', 'Restrict search to your current agent', {
+    children: [placeholderNode('<agent-name>', 'Current agent only')],
+  }),
+  literalNode('--limit', 'Maximum number of matches', {
+    children: [placeholderNode('<n>', 'Result limit, default 5')],
+  }),
+  placeholderNode('<query>', 'Search query text'),
+]
+
 const messagesUsage = 'Usage: `/messages <num>` | `/messages <start> <end>`'
 const deleteMessagesUsage = 'Usage: `/delete-messages <num>` (positive: delete oldest, negative: delete newest)'
+
+function isCommandSessionEffectivelyIsolated(session?: Session): boolean {
+  return sessionManager.isSessionEffectivelyIsolated(session)
+}
+
+function commandIsolationError(operation: string): string {
+  return `❌ Isolated session cannot use ${operation}.`
+}
 
 function formatTimerDate(timestamp?: number | null): string {
   if (!timestamp) return 'n/a'
@@ -652,6 +686,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       
       const subcommand = args[0]
       const subArgs = args.slice(1)
+      const effectiveIsolated = isCommandSessionEffectivelyIsolated(session)
 
       if (!subcommand) {
         let resp = '📋 *Session Commands*\n\n'
@@ -677,6 +712,10 @@ export const COMMANDS: Record<string, CommandDef> = {
 
       switch (subcommand) {
         case 'list': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/session list'))
+            break
+          }
           const allSessions = sessionManager.getAllSessions()
           const allAttachments = sessionManager.getAllAttachments()
 
@@ -731,6 +770,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'new': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/session new'))
+            break
+          }
           sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
           const newSessionId = sessionManager.attachChannel(ctx.platform, ctx.channelUserId)
           ctx.reply(`✅ Created and attached to new session \`${newSessionId}\``)
@@ -738,6 +781,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'create': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/session create'))
+            break
+          }
           if (subArgs.length < 2) {
             ctx.reply('Usage: /session create <agent> <session>')
             return
@@ -764,6 +811,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'fork': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/session fork'))
+            break
+          }
           if (!sessionId || !session) {
             ctx.reply('❌ No active session to fork.')
             return
@@ -776,6 +827,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'delete': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/session delete'))
+            break
+          }
           if (subArgs.length === 0) {
             ctx.reply('Usage: /session delete <sessionId>\nUse /session list to see available sessions.')
             return
@@ -922,6 +977,16 @@ export const COMMANDS: Record<string, CommandDef> = {
             return
           }
 
+          const agentIsolationNode = sessionManager.getAgentIsolationNode(session.agent || 'main')
+          if (agentIsolationNode) {
+            if (subArgs.length === 0) {
+              ctx.reply(`🔒 Inherited from agent isolation (node: \`${agentIsolationNode}\`)`)
+            } else {
+              ctx.reply('❌ This session belongs to an isolated agent. Change agent isolation instead.')
+            }
+            return
+          }
+
           if (subArgs.length === 0) {
             const node = session.currentNode || 'master'
             const state = session.isolated ? 'on' : 'off'
@@ -975,6 +1040,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'move': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/session move'))
+            break
+          }
           if (!sessionId || !session) {
             ctx.reply('❌ No active session to move.')
             return
@@ -1005,6 +1074,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'parent': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/session parent'))
+            break
+          }
           if (subArgs.length === 0) {
             ctx.reply('Usage: /session parent <parent-session-id> [child-session-id]')
             return
@@ -1041,6 +1114,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'unparent': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/session unparent'))
+            break
+          }
           const targetChildSessionId = subArgs[0] || sessionId
 
           if (!targetChildSessionId) {
@@ -1067,6 +1144,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'archive': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/session archive'))
+            break
+          }
           const targetSessionId = subArgs.length > 0 ? subArgs[0] : sessionId
           
           if (!targetSessionId) {
@@ -1089,6 +1170,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'unarchive': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/session unarchive'))
+            break
+          }
           const targetSessionId = subArgs.length > 0 ? subArgs[0] : sessionId
           
           if (!targetSessionId) {
@@ -1122,6 +1207,12 @@ export const COMMANDS: Record<string, CommandDef> = {
       children: [placeholderNode('<sessionId>', 'Existing session id')],
     },
     handler: async (ctx, args) => {
+      const currentSessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId)
+      const currentSession = currentSessionId ? await sessionManager.getSession(currentSessionId) : undefined
+      if (isCommandSessionEffectivelyIsolated(currentSession)) {
+        ctx.reply(commandIsolationError('/attach'))
+        return
+      }
       if (args.length === 0) {
         ctx.reply('Usage: /attach <sessionId>\nUse /sessions to see available sessions.')
         return
@@ -1146,13 +1237,17 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: false,
     autocomplete: { children: AGENT_AUTOCOMPLETE },
     handler: async (ctx, args) => {
+      const currentSessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId)
+      const currentSession = currentSessionId ? await sessionManager.getSession(currentSessionId) : undefined
+      const effectiveIsolated = isCommandSessionEffectivelyIsolated(currentSession)
       const subcommand = args[0]
       const subArgs = args.slice(1)
 
       if (!subcommand) {
         let resp = '🤖 *Agent Commands*\n\n'
         resp += '`/agent list` - List all agents\n'
-        resp += '`/agent create <name> [--no-main]` - Create new agent (optionally without creating main session)\n'
+        resp += '`/agent create <name> [--no-main] [--isolated <node-id>]` - Create new agent\n'
+        resp += '`/agent isolated <agent> <node-id|off>` - Set or clear agent isolation\n'
         resp += '`/agent inherit <agent> <parent-agent|none>` - Set or clear shared memory inheritance\n'
         resp += '`/agent delete <name> [--confirm]` - Delete agent (requires confirmation)\n'
         ctx.reply(resp)
@@ -1161,6 +1256,10 @@ export const COMMANDS: Record<string, CommandDef> = {
 
       switch (subcommand) {
         case 'list': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/agent list'))
+            break
+          }
           const agentsDir = AGENTS_DIR
           
           if (!await fs.pathExists(agentsDir)) {
@@ -1169,7 +1268,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           }
           
           const entries = await fs.readdir(agentsDir, { withFileTypes: true })
-          const agents: Array<{name: string, sessionCount: number, inherit?: string, skills?: string[]}> = []
+          const agents: Array<{name: string, sessionCount: number, inherit?: string, skills?: string[], isolated?: boolean, isolatedNode?: string}> = []
           
           for (const entry of entries) {
             if (entry.isDirectory()) {
@@ -1181,7 +1280,9 @@ export const COMMANDS: Record<string, CommandDef> = {
                 name: agentName,
                 sessionCount: sessions.length,
                 inherit: sessionManager.getAgentMetadata(agentName).inherit,
-                skills: sessionManager.getAgentSkills(agentName)
+                skills: sessionManager.getAgentSkills(agentName),
+                isolated: sessionManager.getAgentMetadata(agentName).isolated,
+                isolatedNode: sessionManager.getAgentIsolationNode(agentName),
               })
             }
           }
@@ -1200,6 +1301,9 @@ export const COMMANDS: Record<string, CommandDef> = {
             if (agent.inherit) {
               resp += ` - inherits \`${agent.inherit}\``
             }
+            if (agent.isolated) {
+              resp += ` - isolated${agent.isolatedNode ? ` on \`${agent.isolatedNode}\`` : ''}`
+            }
             if (agent.skills && agent.skills.length > 0) {
               resp += ` - skills: ${agent.skills.map(skill => `\`${skill}\``).join(', ')}`
             }
@@ -1210,13 +1314,19 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'create': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/agent create'))
+            break
+          }
           if (subArgs.length === 0) {
-            ctx.reply('Usage: /agent create <name> [--no-main]\nExample: /agent create my-assistant\nExample: /agent create my-agent --no-main')
+            ctx.reply('Usage: /agent create <name> [--no-main] [--isolated <node-id>]\nExample: /agent create my-assistant\nExample: /agent create my-agent --no-main\nExample: /agent create sandbox-agent --isolated sandbox-node')
             return
           }
 
           const agentName = subArgs[0]
           const createMainSession = !subArgs.includes('--no-main')
+          const isolatedFlagIndex = subArgs.indexOf('--isolated')
+          const isolatedNode = isolatedFlagIndex >= 0 ? subArgs[isolatedFlagIndex + 1] : undefined
           
           try {
             sessionManager.validateAgentName(agentName)
@@ -1238,13 +1348,17 @@ export const COMMANDS: Record<string, CommandDef> = {
               agentName,
               initialMemoryFiles: { 'SOUL.md': soulContent },
               currentNode: 'master',
-              createMainSession
+              createMainSession,
+              isolatedNode,
             })
 
             let resp = `✅ Agent "${agentName}" created successfully!\n\nAgent folder: \`agents/${agentName}\``
             resp += createMainSession
               ? `\nMain session: \`${result.mainSessionId}\``
               : '\nMain session: not created (`--no-main`)'
+            if (isolatedNode) {
+              resp += `\nIsolation: enabled on \`${isolatedNode}\``
+            }
             ctx.reply(resp)
           } catch (e: any) {
             ctx.reply(`❌ Failed to create agent: ${e.message}`)
@@ -1252,7 +1366,38 @@ export const COMMANDS: Record<string, CommandDef> = {
           break
         }
 
+        case 'isolated': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/agent isolated'))
+            break
+          }
+          if (subArgs.length < 2) {
+            ctx.reply('Usage: /agent isolated <agent> <node-id|off>')
+            break
+          }
+
+          const agentName = subArgs[0]
+          const mode = subArgs[1]
+          try {
+            const result = await sessionManager.setAgentIsolation(agentName, mode === 'off' ? undefined : mode)
+            let resp = result.isolated
+              ? `✅ Agent "${agentName}" is now isolated on node \`${result.node}\`.`
+              : `✅ Agent "${agentName}" isolation cleared.`
+            if (result.affectedSessions.length > 0) {
+              resp += `\nUpdated ${result.affectedSessions.length} session(s).`
+            }
+            ctx.reply(resp)
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to update agent isolation: ${e.message}`)
+          }
+          break
+        }
+
         case 'inherit': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/agent inherit'))
+            break
+          }
           if (subArgs.length < 2) {
             ctx.reply('Usage: /agent inherit <agent> <parent-agent|none>')
             return
@@ -1281,6 +1426,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'delete': {
+          if (effectiveIsolated) {
+            ctx.reply(commandIsolationError('/agent delete'))
+            break
+          }
           if (subArgs.length === 0) {
             ctx.reply('Usage: /agent delete <name> [--confirm]\nExample: /agent delete my-assistant --confirm\n\n⚠️ This will delete the agent and all its sessions permanently!')
             return
@@ -1512,6 +1661,17 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
+      const effectiveIsolated = isCommandSessionEffectivelyIsolated(session)
+
+      if (effectiveIsolated) {
+        if (args.length === 0) {
+          const node = sessionManager.getAgentIsolationNode(session.agent || 'main') || session.currentNode || 'master'
+          ctx.reply(`🔒 Isolated session is bound to node \`${node}\`.`)
+        } else {
+          ctx.reply(commandIsolationError('/node'))
+        }
+        return
+      }
 
       if (args[0] === 'pair') {
         const sub = args[1]
@@ -1625,6 +1785,11 @@ export const COMMANDS: Record<string, CommandDef> = {
       // With args: switch node
       const nodeId = args[0]
 
+      if (effectiveIsolated) {
+        ctx.reply(commandIsolationError('/node <node-id>'))
+        return
+      }
+
       if (nodeId !== 'master' && !nodesManager.getNode(nodeId)) {
         ctx.reply(`❌ Node \`${nodeId}\` not found.\n\nUse \`/node\` to list available nodes.`)
         return
@@ -1637,6 +1802,63 @@ export const COMMANDS: Record<string, CommandDef> = {
         ctx.reply(`✅ Switched to node \`${nodeId}\`\n\nAll file/exec/browser tools will now execute on this node.`)
       } catch (e: any) {
         ctx.reply(`❌ Failed to switch node: ${e.message}`)
+      }
+    }
+  },
+  '/search': {
+    description: 'Search archived messages within your allowed memory scope',
+    requiresSession: true,
+    autocomplete: { children: SEARCH_AUTOCOMPLETE },
+    handler: async (ctx, args, sessionId, session) => {
+      if (!sessionId || !session) {
+        ctx.reply('❌ No active session.')
+        return
+      }
+
+      let limit = 5
+      let targetSessionId: string | undefined
+      let targetAgentName: string | undefined
+      const queryParts: string[] = []
+
+      for (let i = 0; i < args.length; i += 1) {
+        const arg = args[i]
+        if (arg === '--limit' && i + 1 < args.length) {
+          const parsed = parseInt(args[i + 1], 10)
+          if (!Number.isNaN(parsed) && parsed > 0) {
+            limit = parsed
+          }
+          i += 1
+          continue
+        }
+        if (arg === '--session' && i + 1 < args.length) {
+          targetSessionId = args[i + 1]
+          i += 1
+          continue
+        }
+        if (arg === '--agent' && i + 1 < args.length) {
+          targetAgentName = args[i + 1]
+          i += 1
+          continue
+        }
+        queryParts.push(arg)
+      }
+
+      const query = queryParts.join(' ').trim()
+      if (!query) {
+        ctx.reply('Usage: /search [--session <session-id>] [--agent <agent-name>] [--limit <n>] <query>')
+        return
+      }
+
+      try {
+        const result = await tools.search_memory({
+          query,
+          limit,
+          sessionId: targetSessionId,
+          agentName: targetAgentName,
+        }, { sessionId, session })
+        ctx.reply(result)
+      } catch (e: any) {
+        ctx.reply(`❌ Search failed: ${e.message}`)
       }
     }
   },

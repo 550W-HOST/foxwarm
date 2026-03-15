@@ -163,6 +163,12 @@ export async function createSessionInAgent(options: {
     throw new Error(`Session "${sessionId}" already exists.`);
   }
 
+  const agentMeta = deps.getAgentMetadata(agentName);
+  const agentIsolated = !!agentMeta.isolated;
+  const isolatedNode = agentIsolated && typeof agentMeta.isolatedNode === 'string' && agentMeta.isolatedNode.trim()
+    ? agentMeta.isolatedNode.trim()
+    : undefined;
+
   const snapshot = await llm.getPersistentMemory(agentName);
   await deps.createSession(sessionId, {
     id: sessionId,
@@ -182,7 +188,8 @@ export async function createSessionInAgent(options: {
     vectorIndexPosition: 0,
     nextMessageSeq: 1,
     parentSessionId,
-    currentNode: currentNode || 'master',
+    currentNode: isolatedNode || currentNode || 'master',
+    isolated: agentIsolated,
     model,
   });
 
@@ -233,6 +240,11 @@ export async function createAgentWithMainSession(options: {
   }
 
   const mainSessionId = buildSessionId(agentName, 'main');
+  const targetAgentMeta = deps.getAgentMetadata(agentName);
+  const agentIsolated = !!targetAgentMeta.isolated;
+  const isolatedNode = agentIsolated && typeof targetAgentMeta.isolatedNode === 'string' && targetAgentMeta.isolatedNode.trim()
+    ? targetAgentMeta.isolatedNode.trim()
+    : undefined;
 
   if (convertSessionId) {
     const sourceToConvert = await deps.getExistingSession(convertSessionId);
@@ -290,7 +302,8 @@ export async function createAgentWithMainSession(options: {
     meta: { lastMessageTime: Date.now() },
     vectorIndexPosition: 0,
     nextMessageSeq: 1,
-    currentNode: currentNode || sourceSession?.currentNode || 'master',
+    currentNode: isolatedNode || currentNode || sourceSession?.currentNode || 'master',
+    isolated: agentIsolated,
     model: model ?? sourceSession?.model,
   });
 

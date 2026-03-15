@@ -296,7 +296,7 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   const entries = await fs.readdir(agentsDir, { withFileTypes: true });
-  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, skills?: string[]}> = [];
+  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, skills?: string[], isolated?: boolean, isolatedNode?: string}> = [];
 
   for (const entry of entries) {
     if (entry.isDirectory()) {
@@ -310,6 +310,8 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
         sessionCount: sessions.length,
         inherit: sessionManager.getAgentMetadata(agentName).inherit,
         skills: sessionManager.getAgentSkills(agentName),
+        isolated: sessionManager.getAgentMetadata(agentName).isolated,
+        isolatedNode: sessionManager.getAgentIsolationNode(agentName),
       });
     }
   }
@@ -326,6 +328,9 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
     }
     if (agent.inherit) {
       result += ` [inherits: ${agent.inherit}]`;
+    }
+    if (agent.isolated) {
+      result += ` [isolated${agent.isolatedNode ? `:${agent.isolatedNode}` : ''}]`;
     }
     if (agent.skills && agent.skills.length > 0) {
       result += ` [skills: ${agent.skills.join(', ')}]`;
@@ -831,6 +836,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
     convertSession = false,
     createMainSession = true,
     inherit,
+    isolatedNode,
   } = args;
 
   if (!agentName || typeof agentName !== 'string') {
@@ -850,6 +856,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
     model: ctx.session?.model,
     createMainSession,
     inherit: normalizedInherit,
+    isolatedNode,
   });
 
   if (result.convertedFromSessionId) {
@@ -869,6 +876,9 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
   let message = `Agent "${agentName}" created successfully.\nAgent folder: ${result.agentDir}`;
   if (normalizedInherit) {
     message += `\nShared memory inherits from: ${normalizedInherit}`;
+  }
+  if (isolatedNode) {
+    message += `\nIsolation: enabled on node ${isolatedNode}`;
   }
   if (result.createdMainSession) {
     message += `\nMain session: ${result.mainSessionId}`;
@@ -935,6 +945,28 @@ export async function tool_set_agent_inherit(args: ToolArgs, ctx?: ToolContext) 
   return message;
 }
 
+export async function tool_set_agent_isolated(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'set_agent_isolated');
+  const { agentName, nodeId } = args;
+
+  if (!agentName || typeof agentName !== 'string') {
+    throw new Error('agentName is required');
+  }
+
+  const result = await sessionManager.setAgentIsolation(
+    agentName,
+    typeof nodeId === 'string' && nodeId.trim() ? nodeId.trim() : undefined,
+  );
+
+  let message = result.isolated
+    ? `Agent "${agentName}" is now isolated on node "${result.node}".`
+    : `Agent "${agentName}" isolation cleared.`;
+  if (result.affectedSessions.length > 0) {
+    message += `\nUpdated ${result.affectedSessions.length} session(s).`;
+  }
+  return message;
+}
+
 export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
   const {
     sessionId,
@@ -954,7 +986,7 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
     throw new Error(`Session "${sourceId}" not found.`);
   }
 
-  if (sourceSession.isolated) {
+  if (sessionManager.isSessionEffectivelyIsolated(sourceSession)) {
     throw new Error('Isolated session cannot use move_session tool.');
   }
 

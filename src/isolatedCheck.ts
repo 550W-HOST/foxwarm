@@ -22,7 +22,7 @@ export async function checkToolPermission(
   toolArgs?: Record<string, any>
 ): Promise<void> {
   const session = await sessionManager.getExistingSession(sessionId);
-  if (!session?.isolated) return;
+  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   const timerTools = ['create_timer', 'list_timers', 'delete_timer'];
   if (timerTools.includes(toolName)) {
@@ -36,7 +36,7 @@ export async function checkToolPermission(
   }
 
   // Tools that isolated session can use
-  const allowedTools = ['read', 'write', 'edit', 'apply_patch', 'exec', 'remote_node', 'send_to_session', 'send_file'];
+  const allowedTools = ['read', 'write', 'edit', 'apply_patch', 'exec', 'remote_node', 'send_to_session', 'send_file', 'search_memory'];
   if (!allowedTools.includes(toolName)) {
     throw new Error(`Isolated session cannot use ${toolName} tool.`);
   }
@@ -46,7 +46,7 @@ export async function checkToolPermission(
   // agent directory, but must never run shell exec on master.
   const nodeDependentTools = ['read', 'write', 'edit', 'apply_patch', 'exec'];
   if (nodeDependentTools.includes(toolName) && executionNode) {
-    const currentNode = session.currentNode || 'master';
+    const currentNode = sessionManager.getAgentIsolationNode(session.agent || 'main') || session.currentNode || 'master';
 
     if (toolName === 'exec' && executionNode === 'master') {
       throw new Error('Isolated session cannot run exec on master node. Bind it to a non-master node first.');
@@ -80,14 +80,15 @@ export async function checkToolPermission(
  */
 export function checkPathAccess(fullPath: string, agentName: string): void {
   const agentDir = getAgentDir(agentName);
+  const agentMemoryDir = path.join(agentDir, 'memory');
   const agentsDir = AGENTS_DIR;
 
   const normalizedPath = path.normalize(fullPath);
-  const normalizedAgentDir = path.normalize(agentDir);
+  const normalizedAgentMemoryDir = path.normalize(agentMemoryDir);
   const normalizedAgentsDir = path.normalize(agentsDir);
 
-  // Allow access only to current agent's directory (agents/{agentName}/)
-  if (normalizedPath === normalizedAgentDir || normalizedPath.startsWith(normalizedAgentDir + path.sep)) {
+  // Allow access only to current agent's memory directory on master.
+  if (normalizedPath === normalizedAgentMemoryDir || normalizedPath.startsWith(normalizedAgentMemoryDir + path.sep)) {
     return;
   }
 
@@ -96,11 +97,11 @@ export function checkPathAccess(fullPath: string, agentName: string): void {
     const relativePath = normalizedPath.slice(normalizedAgentsDir.length + 1);
     const targetAgent = relativePath.split(path.sep)[0];
     if (targetAgent && targetAgent !== agentName) {
-      throw new Error(`Isolated session cannot access other agent directories. Allowed: agents/${agentName}/`);
+      throw new Error(`Isolated session cannot access other agent directories. Allowed on master: agents/${agentName}/memory/`);
     }
   }
 
-  throw new Error(`Isolated session can only access agents/${agentName}/ directory.`);
+  throw new Error(`Isolated session can only access agents/${agentName}/memory/ on master.`);
 }
 
 /**
@@ -114,7 +115,7 @@ export async function requireNotIsolated(sessionIdOrCtx: string | { sessionId?: 
   if (!sessionId) return;
   
   const session = await sessionManager.getExistingSession(sessionId);
-  if (session?.isolated) {
+  if (sessionManager.isSessionEffectivelyIsolated(session)) {
     throw new Error(`Isolated session cannot use ${operation} tool.`);
   }
 }
@@ -130,7 +131,7 @@ export async function checkChannelPermission(sessionIdOrCtx: string | { sessionI
   if (!sessionId) return;
   
   const session = await sessionManager.getExistingSession(sessionId);
-  if (!session?.isolated) return;
+  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   const attachedChannels = sessionManager.getChannelsBySession(sessionId);
   const attachedChannelIds = attachedChannels.map(ch => `${ch.platform}:${ch.channelUserId}`);
@@ -154,7 +155,7 @@ export async function checkSendFilePermission(
   if (!sessionId) return;
 
   const session = await sessionManager.getExistingSession(sessionId);
-  if (!session?.isolated) return;
+  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   if (options.channelId) {
     await checkChannelPermission(sessionId, options.channelId);
@@ -183,7 +184,7 @@ export async function checkTimerPermission(
   if (!sessionId) return;
 
   const session = await sessionManager.getExistingSession(sessionId);
-  if (!session?.isolated) return;
+  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   const targetSessionId = options.targetSessionId || sessionId;
   if (targetSessionId !== sessionId) {
