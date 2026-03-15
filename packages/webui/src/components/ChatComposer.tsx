@@ -445,7 +445,11 @@ const ChatComposer = memo(function ChatComposer({
       // Auto-normalize quiet input for display only, capped at +20 dB (~10x amplitude).
       const targetPeak = 0.78
       const normalizationScale = Math.min(10, targetPeak / waveformPeakRef.current)
-      const nextBars = rawBars.map((value) => Math.max(0.22, Math.min(1, value * normalizationScale)))
+      const centerWeight = [0.72, 0.88, 1, 0.88, 0.72]
+      const nextBars = rawBars.map((value, index) => {
+        const weighted = value * normalizationScale * centerWeight[index]
+        return Math.max(0.22, Math.min(1, weighted))
+      })
 
       setWaveformBars(nextBars)
       waveformFrameRef.current = requestAnimationFrame(tick)
@@ -777,13 +781,13 @@ const ChatComposer = memo(function ChatComposer({
                     type="button"
                     onClick={() => void handleRecordToggle()}
                     disabled={transcribingAudio}
-                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200 dark:hover:bg-red-900/60' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : ''}`}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium leading-none transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200 dark:hover:bg-red-900/60' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : ''}`}
                     title={isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
                   >
-                    {isRecordingAudio ? <Square size={13} /> : <Mic size={13} />}
-                    <span>{isRecordingAudio ? 'Stop' : 'Rec'}</span>
+                    {isRecordingAudio ? <Square size={13} className="shrink-0" /> : <Mic size={13} className="shrink-0" />}
+                    <span className="leading-none translate-y-[0.5px]">{isRecordingAudio ? 'Stop' : 'Rec'}</span>
                     {(isRecordingAudio || transcribingAudio) && (
-                      <span className="ml-1 inline-flex h-4 items-center gap-[2px] self-center">
+                      <span className="ml-1 inline-flex h-[14px] items-center gap-[2px] self-center translate-y-[1px]">
                         {waveformBars.map((value, index) => (
                           <span
                             key={index}
