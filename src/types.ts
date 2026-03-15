@@ -57,6 +57,14 @@ export interface SessionStreamEvent {
   text?: string;
 }
 
+export interface SessionTodoState {
+  todo: string;
+  remindEvery: number;
+  anchorSeq: number;
+  updatedAt: number;
+  remindedWhileBusy?: boolean;
+}
+
 // Session types
 export interface SessionStats {
   totalCachedTokens: number;
@@ -121,6 +129,7 @@ export interface Session {
   historyVersion?: number; // Incremented on compact/clear to detect changes
   nextMessageSeq?: number; // Next per-session sequence number for append-only archive logging
   parentSessionId?: string; // Parent session ID for child sessions
+  todoState?: SessionTodoState; // Session-local todo reminder configuration
   broadcast?: SessionReply; // Broadcast message to all attached channels
 }
 

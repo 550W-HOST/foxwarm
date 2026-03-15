@@ -18,6 +18,7 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'aliases',
   'busy',
   'nextMessageSeq',
+  'todoState',
 ] as const;
 
 const SESSION_METADATA_FIELDS = [
@@ -40,6 +41,7 @@ const SESSION_METADATA_FIELDS = [
   'historyVersion',
   'nextMessageSeq',
   'parentSessionId',
+  'todoState',
 ] as const;
 
 function pickDefinedFields<T extends readonly string[]>(source: Record<string, any>, fields: T): Record<T[number], any> {
