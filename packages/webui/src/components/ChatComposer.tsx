@@ -275,9 +275,7 @@ const ChatComposer = memo(function ChatComposer({
 
   return (
     <div
-      className={`sticky bottom-0 z-20 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md p-4 transition-colors ${
-        isDragging ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-400 dark:border-blue-500' : ''
-      }`}
+      className="absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -291,93 +289,97 @@ const ChatComposer = memo(function ChatComposer({
         </div>
       )}
 
-      {attachments.length > 0 && (
-        <div className="mb-3 flex flex-wrap gap-2">
-          {attachments.map((file, idx) => (
-            <div key={`${file.name}-${idx}`} className="relative inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800">
-              <span className="text-gray-700 dark:text-gray-300">{file.name}</span>
-              <button
-                onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
-                className="text-gray-400 transition hover:text-red-500"
-              >
-                ×
-              </button>
+      <div className={`relative mx-auto max-w-5xl rounded-2xl border border-gray-200/80 dark:border-gray-700/80 bg-white/92 dark:bg-gray-800/92 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-white/80 supports-[backdrop-filter]:dark:bg-gray-800/80 ${
+        isDragging ? 'border-blue-400 dark:border-blue-500' : ''
+      }`}>
+        <div className="p-4">
+          {attachments.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {attachments.map((file, idx) => (
+                <div key={`${file.name}-${idx}`} className="relative inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                  <span className="text-gray-700 dark:text-gray-300">{file.name}</span>
+                  <button
+                    onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
+                    className="text-gray-400 transition hover:text-red-500"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+          )}
 
-      {showSlashCommandMenu && (
-        <div className="mb-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-lg overflow-hidden">
-          <div className="px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2">
-            <span>Slash commands</span>
-            <span className="text-[11px]">↑↓ select · Enter/Tab apply · Esc dismiss</span>
-          </div>
-          <div ref={slashMenuRef} className="max-h-64 overflow-y-auto">
-            {commandsLoading && (
-              <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">Loading commands...</div>
-            )}
-            {!commandsLoading && commandsError && slashCommandSuggestions.length === 0 && slashCommandHints.length === 0 && (
-              <div className="px-3 py-2 text-sm text-red-600 dark:text-red-300">{commandsError}</div>
-            )}
-            {!commandsLoading && !commandsError && slashCommandSuggestions.length === 0 && slashCommandHints.length === 0 && (
-              <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">No matching commands.</div>
-            )}
-            {slashCommandSuggestions.map((command, index) => {
-              const isActive = index === highlightedCommandIndex
-              return (
-                <button
-                  key={command.key}
-                  type="button"
-                  data-active={isActive ? 'true' : 'false'}
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    applySlashCommand(command)
-                  }}
-                  onMouseEnter={() => setHighlightedCommandIndex(index)}
-                  className={`w-full px-3 py-2 text-left border-b last:border-b-0 border-gray-100 dark:border-gray-800 transition ${isActive ? 'bg-blue-50 dark:bg-blue-900/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800/80'}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{command.label}</span>
-                    {command.requiresSession === false && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">global</span>
+          {showSlashCommandMenu && (
+            <div className="mb-2 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-900">
+              <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 text-xs font-medium text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                <span>Slash commands</span>
+                <span className="text-[11px]">↑↓ select · Enter/Tab apply · Esc dismiss</span>
+              </div>
+              <div ref={slashMenuRef} className="max-h-64 overflow-y-auto">
+                {commandsLoading && (
+                  <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">Loading commands...</div>
+                )}
+                {!commandsLoading && commandsError && slashCommandSuggestions.length === 0 && slashCommandHints.length === 0 && (
+                  <div className="px-3 py-2 text-sm text-red-600 dark:text-red-300">{commandsError}</div>
+                )}
+                {!commandsLoading && !commandsError && slashCommandSuggestions.length === 0 && slashCommandHints.length === 0 && (
+                  <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">No matching commands.</div>
+                )}
+                {slashCommandSuggestions.map((command, index) => {
+                  const isActive = index === highlightedCommandIndex
+                  return (
+                    <button
+                      key={command.key}
+                      type="button"
+                      data-active={isActive ? 'true' : 'false'}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        applySlashCommand(command)
+                      }}
+                      onMouseEnter={() => setHighlightedCommandIndex(index)}
+                      className={`w-full border-b border-gray-100 px-3 py-2 text-left transition last:border-b-0 dark:border-gray-800 ${isActive ? 'bg-blue-50 dark:bg-blue-900/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800/80'}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{command.label}</span>
+                        {command.requiresSession === false && (
+                          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-800 dark:text-gray-400">global</span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{command.description}</div>
+                      {command.usage && (
+                        <div className="mt-1 font-mono text-[11px] text-gray-500 dark:text-gray-400">{command.usage}</div>
+                      )}
+                    </button>
+                  )
+                })}
+                {slashCommandHints.map((hint, index) => (
+                  <div
+                    key={hint.key}
+                    className={`px-3 py-2 text-left ${slashCommandSuggestions.length > 0 || index > 0 ? 'border-t border-gray-100 dark:border-gray-800' : ''}`}
+                  >
+                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200">{hint.label}</div>
+                    {hint.description && (
+                      <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{hint.description}</div>
+                    )}
+                    {hint.usage && (
+                      <div className="mt-1 font-mono text-[11px] text-gray-500 dark:text-gray-400">{hint.usage}</div>
                     )}
                   </div>
-                  <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{command.description}</div>
-                  {command.usage && (
-                    <div className="mt-1 font-mono text-[11px] text-gray-500 dark:text-gray-400">{command.usage}</div>
-                  )}
-                </button>
-              )
-            })}
-            {slashCommandHints.map((hint, index) => (
-              <div
-                key={hint.key}
-                className={`px-3 py-2 text-left ${slashCommandSuggestions.length > 0 || index > 0 ? 'border-t border-gray-100 dark:border-gray-800' : ''}`}
-              >
-                <div className="font-mono text-sm text-gray-700 dark:text-gray-200">{hint.label}</div>
-                {hint.description && (
-                  <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{hint.description}</div>
-                )}
-                {hint.usage && (
-                  <div className="mt-1 font-mono text-[11px] text-gray-500 dark:text-gray-400">{hint.usage}</div>
-                )}
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+            </div>
+          )}
 
-      {sessionMissing && (
-        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
-          Session not found. Select an existing session from the list, or create a new session instead of opening a missing hash directly.
-        </div>
-      )}
+          {sessionMissing && (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
+              Session not found. Select an existing session from the list, or create a new session instead of opening a missing hash directly.
+            </div>
+          )}
 
-      <form
-        onSubmit={handleSubmit}
-        className="rounded-[30px] border border-gray-200 bg-gray-50/95 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] transition focus-within:border-gray-300 focus-within:bg-white dark:border-gray-700 dark:bg-gray-800/95 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800"
-      >
+          <form
+            onSubmit={handleSubmit}
+            className="rounded-[30px] border border-gray-200 bg-gray-50/95 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] transition focus-within:border-gray-300 focus-within:bg-white dark:border-gray-700 dark:bg-gray-800/95 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800"
+          >
         <input
           type="file"
           id="file-upload"
@@ -450,7 +452,9 @@ const ChatComposer = memo(function ChatComposer({
             <ArrowUp size={18} />
           </button>
         </div>
-      </form>
+          </form>
+        </div>
+      </div>
     </div>
   )
 })
