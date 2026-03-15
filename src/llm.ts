@@ -1122,17 +1122,6 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const toolArgs = { ...call.args };
         delete toolArgs.node;
         
-        // Check isolated session tool permission (includes path access check for master)
-        try {
-            await checkToolPermission(call.name, sessionId, targetNode, toolArgs);
-        } catch (e: any) {
-            result = { error: e.message || String(e) };
-        }
-        
-        if (result?.error) {
-            // Skip tool execution if permission check failed
-        } else {
-        
         // Tools that must run on master because they depend on host-local
         // session/channel/agent/vector/MCP state rather than remote node files.
         const masterOnlyTools = [
@@ -1151,11 +1140,23 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
         ];
         const forceMaster = masterOnlyTools.includes(call.name);
+        const executionNode = forceMaster ? 'master' : targetNode;
+
+        // Check isolated session tool permission (includes path access check for master)
+        try {
+            await checkToolPermission(call.name, sessionId, executionNode, toolArgs);
+        } catch (e: any) {
+            result = { error: e.message || String(e) };
+        }
         
-        if (targetNode !== 'master' && !forceMaster) {
+        if (result?.error) {
+            // Skip tool execution if permission check failed
+        } else {
+        
+        if (executionNode !== 'master') {
             // Execute on remote node
             try {
-                result = normalizeToolResult(await nodesManager.executeTool(targetNode, call.name, toolArgs, sessionId));
+                result = normalizeToolResult(await nodesManager.executeTool(executionNode, call.name, toolArgs, sessionId));
             } catch (e: any) {
                 result = { error: e.message || String(e) };
             }
