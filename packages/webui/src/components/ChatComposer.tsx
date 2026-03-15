@@ -49,7 +49,7 @@ const ChatComposer = memo(function ChatComposer({
   const [transcribingAudio, setTranscribingAudio] = useState(false)
   const [transcribeError, setTranscribeError] = useState<string | null>(null)
   const [liveTranscriptionPreview, setLiveTranscriptionPreview] = useState('')
-  const [waveformBars, setWaveformBars] = useState<number[]>(() => Array.from({ length: 20 }, () => 0.12))
+  const [waveformBars, setWaveformBars] = useState<number[]>(() => Array.from({ length: 5 }, () => 0.22))
   const [availableCommands, setAvailableCommands] = useState<SlashCommandOption[]>([])
   const [commandsLoading, setCommandsLoading] = useState(false)
   const [commandsError, setCommandsError] = useState<string | null>(null)
@@ -119,7 +119,7 @@ const ChatComposer = memo(function ChatComposer({
     setIsRecordingAudio(false)
     setTranscribeError(null)
     setLiveTranscriptionPreview('')
-    setWaveformBars(Array.from({ length: 20 }, () => 0.12))
+    setWaveformBars(Array.from({ length: 5 }, () => 0.22))
     setDismissedSlashQuery(null)
 
     setTimeout(() => {
@@ -165,7 +165,7 @@ const ChatComposer = memo(function ChatComposer({
     audioGainRef.current = null
     audioAnalyserRef.current = null
     audioStreamRef.current = null
-    setWaveformBars(Array.from({ length: 20 }, () => 0.12))
+    setWaveformBars(Array.from({ length: 5 }, () => 0.22))
 
     if (audioContextRef.current) {
       await audioContextRef.current.close().catch(() => {})
@@ -405,7 +405,7 @@ const ChatComposer = memo(function ChatComposer({
     if (!analyser) return
 
     const data = new Uint8Array(analyser.frequencyBinCount)
-    const barCount = 20
+    const barCount = 5
 
     const tick = () => {
       const activeAnalyser = audioAnalyserRef.current
@@ -424,7 +424,7 @@ const ChatComposer = memo(function ChatComposer({
           sum += data[i]
         }
         const avg = end > start ? sum / (end - start) : 0
-        return Math.max(0.12, Math.min(1, avg / 255))
+        return Math.max(0.22, Math.min(1, avg / 255))
       })
 
       setWaveformBars(nextBars)
@@ -605,15 +605,6 @@ const ChatComposer = memo(function ChatComposer({
               <div className="mb-2 flex items-center gap-2 text-xs font-medium text-blue-700 dark:text-blue-300">
                 <span>{isRecordingAudio ? 'Live ASR preview' : 'ASR finalizing'}</span>
               </div>
-              <div className="mb-2 flex h-10 items-end gap-1">
-                {waveformBars.map((value, index) => (
-                  <div
-                    key={index}
-                    className={`flex-1 rounded-full transition-all duration-75 ${isRecordingAudio ? 'bg-blue-500/70 dark:bg-blue-300/70' : 'bg-blue-300/70 dark:bg-blue-500/50'}`}
-                    style={{ height: `${Math.max(12, Math.round(value * 100))}%` }}
-                  />
-                ))}
-              </div>
               <div className="whitespace-pre-wrap break-words">
                 {liveTranscriptionPreview || (isRecordingAudio ? 'Listening…' : 'Waiting for final transcript…')}
               </div>
@@ -771,6 +762,17 @@ const ChatComposer = memo(function ChatComposer({
                   >
                     {isRecordingAudio ? <Square size={13} /> : <Mic size={13} />}
                     <span>{isRecordingAudio ? 'Stop' : 'Rec'}</span>
+                    {(isRecordingAudio || transcribingAudio) && (
+                      <span className="ml-1 inline-flex h-4 items-center gap-[2px] self-center">
+                        {waveformBars.map((value, index) => (
+                          <span
+                            key={index}
+                            className={`w-[3px] rounded-full transition-all duration-75 ${isRecordingAudio ? 'bg-current opacity-90' : 'bg-current opacity-60'}`}
+                            style={{ height: `${Math.max(4, Math.round(value * 14))}px` }}
+                          />
+                        ))}
+                      </span>
+                    )}
                   </button>
                 </div>
               </>
