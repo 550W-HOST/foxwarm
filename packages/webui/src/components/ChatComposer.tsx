@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, ChevronDown, Paperclip, Plus } from 'lucide-react'
+import { ArrowUp, ChevronDown, Mic, Paperclip, Plus, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import {
   applySlashCommandSuggestion,
@@ -34,6 +34,7 @@ const ChatComposer = memo(function ChatComposer({
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<File[]>([])
   const [isDragging, setIsDragging] = useState(false)
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false)
   const [transcribingAudio, setTranscribingAudio] = useState(false)
   const [transcribeError, setTranscribeError] = useState<string | null>(null)
   const [availableCommands, setAvailableCommands] = useState<SlashCommandOption[]>([])
@@ -45,6 +46,14 @@ const ChatComposer = memo(function ChatComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
+  const audioGainRef = useRef<GainNode | null>(null)
+  const audioStreamRef = useRef<MediaStream | null>(null)
+  const audioChunksRef = useRef<Float32Array[]>([])
+  const audioSampleRateRef = useRef<number>(16000)
+  const recordingActiveRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -88,6 +97,7 @@ const ChatComposer = memo(function ChatComposer({
     const savedDraft = localStorage.getItem(draftKey)
     setInput(savedDraft || '')
     setAttachments([])
+    setIsRecordingAudio(false)
     setTranscribeError(null)
     setDismissedSlashQuery(null)
 
@@ -116,6 +126,30 @@ const ChatComposer = memo(function ChatComposer({
       }
     }
   }, [input, sessionId])
+
+  const cleanupRecording = useCallback(async () => {
+    recordingActiveRef.current = false
+    audioProcessorRef.current?.disconnect()
+    audioSourceRef.current?.disconnect()
+    audioGainRef.current?.disconnect()
+    audioStreamRef.current?.getTracks().forEach(track => track.stop())
+
+    audioProcessorRef.current = null
+    audioSourceRef.current = null
+    audioGainRef.current = null
+    audioStreamRef.current = null
+
+    if (audioContextRef.current) {
+      await audioContextRef.current.close().catch(() => {})
+      audioContextRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      void cleanupRecording()
+    }
+  }, [cleanupRecording])
 
   const slashCompletion = useMemo(() => getSlashCommandCompletion(input, availableCommands), [availableCommands, input])
   const slashCommandSuggestions = slashCompletion?.suggestions || []
@@ -280,6 +314,112 @@ const ChatComposer = memo(function ChatComposer({
     }
   }, [])
 
+  const appendTranscriptToDraft = useCallback((transcript: string) => {
+    const trimmed = transcript.trim()
+    if (!trimmed) return
+
+    setInput(prev => {
+      const prefix = prev.trim()
+      return prefix ? `${prefix}\n\n${trimmed}` : trimmed
+    })
+
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        resizeTextarea(textareaRef.current)
+        textareaRef.current.focus()
+        const caret = textareaRef.current.value.length
+        textareaRef.current.setSelectionRange(caret, caret)
+      }
+    })
+  }, [])
+
+  const mergeAudioChunks = useCallback((chunks: Float32Array[]) => {
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+    const merged = new Float32Array(totalLength)
+    let offset = 0
+    for (const chunk of chunks) {
+      merged.set(chunk, offset)
+      offset += chunk.length
+    }
+    return merged
+  }, [])
+
+  const downsampleTo16k = useCallback((inputData: Float32Array, inputSampleRate: number) => {
+    if (inputSampleRate === 16000) {
+      return inputData
+    }
+
+    const ratio = inputSampleRate / 16000
+    const outputLength = Math.max(1, Math.round(inputData.length / ratio))
+    const output = new Float32Array(outputLength)
+    let offsetResult = 0
+    let offsetBuffer = 0
+
+    while (offsetResult < output.length) {
+      const nextOffsetBuffer = Math.min(inputData.length, Math.round((offsetResult + 1) * ratio))
+      let accum = 0
+      let count = 0
+      for (let i = offsetBuffer; i < nextOffsetBuffer; i++) {
+        accum += inputData[i]
+        count++
+      }
+      output[offsetResult] = count > 0 ? accum / count : 0
+      offsetResult++
+      offsetBuffer = nextOffsetBuffer
+    }
+
+    return output
+  }, [])
+
+  const encodeWav = useCallback((samples: Float32Array, sampleRate: number) => {
+    const buffer = new ArrayBuffer(44 + samples.length * 2)
+    const view = new DataView(buffer)
+
+    const writeString = (offset: number, value: string) => {
+      for (let i = 0; i < value.length; i++) {
+        view.setUint8(offset + i, value.charCodeAt(i))
+      }
+    }
+
+    writeString(0, 'RIFF')
+    view.setUint32(4, 36 + samples.length * 2, true)
+    writeString(8, 'WAVE')
+    writeString(12, 'fmt ')
+    view.setUint32(16, 16, true)
+    view.setUint16(20, 1, true)
+    view.setUint16(22, 1, true)
+    view.setUint32(24, sampleRate, true)
+    view.setUint32(28, sampleRate * 2, true)
+    view.setUint16(32, 2, true)
+    view.setUint16(34, 16, true)
+    writeString(36, 'data')
+    view.setUint32(40, samples.length * 2, true)
+
+    let offset = 44
+    for (let i = 0; i < samples.length; i++) {
+      const sample = Math.max(-1, Math.min(1, samples[i]))
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
+      offset += 2
+    }
+
+    return new Blob([buffer], { type: 'audio/wav' })
+  }, [])
+
+  const stopRecordingAndBuildFile = useCallback(async () => {
+    await cleanupRecording()
+
+    const merged = mergeAudioChunks(audioChunksRef.current)
+    audioChunksRef.current = []
+
+    if (merged.length === 0) {
+      throw new Error('No recorded audio captured')
+    }
+
+    const downsampled = downsampleTo16k(merged, audioSampleRateRef.current)
+    const wavBlob = encodeWav(downsampled, 16000)
+    return new File([wavBlob], `recording-${Date.now()}.wav`, { type: 'audio/wav' })
+  }, [cleanupRecording, downsampleTo16k, encodeWav, mergeAudioChunks])
+
   const handleAudioPick = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return
 
@@ -293,26 +433,83 @@ const ChatComposer = memo(function ChatComposer({
         throw new Error('ASR returned empty text')
       }
 
-      setInput(prev => {
-        const prefix = prev.trim()
-        return prefix ? `${prefix}\n\n${transcript.trim()}` : transcript.trim()
-      })
-
-      requestAnimationFrame(() => {
-        if (textareaRef.current) {
-          resizeTextarea(textareaRef.current)
-          textareaRef.current.focus()
-          const caret = textareaRef.current.value.length
-          textareaRef.current.setSelectionRange(caret, caret)
-        }
-      })
+      appendTranscriptToDraft(transcript)
     } catch (e) {
       console.error('ASR transcription failed:', e)
       setTranscribeError(e instanceof Error ? e.message : 'ASR transcription failed')
     } finally {
       setTranscribingAudio(false)
     }
-  }, [input, onTranscribeAudio])
+  }, [appendTranscriptToDraft, input, onTranscribeAudio])
+
+  const handleRecordToggle = useCallback(async () => {
+    if (transcribingAudio) return
+
+    if (isRecordingAudio) {
+      setIsRecordingAudio(false)
+      setTranscribingAudio(true)
+      setTranscribeError(null)
+
+      try {
+        const file = await stopRecordingAndBuildFile()
+        const transcript = await onTranscribeAudio(file, input)
+        if (!transcript.trim()) {
+          throw new Error('ASR returned empty text')
+        }
+        appendTranscriptToDraft(transcript)
+      } catch (e) {
+        console.error('Audio recording transcription failed:', e)
+        setTranscribeError(e instanceof Error ? e.message : 'Audio recording transcription failed')
+      } finally {
+        setTranscribingAudio(false)
+      }
+      return
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setTranscribeError('Current browser does not support microphone recording')
+      return
+    }
+
+    try {
+      setTranscribeError(null)
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const audioContext = new AudioContext()
+      await audioContext.resume().catch(() => {})
+      const source = audioContext.createMediaStreamSource(stream)
+      const processor = audioContext.createScriptProcessor(4096, 1, 1)
+      const gain = audioContext.createGain()
+      gain.gain.value = 0
+
+      audioChunksRef.current = []
+      audioSampleRateRef.current = audioContext.sampleRate
+      recordingActiveRef.current = true
+
+      processor.onaudioprocess = (event) => {
+        if (!recordingActiveRef.current) {
+          return
+        }
+        const channelData = event.inputBuffer.getChannelData(0)
+        audioChunksRef.current.push(new Float32Array(channelData))
+      }
+
+      source.connect(processor)
+      processor.connect(gain)
+      gain.connect(audioContext.destination)
+
+      audioContextRef.current = audioContext
+      audioSourceRef.current = source
+      audioProcessorRef.current = processor
+      audioGainRef.current = gain
+      audioStreamRef.current = stream
+      setIsRecordingAudio(true)
+    } catch (e) {
+      console.error('Failed to start microphone recording:', e)
+      setTranscribeError(e instanceof Error ? e.message : 'Failed to start microphone recording')
+      await cleanupRecording()
+      setIsRecordingAudio(false)
+    }
+  }, [appendTranscriptToDraft, cleanupRecording, input, isRecordingAudio, onTranscribeAudio, stopRecordingAndBuildFile, transcribingAudio])
 
   return (
     <div
@@ -485,13 +682,25 @@ const ChatComposer = memo(function ChatComposer({
               <Plus size={18} />
             </label>
             {asrAvailable && (
-              <label
-                htmlFor="audio-upload"
-                className={`inline-flex h-8 shrink-0 cursor-pointer items-center justify-center rounded-full px-3 text-[13px] font-medium transition ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'}`}
-                title="ASR experiment: upload audio and insert transcript into draft"
-              >
-                <span>{transcribingAudio ? 'ASR…' : 'ASR'}</span>
-              </label>
+              <>
+                <label
+                  htmlFor="audio-upload"
+                  className={`inline-flex h-8 shrink-0 cursor-pointer items-center justify-center rounded-full px-3 text-[13px] font-medium transition ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'}`}
+                  title="Upload audio file and append transcript to draft"
+                >
+                  <span>{transcribingAudio ? 'ASR…' : 'ASR'}</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void handleRecordToggle()}
+                  disabled={transcribingAudio}
+                  className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200 dark:hover:bg-red-900/60' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : ''}`}
+                  title={isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
+                >
+                  {isRecordingAudio ? <Square size={13} /> : <Mic size={13} />}
+                  <span>{isRecordingAudio ? 'Stop' : 'Rec'}</span>
+                </button>
+              </>
             )}
             <button
               type="button"
