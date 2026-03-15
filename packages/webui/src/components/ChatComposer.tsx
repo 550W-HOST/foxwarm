@@ -14,22 +14,28 @@ interface ChatComposerProps {
   sessionId: string
   sessionMissing: boolean
   loading: boolean
+  asrAvailable: boolean
   sendKeyMode: SendKeyMode
   onToggleSendKeyMode: () => void
   onSend: (payload: { text: string; attachments: File[] }) => Promise<boolean>
+  onTranscribeAudio: (file: File, context: string) => Promise<string>
 }
 
 const ChatComposer = memo(function ChatComposer({
   sessionId,
   sessionMissing,
   loading,
+  asrAvailable,
   sendKeyMode,
   onToggleSendKeyMode,
   onSend,
+  onTranscribeAudio,
 }: ChatComposerProps) {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<File[]>([])
   const [isDragging, setIsDragging] = useState(false)
+  const [transcribingAudio, setTranscribingAudio] = useState(false)
+  const [transcribeError, setTranscribeError] = useState<string | null>(null)
   const [availableCommands, setAvailableCommands] = useState<SlashCommandOption[]>([])
   const [commandsLoading, setCommandsLoading] = useState(false)
   const [commandsError, setCommandsError] = useState<string | null>(null)
@@ -82,6 +88,7 @@ const ChatComposer = memo(function ChatComposer({
     const savedDraft = localStorage.getItem(draftKey)
     setInput(savedDraft || '')
     setAttachments([])
+    setTranscribeError(null)
     setDismissedSlashQuery(null)
 
     setTimeout(() => {
@@ -273,6 +280,40 @@ const ChatComposer = memo(function ChatComposer({
     }
   }, [])
 
+  const handleAudioPick = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+
+    const file = files[0]
+    setTranscribeError(null)
+    setTranscribingAudio(true)
+
+    try {
+      const transcript = await onTranscribeAudio(file, input)
+      if (!transcript.trim()) {
+        throw new Error('ASR returned empty text')
+      }
+
+      setInput(prev => {
+        const prefix = prev.trim()
+        return prefix ? `${prefix}\n\n${transcript.trim()}` : transcript.trim()
+      })
+
+      requestAnimationFrame(() => {
+        if (textareaRef.current) {
+          resizeTextarea(textareaRef.current)
+          textareaRef.current.focus()
+          const caret = textareaRef.current.value.length
+          textareaRef.current.setSelectionRange(caret, caret)
+        }
+      })
+    } catch (e) {
+      console.error('ASR transcription failed:', e)
+      setTranscribeError(e instanceof Error ? e.message : 'ASR transcription failed')
+    } finally {
+      setTranscribingAudio(false)
+    }
+  }, [input, onTranscribeAudio])
+
   return (
     <div
       className="absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
@@ -303,6 +344,12 @@ const ChatComposer = memo(function ChatComposer({
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {transcribeError && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
+            ASR 实验入口失败：{transcribeError}
           </div>
         )}
 
@@ -391,6 +438,16 @@ const ChatComposer = memo(function ChatComposer({
           }}
           className="hidden"
         />
+        <input
+          type="file"
+          id="audio-upload"
+          accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm"
+          onChange={(e) => {
+            void handleAudioPick(e.target.files)
+            e.currentTarget.value = ''
+          }}
+          className="hidden"
+        />
         <textarea
           ref={textareaRef}
           value={input}
@@ -427,6 +484,15 @@ const ChatComposer = memo(function ChatComposer({
             >
               <Plus size={18} />
             </label>
+            {asrAvailable && (
+              <label
+                htmlFor="audio-upload"
+                className={`inline-flex h-8 shrink-0 cursor-pointer items-center justify-center rounded-full px-3 text-[13px] font-medium transition ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'}`}
+                title="ASR experiment: upload audio and insert transcript into draft"
+              >
+                <span>{transcribingAudio ? 'ASR…' : 'ASR'}</span>
+              </label>
+            )}
             <button
               type="button"
               onClick={onToggleSendKeyMode}

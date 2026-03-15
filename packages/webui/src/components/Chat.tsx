@@ -35,6 +35,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   })
   const [showMenu, setShowMenu] = useState(false)
   const [processingReasoningSummary, setProcessingReasoningSummary] = useState('')
+  const [asrAvailable, setAsrAvailable] = useState(false)
 
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
@@ -52,6 +53,30 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   useEffect(() => {
     setProcessingReasoningSummary('')
   }, [sessionId])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchAsrStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE_PATH}/asr/status`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (!cancelled) {
+          setAsrAvailable(Boolean(data?.configured && data?.available))
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setAsrAvailable(false)
+        }
+      }
+    }
+
+    fetchAsrStatus()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     if (!sessionBusy) {
@@ -399,6 +424,33 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     setSendKeyMode(prev => prev === 'enter' ? 'mod-enter' : 'enter')
   }, [])
 
+  const handleTranscribeAudio = useCallback(async (file: File, context: string) => {
+    const formData = new FormData()
+    formData.append('audio', file)
+    if (context.trim()) {
+      formData.append('context', context.trim())
+    }
+
+    const response = await fetch(`${API_BASE_PATH}/asr/transcribe`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    const responseText = await response.text()
+    let data: any = {}
+    try {
+      data = responseText ? JSON.parse(responseText) : {}
+    } catch {
+      data = { error: responseText || 'ASR request failed' }
+    }
+
+    if (!response.ok) {
+      throw new Error(data?.error || `ASR request failed (${response.status})`)
+    }
+
+    return typeof data?.text === 'string' ? data.text : ''
+  }, [])
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
       <div className="sticky top-0 z-30 h-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4">
@@ -550,9 +602,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         sessionId={sessionId}
         sessionMissing={sessionMissing}
         loading={loading}
+        asrAvailable={asrAvailable}
         sendKeyMode={sendKeyMode}
         onToggleSendKeyMode={toggleSendKeyMode}
         onSend={handleSend}
+        onTranscribeAudio={handleTranscribeAudio}
       />
     </div>
   )

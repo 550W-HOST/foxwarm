@@ -49,6 +49,44 @@ export class WebUIChannel implements Channel {
     this.setupRoutes();
   }
 
+  private getAsrServiceUrl(): string | null {
+    const value = process.env.FOXWARM_ASR_SERVICE_URL || process.env.ASR_SERVICE_URL;
+    const trimmed = value?.trim();
+    if (!trimmed) return null;
+    return trimmed.replace(/\/+$/, '');
+  }
+
+  private async probeAsrService(): Promise<Record<string, any>> {
+    const serviceUrl = this.getAsrServiceUrl();
+    if (!serviceUrl) {
+      return {
+        configured: false,
+        available: false,
+        serviceUrl: null,
+      };
+    }
+
+    try {
+      const response = await fetch(`${serviceUrl}/health`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      const body = await response.json().catch(() => ({}));
+      return {
+        configured: true,
+        available: response.ok,
+        serviceUrl,
+        health: body,
+      };
+    } catch (error: any) {
+      return {
+        configured: true,
+        available: false,
+        serviceUrl,
+        error: error?.message || String(error),
+      };
+    }
+  }
+
   // Middleware for static file protection
   private staticAuthMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     // Allow login.html, /api/auth, and /download without token check here (handled by route)
@@ -557,6 +595,95 @@ export class WebUIChannel implements Channel {
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Upload error');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/asr/status',
+        method: 'GET',
+        handler: async (_req: express.Request, res: express.Response) => {
+          res.json(await this.probeAsrService());
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/asr/transcribe',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          const serviceUrl = this.getAsrServiceUrl();
+          if (!serviceUrl) {
+            res.status(503).json({ error: 'ASR service is not configured' });
+            return;
+          }
+
+          try {
+            const multer = require('multer');
+            const os = require('os');
+            const uploadDir = path.join(os.tmpdir(), 'foxwarm-asr-proxy');
+
+            await fs.ensureDir(uploadDir);
+
+            const upload = multer({
+              dest: uploadDir,
+              limits: { fileSize: 25 * 1024 * 1024 },
+            });
+
+            upload.single('audio')(req, res, async (err: any) => {
+              if (err) {
+                res.status(400).json({ error: err.message });
+                return;
+              }
+
+              if (!req.file) {
+                res.status(400).json({ error: 'No audio uploaded' });
+                return;
+              }
+
+              try {
+                const fileBuffer = await fs.readFile(req.file.path);
+                const formData = new FormData();
+                const mimeType = req.file.mimetype || 'application/octet-stream';
+                formData.append('audio', new Blob([fileBuffer], { type: mimeType }), req.file.originalname || 'audio.wav');
+
+                const context = typeof req.body?.context === 'string' ? req.body.context : '';
+                const language = typeof req.body?.language === 'string' ? req.body.language : '';
+                const segmentSeconds = typeof req.body?.segmentSeconds === 'string' ? req.body.segmentSeconds : '';
+
+                if (context) formData.append('context', context);
+                if (language) formData.append('language', language);
+                if (segmentSeconds) formData.append('segmentSeconds', segmentSeconds);
+
+                const response = await fetch(`${serviceUrl}/transcribe`, {
+                  method: 'POST',
+                  body: formData,
+                  signal: AbortSignal.timeout(10 * 60 * 1000),
+                });
+
+                const responseText = await response.text();
+                let responseJson: any;
+                try {
+                  responseJson = JSON.parse(responseText);
+                } catch {
+                  responseJson = { error: responseText || 'ASR service returned non-JSON response' };
+                }
+
+                if (!response.ok) {
+                  res.status(response.status).json(responseJson);
+                  return;
+                }
+
+                res.json(responseJson);
+              } catch (proxyError: any) {
+                logger.error({ err: proxyError }, 'ASR proxy error');
+                res.status(502).json({ error: proxyError?.message || 'ASR proxy request failed' });
+              } finally {
+                await fs.remove(req.file.path).catch(() => {});
+              }
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'ASR route error');
             res.status(500).json({ error: e.message });
           }
         },
