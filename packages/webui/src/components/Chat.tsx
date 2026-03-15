@@ -6,15 +6,9 @@ import ChatTimeline from './ChatTimeline'
 import ProcessingStatus from './ProcessingStatus'
 import type { Message, MessagePart, SendKeyMode, SessionStreamEvent } from './chatShared'
 
-function getAsrServiceBaseUrl() {
-  const override = localStorage.getItem('foxwarm_asr_url')?.trim()
-  if (override) {
-    return override.replace(/\/+$/, '')
-  }
-
-  const protocol = window.location.protocol || 'http:'
-  const hostname = window.location.hostname || 'localhost'
-  return `${protocol}//${hostname}:8091`
+function getAsrStreamUrl() {
+  const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
+  return base.replace(/^http/i, 'ws')
 }
 
 const ASR_CONTEXT_MAX_CHARS = 2400
@@ -120,11 +114,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
 
     const fetchAsrStatus = async () => {
       try {
-        const res = await fetch(`${getAsrServiceBaseUrl()}/health`)
+        const res = await fetch(`${API_BASE_PATH}/asr/status`)
         if (!res.ok) return
         const data = await res.json()
         if (!cancelled) {
-          setAsrAvailable(Boolean(data?.ok && data?.qwenAsrBinExists && data?.modelDirExists))
+          setAsrAvailable(Boolean(data?.configured && data?.available))
         }
       } catch (e) {
         if (!cancelled) {
@@ -493,7 +487,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       formData.append('context', context.trim())
     }
 
-    const response = await fetch(`${getAsrServiceBaseUrl()}/transcribe`, {
+    const response = await fetch(`${API_BASE_PATH}/asr/transcribe`, {
       method: 'POST',
       body: formData,
     })
@@ -524,12 +518,10 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     onFinal: (text: string) => void
     onError: (message: string) => void
   }): Promise<StreamingAsrSession> => {
-    const httpBaseUrl = getAsrServiceBaseUrl()
-    const wsBaseUrl = httpBaseUrl.replace(/^http/i, 'ws')
     const context = buildAsrContext(messages, draftText)
 
     return await new Promise<StreamingAsrSession>((resolve, reject) => {
-      const socket = new WebSocket(`${wsBaseUrl}/ws/stream`)
+      const socket = new WebSocket(getAsrStreamUrl())
       let resolved = false
       let settled = false
 

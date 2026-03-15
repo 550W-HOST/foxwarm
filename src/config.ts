@@ -31,6 +31,12 @@ export type WeWorkConfig = {
   allowedUsers?: string[];
 };
 
+export type AsrServiceConfig = {
+  enabled?: boolean;
+  url?: string;
+  key?: string;
+};
+
 export type AppConfig = {
   bot?: {
     name?: string;
@@ -61,6 +67,7 @@ export type AppConfig = {
     matrix?: MatrixConfig;
     wework?: WeWorkConfig;
   };
+  asrService?: AsrServiceConfig;
 };
 
 // Base directories
@@ -205,6 +212,11 @@ function buildConfigFromLegacyEnv(source: Record<string, string | undefined>): A
         allowedUsers: weworkAllowed,
       },
     },
+    asrService: {
+      enabled: parseBoolean(source.ENABLE_ASR_SERVICE),
+      url: source.ASR_SERVICE_URL,
+      key: source.ASR_SERVICE_KEY,
+    },
   };
 
   return cleanupUndefinedDeep(config);
@@ -259,6 +271,7 @@ export const ENABLE_TUI = APP_CONFIG.bot?.enableTUI === true || process.argv.inc
 export const TELEGRAM_CONFIG: TelegramConfig = APP_CONFIG.channels?.telegram || {};
 export const MATRIX_CONFIG: MatrixConfig = APP_CONFIG.channels?.matrix || {};
 export const WEWORK_CONFIG: WeWorkConfig = APP_CONFIG.channels?.wework || {};
+export const ASR_SERVICE_CONFIG: AsrServiceConfig = APP_CONFIG.asrService || {};
 export const OLLAMA_BASE_URL = APP_CONFIG.llm?.ollamaBaseUrl || 'http://localhost:11434';
 
 export const AGENTS_DIR = resolvePathValue(APP_CONFIG.paths?.agentsDir, path.join(DATA_ROOT_DIR, 'agents'));

@@ -11,6 +11,7 @@ const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = Number(process.env.QWEN_ASR_SERVICE_PORT || process.env.PORT || 8091);
 const HOST = process.env.QWEN_ASR_SERVICE_HOST || '127.0.0.1';
+const ASR_SERVICE_KEY = String(process.env.QWEN_ASR_SERVICE_KEY || process.env.ASR_SERVICE_KEY || '').trim();
 const QWEN_ASR_BIN = process.env.QWEN_ASR_BIN || '/home/ldmbot/experiments/qwen-asr/qwen_asr';
 const QWEN_ASR_MODEL_DIR = process.env.QWEN_ASR_MODEL_DIR || '/home/ldmbot/experiments/qwen-asr/qwen3-asr-0.6b';
 const QWEN_ASR_THREADS = String(process.env.QWEN_ASR_THREADS || '4');
@@ -29,13 +30,36 @@ const upload = multer({
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') {
     res.status(204).end();
     return;
   }
   next();
 });
+
+function isAuthorized(headers) {
+  if (!ASR_SERVICE_KEY) {
+    return true;
+  }
+
+  const authHeader = headers?.authorization;
+  if (typeof authHeader !== 'string') {
+    return false;
+  }
+
+  return authHeader === `Bearer ${ASR_SERVICE_KEY}`;
+}
+
+function requireAuthorization(req, res, next) {
+  if (!isAuthorized(req.headers)) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  next();
+}
+
+app.use(requireAuthorization);
 
 function commandExists(command) {
   return new Promise((resolve) => {
@@ -103,6 +127,7 @@ async function buildHealth() {
   const ffmpegAvailable = await commandExists(FFMPEG_BIN);
   return {
     ok: true,
+    protected: Boolean(ASR_SERVICE_KEY),
     qwenAsrBin: QWEN_ASR_BIN,
     qwenAsrBinExists: await fs.pathExists(QWEN_ASR_BIN),
     modelDir: QWEN_ASR_MODEL_DIR,
@@ -340,6 +365,10 @@ const server = app.listen(PORT, HOST, () => {
 });
 
 const wss = new WebSocketServer({ server, path: '/ws/stream' });
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  if (!isAuthorized(req.headers)) {
+    ws.close(1008, 'Unauthorized');
+    return;
+  }
   createStreamSession(ws);
 });

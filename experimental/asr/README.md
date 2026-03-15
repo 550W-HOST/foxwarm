@@ -11,6 +11,8 @@ This is a minimal prototype for running `Qwen3-ASR-0.6B` as an independent local
 - supports other audio formats only if `ffmpeg` is installed on the service host
 - includes permissive CORS headers so Foxwarm WebUI on port 3002 can call it directly from the browser
 
+For the current public/private integration direction, Foxwarm should normally call this service through its own backend proxy using a configured service key.
+
 ## Service start
 
 From the foxwarm repo root:
@@ -24,6 +26,7 @@ Optional environment variables:
 ```bash
 QWEN_ASR_SERVICE_HOST=0.0.0.0
 QWEN_ASR_SERVICE_PORT=8091
+QWEN_ASR_SERVICE_KEY=change-me
 QWEN_ASR_BIN=/home/ldmbot/experiments/qwen-asr/qwen_asr
 QWEN_ASR_MODEL_DIR=/home/ldmbot/experiments/qwen-asr/qwen3-asr-0.6b
 QWEN_ASR_THREADS=4
@@ -35,35 +38,42 @@ Health check:
 
 ```bash
 curl http://127.0.0.1:8091/health
+
+# when key protection is enabled
+curl -H 'Authorization: Bearer change-me' http://127.0.0.1:8091/health
 ```
 
 Transcribe test:
 
 ```bash
 curl -X POST http://127.0.0.1:8091/transcribe \
+  -H 'Authorization: Bearer change-me' \
   -F audio=@/home/ldmbot/experiments/qwen-asr/samples/jfk.wav \
   -F 'context=Preserve spelling: Foxwarm, Qwen, OpenBLAS'
 ```
 
 ## Foxwarm integration
 
-Foxwarm WebUI talks to this service directly from the browser.
+Foxwarm should normally proxy requests to this service from the backend so the browser does not need to know the service URL or key.
 
-Default frontend target:
+Add this to `state/config.yaml` on the Foxwarm side:
+
+```yaml
+asrService:
+  enabled: true
+  url: http://127.0.0.1:8091
+  key: change-me
+```
+
+Then Foxwarm can expose same-origin endpoints such as:
 
 ```text
-${window.location.protocol}//${window.location.hostname}:8091
+GET /api/asr/status
+POST /api/asr/transcribe
+WS /api/asr/stream
 ```
 
-You can override it in the browser with:
-
-```js
-localStorage.setItem('foxwarm_asr_url', 'http://10.12.6.40:8091')
-```
-
-Then refresh the page.
-
-The chat composer shows a small `ASR` button when the direct service health check succeeds. It uploads an audio file directly to the ASR service and inserts the transcript back into the draft.
+The WebUI can then talk only to Foxwarm's own `/api/asr/*` routes.
 
 ## Current limits
 

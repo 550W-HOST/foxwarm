@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, ChevronDown, Mic, Paperclip, Plus, Square } from 'lucide-react'
+import { ArrowUp, Mic, Paperclip, Plus, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import {
   applySlashCommandSuggestion,
@@ -601,22 +601,6 @@ const ChatComposer = memo(function ChatComposer({
       )}
 
       <div className="mx-auto max-w-5xl">
-        {attachments.length > 0 && (
-          <div className="mb-3 flex flex-wrap gap-2">
-            {attachments.map((file, idx) => (
-              <div key={`${file.name}-${idx}`} className="relative inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                <span className="text-gray-700 dark:text-gray-300">{file.name}</span>
-                <button
-                  onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
-                  className="text-gray-400 transition hover:text-red-500"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
         {transcribeError && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
             ASR 实验入口失败：{transcribeError}
@@ -767,27 +751,48 @@ const ChatComposer = memo(function ChatComposer({
             >
               <Plus size={18} />
             </label>
+            <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+              {attachments.length === 0 ? (
+                <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-gray-500 dark:text-gray-400">
+                  <Paperclip size={13} />
+                  <span>No files</span>
+                </div>
+              ) : (
+                attachments.map((file, idx) => (
+                  <div
+                    key={`${file.name}-${idx}`}
+                    className="inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-full border border-gray-200 bg-white px-3 text-[13px] shadow-sm dark:border-gray-700 dark:bg-gray-800"
+                  >
+                    <Paperclip size={12} className="shrink-0 text-gray-400 dark:text-gray-500" />
+                    <span className="truncate text-gray-700 dark:text-gray-300">{file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
+                      className="shrink-0 text-gray-400 transition hover:text-red-500"
+                      title="Remove attachment"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
             {asrAvailable && (
               <>
-                <label
-                  htmlFor="audio-upload"
-                  className={`inline-flex h-8 shrink-0 cursor-pointer items-center justify-center rounded-full px-3 text-[13px] font-medium transition ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'}`}
-                  title="Upload audio file and append transcript to draft"
-                >
-                  <span>{transcribingAudio ? 'ASR…' : 'ASR'}</span>
-                </label>
-                <div className="inline-flex shrink-0">
+                <div className="inline-flex shrink-0 items-center rounded-full bg-transparent">
                   <button
                     type="button"
                     onClick={() => void handleRecordToggle()}
                     disabled={transcribingAudio}
-                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium leading-none transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200 dark:hover:bg-red-900/60' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : ''}`}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-l-full rounded-r-none px-3 text-[13px] font-medium leading-none transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200 dark:hover:bg-red-900/60' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : ''}`}
                     title={isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
                   >
                     {isRecordingAudio ? <Square size={13} className="shrink-0" /> : <Mic size={13} className="shrink-0" />}
-                    <span className="leading-none translate-y-[0.5px]">{isRecordingAudio ? 'Stop' : 'Rec'}</span>
+                    {!isRecordingAudio && (
+                      <span className="leading-none">Rec</span>
+                    )}
                     {(isRecordingAudio || transcribingAudio) && (
-                      <span className="ml-1 inline-flex h-[14px] items-center gap-[2px] self-center translate-y-[1px]">
+                      <span className="ml-1 inline-flex h-[14px] items-center gap-[2px] self-center">
                         {waveformBars.map((value, index) => (
                           <span
                             key={index}
@@ -798,6 +803,18 @@ const ChatComposer = memo(function ChatComposer({
                       </span>
                     )}
                   </button>
+                  <label
+                    htmlFor="audio-upload"
+                    onClick={(e) => {
+                      if (isRecordingAudio || transcribingAudio) {
+                        e.preventDefault()
+                      }
+                    }}
+                    className={`inline-flex h-8 shrink-0 items-center justify-center rounded-r-full rounded-l-none px-3 text-[13px] font-medium transition ${isRecordingAudio || transcribingAudio ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${isRecordingAudio ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200' : ''}`}
+                    title="Upload audio file and append transcript to draft"
+                  >
+                    <span>file</span>
+                  </label>
                 </div>
               </>
             )}
@@ -808,12 +825,7 @@ const ChatComposer = memo(function ChatComposer({
               title="Toggle send key"
             >
               <span>{sendKeyMode === 'enter' ? 'Enter to send' : 'Ctrl/Cmd+Enter'}</span>
-              <ChevronDown size={13} />
             </button>
-            <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-gray-500 dark:text-gray-400">
-              <Paperclip size={13} />
-              <span>{attachments.length > 0 ? `${attachments.length} file${attachments.length > 1 ? 's' : ''}` : 'No files'}</span>
-            </div>
           </div>
           <button
             type="submit"
