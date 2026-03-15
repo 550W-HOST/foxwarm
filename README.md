@@ -175,6 +175,8 @@ A runnable conversation thread bound to exactly one agent.
 ### Skill
 A reusable memory/capability pack attached explicitly to an agent.
 
+Foxwarm can also ship bundled optional skills under `skills/`. For example, `skills/ask_gemini/` provides an external-info lookup helper backed by Gemini; it requires a Gemini API key via `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `~/.secrets/gemini_api_key`.
+
 ### `agent.inherit`
 Shared-memory composition between agents. It is **not** a reporting hierarchy.
 
