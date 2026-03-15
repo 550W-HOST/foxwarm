@@ -1133,8 +1133,22 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             // Skip tool execution if permission check failed
         } else {
         
-        // Tools that must run on master (node management tools, timers)
-        const masterOnlyTools = ['remote_node', 'list_nodes', 'node_tools', 'create_timer', 'list_timers', 'delete_timer'];
+        // Tools that must run on master because they depend on host-local
+        // session/channel/agent/vector/MCP state rather than remote node files.
+        const masterOnlyTools = [
+            'remote_node', 'list_nodes', 'node_tools',
+            'search_memory', 'get_memory_context',
+            'create_child_session', 'send_to_session', 'send_to_channel', 'send_file',
+            'list_sessions', 'list_agents', 'list_skills',
+            'attach_agent_skill', 'detach_agent_skill', 'load_skill',
+            'get_session_messages', 'get_archived_messages', 'delete_session',
+            'update_session_name', 'set_todo', 'update_session_snapshot', 'stop_session',
+            'compact_session', 'compress_session',
+            'create_timer', 'list_timers', 'delete_timer',
+            'mcp_config', 'call_mcp', 'search_mcp_tools',
+            'change_current_node',
+            'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
+        ];
         const forceMaster = masterOnlyTools.includes(call.name);
         
         if (targetNode !== 'master' && !forceMaster) {
