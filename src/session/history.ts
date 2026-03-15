@@ -128,9 +128,11 @@ function buildToolNoisePlaceholder(options: {
   const { sessionId, seq, toolName, kind, estimatedTokens } = options;
   const rangeLabel = typeof seq === 'number' ? `#${seq}` : '(seq unavailable)';
   const kindLabel = kind === 'function_call' ? 'tool call' : 'tool response';
-  const toolLabel = toolName ? ` for \`${toolName}\`` : '';
-  const lookup = buildArchiveLookupInstruction(sessionId, seq, seq);
-  return `[compacted ${kindLabel}] Original ${kindLabel}${toolLabel} at ${rangeLabel} exceeded ${TOOL_NOISE_TOKEN_THRESHOLD} tokens (estimated ${estimatedTokens}) and was removed from working history to reduce tool noise. ${lookup}`;
+  const toolLabel = toolName || 'unknown';
+  const lookup = typeof seq === 'number'
+    ? `archive ${rangeLabel} via get_archived_messages`
+    : 'see archive via get_archived_messages';
+  return `[compacted ${kindLabel}: ${toolLabel}] ${lookup}`;
 }
 
 function buildCompactedFunctionCallArgs(placeholder: string): Record<string, any> {
