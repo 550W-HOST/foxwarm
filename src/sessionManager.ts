@@ -18,6 +18,7 @@ import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq,
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
+import * as sessionRelations from './session/relations';
 
 function systemPart(system: string): MessagePart {
   return { system };
@@ -365,6 +366,10 @@ function getSessionHistoryDeps() {
   };
 }
 
+function notifySessionListUpdated() {
+  onSessionListUpdated?.();
+}
+
 function getAgentMetadataDeps() {
   return {
     getSession,
@@ -543,9 +548,7 @@ export function getChannelsBySession(sessionId: string): Array<{ platform: strin
 }
 
 export function getChildSessionIds(parentSessionId: string): string[] {
-  return Array.from(sessions.entries())
-    .filter(([, session]) => session.parentSessionId === parentSessionId)
-    .map(([sessionId]) => sessionId);
+  return sessionRelations.getChildSessionIds(sessions, parentSessionId);
 }
 
 export function getChannelBySession(sessionId: string): { platform: string; channelUserId: string } | undefined {
@@ -714,179 +717,34 @@ export async function createChildSession(parentSessionId: string, suffix: string
   }
 }
 
-async function persistSessionMetadataUpdate(sessionId: string, updates: Partial<Session>): Promise<void> {
-  const historyFile = getSessionHistoryFilePath(sessionId);
-
-  if (await fs.pathExists(historyFile)) {
-    const historyData = await fs.readJson(historyFile);
-    await fs.writeJson(historyFile, { ...historyData, ...updates }, { spaces: 2 });
-    return;
-  }
-
-  await saveSession(sessionId);
-}
-
 export async function setSessionParent(childSessionId: string, parentSessionId?: string): Promise<{
   childSessionId: string;
   parentSessionId?: string;
   previousParentSessionId?: string;
 }> {
-  const childSession = await getExistingSession(childSessionId);
-  if (!childSession) {
-    throw new Error(`Session "${childSessionId}" not found.`);
-  }
-
-  const realChildId = childSession.id;
-  const previousParentSessionId = childSession.parentSessionId || undefined;
-
-  let realParentId: string | undefined;
-  if (parentSessionId) {
-    const parentSession = await getExistingSession(parentSessionId);
-    if (!parentSession) {
-      throw new Error(`Session "${parentSessionId}" not found.`);
-    }
-
-    realParentId = parentSession.id;
-    if (realParentId === realChildId) {
-      throw new Error('A session cannot be its own parent.');
-    }
-  }
-
-  if (previousParentSessionId === realParentId) {
-    return {
-      childSessionId: realChildId,
-      parentSessionId: realParentId,
-      previousParentSessionId,
-    };
-  }
-
-  childSession.parentSessionId = realParentId;
-  await persistSessionMetadataUpdate(realChildId, { parentSessionId: realParentId });
-  await saveSessionsMetadata();
-
-  if (onSessionListUpdated) {
-    onSessionListUpdated();
-  }
-
-  return {
-    childSessionId: realChildId,
-    parentSessionId: realParentId,
-    previousParentSessionId,
-  };
+  return sessionRelations.setSessionParent({
+    getExistingSession,
+    saveSession,
+    saveSessionsMetadata,
+    notifySessionListUpdated,
+  }, childSessionId, parentSessionId);
 }
 
 export async function updateChildSessionParentIds(oldParentSessionId: string, newParentSessionId: string): Promise<string[]> {
-  const updatedChildIds: string[] = [];
-
-  for (const [sessionId, session] of sessions.entries()) {
-    if (session.parentSessionId !== oldParentSessionId) {
-      continue;
-    }
-
-    session.parentSessionId = newParentSessionId;
-    await persistSessionMetadataUpdate(sessionId, { parentSessionId: newParentSessionId });
-    updatedChildIds.push(sessionId);
-  }
-
-  if (updatedChildIds.length > 0) {
-    await saveSessionsMetadata();
-
-    if (onSessionListUpdated) {
-      onSessionListUpdated();
-    }
-  }
-
-  return updatedChildIds;
-}
-
-/**
- * Check if a session operation is allowed based on isolated rules
- * @param sourceSession Source session (or undefined for system operations)
- * @param targetSessionId Target session ID
- * @param operation Operation name for error messages
- */
-async function checkIsolatedPermission(
-  sourceSession: Session | undefined,
-  targetSessionId: string,
-  operation: string
-): Promise<void> {
-  // Get target session
-  const targetSession = await getExistingSession(targetSessionId);
-  if (!targetSession) {
-    throw new Error(`Session "${targetSessionId}" not found.`);
-  }
-
-  // If no source session (system operation), allow
-  if (!sourceSession) {
-    return;
-  }
-
-  const sourceAgent = sourceSession.agent || 'main';
-  const targetAgent = targetSession.agent || 'main';
-
-  // Session-level isolated routing rules are enforced by sendToSession()
-  // using direct parent/child relationship checks. This helper keeps the
-  // broader agent-isolation guardrails aligned underneath that rule.
-
-  // Check source agent isolation
-  const sourceAgentMeta = getAgentMetadata(sourceAgent);
-  if (sourceAgentMeta.isolated && sourceAgent !== targetAgent) {
-    throw new Error(`Agent "${sourceAgent}" is isolated and cannot operate on sessions in other agents.`);
-  }
-
-  // Check target agent isolation
-  const targetAgentMeta = getAgentMetadata(targetAgent);
-  if (targetAgentMeta.isolated && sourceAgent !== targetAgent) {
-    throw new Error(`Agent "${targetAgent}" is isolated and cannot be accessed from other agents.`);
-  }
-}
-
-/**
- * Send a message to a session (add to queue)
- * @param targetSessionId Target session ID
- * @param message Message text
- * @param fromSessionId Optional source session ID for tracking
- */
-function isDirectSessionLink(a: Session | undefined, b: Session | undefined): boolean {
-  if (!a || !b) return false;
-  if (a.id === b.id) return true;
-  if (a.parentSessionId === b.id || b.parentSessionId === a.id) return true;
-  return false;
+  return sessionRelations.updateChildSessionParentIds({
+    saveSession,
+    saveSessionsMetadata,
+    getSessionsMap: getAllSessions,
+    notifySessionListUpdated,
+  }, oldParentSessionId, newParentSessionId);
 }
 
 export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string): Promise<void> {
-  const targetSession = await getExistingSession(targetSessionId);
-  if (!targetSession) {
-    throw new Error(`Session \"${targetSessionId}\" not found.`);
-  }
-  const fromSession = fromSessionId ? await getExistingSession(fromSessionId) : undefined;
-  if (fromSessionId && !fromSession) {
-    throw new Error(`Session \"${fromSessionId}\" not found.`);
-  }
-
-  // Check isolated permissions
-  await checkIsolatedPermission(fromSession, targetSessionId, 'send_to_session');
-
-  if ((fromSession?.isolated || targetSession?.isolated) && fromSession && !isDirectSessionLink(fromSession, targetSession)) {
-    throw new Error('Isolated sessions can only communicate with themselves or their direct parent/child sessions.');
-  }
-
-  const replyTarget = fromSessionId || 'unknown-session';
-  const prefix = fromSessionId
-    ? `[SYSTEM: The following message is an inter-agent message from another session, not from the direct user; source_session_id: \`${fromSessionId}\`; reply_via: send_to_session({sessionId: \`${replyTarget}\`, message: "..."}).]`
-    : '[SYSTEM: The following message is system-delivered session content, not from the direct user.]';
-
-  const combinedText = message
-    ? `${prefix}\n${message}`
-    : prefix;
-
-  const parts: MessagePart[] = [{ text: combinedText }];
-
-  logger.info({ targetSessionId, fromSessionId }, 'Message sent to session');
-  await enqueueSessionItem(targetSessionId, {
-    type: 'intersession',
-    parts,
-  });
+  await sessionRelations.sendToSession({
+    getExistingSession,
+    getAgentMetadata,
+    enqueueSessionItem,
+  }, targetSessionId, message, fromSessionId);
 }
 
 
