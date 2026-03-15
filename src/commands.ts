@@ -1758,20 +1758,20 @@ export const COMMANDS: Record<string, CommandDef> = {
       // No args: list nodes
       if (args.length === 0) {
         const nodes = nodesManager.listNodes()
+        const remoteNodes = nodes.filter(node => node.id !== 'master')
         const currentNode = session.currentNode || 'master'
 
-        if (nodes.length === 0) {
+        if (remoteNodes.length === 0) {
           ctx.reply('📋 No remote nodes registered.\n\n✅ Master node (local) is always available.')
           return
         }
 
-        let reply = `📋 **Available Nodes** (${nodes.length + 1} total):\n\n`
+        let reply = `📋 **Available Nodes** (${remoteNodes.length + 1} total):\n\n`
 
         reply += currentNode === 'master' ? '✅ ' : '  '
         reply += '`master` (local)\n'
 
-        for (const node of nodes) {
-          if (node.id === 'master') continue
+        for (const node of remoteNodes) {
           reply += currentNode === node.id ? '✅ ' : '  '
           reply += `\`${node.id}\` - Last activity: ${new Date(node.lastActivity).toLocaleString()}\n`
         }
