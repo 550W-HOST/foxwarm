@@ -49,6 +49,7 @@ const ChatComposer = memo(function ChatComposer({
   const [transcribingAudio, setTranscribingAudio] = useState(false)
   const [transcribeError, setTranscribeError] = useState<string | null>(null)
   const [liveTranscriptionPreview, setLiveTranscriptionPreview] = useState('')
+  const [waveformBars, setWaveformBars] = useState<number[]>(() => Array.from({ length: 20 }, () => 0.12))
   const [availableCommands, setAvailableCommands] = useState<SlashCommandOption[]>([])
   const [commandsLoading, setCommandsLoading] = useState(false)
   const [commandsError, setCommandsError] = useState<string | null>(null)
@@ -62,9 +63,11 @@ const ChatComposer = memo(function ChatComposer({
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
   const audioGainRef = useRef<GainNode | null>(null)
+  const audioAnalyserRef = useRef<AnalyserNode | null>(null)
   const audioStreamRef = useRef<MediaStream | null>(null)
   const audioSampleRateRef = useRef<number>(16000)
   const recordingActiveRef = useRef(false)
+  const waveformFrameRef = useRef<number | null>(null)
   const streamingSessionRef = useRef<{
     sendAudioChunk: (chunk: ArrayBuffer) => void
     stop: () => void
@@ -116,6 +119,7 @@ const ChatComposer = memo(function ChatComposer({
     setIsRecordingAudio(false)
     setTranscribeError(null)
     setLiveTranscriptionPreview('')
+    setWaveformBars(Array.from({ length: 20 }, () => 0.12))
     setDismissedSlashQuery(null)
 
     setTimeout(() => {
@@ -146,15 +150,22 @@ const ChatComposer = memo(function ChatComposer({
 
   const cleanupRecording = useCallback(async () => {
     recordingActiveRef.current = false
+    if (waveformFrameRef.current !== null) {
+      cancelAnimationFrame(waveformFrameRef.current)
+      waveformFrameRef.current = null
+    }
     audioProcessorRef.current?.disconnect()
     audioSourceRef.current?.disconnect()
     audioGainRef.current?.disconnect()
+    audioAnalyserRef.current?.disconnect()
     audioStreamRef.current?.getTracks().forEach(track => track.stop())
 
     audioProcessorRef.current = null
     audioSourceRef.current = null
     audioGainRef.current = null
+    audioAnalyserRef.current = null
     audioStreamRef.current = null
+    setWaveformBars(Array.from({ length: 20 }, () => 0.12))
 
     if (audioContextRef.current) {
       await audioContextRef.current.close().catch(() => {})
@@ -389,6 +400,43 @@ const ChatComposer = memo(function ChatComposer({
     return pcm16.buffer
   }, [downsampleTo16k])
 
+  const startWaveformLoop = useCallback(() => {
+    const analyser = audioAnalyserRef.current
+    if (!analyser) return
+
+    const data = new Uint8Array(analyser.frequencyBinCount)
+    const barCount = 20
+
+    const tick = () => {
+      const activeAnalyser = audioAnalyserRef.current
+      if (!recordingActiveRef.current || !activeAnalyser) {
+        waveformFrameRef.current = null
+        return
+      }
+
+      activeAnalyser.getByteFrequencyData(data)
+      const binsPerBar = Math.max(1, Math.floor(data.length / barCount))
+      const nextBars = Array.from({ length: barCount }, (_, index) => {
+        const start = index * binsPerBar
+        const end = Math.min(data.length, start + binsPerBar)
+        let sum = 0
+        for (let i = start; i < end; i++) {
+          sum += data[i]
+        }
+        const avg = end > start ? sum / (end - start) : 0
+        return Math.max(0.12, Math.min(1, avg / 255))
+      })
+
+      setWaveformBars(nextBars)
+      waveformFrameRef.current = requestAnimationFrame(tick)
+    }
+
+    if (waveformFrameRef.current !== null) {
+      cancelAnimationFrame(waveformFrameRef.current)
+    }
+    waveformFrameRef.current = requestAnimationFrame(tick)
+  }, [])
+
   const handleAudioPick = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return
 
@@ -471,7 +519,10 @@ const ChatComposer = memo(function ChatComposer({
       const source = audioContext.createMediaStreamSource(stream)
       const processor = audioContext.createScriptProcessor(4096, 1, 1)
       const gain = audioContext.createGain()
+      const analyser = audioContext.createAnalyser()
       gain.gain.value = 0
+      analyser.fftSize = 512
+      analyser.smoothingTimeConstant = 0.82
 
       audioSampleRateRef.current = audioContext.sampleRate
       recordingActiveRef.current = true
@@ -486,6 +537,7 @@ const ChatComposer = memo(function ChatComposer({
         streamingSession.sendAudioChunk(floatChunkToPcm16Buffer(chunk, audioSampleRateRef.current))
       }
 
+      source.connect(analyser)
       source.connect(processor)
       processor.connect(gain)
       gain.connect(audioContext.destination)
@@ -494,8 +546,10 @@ const ChatComposer = memo(function ChatComposer({
       audioSourceRef.current = source
       audioProcessorRef.current = processor
       audioGainRef.current = gain
+      audioAnalyserRef.current = analyser
       audioStreamRef.current = stream
       setIsRecordingAudio(true)
+      startWaveformLoop()
     } catch (e) {
       console.error('Failed to start microphone recording:', e)
       setTranscribeError(e instanceof Error ? e.message : 'Failed to start microphone recording')
@@ -542,22 +596,6 @@ const ChatComposer = memo(function ChatComposer({
         {transcribeError && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
             ASR 实验入口失败：{transcribeError}
-          </div>
-        )}
-
-        {(isRecordingAudio || transcribingAudio || liveTranscriptionPreview) && (
-          <div className="mb-3 flex justify-start">
-            <div className="max-w-[min(100%,36rem)] rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 shadow-sm dark:border-blue-800/80 dark:bg-blue-900/20 dark:text-blue-100">
-              <div className="mb-1 flex items-center gap-2 text-xs font-medium text-blue-700 dark:text-blue-300">
-                <span>{isRecordingAudio ? 'Live ASR preview' : 'ASR finalizing'}</span>
-              </div>
-              <div className="whitespace-pre-wrap break-words">
-                {liveTranscriptionPreview || (isRecordingAudio ? 'Listening…' : 'Waiting for final transcript…')}
-              </div>
-              <div className="mt-2 text-[11px] text-blue-600/90 dark:text-blue-300/80">
-                Preview only — final text will be appended to the draft when recording ends. It will not auto-send.
-              </div>
-            </div>
           </div>
         )}
 
@@ -701,16 +739,37 @@ const ChatComposer = memo(function ChatComposer({
                 >
                   <span>{transcribingAudio ? 'ASR…' : 'ASR'}</span>
                 </label>
-                <button
-                  type="button"
-                  onClick={() => void handleRecordToggle()}
-                  disabled={transcribingAudio}
-                  className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200 dark:hover:bg-red-900/60' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : ''}`}
-                  title={isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
-                >
-                  {isRecordingAudio ? <Square size={13} /> : <Mic size={13} />}
-                  <span>{isRecordingAudio ? 'Stop' : 'Rec'}</span>
-                </button>
+                <div className="relative inline-flex shrink-0">
+                  {(isRecordingAudio || transcribingAudio || liveTranscriptionPreview) && (
+                    <div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-[min(22rem,70vw)] -translate-x-1/2 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 shadow-lg dark:border-blue-800/80 dark:bg-blue-900/20 dark:text-blue-100">
+                      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-blue-700 dark:text-blue-300">
+                        <span>{isRecordingAudio ? 'Live ASR preview' : 'ASR finalizing'}</span>
+                      </div>
+                      <div className="mb-2 flex h-10 items-end gap-1">
+                        {waveformBars.map((value, index) => (
+                          <div
+                            key={index}
+                            className={`flex-1 rounded-full transition-all duration-75 ${isRecordingAudio ? 'bg-blue-500/70 dark:bg-blue-300/70' : 'bg-blue-300/70 dark:bg-blue-500/50'}`}
+                            style={{ height: `${Math.max(12, Math.round(value * 100))}%` }}
+                          />
+                        ))}
+                      </div>
+                      <div className="whitespace-pre-wrap break-words">
+                        {liveTranscriptionPreview || (isRecordingAudio ? 'Listening…' : 'Waiting for final transcript…')}
+                      </div>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void handleRecordToggle()}
+                    disabled={transcribingAudio}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200 dark:hover:bg-red-900/60' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : ''}`}
+                    title={isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
+                  >
+                    {isRecordingAudio ? <Square size={13} /> : <Mic size={13} />}
+                    <span>{isRecordingAudio ? 'Stop' : 'Rec'}</span>
+                  </button>
+                </div>
               </>
             )}
             <button
