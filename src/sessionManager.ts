@@ -298,6 +298,7 @@ export async function getSession(sessionId: string): Promise<Session> {
   if (session.busy === undefined) session.busy = false;
   if (!session.meta) session.meta = { lastMessageTime: Date.now() };
   if (!session.currentNode) session.currentNode = 'master'; // Default to master node
+  delete (session as any).isolated;
   if (session.nextMessageSeq === undefined) {
     session.nextMessageSeq = getNextSessionMessageSeq(session);
   }
@@ -326,6 +327,9 @@ export async function createEmptySession(sessionId?: string): Promise<{ session:
  * Create a new session with given data
  */
 export async function createSession(sessionId: string, sessionData: any): Promise<void> {
+  if (sessionData && typeof sessionData === 'object') {
+    delete sessionData.isolated;
+  }
   sessions.set(sessionId, sessionData);
   await saveSession(sessionId);
   logger.info({ sessionId }, 'Session created');
@@ -587,7 +591,7 @@ export function getChannelBySession(sessionId: string): { platform: string; chan
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; isolated?: boolean }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string }): Promise<string> {
   const sourceSession = await getSession(sourceSessionId);
   const newSessionId = suffix 
     ? `${sourceSessionId}_${suffix}`
@@ -610,7 +614,6 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     nextMessageSeq: 1,
     parentSessionId: isChildSession ? sourceSessionId : null,
     currentNode: options?.node || sourceSession.currentNode || 'master',
-    isolated: options?.isolated ?? sourceSession.isolated,
     agent: sourceSession.agent,
     verbose: sourceSession.verbose,
     model: sourceSession.model
@@ -695,7 +698,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
  * @param fork Whether to fork (inherit context) or create new
  * @returns New child session ID
  */
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = true, options?: { node?: string; isolated?: boolean }): Promise<string> {
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = true, options?: { node?: string }): Promise<string> {
   if (fork) {
     // Fork from parent (inherit context)
     return await forkSession(parentSessionId, suffix, true, options);
@@ -724,7 +727,6 @@ export async function createChildSession(parentSessionId: string, suffix: string
       nextMessageSeq: 1,
       parentSessionId: parentSessionId,
       currentNode: options?.node || parentSession.currentNode || 'master',
-      isolated: options?.isolated ?? parentSession.isolated,
       model: parentSession.model
     };
 
@@ -886,6 +888,8 @@ export async function loadSessions(): Promise<void> {
         history: [], // Empty, will be loaded when getSession is called
         queue: metadata.queue || [],
       };
+
+      delete (session as any).isolated;
 
       sessions.set(sessionId, session);
     }
@@ -1095,7 +1099,7 @@ export function listSessions(): Array<{ id: string; messageCount: number; lastMe
       hasChannel: !!channel,
       displayName: session.displayName,
       currentNode: session.currentNode,
-      isolated: session.isolated,
+      isolated: isSessionEffectivelyIsolated(session),
       busy: session.busy,
       queueLength: session.queue?.length || 0
     });

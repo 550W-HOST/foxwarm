@@ -171,7 +171,7 @@ export class WebUIChannel implements Channel {
                 displayName: session.displayName || null,
                 archived: session.archived || false,
                 currentNode: session.currentNode || 'master',
-                isolated: session.isolated || false,
+                isolated: sessionManager.isSessionEffectivelyIsolated(session),
               }))
               .sort((a, b) => b.lastMessageTime - a.lastMessageTime); // Sort by lastMessageTime descending
             res.json({ sessions });

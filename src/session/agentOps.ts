@@ -164,8 +164,7 @@ export async function createSessionInAgent(options: {
   }
 
   const agentMeta = deps.getAgentMetadata(agentName);
-  const agentIsolated = !!agentMeta.isolated;
-  const isolatedNode = agentIsolated && typeof agentMeta.isolatedNode === 'string' && agentMeta.isolatedNode.trim()
+  const isolatedNode = agentMeta.isolated && typeof agentMeta.isolatedNode === 'string' && agentMeta.isolatedNode.trim()
     ? agentMeta.isolatedNode.trim()
     : undefined;
 
@@ -189,7 +188,6 @@ export async function createSessionInAgent(options: {
     nextMessageSeq: 1,
     parentSessionId,
     currentNode: isolatedNode || currentNode || 'master',
-    isolated: agentIsolated,
     model,
   });
 
@@ -241,8 +239,7 @@ export async function createAgentWithMainSession(options: {
 
   const mainSessionId = buildSessionId(agentName, 'main');
   const targetAgentMeta = deps.getAgentMetadata(agentName);
-  const agentIsolated = !!targetAgentMeta.isolated;
-  const isolatedNode = agentIsolated && typeof targetAgentMeta.isolatedNode === 'string' && targetAgentMeta.isolatedNode.trim()
+  const isolatedNode = targetAgentMeta.isolated && typeof targetAgentMeta.isolatedNode === 'string' && targetAgentMeta.isolatedNode.trim()
     ? targetAgentMeta.isolatedNode.trim()
     : undefined;
 
@@ -303,7 +300,6 @@ export async function createAgentWithMainSession(options: {
     vectorIndexPosition: 0,
     nextMessageSeq: 1,
     currentNode: isolatedNode || currentNode || sourceSession?.currentNode || 'master',
-    isolated: agentIsolated,
     model: model ?? sourceSession?.model,
   });
 

@@ -1138,6 +1138,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const masterOnlyTools = [
             'remote_node', 'list_nodes', 'node_tools',
             'search_memory', 'get_memory_context',
+            'list_files', 'delete_file',
             'create_child_session', 'send_to_session', 'send_to_channel', 'send_file',
             'list_sessions', 'list_agents', 'list_skills',
             'attach_agent_skill', 'detach_agent_skill', 'load_skill',

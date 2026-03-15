@@ -153,14 +153,14 @@ function formatSendFileSessionResult(targetSessionId: string, file: ChannelFile,
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  const { suffix, fork = true, message, node, isolated, noFurtherAssistantReply } = args;
+  const { suffix, fork = true, message, node, noFurtherAssistantReply } = args;
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
   }
 
   const currentSessionId = ctx.sessionId;
-  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork, { node, isolated });
+  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork, { node });
 
   if (message) {
     sessionManager.sendToSession(childSessionId, message, currentSessionId).catch(err => {

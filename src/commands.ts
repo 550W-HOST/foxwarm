@@ -108,15 +108,6 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
       literalNode('unset', 'Alias of clear'),
     ],
   }),
-  literalNode('isolated', 'Toggle isolated mode', {
-    usage: '/session isolated [on|off] [node]',
-    children: [
-      literalNode('on', 'Enable isolated mode', {
-        children: [placeholderNode('[node]', 'Optional node to bind while isolated')],
-      }),
-      literalNode('off', 'Disable isolated mode'),
-    ],
-  }),
   literalNode('index', 'Force archive indexing for the current session'),
   literalNode('move', 'Rename the current session or move it to an existing agent', {
     usage: '/session move <new-session-id>|<existing-agent>/<new-session-id>',
@@ -699,7 +690,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         resp += '`/session rename <name>` - Rename session\n'
         resp += '`/session update-snapshot [session-id]` - Refresh session prompt snapshot\n'
         resp += '`/session compact-threshold [tokens|Nk|clear|unset]` - Get/set auto-compact threshold override for current session\n'
-        resp += '`/session isolated [on|off] [node]` - Toggle isolated mode\n'
         resp += '`/session index` - Index messages to vector database\n'
         resp += '`/session move <new-session-id>|<existing-agent>/<new-session-id>` - Move/rename session\n'
         resp += '`/session parent <parent-session-id> [child-session-id]` - Set parent session\n'
@@ -754,7 +744,7 @@ export const COMMANDS: Record<string, CommandDef> = {
             const msgCount = sess.meta?.messageCount || sess.history.length
             const displayName = sess.displayName ? ` (${sess.displayName})` : ''
             const node = sess.currentNode || 'master'
-            const isolated = sess.isolated ? ' isolated' : ''
+            const isolated = sessionManager.isSessionEffectivelyIsolated(sess) ? ' isolated' : ''
             resp += `\`${sid}\`${displayName} - ${msgCount} msgs - node: \`${node}\`${isolated}\n`
             if (attachedChannels.length) {
               resp += `    - channels: \`${attachedChannels.join(', ')}\`\n`
@@ -979,45 +969,11 @@ export const COMMANDS: Record<string, CommandDef> = {
 
           const agentIsolationNode = sessionManager.getAgentIsolationNode(session.agent || 'main')
           if (agentIsolationNode) {
-            if (subArgs.length === 0) {
-              ctx.reply(`🔒 Inherited from agent isolation (node: \`${agentIsolationNode}\`)`)
-            } else {
-              ctx.reply('❌ This session belongs to an isolated agent. Change agent isolation instead.')
-            }
+            ctx.reply(`🔒 Session-level isolated mode has been removed. This session inherits agent isolation on node \`${agentIsolationNode}\`. Use \`/agent isolated\` to change it.`)
             return
           }
 
-          if (subArgs.length === 0) {
-            const node = session.currentNode || 'master'
-            const state = session.isolated ? 'on' : 'off'
-            ctx.reply(`🔒 Isolated: \`${state}\` (node: \`${node}\`)`)
-            return
-          }
-
-          const mode = subArgs[0]
-          if (mode !== 'on' && mode !== 'off') {
-            ctx.reply('Usage: /session isolated [on|off] [node]')
-            return
-          }
-
-          if (mode === 'on') {
-            const nodeId = subArgs[1]
-            if (nodeId) {
-              if (nodeId !== 'master' && !nodesManager.getNode(nodeId)) {
-                ctx.reply(`❌ Node \`${nodeId}\` not found.`)
-                return
-              }
-              session.currentNode = nodeId
-            }
-            session.isolated = true
-            await sessionManager.saveSession(sessionId)
-            ctx.reply(`✅ Isolated mode enabled (node: \`${session.currentNode || 'master'}\`)`)
-            return
-          }
-
-          session.isolated = false
-          await sessionManager.saveSession(sessionId)
-          ctx.reply('✅ Isolated mode disabled.')
+          ctx.reply('ℹ️ Session-level isolated mode has been removed. Use `currentNode` for ordinary node selection, or `/agent isolated <agent> <node-id|off>` for agent-level isolation.')
           break
         }
 

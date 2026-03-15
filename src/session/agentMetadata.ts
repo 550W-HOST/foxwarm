@@ -124,7 +124,7 @@ export function isAgentIsolated(agentName: string): boolean {
 
 export function isSessionEffectivelyIsolated(session?: Session | null): boolean {
   if (!session) return false;
-  return !!(session.isolated || isAgentIsolated(session.agent || 'main'));
+  return isAgentIsolated(session.agent || 'main');
 }
 
 export async function setAgentMetadata(agentName: string, meta: AgentMetadata): Promise<void> {
@@ -259,7 +259,6 @@ export async function setAgentIsolation(
     if (sessionAgent !== agentName) continue;
 
     const session = await deps.getSession(sessionId);
-    session.isolated = !!normalizedNode;
     if (normalizedNode) {
       session.currentNode = normalizedNode;
     }

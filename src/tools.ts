@@ -219,6 +219,104 @@ async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
     return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;
 }
 
+type ListFilesEntry = {
+    path: string;
+    type: 'file' | 'directory';
+    size?: number;
+    modifiedAt: string;
+};
+
+async function collectFileEntries(baseDir: string, relativeDir: string, options: {
+    recursive: boolean;
+    includeHidden: boolean;
+    limit: number;
+}, bucket: ListFilesEntry[]): Promise<void> {
+    if (bucket.length >= options.limit) {
+        return;
+    }
+
+    const fullDir = path.join(baseDir, relativeDir);
+    const entries = await fs.readdir(fullDir, { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const entry of entries) {
+        if (!options.includeHidden && entry.name.startsWith('.')) {
+            continue;
+        }
+        if (bucket.length >= options.limit) {
+            return;
+        }
+
+        const relPath = relativeDir ? path.posix.join(relativeDir.split(path.sep).join(path.posix.sep), entry.name) : entry.name;
+        const fullPath = path.join(fullDir, entry.name);
+        const stats = await fs.stat(fullPath);
+        bucket.push({
+            path: relPath,
+            type: entry.isDirectory() ? 'directory' : 'file',
+            size: entry.isDirectory() ? undefined : stats.size,
+            modifiedAt: stats.mtime.toISOString(),
+        });
+
+        if (options.recursive && entry.isDirectory()) {
+            await collectFileEntries(baseDir, path.join(relativeDir, entry.name), options, bucket);
+        }
+    }
+}
+
+async function tool_list_files(args: ToolArgs, ctx: ToolContext) {
+    const { dirPath = '.', recursive = false, includeHidden = false, limit = 200 } = args;
+    const agentName = ctx.session?.agent || 'main';
+    const fullPath = resolveAgentPath(dirPath, agentName);
+
+    if (sessionManager.isSessionEffectivelyIsolated(ctx.session) && (!ctx.runtimeNodeId || ctx.runtimeNodeId === 'master')) {
+        checkPathAccess(fullPath, agentName);
+    }
+
+    const stats = await fs.stat(fullPath);
+    if (!stats.isDirectory()) {
+        throw new Error(`Not a directory: ${dirPath}`);
+    }
+
+    const entries: ListFilesEntry[] = [];
+    await collectFileEntries(fullPath, '', {
+        recursive: recursive === true,
+        includeHidden: includeHidden === true,
+        limit: Math.max(1, Math.min(Number(limit) || 200, 1000)),
+    }, entries);
+
+    const rootLabel = dirPath === '.' ? agentName : dirPath;
+    if (entries.length === 0) {
+        return `No files found under \`${rootLabel}\`.`;
+    }
+
+    return `Files under \`${rootLabel}\` (${entries.length}):\n\n` + entries.map(entry => {
+        const sizeLabel = entry.type === 'file' ? ` (${entry.size} B)` : '/';
+        return `- \`${entry.path}\`${sizeLabel} - ${entry.modifiedAt}`;
+    }).join('\n');
+}
+
+async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
+    const { filePath } = args;
+    if (!filePath || typeof filePath !== 'string') {
+        throw new Error('filePath is required');
+    }
+
+    const agentName = ctx.session?.agent || 'main';
+    const fullPath = resolveAgentPath(filePath, agentName);
+
+    if (sessionManager.isSessionEffectivelyIsolated(ctx.session) && (!ctx.runtimeNodeId || ctx.runtimeNodeId === 'master')) {
+        checkPathAccess(fullPath, agentName);
+    }
+
+    const stats = await fs.lstat(fullPath);
+    if (stats.isDirectory()) {
+        throw new Error('delete_file only supports files or symlinks, not directories.');
+    }
+
+    await fs.remove(fullPath);
+    return `Deleted file \`${filePath}\``;
+}
+
 async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     const { command } = args;
 
@@ -560,6 +658,8 @@ export const read = tool_read;
 export const write = tool_write;
 export const edit = tool_edit;
 export const apply_patch = tool_apply_patch;
+export const list_files = tool_list_files;
+export const delete_file = tool_delete_file;
 export const exec = tool_exec;
 export const search_memory = tool_search_memory;
 export const get_memory_context = tool_get_memory_context;
@@ -697,6 +797,32 @@ export const definitions = [
             }
         },
         {
+            name: 'list_files',
+            description: 'List files under the current agent directory. Can recurse, but path traversal outside the agent folder is blocked.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    dirPath: { type: 'string', description: 'Directory path relative to the current agent folder. Defaults to .' },
+                    recursive: { type: 'boolean', description: 'Whether to recurse into subdirectories. Default: false' },
+                    includeHidden: { type: 'boolean', description: 'Whether to include dotfiles. Default: false' },
+                    limit: { type: 'number', description: 'Maximum number of entries to return. Default: 200, max: 1000' },
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
+                }
+            }
+        },
+        {
+            name: 'delete_file',
+            description: 'Delete a single file or symlink inside the current agent folder. Refuses to delete directories.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    filePath: { type: 'string', description: 'File path relative to the current agent folder.' },
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
+                },
+                required: ['filePath']
+            }
+        },
+        {
             name: 'exec',
             description: 'Execute a shell command in agent-folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running over 10 seconds will time out and run in background.',
             parameters: {
@@ -742,8 +868,7 @@ export const definitions = [
                     fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: true', default: true },
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
                     noFurtherAssistantReply: { type: 'boolean', description: 'If true, stop the current assistant turn immediately after creating the child (and after sending the optional initial message). Use when the handoff itself is the whole reply and no extra reply is needed here.' },
-                    node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' },
-                    isolated: { type: 'boolean', description: 'Whether to isolate this session to its node (children inherit)' }
+                    node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' }
                 },
                 required: ['suffix']
             }

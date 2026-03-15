@@ -62,6 +62,8 @@ export class NodesManager {
       'write',
       'edit',
       'apply_patch',
+      'list_files',
+      'delete_file',
       'exec',
       'search_memory',
       'get_memory_context',
