@@ -8,6 +8,7 @@ import * as sessionManager from '../sessionManager';
 import * as llm from '../llm';
 import * as vector from '../vector';
 import { MessagePart, Session } from '../types';
+import { tool_get_archived_messages } from '../toolsSessionAgent';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -358,9 +359,43 @@ async function main(): Promise<void> {
       assert.strictEqual(llmCallCount, 4);
       assert.strictEqual(finalSession.busy, false);
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
+      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compacted message placeholder:') && (part.system || '').includes('get_archived_messages') && (part.system || '').includes('#1-#3'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('compacted summary'))));
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed'))));
       assertLastModelText(finalSession, 'continued after compact');
+    });
+
+    await test('get_archived_messages reads archived session history by seq range', async () => {
+      const sessionId = makeSessionId('selftest_archive_lookup');
+      createdSessionIds.push(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await sessionManager.appendSessionMessage(session, {
+        role: 'user',
+        parts: [{ text: 'archived alpha' }],
+      });
+      await sessionManager.appendSessionMessage(session, {
+        role: 'model',
+        parts: [{ text: 'archived beta' }],
+      });
+      await sessionManager.appendSessionMessage(session, {
+        role: 'tool',
+        parts: [{ functionResponse: { tool_use_id: 'archived-read', name: 'read', response: { output: 'archived gamma' } } }],
+      });
+
+      const output = await tool_get_archived_messages({
+        sessionId,
+        startSeq: 2,
+        endSeq: 3,
+        previewLength: 200,
+      }, { sessionId, session });
+
+      assert.match(String(output), /Archived messages for session/);
+      assert.match(String(output), /\[#2\]/);
+      assert.match(String(output), /archived beta/);
+      assert.match(String(output), /\[#3\]/);
+      assert.match(String(output), /archived gamma/);
+      assert.doesNotMatch(String(output), /archived alpha/);
     });
 
     await test('automatic in-turn compaction after tool calls resumes with compacted history', async () => {
@@ -434,6 +469,45 @@ async function main(): Promise<void> {
       assert.strictEqual(finalSession.busy, false);
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary'))));
       assertLastModelText(finalSession, 'continued after auto compact');
+    });
+
+    await test('tool-noise compaction replaces oversized archived tool parts in older history only', async () => {
+      const sessionId = makeSessionId('selftest_tool_noise_compact');
+      createdSessionIds.push(sessionId);
+      const session = await ensureSession(sessionId);
+      const longArgs = { payload: 'x'.repeat(4000) };
+      const longResponse = { output: 'y'.repeat(4000) };
+
+      await sessionManager.appendSessionMessage(session, {
+        role: 'user',
+        parts: [{ text: 'tool noise test' }],
+      });
+      await sessionManager.appendSessionMessage(session, {
+        role: 'model',
+        parts: [{ functionCall: { id: 'tool-noise-call', name: 'exec', args: longArgs } }],
+      });
+      await sessionManager.appendSessionMessage(session, {
+        role: 'tool',
+        parts: [{ functionResponse: { tool_use_id: 'tool-noise-call', name: 'exec', response: longResponse } }],
+      });
+      await sessionManager.appendSessionMessage(session, {
+        role: 'model',
+        parts: [{ text: 'recent tail should stay untouched' }],
+      });
+
+      const result = await sessionManager.compactSessionToolMessages(sessionId, 0.25);
+      assert.strictEqual(result.replacedFunctionCalls, 1);
+      assert.strictEqual(result.replacedFunctionResponses, 1);
+
+      const updated = await sessionManager.getSession(sessionId);
+      const compactedCallPart = updated.history[1].parts[0];
+      const compactedResponsePart = updated.history[2].parts[0];
+      assert.strictEqual(compactedCallPart.functionCall, undefined);
+      assert.strictEqual(compactedResponsePart.functionResponse, undefined);
+      assert.match(compactedCallPart.text || '', /compacted tool call/);
+      assert.match(compactedCallPart.text || '', /get_archived_messages/);
+      assert.match(compactedResponsePart.text || '', /compacted tool response/);
+      assert.match(updated.history[3].parts[0].text || '', /recent tail should stay untouched/);
     });
 
     await test('post-tool LLM failure leaves a visible terminal model message without auto-notifying parent', async () => {

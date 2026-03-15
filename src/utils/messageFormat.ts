@@ -50,7 +50,7 @@ function formatMultilineText(text: string, continuationPrefix: string = '> '): s
 }
 
 export function formatPrefixedMultilineText(prefix: string, text: string, continuationPrefix: string = '> '): string {
-  const normalized = formatMultilineText(text, continuationPrefix);
+  const normalized = text.trim();
   if (!normalized) {
     return prefix;
   }
@@ -157,7 +157,11 @@ export function formatMessageText(message: Message, options: FormatMessageTextOp
     return formatMultilineText(content, resolved.continuationPrefix);
   }
 
-  return formatPrefixedMultilineText(`[${message.role}] `, content, resolved.continuationPrefix);
+  return formatPrefixedMultilineText(
+    `[${message.role}] `,
+    formatMultilineText(content, resolved.continuationPrefix),
+    resolved.continuationPrefix,
+  );
 }
 
 export function formatMessagePreviewText(

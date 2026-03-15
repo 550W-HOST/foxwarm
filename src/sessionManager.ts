@@ -1087,6 +1087,17 @@ export async function getSessionMessages(sessionId: string, start?: number, coun
   return history.slice(startIdx, endIdx);
 }
 
+export async function getArchivedMessages(sessionId: string, options: {
+  startSeq?: number;
+  endSeq?: number;
+} = {}) {
+  return sessionHistory.getArchivedMessages(sessionId, options);
+}
+
+export async function compactSessionToolMessages(sessionId: string, keepPercent: number = COMPACT_PERCENT, thresholdTokens?: number) {
+  return sessionHistory.compactToolMessages(getSessionHistoryDeps(), sessionId, keepPercent, thresholdTokens);
+}
+
 /**
  * Delete a session
  */

@@ -1,9 +1,9 @@
 import * as llm from '../llm';
 import { logger } from '../common';
 import { COMPACT_PERCENT, resolveModelConfig } from '../config';
-import { estimateSessionTokens } from '../tokenCount';
+import { estimateSessionTokens, estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
-import { appendMessagesToArchive } from './archive';
+import { appendMessagesToArchive, readArchiveMessages } from './archive';
 import {
   buildCompactCandidateBlocks,
   buildCompactPlanValidationFeedback,
@@ -16,6 +16,30 @@ import {
   validateCompactPlanArgs,
 } from './compactPlan';
 import { Message, QueueItem, Session, TokenUsage } from '../types';
+
+const TOOL_NOISE_TOKEN_THRESHOLD = 200;
+
+export interface ArchivedMessagesQueryOptions {
+  startSeq?: number;
+  endSeq?: number;
+}
+
+export interface ArchivedMessagesQueryResult {
+  records: Array<{ seq: number; message: Message }>;
+  totalMatched: number;
+  returnedCount: number;
+  availableRange: { startSeq?: number; endSeq?: number };
+  requestedRange: { startSeq?: number; endSeq?: number };
+}
+
+export interface ToolNoiseCompactionResult {
+  replacedFunctionCalls: number;
+  replacedFunctionResponses: number;
+  touchedMessages: number;
+  inspectedMessages: number;
+  keepStartIndex: number;
+  thresholdTokens: number;
+}
 
 type SessionHistoryDeps = {
   getSessionById: (sessionId: string) => Session | undefined;
@@ -50,6 +74,94 @@ export async function forceIndexSession(deps: SessionHistoryDeps, sessionId: str
   }
 }
 
+function buildArchiveLookupInstruction(sessionId: string, startSeq?: number, endSeq?: number): string {
+  const seqArgs: string[] = [];
+  if (typeof startSeq === 'number') {
+    seqArgs.push(`startSeq: ${startSeq}`);
+  }
+  if (typeof endSeq === 'number') {
+    seqArgs.push(`endSeq: ${endSeq}`);
+  }
+
+  return `Use get_archived_messages({sessionId: '${sessionId}'${seqArgs.length ? `, ${seqArgs.join(', ')}` : ''}}) to inspect the archived originals if needed.`;
+}
+
+function buildDroppedRangePlaceholder(sessionId: string, startSeq?: number, endSeq?: number, messageCount?: number): Message {
+  const countLabel = typeof messageCount === 'number' && messageCount > 0
+    ? `${messageCount} message(s)`
+    : 'a compacted message range';
+  const rangeLabel = formatSeqRange(startSeq, endSeq);
+
+  return {
+    role: 'user',
+    parts: [{
+      system: `Compacted message placeholder: ${countLabel} from ${rangeLabel} were removed from working history here. ${buildArchiveLookupInstruction(sessionId, startSeq, endSeq)}`
+    }],
+  };
+}
+
+function getFunctionCallTokenCount(part: Message['parts'][number]): number {
+  if (!part.functionCall) {
+    return 0;
+  }
+
+  return estimateTokenCount(part.functionCall.name || '')
+    + estimateTokenCount(JSON.stringify(part.functionCall.args || {}));
+}
+
+function getFunctionResponseTokenCount(part: Message['parts'][number]): number {
+  if (!part.functionResponse) {
+    return 0;
+  }
+
+  return estimateTokenCount(part.functionResponse.name || '')
+    + estimateTokenCount(JSON.stringify(part.functionResponse.response || {}));
+}
+
+function appendPlaceholderText(originalText: string | undefined, placeholder: string): string {
+  if (typeof originalText === 'string' && originalText.trim()) {
+    return `${originalText.trim()}\n${placeholder}`;
+  }
+  return placeholder;
+}
+
+function buildToolNoisePlaceholder(options: {
+  sessionId: string;
+  seq?: number;
+  toolName?: string;
+  kind: 'function_call' | 'function_response';
+  estimatedTokens: number;
+}): string {
+  const { sessionId, seq, toolName, kind, estimatedTokens } = options;
+  const rangeLabel = typeof seq === 'number' ? `#${seq}` : '(seq unavailable)';
+  const kindLabel = kind === 'function_call' ? 'tool call' : 'tool response';
+  const toolLabel = toolName ? ` for \`${toolName}\`` : '';
+  const lookup = buildArchiveLookupInstruction(sessionId, seq, seq);
+  return `[compacted ${kindLabel}] Original ${kindLabel}${toolLabel} at ${rangeLabel} exceeded ${TOOL_NOISE_TOKEN_THRESHOLD} tokens (estimated ${estimatedTokens}) and was removed from working history to reduce tool noise. ${lookup}`;
+}
+
+function normalizeSeqRange(startSeq?: number, endSeq?: number): { startSeq?: number; endSeq?: number } {
+  if (typeof startSeq === 'number' && typeof endSeq === 'number' && startSeq > endSeq) {
+    return { startSeq: endSeq, endSeq: startSeq };
+  }
+
+  return { startSeq, endSeq };
+}
+
+function resolveCompactionSplitIndex(history: Message[], keepPercent: number): number {
+  let splitIndex = Math.floor(history.length * (1 - keepPercent));
+
+  if (keepPercent > 0) {
+    while (splitIndex < history.length && history[splitIndex].role === 'tool') {
+      splitIndex++;
+    }
+  } else {
+    splitIndex = history.length;
+  }
+
+  return splitIndex;
+}
+
 async function finalizeCompaction(
   deps: SessionHistoryDeps,
   sessionId: string,
@@ -70,8 +182,9 @@ async function finalizeCompaction(
     parts: [{ system: completionMarker }],
     __meta: { timestamp: now }
   };
+  const archiveOnlyRetainedSyntheticMessages = retainedMessages.filter(message => message.__meta?.seq === undefined);
   const archiveOnlySummaryMessages = summaryConversation.filter(message => message.__meta?.seq === undefined);
-  await appendMessagesToArchive(session, [compactedMarker, ...archiveOnlySummaryMessages, completionMessage]);
+  await appendMessagesToArchive(session, [compactedMarker, ...archiveOnlyRetainedSyntheticMessages, ...archiveOnlySummaryMessages, completionMessage]);
 
   const summaryMessages: Message[] = [
     compactedMarker,
@@ -111,15 +224,7 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
     session.broadcast(options.startBroadcastMessage);
   }
 
-  let splitIndex = Math.floor(history.length * (1 - keepPercent));
-
-  if (keepPercent > 0) {
-    while (splitIndex < history.length && history[splitIndex].role === 'tool') {
-      splitIndex++;
-    }
-  } else {
-    splitIndex = history.length;
-  }
+  const splitIndex = resolveCompactionSplitIndex(history, keepPercent);
 
   if (splitIndex <= 0) {
     logger.info({ sessionId, keepPercent }, 'Compaction skipped because there are no older messages to compact');
@@ -190,9 +295,47 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
       throw new Error(`Compaction failed because no valid ${COMPACT_PLAN_TOOL_NAME} plan was produced.`);
     }
 
-    const candidateById = new Map(candidateBlocks.map(block => [block.id, block]));
-    const keptOlderMessages = compactPlan.keepBlockIds.flatMap(blockId => candidateById.get(blockId)?.messages || []);
-    const retainedMessages = [...keptOlderMessages, ...forceKeptRecentMessages];
+    const keptBlockIds = new Set(compactPlan.keepBlockIds);
+    const retainedOlderMessages: Message[] = [];
+    let pendingDroppedRange: { startSeq?: number; endSeq?: number; messageCount: number } | null = null;
+
+    const flushDroppedRange = () => {
+      if (!pendingDroppedRange) {
+        return;
+      }
+
+      retainedOlderMessages.push(buildDroppedRangePlaceholder(
+        sessionId,
+        pendingDroppedRange.startSeq,
+        pendingDroppedRange.endSeq,
+        pendingDroppedRange.messageCount,
+      ));
+      pendingDroppedRange = null;
+    };
+
+    for (const block of candidateBlocks) {
+      if (keptBlockIds.has(block.id)) {
+        flushDroppedRange();
+        retainedOlderMessages.push(...block.messages);
+        continue;
+      }
+
+      if (!pendingDroppedRange) {
+        pendingDroppedRange = {
+          startSeq: block.startSeq,
+          endSeq: block.endSeq,
+          messageCount: block.messageCount,
+        };
+        continue;
+      }
+
+      pendingDroppedRange.endSeq = block.endSeq;
+      pendingDroppedRange.messageCount += block.messageCount;
+    }
+
+    flushDroppedRange();
+
+    const retainedMessages = [...retainedOlderMessages, ...forceKeptRecentMessages];
 
     const now = Date.now();
     const summaryConversation: Message[] = [
@@ -298,6 +441,129 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
   };
 
   await deps.saveSession(session.id);
+}
+
+export async function getArchivedMessages(sessionId: string, options: ArchivedMessagesQueryOptions = {}): Promise<ArchivedMessagesQueryResult> {
+  const { startSeq, endSeq } = normalizeSeqRange(options.startSeq, options.endSeq);
+
+  const archiveMessages = await readArchiveMessages(sessionId);
+  const availableRange = {
+    startSeq: archiveMessages[0]?.seq,
+    endSeq: archiveMessages[archiveMessages.length - 1]?.seq,
+  };
+
+  const matched = archiveMessages.filter(record => {
+    if (typeof startSeq === 'number' && record.seq < startSeq) {
+      return false;
+    }
+    if (typeof endSeq === 'number' && record.seq > endSeq) {
+      return false;
+    }
+    return true;
+  });
+
+  const sliced = matched.map(record => ({
+    seq: record.seq,
+    message: record.message,
+  }));
+
+  return {
+    records: sliced,
+    totalMatched: matched.length,
+    returnedCount: sliced.length,
+    availableRange,
+    requestedRange: { startSeq, endSeq },
+  };
+}
+
+export async function compactToolMessages(
+  deps: SessionHistoryDeps,
+  sessionId: string,
+  keepPercent: number = COMPACT_PERCENT,
+  thresholdTokens: number = TOOL_NOISE_TOKEN_THRESHOLD,
+): Promise<ToolNoiseCompactionResult> {
+  const session = await deps.getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
+
+  const splitIndex = resolveCompactionSplitIndex(session.history, keepPercent);
+  const targetMessages = session.history.slice(0, splitIndex);
+  let replacedFunctionCalls = 0;
+  let replacedFunctionResponses = 0;
+  let touchedMessages = 0;
+
+  const rewrittenMessages = targetMessages.map(message => {
+    let touched = false;
+    const rewrittenParts = message.parts.map(part => {
+      const nextPart = structuredClone(part);
+      const placeholderLines: string[] = [];
+
+      const functionCallTokens = getFunctionCallTokenCount(part);
+      if (part.functionCall && functionCallTokens > thresholdTokens) {
+        placeholderLines.push(buildToolNoisePlaceholder({
+          sessionId,
+          seq: message.__meta?.seq,
+          toolName: part.functionCall.name,
+          kind: 'function_call',
+          estimatedTokens: functionCallTokens,
+        }));
+        delete nextPart.functionCall;
+        replacedFunctionCalls += 1;
+        touched = true;
+      }
+
+      const functionResponseTokens = getFunctionResponseTokenCount(part);
+      if (part.functionResponse && functionResponseTokens > thresholdTokens) {
+        placeholderLines.push(buildToolNoisePlaceholder({
+          sessionId,
+          seq: message.__meta?.seq,
+          toolName: part.functionResponse.name,
+          kind: 'function_response',
+          estimatedTokens: functionResponseTokens,
+        }));
+        delete nextPart.functionResponse;
+        replacedFunctionResponses += 1;
+        touched = true;
+      }
+
+      if (placeholderLines.length > 0) {
+        nextPart.text = appendPlaceholderText(nextPart.text, placeholderLines.join('\n'));
+      }
+
+      return nextPart;
+    });
+
+    if (touched) {
+      touchedMessages += 1;
+    }
+
+    return {
+      ...message,
+      parts: rewrittenParts,
+    };
+  });
+
+  session.history = [
+    ...rewrittenMessages,
+    ...session.history.slice(splitIndex),
+  ];
+  session.historyVersion = (session.historyVersion || 0) + 1;
+  session.indexingState = undefined;
+  if (session.vectorIndexPosition !== undefined) {
+    session.vectorIndexPosition = Math.min(session.vectorIndexPosition, session.history.length);
+  }
+
+  await deps.saveSession(sessionId);
+
+  return {
+    replacedFunctionCalls,
+    replacedFunctionResponses,
+    touchedMessages,
+    inspectedMessages: targetMessages.length,
+    keepStartIndex: splitIndex,
+    thresholdTokens,
+  };
 }
 
 export function getUsageTotalTokens(finalUsage?: Partial<TokenUsage> & {

@@ -8,6 +8,7 @@ import { getAgentDir } from './config';
 import { logger } from './common';
 import { AGENTS_DIR, COMPACT_PERCENT } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
+import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
 import { requireNotIsolated, checkChannelPermission, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
 
 interface ToolContext {
@@ -73,6 +74,41 @@ function detectMimeType(filePath: string): string {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function formatArchivedMessagePreview(
+  sessionId: string,
+  records: Array<{ seq: number; message: any }>,
+  meta: { totalMatched: number; startSeq?: number; endSeq?: number },
+  previewLength: number,
+): string {
+  if (records.length === 0) {
+    const rangeLabel = typeof meta.startSeq === 'number' || typeof meta.endSeq === 'number'
+      ? ` for ${typeof meta.startSeq === 'number' ? `#${meta.startSeq}` : '?'}-${typeof meta.endSeq === 'number' ? `#${meta.endSeq}` : '?'}`
+      : '';
+    return `No archived messages found in session \`${sessionId}\`${rangeLabel}.`;
+  }
+
+  const rangeBits: string[] = [];
+  if (typeof meta.startSeq === 'number') {
+    rangeBits.push(`startSeq=#${meta.startSeq}`);
+  }
+  if (typeof meta.endSeq === 'number') {
+    rangeBits.push(`endSeq=#${meta.endSeq}`);
+  }
+  const rangeLabel = rangeBits.length ? ` (${rangeBits.join(', ')})` : '';
+
+  let result = `Archived messages for session \`${sessionId}\` - showing ${records.length} of ${meta.totalMatched} matched message(s)${rangeLabel}.\n\n`;
+  for (const record of records) {
+    const roleEmoji = record.message.role === 'user' ? '👤' : record.message.role === 'model' ? '🤖' : '🔧';
+    const preview = formatMessagePreviewText(record.message, previewLength, {
+      skipEphemeralSystem: true,
+      skipRagMemorySnippets: true,
+      skipThinking: true,
+    });
+    result += `${formatPrefixedMultilineText(`[#${record.seq}] ${roleEmoji} ${record.message.role}: `, preview)}\n`;
+  }
+  return result;
 }
 
 async function prepareChannelFile(filePath: string, ctx?: ToolContext): Promise<ChannelFile> {
@@ -445,6 +481,34 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
   }
 
   return formatSessionMessagesPreview(sessionId, messages, actualStart, totalMessages, previewLength);
+}
+
+export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'get_archived_messages');
+  const targetSessionId = args.sessionId || ctx?.sessionId;
+  const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
+
+  if (!targetSessionId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  const result = await sessionManager.getArchivedMessages(targetSessionId, {
+    startSeq: typeof args.startSeq === 'number' ? args.startSeq : undefined,
+    endSeq: typeof args.endSeq === 'number' ? args.endSeq : undefined,
+  });
+
+  if (result.totalMatched === 0) {
+    const availableRange = typeof result.availableRange.startSeq === 'number' || typeof result.availableRange.endSeq === 'number'
+      ? ` Available archived seq range: ${typeof result.availableRange.startSeq === 'number' ? `#${result.availableRange.startSeq}` : '?'}-${typeof result.availableRange.endSeq === 'number' ? `#${result.availableRange.endSeq}` : '?'}.`
+      : '';
+    return `No archived messages matched for session \`${targetSessionId}\`.${availableRange}`;
+  }
+
+  return formatArchivedMessagePreview(targetSessionId, result.records, {
+    totalMatched: result.totalMatched,
+    startSeq: result.requestedRange.startSeq,
+    endSeq: result.requestedRange.endSeq,
+  }, previewLength);
 }
 
 export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {

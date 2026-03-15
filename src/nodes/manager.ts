@@ -76,6 +76,7 @@ export class NodesManager {
       'detach_agent_skill',
       'load_skill',
       'get_session_messages',
+      'get_archived_messages',
       'delete_session',
       'update_session_name',
       'stop_session',
