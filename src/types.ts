@@ -62,7 +62,6 @@ export interface SessionTodoState {
   remindEvery: number;
   anchorSeq: number;
   updatedAt: number;
-  remindedWhileBusy?: boolean;
 }
 
 // Session types

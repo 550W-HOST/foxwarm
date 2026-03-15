@@ -85,7 +85,7 @@ async function main(): Promise<void> {
       assert.strictEqual(session.todoState, undefined);
     });
 
-    await test('todo reminder counts later messages including tool-loop progress but only fires once per busy turn', async () => {
+    await test('todo reminder counts exact later non-reminder messages and repeats within the same busy tool loop', async () => {
       const sessionId = makeSessionId('selftest_todo_loop');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
@@ -97,43 +97,56 @@ async function main(): Promise<void> {
 
       session.busy = true;
       await tool_set_todo({ todo: '- [ ] ship feature', remindEvery: 2 }, { sessionId, session });
-      assert.strictEqual(session.todoState?.anchorSeq, 2);
+      assert.strictEqual(session.todoState?.anchorSeq, 1);
 
       await append(session, {
         role: 'tool',
         parts: [{ functionResponse: { tool_use_id: 'set-todo-1', name: 'set_todo', response: { output: 'ok' } } }],
       });
+      assert.strictEqual(countTodoReminders(session), 0);
+
       await append(session, {
         role: 'model',
         parts: [{ text: 'Working on it.' }],
       });
-      assert.strictEqual(countTodoReminders(session), 0);
+      assert.strictEqual(countTodoReminders(session), 1);
+      assert.strictEqual(session.todoState?.anchorSeq, 3);
 
       await append(session, {
         role: 'tool',
         parts: [{ functionResponse: { tool_use_id: 'other-1', name: 'read', response: { output: 'done' } } }],
       });
       assert.strictEqual(countTodoReminders(session), 1);
-      const firstReminder = session.history[session.history.length - 1];
+      const firstReminder = session.history.find(message => message.__meta?.todoReminder === true)!;
       assert.strictEqual(firstReminder.__meta?.todoReminder, true);
       assert.match(firstReminder.parts[0].system || '', /TODO reminder for this session/);
       assert.match(firstReminder.parts[0].system || '', /- \[ \] ship feature/);
 
       await append(session, {
         role: 'model',
-        parts: [{ text: 'Still busy in same turn.' }],
+        parts: [{ functionCall: { id: 'other-2', name: 'exec', args: { command: 'echo hi' } } }],
       });
-      assert.strictEqual(countTodoReminders(session), 1);
+      assert.strictEqual(countTodoReminders(session), 2);
+      assert.strictEqual(session.todoState?.anchorSeq, 6);
+
+      await append(session, {
+        role: 'tool',
+        parts: [{ functionResponse: { tool_use_id: 'other-2', name: 'exec', response: { output: 'hi' } } }],
+      });
+      assert.strictEqual(countTodoReminders(session), 2);
+      const reminderSeqs = session.history
+        .filter(message => message.__meta?.todoReminder === true)
+        .map(message => message.__meta?.todoAnchorSeq);
+      assert.deepStrictEqual(reminderSeqs, [3, 6]);
 
       session.busy = false;
       await sessionManager.saveSession(sessionId);
-      session.busy = true;
 
       await append(session, {
         role: 'user',
         parts: [{ text: 'next turn message' }],
       });
-      assert.strictEqual(countTodoReminders(session), 2);
+      assert.strictEqual(countTodoReminders(session), 3);
     });
 
     await test('set_todo rejects non-checklist todo text', async () => {

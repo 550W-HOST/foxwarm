@@ -19,7 +19,7 @@ import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetada
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
-import { clearTodoBusySuppression, maybeBuildTodoReminderMessage } from './session/todo';
+import { maybeBuildTodoReminderMessage } from './session/todo';
 
 function systemPart(system: string): MessagePart {
   return { system };
@@ -789,10 +789,6 @@ export async function saveSession(sessionId: string): Promise<void> {
     // Initialize historyVersion if not exists
     if (session.historyVersion === undefined) {
       session.historyVersion = 0;
-    }
-
-    if (!session.busy) {
-      clearTodoBusySuppression(session);
     }
 
     // Update message count in metadata
