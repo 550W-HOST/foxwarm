@@ -502,11 +502,16 @@ async function main(): Promise<void> {
       const updated = await sessionManager.getSession(sessionId);
       const compactedCallPart = updated.history[1].parts[0];
       const compactedResponsePart = updated.history[2].parts[0];
-      assert.strictEqual(compactedCallPart.functionCall, undefined);
-      assert.strictEqual(compactedResponsePart.functionResponse, undefined);
-      assert.match(compactedCallPart.text || '', /compacted tool call/);
-      assert.match(compactedCallPart.text || '', /get_archived_messages/);
-      assert.match(compactedResponsePart.text || '', /compacted tool response/);
+      assert(compactedCallPart.functionCall, 'expected compacted function call part to preserve functionCall structure');
+      assert(compactedResponsePart.functionResponse, 'expected compacted function response part to preserve functionResponse structure');
+      assert.strictEqual(compactedCallPart.functionCall?.name, 'exec');
+      assert.strictEqual(compactedResponsePart.functionResponse?.name, 'exec');
+      assert.strictEqual(compactedCallPart.functionCall?.args?.__compacted, true);
+      assert.match(String(compactedCallPart.functionCall?.args?.placeholder || ''), /compacted tool call/);
+      assert.match(String(compactedCallPart.functionCall?.args?.placeholder || ''), /get_archived_messages/);
+      assert.strictEqual(compactedResponsePart.functionResponse?.response?.__compacted, true);
+      assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /compacted tool response/);
+      assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /get_archived_messages/);
       assert.match(updated.history[3].parts[0].text || '', /recent tail should stay untouched/);
     });
 

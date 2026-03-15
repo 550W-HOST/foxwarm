@@ -118,13 +118,6 @@ function getFunctionResponseTokenCount(part: Message['parts'][number]): number {
     + estimateTokenCount(JSON.stringify(part.functionResponse.response || {}));
 }
 
-function appendPlaceholderText(originalText: string | undefined, placeholder: string): string {
-  if (typeof originalText === 'string' && originalText.trim()) {
-    return `${originalText.trim()}\n${placeholder}`;
-  }
-  return placeholder;
-}
-
 function buildToolNoisePlaceholder(options: {
   sessionId: string;
   seq?: number;
@@ -138,6 +131,20 @@ function buildToolNoisePlaceholder(options: {
   const toolLabel = toolName ? ` for \`${toolName}\`` : '';
   const lookup = buildArchiveLookupInstruction(sessionId, seq, seq);
   return `[compacted ${kindLabel}] Original ${kindLabel}${toolLabel} at ${rangeLabel} exceeded ${TOOL_NOISE_TOKEN_THRESHOLD} tokens (estimated ${estimatedTokens}) and was removed from working history to reduce tool noise. ${lookup}`;
+}
+
+function buildCompactedFunctionCallArgs(placeholder: string): Record<string, any> {
+  return {
+    __compacted: true,
+    placeholder,
+  };
+}
+
+function buildCompactedFunctionResponse(placeholder: string): Record<string, any> {
+  return {
+    __compacted: true,
+    output: placeholder,
+  };
 }
 
 function normalizeSeqRange(startSeq?: number, endSeq?: number): { startSeq?: number; endSeq?: number } {
@@ -497,38 +504,39 @@ export async function compactToolMessages(
     let touched = false;
     const rewrittenParts = message.parts.map(part => {
       const nextPart = structuredClone(part);
-      const placeholderLines: string[] = [];
 
       const functionCallTokens = getFunctionCallTokenCount(part);
       if (part.functionCall && functionCallTokens > thresholdTokens) {
-        placeholderLines.push(buildToolNoisePlaceholder({
+        const placeholder = buildToolNoisePlaceholder({
           sessionId,
           seq: message.__meta?.seq,
           toolName: part.functionCall.name,
           kind: 'function_call',
           estimatedTokens: functionCallTokens,
-        }));
-        delete nextPart.functionCall;
+        });
+        nextPart.functionCall = {
+          ...nextPart.functionCall,
+          args: buildCompactedFunctionCallArgs(placeholder),
+        };
         replacedFunctionCalls += 1;
         touched = true;
       }
 
       const functionResponseTokens = getFunctionResponseTokenCount(part);
       if (part.functionResponse && functionResponseTokens > thresholdTokens) {
-        placeholderLines.push(buildToolNoisePlaceholder({
+        const placeholder = buildToolNoisePlaceholder({
           sessionId,
           seq: message.__meta?.seq,
           toolName: part.functionResponse.name,
           kind: 'function_response',
           estimatedTokens: functionResponseTokens,
-        }));
-        delete nextPart.functionResponse;
+        });
+        nextPart.functionResponse = {
+          ...nextPart.functionResponse,
+          response: buildCompactedFunctionResponse(placeholder),
+        };
         replacedFunctionResponses += 1;
         touched = true;
-      }
-
-      if (placeholderLines.length > 0) {
-        nextPart.text = appendPlaceholderText(nextPart.text, placeholderLines.join('\n'));
       }
 
       return nextPart;
