@@ -320,7 +320,6 @@ async function finalizeCompaction(
   ensureContextFrontier(session).push({ kind: 'message', seq: completionMessage.__meta!.seq! });
 
   session.vectorIndexPosition = 0;
-  session.nextBlockId = 1;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
 
