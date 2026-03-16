@@ -21,6 +21,10 @@ This writes the following into the current directory by default:
 - `./.env`
 - `./data/` (credentials, agent data, logs)
 
+Important persisted path:
+
+- `./data/state/node_credentials.json`
+
 Then approve the pending node from the master:
 
 ```text
@@ -44,3 +48,26 @@ docker compose up -d --build
 ```
 
 The current compose template builds the node image from `/node/source.tar.gz`, so the remote machine does not need a local foxwarm checkout.
+
+## Minimal troubleshooting
+
+Check local status first:
+
+```bash
+docker compose ps
+docker compose logs -f
+```
+
+Then check the master-side node state:
+
+```text
+/node pair list
+/node known
+/node
+```
+
+If approval succeeded but reconnect still fails, inspect or remove:
+
+```text
+./data/state/node_credentials.json
+```
