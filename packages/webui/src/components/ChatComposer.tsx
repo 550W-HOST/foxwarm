@@ -163,7 +163,7 @@ const ChatComposer = memo(function ChatComposer({
     }
   }, [input, sessionId])
 
-  const cleanupRecording = useCallback(async () => {
+  const cleanupRecording = useCallback(async (options?: { preserveRecordedAudio?: boolean }) => {
     recordingActiveRef.current = false
     if (waveformFrameRef.current !== null) {
       cancelAnimationFrame(waveformFrameRef.current)
@@ -185,7 +185,9 @@ const ChatComposer = memo(function ChatComposer({
     audioMaxPeakRef.current = 0
     audioMaxRmsRef.current = 0
     audioRmsSumRef.current = 0
-    recordedPcmChunksRef.current = []
+    if (!options?.preserveRecordedAudio) {
+      recordedPcmChunksRef.current = []
+    }
     setWaveformBars(Array.from({ length: 5 }, () => 0.22))
 
     if (audioContextRef.current) {
@@ -610,7 +612,7 @@ const ChatComposer = memo(function ChatComposer({
       }
 
       try {
-        await cleanupRecording()
+        await cleanupRecording({ preserveRecordedAudio: true })
         streamingSessionRef.current?.cancel()
         streamingSessionRef.current = null
 
@@ -623,11 +625,13 @@ const ChatComposer = memo(function ChatComposer({
         pushAsrDebug(`rec append success; trimmedLength=${transcript.trim().length}`)
         setLiveTranscriptionPreview('')
         setTranscribingAudio(false)
+        recordedPcmChunksRef.current = []
       } catch (e) {
         console.error('Failed to stop streaming audio recording:', e)
         setTranscribeError(e instanceof Error ? e.message : 'Failed to stop streaming audio recording')
         pushAsrDebug(`rec stop error; ${e instanceof Error ? e.message : 'Failed to stop streaming audio recording'}`)
         setTranscribingAudio(false)
+        recordedPcmChunksRef.current = []
       }
       return
     }
