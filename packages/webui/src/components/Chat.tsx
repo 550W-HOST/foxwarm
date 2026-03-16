@@ -11,6 +11,14 @@ function getAsrStreamUrl() {
   return base.replace(/^http/i, 'ws')
 }
 
+type AsrTranscribeResult = {
+  text: string
+  status: number
+  rawLength: number
+  textLength: number
+  responsePreview: string
+}
+
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 
@@ -479,7 +487,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     setSendKeyMode(prev => prev === 'enter' ? 'mod-enter' : 'enter')
   }, [])
 
-  const handleTranscribeAudio = useCallback(async (file: File, draftText: string) => {
+  const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
     const formData = new FormData()
     formData.append('audio', file)
     const context = buildAsrContext(messages, draftText)
@@ -504,7 +512,14 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       throw new Error(data?.error || `ASR request failed (${response.status})`)
     }
 
-    return typeof data?.text === 'string' ? data.text : ''
+    const text = typeof data?.text === 'string' ? data.text : ''
+    return {
+      text,
+      status: response.status,
+      rawLength: responseText.length,
+      textLength: text.length,
+      responsePreview: responseText.slice(0, 200),
+    }
   }, [messages])
 
   const handleCreateStreamingTranscriber = useCallback(async ({
@@ -512,11 +527,13 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     onPartial,
     onFinal,
     onError,
+    onDebug,
   }: {
     draftText: string
     onPartial: (text: string) => void
     onFinal: (text: string) => void
     onError: (message: string) => void
+    onDebug: (message: string) => void
   }): Promise<StreamingAsrSession> => {
     const context = buildAsrContext(messages, draftText)
 
@@ -541,31 +558,43 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       socket.binaryType = 'arraybuffer'
 
       socket.onopen = () => {
+        onDebug(`ws open; contextLength=${context.length}`)
         socket.send(JSON.stringify({
           type: 'start',
           context,
         }))
+        onDebug('ws start sent')
       }
 
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(String(event.data))
           if (payload.type === 'ready') {
+            onDebug('ws ready received')
             if (resolved) return
             resolved = true
             settled = true
+            let chunkCount = 0
+            let totalBytes = 0
             resolve({
               sendAudioChunk: (chunk: ArrayBuffer) => {
                 if (socket.readyState === WebSocket.OPEN) {
                   socket.send(chunk)
+                  chunkCount += 1
+                  totalBytes += chunk.byteLength
+                  if (chunkCount <= 3 || chunkCount % 20 === 0) {
+                    onDebug(`ws chunk sent; count=${chunkCount} bytes=${chunk.byteLength} totalBytes=${totalBytes}`)
+                  }
                 }
               },
               stop: () => {
                 if (socket.readyState === WebSocket.OPEN) {
                   socket.send(JSON.stringify({ type: 'stop' }))
+                  onDebug(`ws stop sent; chunkCount=${chunkCount} totalBytes=${totalBytes}`)
                 }
               },
               cancel: () => {
+                onDebug('ws cancel called')
                 try {
                   socket.close()
                 } catch {}
@@ -575,11 +604,13 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
           }
 
           if (payload.type === 'partial') {
+            onDebug(`ws partial received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
             onPartial(typeof payload.text === 'string' ? payload.text : '')
             return
           }
 
           if (payload.type === 'final') {
+            onDebug(`ws final received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
             onFinal(typeof payload.text === 'string' ? payload.text : '')
             try {
               socket.close()
@@ -588,18 +619,22 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
           }
 
           if (payload.type === 'error') {
+            onDebug(`ws error payload; ${payload.error || 'unknown error'}`)
             fail(payload.error || 'Streaming ASR failed')
           }
         } catch (error) {
+          onDebug(`ws invalid payload; ${error instanceof Error ? error.message : 'unknown error'}`)
           fail(error instanceof Error ? error.message : 'Invalid streaming ASR response')
         }
       }
 
       socket.onerror = () => {
+        onDebug('ws onerror fired')
         fail('Failed to connect to streaming ASR service')
       }
 
       socket.onclose = () => {
+        onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)}`)
         if (!resolved && !settled) {
           reject(new Error('Streaming ASR connection closed before ready'))
         }
