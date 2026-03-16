@@ -11,22 +11,6 @@ function getAsrStreamUrl() {
   return base.replace(/^http/i, 'ws')
 }
 
-function getAsrLanguageHint(): string {
-  const locales = [
-    ...(Array.isArray(navigator.languages) ? navigator.languages : []),
-    navigator.language,
-  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-
-  for (const locale of locales) {
-    const normalized = locale.toLowerCase()
-    if (normalized.startsWith('zh')) {
-      return 'Chinese'
-    }
-  }
-
-  return ''
-}
-
 type AsrTranscribeResult = {
   text: string
   status: number
@@ -507,12 +491,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     const formData = new FormData()
     formData.append('audio', file)
     const context = buildAsrContext(messages, draftText)
-    const language = getAsrLanguageHint()
     if (context.trim()) {
       formData.append('context', context.trim())
-    }
-    if (language) {
-      formData.append('language', language)
     }
 
     const response = await fetch(`${API_BASE_PATH}/asr/transcribe`, {
@@ -556,7 +536,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     onDebug: (message: string) => void
   }): Promise<StreamingAsrSession> => {
     const context = buildAsrContext(messages, draftText)
-    const language = getAsrLanguageHint()
 
     return await new Promise<StreamingAsrSession>((resolve, reject) => {
       const socket = new WebSocket(getAsrStreamUrl())
@@ -579,11 +558,10 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       socket.binaryType = 'arraybuffer'
 
       socket.onopen = () => {
-        onDebug(`ws open; contextLength=${context.length} language=${language || 'auto'}`)
+        onDebug(`ws open; contextLength=${context.length} language=auto`)
         socket.send(JSON.stringify({
           type: 'start',
           context,
-          language,
         }))
         onDebug('ws start sent')
       }
