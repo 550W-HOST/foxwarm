@@ -20,11 +20,11 @@ function getAsrLanguageHint(): string {
   for (const locale of locales) {
     const normalized = locale.toLowerCase()
     if (normalized.startsWith('zh')) {
-      return 'zh'
+      return 'Chinese'
     }
   }
 
-  return 'zh'
+  return ''
 }
 
 type AsrTranscribeResult = {
