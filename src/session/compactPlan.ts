@@ -1,36 +1,39 @@
-import { estimateMessageTokens } from '../tokenCount';
-import { Message, ToolDefinition } from '../types';
-import { formatMessagePreviewText } from '../utils/messageFormat';
+import { ToolDefinition } from '../types';
 
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
-const DEFAULT_BLOCK_TOKEN_TARGET = 1200;
-const DEFAULT_BLOCK_MESSAGE_LIMIT = 12;
-const DEFAULT_PREVIEW_MESSAGE_LIMIT = 3;
-const DEFAULT_PREVIEW_CHAR_LIMIT = 160;
+const DEFAULT_PREVIEW_CHAR_LIMIT = 80;
 
-export interface CompactCandidateBlock {
-  id: string;
-  startSeq?: number;
-  endSeq?: number;
-  messageCount: number;
-  estimatedTokens: number;
-  preview: string;
-  tags: string[];
-  messages: Message[];
+export type CompactCandidateItem =
+  | {
+      kind: 'message';
+      key: string;
+      seq: number;
+      preview: string;
+    }
+  | {
+      kind: 'block';
+      key: string;
+      id: number;
+      level: number;
+      rawStartSeq: number;
+      rawEndSeq: number;
+      preview: string;
+    };
+
+export interface LayeredCreateBlockPlan {
+  level: number;
+  sourceKind: 'message' | 'block';
+  sourceStart: number;
+  sourceEnd: number;
+  summary: string;
 }
 
 export interface CompactPlan {
-  summary: string;
-  keepBlockIds: string[];
-  dropBlockIds: string[];
+  createBlocks: LayeredCreateBlockPlan[];
 }
 
 export interface CompactPlanValidationDetails {
-  summaryErrors: string[];
-  arrayErrors: string[];
-  unknownBlockIds: string[];
-  duplicateBlockIds: string[];
-  missingBlockIds: string[];
+  createBlockErrors: string[];
 }
 
 export class CompactPlanValidationError extends Error {
@@ -45,365 +48,268 @@ export class CompactPlanValidationError extends Error {
 
 export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   name: COMPACT_PLAN_TOOL_NAME,
-  description: 'Submit the compaction plan for older candidate blocks. Every candidate block must appear exactly once in keepBlockIds or dropBlockIds. Also provide the replacement working summary that future turns should read after compaction.',
+  description: 'Submit layered-context block creation plan for older context items. Create one or more continuous same-level summary blocks; unmentioned older items stay verbatim in working history.',
   parameters: {
     type: 'object',
     properties: {
-      summary: {
-        type: 'string',
-        description: 'Concise working summary for future turns. Preserve the critical older context that future turns still need after dropped blocks leave working history, plus any context needed to understand the retained recent messages.'
-      },
-      keepBlockIds: {
+      createBlocks: {
         type: 'array',
-        description: 'Older block ids to keep verbatim in working history. Use sparingly for exact instructions, unresolved tasks, or details that should remain word-for-word.',
-        items: { type: 'string' }
+        description: 'Each block replaces one continuous range of older candidate items with a lightweight summary block. Level 1 blocks summarize raw messages; higher levels summarize blocks from the immediately lower level.',
+        items: {
+          type: 'object',
+          properties: {
+            level: { type: 'number', description: 'Target block level. Use 1 for raw messages, 2 for level-1 blocks, and so on.' },
+            sourceKind: { type: 'string', enum: ['message', 'block'], description: 'Whether this block summarizes raw messages or existing lower-level blocks.' },
+            sourceStart: { type: 'number', description: 'For sourceKind=message, starting raw seq. For sourceKind=block, starting block id.' },
+            sourceEnd: { type: 'number', description: 'For sourceKind=message, ending raw seq. For sourceKind=block, ending block id.' },
+            summary: { type: 'string', description: 'Concise summary text for this block.' },
+          },
+          required: ['level', 'sourceKind', 'sourceStart', 'sourceEnd', 'summary'],
+        },
       },
-      dropBlockIds: {
-        type: 'array',
-        description: 'Older block ids that can disappear from working history entirely. Archive still keeps them, so use this only for low-value or obsolete details.',
-        items: { type: 'string' }
-      }
     },
-    required: ['summary', 'keepBlockIds', 'dropBlockIds']
-  }
+    required: ['createBlocks'],
+  },
 };
-
-function collectBlockTags(messages: Message[]): string[] {
-  const tags = new Set<string>();
-
-  for (const message of messages) {
-    tags.add(message.role);
-    if (message.parts?.some(part => typeof part.system === 'string')) {
-      tags.add('system');
-    }
-    if (message.parts?.some(part => part.functionCall)) {
-      tags.add('tool-call');
-    }
-    if (message.parts?.some(part => part.functionResponse)) {
-      tags.add('tool-result');
-    }
-    if (message.parts?.some(part => part.inlineData || part.inlineDataRef)) {
-      tags.add('inline-data');
-    }
-  }
-
-  return Array.from(tags);
-}
-
-function getSeqRange(messages: Message[]): { startSeq?: number; endSeq?: number } {
-  const seqs = messages
-    .map(message => message.__meta?.seq)
-    .filter((seq): seq is number => typeof seq === 'number' && seq > 0);
-
-  if (seqs.length === 0) {
-    return {};
-  }
-
-  return {
-    startSeq: seqs[0],
-    endSeq: seqs[seqs.length - 1],
-  };
-}
-
-function buildBlockPreview(messages: Message[]): string {
-  const previewLines = messages.slice(0, DEFAULT_PREVIEW_MESSAGE_LIMIT).map(message => {
-    const seqLabel = typeof message.__meta?.seq === 'number' ? `#${message.__meta.seq} ` : '';
-    const preview = formatMessagePreviewText(message, DEFAULT_PREVIEW_CHAR_LIMIT, {
-      skipEphemeralSystem: true,
-      skipRagMemorySnippets: true,
-      skipThinking: true,
-    }).trim();
-    return `${seqLabel}${preview || '[empty message]'}`;
-  });
-
-  if (messages.length > DEFAULT_PREVIEW_MESSAGE_LIMIT) {
-    const tailSeq = messages[messages.length - 1]?.__meta?.seq;
-    previewLines.push(`... ${messages.length - DEFAULT_PREVIEW_MESSAGE_LIMIT} more message(s)${typeof tailSeq === 'number' ? ` through #${tailSeq}` : ''}`);
-  }
-
-  return previewLines.join('\n');
-}
-
-function buildCandidateId(index: number, startSeq?: number, endSeq?: number): string {
-  if (typeof startSeq === 'number' && typeof endSeq === 'number') {
-    return `block_${String(index + 1).padStart(2, '0')}_seq_${startSeq}_${endSeq}`;
-  }
-
-  return `block_${String(index + 1).padStart(2, '0')}`;
-}
-
-function shouldFlushBlock(currentMessages: Message[], currentTokens: number, nextMessage?: Message): boolean {
-  if (currentMessages.length === 0) {
-    return false;
-  }
-
-  const reachedSizeLimit = currentTokens >= DEFAULT_BLOCK_TOKEN_TARGET || currentMessages.length >= DEFAULT_BLOCK_MESSAGE_LIMIT;
-  if (!reachedSizeLimit) {
-    return false;
-  }
-
-  if (!nextMessage) {
-    return true;
-  }
-
-  const currentLast = currentMessages[currentMessages.length - 1];
-  if (currentLast.role === 'tool' || nextMessage.role === 'tool') {
-    return false;
-  }
-
-  return true;
-}
-
-export function buildCompactCandidateBlocks(messages: Message[]): CompactCandidateBlock[] {
-  const blocks: CompactCandidateBlock[] = [];
-  let currentMessages: Message[] = [];
-  let currentTokens = 0;
-
-  const flush = () => {
-    if (currentMessages.length === 0) {
-      return;
-    }
-
-    const { startSeq, endSeq } = getSeqRange(currentMessages);
-    blocks.push({
-      id: buildCandidateId(blocks.length, startSeq, endSeq),
-      startSeq,
-      endSeq,
-      messageCount: currentMessages.length,
-      estimatedTokens: currentTokens,
-      preview: buildBlockPreview(currentMessages),
-      tags: collectBlockTags(currentMessages),
-      messages: currentMessages,
-    });
-
-    currentMessages = [];
-    currentTokens = 0;
-  };
-
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index];
-    currentMessages.push(message);
-    currentTokens += estimateMessageTokens(message);
-
-    if (shouldFlushBlock(currentMessages, currentTokens, messages[index + 1])) {
-      flush();
-    }
-  }
-
-  flush();
-  return blocks;
-}
 
 export function formatSeqRange(startSeq?: number, endSeq?: number): string {
   if (typeof startSeq === 'number' && typeof endSeq === 'number') {
     return startSeq === endSeq ? `#${startSeq}` : `#${startSeq}-#${endSeq}`;
   }
-  if (typeof startSeq === 'number') {
-    return `#${startSeq}-?`;
-  }
-  if (typeof endSeq === 'number') {
-    return `?-#${endSeq}`;
-  }
+  if (typeof startSeq === 'number') return `#${startSeq}-?`;
+  if (typeof endSeq === 'number') return `?-#${endSeq}`;
   return '(seq unavailable)';
+}
+
+function trimPreview(text: string, limit: number = DEFAULT_PREVIEW_CHAR_LIMIT): string {
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit - 1)}…`;
+}
+
+export function buildMessageCandidateItem(seq: number, preview: string): CompactCandidateItem {
+  return {
+    kind: 'message',
+    key: `M#${seq}`,
+    seq,
+    preview: trimPreview(preview),
+  };
+}
+
+export function buildBlockCandidateItem(id: number, level: number, rawStartSeq: number, rawEndSeq: number, summary: string): CompactCandidateItem {
+  return {
+    kind: 'block',
+    key: `B#${id}`,
+    id,
+    level,
+    rawStartSeq,
+    rawEndSeq,
+    preview: trimPreview(summary),
+  };
 }
 
 export function buildCompactPromptText(options: {
   forcedKeptCount: number;
   forcedKeptStartSeq?: number;
   forcedKeptEndSeq?: number;
-  candidateBlocks: CompactCandidateBlock[];
+  candidateItems: CompactCandidateItem[];
   guidance?: string;
 }): string {
-  const { forcedKeptCount, forcedKeptStartSeq, forcedKeptEndSeq, candidateBlocks, guidance } = options;
+  const { forcedKeptCount, forcedKeptStartSeq, forcedKeptEndSeq, candidateItems, guidance } = options;
   const lines: string[] = [
-    'COMPACTION STARTED: stop any previous task and focus only on compaction.',
-    `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} message(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. Do not spend block selections on them.`,
-    `Review the older candidate blocks below and respond by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
+    'COMPACTION STARTED: stop any previous task and focus only on layered-context compaction.',
+    `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. Do not replace them.`,
+    `Review the older candidate items below and respond by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
     'Rules:',
-    '- Every candidate block id must appear exactly once in keepBlockIds or dropBlockIds.',
-    '- Use keepBlockIds only for older content that must stay verbatim in working history.',
-    '- Use dropBlockIds only for low-value older content that can leave working history. Archive still keeps everything.',
-    '- The summary should be concise but sufficient for future turns to continue work safely.',
+    '- createBlocks may include one or more new blocks.',
+    '- A block must summarize a continuous range of same-kind candidate items only.',
+    '- Level 1 blocks summarize raw messages (sourceKind=message).',
+    '- Higher-level blocks summarize existing blocks from the immediately lower level (sourceKind=block and level = child level + 1).',
+    '- Items not covered by createBlocks stay verbatim in working history.',
+    '- Do not overlap source ranges across createBlocks.',
+    '- Keep each summary compact and factual.',
     '',
-    ...(guidance ? [
-      'Additional requester guidance for this compaction:',
-      guidance,
-      '',
-    ] : []),
-    'Older compact candidates:',
+    ...(guidance ? ['Additional requester guidance:', guidance, ''] : []),
+    'Older compaction candidates:',
   ];
 
-  for (const block of candidateBlocks) {
-    lines.push([
-      `- ${block.id}`,
-      `  seqRange: ${formatSeqRange(block.startSeq, block.endSeq)}`,
-      `  messageCount: ${block.messageCount}`,
-      `  estimatedTokens: ${block.estimatedTokens}`,
-      `  tags: ${block.tags.join(', ') || '(none)'}`,
-      '  preview:',
-      ...block.preview.split('\n').map(line => `    ${line}`),
-    ].join('\n'));
+  for (const item of candidateItems) {
+    if (item.kind === 'message') {
+      lines.push(`- ${item.key} ${item.preview || '[empty message]'}`);
+      continue;
+    }
+
+    lines.push(`- ${item.key} L${item.level} raw${formatSeqRange(item.rawStartSeq, item.rawEndSeq)} ${item.preview || '[empty block]'}`);
   }
 
   return lines.join('\n');
 }
 
-function normalizeStringArray(value: unknown, fieldName: string, arrayErrors: string[]): string[] {
-  if (!Array.isArray(value)) {
-    arrayErrors.push(`${fieldName} must be an array of block ids.`);
+function buildCompactPlanValidationSummary(details: CompactPlanValidationDetails): string {
+  if (!details.createBlockErrors.length) {
+    return 'Compaction plan validation failed.';
+  }
+  return details.createBlockErrors.join(' ');
+}
+
+function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPlanValidationDetails): LayeredCreateBlockPlan[] {
+  if (!Array.isArray(rawArgs.createBlocks)) {
+    details.createBlockErrors.push('createBlocks must be an array.');
     return [];
   }
 
-  const normalized: string[] = [];
-  value.forEach((item, index) => {
-    if (typeof item !== 'string' || !item.trim()) {
-      arrayErrors.push(`${fieldName}[${index}] must be a non-empty string.`);
-      return;
+  return rawArgs.createBlocks.flatMap((entry, index) => {
+    if (!entry || typeof entry !== 'object') {
+      details.createBlockErrors.push(`createBlocks[${index}] must be an object.`);
+      return [];
     }
-    normalized.push(item.trim());
+
+    const level = Number((entry as any).level);
+    const sourceKind = (entry as any).sourceKind;
+    const sourceStart = Number((entry as any).sourceStart);
+    const sourceEnd = Number((entry as any).sourceEnd);
+    const summary = typeof (entry as any).summary === 'string' ? (entry as any).summary.trim() : '';
+
+    if (!Number.isInteger(level) || level < 1) {
+      details.createBlockErrors.push(`createBlocks[${index}].level must be an integer >= 1.`);
+    }
+    if (sourceKind !== 'message' && sourceKind !== 'block') {
+      details.createBlockErrors.push(`createBlocks[${index}].sourceKind must be \"message\" or \"block\".`);
+    }
+    if (!Number.isInteger(sourceStart) || sourceStart < 1) {
+      details.createBlockErrors.push(`createBlocks[${index}].sourceStart must be a positive integer.`);
+    }
+    if (!Number.isInteger(sourceEnd) || sourceEnd < 1) {
+      details.createBlockErrors.push(`createBlocks[${index}].sourceEnd must be a positive integer.`);
+    }
+    if (Number.isInteger(sourceStart) && Number.isInteger(sourceEnd) && sourceStart > sourceEnd) {
+      details.createBlockErrors.push(`createBlocks[${index}] has sourceStart > sourceEnd.`);
+    }
+    if (!summary) {
+      details.createBlockErrors.push(`createBlocks[${index}].summary must be a non-empty string.`);
+    }
+    if (sourceKind === 'message' && Number.isInteger(level) && level !== 1) {
+      details.createBlockErrors.push(`createBlocks[${index}] uses sourceKind=message so level must be 1.`);
+    }
+    if (sourceKind === 'block' && Number.isInteger(level) && level < 2) {
+      details.createBlockErrors.push(`createBlocks[${index}] uses sourceKind=block so level must be >= 2.`);
+    }
+
+    return [{ level, sourceKind, sourceStart, sourceEnd, summary } as LayeredCreateBlockPlan];
   });
-
-  return normalized;
 }
 
-function buildCompactPlanValidationSummary(details: CompactPlanValidationDetails): string {
-  const issueCount = details.summaryErrors.length
-    + details.arrayErrors.length
-    + details.unknownBlockIds.length
-    + details.duplicateBlockIds.length
-    + details.missingBlockIds.length;
+function findMessageRange(candidateItems: CompactCandidateItem[], sourceStart: number, sourceEnd: number): [number, number] | null {
+  const startIndex = candidateItems.findIndex(item => item.kind === 'message' && item.seq === sourceStart);
+  if (startIndex < 0) return null;
 
-  if (issueCount === 0) {
-    return 'Compaction plan validation failed.';
-  }
-
-  const lines: string[] = [];
-  if (details.summaryErrors.length) {
-    lines.push(`summary: ${details.summaryErrors.join('; ')}`);
-  }
-  if (details.arrayErrors.length) {
-    lines.push(...details.arrayErrors);
-  }
-  if (details.unknownBlockIds.length) {
-    lines.push(`unknown block ids: ${Array.from(new Set(details.unknownBlockIds)).join(', ')}`);
-  }
-  if (details.duplicateBlockIds.length) {
-    lines.push(`duplicate block ids: ${Array.from(new Set(details.duplicateBlockIds)).join(', ')}`);
-  }
-  if (details.missingBlockIds.length) {
-    lines.push(`missing block ids: ${details.missingBlockIds.join(', ')}`);
+  let expectedSeq = sourceStart;
+  let endIndex = startIndex - 1;
+  for (let index = startIndex; index < candidateItems.length; index += 1) {
+    const item = candidateItems[index];
+    if (item.kind !== 'message' || item.seq !== expectedSeq) {
+      break;
+    }
+    endIndex = index;
+    if (expectedSeq === sourceEnd) {
+      return [startIndex, endIndex];
+    }
+    expectedSeq += 1;
   }
 
-  return lines.join(' | ');
+  return null;
 }
 
-function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidateBlocks: CompactCandidateBlock[]): CompactPlanValidationDetails {
+function findBlockRange(candidateItems: CompactCandidateItem[], level: number, sourceStart: number, sourceEnd: number): [number, number] | null {
+  const childLevel = level - 1;
+  const startIndex = candidateItems.findIndex(item => item.kind === 'block' && item.id === sourceStart && item.level === childLevel);
+  if (startIndex < 0) return null;
+
+  let expectedId = sourceStart;
+  let endIndex = startIndex - 1;
+  for (let index = startIndex; index < candidateItems.length; index += 1) {
+    const item = candidateItems[index];
+    if (item.kind !== 'block' || item.level !== childLevel || item.id !== expectedId) {
+      break;
+    }
+    endIndex = index;
+    if (expectedId === sourceEnd) {
+      return [startIndex, endIndex];
+    }
+    expectedId += 1;
+  }
+
+  return null;
+}
+
+function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidateItems: CompactCandidateItem[]): CompactPlanValidationDetails {
   const details: CompactPlanValidationDetails = {
-    summaryErrors: [],
-    arrayErrors: [],
-    unknownBlockIds: [],
-    duplicateBlockIds: [],
-    missingBlockIds: [],
+    createBlockErrors: [],
   };
 
-  const summary = typeof rawArgs?.summary === 'string' ? rawArgs.summary.trim() : '';
-  if (!summary) {
-    details.summaryErrors.push('must be a non-empty string');
-  } else if (summary.startsWith('Error:')) {
-    details.summaryErrors.push('must not start with `Error:`');
+  const createBlocks = normalizeCreateBlocks(rawArgs, details);
+  if (details.createBlockErrors.length > 0) {
+    return details;
   }
 
-  const keepBlockIds = normalizeStringArray(rawArgs?.keepBlockIds, 'keepBlockIds', details.arrayErrors);
-  const dropBlockIds = normalizeStringArray(rawArgs?.dropBlockIds, 'dropBlockIds', details.arrayErrors);
-
-  const knownIds = new Set(candidateBlocks.map(block => block.id));
-  const seenIds = new Set<string>();
-  for (const blockId of [...keepBlockIds, ...dropBlockIds]) {
-    if (!knownIds.has(blockId)) {
-      details.unknownBlockIds.push(blockId);
-      continue;
-    }
-    if (seenIds.has(blockId)) {
-      details.duplicateBlockIds.push(blockId);
-      continue;
-    }
-    seenIds.add(blockId);
+  if (createBlocks.length === 0) {
+    details.createBlockErrors.push('createBlocks must contain at least one block.');
+    return details;
   }
 
-  details.missingBlockIds = candidateBlocks
-    .map(block => block.id)
-    .filter(blockId => !seenIds.has(blockId));
+  const usedIndices = new Set<number>();
+  createBlocks.forEach((block, index) => {
+    const range = block.sourceKind === 'message'
+      ? findMessageRange(candidateItems, block.sourceStart, block.sourceEnd)
+      : findBlockRange(candidateItems, block.level, block.sourceStart, block.sourceEnd);
+
+    if (!range) {
+      const unitLabel = block.sourceKind === 'message' ? 'seq' : 'block id';
+      details.createBlockErrors.push(`createBlocks[${index}] does not match a continuous ${block.sourceKind} range in current older context for ${unitLabel} ${block.sourceStart}-${block.sourceEnd}.`);
+      return;
+    }
+
+    for (let candidateIndex = range[0]; candidateIndex <= range[1]; candidateIndex += 1) {
+      if (usedIndices.has(candidateIndex)) {
+        details.createBlockErrors.push(`createBlocks[${index}] overlaps another createBlocks range at candidate ${candidateItems[candidateIndex].key}.`);
+        return;
+      }
+    }
+
+    for (let candidateIndex = range[0]; candidateIndex <= range[1]; candidateIndex += 1) {
+      usedIndices.add(candidateIndex);
+    }
+  });
 
   return details;
 }
 
-function hasCompactPlanValidationIssues(details: CompactPlanValidationDetails): boolean {
-  return details.summaryErrors.length > 0
-    || details.arrayErrors.length > 0
-    || details.unknownBlockIds.length > 0
-    || details.duplicateBlockIds.length > 0
-    || details.missingBlockIds.length > 0;
-}
-
-export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateBlocks: CompactCandidateBlock[]): CompactPlan {
-  const summary = typeof rawArgs?.summary === 'string' ? rawArgs.summary.trim() : '';
-  const details = getCompactPlanValidationDetails(rawArgs, candidateBlocks);
-  if (hasCompactPlanValidationIssues(details)) {
+export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateItems: CompactCandidateItem[]): CompactPlan {
+  const details = getCompactPlanValidationDetails(rawArgs, candidateItems);
+  if (details.createBlockErrors.length > 0) {
     throw new CompactPlanValidationError(details);
   }
 
-  const keepBlockIds = (rawArgs.keepBlockIds as string[]).map(id => id.trim());
-  const dropBlockIds = (rawArgs.dropBlockIds as string[]).map(id => id.trim());
-
   return {
-    summary,
-    keepBlockIds,
-    dropBlockIds,
+    createBlocks: normalizeCreateBlocks(rawArgs, { createBlockErrors: [] }),
   };
 }
 
 export function buildCompactPlanValidationFeedback(error: CompactPlanValidationError, attemptsRemaining: number): string {
-  const lines: string[] = [
-    `COMPACT PLAN INVALID: your last ${COMPACT_PLAN_TOOL_NAME} call had validation errors.`,
-    'Fix only the compact plan and call submit_compact_plan again. Do not switch back to normal conversation and do not call any other tool.',
-    'Validation problems:',
-  ];
-
-  if (error.details.summaryErrors.length) {
-    lines.push(`- summary: ${error.details.summaryErrors.join('; ')}`);
-  }
-  for (const issue of error.details.arrayErrors) {
-    lines.push(`- ${issue}`);
-  }
-  if (error.details.unknownBlockIds.length) {
-    lines.push(`- unknown block ids: ${Array.from(new Set(error.details.unknownBlockIds)).join(', ')}`);
-  }
-  if (error.details.duplicateBlockIds.length) {
-    lines.push(`- duplicate block ids: ${Array.from(new Set(error.details.duplicateBlockIds)).join(', ')}`);
-  }
-  if (error.details.missingBlockIds.length) {
-    lines.push(`- missing block ids: ${error.details.missingBlockIds.join(', ')}`);
-  }
-
-  lines.push('Rules reminder: every candidate block id must appear exactly once in keepBlockIds or dropBlockIds.');
-  lines.push(`Attempts remaining after this feedback: ${attemptsRemaining}.`);
-
-  return lines.join('\n');
+  return [
+    'COMPACT PLAN INVALID.',
+    error.message,
+    `Attempts remaining after this feedback: ${attemptsRemaining}.`,
+    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. Do not switch back to normal conversation and do not call any other tool.`,
+  ].join(' ');
 }
 
-export function describeBlockRanges(blocks: CompactCandidateBlock[], blockIds: string[]): string {
-  if (blockIds.length === 0) {
+export function describeCreatedRanges(plan: CompactPlan): string {
+  if (plan.createBlocks.length === 0) {
     return 'none';
   }
 
-  const blockMap = new Map(blocks.map(block => [block.id, block]));
-  return blockIds
-    .map(blockId => {
-      const block = blockMap.get(blockId);
-      if (!block) {
-        return blockId;
-      }
-      return `${blockId} (${formatSeqRange(block.startSeq, block.endSeq)})`;
-    })
-    .join(', ');
+  return plan.createBlocks.map(block => (
+    `${block.sourceKind === 'message' ? 'L1' : `L${block.level}`} ${block.sourceKind} ${block.sourceStart}-${block.sourceEnd}`
+  )).join(', ');
 }

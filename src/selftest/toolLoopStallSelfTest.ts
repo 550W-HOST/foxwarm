@@ -303,15 +303,12 @@ async function main(): Promise<void> {
         if (llmCallCount === 2) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
-          const blockIds = Array.from(systemText.matchAll(/- (block_[^\n]+)/g)).map(match => match[1]);
-          assert(blockIds.length > 0, 'expected compaction prompt to include at least one block id');
+          assert.match(systemText, /M#1/);
           const toolCall = {
             id: 'compact-plan-invalid',
             name: 'submit_compact_plan',
             args: {
-              summary: '',
-              keepBlockIds: [] as string[],
-              dropBlockIds: [] as string[],
+              createBlocks: [] as any[],
             },
           };
           await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
@@ -321,19 +318,18 @@ async function main(): Promise<void> {
         if (llmCallCount === 3) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
-          assert.match(systemText, /summary: must be a non-empty string/);
-          const originalPrompt = activeSession.history
-            .find(msg => msg.role === 'user' && msg.parts.some(part => typeof part.system === 'string' && part.system.includes('COMPACTION STARTED')))
-            ?.parts.find(part => typeof part.system === 'string')?.system || '';
-          const blockIds = Array.from(originalPrompt.matchAll(/- (block_[^\n]+)/g)).map(match => match[1]);
-          assert(blockIds.length > 0, 'expected original compaction prompt to remain available in history');
+          assert.match(systemText, /createBlocks must contain at least one block/);
           const toolCall = {
             id: 'compact-plan',
             name: 'submit_compact_plan',
             args: {
-              summary: 'compacted summary',
-              keepBlockIds: [] as string[],
-              dropBlockIds: blockIds,
+              createBlocks: [{
+                level: 1,
+                sourceKind: 'message',
+                sourceStart: 1,
+                sourceEnd: 3,
+                summary: 'layered compact summary',
+              }],
             },
           };
           await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
@@ -342,8 +338,7 @@ async function main(): Promise<void> {
 
         if (llmCallCount === 4) {
           assert.strictEqual(parts, null);
-          assert(activeSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
-          assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('compacted summary'))));
+          assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
           await appendStubModelMessage(activeSession, [{ text: 'continued after compact' }]);
           return { text: 'continued after compact' };
         }
@@ -358,9 +353,8 @@ async function main(): Promise<void> {
       const finalSession = await sessionManager.getSession(sessionId);
       assert.strictEqual(llmCallCount, 4);
       assert.strictEqual(finalSession.busy, false);
-      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
-      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compacted message placeholder:') && (part.system || '').includes('get_archived_messages') && (part.system || '').includes('#1-#3'))));
-      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('compacted summary'))));
+      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
+      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('layered compact summary'))));
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed'))));
       assertLastModelText(finalSession, 'continued after compact');
     });

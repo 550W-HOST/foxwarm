@@ -3,19 +3,24 @@ import { logger } from '../common';
 import { COMPACT_PERCENT, resolveModelConfig } from '../config';
 import { estimateSessionTokens, estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
-import { appendMessagesToArchive, readArchiveMessages } from './archive';
+import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange } from './archive';
 import {
-  buildCompactCandidateBlocks,
+  buildBlockCandidateItem,
   buildCompactPlanValidationFeedback,
   buildCompactPromptText,
+  buildMessageCandidateItem,
   COMPACT_PLAN_TOOL_DEFINITION,
   COMPACT_PLAN_TOOL_NAME,
+  CompactCandidateItem,
+  CompactPlan,
   CompactPlanValidationError,
-  describeBlockRanges,
+  describeCreatedRanges,
   formatSeqRange,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { Message, QueueItem, Session, TokenUsage } from '../types';
+import { Message, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
+import { formatMessagePreviewText } from '../utils/messageFormat';
+import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './layeredContext';
 
 const TOOL_NOISE_TOKEN_THRESHOLD = 200;
 
@@ -184,48 +189,146 @@ function resolveCompactionSplitIndex(history: Message[], keepPercent: number): n
   return splitIndex;
 }
 
+async function buildLayeredCompactCandidateItems(session: Session, olderFrontier: ContextFrontierItem[]): Promise<CompactCandidateItem[]> {
+  const messageSeqs = olderFrontier
+    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
+    .map(item => item.seq);
+  const blockIds = olderFrontier
+    .filter((item): item is Extract<ContextFrontierItem, { kind: 'block' }> => item.kind === 'block')
+    .map(item => item.id);
+
+  const messageRecords = messageSeqs.length > 0
+    ? await readArchiveMessagesBySeqRange(session.id, Math.min(...messageSeqs), Math.max(...messageSeqs))
+    : [];
+  const blockRecords = blockIds.length > 0
+    ? await readArchiveBlocksByIdRange(session.id, Math.min(...blockIds), Math.max(...blockIds))
+    : [];
+
+  const messageMap = new Map(messageRecords.map(record => [record.seq, record]));
+  const blockMap = new Map(blockRecords.map(record => [record.id, record]));
+
+  return olderFrontier.flatMap(item => {
+    if (item.kind === 'message') {
+      const record = messageMap.get(item.seq);
+      if (!record) {
+        return [];
+      }
+      return [buildMessageCandidateItem(item.seq, formatMessagePreviewText(record.message, 60, {
+        skipEphemeralSystem: true,
+        skipRagMemorySnippets: true,
+        skipThinking: true,
+      }).trim() || '[empty message]')];
+    }
+
+    const record = blockMap.get(item.id);
+    if (!record) {
+      return [];
+    }
+
+    return [buildBlockCandidateItem(record.id, record.level, record.rawStartSeq, record.rawEndSeq, record.summary)];
+  });
+}
+
+function resolveCreateBlockRanges(plan: CompactPlan, candidateItems: CompactCandidateItem[]): Array<{ planIndex: number; startIndex: number; endIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> {
+  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> = [];
+
+  for (let planIndex = 0; planIndex < plan.createBlocks.length; planIndex += 1) {
+    const block = plan.createBlocks[planIndex];
+    let startIndex = -1;
+    let endIndex = -1;
+
+    if (block.sourceKind === 'message') {
+      for (let index = 0; index < candidateItems.length; index += 1) {
+        const item = candidateItems[index];
+        if (item.kind === 'message' && item.seq === block.sourceStart) {
+          startIndex = index;
+          break;
+        }
+      }
+      if (startIndex < 0) {
+        throw new Error(`Unable to resolve layered compact message range ${block.sourceStart}-${block.sourceEnd}.`);
+      }
+      endIndex = startIndex + (block.sourceEnd - block.sourceStart);
+      operations.push({
+        planIndex,
+        startIndex,
+        endIndex,
+        rawStartSeq: block.sourceStart,
+        rawEndSeq: block.sourceEnd,
+        sourceKind: block.sourceKind,
+        level: block.level,
+        sourceStart: block.sourceStart,
+        sourceEnd: block.sourceEnd,
+        summary: block.summary,
+      });
+      continue;
+    }
+
+    for (let index = 0; index < candidateItems.length; index += 1) {
+      const item = candidateItems[index];
+      if (item.kind === 'block' && item.id === block.sourceStart && item.level === block.level - 1) {
+        startIndex = index;
+        break;
+      }
+    }
+    if (startIndex < 0) {
+      throw new Error(`Unable to resolve layered compact block range ${block.sourceStart}-${block.sourceEnd}.`);
+    }
+    endIndex = startIndex + (block.sourceEnd - block.sourceStart);
+    const startItem = candidateItems[startIndex];
+    const endItem = candidateItems[endIndex];
+    if (startItem.kind !== 'block' || endItem.kind !== 'block') {
+      throw new Error(`Layered compact block range ${block.sourceStart}-${block.sourceEnd} resolved to non-block items.`);
+    }
+    operations.push({
+      planIndex,
+      startIndex,
+      endIndex,
+      rawStartSeq: startItem.rawStartSeq,
+      rawEndSeq: endItem.rawEndSeq,
+      sourceKind: block.sourceKind,
+      level: block.level,
+      sourceStart: block.sourceStart,
+      sourceEnd: block.sourceEnd,
+      summary: block.summary,
+    });
+  }
+
+  return operations.sort((a, b) => a.startIndex - b.startIndex || a.planIndex - b.planIndex);
+}
+
 async function finalizeCompaction(
   deps: SessionHistoryDeps,
   sessionId: string,
   session: Session,
-  retainedMessages: Message[],
-  summaryConversation: Message[],
+  newFrontier: ContextFrontierItem[],
   completionMarker: string,
-  removedMessageCount: number,
+  createdBlockCount: number,
+  replacedItemCount: number,
 ): Promise<void> {
-  const now = Date.now();
-  const compactedMarker: Message = {
-    role: 'user',
-    parts: [{ system: 'This session has been compacted. Messages before this are removed.' }],
-    __meta: { timestamp: now }
-  };
+  session.contextFrontier = newFrontier;
+  session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
+  session.history = await renderHistoryFromFrontier(session, newFrontier);
+
   const completionMessage: Message = {
     role: 'user',
     parts: [{ system: completionMarker }],
-    __meta: { timestamp: now }
+    __meta: { timestamp: Date.now() },
   };
-  const archiveOnlyRetainedSyntheticMessages = retainedMessages.filter(message => message.__meta?.seq === undefined);
-  const archiveOnlySummaryMessages = summaryConversation.filter(message => message.__meta?.seq === undefined);
-  await appendMessagesToArchive(session, [compactedMarker, ...archiveOnlyRetainedSyntheticMessages, ...archiveOnlySummaryMessages, completionMessage]);
+  await appendMessagesToArchive(session, [completionMessage]);
+  session.history.push(completionMessage);
+  ensureContextFrontier(session).push({ kind: 'message', seq: completionMessage.__meta!.seq! });
 
-  const summaryMessages: Message[] = [
-    compactedMarker,
-    ...retainedMessages,
-    ...summaryConversation,
-    completionMessage,
-  ];
-
-  session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
-  session.history = summaryMessages;
   session.vectorIndexPosition = 0;
+  session.nextBlockId = 1;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
 
   await deps.saveSession(sessionId);
-  logger.info({ removedMessageCount, retainedCount: retainedMessages.length }, 'History compacted successfully');
+  logger.info({ createdBlockCount, replacedItemCount, renderedCount: session.history.length }, 'Layered context compaction completed successfully');
 
   if (session.broadcast) {
-    session.broadcast(`Compaction completed. Removed ${removedMessageCount} messages.`);
+    session.broadcast(`Layered-context compaction completed. Created ${createdBlockCount} block(s) replacing ${replacedItemCount} older item(s).`);
   }
 }
 
@@ -239,47 +342,50 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
 
   const history = session.history;
   if (history.length < 1) return;
-  const originalHistoryLength = history.length;
 
   logger.info({ sessionId, hasBroadcast: !!session.broadcast }, options.startLogMessage || 'Compaction starting');
   if (session.broadcast && options.startBroadcastMessage) {
     session.broadcast(options.startBroadcastMessage);
   }
 
-  const splitIndex = resolveCompactionSplitIndex(history, keepPercent);
+  const frontier = cloneSessionFrontier(session);
+  if (frontier.length === 0) {
+    logger.info({ sessionId }, 'Compaction skipped because layered frontier is empty');
+    return;
+  }
 
+  const splitIndex = resolveCompactionSplitIndex(history, keepPercent);
   if (splitIndex <= 0) {
     logger.info({ sessionId, keepPercent }, 'Compaction skipped because there are no older messages to compact');
     return;
   }
 
-  const olderMessages = history.slice(0, splitIndex);
-  const forceKeptRecentMessages = splitIndex < history.length ? history.slice(splitIndex) : [];
-  const candidateBlocks = buildCompactCandidateBlocks(olderMessages);
+  const olderFrontier = frontier.slice(0, splitIndex);
+  const forceKeptRecentFrontier = splitIndex < frontier.length ? frontier.slice(splitIndex) : [];
+  const candidateItems = await buildLayeredCompactCandidateItems(session, olderFrontier);
 
-  if (candidateBlocks.length === 0) {
-    logger.info({ sessionId, splitIndex }, 'Compaction skipped because no candidate blocks were produced');
+  if (candidateItems.length === 0) {
+    logger.info({ sessionId, splitIndex }, 'Compaction skipped because no layered candidate items were produced');
     return;
   }
 
-  const forcedKeptStartSeq = forceKeptRecentMessages[0]?.__meta?.seq;
-  const forcedKeptEndSeq = forceKeptRecentMessages[forceKeptRecentMessages.length - 1]?.__meta?.seq;
+  const forcedKeptMessageItems = forceKeptRecentFrontier.filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message');
+  const forcedKeptStartSeq = forcedKeptMessageItems[0]?.seq;
+  const forcedKeptEndSeq = forcedKeptMessageItems[forcedKeptMessageItems.length - 1]?.seq;
   const summaryPrompt = {
     system: buildCompactPromptText({
-      forcedKeptCount: forceKeptRecentMessages.length,
+      forcedKeptCount: forceKeptRecentFrontier.length,
       forcedKeptStartSeq,
       forcedKeptEndSeq,
-      candidateBlocks,
+      candidateItems,
       guidance: compactGuidance,
     })
   };
 
-  const beforeCompactIndex = session.history.length;
-
   try {
     const maxCompactAttempts = 3;
     let nextPromptParts = [summaryPrompt];
-    let compactPlan = null;
+    let compactPlan: CompactPlan | null = null;
 
     for (let attempt = 1; attempt <= maxCompactAttempts; attempt++) {
       const result = await llm.chat(nextPromptParts, session, attempt - 1, {
@@ -294,7 +400,7 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
       }
 
       try {
-        compactPlan = validateCompactPlanArgs(result.toolCalls[0].args || {}, candidateBlocks);
+        compactPlan = validateCompactPlanArgs(result.toolCalls[0].args || {}, candidateItems);
         break;
       } catch (e) {
         if (!(e instanceof CompactPlanValidationError)) {
@@ -306,7 +412,7 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
           throw new Error(`Compaction failed after ${maxCompactAttempts} invalid ${COMPACT_PLAN_TOOL_NAME} submissions: ${e.message}`);
         }
 
-        logger.warn({ sessionId, attempt, attemptsRemaining, validationError: e.message }, 'Compaction plan validation failed; retrying compact flow');
+        logger.warn({ sessionId, attempt, attemptsRemaining, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
         nextPromptParts = [{
           system: buildCompactPlanValidationFeedback(e, attemptsRemaining),
         }];
@@ -317,75 +423,49 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
       throw new Error(`Compaction failed because no valid ${COMPACT_PLAN_TOOL_NAME} plan was produced.`);
     }
 
-    const keptBlockIds = new Set(compactPlan.keepBlockIds);
-    const retainedOlderMessages: Message[] = [];
-    let pendingDroppedRange: { startSeq?: number; endSeq?: number; messageCount: number } | null = null;
+    const operations = resolveCreateBlockRanges(compactPlan, candidateItems);
+    const createdRecords = await appendBlocksToArchive(session, operations.map(operation => ({
+      level: operation.level,
+      sourceKind: operation.sourceKind,
+      sourceStart: operation.sourceStart,
+      sourceEnd: operation.sourceEnd,
+      rawStartSeq: operation.rawStartSeq,
+      rawEndSeq: operation.rawEndSeq,
+      summary: operation.summary,
+    })));
 
-    const flushDroppedRange = () => {
-      if (!pendingDroppedRange) {
-        return;
+    const rewrittenOlderFrontier: ContextFrontierItem[] = [];
+    let cursor = 0;
+    for (let index = 0; index < operations.length; index += 1) {
+      const operation = operations[index];
+      const createdRecord = createdRecords[index];
+      if (cursor < operation.startIndex) {
+        rewrittenOlderFrontier.push(...olderFrontier.slice(cursor, operation.startIndex));
       }
-
-      retainedOlderMessages.push(buildDroppedRangePlaceholder(
-        sessionId,
-        pendingDroppedRange.startSeq,
-        pendingDroppedRange.endSeq,
-        pendingDroppedRange.messageCount,
-      ));
-      pendingDroppedRange = null;
-    };
-
-    for (const block of candidateBlocks) {
-      if (keptBlockIds.has(block.id)) {
-        flushDroppedRange();
-        retainedOlderMessages.push(...block.messages);
-        continue;
-      }
-
-      if (!pendingDroppedRange) {
-        pendingDroppedRange = {
-          startSeq: block.startSeq,
-          endSeq: block.endSeq,
-          messageCount: block.messageCount,
-        };
-        continue;
-      }
-
-      pendingDroppedRange.endSeq = block.endSeq;
-      pendingDroppedRange.messageCount += block.messageCount;
+      rewrittenOlderFrontier.push({
+        kind: 'block',
+        id: createdRecord.id,
+        level: createdRecord.level,
+        rawStartSeq: createdRecord.rawStartSeq,
+        rawEndSeq: createdRecord.rawEndSeq,
+      });
+      cursor = operation.endIndex + 1;
+    }
+    if (cursor < olderFrontier.length) {
+      rewrittenOlderFrontier.push(...olderFrontier.slice(cursor));
     }
 
-    flushDroppedRange();
-
-    const retainedMessages = [...retainedOlderMessages, ...forceKeptRecentMessages];
-
-    const now = Date.now();
-    const summaryConversation: Message[] = [
-      {
-        role: 'user',
-        parts: [{
-          system: [
-            'Compaction plan applied via submit_compact_plan.',
-            `Older blocks kept verbatim: ${describeBlockRanges(candidateBlocks, compactPlan.keepBlockIds)}.`,
-            `Older blocks dropped from working history only: ${describeBlockRanges(candidateBlocks, compactPlan.dropBlockIds)}.`,
-            `Recent force-kept messages: ${forceKeptRecentMessages.length > 0 ? `${forceKeptRecentMessages.length} message(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)}` : 'none'}.`,
-          ].join(' ')
-        }],
-        __meta: { timestamp: now }
-      },
-      {
-        role: 'model',
-        parts: [{ text: compactPlan.summary }],
-        __meta: { timestamp: now }
-      },
-    ];
-
-    await finalizeCompaction(deps, sessionId, session, retainedMessages, summaryConversation, completionMarker, originalHistoryLength - retainedMessages.length);
+    const newFrontier = [...rewrittenOlderFrontier, ...forceKeptRecentFrontier];
+    await finalizeCompaction(
+      deps,
+      sessionId,
+      session,
+      newFrontier,
+      completionMarker,
+      createdRecords.length,
+      operations.reduce((sum, operation) => sum + (operation.endIndex - operation.startIndex + 1), 0),
+    );
   } catch (e) {
-    if (session.history.length > beforeCompactIndex) {
-      session.history = session.history.slice(0, beforeCompactIndex);
-      await deps.saveSession(sessionId);
-    }
     logger.error(e, 'Compaction failed');
     throw e;
   }
@@ -424,6 +504,9 @@ export async function deleteMessages(deps: SessionHistoryDeps, sessionId: string
   if (num > 0) {
     deleted = Math.min(num, session.history.length);
     session.history = session.history.slice(deleted);
+    if (Array.isArray(session.contextFrontier)) {
+      session.contextFrontier = session.contextFrontier.slice(deleted);
+    }
     if (session.vectorIndexPosition !== undefined) {
       session.vectorIndexPosition = Math.max(0, session.vectorIndexPosition - deleted);
     }
@@ -431,6 +514,9 @@ export async function deleteMessages(deps: SessionHistoryDeps, sessionId: string
     const absNum = Math.min(Math.abs(num), session.history.length);
     deleted = absNum;
     session.history = session.history.slice(0, session.history.length - absNum);
+    if (Array.isArray(session.contextFrontier)) {
+      session.contextFrontier = session.contextFrontier.slice(0, session.contextFrontier.length - absNum);
+    }
     if (session.vectorIndexPosition !== undefined) {
       session.vectorIndexPosition = Math.min(session.vectorIndexPosition, session.history.length);
     }
@@ -450,10 +536,12 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
   }
 
   session.history = [];
+  session.contextFrontier = [];
   session.queue = [];
   session.stopping = false;
   session.busy = false;
   session.vectorIndexPosition = 0;
+  session.nextBlockId = 1;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
   session.meta = {

@@ -1,133 +1,119 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildBlockCandidateItem,
   buildCompactPlanValidationFeedback,
-  buildCompactCandidateBlocks,
   buildCompactPromptText,
+  buildMessageCandidateItem,
   COMPACT_PLAN_TOOL_NAME,
   CompactPlanValidationError,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { Message } from '../types';
 
-function makeMessage(seq: number, role: 'user' | 'model' | 'tool', text: string): Message {
-  return {
-    role,
-    parts: role === 'tool'
-      ? [{ functionResponse: { tool_use_id: `tool-${seq}`, name: 'read', response: { output: text } } }]
-      : [{ text }],
-    __meta: { seq, timestamp: seq * 1000 },
-  };
-}
+const messageCandidates = [
+  buildMessageCandidateItem(1, 'first request'),
+  buildMessageCandidateItem(2, 'first answer'),
+  buildMessageCandidateItem(3, 'second request'),
+  buildMessageCandidateItem(4, 'second answer'),
+];
 
-test('buildCompactCandidateBlocks groups older history into seq-based blocks with previews', () => {
-  const messages: Message[] = [
-    makeMessage(1, 'user', 'first request'),
-    makeMessage(2, 'model', 'first answer'),
-    makeMessage(3, 'user', 'second request'),
-    makeMessage(4, 'model', 'second answer'),
-  ];
-
-  const blocks = buildCompactCandidateBlocks(messages);
-  assert.equal(blocks.length, 1);
-  assert.equal(blocks[0].startSeq, 1);
-  assert.equal(blocks[0].endSeq, 4);
-  assert.match(blocks[0].id, /seq_1_4/);
-  assert.match(blocks[0].preview, /#1/);
-  assert.match(blocks[0].preview, /first request/);
+test('message and block candidates render stable compact keys', () => {
+  assert.equal(messageCandidates[0].kind, 'message');
+  assert.equal(messageCandidates[0].key, 'M#1');
+  const block = buildBlockCandidateItem(8, 2, 10, 30, 'summarized prior discussion');
+  assert.equal(block.kind, 'block');
+  assert.equal(block.key, 'B#8');
+  assert.match(block.preview, /summarized prior discussion/);
 });
 
-test('compact block preview skips thinking and prefixes continuation lines with > ', () => {
-  const messages: Message[] = [
-    {
-      role: 'model',
-      parts: [{
-        text: 'visible line 1\nvisible line 2',
-        thinking: 'hidden reasoning should not appear',
-      }],
-      __meta: { seq: 11, timestamp: 11000 },
-    },
-  ];
-
-  const blocks = buildCompactCandidateBlocks(messages);
-  assert.equal(blocks.length, 1);
-  assert.match(blocks[0].preview, /#11 visible line 1\n> visible line 2/);
-  assert.doesNotMatch(blocks[0].preview, /hidden reasoning should not appear/);
-});
-
-test('buildCompactPromptText tells the model to use the compact plan tool and references force-kept recent messages', () => {
-  const blocks = buildCompactCandidateBlocks([
-    makeMessage(1, 'user', 'alpha'),
-    makeMessage(2, 'model', 'beta'),
-  ]);
-
+test('buildCompactPromptText instructs the model to use the compact plan tool for layered-context candidates', () => {
   const prompt = buildCompactPromptText({
     forcedKeptCount: 3,
     forcedKeptStartSeq: 50,
     forcedKeptEndSeq: 60,
-    candidateBlocks: blocks,
-    guidance: 'Prefer keeping unresolved implementation details.',
+    candidateItems: [
+      ...messageCandidates.slice(0, 2),
+      buildBlockCandidateItem(9, 1, 3, 9, 'earlier summarized context'),
+    ],
+    guidance: 'Prefer compact summaries for resolved discussion.',
   });
 
   assert.match(prompt, new RegExp(COMPACT_PLAN_TOOL_NAME));
   assert.match(prompt, /force-kept/i);
-  assert.match(prompt, /#50-#60/);
-  assert.match(prompt, /unresolved implementation details/);
-  assert.match(prompt, new RegExp(blocks[0].id));
+  assert.match(prompt, /M#1/);
+  assert.match(prompt, /B#9 L1 raw#3-#9/);
+  assert.match(prompt, /resolved discussion/);
 });
 
-test('validateCompactPlanArgs accepts complete non-overlapping block assignments', () => {
-  const blocks = buildCompactCandidateBlocks([
-    makeMessage(1, 'user', 'alpha'),
-    makeMessage(2, 'model', 'beta'),
-    makeMessage(3, 'user', 'gamma'),
-    makeMessage(4, 'model', 'delta'),
-  ]);
+test('validateCompactPlanArgs accepts layered message and block range creation', () => {
+  const candidates = [
+    ...messageCandidates,
+    buildBlockCandidateItem(10, 1, 5, 8, 'prior block'),
+    buildBlockCandidateItem(11, 1, 9, 12, 'next prior block'),
+  ];
 
   const plan = validateCompactPlanArgs({
-    summary: 'short working summary',
-    keepBlockIds: [blocks[0].id],
-    dropBlockIds: [],
-  }, blocks);
+    createBlocks: [
+      {
+        level: 1,
+        sourceKind: 'message',
+        sourceStart: 1,
+        sourceEnd: 4,
+        summary: 'summary for first four messages',
+      },
+      {
+        level: 2,
+        sourceKind: 'block',
+        sourceStart: 10,
+        sourceEnd: 11,
+        summary: 'summary for existing level 1 blocks',
+      },
+    ],
+  }, candidates);
 
-  assert.equal(plan.summary, 'short working summary');
-  assert.deepEqual(plan.keepBlockIds, [blocks[0].id]);
+  assert.equal(plan.createBlocks.length, 2);
+  assert.equal(plan.createBlocks[0].level, 1);
+  assert.equal(plan.createBlocks[1].level, 2);
 });
 
-test('validateCompactPlanArgs rejects missing or duplicated block classifications', () => {
-  const blocks = buildCompactCandidateBlocks([
-    makeMessage(1, 'user', 'alpha'),
-    makeMessage(2, 'model', 'beta'),
-  ]);
+test('validateCompactPlanArgs rejects non-continuous or overlapping ranges', () => {
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocks: [{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 5,
+      summary: 'invalid range',
+    }],
+  }, messageCandidates), /continuous message range/i);
 
   assert.throws(() => validateCompactPlanArgs({
-    summary: 'summary',
-    keepBlockIds: [],
-    dropBlockIds: [],
-  }, blocks), /missing block ids/i);
-
-  assert.throws(() => validateCompactPlanArgs({
-    summary: 'summary',
-    keepBlockIds: [blocks[0].id],
-    dropBlockIds: [blocks[0].id],
-  }, blocks), /duplicate block ids/i);
+    createBlocks: [
+      {
+        level: 1,
+        sourceKind: 'message',
+        sourceStart: 1,
+        sourceEnd: 2,
+        summary: 'first',
+      },
+      {
+        level: 1,
+        sourceKind: 'message',
+        sourceStart: 2,
+        sourceEnd: 3,
+        summary: 'overlap',
+      },
+    ],
+  }, messageCandidates), /overlaps another createBlocks range/i);
 });
 
-test('buildCompactPlanValidationFeedback explains invalid compact plans with structured details', () => {
+test('buildCompactPlanValidationFeedback explains invalid layered compact plans', () => {
   const error = new CompactPlanValidationError({
-    summaryErrors: ['must be a non-empty string'],
-    arrayErrors: ['keepBlockIds must be an array of block ids.'],
-    unknownBlockIds: ['block_x'],
-    duplicateBlockIds: ['block_01'],
-    missingBlockIds: ['block_02'],
+    createBlockErrors: ['createBlocks[0].summary must be a non-empty string.'],
   });
 
   const feedback = buildCompactPlanValidationFeedback(error, 2);
   assert.match(feedback, /COMPACT PLAN INVALID/);
-  assert.match(feedback, /summary: must be a non-empty string/);
-  assert.match(feedback, /keepBlockIds must be an array of block ids/);
-  assert.match(feedback, /unknown block ids: block_x/);
-  assert.match(feedback, /duplicate block ids: block_01/);
-  assert.match(feedback, /missing block ids: block_02/);
+  assert.match(feedback, /summary must be a non-empty string/);
   assert.match(feedback, /Attempts remaining after this feedback: 2/);
 });
