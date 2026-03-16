@@ -10,6 +10,8 @@ Use this skill when you need to deploy, repair, or integrate the standalone ASR 
 ## What this skill contains
 
 - service entrypoint: `skills/asr_service/qwen-asr-service.js`
+- GPU service entrypoint: `skills/asr_service/qwen-asr-gpu-service.py`
+- GPU service deps: `skills/asr_service/requirements-gpu.txt`
 - setup guidance for CPU-first local deployment
 - integration guidance for Foxwarm `state/config.yaml`
 
@@ -98,3 +100,78 @@ curl -X POST http://127.0.0.1:8091/transcribe \
 - Current prototype backend is CPU-oriented.
 - Later GPU implementations can keep the same service contract while swapping inference backend.
 - If you need Foxwarm-side troubleshooting, first check `/api/asr/status` from Foxwarm itself.
+
+## Windows + NVIDIA GPU deployment
+
+For a practical GPU deployment on a Windows machine, the recommended path is:
+
+```text
+Windows host + NVIDIA driver + WSL2 Ubuntu + qwen-asr[vllm]
+```
+
+### Why WSL2
+
+- official `qwen-asr` GPU path is Python/CUDA oriented
+- official streaming support is tied to the vLLM backend
+- vLLM does **not** support native Windows directly; WSL2 Linux is the practical route
+
+### Files to use
+
+- service: `skills/asr_service/qwen-asr-gpu-service.py`
+- deps: `skills/asr_service/requirements-gpu.txt`
+
+### Suggested WSL2 setup
+
+Inside Ubuntu on WSL2:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip wheel
+
+# install CUDA-enabled PyTorch first according to your CUDA version
+# example only; adjust to your environment
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+pip install -r skills/asr_service/requirements-gpu.txt
+
+# optional but recommended for lower VRAM / better speed when supported
+pip install -U flash-attn --no-build-isolation
+```
+
+### Start GPU service
+
+```bash
+export QWEN_ASR_SERVICE_HOST=0.0.0.0
+export QWEN_ASR_SERVICE_PORT=8091
+export QWEN_ASR_SERVICE_KEY='change-me'
+export QWEN_ASR_BACKEND=vllm
+export QWEN_ASR_MODEL='Qwen/Qwen3-ASR-0.6B'
+export QWEN_ASR_DTYPE='bfloat16'
+export QWEN_ASR_GPU_MEMORY_UTILIZATION='0.8'
+
+python skills/asr_service/qwen-asr-gpu-service.py
+```
+
+### What this GPU service supports
+
+- `GET /health`
+- `POST /transcribe`
+- `WS /ws/stream`
+
+So Foxwarm can keep using the same `asrService.url/key` contract.
+
+### Foxwarm config example for remote GPU host
+
+```yaml
+asrService:
+  enabled: true
+  url: http://YOUR_GPU_PC_IP:8091
+  key: change-me
+```
+
+### Current caveats
+
+- this GPU service was prepared from official `qwen-asr` usage patterns, but was not runtime-validated on this current CPU-only machine
+- streaming support depends on vLLM backend availability in WSL2
+- if you only need stable final transcription first, start with `POST /transcribe` validation before testing `/ws/stream`
