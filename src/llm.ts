@@ -1128,6 +1128,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             'remote_node', 'list_nodes', 'node_tools',
             'search_memory', 'get_memory_context',
             'list_files', 'delete_file',
+            'copy_between_nodes',
             'create_child_session', 'send_to_session', 'send_to_channel', 'send_file',
             'list_sessions', 'list_agents', 'list_skills',
             'attach_agent_skill', 'detach_agent_skill', 'load_skill',
@@ -1164,8 +1165,8 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             // Execute locally on master
             try {
                 result = normalizeToolResult(await toolFn(toolArgs, toolContext));
-            } catch (e) {
-                result = { error: e.message };
+            } catch (e: any) {
+                result = { error: e?.message || String(e) };
             }
         } else {
             result = { error: `Unknown tool: ${call.name}` };

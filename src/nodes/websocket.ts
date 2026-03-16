@@ -138,6 +138,15 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
           case 'tool_call_error':
             nodesManager.handleToolError(data.callId, data.error);
             break;
+          case 'file_read_response':
+            nodesManager.handleFileReadResponse(data.transferId, data.file);
+            break;
+          case 'file_write_response':
+            nodesManager.handleFileWriteResponse(data.transferId, data.result);
+            break;
+          case 'file_transfer_error':
+            nodesManager.handleFileTransferError(data.transferId, data.error);
+            break;
           case 'session_event':
             if (!data.sessionId || typeof data.message !== 'string') {
               ws.send(JSON.stringify({

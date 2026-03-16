@@ -146,6 +146,19 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
     {
       agent: agentName,
       session: sessionId,
+      target_node: 'master',
+      tool_name: 'copy_between_nodes',
+      tool_args: {
+        sourceNode: { oneOf: ['master', boundNode] },
+        sourcePath: { pathWithinAgent: true },
+        targetNode: { oneOf: ['master', boundNode] },
+        targetPath: { pathWithinAgent: true },
+      },
+      action: 'accept',
+    },
+    {
+      agent: agentName,
+      session: sessionId,
       target_node: boundNode,
       tool_name: 'exec',
       action: 'accept',

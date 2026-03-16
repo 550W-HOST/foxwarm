@@ -9,6 +9,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import { logger } from '../common';
 import { WORKSPACE_DIR } from '../config';
+import { NodeTransferFilePayload, NodeTransferWriteResult, readNodeTransferFile, writeNodeTransferFile } from '../nodeFileTransfer';
 import * as sessionManager from '../sessionManager';
 import * as browser from '../browser';
 import { WebSocket } from 'ws';
@@ -43,9 +44,19 @@ interface ToolCall {
   reject: (error: string) => void;
 }
 
+interface PendingFileTransfer<T = any> {
+  id: string;
+  nodeId: string;
+  sessionId: string;
+  type: 'read' | 'write';
+  resolve: (result: T) => void;
+  reject: (error: string) => void;
+}
+
 export class NodesManager {
   private nodes: Map<string, Node> = new Map();
   private toolCalls: Map<string, ToolCall> = new Map();
+  private fileTransfers: Map<string, PendingFileTransfer> = new Map();
   private tools: Set<string> = new Set(); // Available tools
   
   private readonly WORKSPACE = WORKSPACE_DIR;
@@ -89,7 +100,8 @@ export class NodesManager {
       'browse_list',
       'browse_get',
       'browse_close',
-      'browse_interact'
+      'browse_interact',
+      'copy_between_nodes',
     ]);
   }
 
@@ -338,6 +350,123 @@ export class NodesManager {
     } else {
       logger.warn({ callId }, 'Tool error for unknown call');
     }
+  }
+
+  async readFileFromNode(nodeId: string, filePath: string, sessionId: string): Promise<NodeTransferFilePayload> {
+    const session = await sessionManager.getSession(sessionId);
+    const agentName = session.agent || 'main';
+
+    if (nodeId === 'master') {
+      return await readNodeTransferFile(filePath, agentName);
+    }
+
+    const node = this.nodes.get(nodeId);
+    if (!node?.ws) {
+      throw new Error(`Node \`${nodeId}\` not found`);
+    }
+
+    const transferId = `file_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
+    return new Promise((resolve, reject) => {
+      this.fileTransfers.set(transferId, {
+        id: transferId,
+        nodeId,
+        sessionId,
+        type: 'read',
+        resolve,
+        reject,
+      });
+
+      node.ws!.send(JSON.stringify({
+        type: 'file_read_request',
+        transferId,
+        filePath,
+        sessionId,
+        agentName,
+      }));
+
+      setTimeout(() => {
+        if (this.fileTransfers.has(transferId)) {
+          this.fileTransfers.delete(transferId);
+          reject(`File read \`${transferId}\` timed out`);
+        }
+      }, 30000);
+    });
+  }
+
+  async writeFileToNode(nodeId: string, filePath: string, dataBase64: string, overwrite: boolean, sessionId: string): Promise<NodeTransferWriteResult> {
+    const session = await sessionManager.getSession(sessionId);
+    const agentName = session.agent || 'main';
+
+    if (nodeId === 'master') {
+      return await writeNodeTransferFile(filePath, agentName, dataBase64, overwrite);
+    }
+
+    const node = this.nodes.get(nodeId);
+    if (!node?.ws) {
+      throw new Error(`Node \`${nodeId}\` not found`);
+    }
+
+    const transferId = `file_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
+    return new Promise((resolve, reject) => {
+      this.fileTransfers.set(transferId, {
+        id: transferId,
+        nodeId,
+        sessionId,
+        type: 'write',
+        resolve,
+        reject,
+      });
+
+      node.ws!.send(JSON.stringify({
+        type: 'file_write_request',
+        transferId,
+        filePath,
+        dataBase64,
+        overwrite,
+        sessionId,
+        agentName,
+      }));
+
+      setTimeout(() => {
+        if (this.fileTransfers.has(transferId)) {
+          this.fileTransfers.delete(transferId);
+          reject(`File write \`${transferId}\` timed out`);
+        }
+      }, 30000);
+    });
+  }
+
+  handleFileReadResponse(transferId: string, file: NodeTransferFilePayload): void {
+    const transfer = this.fileTransfers.get(transferId);
+    if (!transfer) {
+      logger.warn({ transferId }, 'File read response for unknown transfer');
+      return;
+    }
+    this.fileTransfers.delete(transferId);
+    transfer.resolve(file);
+    logger.info({ transferId, nodeId: transfer.nodeId }, 'File read response received');
+  }
+
+  handleFileWriteResponse(transferId: string, result: NodeTransferWriteResult): void {
+    const transfer = this.fileTransfers.get(transferId);
+    if (!transfer) {
+      logger.warn({ transferId }, 'File write response for unknown transfer');
+      return;
+    }
+    this.fileTransfers.delete(transferId);
+    transfer.resolve(result);
+    logger.info({ transferId, nodeId: transfer.nodeId }, 'File write response received');
+  }
+
+  handleFileTransferError(transferId: string, error: string): void {
+    const transfer = this.fileTransfers.get(transferId);
+    if (!transfer) {
+      logger.warn({ transferId }, 'File transfer error for unknown transfer');
+      return;
+    }
+    this.fileTransfers.delete(transferId);
+    transfer.reject(error);
+    logger.warn({ transferId, nodeId: transfer.nodeId, error }, 'File transfer error received');
   }
 
   async handleSessionEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {

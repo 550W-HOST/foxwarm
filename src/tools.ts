@@ -317,6 +317,28 @@ async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
     return `Deleted file \`${filePath}\``;
 }
 
+async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
+    const { sourceNode, sourcePath, targetNode, targetPath, overwrite = false } = args;
+
+    if (!ctx.sessionId) {
+        throw new Error('copy_between_nodes requires an active session context.');
+    }
+
+    if (!sourceNode || !targetNode || !sourcePath || !targetPath) {
+        throw new Error('copy_between_nodes requires sourceNode, sourcePath, targetNode, and targetPath.');
+    }
+
+    const file = await nodesManager.readFileFromNode(String(sourceNode), String(sourcePath), ctx.sessionId);
+    const result = await nodesManager.writeFileToNode(String(targetNode), String(targetPath), file.dataBase64, overwrite === true, ctx.sessionId);
+
+    return [
+        `Copied \`${sourcePath}\` from node \`${sourceNode}\` to \`${targetPath}\` on node \`${targetNode}\`.`,
+        `Size: ${file.sizeBytes} B`,
+        `SHA256: ${result.sha256}`,
+        `Overwrote existing file: ${result.overwritten ? 'yes' : 'no'}`,
+    ].join('\n');
+}
+
 async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     const { command } = args;
 
@@ -660,6 +682,7 @@ export const edit = tool_edit;
 export const apply_patch = tool_apply_patch;
 export const list_files = tool_list_files;
 export const delete_file = tool_delete_file;
+export const copy_between_nodes = tool_copy_between_nodes;
 export const exec = tool_exec;
 export const search_memory = tool_search_memory;
 export const get_memory_context = tool_get_memory_context;
@@ -820,6 +843,21 @@ export const definitions = [
                     node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
                 },
                 required: ['filePath']
+            }
+        },
+        {
+            name: 'copy_between_nodes',
+            description: 'Copy a file between master/remote nodes using the current session agent directory on each endpoint. Paths must be relative to the agent folder.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sourceNode: { type: 'string', description: 'Source node id. Use `master` for local files.' },
+                    sourcePath: { type: 'string', description: 'Relative file path inside the current agent folder on the source node.' },
+                    targetNode: { type: 'string', description: 'Target node id. Use `master` for local files.' },
+                    targetPath: { type: 'string', description: 'Relative file path inside the current agent folder on the target node.' },
+                    overwrite: { type: 'boolean', description: 'Overwrite the target file if it already exists. Default: false' },
+                },
+                required: ['sourceNode', 'sourcePath', 'targetNode', 'targetPath']
             }
         },
         {
