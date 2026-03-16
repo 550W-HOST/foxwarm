@@ -56,7 +56,6 @@ const ChatComposer = memo(function ChatComposer({
   const [transcribingAudio, setTranscribingAudio] = useState(false)
   const [transcribeError, setTranscribeError] = useState<string | null>(null)
   const [liveTranscriptionPreview, setLiveTranscriptionPreview] = useState('')
-  const [asrDebugLog, setAsrDebugLog] = useState<string[]>([])
   const [waveformBars, setWaveformBars] = useState<number[]>(() => Array.from({ length: 5 }, () => 0.22))
   const [availableCommands, setAvailableCommands] = useState<SlashCommandOption[]>([])
   const [commandsLoading, setCommandsLoading] = useState(false)
@@ -134,7 +133,6 @@ const ChatComposer = memo(function ChatComposer({
     setIsRecordingAudio(false)
     setTranscribeError(null)
     setLiveTranscriptionPreview('')
-    setAsrDebugLog([])
     setWaveformBars(Array.from({ length: 5 }, () => 0.22))
     setDismissedSlashQuery(null)
 
@@ -393,7 +391,6 @@ const ChatComposer = memo(function ChatComposer({
     const timestamp = new Date().toLocaleTimeString([], { hour12: false })
     const line = `${timestamp} ${message}`
     console.info('[ASR debug]', line)
-    setAsrDebugLog(prev => [...prev.slice(-7), line])
   }, [])
 
   const downsampleTo16k = useCallback((inputData: Float32Array, inputSampleRate: number) => {
@@ -541,7 +538,6 @@ const ChatComposer = memo(function ChatComposer({
     const file = files[0]
     setTranscribeError(null)
     setTranscribingAudio(true)
-    setAsrDebugLog([])
     pushAsrDebug(`file start; name=${file.name} size=${file.size} type=${file.type || 'unknown'}`)
 
     try {
@@ -604,7 +600,6 @@ const ChatComposer = memo(function ChatComposer({
     try {
       setTranscribeError(null)
       setLiveTranscriptionPreview('')
-      setAsrDebugLog([])
       pushAsrDebug('rec start requested')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       pushAsrDebug('mic stream granted')
@@ -726,18 +721,6 @@ const ChatComposer = memo(function ChatComposer({
             ASR 实验入口失败：{transcribeError}
           </div>
         )}
-
-        {asrDebugLog.length > 0 && (
-          <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
-            <div className="mb-1 font-medium">ASR debug</div>
-            <div className="space-y-1 whitespace-pre-wrap break-words font-mono">
-              {asrDebugLog.map((line, idx) => (
-                <div key={`${idx}-${line}`}>{line}</div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {(isRecordingAudio || transcribingAudio || liveTranscriptionPreview) && (
           <div className="mb-3 flex justify-start">
             <div className="max-w-[min(100%,32rem)] rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 shadow-sm dark:border-blue-800/80 dark:bg-blue-900/20 dark:text-blue-100">
