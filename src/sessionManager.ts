@@ -11,10 +11,11 @@ import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir } from './config';
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getSessionArchiveImagesDir, getSessionArchiveLogPath } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
-import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './session/archive';
+import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq } from './session/archive';
+import { appendMessagesToContextFrontier, copyLayeredContextFiles, ensureContextFrontier, loadSessionFrontier, moveLayeredContextFiles, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
@@ -269,6 +270,7 @@ export async function getSession(sessionId: string): Promise<Session> {
           session.persistentMemorySnapshot = historyData.persistentMemorySnapshot;
         }
         applySessionHistoryState(session, historyData);
+        await loadSessionFrontier(session);
         if (historyData.indexingState) {
           // Check if indexing was interrupted
           await resumeIndexingIfNeeded(sessionId, session);
@@ -301,6 +303,9 @@ export async function getSession(sessionId: string): Promise<Session> {
   delete (session as any).isolated;
   if (session.nextMessageSeq === undefined) {
     session.nextMessageSeq = getNextSessionMessageSeq(session);
+  }
+  if (session.contextFrontier && session.contextFrontier.length > 0 && session.history.length !== session.contextFrontier.length) {
+    session.history = await renderHistoryFromFrontier(session);
   }
 
   // Setup broadcast function
@@ -599,7 +604,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 
   const forkedSession: Session = {
     id: newSessionId,
-    history: sourceSession.history.map(stripMessageSeq),
+    history: structuredClone(sourceSession.history),
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
     stats: {
       totalCachedTokens: 0,
@@ -611,7 +616,9 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     queue: [],
     meta: { lastMessageTime: Date.now() },
     vectorIndexPosition: sourceSession.history.length, // Inherit parent's index position to avoid re-indexing
-    nextMessageSeq: 1,
+    nextMessageSeq: sourceSession.nextMessageSeq,
+    nextBlockId: sourceSession.nextBlockId,
+    contextFrontier: sourceSession.contextFrontier ? structuredClone(sourceSession.contextFrontier) : undefined,
     parentSessionId: isChildSession ? sourceSessionId : null,
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
@@ -684,6 +691,22 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   }
 
   sessions.set(newSessionId, forkedSession);
+
+  const sourceArchiveLog = getSessionArchiveLogPath(sourceSessionId);
+  const targetArchiveLog = getSessionArchiveLogPath(newSessionId);
+  if (await fs.pathExists(sourceArchiveLog)) {
+    await fs.ensureDir(path.dirname(targetArchiveLog));
+    await fs.copy(sourceArchiveLog, targetArchiveLog, { overwrite: true });
+  }
+
+  const sourceArchiveImagesDir = getSessionArchiveImagesDir(sourceSessionId);
+  const targetArchiveImagesDir = getSessionArchiveImagesDir(newSessionId);
+  if (await fs.pathExists(sourceArchiveImagesDir)) {
+    await fs.ensureDir(path.dirname(targetArchiveImagesDir));
+    await fs.copy(sourceArchiveImagesDir, targetArchiveImagesDir, { overwrite: true });
+  }
+
+  await copyLayeredContextFiles(sourceSessionId, newSessionId);
   await appendSessionMessages(forkedSession, appendedForkMessages);
 
   logger.info({ sourceSessionId, newSessionId, isChildSession }, 'Session forked');
@@ -801,6 +824,7 @@ export async function saveSession(sessionId: string): Promise<void> {
     const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
     await fs.ensureDir(path.dirname(historyFile));
     await fs.writeJson(historyFile, serializeSessionHistoryPayload(session), { spaces: 2 });
+    await saveSessionFrontier(session);
     
     // Save metadata (lightweight operation)
     await saveSessionsMetadata();
@@ -1053,12 +1077,14 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
   for (const message of messages) {
     session.history.push(message);
   }
+  appendMessagesToContextFrontier(session, messages);
 
   const todoReminderMessage = maybeBuildTodoReminderMessage(session);
   const messagesToNotify = [...messages];
   if (todoReminderMessage) {
     await appendMessagesToArchive(session, [todoReminderMessage]);
     session.history.push(todoReminderMessage);
+    appendMessagesToContextFrontier(session, [todoReminderMessage]);
     messagesToNotify.push(todoReminderMessage);
   }
 
@@ -1129,6 +1155,19 @@ export async function getArchivedMessages(sessionId: string, options: {
   endSeq?: number;
 } = {}) {
   return sessionHistory.getArchivedMessages(sessionId, options);
+}
+
+export async function getArchivedBlocks(sessionId: string, options: {
+  startId?: number;
+  endId?: number;
+} = {}) {
+  const records = await readArchiveBlocksByIdRange(sessionId, options.startId, options.endId);
+  return {
+    records,
+    totalMatched: records.length,
+    returnedCount: records.length,
+    requestedRange: { startId: options.startId, endId: options.endId },
+  };
 }
 
 export async function compactSessionToolMessages(sessionId: string, keepPercent: number = COMPACT_PERCENT, thresholdTokens?: number) {

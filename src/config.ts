@@ -320,6 +320,14 @@ export function getSessionArchiveLogPath(sessionId: string): string {
   return path.join(SESSION_LOGS_DIR, `${sessionId}.jsonl`);
 }
 
+export function getSessionBlockArchiveLogPath(sessionId: string): string {
+  return path.join(SESSION_LOGS_DIR, `${sessionId}.blocks.jsonl`);
+}
+
+export function getSessionFrontierPath(sessionId: string): string {
+  return path.join(SESSIONS_DIR, `${sessionId}.frontier.json`);
+}
+
 export function getSessionArchiveImagesDir(sessionId: string): string {
   return path.join(SESSIONS_BLOB_DIR, `${sessionId}.images`);
 }

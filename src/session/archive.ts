@@ -191,3 +191,11 @@ export function stripMessageSeq(message: Message): Message {
 
   return clonedMessage;
 }
+export async function readArchiveMessagesBySeqRange(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageRecord[]> {
+  const records = await readArchiveMessages(sessionId);
+  return records.filter(record => {
+    if (typeof startSeq === 'number' && record.seq < startSeq) return false;
+    if (typeof endSeq === 'number' && record.seq > endSeq) return false;
+    return true;
+  });
+}

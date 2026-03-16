@@ -106,6 +106,10 @@ export interface QueueItem {
   requestedBy?: 'auto' | 'command' | 'tool' | 'manual';
 }
 
+export type ContextFrontierItem =
+  | { kind: 'message'; seq: number }
+  | { kind: 'block'; id: number; level: number; rawStartSeq: number; rawEndSeq: number };
+
 export interface Session {
   id: string;
   agent?: string; // Agent name (default: 'main')
@@ -126,6 +130,8 @@ export interface Session {
   indexingState?: IndexingState; // Track ongoing indexing operation
   historyVersion?: number; // Incremented on compact/clear to detect changes
   nextMessageSeq?: number; // Next per-session sequence number for append-only archive logging
+  nextBlockId?: number; // Next per-session layered-context block id
+  contextFrontier?: ContextFrontierItem[]; // Structured layered-context frontier; session.history is a rendered view
   parentSessionId?: string; // Parent session ID for child sessions
   todoState?: SessionTodoState; // Session-local todo reminder configuration
   compactThresholdTokens?: number; // Optional per-session auto-compact threshold override in tokens

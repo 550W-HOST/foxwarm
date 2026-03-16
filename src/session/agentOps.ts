@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import * as llm from '../llm';
-import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, SESSIONS_DIR } from '../config';
+import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, getSessionBlockArchiveLogPath, getSessionFrontierPath, SESSIONS_DIR } from '../config';
 import { Session } from '../types';
 
 interface SessionAgentOpsDeps {
@@ -122,6 +122,20 @@ async function renameSessionIdentity(options: {
   if (await fs.pathExists(oldArchiveImagesDir)) {
     await fs.ensureDir(path.dirname(newArchiveImagesDir));
     await fs.move(oldArchiveImagesDir, newArchiveImagesDir, { overwrite: true });
+  }
+
+  const oldBlockArchive = getSessionBlockArchiveLogPath(oldRealId);
+  const newBlockArchive = getSessionBlockArchiveLogPath(targetSessionId);
+  if (await fs.pathExists(oldBlockArchive)) {
+    await fs.ensureDir(path.dirname(newBlockArchive));
+    await fs.move(oldBlockArchive, newBlockArchive, { overwrite: true });
+  }
+
+  const oldFrontierFile = getSessionFrontierPath(oldRealId);
+  const newFrontierFile = getSessionFrontierPath(targetSessionId);
+  if (await fs.pathExists(oldFrontierFile)) {
+    await fs.ensureDir(path.dirname(newFrontierFile));
+    await fs.move(oldFrontierFile, newFrontierFile, { overwrite: true });
   }
 
   const updatedChildren = await deps.updateChildSessionParentIds(oldRealId, targetSessionId);
