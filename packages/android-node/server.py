@@ -12,12 +12,20 @@ import os
 import shlex
 import subprocess
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, Optional
 from PIL import Image
 import uiautomator2 as u2
 from aiohttp import web
 import websockets
+from node_auth import (
+    build_node_ws_url,
+    clear_stored_credentials,
+    load_stored_credentials,
+    parse_connection_config,
+    save_stored_credentials,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -559,69 +567,135 @@ class AndroidNode:
         }
 
 
-async def connect_to_alphabot(node: AndroidNode, alphabot_url: str):
-    """Connect to Alphabot and register as a node"""
-    logger.info(f"Connecting to Alphabot at {alphabot_url}")
-    
-    try:
-        async with websockets.connect(alphabot_url) as websocket:
-            # Send node registration
-            registration = {
-                "type": "node_register",
-                "nodeType": "android",
-                "capabilities": {
-                    "tools": TOOL_DEFINITIONS
-                },
-                "metadata": {
-                    "version": "1.0.0",
-                    "platform": "android",
-                    "device": node.device_info
-                }
-            }
-            
-            logger.info("Sending node registration...")
-            await websocket.send(json.dumps(registration))
-            
-            # Wait for registration response
-            response = await websocket.recv()
-            response_data = json.loads(response)
-            
-            if response_data.get("type") == "registered":
-                logger.info(f"✅ Successfully registered as node: {response_data.get('nodeId')}")
-            else:
-                logger.error(f"❌ Registration failed: {response_data}")
-                return
-            
-            # Handle tool calls
-            logger.info("Waiting for tool calls...")
-            async for message in websocket:
-                try:
+def build_registration_payload(node: AndroidNode) -> Dict[str, Any]:
+    return {
+        "type": "node_register",
+        "nodeType": "android",
+        "capabilities": {
+            "tools": TOOL_DEFINITIONS
+        },
+        "metadata": {
+            "version": "1.0.0",
+            "platform": "android",
+            "device": node.device_info
+        }
+    }
+
+
+async def connect_to_foxwarm(node: AndroidNode):
+    """Connect to foxwarm using pairing-based auth or stored credentials."""
+    config = parse_connection_config()
+    if not config:
+        raise RuntimeError("Missing FOXWARM/ALPHABOT host configuration")
+
+    connected_node_id = config.node_id
+    auth_token = config.auth_token
+    pairing_token = config.pairing_token
+    pairing_rejected = False
+    force_immediate_reconnect = False
+
+    stored = load_stored_credentials(config.credentials_file)
+    if stored and not (connected_node_id and auth_token):
+        connected_node_id = stored.node_id
+        auth_token = stored.auth_token
+
+    if not pairing_token and not (connected_node_id and auth_token):
+        raise RuntimeError("Need pairing token or stored node credentials")
+
+    while True:
+        mode = "authenticated" if connected_node_id and auth_token else "pairing"
+        ws_url = build_node_ws_url(
+            config.host,
+            pairing_token=pairing_token if mode == "pairing" else None,
+            node_id=connected_node_id if mode == "authenticated" else None,
+            auth_token=auth_token if mode == "authenticated" else None,
+        )
+        logger.info(
+            "Connecting to foxwarm at %s (mode=%s, requested=%s, node_id=%s)",
+            ws_url,
+            mode,
+            config.requested_name,
+            connected_node_id,
+        )
+
+        try:
+            async with websockets.connect(ws_url) as websocket:
+                if mode == "authenticated":
+                    logger.info("Sending node registration...")
+                    await websocket.send(json.dumps(build_registration_payload(node)))
+                else:
+                    logger.info("Sending pair request...")
+                    await websocket.send(json.dumps({
+                        "type": "pair_request",
+                        "requestedName": config.requested_name,
+                        "nodeType": "android",
+                        "capabilities": {"tools": TOOL_DEFINITIONS},
+                    }))
+
+                async for message in websocket:
                     data = json.loads(message)
-                    
-                    if data.get("type") == "tool_call":
+                    message_type = data.get("type")
+
+                    if message_type == "registered":
+                        connected_node_id = data.get("nodeId") or connected_node_id
+                        logger.info("✅ Successfully registered as node: %s", connected_node_id)
+                        continue
+
+                    if message_type == "pair_pending":
+                        logger.info(
+                            "⏳ Pairing pending approval: pendingId=%s pairCode=%s requested=%s",
+                            data.get("pendingId"),
+                            data.get("pairCode"),
+                            data.get("requestedName"),
+                        )
+                        continue
+
+                    if message_type == "pair_approved":
+                        connected_node_id = str(data.get("nodeId"))
+                        auth_token = str(data.get("authToken"))
+                        save_stored_credentials(
+                            config.credentials_file,
+                            connected_node_id,
+                            auth_token,
+                            int(data.get("pairedAt") or int(time.time() * 1000)),
+                        )
+                        logger.info("✅ Pairing approved for node: %s", connected_node_id)
+                        force_immediate_reconnect = True
+                        await websocket.close(reason="Reconnect with node credentials")
+                        break
+
+                    if message_type == "pair_rejected":
+                        logger.error("❌ Pairing rejected: %s", data.get("reason"))
+                        pairing_rejected = True
+                        break
+
+                    if message_type == "tool_call":
                         tool_name = data.get("tool")
                         args = data.get("args", {})
                         call_id = data.get("callId") or data.get("id")
-                        
-                        logger.info(f"Executing tool: {tool_name}")
+                        logger.info("Executing tool: %s", tool_name)
                         result = await node.handle_tool_call(tool_name, args)
-                        
-                        # Send result back
-                        response = {
+                        await websocket.send(json.dumps({
                             "type": "tool_call_response",
                             "callId": call_id,
-                            "result": result
-                        }
-                        await websocket.send(json.dumps(response))
-                        
-                except Exception as e:
-                    logger.error(f"Error handling message: {e}")
-                    
-    except Exception as e:
-        logger.error(f"Connection error: {e}")
-        # Retry after delay
-        await asyncio.sleep(5)
-        await connect_to_alphabot(node, alphabot_url)
+                            "result": result,
+                        }))
+                        continue
+
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.warning("Connection closed: code=%s reason=%s", e.code, e.reason)
+            if e.code == 1008 and "Invalid node credentials" in str(e.reason) and pairing_token:
+                clear_stored_credentials(config.credentials_file)
+                connected_node_id = None
+                auth_token = None
+        except Exception as e:
+            logger.error("Connection error: %s", e)
+
+        if pairing_rejected:
+            return
+
+        await asyncio.sleep(0.25 if force_immediate_reconnect else 5)
+        force_immediate_reconnect = False
 
 
 async def websocket_handler(websocket, path, node: AndroidNode):
@@ -659,12 +733,11 @@ async def main():
     node = AndroidNode(device_serial)
     
     # Check if should connect to Alphabot
-    alphabot_url = os.getenv("ALPHABOT_URL")
-    
-    if alphabot_url:
-        # Dynamic registration mode
-        logger.info("🚀 Starting in dynamic registration mode")
-        await connect_to_alphabot(node, alphabot_url)
+    connection_config = parse_connection_config()
+
+    if connection_config:
+        logger.info("🚀 Starting in foxwarm pairing/auth mode")
+        await connect_to_foxwarm(node)
     else:
         # Legacy standalone mode
         logger.info("🚀 Starting in standalone mode (HTTP + WebSocket)")
