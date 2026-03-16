@@ -11,7 +11,7 @@
     "restart": "./scripts/restart.sh",
     "stop": "./scripts/stop.sh",
     "tui": "npm run build && node lib/index.js --tui",
-    "node": "npm run build && node lib/nodeClient.js",
+    "node": "npm run build && node lib/nodes/client.js",
     "dev": "tsc --watch",
     "selftest:apply-patch": "npm run build && node lib/selftest/applyPatchSelfTest.js",
     "selftest:todo-reminder": "npm run build && node lib/selftest/todoReminderSelfTest.js",
