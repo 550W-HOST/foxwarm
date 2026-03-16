@@ -112,6 +112,36 @@ function formatArchivedMessagePreview(
   return result;
 }
 
+
+function formatArchivedBlockPreview(
+  sessionId: string,
+  records: Array<{ id: number; level: number; rawStartSeq: number; rawEndSeq: number; summary: string; sourceKind: string; sourceStart: number; sourceEnd: number; }>,
+  meta: { totalMatched: number; startId?: number; endId?: number },
+  previewLength: number,
+): string {
+  if (records.length === 0) {
+    const rangeLabel = typeof meta.startId === 'number' || typeof meta.endId === 'number'
+      ? ` for ${typeof meta.startId === 'number' ? `#${meta.startId}` : '?'}-${typeof meta.endId === 'number' ? `#${meta.endId}` : '?'}`
+      : '';
+    return `No archived blocks found in session \`${sessionId}\`${rangeLabel}.`;
+  }
+
+  const rangeBits: string[] = [];
+  if (typeof meta.startId === 'number') rangeBits.push(`startId=#${meta.startId}`);
+  if (typeof meta.endId === 'number') rangeBits.push(`endId=#${meta.endId}`);
+  const rangeLabel = rangeBits.length ? ` (${rangeBits.join(', ')})` : '';
+
+  let result = `Archived layered-context blocks for session \`${sessionId}\` - showing ${records.length} of ${meta.totalMatched} matched block(s)${rangeLabel}.
+
+`;
+  for (const record of records) {
+    const prefix = `[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
+    result += `${formatPrefixedMultilineText(prefix, (record.summary || '').slice(0, previewLength) || '[empty summary]')}
+`;
+  }
+  return result;
+}
+
 async function prepareChannelFile(filePath: string, ctx?: ToolContext): Promise<ChannelFile> {
   const agentName = ctx?.session?.agent || 'main';
   const fullPath = resolveAgentPath(filePath, agentName);
@@ -514,6 +544,28 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
     totalMatched: result.totalMatched,
     startSeq: result.requestedRange.startSeq,
     endSeq: result.requestedRange.endSeq,
+  }, previewLength);
+}
+
+
+export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'get_archived_blocks');
+  const targetSessionId = args.sessionId || ctx?.sessionId;
+  const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
+
+  if (!targetSessionId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  const result = await sessionManager.getArchivedBlocks(targetSessionId, {
+    startId: typeof args.startId === 'number' ? args.startId : undefined,
+    endId: typeof args.endId === 'number' ? args.endId : undefined,
+  });
+
+  return formatArchivedBlockPreview(targetSessionId, result.records, {
+    totalMatched: result.totalMatched,
+    startId: result.requestedRange.startId,
+    endId: result.requestedRange.endId,
   }, previewLength);
 }
 

@@ -1132,7 +1132,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             'create_child_session', 'send_to_session', 'send_to_channel', 'send_file',
             'list_sessions', 'list_agents', 'list_skills',
             'attach_agent_skill', 'detach_agent_skill', 'load_skill',
-            'get_session_messages', 'get_archived_messages', 'delete_session',
+            'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'delete_session',
             'update_session_name', 'set_todo', 'update_session_snapshot', 'stop_session',
             'compact_session', 'compress_session',
             'create_timer', 'list_timers', 'delete_timer',

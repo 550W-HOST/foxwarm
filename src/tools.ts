@@ -31,6 +31,7 @@ import {
     tool_load_skill,
     tool_get_session_messages,
     tool_get_archived_messages,
+    tool_get_archived_blocks,
     tool_delete_session,
     tool_update_session_name,
     tool_set_todo,
@@ -703,6 +704,7 @@ export const detach_agent_skill = tool_detach_agent_skill;
 export const load_skill = tool_load_skill;
 export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
+export const get_archived_blocks = tool_get_archived_blocks;
 export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
 export const set_todo = tool_set_todo;
@@ -1043,6 +1045,19 @@ export const definitions = [
                     startSeq: { type: 'number', description: 'Optional inclusive starting seq number' },
                     endSeq: { type: 'number', description: 'Optional inclusive ending seq number' },
                     previewLength: { type: 'number', description: 'Maximum preview length per archived message (default: 1000)' }
+                }
+            }
+        },
+        {
+            name: 'get_archived_blocks',
+            description: 'Read archived layered-context block summaries by block id range for a session.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
+                    startId: { type: 'number', description: 'Optional inclusive starting block id' },
+                    endId: { type: 'number', description: 'Optional inclusive ending block id' },
+                    previewLength: { type: 'number', description: 'Maximum length per block summary preview (default: 1000)' }
                 }
             }
         },
