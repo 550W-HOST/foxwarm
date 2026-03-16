@@ -81,7 +81,8 @@ const ChatComposer = memo(function ChatComposer({
   const audioMaxPeakRef = useRef(0)
   const audioMaxRmsRef = useRef(0)
   const audioRmsSumRef = useRef(0)
-  const recordedPcmChunksRef = useRef<Int16Array[]>([])
+  const pendingStreamingChunksRef = useRef<Int16Array[]>([])
+  const streamingFlushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const streamingSessionRef = useRef<{
     sendAudioChunk: (chunk: ArrayBuffer) => void
     stop: () => void
@@ -163,11 +164,15 @@ const ChatComposer = memo(function ChatComposer({
     }
   }, [input, sessionId])
 
-  const cleanupRecording = useCallback(async (options?: { preserveRecordedAudio?: boolean }) => {
+  const cleanupRecording = useCallback(async () => {
     recordingActiveRef.current = false
     if (waveformFrameRef.current !== null) {
       cancelAnimationFrame(waveformFrameRef.current)
       waveformFrameRef.current = null
+    }
+    if (streamingFlushTimerRef.current) {
+      clearInterval(streamingFlushTimerRef.current)
+      streamingFlushTimerRef.current = null
     }
     audioProcessorRef.current?.disconnect()
     audioSourceRef.current?.disconnect()
@@ -185,9 +190,7 @@ const ChatComposer = memo(function ChatComposer({
     audioMaxPeakRef.current = 0
     audioMaxRmsRef.current = 0
     audioRmsSumRef.current = 0
-    if (!options?.preserveRecordedAudio) {
-      recordedPcmChunksRef.current = []
-    }
+    pendingStreamingChunksRef.current = []
     setWaveformBars(Array.from({ length: 5 }, () => 0.22))
 
     if (audioContextRef.current) {
@@ -430,41 +433,15 @@ const ChatComposer = memo(function ChatComposer({
     return pcm16.buffer
   }, [downsampleTo16k])
 
-  const encodePcm16ToWav = useCallback((chunks: Int16Array[], sampleRate: number) => {
+  const mergePcmChunksToBuffer = useCallback((chunks: Int16Array[]) => {
     const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-    const dataSize = totalSamples * 2
-    const buffer = new ArrayBuffer(44 + dataSize)
-    const view = new DataView(buffer)
-
-    const writeString = (offset: number, value: string) => {
-      for (let i = 0; i < value.length; i++) {
-        view.setUint8(offset + i, value.charCodeAt(i))
-      }
-    }
-
-    writeString(0, 'RIFF')
-    view.setUint32(4, 36 + dataSize, true)
-    writeString(8, 'WAVE')
-    writeString(12, 'fmt ')
-    view.setUint32(16, 16, true)
-    view.setUint16(20, 1, true)
-    view.setUint16(22, 1, true)
-    view.setUint32(24, sampleRate, true)
-    view.setUint32(28, sampleRate * 2, true)
-    view.setUint16(32, 2, true)
-    view.setUint16(34, 16, true)
-    writeString(36, 'data')
-    view.setUint32(40, dataSize, true)
-
-    let offset = 44
+    const merged = new Int16Array(totalSamples)
+    let offset = 0
     for (const chunk of chunks) {
-      for (let i = 0; i < chunk.length; i++) {
-        view.setInt16(offset, chunk[i], true)
-        offset += 2
-      }
+      merged.set(chunk, offset)
+      offset += chunk.length
     }
-
-    return buffer
+    return merged.buffer
   }, [])
 
   const analyzeAudioChunk = useCallback((inputData: Float32Array) => {
@@ -484,25 +461,20 @@ const ChatComposer = memo(function ChatComposer({
     return { rms, peak }
   }, [])
 
-  const transcribeRecordedAudio = useCallback(async (draftText: string) => {
-    const chunks = recordedPcmChunksRef.current
-    const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-    if (totalSamples === 0) {
-      throw new Error('No recorded audio captured')
+  const flushPendingStreamingChunks = useCallback((reason: string) => {
+    const streamingSession = streamingSessionRef.current
+    const chunks = pendingStreamingChunksRef.current
+    if (!streamingSession || chunks.length === 0) {
+      return
     }
 
-    const wavBuffer = encodePcm16ToWav(chunks, 16000)
-    const file = new File([wavBuffer], `rec-${Date.now()}.wav`, { type: 'audio/wav' })
-    const durationSeconds = totalSamples / 16000
-    pushAsrDebug(`rec offline transcribe start; samples=${totalSamples} duration=${durationSeconds.toFixed(2)}s wavBytes=${wavBuffer.byteLength}`)
-
-    const result = await onTranscribeAudio(file, draftText)
-    pushAsrDebug(`rec offline response; status=${result.status} rawLength=${result.rawLength} textLength=${result.textLength}`)
-    if (result.responsePreview) {
-      pushAsrDebug(`rec offline preview=${JSON.stringify(result.responsePreview)}`)
-    }
-    return result
-  }, [encodePcm16ToWav, onTranscribeAudio, pushAsrDebug])
+    const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+    const chunkCount = chunks.length
+    const payload = mergePcmChunksToBuffer(chunks)
+    pendingStreamingChunksRef.current = []
+    pushAsrDebug(`ws batch sent; reason=${reason} chunkCount=${chunkCount} bytes=${totalBytes}`)
+    streamingSession.sendAudioChunk(payload)
+  }, [mergePcmChunksToBuffer, pushAsrDebug])
 
   const startWaveformLoop = useCallback(() => {
     const analyser = audioAnalyserRef.current
@@ -612,26 +584,14 @@ const ChatComposer = memo(function ChatComposer({
       }
 
       try {
-        await cleanupRecording({ preserveRecordedAudio: true })
-        streamingSessionRef.current?.cancel()
-        streamingSessionRef.current = null
-
-        const result = await transcribeRecordedAudio(input)
-        const transcript = result.text
-        if (!transcript.trim()) {
-          throw new Error(`ASR returned empty text (status=${result.status}, rawLength=${result.rawLength}, textLength=${result.textLength})`)
-        }
-        appendTranscriptToDraft(transcript)
-        pushAsrDebug(`rec append success; trimmedLength=${transcript.trim().length}`)
-        setLiveTranscriptionPreview('')
-        setTranscribingAudio(false)
-        recordedPcmChunksRef.current = []
+        flushPendingStreamingChunks('stop')
+        await cleanupRecording()
+        streamingSessionRef.current?.stop()
       } catch (e) {
         console.error('Failed to stop streaming audio recording:', e)
         setTranscribeError(e instanceof Error ? e.message : 'Failed to stop streaming audio recording')
         pushAsrDebug(`rec stop error; ${e instanceof Error ? e.message : 'Failed to stop streaming audio recording'}`)
         setTranscribingAudio(false)
-        recordedPcmChunksRef.current = []
       }
       return
     }
@@ -648,7 +608,36 @@ const ChatComposer = memo(function ChatComposer({
       pushAsrDebug('rec start requested')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       pushAsrDebug('mic stream granted')
-      recordedPcmChunksRef.current = []
+      const streamingSession = await onCreateStreamingTranscriber({
+        draftText: input,
+        onPartial: (text) => {
+          setLiveTranscriptionPreview(text)
+        },
+        onFinal: (text) => {
+          setLiveTranscriptionPreview(text)
+          if (text.trim()) {
+            appendTranscriptToDraft(text)
+            pushAsrDebug(`rec append success; trimmedLength=${text.trim().length}`)
+          } else {
+            pushAsrDebug('rec final text empty after trim')
+          }
+          setTranscribingAudio(false)
+          setIsRecordingAudio(false)
+          streamingSessionRef.current = null
+          setTimeout(() => {
+            setLiveTranscriptionPreview('')
+          }, 1200)
+        },
+        onError: (message) => {
+          setTranscribeError(message)
+          setTranscribingAudio(false)
+          setIsRecordingAudio(false)
+          setLiveTranscriptionPreview('')
+          streamingSessionRef.current = null
+          void cleanupRecording()
+        },
+        onDebug: pushAsrDebug,
+      })
 
       const audioContext = new AudioContext()
       await audioContext.resume().catch(() => {})
@@ -666,7 +655,11 @@ const ChatComposer = memo(function ChatComposer({
       audioMaxPeakRef.current = 0
       audioMaxRmsRef.current = 0
       audioRmsSumRef.current = 0
-      streamingSessionRef.current = null
+      pendingStreamingChunksRef.current = []
+      streamingSessionRef.current = streamingSession
+      streamingFlushTimerRef.current = setInterval(() => {
+        flushPendingStreamingChunks('timer')
+      }, 600)
 
       processor.onaudioprocess = (event) => {
         if (!recordingActiveRef.current) {
@@ -680,7 +673,7 @@ const ChatComposer = memo(function ChatComposer({
         audioMaxPeakRef.current = Math.max(audioMaxPeakRef.current, peak)
         audioMaxRmsRef.current = Math.max(audioMaxRmsRef.current, rms)
         audioRmsSumRef.current += rms
-        recordedPcmChunksRef.current.push(pcm16)
+        pendingStreamingChunksRef.current.push(pcm16)
         if (audioChunkCountRef.current <= 3 || audioChunkCountRef.current % 20 === 0) {
           pushAsrDebug(`mic chunk stats; count=${audioChunkCountRef.current} rms=${rms.toFixed(4)} peak=${peak.toFixed(4)}`)
         }
@@ -698,7 +691,7 @@ const ChatComposer = memo(function ChatComposer({
       audioAnalyserRef.current = analyser
       audioStreamRef.current = stream
       setIsRecordingAudio(true)
-      pushAsrDebug(`rec started; audioContextSampleRate=${audioContext.sampleRate}; final transcript will use offline transcribe`)
+      pushAsrDebug(`rec started; audioContextSampleRate=${audioContext.sampleRate}; streaming batched by 600ms window`)
       startWaveformLoop()
     } catch (e) {
       console.error('Failed to start microphone recording:', e)
@@ -709,7 +702,7 @@ const ChatComposer = memo(function ChatComposer({
       await cleanupRecording()
       setIsRecordingAudio(false)
     }
-  }, [analyzeAudioChunk, appendTranscriptToDraft, cleanupRecording, floatChunkToPcm16Buffer, input, isRecordingAudio, onCreateStreamingTranscriber, pushAsrDebug, transcribeRecordedAudio, transcribingAudio])
+  }, [analyzeAudioChunk, appendTranscriptToDraft, cleanupRecording, floatChunkToPcm16Buffer, flushPendingStreamingChunks, input, isRecordingAudio, onCreateStreamingTranscriber, pushAsrDebug, transcribingAudio])
 
   return (
     <div
