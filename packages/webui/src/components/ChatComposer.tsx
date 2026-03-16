@@ -77,6 +77,10 @@ const ChatComposer = memo(function ChatComposer({
   const recordingActiveRef = useRef(false)
   const waveformFrameRef = useRef<number | null>(null)
   const waveformPeakRef = useRef<number>(0.12)
+  const audioChunkCountRef = useRef(0)
+  const audioMaxPeakRef = useRef(0)
+  const audioMaxRmsRef = useRef(0)
+  const audioRmsSumRef = useRef(0)
   const streamingSessionRef = useRef<{
     sendAudioChunk: (chunk: ArrayBuffer) => void
     stop: () => void
@@ -176,6 +180,10 @@ const ChatComposer = memo(function ChatComposer({
     audioAnalyserRef.current = null
     audioStreamRef.current = null
     waveformPeakRef.current = 0.12
+    audioChunkCountRef.current = 0
+    audioMaxPeakRef.current = 0
+    audioMaxRmsRef.current = 0
+    audioRmsSumRef.current = 0
     setWaveformBars(Array.from({ length: 5 }, () => 0.22))
 
     if (audioContextRef.current) {
@@ -418,6 +426,23 @@ const ChatComposer = memo(function ChatComposer({
     return pcm16.buffer
   }, [downsampleTo16k])
 
+  const analyzeAudioChunk = useCallback((inputData: Float32Array) => {
+    let peak = 0
+    let sumSquares = 0
+
+    for (let i = 0; i < inputData.length; i++) {
+      const sample = inputData[i]
+      const abs = Math.abs(sample)
+      if (abs > peak) {
+        peak = abs
+      }
+      sumSquares += sample * sample
+    }
+
+    const rms = inputData.length > 0 ? Math.sqrt(sumSquares / inputData.length) : 0
+    return { rms, peak }
+  }, [])
+
   const startWaveformLoop = useCallback(() => {
     const analyser = audioAnalyserRef.current
     if (!analyser) return
@@ -516,6 +541,15 @@ const ChatComposer = memo(function ChatComposer({
       setTranscribingAudio(true)
       setTranscribeError(null)
 
+      if (audioChunkCountRef.current > 0) {
+        const avgRms = audioRmsSumRef.current / audioChunkCountRef.current
+        pushAsrDebug(
+          `rec stop requested; chunkCount=${audioChunkCountRef.current} avgRms=${avgRms.toFixed(4)} maxRms=${audioMaxRmsRef.current.toFixed(4)} maxPeak=${audioMaxPeakRef.current.toFixed(4)}`
+        )
+      } else {
+        pushAsrDebug('rec stop requested; no audio chunks captured')
+      }
+
       try {
         await cleanupRecording()
         streamingSessionRef.current?.stop()
@@ -582,6 +616,10 @@ const ChatComposer = memo(function ChatComposer({
 
       audioSampleRateRef.current = audioContext.sampleRate
       recordingActiveRef.current = true
+      audioChunkCountRef.current = 0
+      audioMaxPeakRef.current = 0
+      audioMaxRmsRef.current = 0
+      audioRmsSumRef.current = 0
       streamingSessionRef.current = streamingSession
 
       processor.onaudioprocess = (event) => {
@@ -590,6 +628,14 @@ const ChatComposer = memo(function ChatComposer({
         }
         const channelData = event.inputBuffer.getChannelData(0)
         const chunk = new Float32Array(channelData)
+        const { rms, peak } = analyzeAudioChunk(chunk)
+        audioChunkCountRef.current += 1
+        audioMaxPeakRef.current = Math.max(audioMaxPeakRef.current, peak)
+        audioMaxRmsRef.current = Math.max(audioMaxRmsRef.current, rms)
+        audioRmsSumRef.current += rms
+        if (audioChunkCountRef.current <= 3 || audioChunkCountRef.current % 20 === 0) {
+          pushAsrDebug(`mic chunk stats; count=${audioChunkCountRef.current} rms=${rms.toFixed(4)} peak=${peak.toFixed(4)}`)
+        }
         streamingSession.sendAudioChunk(floatChunkToPcm16Buffer(chunk, audioSampleRateRef.current))
       }
 
@@ -616,7 +662,7 @@ const ChatComposer = memo(function ChatComposer({
       await cleanupRecording()
       setIsRecordingAudio(false)
     }
-  }, [appendTranscriptToDraft, cleanupRecording, floatChunkToPcm16Buffer, input, isRecordingAudio, onCreateStreamingTranscriber, pushAsrDebug, transcribingAudio])
+  }, [analyzeAudioChunk, appendTranscriptToDraft, cleanupRecording, floatChunkToPcm16Buffer, input, isRecordingAudio, onCreateStreamingTranscriber, pushAsrDebug, transcribingAudio])
 
   return (
     <div
