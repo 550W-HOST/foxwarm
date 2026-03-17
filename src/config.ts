@@ -360,6 +360,7 @@ export type ModelConfigEntry = {
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
+  asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;

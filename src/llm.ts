@@ -209,7 +209,14 @@ function buildReasoningSummaryText(summaryParts: Map<string, string>): string {
         .join('\n');
 }
 
-async function collectOpenAIResponsesStream(stream: any, session: Session, signal: AbortSignal): Promise<any> {
+async function collectOpenAIResponsesStream(
+    stream: any,
+    session: Session,
+    signal: AbortSignal,
+    options?: {
+        onReasoningSummary?: (text: string) => void;
+    },
+): Promise<any> {
     if (signal.aborted) {
         throw makeAbortError();
     }
@@ -246,10 +253,14 @@ async function collectOpenAIResponsesStream(stream: any, session: Session, signa
             }
 
             lastSummaryText = nextText;
-            sessionManager.notifySessionEvent(session.id, {
-                type: 'reasoning-summary',
-                text: nextText,
-            });
+            if (options?.onReasoningSummary) {
+                options.onReasoningSummary(nextText);
+            } else {
+                sessionManager.notifySessionEvent(session.id, {
+                    type: 'reasoning-summary',
+                    text: nextText,
+                });
+            }
         };
 
         const handleEvent = (event: any) => {
@@ -1231,9 +1242,16 @@ export async function chat(
     iteration = 0,
     options?: {
         toolDefinitions?: ToolDefinition[];
+        appendMessage?: (message: Message) => Promise<void>;
+        notifySessionEvents?: boolean;
+        registerAbortController?: boolean;
     },
 ): Promise<ChatResult> {
     const appendMessage = async (message: Message) => {
+        if (options?.appendMessage) {
+            await options.appendMessage(message);
+            return;
+        }
         await sessionManager.appendSessionMessage(session, message);
     };
 
@@ -1404,8 +1422,15 @@ export async function chat(
     let resp: any;
     const maxRetries = 3;
     const abortController = new AbortController();
-    sessionManager.registerSessionAbortController(session.id, abortController);
-    sessionManager.notifySessionEvent(session.id, { type: 'reasoning-summary-reset' });
+    const shouldRegisterAbortController = options?.registerAbortController !== false;
+    const shouldNotifySessionEvents = options?.notifySessionEvents !== false;
+
+    if (shouldRegisterAbortController) {
+        sessionManager.registerSessionAbortController(session.id, abortController);
+    }
+    if (shouldNotifySessionEvents) {
+        sessionManager.notifySessionEvent(session.id, { type: 'reasoning-summary-reset' });
+    }
 
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -1438,7 +1463,11 @@ export async function chat(
                         continue;
                     }
 
-                    resp = await collectOpenAIResponsesStream(response.data, session, abortController.signal);
+                    resp = await collectOpenAIResponsesStream(response.data, session, abortController.signal, {
+                        onReasoningSummary: shouldNotifySessionEvents
+                            ? undefined
+                            : () => {},
+                    });
                     await logResponse({
                         status: response.status + ' ' + response.statusText,
                         headers: response.headers,
@@ -1496,7 +1525,9 @@ export async function chat(
             }
         }
     } finally {
-        sessionManager.clearSessionAbortController(session.id, abortController);
+        if (shouldRegisterAbortController) {
+            sessionManager.clearSessionAbortController(session.id, abortController);
+        }
     }
     
     // Extract response content blocks and tool calls

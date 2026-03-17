@@ -373,6 +373,7 @@ function getSessionHistoryDeps() {
     getSessionById: (sessionId: string) => sessions.get(sessionId),
     getExistingSession,
     saveSession,
+    enqueueSessionItem,
   };
 }
 
@@ -995,7 +996,7 @@ export async function requestSessionCompaction(
 ): Promise<{ alreadyQueued: boolean; startedImmediately: boolean; queueLength: number }> {
   const session = await getSession(sessionId);
 
-  if (session.queue.some(item => item.type === 'compact')) {
+  if (session.queue.some(item => item.type === 'compact' || item.type === 'compact-commit') || sessionHistory.hasPendingCompactWork(sessionId)) {
     return {
       alreadyQueued: true,
       startedImmediately: false,
@@ -1020,8 +1021,16 @@ export async function requestSessionCompaction(
   };
 }
 
-export async function processSessionCompactionRequest(sessionId: string, item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>): Promise<void> {
-  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item);
+export async function processSessionCompactionRequest(
+  sessionId: string,
+  item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>,
+  executionMode: 'auto' | 'await' | 'background' = 'auto'
+): Promise<void> {
+  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode);
+}
+
+export async function applyCompletedCompactJob(sessionId: string): Promise<boolean> {
+  return sessionHistory.applyCompletedCompactJob(getSessionHistoryDeps(), sessionId);
 }
 
 /**
@@ -1219,6 +1228,8 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
   if (!sessions.has(sessionId)) {
     return false;
   }
+
+  sessionHistory.discardPendingCompactWork(sessionId);
   
   // Remove from memory
   sessions.delete(sessionId);
