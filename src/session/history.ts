@@ -20,7 +20,7 @@ import {
 } from './compactPlan';
 import { Message, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
 import { formatMessagePreviewText } from '../utils/messageFormat';
-import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './layeredContext';
+import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 
 const TOOL_NOISE_TOKEN_THRESHOLD = 200;
 
@@ -175,6 +175,12 @@ function normalizeSeqRange(startSeq?: number, endSeq?: number): { startSeq?: num
   return { startSeq, endSeq };
 }
 
+type LayeredCompactCandidateEntry = {
+  item: CompactCandidateItem;
+  frontierStartIndex: number;
+  frontierEndIndex: number;
+};
+
 function resolveCompactionSplitIndex(history: Message[], keepPercent: number): number {
   let splitIndex = Math.floor(history.length * (1 - keepPercent));
 
@@ -189,7 +195,7 @@ function resolveCompactionSplitIndex(history: Message[], keepPercent: number): n
   return splitIndex;
 }
 
-async function buildLayeredCompactCandidateItems(session: Session, olderFrontier: ContextFrontierItem[]): Promise<CompactCandidateItem[]> {
+async function buildLayeredCompactCandidateEntries(session: Session, olderFrontier: ContextFrontierItem[]): Promise<LayeredCompactCandidateEntry[]> {
   const messageSeqs = olderFrontier
     .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
     .map(item => item.seq);
@@ -207,17 +213,21 @@ async function buildLayeredCompactCandidateItems(session: Session, olderFrontier
   const messageMap = new Map(messageRecords.map(record => [record.seq, record]));
   const blockMap = new Map(blockRecords.map(record => [record.id, record]));
 
-  return olderFrontier.flatMap(item => {
+  return olderFrontier.flatMap((item, frontierIndex) => {
     if (item.kind === 'message') {
       const record = messageMap.get(item.seq);
-      if (!record) {
+      if (!record || shouldIgnoreMessageInCompactCandidates(record.message)) {
         return [];
       }
-      return [buildMessageCandidateItem(item.seq, formatMessagePreviewText(record.message, 60, {
-        skipEphemeralSystem: true,
-        skipRagMemorySnippets: true,
-        skipThinking: true,
-      }).trim() || '[empty message]')];
+      return [{
+        item: buildMessageCandidateItem(item.seq, formatMessagePreviewText(record.message, 60, {
+          skipEphemeralSystem: true,
+          skipRagMemorySnippets: true,
+          skipThinking: true,
+        }).trim() || '[empty message]'),
+        frontierStartIndex: frontierIndex,
+        frontierEndIndex: frontierIndex,
+      }];
     }
 
     const record = blockMap.get(item.id);
@@ -225,12 +235,17 @@ async function buildLayeredCompactCandidateItems(session: Session, olderFrontier
       return [];
     }
 
-    return [buildBlockCandidateItem(record.id, record.level, record.rawStartSeq, record.rawEndSeq, record.summary)];
+    return [{
+      item: buildBlockCandidateItem(record.id, record.level, record.rawStartSeq, record.rawEndSeq, record.summary),
+      frontierStartIndex: frontierIndex,
+      frontierEndIndex: frontierIndex,
+    }];
   });
 }
 
-function resolveCreateBlockRanges(plan: CompactPlan, candidateItems: CompactCandidateItem[]): Array<{ planIndex: number; startIndex: number; endIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> {
-  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> = [];
+function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> {
+  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> = [];
+  const candidateItems = candidateEntries.map(entry => entry.item);
 
   for (let planIndex = 0; planIndex < plan.createBlocks.length; planIndex += 1) {
     const block = plan.createBlocks[planIndex];
@@ -248,11 +263,27 @@ function resolveCreateBlockRanges(plan: CompactPlan, candidateItems: CompactCand
       if (startIndex < 0) {
         throw new Error(`Unable to resolve layered compact message range ${block.sourceStart}-${block.sourceEnd}.`);
       }
-      endIndex = startIndex + (block.sourceEnd - block.sourceStart);
+      for (let index = startIndex; index < candidateItems.length; index += 1) {
+        const item = candidateItems[index];
+        if (item.kind !== 'message') {
+          break;
+        }
+        endIndex = index;
+        if (item.seq === block.sourceEnd) {
+          break;
+        }
+      }
+      if (endIndex < startIndex || candidateItems[endIndex]?.kind !== 'message' || (candidateItems[endIndex] as Extract<CompactCandidateItem, { kind: 'message' }>).seq !== block.sourceEnd) {
+        throw new Error(`Unable to resolve layered compact message range ${block.sourceStart}-${block.sourceEnd}.`);
+      }
+      const startEntry = candidateEntries[startIndex];
+      const endEntry = candidateEntries[endIndex];
       operations.push({
         planIndex,
         startIndex,
         endIndex,
+        frontierStartIndex: startEntry.frontierStartIndex,
+        frontierEndIndex: endEntry.frontierEndIndex,
         rawStartSeq: block.sourceStart,
         rawEndSeq: block.sourceEnd,
         sourceKind: block.sourceKind,
@@ -280,10 +311,14 @@ function resolveCreateBlockRanges(plan: CompactPlan, candidateItems: CompactCand
     if (startItem.kind !== 'block' || endItem.kind !== 'block') {
       throw new Error(`Layered compact block range ${block.sourceStart}-${block.sourceEnd} resolved to non-block items.`);
     }
+    const startEntry = candidateEntries[startIndex];
+    const endEntry = candidateEntries[endIndex];
     operations.push({
       planIndex,
       startIndex,
       endIndex,
+      frontierStartIndex: startEntry.frontierStartIndex,
+      frontierEndIndex: endEntry.frontierEndIndex,
       rawStartSeq: startItem.rawStartSeq,
       rawEndSeq: endItem.rawEndSeq,
       sourceKind: block.sourceKind,
@@ -361,7 +396,8 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
 
   const olderFrontier = frontier.slice(0, splitIndex);
   const forceKeptRecentFrontier = splitIndex < frontier.length ? frontier.slice(splitIndex) : [];
-  const candidateItems = await buildLayeredCompactCandidateItems(session, olderFrontier);
+  const candidateEntries = await buildLayeredCompactCandidateEntries(session, olderFrontier);
+  const candidateItems = candidateEntries.map(entry => entry.item);
 
   if (candidateItems.length === 0) {
     logger.info({ sessionId, splitIndex }, 'Compaction skipped because no layered candidate items were produced');
@@ -422,7 +458,7 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
       throw new Error(`Compaction failed because no valid ${COMPACT_PLAN_TOOL_NAME} plan was produced.`);
     }
 
-    const operations = resolveCreateBlockRanges(compactPlan, candidateItems);
+    const operations = resolveCreateBlockRanges(compactPlan, candidateEntries);
     const createdRecords = await appendBlocksToArchive(session, operations.map(operation => ({
       level: operation.level,
       sourceKind: operation.sourceKind,
@@ -438,8 +474,8 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
     for (let index = 0; index < operations.length; index += 1) {
       const operation = operations[index];
       const createdRecord = createdRecords[index];
-      if (cursor < operation.startIndex) {
-        rewrittenOlderFrontier.push(...olderFrontier.slice(cursor, operation.startIndex));
+      if (cursor < operation.frontierStartIndex) {
+        rewrittenOlderFrontier.push(...olderFrontier.slice(cursor, operation.frontierStartIndex));
       }
       rewrittenOlderFrontier.push({
         kind: 'block',
@@ -448,7 +484,7 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
         rawStartSeq: createdRecord.rawStartSeq,
         rawEndSeq: createdRecord.rawEndSeq,
       });
-      cursor = operation.endIndex + 1;
+      cursor = operation.frontierEndIndex + 1;
     }
     if (cursor < olderFrontier.length) {
       rewrittenOlderFrontier.push(...olderFrontier.slice(cursor));
@@ -462,7 +498,7 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
       newFrontier,
       completionMarker,
       createdRecords.length,
-      operations.reduce((sum, operation) => sum + (operation.endIndex - operation.startIndex + 1), 0),
+      operations.reduce((sum, operation) => sum + (operation.frontierEndIndex - operation.frontierStartIndex + 1), 0),
     );
   } catch (e) {
     logger.error(e, 'Compaction failed');

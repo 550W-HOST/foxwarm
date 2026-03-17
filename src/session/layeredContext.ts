@@ -9,6 +9,13 @@ import {
 import { logger } from '../common';
 import { ArchiveMessageRecord, readArchiveMessagesBySeqRange } from './archive';
 
+const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
+  'This session has been compacted.',
+  'Compacted message placeholder:',
+  'Compaction completed.',
+  'Manual compaction completed.',
+];
+
 export interface ArchiveBlockRecord {
   v: number;
   kind: 'block';
@@ -33,6 +40,36 @@ export interface CreateArchiveBlockInput {
   rawStartSeq: number;
   rawEndSeq: number;
   summary: string;
+}
+
+export function isIgnoredCompactLifecycleSystemText(text: string): boolean {
+  return COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES.some(prefix => text.startsWith(prefix));
+}
+
+export function shouldIgnoreMessageInCompactCandidates(message: Message): boolean {
+  const parts = message.parts || [];
+  const systemTexts = parts
+    .map(part => typeof part.system === 'string' ? part.system.trim() : '')
+    .filter(Boolean);
+
+  if (systemTexts.length === 0) {
+    return false;
+  }
+
+  const hasNonSystemContent = parts.some(part => (
+    (typeof part.text === 'string' && part.text.trim().length > 0)
+    || (typeof part.thinking === 'string' && part.thinking.trim().length > 0)
+    || !!part.functionCall
+    || !!part.functionResponse
+    || !!part.inlineData
+    || !!(part as any).inlineDataRef
+  ));
+
+  if (hasNonSystemContent) {
+    return false;
+  }
+
+  return systemTexts.every(isIgnoredCompactLifecycleSystemText);
 }
 
 function cloneFrontier(frontier: ContextFrontierItem[] | undefined): ContextFrontierItem[] | undefined {

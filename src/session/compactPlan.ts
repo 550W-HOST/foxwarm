@@ -203,18 +203,16 @@ function findMessageRange(candidateItems: CompactCandidateItem[], sourceStart: n
   const startIndex = candidateItems.findIndex(item => item.kind === 'message' && item.seq === sourceStart);
   if (startIndex < 0) return null;
 
-  let expectedSeq = sourceStart;
   let endIndex = startIndex - 1;
   for (let index = startIndex; index < candidateItems.length; index += 1) {
     const item = candidateItems[index];
-    if (item.kind !== 'message' || item.seq !== expectedSeq) {
+    if (item.kind !== 'message') {
       break;
     }
     endIndex = index;
-    if (expectedSeq === sourceEnd) {
+    if (item.seq === sourceEnd) {
       return [startIndex, endIndex];
     }
-    expectedSeq += 1;
   }
 
   return null;

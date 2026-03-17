@@ -76,6 +76,28 @@ test('validateCompactPlanArgs accepts layered message and block range creation',
   assert.equal(plan.createBlocks[1].level, 2);
 });
 
+test('validateCompactPlanArgs accepts sparse raw seq ranges when ignored lifecycle messages were filtered out of candidates', () => {
+  const sparseMessageCandidates = [
+    buildMessageCandidateItem(1, 'first real message'),
+    buildMessageCandidateItem(3, 'second real message after ignored lifecycle seq #2'),
+    buildMessageCandidateItem(4, 'third real message'),
+  ];
+
+  const plan = validateCompactPlanArgs({
+    createBlocks: [{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 4,
+      summary: 'summary across visible messages while skipping ignored lifecycle seqs',
+    }],
+  }, sparseMessageCandidates);
+
+  assert.equal(plan.createBlocks.length, 1);
+  assert.equal(plan.createBlocks[0].sourceStart, 1);
+  assert.equal(plan.createBlocks[0].sourceEnd, 4);
+});
+
 test('validateCompactPlanArgs rejects non-continuous or overlapping ranges', () => {
   assert.throws(() => validateCompactPlanArgs({
     createBlocks: [{
