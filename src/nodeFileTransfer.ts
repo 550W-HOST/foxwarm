@@ -88,7 +88,7 @@ export async function readNodeTransferFile(filePath: string, agentName: string):
 }
 
 export async function writeNodeTransferFile(filePath: string, agentName: string, dataBase64: string, overwrite = false): Promise<NodeTransferWriteResult> {
-  if (typeof dataBase64 !== 'string' || dataBase64.length === 0) {
+  if (typeof dataBase64 !== 'string') {
     throw new Error('dataBase64 is required');
   }
 
