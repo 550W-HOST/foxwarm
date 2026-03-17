@@ -1,9 +1,10 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Menu } from 'lucide-react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Check, Copy, Menu, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import ChatTimeline from './ChatTimeline'
 import ProcessingStatus from './ProcessingStatus'
+import { copyTextToClipboard } from './chatShared'
 import type { Message, MessagePart, SendKeyMode, SessionStreamEvent } from './chatShared'
 
 function getAsrStreamUrl() {
@@ -77,6 +78,59 @@ type StreamingAsrSession = {
   cancel: () => void
 }
 
+type SessionListRecord = {
+  id: string
+  agent?: string
+  messageCount?: number
+  lastMessageTime?: number
+  parentSessionId?: string | null
+  childSessions?: string[]
+  aliases?: string[]
+  busy?: boolean
+  queueLength?: number
+  displayName?: string | null
+  archived?: boolean
+  currentNode?: string
+  isolated?: boolean
+}
+
+type SessionFilePayload = {
+  history?: Message[]
+  persistentMemorySnapshot?: string
+  [key: string]: any
+}
+
+const SESSION_JSON_BASE_PATH_CANDIDATES = [
+  '/home/ldmbot/git/foxwarm/test/state/sessions',
+  '/home/ldmbot/git/foxwarm/state/sessions',
+  '/home/ldmbot/betabot/state/sessions',
+  '/app/test/state/sessions',
+  '/app/state/sessions',
+]
+
+function buildSessionJsonPathCandidates(sessionId: string): string[] {
+  return SESSION_JSON_BASE_PATH_CANDIDATES.map((basePath) => `${basePath}/${sessionId}.json`)
+}
+
+async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPath: string | null; payload: SessionFilePayload | null }> {
+  const candidates = buildSessionJsonPathCandidates(sessionId)
+
+  for (const candidate of candidates) {
+    try {
+      const res = await fetch(`/download?path=${encodeURIComponent(candidate)}`)
+      if (!res.ok) continue
+
+      const text = await res.text()
+      const payload = JSON.parse(text) as SessionFilePayload
+      return { resolvedPath: candidate, payload }
+    } catch {
+      // Try the next likely runtime path.
+    }
+  }
+
+  return { resolvedPath: null, payload: null }
+}
+
 const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
@@ -97,8 +151,15 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     return saved !== null ? saved === 'true' : true
   })
   const [showMenu, setShowMenu] = useState(false)
+  const [showDebugInfo, setShowDebugInfo] = useState(false)
+  const [debugInfoLoading, setDebugInfoLoading] = useState(false)
+  const [debugInfoError, setDebugInfoError] = useState<string | null>(null)
+  const [debugInfoCopied, setDebugInfoCopied] = useState(false)
   const [processingReasoningSummary, setProcessingReasoningSummary] = useState('')
   const [asrAvailable, setAsrAvailable] = useState(false)
+  const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
+  const [resolvedSessionFilePath, setResolvedSessionFilePath] = useState<string | null>(null)
+  const [sessionFilePayload, setSessionFilePayload] = useState<SessionFilePayload | null>(null)
 
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
@@ -108,6 +169,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const shouldAutoScrollRef = useRef<boolean>(true)
   const pendingSentMessagesRef = useRef<string[]>([])
+  const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
     localStorage.setItem('sendKeyMode', sendKeyMode)
@@ -115,6 +177,12 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
 
   useEffect(() => {
     setProcessingReasoningSummary('')
+  }, [sessionId])
+
+  useEffect(() => {
+    setShowDebugInfo(false)
+    setDebugInfoError(null)
+    setDebugInfoCopied(false)
   }, [sessionId])
 
   useEffect(() => {
@@ -159,6 +227,14 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     const container = messagesContainerRef.current
     if (container) {
       container.scrollTop = container.scrollHeight
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (debugInfoCopyResetTimeoutRef.current !== null) {
+        window.clearTimeout(debugInfoCopyResetTimeoutRef.current)
+      }
     }
   }, [])
 
@@ -349,6 +425,38 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     eventSourceRef.current = es
   }, [fetchHistory, sessionId])
 
+  const refreshSessionDebugData = useCallback(async () => {
+    setDebugInfoLoading(true)
+    setDebugInfoError(null)
+
+    try {
+      const [sessionsRes, fileData] = await Promise.all([
+        fetch(`${API_BASE_PATH}/sessions`),
+        fetchSessionFilePayload(sessionId),
+      ])
+
+      if (sessionsRes.ok) {
+        const data = await sessionsRes.json()
+        const currentSession = (data.sessions || []).find((session: SessionListRecord) => session.id === sessionId) || null
+        setSessionRecord(currentSession)
+      } else {
+        setSessionRecord(null)
+      }
+
+      setResolvedSessionFilePath(fileData.resolvedPath)
+      setSessionFilePayload(fileData.payload)
+
+      if (!fileData.payload) {
+        setDebugInfoError('Session file JSON is not available from the current WebUI runtime paths.')
+      }
+    } catch (error) {
+      console.error('Failed to refresh session debug data:', error)
+      setDebugInfoError(error instanceof Error ? error.message : 'Failed to refresh debug info')
+    } finally {
+      setDebugInfoLoading(false)
+    }
+  }, [sessionId])
+
   useEffect(() => {
     fetchHistory()
     connectSSE()
@@ -368,6 +476,10 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       }
     }
   }, [connectSSE, fetchHistory])
+
+  useEffect(() => {
+    refreshSessionDebugData()
+  }, [refreshSessionDebugData])
 
   useEffect(() => {
     setSessionMissing(false)
@@ -411,6 +523,97 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       scrollToBottom()
     }
   }, [messages, scrollToBottom])
+
+  const snapshotSystemMessage = useMemo<Message | null>(() => {
+    const snapshotText = typeof sessionFilePayload?.persistentMemorySnapshot === 'string'
+      ? sessionFilePayload.persistentMemorySnapshot.trim()
+      : ''
+
+    if (!snapshotText) {
+      return null
+    }
+
+    return {
+      role: 'tool',
+      parts: [{ text: `[SYSTEM: snapshot]\n${snapshotText}` }],
+      __meta: {
+        timestamp: -1,
+        synthetic: 'persistentMemorySnapshot',
+      },
+    }
+  }, [sessionFilePayload])
+
+  const timelineMessages = useMemo(() => (
+    snapshotSystemMessage ? [snapshotSystemMessage, ...messages] : messages
+  ), [messages, snapshotSystemMessage])
+
+  const debugInfoObject = useMemo(() => ({
+    sessionId,
+    sessionDisplayName: sessionDisplayName || null,
+    sessionRecord,
+    resolvedSessionFilePath,
+    sessionPayload: sessionFilePayload
+      ? {
+          ...sessionFilePayload,
+          history: messages,
+        }
+      : {
+          history: messages,
+        },
+    clientState: {
+      connectionState,
+      reconnectCountdown,
+      sessionMissing,
+      sessionBusy,
+      sessionQueueLength,
+      verbose,
+      sendKeyMode,
+      loading,
+      asrAvailable,
+      processingReasoningSummary,
+    },
+  }), [
+    asrAvailable,
+    connectionState,
+    loading,
+    messages,
+    processingReasoningSummary,
+    reconnectCountdown,
+    resolvedSessionFilePath,
+    sendKeyMode,
+    sessionBusy,
+    sessionDisplayName,
+    sessionFilePayload,
+    sessionId,
+    sessionMissing,
+    sessionQueueLength,
+    sessionRecord,
+    verbose,
+  ])
+
+  const debugInfoText = useMemo(() => JSON.stringify(debugInfoObject, null, 2), [debugInfoObject])
+
+  const handleOpenDebugInfo = useCallback(async () => {
+    setShowMenu(false)
+    setShowDebugInfo(true)
+    await refreshSessionDebugData()
+  }, [refreshSessionDebugData])
+
+  const handleCopyDebugInfo = useCallback(async () => {
+    try {
+      await copyTextToClipboard(debugInfoText)
+      setDebugInfoCopied(true)
+      if (debugInfoCopyResetTimeoutRef.current !== null) {
+        window.clearTimeout(debugInfoCopyResetTimeoutRef.current)
+      }
+      debugInfoCopyResetTimeoutRef.current = window.setTimeout(() => {
+        setDebugInfoCopied(false)
+        debugInfoCopyResetTimeoutRef.current = null
+      }, 1500)
+    } catch (error) {
+      console.error('Failed to copy debug info:', error)
+    }
+  }, [debugInfoText])
 
   const handleSend = useCallback(async ({ text, attachments }: { text: string; attachments: File[] }) => {
     if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
@@ -735,6 +938,12 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
                     </span>
                   </div>
                 </button>
+                <button
+                  onClick={handleOpenDebugInfo}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm border-t border-gray-200 dark:border-gray-700"
+                >
+                  debug info
+                </button>
               </div>
             )}
           </div>
@@ -754,7 +963,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       )}
 
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 pb-56 md:pb-52">
-        <ChatTimeline messages={messages} isMobile={isMobile} verbose={verbose} />
+        <ChatTimeline messages={timelineMessages} isMobile={isMobile} verbose={verbose} />
         <ProcessingStatus
           sessionBusy={sessionBusy}
           sessionQueueLength={sessionQueueLength}
@@ -800,6 +1009,62 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         onTranscribeAudio={handleTranscribeAudio}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
       />
+
+      {showDebugInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowDebugInfo(false)}>
+          <div
+            className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+              <div>
+                <div className="text-sm font-semibold text-gray-900 dark:text-white">debug info</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Current session internal/debug JSON</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => void refreshSessionDebugData()}
+                  className="rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                >
+                  refresh
+                </button>
+                <button
+                  onClick={() => void handleCopyDebugInfo()}
+                  className="inline-flex items-center gap-1 rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                >
+                  {debugInfoCopied ? <Check size={13} /> : <Copy size={13} />}
+                  {debugInfoCopied ? 'copied' : 'copy'}
+                </button>
+                <button
+                  onClick={() => setShowDebugInfo(false)}
+                  className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  title="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto bg-gray-50 dark:bg-gray-950">
+              <div className="border-b border-gray-200 px-4 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
+                {resolvedSessionFilePath
+                  ? `session file: ${resolvedSessionFilePath}`
+                  : 'session file: unavailable from current WebUI runtime paths'}
+              </div>
+              {debugInfoError && (
+                <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+                  {debugInfoError}
+                </div>
+              )}
+              {debugInfoLoading && (
+                <div className="border-b border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-700 dark:border-blue-900/50 dark:bg-blue-950/40 dark:text-blue-300">
+                  Refreshing debug info...
+                </div>
+              )}
+              <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs leading-5 text-gray-900 dark:text-gray-100">{debugInfoText}</pre>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }, (prev, next) => (
