@@ -273,14 +273,6 @@ const SEARCH_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 const messagesUsage = 'Usage: `/messages <num>` | `/messages <start> <end>`'
 const deleteMessagesUsage = 'Usage: `/delete-messages <num>` (positive: delete oldest, negative: delete newest)'
 
-function isCommandSessionEffectivelyIsolated(session?: Session): boolean {
-  return sessionManager.isSessionEffectivelyIsolated(session)
-}
-
-function commandIsolationError(operation: string): string {
-  return `❌ Isolated session cannot use ${operation}.`
-}
-
 function formatTimerDate(timestamp?: number | null): string {
   if (!timestamp) return 'n/a'
   const date = new Date(timestamp)
@@ -677,8 +669,6 @@ export const COMMANDS: Record<string, CommandDef> = {
       
       const subcommand = args[0]
       const subArgs = args.slice(1)
-      const effectiveIsolated = isCommandSessionEffectivelyIsolated(session)
-
       if (!subcommand) {
         let resp = '📋 *Session Commands*\n\n'
         resp += '`/session list` - List all sessions\n'
@@ -702,10 +692,6 @@ export const COMMANDS: Record<string, CommandDef> = {
 
       switch (subcommand) {
         case 'list': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/session list'))
-            break
-          }
           const allSessions = sessionManager.getAllSessions()
           const allAttachments = sessionManager.getAllAttachments()
 
@@ -760,10 +746,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'new': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/session new'))
-            break
-          }
           sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
           const newSessionId = sessionManager.attachChannel(ctx.platform, ctx.channelUserId)
           ctx.reply(`✅ Created and attached to new session \`${newSessionId}\``)
@@ -771,10 +753,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'create': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/session create'))
-            break
-          }
           if (subArgs.length < 2) {
             ctx.reply('Usage: /session create <agent> <session>')
             return
@@ -801,10 +779,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'fork': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/session fork'))
-            break
-          }
           if (!sessionId || !session) {
             ctx.reply('❌ No active session to fork.')
             return
@@ -817,10 +791,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'delete': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/session delete'))
-            break
-          }
           if (subArgs.length === 0) {
             ctx.reply('Usage: /session delete <sessionId>\nUse /session list to see available sessions.')
             return
@@ -996,10 +966,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'move': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/session move'))
-            break
-          }
           if (!sessionId || !session) {
             ctx.reply('❌ No active session to move.')
             return
@@ -1013,16 +979,23 @@ export const COMMANDS: Record<string, CommandDef> = {
           
           try {
             const { newSessionId, newAgentName } = parseSessionMoveTarget(targetId)
-            await tools.move_session({ 
-              sessionId: sessionId,
+            const result = await sessionManager.moveSessionToTarget({
+              sourceSessionId: sessionId,
               newSessionId,
               newAgentName,
-            }, { 
-              session,
-              sessionId: sessionId,
-              broadcast: async (msg: string) => ctx.reply(msg)
             })
-            // move_session already sends reply via broadcast
+
+            let message = `✅ Session \`${sessionId}\` moved to \`${result.targetSessionId}\`.`
+            if (result.createdAgent) {
+              message += `\nAgent \`${result.targetAgent}\` created.`
+            }
+            if (result.aliases.length > 0) {
+              message += `\nAliases: ${result.aliases.map(alias => `\`${alias}\``).join(', ')}`
+            }
+            if (result.updatedChildren.length > 0) {
+              message += `\nUpdated ${result.updatedChildren.length} child session parent reference(s).`
+            }
+            ctx.reply(message)
           } catch (e: any) {
             ctx.reply(`❌ Move failed: ${e.message}`)
           }
@@ -1030,10 +1003,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'parent': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/session parent'))
-            break
-          }
           if (subArgs.length === 0) {
             ctx.reply('Usage: /session parent <parent-session-id> [child-session-id]')
             return
@@ -1070,10 +1039,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'unparent': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/session unparent'))
-            break
-          }
           const targetChildSessionId = subArgs[0] || sessionId
 
           if (!targetChildSessionId) {
@@ -1100,10 +1065,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'archive': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/session archive'))
-            break
-          }
           const targetSessionId = subArgs.length > 0 ? subArgs[0] : sessionId
           
           if (!targetSessionId) {
@@ -1126,10 +1087,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'unarchive': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/session unarchive'))
-            break
-          }
           const targetSessionId = subArgs.length > 0 ? subArgs[0] : sessionId
           
           if (!targetSessionId) {
@@ -1164,11 +1121,6 @@ export const COMMANDS: Record<string, CommandDef> = {
     },
     handler: async (ctx, args) => {
       const currentSessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId)
-      const currentSession = currentSessionId ? await sessionManager.getSession(currentSessionId) : undefined
-      if (isCommandSessionEffectivelyIsolated(currentSession)) {
-        ctx.reply(commandIsolationError('/attach'))
-        return
-      }
       if (args.length === 0) {
         ctx.reply('Usage: /attach <sessionId>\nUse /sessions to see available sessions.')
         return
@@ -1194,8 +1146,6 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: AGENT_AUTOCOMPLETE },
     handler: async (ctx, args) => {
       const currentSessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId)
-      const currentSession = currentSessionId ? await sessionManager.getSession(currentSessionId) : undefined
-      const effectiveIsolated = isCommandSessionEffectivelyIsolated(currentSession)
       const subcommand = args[0]
       const subArgs = args.slice(1)
 
@@ -1212,10 +1162,6 @@ export const COMMANDS: Record<string, CommandDef> = {
 
       switch (subcommand) {
         case 'list': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/agent list'))
-            break
-          }
           const agentsDir = AGENTS_DIR
           
           if (!await fs.pathExists(agentsDir)) {
@@ -1270,10 +1216,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'create': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/agent create'))
-            break
-          }
           if (subArgs.length === 0) {
             ctx.reply('Usage: /agent create <name> [--no-main] [--isolated <node-id>]\nExample: /agent create my-assistant\nExample: /agent create my-agent --no-main\nExample: /agent create sandbox-agent --isolated sandbox-node')
             return
@@ -1323,10 +1265,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'isolated': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/agent isolated'))
-            break
-          }
           if (subArgs.length < 2) {
             ctx.reply('Usage: /agent isolated <agent> <node-id|off>')
             break
@@ -1350,10 +1288,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'inherit': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/agent inherit'))
-            break
-          }
           if (subArgs.length < 2) {
             ctx.reply('Usage: /agent inherit <agent> <parent-agent|none>')
             return
@@ -1382,10 +1316,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'delete': {
-          if (effectiveIsolated) {
-            ctx.reply(commandIsolationError('/agent delete'))
-            break
-          }
           if (subArgs.length === 0) {
             ctx.reply('Usage: /agent delete <name> [--confirm]\nExample: /agent delete my-assistant --confirm\n\n⚠️ This will delete the agent and all its sessions permanently!')
             return
@@ -1617,17 +1547,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
-      const effectiveIsolated = isCommandSessionEffectivelyIsolated(session)
-
-      if (effectiveIsolated) {
-        if (args.length === 0) {
-          const node = sessionManager.getAgentIsolationNode(session.agent || 'main') || session.currentNode || 'master'
-          ctx.reply(`🔒 Isolated session is bound to node \`${node}\`.`)
-        } else {
-          ctx.reply(commandIsolationError('/node'))
-        }
-        return
-      }
+      const boundNode = sessionManager.getAgentIsolationNode(session.agent || 'main')
 
       if (args[0] === 'pair') {
         const sub = args[1]
@@ -1715,7 +1635,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (args.length === 0) {
         const nodes = nodesManager.listNodes()
         const remoteNodes = nodes.filter(node => node.id !== 'master')
-        const currentNode = session.currentNode || 'master'
+        const currentNode = boundNode || session.currentNode || 'master'
 
         let reply = `📋 **Available Nodes** (${remoteNodes.length + 1} total):\n\n`
 
@@ -1732,6 +1652,9 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         reply += `\n\n💡 Current node: \`${currentNode}\``
+        if (boundNode) {
+          reply += `\n🔒 Runtime is bound by agent isolation to \`${boundNode}\`.`
+        }
 
         ctx.reply(reply)
         return
@@ -1740,8 +1663,8 @@ export const COMMANDS: Record<string, CommandDef> = {
       // With args: switch node
       const nodeId = args[0]
 
-      if (effectiveIsolated) {
-        ctx.reply(commandIsolationError('/node <node-id>'))
+      if (boundNode) {
+        ctx.reply(`🔒 Current session belongs to an isolated agent bound to node \`${boundNode}\`. Changing \`currentNode\` here would not affect runtime execution. Use \`/agent isolated <agent> off\` first if you really want to unbind it.`)
         return
       }
 
