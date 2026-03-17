@@ -6,8 +6,9 @@ HOST=""
 PAIRING=""
 NODE_ID="node-$(hostname 2>/dev/null || echo foxwarm-node)"
 STATE_DIR="./data"
-COMPOSE_FILE="./docker-compose.yaml"
+SOURCE_DIR="./foxwarm-node"
 ENV_FILE="./.env"
+PREPARE_ONLY=0
 
 usage() {
   cat <<'EOF'
@@ -17,13 +18,17 @@ Usage:
     --pairing=PAIRING_TOKEN \
     --node-id=my-node
 
+This is the bare-metal bootstrap path. It prepares a local node client checkout,
+installs/builds it, and by default starts it in the background from the current directory.
+
 Options:
   --host=URL          Foxwarm master base URL (required)
-  --pairing=TOKEN     Pairing token from the master (required unless .env already has one)
+  --pairing=TOKEN     Pairing token for first-time setup; optional only if stored credentials already exist
   --node-id=ID        Requested node name (default: node-<hostname>)
   --state-dir=DIR     Persistent data dir on the local machine (default: ./data)
-  --compose-file=FILE docker compose file path to create (default: ./docker-compose.yaml)
-  --env-file=FILE     env file path to create (default: ./.env)
+  --source-dir=DIR    Local source dir to extract/build the node client (default: ./foxwarm-node)
+  --env-file=FILE     Env record file to create (default: ./.env)
+  --prepare-only      Prepare files/install/build but do not start the node process
   --help              Show this help
 EOF
 }
@@ -34,8 +39,9 @@ for arg in "$@"; do
     --pairing=*) PAIRING="${arg#*=}" ;;
     --node-id=*) NODE_ID="${arg#*=}" ;;
     --state-dir=*) STATE_DIR="${arg#*=}" ;;
-    --compose-file=*) COMPOSE_FILE="${arg#*=}" ;;
+    --source-dir=*) SOURCE_DIR="${arg#*=}" ;;
     --env-file=*) ENV_FILE="${arg#*=}" ;;
+    --prepare-only) PREPARE_ONLY=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $arg" >&2; usage >&2; exit 1 ;;
   esac
@@ -47,58 +53,93 @@ if [ -z "$HOST" ]; then
   exit 1
 fi
 
-if ! command -v curl >/dev/null 2>&1; then
-  echo "Error: curl is required" >&2
-  exit 1
-fi
-
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-  DOCKER_COMPOSE='docker compose'
-elif command -v docker-compose >/dev/null 2>&1; then
-  DOCKER_COMPOSE='docker-compose'
-else
-  echo "Error: docker compose is required (docker compose or docker-compose)" >&2
-  exit 1
-fi
+for cmd in curl tar node npm; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "Error: $cmd is required for bare-metal node bootstrap" >&2
+    exit 1
+  fi
+done
 
 HOST="${HOST%/}"
-mkdir -p "$STATE_DIR/state" "$STATE_DIR/agents" "$STATE_DIR/logs"
+CREDENTIALS_FILE="$STATE_DIR/state/node_credentials.json"
+LOG_FILE="$STATE_DIR/logs/node.log"
+PID_FILE="$STATE_DIR/node.pid"
 
-curl -fsSL "$HOST/node/docker-compose.yaml" -o "$COMPOSE_FILE"
+mkdir -p "$STATE_DIR/state" "$STATE_DIR/agents" "$STATE_DIR/logs" "$SOURCE_DIR"
+
+if [ -z "$PAIRING" ] && [ ! -s "$CREDENTIALS_FILE" ]; then
+  echo "Error: --pairing is required for first-time setup when no stored credentials exist at $CREDENTIALS_FILE" >&2
+  exit 1
+fi
+
+echo "Downloading node source bundle from $HOST/node/source.tar.gz ..."
+curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$SOURCE_DIR"
+
+ABS_STATE_DIR="$(cd "$STATE_DIR" && pwd)"
+ABS_SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
 
 cat > "$ENV_FILE" <<EOF
 NODE_HOST=$HOST
 NODE_SOURCE_URL=$HOST/node/source.tar.gz
 NODE_PAIRING_TOKEN=$PAIRING
 NODE_ID=$NODE_ID
-NODE_DATA_DIR=$STATE_DIR
-NODE_CREDENTIALS_FILE=/data/state/node_credentials.json
+NODE_DATA_DIR=$ABS_STATE_DIR
+NODE_SOURCE_DIR=$ABS_SOURCE_DIR
+NODE_CREDENTIALS_FILE=$ABS_STATE_DIR/state/node_credentials.json
+NODE_LOG_FILE=$ABS_STATE_DIR/logs/node.log
+NODE_PID_FILE=$ABS_STATE_DIR/node.pid
 EOF
 
-ABS_STATE_DIR="$(cd "$STATE_DIR" && pwd)"
+echo "Installing dependencies in $ABS_SOURCE_DIR ..."
+(cd "$ABS_SOURCE_DIR" && npm ci)
 
-echo "Created: $COMPOSE_FILE"
-echo "Created: $ENV_FILE"
+echo "Building node client in $ABS_SOURCE_DIR ..."
+(cd "$ABS_SOURCE_DIR" && npm run build)
+
+START_CMD="cd '$ABS_SOURCE_DIR' && nohup node lib/nodes/client.js --host '$HOST' --id '$NODE_ID' ${PAIRING:+--token '$PAIRING'} --credentials-file '$ABS_STATE_DIR/state/node_credentials.json' >> '$ABS_STATE_DIR/logs/node.log' 2>&1 & echo \$! > '$ABS_STATE_DIR/node.pid'"
+
+echo "Prepared env file: $ENV_FILE"
 echo "Persistent node data: $ABS_STATE_DIR"
-echo "Credentials file will be stored at: $ABS_STATE_DIR/state/node_credentials.json"
+echo "Source directory: $ABS_SOURCE_DIR"
+echo "Credentials file: $ABS_STATE_DIR/state/node_credentials.json"
+echo "Log file: $ABS_STATE_DIR/logs/node.log"
 
-if [ -z "$PAIRING" ]; then
-  echo "Warning: --pairing was empty. The compose file was generated, but startup will fail until NODE_PAIRING_TOKEN is set in $ENV_FILE." >&2
+if [ "$PREPARE_ONLY" = "1" ]; then
+  cat <<EOF
+
+Preparation complete. Node process was not started because --prepare-only was used.
+
+Start later with:
+  cd '$ABS_SOURCE_DIR' && node lib/nodes/client.js --host '$HOST' --id '$NODE_ID' ${PAIRING:+--token '$PAIRING'} --credentials-file '$ABS_STATE_DIR/state/node_credentials.json'
+
+If this is the first run, approve the pending pairing after startup:
+  /node pair list
+  /node pair approve <pending-id> $NODE_ID
+
+EOF
+  exit 0
 fi
 
-echo "Starting node client with: $DOCKER_COMPOSE up -d --build"
-sh -c "$DOCKER_COMPOSE up -d --build"
+echo "Starting node client in background ..."
+sh -c "$START_CMD"
+sleep 1
 
 cat <<EOF
 
-Node client started.
+Node client prepared and started in background.
+
+PID file:
+  $ABS_STATE_DIR/node.pid
+
+Log file:
+  $ABS_STATE_DIR/logs/node.log
 
 If this is the first run, approve the pending pairing on the master:
   /node pair list
   /node pair approve <pending-id> $NODE_ID
 
 Useful follow-up commands:
-  $DOCKER_COMPOSE logs -f
-  $DOCKER_COMPOSE ps
+  tail -f '$ABS_STATE_DIR/logs/node.log'
+  cat '$ABS_STATE_DIR/node.pid'
 
 EOF

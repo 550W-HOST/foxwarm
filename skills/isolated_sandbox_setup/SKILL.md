@@ -20,7 +20,7 @@ Use a sandbox node when you want:
 
 ## Fast bootstrap flow
 
-The current preferred startup path is still the same master-provided bootstrap flow:
+The current preferred sandbox startup path is still the same master-provided **bare-metal** bootstrap flow:
 
 ```bash
 curl -fsSL http://YOUR_MASTER:3001/node/run.sh | bash -s -- \
@@ -31,13 +31,32 @@ curl -fsSL http://YOUR_MASTER:3001/node/run.sh | bash -s -- \
 
 By default this writes local state into the current directory:
 
-- `./docker-compose.yaml`
 - `./.env`
 - `./data/`
+- `./foxwarm-node/`
 
 That means sandbox credentials/state normally live under:
 
 - `./data/state/node_credentials.json`
+
+## Docker alternative for sandbox nodes
+
+If you specifically want Docker for the sandbox node, use:
+
+```bash
+curl -fsSL http://YOUR_MASTER:3001/node/run-docker.sh | bash -s -- \
+  --host=http://YOUR_MASTER:3001 \
+  --pairing=YOUR_PAIRING_TOKEN \
+  --node-id=sandbox-docker
+```
+
+That path writes:
+
+- `./docker-compose.yaml`
+- `./.env`
+- `./data/`
+
+and runs `docker compose up -d --build`.
 
 ## Manual compose flow
 
@@ -56,6 +75,12 @@ EOF
 
 docker compose up -d --build
 ```
+
+The compose file is self-contained:
+
+- it does not need a separate local `Dockerfile.node`
+- it uses an inline Dockerfile
+- that inline Dockerfile downloads `/node/source.tar.gz` during build
 
 ## First-run approval flow
 

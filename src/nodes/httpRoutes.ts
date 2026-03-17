@@ -8,6 +8,7 @@ import { HttpServer } from '../httpServer';
 
 const NODE_TEMPLATE_DIR = path.join(BASE_DIR, 'templates', 'node');
 const NODE_RUN_SH_PATH = path.join(NODE_TEMPLATE_DIR, 'run.sh');
+const NODE_RUN_DOCKER_SH_PATH = path.join(NODE_TEMPLATE_DIR, 'run-docker.sh');
 const NODE_DOCKER_COMPOSE_PATH = path.join(NODE_TEMPLATE_DIR, 'docker-compose.yaml');
 const NODE_SOURCE_FILES = [
   'Dockerfile.node',
@@ -20,7 +21,7 @@ const NODE_SOURCE_FILES = [
 ];
 
 async function ensureNodeTemplateFiles(): Promise<void> {
-  for (const filePath of [NODE_RUN_SH_PATH, NODE_DOCKER_COMPOSE_PATH]) {
+  for (const filePath of [NODE_RUN_SH_PATH, NODE_RUN_DOCKER_SH_PATH, NODE_DOCKER_COMPOSE_PATH]) {
     if (!await fs.pathExists(filePath)) {
       throw new Error(`Missing node template file: ${path.relative(BASE_DIR, filePath)}`);
     }
@@ -42,6 +43,7 @@ function addTextRoute(httpServer: HttpServer, routePath: string, filePath: strin
 
 export function registerNodeHttpRoutes(httpServer: HttpServer): void {
   addTextRoute(httpServer, '/node/run.sh', NODE_RUN_SH_PATH, 'text/x-shellscript; charset=utf-8');
+  addTextRoute(httpServer, '/node/run-docker.sh', NODE_RUN_DOCKER_SH_PATH, 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/docker-compose.yaml', NODE_DOCKER_COMPOSE_PATH, 'text/yaml; charset=utf-8');
 
   httpServer.addRoute({

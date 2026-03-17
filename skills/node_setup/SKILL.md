@@ -10,6 +10,7 @@ Use this skill when you need to explain, bootstrap, or troubleshoot a **normal r
 This skill matches the current deployment flow based on:
 
 - `/node/run.sh`
+- `/node/run-docker.sh`
 - `/node/docker-compose.yaml`
 - `/node/source.tar.gz`
 
@@ -30,7 +31,7 @@ Use this when the goal is simply:
 - “pair a node with a running Foxwarm master”
 - “understand where credentials/state/logs go”
 
-## Fastest startup: one command
+## Fastest startup: bare-metal one command
 
 ```bash
 curl -fsSL http://YOUR_MASTER:3001/node/run.sh | bash -s -- \
@@ -41,19 +42,20 @@ curl -fsSL http://YOUR_MASTER:3001/node/run.sh | bash -s -- \
 
 What this does:
 
-- downloads the current compose template from the master
-- writes `./docker-compose.yaml`
+- downloads `/node/source.tar.gz`
+- extracts it into `./foxwarm-node/`
 - writes `./.env`
 - creates local state under `./data/`
-- runs `docker compose up -d --build`
+- runs `npm ci` and `npm run build`
+- starts the node client locally in the background by default
 
 ## Where data goes
 
 By default, node deployment state is written in the **current directory**:
 
-- `./docker-compose.yaml`
 - `./.env`
 - `./data/`
+- `./foxwarm-node/`
 
 Inside `./data/`, the important persisted files are:
 
@@ -64,8 +66,28 @@ Inside `./data/`, the important persisted files are:
 If needed, `run.sh` also supports:
 
 - `--state-dir=DIR`
-- `--compose-file=FILE`
+- `--source-dir=DIR`
 - `--env-file=FILE`
+- `--prepare-only`
+
+## Docker bootstrap alternative
+
+If you explicitly want the Docker-based path instead, use:
+
+```bash
+curl -fsSL http://YOUR_MASTER:3001/node/run-docker.sh | bash -s -- \
+  --host=http://YOUR_MASTER:3001 \
+  --pairing=YOUR_PAIRING_TOKEN \
+  --node-id=my-node
+```
+
+That path writes:
+
+- `./docker-compose.yaml`
+- `./.env`
+- `./data/`
+
+and then runs `docker compose up -d --build`.
 
 ## docker-compose template flow
 
@@ -87,7 +109,8 @@ docker compose up -d --build
 
 Why this works:
 
-- the compose template builds from `/node/source.tar.gz`
+- the compose file contains an inline Dockerfile, so no separate local `Dockerfile.node` is needed
+- that inline Dockerfile downloads `/node/source.tar.gz` during build
 - the remote machine does **not** need a local Foxwarm git checkout first
 
 ## First startup: approve pairing on the master
