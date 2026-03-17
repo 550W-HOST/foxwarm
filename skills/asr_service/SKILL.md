@@ -125,6 +125,9 @@ Windows host + NVIDIA driver + WSL2 Ubuntu + qwen-asr[vllm]
 Inside Ubuntu on WSL2:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y build-essential
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip wheel
@@ -149,8 +152,20 @@ export QWEN_ASR_BACKEND=vllm
 export QWEN_ASR_MODEL='Qwen/Qwen3-ASR-0.6B'
 export QWEN_ASR_DTYPE='bfloat16'
 export QWEN_ASR_GPU_MEMORY_UTILIZATION='0.8'
+export QWEN_ASR_MAX_MODEL_LEN='32768'
 
 python skills/asr_service/qwen-asr-gpu-service.py
+```
+
+Additional optional env for smaller / mid-range GPUs:
+
+```bash
+# vLLM may otherwise try the model's full default max seq len (65536)
+# which can exceed KV-cache budget on cards around the RTX 4070 class.
+export QWEN_ASR_MAX_MODEL_LEN='32768'
+
+# if you need a bit more KV-cache budget, increase carefully.
+export QWEN_ASR_GPU_MEMORY_UTILIZATION='0.9'
 ```
 
 ### What this GPU service supports
@@ -172,6 +187,14 @@ asrService:
 
 ### Current caveats
 
-- this GPU service was prepared from official `qwen-asr` usage patterns, but was not runtime-validated on this current CPU-only machine
+- this GPU service has now been runtime-validated on a WSL2 + RTX 4070 setup, but the validated config needed:
+  - system compiler installed (`build-essential`)
+  - `QWEN_ASR_MAX_MODEL_LEN=32768`
+  - `QWEN_ASR_GPU_MEMORY_UTILIZATION=0.9`
+- without a compiler, vLLM / Triton startup can fail while compiling backend helpers
+- with the default model max seq len `65536`, vLLM may fail KV-cache initialization on ~12 GB GPUs; lowering `QWEN_ASR_MAX_MODEL_LEN` is the intended fix
+- `/health` only checks service availability; it does **not** force full model preload
+- first real inference can therefore be much slower than later ones because model load / warmup / graph capture happen lazily
 - streaming support depends on vLLM backend availability in WSL2
+- minimal websocket control-path smoke (`start -> ready`, immediate `stop -> final`) was validated, but full audio-chunk streaming recognition should still be tested separately before relying on it in production
 - if you only need stable final transcription first, start with `POST /transcribe` validation before testing `/ws/stream`

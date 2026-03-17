@@ -46,6 +46,7 @@ BACKEND = os.getenv('QWEN_ASR_BACKEND', 'vllm').strip().lower() or 'vllm'
 MODEL_NAME = os.getenv('QWEN_ASR_MODEL', 'Qwen/Qwen3-ASR-0.6B').strip()
 DTYPE_NAME = os.getenv('QWEN_ASR_DTYPE', 'bfloat16').strip().lower()
 GPU_MEMORY_UTILIZATION = float(os.getenv('QWEN_ASR_GPU_MEMORY_UTILIZATION', '0.8'))
+MAX_MODEL_LEN = int(os.getenv('QWEN_ASR_MAX_MODEL_LEN', '0'))
 MAX_INFERENCE_BATCH_SIZE = int(os.getenv('QWEN_ASR_MAX_INFERENCE_BATCH_SIZE', '32'))
 MAX_NEW_TOKENS = int(os.getenv('QWEN_ASR_MAX_NEW_TOKENS', '512'))
 STREAM_UNFIXED_CHUNK_NUM = int(os.getenv('QWEN_ASR_STREAM_UNFIXED_CHUNK_NUM', '2'))
@@ -92,12 +93,15 @@ class ModelHolder:
 
     def _load_model(self):
         if BACKEND == 'vllm':
-            return Qwen3ASRModel.LLM(
+            kwargs = dict(
                 model=MODEL_NAME,
                 gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
                 max_inference_batch_size=MAX_INFERENCE_BATCH_SIZE,
                 max_new_tokens=MAX_NEW_TOKENS,
             )
+            if MAX_MODEL_LEN > 0:
+                kwargs['max_model_len'] = MAX_MODEL_LEN
+            return Qwen3ASRModel.LLM(**kwargs)
 
         return Qwen3ASRModel.from_pretrained(
             MODEL_NAME,
@@ -164,6 +168,7 @@ async def health(request: Request):
         'backend': BACKEND,
         'model': MODEL_NAME,
         'dtype': DTYPE_NAME,
+        'maxModelLen': MAX_MODEL_LEN or None,
         'cudaAvailable': torch.cuda.is_available(),
         'cudaDeviceCount': torch.cuda.device_count(),
         'streamingSupported': BACKEND == 'vllm',
