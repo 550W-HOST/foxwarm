@@ -132,10 +132,9 @@ export class NodesManager {
     
     // Check if node already exists (reconnection case)
     const existingNode = this.nodes.get(nodeId);
-    if (existingNode && existingNode.ws) {
+    if (existingNode && existingNode.ws && existingNode.ws !== ws) {
       logger.info({ nodeId }, 'Node reconnecting, closing old connection');
       existingNode.ws.close();
-      this.nodes.delete(nodeId);
     }
     
     const node: Node = {
@@ -169,10 +168,9 @@ export class NodesManager {
     
     // Check if node already exists (reconnection case)
     const existingNode = this.nodes.get(nodeId);
-    if (existingNode && existingNode.ws) {
+    if (existingNode && existingNode.ws && existingNode.ws !== ws) {
       logger.info({ nodeId }, 'Node reconnecting, closing old connection');
       existingNode.ws.close();
-      this.nodes.delete(nodeId);
     }
     
     // Extract tool names from capabilities
@@ -203,9 +201,13 @@ export class NodesManager {
   /**
    * Unregister a node
    */
-  unregisterNode(nodeId: string): void {
+  unregisterNode(nodeId: string, ws?: WebSocket | null): void {
     const node = this.nodes.get(nodeId);
     if (node) {
+      if (ws && node.ws && node.ws !== ws) {
+        logger.info({ nodeId }, 'Skipping unregister for stale node connection');
+        return;
+      }
       this.nodes.delete(nodeId);
       logger.info({ nodeId }, 'Node unregistered');
     }
