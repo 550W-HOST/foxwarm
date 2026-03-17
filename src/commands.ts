@@ -1,5 +1,6 @@
 import fs from 'fs-extra'
 import path from 'path'
+import crypto from 'crypto'
 import { ChannelContext } from './channel'
 import { nodesManager } from './nodes/manager'
 import { approvePendingPairing, listApprovedNodes, listPendingPairings, rejectPendingPairing } from './nodes/registry'
@@ -8,7 +9,7 @@ import * as sessionManager from './sessionManager'
 import * as skills from './skills'
 import * as tools from './tools'
 import { estimateSessionTokens } from './tokenCount'
-import { AGENTS_DIR, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, resolveModelConfig } from './config'
+import { AGENTS_DIR, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, HTTP_PORT, NODE_TOKEN_FILE, resolveModelConfig } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
 
@@ -201,9 +202,11 @@ const SKILL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 ]
 
 const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
-  literalNode('pair', 'Manage pending node pairing requests', {
+  literalNode('pair', 'Node pairing token, help, and pending requests', {
     children: [
+      literalNode('help', 'Show node pairing/bootstrap help'),
       literalNode('list', 'List pending node pairing requests'),
+      literalNode('token', 'Show the current node pairing token'),
       literalNode('approve', 'Approve a pending node pairing request', {
         usage: '/node pair approve <pending-id> [node-id]',
         children: [
@@ -221,6 +224,72 @@ const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('known', 'List approved nodes, including offline ones'),
   placeholderNode('<node-id>', 'Existing node id; omit it to list nodes'),
 ]
+
+async function ensureNodePairingToken(): Promise<string> {
+  try {
+    const token = await fs.readFile(NODE_TOKEN_FILE, 'utf8')
+    return token.trim()
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') {
+      const token = crypto.randomBytes(32).toString('hex')
+      await fs.ensureDir(path.dirname(NODE_TOKEN_FILE))
+      await fs.writeFile(NODE_TOKEN_FILE, token)
+      return token
+    }
+    throw err
+  }
+}
+
+function buildNodePairHelp(token: string): string {
+  const baseUrl = `http://localhost:${HTTP_PORT}`
+
+  return [
+    '🧩 **Node Pairing / Bootstrap Help**',
+    '',
+    `Current pairing token: \`${token}\``,
+    '',
+    'Use `/node pair token` if you only want the raw token for copying.',
+    '',
+    `Default examples below use \`${baseUrl}\`. If the node runs on another machine or phone, replace \`localhost\` with a reachable host/IP/domain for this Foxwarm master.`,
+    '',
+    '**Bare metal (recommended Linux host bootstrap)**',
+    '```bash',
+    `curl -fsSL ${baseUrl}/node/run.sh | bash -s -- \\\n  --host=${baseUrl} \\\n  --pairing=${token} \\\n  --node-id=my-node`,
+    '```',
+    '',
+    '**Docker bootstrap**',
+    '```bash',
+    `curl -fsSL ${baseUrl}/node/run-docker.sh | bash -s -- \\\n  --host=${baseUrl} \\\n  --pairing=${token} \\\n  --node-id=my-node`,
+    '```',
+    '',
+    '**Manual docker-compose template**',
+    '```bash',
+    `curl -fsSL ${baseUrl}/node/docker-compose.yaml -o docker-compose.yaml`,
+    'cat > .env <<\'EOF\'',
+    `NODE_HOST=${baseUrl}`,
+    `NODE_SOURCE_URL=${baseUrl}/node/source.tar.gz`,
+    `NODE_PAIRING_TOKEN=${token}`,
+    'NODE_ID=my-node',
+    'NODE_DATA_DIR=./data',
+    'EOF',
+    '',
+    'docker compose up -d --build',
+    '```',
+    '',
+    '**Approve the pending node from Foxwarm**',
+    '```text',
+    '/node pair list',
+    '/node pair approve <pending-id> my-node',
+    '/node known',
+    '/node',
+    '```',
+    '',
+    'Notes:',
+    '- `/node/run.sh` = bare-metal bootstrap',
+    '- `/node/run-docker.sh` = Docker bootstrap',
+    '- `/node/docker-compose.yaml` = inspect/customize the self-contained compose template first',
+  ].join('\n')
+}
 
 const MESSAGES_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   placeholderNode('<num>', 'Positive = oldest messages, negative = newest', {
@@ -1552,6 +1621,35 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (args[0] === 'pair') {
         const sub = args[1]
 
+        if (sub === 'token') {
+          try {
+            const token = await ensureNodePairingToken()
+            const baseUrl = `http://localhost:${HTTP_PORT}`
+            ctx.reply(
+              `🔑 **Current node pairing token**\n\n` +
+              `\`${token}\`\n\n` +
+              `Direct copy:\n` +
+              `\`--pairing=${token}\`\n\n` +
+              `Default local master URL: \`${baseUrl}\`\n` +
+              `If the node is on another machine/device, replace \`localhost\` with a reachable host/IP/domain.\n\n` +
+              `Pairing/bootstrap examples: \`/node pair help\``
+            )
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to read node pairing token: ${e.message}`)
+          }
+          return
+        }
+
+        if (sub === 'help') {
+          try {
+            const token = await ensureNodePairingToken()
+            ctx.reply(buildNodePairHelp(token))
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to build node pairing help: ${e.message}`)
+          }
+          return
+        }
+
         if (!sub || sub === 'list') {
           const pending = await listPendingPairings()
           if (pending.length === 0) {
@@ -1565,7 +1663,7 @@ export const COMMANDS: Record<string, CommandDef> = {
             const connected = entry.connected ? ' online' : ' offline'
             reply += `- \`${entry.id}\` [${entry.nodeType}]${requestedName} code=\`${entry.pairCode}\`${connected}\n`
           }
-          reply += '\nApprove: `/node pair approve <pending-id> [node-id]`\nReject: `/node pair reject <pending-id>`'
+          reply += '\nApprove: `/node pair approve <pending-id> [node-id]`\nReject: `/node pair reject <pending-id>`\nToken: `/node pair token`\nBootstrap help: `/node pair help`'
           ctx.reply(reply)
           return
         }
@@ -1609,7 +1707,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           return
         }
 
-        ctx.reply('Usage: `/node pair list` | `/node pair approve <pending-id> [node-id]` | `/node pair reject <pending-id>`')
+        ctx.reply('Usage: `/node pair help` | `/node pair token` | `/node pair list` | `/node pair approve <pending-id> [node-id]` | `/node pair reject <pending-id>`')
         return
       }
 
