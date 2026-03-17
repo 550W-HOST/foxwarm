@@ -11,7 +11,6 @@ const NODE_RUN_SH_PATH = path.join(NODE_TEMPLATE_DIR, 'run.sh');
 const NODE_RUN_DOCKER_SH_PATH = path.join(NODE_TEMPLATE_DIR, 'run-docker.sh');
 const NODE_DOCKER_COMPOSE_PATH = path.join(NODE_TEMPLATE_DIR, 'docker-compose.yaml');
 const NODE_SOURCE_FILES = [
-  'Dockerfile.node',
   'package.json',
   'package-lock.json',
   'tsconfig.json',
