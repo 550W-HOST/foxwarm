@@ -188,10 +188,21 @@ const ReasoningSummaryCard = memo(function ReasoningSummaryCard({ thinking, tone
     ? 'prose-blue dark:prose-invert prose-p:text-blue-900 dark:prose-p:text-blue-100 prose-headings:text-blue-900 dark:prose-headings:text-blue-100 prose-strong:text-blue-950 dark:prose-strong:text-white prose-li:text-blue-900 dark:prose-li:text-blue-100'
     : 'prose-slate dark:prose-invert prose-p:text-slate-700 dark:prose-p:text-slate-300 prose-headings:text-slate-800 dark:prose-headings:text-slate-200 prose-strong:text-slate-900 dark:prose-strong:text-white prose-li:text-slate-700 dark:prose-li:text-slate-300'
   const isProcessing = tone === 'processing'
+  const isInteractive = !isProcessing
+  const toggleExpanded = () => {
+    if (!isInteractive) return
+    setExpanded(current => !current)
+  }
 
   return (
-    <div className={`rounded-lg border px-3 py-2 ${containerClass}`}>
-      <div className="mb-1 flex items-start justify-between gap-3">
+    <div
+      className={`rounded-lg border px-3 py-2 ${containerClass} ${isInteractive && !expanded ? 'cursor-pointer' : ''}`}
+      onClick={!expanded && isInteractive ? toggleExpanded : undefined}
+    >
+      <div
+        className={`mb-1 flex items-start justify-between gap-3 ${isInteractive ? 'cursor-pointer' : ''}`}
+        onClick={expanded && isInteractive ? toggleExpanded : undefined}
+      >
         <div className={`min-w-0 flex-1 text-[11px] font-medium uppercase tracking-wide ${labelClass}`}>
           <div className="flex min-w-0 items-baseline gap-2">
             <span className="shrink-0">Reasoning</span>
@@ -204,7 +215,10 @@ const ReasoningSummaryCard = memo(function ReasoningSummaryCard({ thinking, tone
         </div>
         {!isProcessing && (
           <button
-            onClick={() => setExpanded(current => !current)}
+            onClick={(e) => {
+              e.stopPropagation()
+              toggleExpanded()
+            }}
             className="shrink-0 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
           >
             {expanded ? '▲ Show less' : '▼ Show more'}

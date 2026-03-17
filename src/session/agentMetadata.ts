@@ -7,6 +7,7 @@ import { Session } from '../types';
 
 export interface AgentMetadata {
   isolated?: boolean;
+  isolatedNode?: string;
   inherit?: string;
   skills?: string[];
   [key: string]: any;
@@ -53,8 +54,16 @@ function normalizeAgentSkills(skills: unknown): string[] | undefined {
 function normalizeAgentMetadata(meta: AgentMetadata): AgentMetadata {
   const nextMeta = { ...meta };
   const normalizedSkills = normalizeAgentSkills(meta.skills);
+  const isolatedNode = typeof meta.isolatedNode === 'string' && meta.isolatedNode.trim()
+    ? meta.isolatedNode.trim()
+    : undefined;
   if (normalizedSkills) nextMeta.skills = normalizedSkills;
   else delete nextMeta.skills;
+  if (nextMeta.isolated) {
+    if (isolatedNode) nextMeta.isolatedNode = isolatedNode;
+  } else {
+    delete nextMeta.isolatedNode;
+  }
   return nextMeta;
 }
 
@@ -99,6 +108,23 @@ export async function loadAgentMetadata(): Promise<void> {
 
 export function getAgentMetadata(agentName: string): AgentMetadata {
   return agentMetadata.get(agentName) || {};
+}
+
+export function getAgentIsolationNode(agentName: string): string | undefined {
+  const meta = getAgentMetadata(agentName);
+  if (!meta.isolated) return undefined;
+  return typeof meta.isolatedNode === 'string' && meta.isolatedNode.trim()
+    ? meta.isolatedNode.trim()
+    : undefined;
+}
+
+export function isAgentIsolated(agentName: string): boolean {
+  return !!getAgentMetadata(agentName).isolated;
+}
+
+export function isSessionEffectivelyIsolated(session?: Session | null): boolean {
+  if (!session) return false;
+  return isAgentIsolated(session.agent || 'main');
 }
 
 export async function setAgentMetadata(agentName: string, meta: AgentMetadata): Promise<void> {
@@ -156,6 +182,14 @@ export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string
       throw new Error('Agent cannot inherit from itself.');
     }
 
+    if (isAgentIsolated(agentName)) {
+      throw new Error(`Agent "${agentName}" is isolated and cannot inherit shared memory from other agents.`);
+    }
+
+    if (isAgentIsolated(inheritAgentName)) {
+      throw new Error(`Agent "${inheritAgentName}" is isolated and cannot be used as an inherit source.`);
+    }
+
     const inheritAgentDir = getAgentDir(inheritAgentName);
     if (!await fs.pathExists(inheritAgentDir)) {
       throw new Error(`Inherited agent "${inheritAgentName}" does not exist.`);
@@ -185,6 +219,54 @@ export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string
   }
 
   return { affectedSessions };
+}
+
+export async function setAgentIsolation(
+  deps: AgentMetadataDeps,
+  agentName: string,
+  isolatedNode?: string,
+): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
+  deps.validateAgentName(agentName);
+
+  const agentDir = getAgentDir(agentName);
+  if (!await fs.pathExists(agentDir)) {
+    throw new Error(`Agent "${agentName}" does not exist.`);
+  }
+
+  const currentMeta = getAgentMetadata(agentName);
+  const nextMeta = { ...currentMeta };
+  const normalizedNode = isolatedNode && String(isolatedNode).trim()
+    ? String(isolatedNode).trim()
+    : undefined;
+
+  if (normalizedNode) {
+    if (normalizedNode === 'master') {
+      throw new Error('Isolated agent must bind to a non-master node.');
+    }
+    nextMeta.isolated = true;
+    nextMeta.isolatedNode = normalizedNode;
+    delete nextMeta.inherit;
+  } else {
+    nextMeta.isolated = false;
+    delete nextMeta.isolatedNode;
+  }
+
+  await setAgentMetadata(agentName, nextMeta);
+
+  const affectedSessions: string[] = [];
+  for (const [sessionId, sessionMeta] of deps.getSessionsMap().entries()) {
+    const sessionAgent = sessionMeta.agent || 'main';
+    if (sessionAgent !== agentName) continue;
+
+    const session = await deps.getSession(sessionId);
+    if (normalizedNode) {
+      session.currentNode = normalizedNode;
+    }
+    await deps.saveSession(session.id);
+    affectedSessions.push(session.id);
+  }
+
+  return { affectedSessions, isolated: !!normalizedNode, node: normalizedNode };
 }
 
 export async function attachAgentSkill(deps: AgentMetadataDeps, agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {

@@ -48,7 +48,7 @@ export class HttpServer {
     this.httpServer = http.createServer(this.app);
     
     // Create WebSocket server
-    this.wsServer = new WebSocketServer({ server: this.httpServer, path: '/node_ws' });
+    this.wsServer = new WebSocketServer({ noServer: true });
     
     // Setup WebSocket handlers
     this.setupWebSocketHandlers();
@@ -84,20 +84,40 @@ export class HttpServer {
   }
 
   checkToken(req: express.Request): boolean {
+    return this.checkTokenFromHeaders(req.headers.cookie, req.headers.authorization);
+  }
+
+  checkIncomingToken(req: http.IncomingMessage): boolean {
+    return this.checkTokenFromHeaders(req.headers.cookie, req.headers.authorization);
+  }
+
+  private checkTokenFromHeaders(cookieHeader: string | undefined, authHeader: string | string[] | undefined): boolean {
     // Check cookie first
-    const cookieToken = req.cookies?.foxwarm_token || req.cookies?.alphabot_token;
+    const cookieToken = this.parseCookieToken(cookieHeader);
     if (cookieToken === this.token) {
       return true;
     }
     
     // Check Authorization header
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const auth = authHeader.substring(7);
+    const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+    if (authValue && authValue.startsWith('Bearer ')) {
+      const auth = authValue.substring(7);
       return auth === this.token;
     }
     
     return false;
+  }
+
+  private parseCookieToken(cookieHeader: string | undefined): string | undefined {
+    if (!cookieHeader) return undefined;
+
+    const cookies: Record<string, string> = {};
+    cookieHeader.split(';').forEach(cookie => {
+      const [name, ...rest] = cookie.split('=');
+      cookies[name.trim()] = decodeURIComponent(rest.join('='));
+    });
+
+    return cookies.foxwarm_token || cookies.alphabot_token;
   }
 
   addRoute(route: RouteHandler): void {
@@ -132,21 +152,23 @@ export class HttpServer {
   }
 
   private setupWebSocketHandlers() {
-    this.wsServer.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
+    this.httpServer.on('upgrade', (req: http.IncomingMessage, socket, head) => {
       const url = req.url || '/';
-      const path = url.split('?')[0]; // Remove query string
-      
-      // Find matching WebSocket handler
+      const path = url.split('?')[0];
       const handler = this.webSocketHandlers.find(h => h.path === path);
-      if (handler) {
+
+      if (!handler) {
+        logger.warn({ path }, 'No WebSocket handler found');
+        socket.destroy();
+        return;
+      }
+
+      this.wsServer.handleUpgrade(req, socket, head, (ws) => {
         handler.handler(ws, req).catch(err => {
           logger.error({ err, path }, 'WebSocket handler error');
           ws.close();
         });
-      } else {
-        logger.warn({ path }, 'No WebSocket handler found');
-        ws.close();
-      }
+      });
     });
   }
 

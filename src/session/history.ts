@@ -3,19 +3,24 @@ import { logger } from '../common';
 import { COMPACT_PERCENT, resolveModelConfig } from '../config';
 import { estimateSessionTokens, estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
-import { appendMessagesToArchive, readArchiveMessages } from './archive';
+import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange } from './archive';
 import {
-  buildCompactCandidateBlocks,
+  buildBlockCandidateItem,
   buildCompactPlanValidationFeedback,
   buildCompactPromptText,
+  buildMessageCandidateItem,
   COMPACT_PLAN_TOOL_DEFINITION,
   COMPACT_PLAN_TOOL_NAME,
+  CompactCandidateItem,
+  CompactPlan,
   CompactPlanValidationError,
-  describeBlockRanges,
+  describeCreatedRanges,
   formatSeqRange,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { Message, QueueItem, Session, TokenUsage } from '../types';
+import { Message, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
+import { formatMessagePreviewText } from '../utils/messageFormat';
+import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 
 const TOOL_NOISE_TOKEN_THRESHOLD = 200;
 
@@ -54,10 +59,24 @@ export function getEffectiveCompactThresholdTokens(session: Pick<Session, 'model
   return getDefaultCompactThresholdTokens(session);
 }
 
+export function isAsyncCompactEnabled(session: Pick<Session, 'model'>): boolean {
+  const { modelEntry } = resolveModelConfig(session.model);
+  return modelEntry?.asyncCompact !== false;
+}
+
+export function hasPendingCompactWork(sessionId: string): boolean {
+  return compactJobStates.has(sessionId);
+}
+
+export function discardPendingCompactWork(sessionId: string): void {
+  compactJobStates.delete(sessionId);
+}
+
 type SessionHistoryDeps = {
   getSessionById: (sessionId: string) => Session | undefined;
   getExistingSession: (sessionId: string) => Promise<Session | null>;
   saveSession: (sessionId: string) => Promise<void>;
+  enqueueSessionItem?: (sessionId: string, item: QueueItem) => Promise<void>;
 };
 
 type CompactionRunOptions = {
@@ -67,6 +86,70 @@ type CompactionRunOptions = {
   startLogMessage?: string;
   startBroadcastMessage?: string;
 };
+
+type CompactExecutionMode = 'auto' | 'await' | 'background';
+
+type CompactJobRequest = Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>;
+
+type CompactJobSnapshot = {
+  sessionId: string;
+  baseHistoryVersion: number;
+  historySnapshot: Message[];
+  frontierSnapshot: ContextFrontierItem[];
+  transientSession: Session;
+  keepPercent: number;
+  completionMarker: string;
+  compactGuidance?: string;
+};
+
+type CompactJobOperation = {
+  frontierStartIndex: number;
+  frontierEndIndex: number;
+  rawStartSeq: number;
+  rawEndSeq: number;
+  sourceKind: 'message' | 'block';
+  level: number;
+  sourceStart: number;
+  sourceEnd: number;
+  summary: string;
+};
+
+type CompactJobResult =
+  | {
+      status: 'noop';
+      reason: 'empty-history' | 'empty-frontier' | 'no-older-messages' | 'no-candidates';
+      completionMarker: string;
+      snapshotFrontier: ContextFrontierItem[];
+      consumedFrontierCount: number;
+    }
+  | {
+      status: 'ready';
+      completionMarker: string;
+      snapshotFrontier: ContextFrontierItem[];
+      consumedFrontierCount: number;
+      operations: CompactJobOperation[];
+      createdBlocks: Array<{
+        level: number;
+        sourceKind: 'message' | 'block';
+        sourceStart: number;
+        sourceEnd: number;
+        rawStartSeq: number;
+        rawEndSeq: number;
+        summary: string;
+      }>;
+      replacedItemCount: number;
+    };
+
+type CompactJobState = {
+  status: 'running' | 'ready' | 'failed';
+  startedAt: number;
+  request: CompactJobRequest;
+  snapshotHistoryVersion: number;
+  result?: CompactJobResult;
+  error?: Error;
+};
+
+const compactJobStates = new Map<string, CompactJobState>();
 
 export async function forceIndexSession(deps: SessionHistoryDeps, sessionId: string): Promise<void> {
   const session = deps.getSessionById(sessionId);
@@ -170,6 +253,107 @@ function normalizeSeqRange(startSeq?: number, endSeq?: number): { startSeq?: num
   return { startSeq, endSeq };
 }
 
+function cloneSessionForCompactJob(session: Session, historySnapshot: Message[], frontierSnapshot: ContextFrontierItem[]): Session {
+  const cloned: Session = {
+    id: session.id,
+    agent: session.agent,
+    aliases: session.aliases ? [...session.aliases] : undefined,
+    history: structuredClone(historySnapshot),
+    persistentMemorySnapshot: session.persistentMemorySnapshot,
+    stats: structuredClone(session.stats),
+    busy: false,
+    queue: [],
+    meta: structuredClone(session.meta),
+    displayName: session.displayName,
+    archived: session.archived,
+    currentNode: session.currentNode,
+    model: session.model,
+    verbose: session.verbose,
+    vectorIndexPosition: session.vectorIndexPosition,
+    indexingState: session.indexingState ? structuredClone(session.indexingState) : undefined,
+    historyVersion: session.historyVersion,
+    nextMessageSeq: session.nextMessageSeq,
+    nextBlockId: session.nextBlockId,
+    contextFrontier: structuredClone(frontierSnapshot),
+    parentSessionId: session.parentSessionId,
+    todoState: session.todoState ? structuredClone(session.todoState) : undefined,
+    compactThresholdTokens: session.compactThresholdTokens,
+  };
+  (cloned as any).__compactJob = true;
+  return cloned;
+}
+
+function buildCompactJobSnapshot(session: Session, options: CompactionRunOptions = {}): CompactJobSnapshot | null {
+  const keepPercent = typeof options.keepPercent === 'number' ? options.keepPercent : COMPACT_PERCENT;
+  const completionMarker = options.completionMarker || 'Compaction completed.';
+  const compactGuidance = options.compactGuidance?.trim();
+  const historySnapshot = structuredClone(session.history);
+
+  if (historySnapshot.length < 1) {
+    return null;
+  }
+
+  const frontierSnapshot = cloneSessionFrontier(session);
+  if (frontierSnapshot.length === 0) {
+    return null;
+  }
+
+  return {
+    sessionId: session.id,
+    baseHistoryVersion: session.historyVersion || 0,
+    historySnapshot,
+    frontierSnapshot,
+    transientSession: cloneSessionForCompactJob(session, historySnapshot, frontierSnapshot),
+    keepPercent,
+    completionMarker,
+    compactGuidance,
+  };
+}
+
+function appendTransientSessionMessage(session: Session, message: Message): Promise<void> {
+  session.history.push(message);
+  return Promise.resolve();
+}
+
+function contextFrontierItemsEqual(a: ContextFrontierItem | undefined, b: ContextFrontierItem | undefined): boolean {
+  if (!a || !b || a.kind !== b.kind) {
+    return false;
+  }
+
+  if (a.kind === 'message' && b.kind === 'message') {
+    return a.seq === b.seq;
+  }
+
+  if (a.kind === 'block' && b.kind === 'block') {
+    return a.id === b.id
+      && a.level === b.level
+      && a.rawStartSeq === b.rawStartSeq
+      && a.rawEndSeq === b.rawEndSeq;
+  }
+
+  return false;
+}
+
+function hasCompatibleFrontierPrefix(currentFrontier: ContextFrontierItem[], snapshotFrontier: ContextFrontierItem[]): boolean {
+  if (currentFrontier.length < snapshotFrontier.length) {
+    return false;
+  }
+
+  for (let index = 0; index < snapshotFrontier.length; index += 1) {
+    if (!contextFrontierItemsEqual(currentFrontier[index], snapshotFrontier[index])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+type LayeredCompactCandidateEntry = {
+  item: CompactCandidateItem;
+  frontierStartIndex: number;
+  frontierEndIndex: number;
+};
+
 function resolveCompactionSplitIndex(history: Message[], keepPercent: number): number {
   let splitIndex = Math.floor(history.length * (1 - keepPercent));
 
@@ -184,220 +368,493 @@ function resolveCompactionSplitIndex(history: Message[], keepPercent: number): n
   return splitIndex;
 }
 
+async function buildLayeredCompactCandidateEntries(session: Session, olderFrontier: ContextFrontierItem[]): Promise<LayeredCompactCandidateEntry[]> {
+  const messageSeqs = olderFrontier
+    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
+    .map(item => item.seq);
+  const blockIds = olderFrontier
+    .filter((item): item is Extract<ContextFrontierItem, { kind: 'block' }> => item.kind === 'block')
+    .map(item => item.id);
+
+  const messageRecords = messageSeqs.length > 0
+    ? await readArchiveMessagesBySeqRange(session.id, Math.min(...messageSeqs), Math.max(...messageSeqs))
+    : [];
+  const blockRecords = blockIds.length > 0
+    ? await readArchiveBlocksByIdRange(session.id, Math.min(...blockIds), Math.max(...blockIds))
+    : [];
+
+  const messageMap = new Map(messageRecords.map(record => [record.seq, record]));
+  const blockMap = new Map(blockRecords.map(record => [record.id, record]));
+
+  return olderFrontier.flatMap((item, frontierIndex) => {
+    if (item.kind === 'message') {
+      const record = messageMap.get(item.seq);
+      if (!record || shouldIgnoreMessageInCompactCandidates(record.message)) {
+        return [];
+      }
+      return [{
+        item: buildMessageCandidateItem(item.seq, formatMessagePreviewText(record.message, 60, {
+          skipEphemeralSystem: true,
+          skipRagMemorySnippets: true,
+          skipThinking: true,
+        }).trim() || '[empty message]'),
+        frontierStartIndex: frontierIndex,
+        frontierEndIndex: frontierIndex,
+      }];
+    }
+
+    const record = blockMap.get(item.id);
+    if (!record) {
+      return [];
+    }
+
+    return [{
+      item: buildBlockCandidateItem(record.id, record.level, record.rawStartSeq, record.rawEndSeq, record.summary),
+      frontierStartIndex: frontierIndex,
+      frontierEndIndex: frontierIndex,
+    }];
+  });
+}
+
+function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> {
+  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> = [];
+  const candidateItems = candidateEntries.map(entry => entry.item);
+
+  for (let planIndex = 0; planIndex < plan.createBlocks.length; planIndex += 1) {
+    const block = plan.createBlocks[planIndex];
+    let startIndex = -1;
+    let endIndex = -1;
+
+    if (block.sourceKind === 'message') {
+      for (let index = 0; index < candidateItems.length; index += 1) {
+        const item = candidateItems[index];
+        if (item.kind === 'message' && item.seq === block.sourceStart) {
+          startIndex = index;
+          break;
+        }
+      }
+      if (startIndex < 0) {
+        throw new Error(`Unable to resolve layered compact message range ${block.sourceStart}-${block.sourceEnd}.`);
+      }
+      for (let index = startIndex; index < candidateItems.length; index += 1) {
+        const item = candidateItems[index];
+        if (item.kind !== 'message') {
+          break;
+        }
+        endIndex = index;
+        if (item.seq === block.sourceEnd) {
+          break;
+        }
+      }
+      if (endIndex < startIndex || candidateItems[endIndex]?.kind !== 'message' || (candidateItems[endIndex] as Extract<CompactCandidateItem, { kind: 'message' }>).seq !== block.sourceEnd) {
+        throw new Error(`Unable to resolve layered compact message range ${block.sourceStart}-${block.sourceEnd}.`);
+      }
+      const startEntry = candidateEntries[startIndex];
+      const endEntry = candidateEntries[endIndex];
+      operations.push({
+        planIndex,
+        startIndex,
+        endIndex,
+        frontierStartIndex: startEntry.frontierStartIndex,
+        frontierEndIndex: endEntry.frontierEndIndex,
+        rawStartSeq: block.sourceStart,
+        rawEndSeq: block.sourceEnd,
+        sourceKind: block.sourceKind,
+        level: block.level,
+        sourceStart: block.sourceStart,
+        sourceEnd: block.sourceEnd,
+        summary: block.summary,
+      });
+      continue;
+    }
+
+    for (let index = 0; index < candidateItems.length; index += 1) {
+      const item = candidateItems[index];
+      if (item.kind === 'block' && item.id === block.sourceStart && item.level === block.level - 1) {
+        startIndex = index;
+        break;
+      }
+    }
+    if (startIndex < 0) {
+      throw new Error(`Unable to resolve layered compact block range ${block.sourceStart}-${block.sourceEnd}.`);
+    }
+    endIndex = startIndex + (block.sourceEnd - block.sourceStart);
+    const startItem = candidateItems[startIndex];
+    const endItem = candidateItems[endIndex];
+    if (startItem.kind !== 'block' || endItem.kind !== 'block') {
+      throw new Error(`Layered compact block range ${block.sourceStart}-${block.sourceEnd} resolved to non-block items.`);
+    }
+    const startEntry = candidateEntries[startIndex];
+    const endEntry = candidateEntries[endIndex];
+    operations.push({
+      planIndex,
+      startIndex,
+      endIndex,
+      frontierStartIndex: startEntry.frontierStartIndex,
+      frontierEndIndex: endEntry.frontierEndIndex,
+      rawStartSeq: startItem.rawStartSeq,
+      rawEndSeq: endItem.rawEndSeq,
+      sourceKind: block.sourceKind,
+      level: block.level,
+      sourceStart: block.sourceStart,
+      sourceEnd: block.sourceEnd,
+      summary: block.summary,
+    });
+  }
+
+  return operations.sort((a, b) => a.startIndex - b.startIndex || a.planIndex - b.planIndex);
+}
+
 async function finalizeCompaction(
   deps: SessionHistoryDeps,
   sessionId: string,
   session: Session,
-  retainedMessages: Message[],
-  summaryConversation: Message[],
+  newFrontier: ContextFrontierItem[],
   completionMarker: string,
-  removedMessageCount: number,
+  createdBlockCount: number,
+  replacedItemCount: number,
 ): Promise<void> {
-  const now = Date.now();
-  const compactedMarker: Message = {
-    role: 'user',
-    parts: [{ system: 'This session has been compacted. Messages before this are removed.' }],
-    __meta: { timestamp: now }
-  };
+  session.contextFrontier = newFrontier;
+  session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
+  session.history = await renderHistoryFromFrontier(session, newFrontier);
+
   const completionMessage: Message = {
     role: 'user',
     parts: [{ system: completionMarker }],
-    __meta: { timestamp: now }
+    __meta: { timestamp: Date.now() },
   };
-  const archiveOnlyRetainedSyntheticMessages = retainedMessages.filter(message => message.__meta?.seq === undefined);
-  const archiveOnlySummaryMessages = summaryConversation.filter(message => message.__meta?.seq === undefined);
-  await appendMessagesToArchive(session, [compactedMarker, ...archiveOnlyRetainedSyntheticMessages, ...archiveOnlySummaryMessages, completionMessage]);
+  await appendMessagesToArchive(session, [completionMessage]);
+  session.history.push(completionMessage);
+  ensureContextFrontier(session).push({ kind: 'message', seq: completionMessage.__meta!.seq! });
 
-  const summaryMessages: Message[] = [
-    compactedMarker,
-    ...retainedMessages,
-    ...summaryConversation,
-    completionMessage,
-  ];
-
-  session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
-  session.history = summaryMessages;
   session.vectorIndexPosition = 0;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
 
   await deps.saveSession(sessionId);
-  logger.info({ removedMessageCount, retainedCount: retainedMessages.length }, 'History compacted successfully');
+  logger.info({ createdBlockCount, replacedItemCount, renderedCount: session.history.length }, 'Layered context compaction completed successfully');
 
   if (session.broadcast) {
-    session.broadcast(`Compaction completed. Removed ${removedMessageCount} messages.`);
+    session.broadcast(`Layered-context compaction completed. Created ${createdBlockCount} block(s) replacing ${replacedItemCount} older item(s).`);
   }
 }
 
-async function runCompaction(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}): Promise<void> {
+async function runCompactJob(snapshot: CompactJobSnapshot): Promise<CompactJobResult> {
+  const { sessionId, transientSession, historySnapshot, frontierSnapshot, keepPercent, compactGuidance, completionMarker } = snapshot;
+  const splitIndex = resolveCompactionSplitIndex(historySnapshot, keepPercent);
+  if (splitIndex <= 0) {
+    logger.info({ sessionId, keepPercent }, 'Compaction skipped because there are no older messages to compact');
+    return {
+      status: 'noop',
+      reason: 'no-older-messages',
+      completionMarker,
+      snapshotFrontier: frontierSnapshot,
+      consumedFrontierCount: splitIndex,
+    };
+  }
+
+  const olderFrontier = frontierSnapshot.slice(0, splitIndex);
+  const forceKeptRecentFrontier = splitIndex < frontierSnapshot.length ? frontierSnapshot.slice(splitIndex) : [];
+  const candidateEntries = await buildLayeredCompactCandidateEntries(transientSession, olderFrontier);
+  const candidateItems = candidateEntries.map(entry => entry.item);
+
+  if (candidateItems.length === 0) {
+    logger.info({ sessionId, splitIndex }, 'Compaction skipped because no layered candidate items were produced');
+    return {
+      status: 'noop',
+      reason: 'no-candidates',
+      completionMarker,
+      snapshotFrontier: frontierSnapshot,
+      consumedFrontierCount: splitIndex,
+    };
+  }
+
+  const forcedKeptMessageItems = forceKeptRecentFrontier.filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message');
+  const forcedKeptStartSeq = forcedKeptMessageItems[0]?.seq;
+  const forcedKeptEndSeq = forcedKeptMessageItems[forcedKeptMessageItems.length - 1]?.seq;
+  const summaryPrompt = {
+    system: buildCompactPromptText({
+      forcedKeptCount: forceKeptRecentFrontier.length,
+      forcedKeptStartSeq,
+      forcedKeptEndSeq,
+      candidateItems,
+      guidance: compactGuidance,
+    })
+  };
+
+  const maxCompactAttempts = 3;
+  let nextPromptParts = [summaryPrompt];
+  let compactPlan: CompactPlan | null = null;
+
+  for (let attempt = 1; attempt <= maxCompactAttempts; attempt += 1) {
+    const result = await llm.chat(nextPromptParts, transientSession, attempt - 1, {
+      toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION],
+      appendMessage: (message) => appendTransientSessionMessage(transientSession, message),
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    if (!result.toolCalls?.length) {
+      throw new Error(`Compaction failed because the model did not call ${COMPACT_PLAN_TOOL_NAME}.`);
+    }
+    if (result.toolCalls.length !== 1 || result.toolCalls[0].name !== COMPACT_PLAN_TOOL_NAME) {
+      throw new Error(`Compaction failed because the model returned an unexpected tool plan instead of a single ${COMPACT_PLAN_TOOL_NAME} call.`);
+    }
+
+    try {
+      compactPlan = validateCompactPlanArgs(result.toolCalls[0].args || {}, candidateItems);
+      break;
+    } catch (e) {
+      if (!(e instanceof CompactPlanValidationError)) {
+        throw e;
+      }
+
+      const attemptsRemaining = maxCompactAttempts - attempt;
+      if (attemptsRemaining <= 0) {
+        throw new Error(`Compaction failed after ${maxCompactAttempts} invalid ${COMPACT_PLAN_TOOL_NAME} submissions: ${e.message}`);
+      }
+
+      logger.warn({ sessionId, attempt, attemptsRemaining, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
+      nextPromptParts = [{
+        system: buildCompactPlanValidationFeedback(e, attemptsRemaining),
+      }];
+    }
+  }
+
+  if (!compactPlan) {
+    throw new Error(`Compaction failed because no valid ${COMPACT_PLAN_TOOL_NAME} plan was produced.`);
+  }
+
+  const operations = resolveCreateBlockRanges(compactPlan, candidateEntries);
+  return {
+    status: 'ready',
+    completionMarker,
+    snapshotFrontier: frontierSnapshot,
+    consumedFrontierCount: splitIndex,
+    operations: operations.map(operation => ({
+      frontierStartIndex: operation.frontierStartIndex,
+      frontierEndIndex: operation.frontierEndIndex,
+      rawStartSeq: operation.rawStartSeq,
+      rawEndSeq: operation.rawEndSeq,
+      sourceKind: operation.sourceKind,
+      level: operation.level,
+      sourceStart: operation.sourceStart,
+      sourceEnd: operation.sourceEnd,
+      summary: operation.summary,
+    })),
+    createdBlocks: operations.map(operation => ({
+      level: operation.level,
+      sourceKind: operation.sourceKind,
+      sourceStart: operation.sourceStart,
+      sourceEnd: operation.sourceEnd,
+      rawStartSeq: operation.rawStartSeq,
+      rawEndSeq: operation.rawEndSeq,
+      summary: operation.summary,
+    })),
+    replacedItemCount: operations.reduce((sum, operation) => sum + (operation.frontierEndIndex - operation.frontierStartIndex + 1), 0),
+  };
+}
+
+async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string, result: CompactJobResult): Promise<boolean> {
+  if (result.status === 'noop') {
+    return false;
+  }
+
   const session = deps.getSessionById(sessionId);
-  if (!session) return;
+  if (!session) {
+    return false;
+  }
 
-  const keepPercent = typeof options.keepPercent === 'number' ? options.keepPercent : COMPACT_PERCENT;
-  const completionMarker = options.completionMarker || 'Compaction completed.';
-  const compactGuidance = options.compactGuidance?.trim();
+  const currentFrontier = cloneSessionFrontier(session);
+  if (!hasCompatibleFrontierPrefix(currentFrontier, result.snapshotFrontier)) {
+    logger.warn({ sessionId, snapshotFrontierLength: result.snapshotFrontier.length, currentFrontierLength: currentFrontier.length }, 'Skipping async compact commit because session frontier changed incompatibly');
+    return false;
+  }
 
-  const history = session.history;
-  if (history.length < 1) return;
-  const originalHistoryLength = history.length;
+  const olderFrontier = result.snapshotFrontier.slice(0, result.consumedFrontierCount);
+  const createdRecords = await appendBlocksToArchive(session, result.createdBlocks);
+
+  const rewrittenOlderFrontier: ContextFrontierItem[] = [];
+  let cursor = 0;
+  for (let index = 0; index < result.operations.length; index += 1) {
+    const operation = result.operations[index];
+    const createdRecord = createdRecords[index];
+    if (cursor < operation.frontierStartIndex) {
+      rewrittenOlderFrontier.push(...olderFrontier.slice(cursor, operation.frontierStartIndex));
+    }
+    rewrittenOlderFrontier.push({
+      kind: 'block',
+      id: createdRecord.id,
+      level: createdRecord.level,
+      rawStartSeq: createdRecord.rawStartSeq,
+      rawEndSeq: createdRecord.rawEndSeq,
+    });
+    cursor = operation.frontierEndIndex + 1;
+  }
+  if (cursor < olderFrontier.length) {
+    rewrittenOlderFrontier.push(...olderFrontier.slice(cursor));
+  }
+
+  const newFrontier = [...rewrittenOlderFrontier, ...currentFrontier.slice(result.consumedFrontierCount)];
+  await finalizeCompaction(
+    deps,
+    sessionId,
+    session,
+    newFrontier,
+    result.completionMarker,
+    createdRecords.length,
+    result.replacedItemCount,
+  );
+  return true;
+}
+
+async function runCompaction(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}): Promise<boolean> {
+  const session = deps.getSessionById(sessionId);
+  if (!session) return false;
 
   logger.info({ sessionId, hasBroadcast: !!session.broadcast }, options.startLogMessage || 'Compaction starting');
   if (session.broadcast && options.startBroadcastMessage) {
     session.broadcast(options.startBroadcastMessage);
   }
 
-  const splitIndex = resolveCompactionSplitIndex(history, keepPercent);
-
-  if (splitIndex <= 0) {
-    logger.info({ sessionId, keepPercent }, 'Compaction skipped because there are no older messages to compact');
-    return;
+  const snapshot = buildCompactJobSnapshot(session, options);
+  if (!snapshot) {
+    logger.info({ sessionId }, 'Compaction skipped because there is no compactable snapshot');
+    return false;
   }
-
-  const olderMessages = history.slice(0, splitIndex);
-  const forceKeptRecentMessages = splitIndex < history.length ? history.slice(splitIndex) : [];
-  const candidateBlocks = buildCompactCandidateBlocks(olderMessages);
-
-  if (candidateBlocks.length === 0) {
-    logger.info({ sessionId, splitIndex }, 'Compaction skipped because no candidate blocks were produced');
-    return;
-  }
-
-  const forcedKeptStartSeq = forceKeptRecentMessages[0]?.__meta?.seq;
-  const forcedKeptEndSeq = forceKeptRecentMessages[forceKeptRecentMessages.length - 1]?.__meta?.seq;
-  const summaryPrompt = {
-    system: buildCompactPromptText({
-      forcedKeptCount: forceKeptRecentMessages.length,
-      forcedKeptStartSeq,
-      forcedKeptEndSeq,
-      candidateBlocks,
-      guidance: compactGuidance,
-    })
-  };
-
-  const beforeCompactIndex = session.history.length;
 
   try {
-    const maxCompactAttempts = 3;
-    let nextPromptParts = [summaryPrompt];
-    let compactPlan = null;
-
-    for (let attempt = 1; attempt <= maxCompactAttempts; attempt++) {
-      const result = await llm.chat(nextPromptParts, session, attempt - 1, {
-        toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION],
-      });
-
-      if (!result.toolCalls?.length) {
-        throw new Error(`Compaction failed because the model did not call ${COMPACT_PLAN_TOOL_NAME}.`);
-      }
-      if (result.toolCalls.length !== 1 || result.toolCalls[0].name !== COMPACT_PLAN_TOOL_NAME) {
-        throw new Error(`Compaction failed because the model returned an unexpected tool plan instead of a single ${COMPACT_PLAN_TOOL_NAME} call.`);
-      }
-
-      try {
-        compactPlan = validateCompactPlanArgs(result.toolCalls[0].args || {}, candidateBlocks);
-        break;
-      } catch (e) {
-        if (!(e instanceof CompactPlanValidationError)) {
-          throw e;
-        }
-
-        const attemptsRemaining = maxCompactAttempts - attempt;
-        if (attemptsRemaining <= 0) {
-          throw new Error(`Compaction failed after ${maxCompactAttempts} invalid ${COMPACT_PLAN_TOOL_NAME} submissions: ${e.message}`);
-        }
-
-        logger.warn({ sessionId, attempt, attemptsRemaining, validationError: e.message }, 'Compaction plan validation failed; retrying compact flow');
-        nextPromptParts = [{
-          system: buildCompactPlanValidationFeedback(e, attemptsRemaining),
-        }];
-      }
-    }
-
-    if (!compactPlan) {
-      throw new Error(`Compaction failed because no valid ${COMPACT_PLAN_TOOL_NAME} plan was produced.`);
-    }
-
-    const keptBlockIds = new Set(compactPlan.keepBlockIds);
-    const retainedOlderMessages: Message[] = [];
-    let pendingDroppedRange: { startSeq?: number; endSeq?: number; messageCount: number } | null = null;
-
-    const flushDroppedRange = () => {
-      if (!pendingDroppedRange) {
-        return;
-      }
-
-      retainedOlderMessages.push(buildDroppedRangePlaceholder(
-        sessionId,
-        pendingDroppedRange.startSeq,
-        pendingDroppedRange.endSeq,
-        pendingDroppedRange.messageCount,
-      ));
-      pendingDroppedRange = null;
-    };
-
-    for (const block of candidateBlocks) {
-      if (keptBlockIds.has(block.id)) {
-        flushDroppedRange();
-        retainedOlderMessages.push(...block.messages);
-        continue;
-      }
-
-      if (!pendingDroppedRange) {
-        pendingDroppedRange = {
-          startSeq: block.startSeq,
-          endSeq: block.endSeq,
-          messageCount: block.messageCount,
-        };
-        continue;
-      }
-
-      pendingDroppedRange.endSeq = block.endSeq;
-      pendingDroppedRange.messageCount += block.messageCount;
-    }
-
-    flushDroppedRange();
-
-    const retainedMessages = [...retainedOlderMessages, ...forceKeptRecentMessages];
-
-    const now = Date.now();
-    const summaryConversation: Message[] = [
-      {
-        role: 'user',
-        parts: [{
-          system: [
-            'Compaction plan applied via submit_compact_plan.',
-            `Older blocks kept verbatim: ${describeBlockRanges(candidateBlocks, compactPlan.keepBlockIds)}.`,
-            `Older blocks dropped from working history only: ${describeBlockRanges(candidateBlocks, compactPlan.dropBlockIds)}.`,
-            `Recent force-kept messages: ${forceKeptRecentMessages.length > 0 ? `${forceKeptRecentMessages.length} message(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)}` : 'none'}.`,
-          ].join(' ')
-        }],
-        __meta: { timestamp: now }
-      },
-      {
-        role: 'model',
-        parts: [{ text: compactPlan.summary }],
-        __meta: { timestamp: now }
-      },
-    ];
-
-    await finalizeCompaction(deps, sessionId, session, retainedMessages, summaryConversation, completionMarker, originalHistoryLength - retainedMessages.length);
+    const result = await runCompactJob(snapshot);
+    return await applyCompactJobResult(deps, sessionId, result);
   } catch (e) {
-    if (session.history.length > beforeCompactIndex) {
-      session.history = session.history.slice(0, beforeCompactIndex);
-      await deps.saveSession(sessionId);
-    }
     logger.error(e, 'Compaction failed');
     throw e;
   }
 }
 
+async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}): Promise<boolean> {
+  if (compactJobStates.has(sessionId)) {
+    logger.info({ sessionId }, 'Skipped starting background compact job because one is already pending');
+    return false;
+  }
+
+  const session = deps.getSessionById(sessionId);
+  if (!session) {
+    return false;
+  }
+
+  logger.info({ sessionId, hasBroadcast: !!session.broadcast }, options.startLogMessage || 'Compaction starting');
+  if (session.broadcast && options.startBroadcastMessage) {
+    session.broadcast(options.startBroadcastMessage);
+  }
+
+  const snapshot = buildCompactJobSnapshot(session, options);
+  if (!snapshot) {
+    logger.info({ sessionId }, 'Background compact skipped because there is no compactable snapshot');
+    return false;
+  }
+  if (!deps.enqueueSessionItem) {
+    logger.warn({ sessionId }, 'Background compact requested without enqueueSessionItem dependency; falling back to synchronous compaction');
+    return runCompaction(deps, sessionId, options);
+  }
+
+  compactJobStates.set(sessionId, {
+    status: 'running',
+    startedAt: Date.now(),
+    request: {
+      keepPercent: options.keepPercent,
+      compactGuidance: options.compactGuidance,
+      completionMarker: options.completionMarker,
+    },
+    snapshotHistoryVersion: snapshot.baseHistoryVersion,
+  });
+
+  void (async () => {
+    try {
+      const result = await runCompactJob(snapshot);
+      compactJobStates.set(sessionId, {
+        status: 'ready',
+        startedAt: Date.now(),
+        request: {
+          keepPercent: options.keepPercent,
+          compactGuidance: options.compactGuidance,
+          completionMarker: options.completionMarker,
+        },
+        snapshotHistoryVersion: snapshot.baseHistoryVersion,
+        result,
+      });
+    } catch (error: any) {
+      compactJobStates.set(sessionId, {
+        status: 'failed',
+        startedAt: Date.now(),
+        request: {
+          keepPercent: options.keepPercent,
+          compactGuidance: options.compactGuidance,
+          completionMarker: options.completionMarker,
+        },
+        snapshotHistoryVersion: snapshot.baseHistoryVersion,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
+
+    const liveSession = deps.getSessionById(sessionId);
+    if (!liveSession) {
+      compactJobStates.delete(sessionId);
+      return;
+    }
+    if (!liveSession.queue.some(item => item.type === 'compact-commit')) {
+      await deps.enqueueSessionItem!(sessionId, { type: 'compact-commit' });
+    }
+  })().catch(error => {
+    logger.error({ err: error, sessionId }, 'Background compact job wrapper failed unexpectedly');
+  });
+
+  return true;
+}
+
+async function runCompactionWithMode(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}, executionMode: CompactExecutionMode = 'auto'): Promise<boolean> {
+  const session = deps.getSessionById(sessionId);
+  if (!session) {
+    return false;
+  }
+
+  if (compactJobStates.has(sessionId)) {
+    logger.info({ sessionId, executionMode }, 'Skipped compaction because another compact job is already pending');
+    return false;
+  }
+
+  const shouldBackground = executionMode === 'background'
+    || (executionMode === 'auto' && isAsyncCompactEnabled(session));
+
+  if (shouldBackground) {
+    return startBackgroundCompaction(deps, sessionId, options);
+  }
+
+  return runCompaction(deps, sessionId, options);
+}
+
+export async function applyCompletedCompactJob(deps: SessionHistoryDeps, sessionId: string): Promise<boolean> {
+  const state = compactJobStates.get(sessionId);
+  if (!state || state.status === 'running') {
+    return false;
+  }
+
+  compactJobStates.delete(sessionId);
+
+  if (state.status === 'failed') {
+    throw state.error || new Error('Background compact job failed.');
+  }
+
+  return applyCompactJobResult(deps, sessionId, state.result!);
+}
+
 export async function compactHistory(deps: SessionHistoryDeps, sessionId: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
-  await runCompaction(deps, sessionId, {
+  await runCompactionWithMode(deps, sessionId, {
     keepPercent,
     completionMarker,
     startLogMessage: 'Compaction starting',
     startBroadcastMessage: '⚠️ Context size limit reached, compacting history...',
-  });
+  }, 'await');
 }
 
 export async function compactHistoryWithSummary(deps: SessionHistoryDeps, sessionId: string, summary: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
@@ -405,13 +862,13 @@ export async function compactHistoryWithSummary(deps: SessionHistoryDeps, sessio
     throw new Error('Summary is required for manual compaction.');
   }
 
-  await runCompaction(deps, sessionId, {
+  await runCompactionWithMode(deps, sessionId, {
     keepPercent,
     completionMarker,
     compactGuidance: `Manual compaction hint from requester: ${summary.trim()}`,
     startLogMessage: 'Manual compaction starting',
     startBroadcastMessage: '⚠️ Manual compaction starting...',
-  });
+  }, 'await');
 }
 
 export async function deleteMessages(deps: SessionHistoryDeps, sessionId: string, num: number): Promise<{ deleted: number; remaining: number }> {
@@ -424,6 +881,9 @@ export async function deleteMessages(deps: SessionHistoryDeps, sessionId: string
   if (num > 0) {
     deleted = Math.min(num, session.history.length);
     session.history = session.history.slice(deleted);
+    if (Array.isArray(session.contextFrontier)) {
+      session.contextFrontier = session.contextFrontier.slice(deleted);
+    }
     if (session.vectorIndexPosition !== undefined) {
       session.vectorIndexPosition = Math.max(0, session.vectorIndexPosition - deleted);
     }
@@ -431,6 +891,9 @@ export async function deleteMessages(deps: SessionHistoryDeps, sessionId: string
     const absNum = Math.min(Math.abs(num), session.history.length);
     deleted = absNum;
     session.history = session.history.slice(0, session.history.length - absNum);
+    if (Array.isArray(session.contextFrontier)) {
+      session.contextFrontier = session.contextFrontier.slice(0, session.contextFrontier.length - absNum);
+    }
     if (session.vectorIndexPosition !== undefined) {
       session.vectorIndexPosition = Math.min(session.vectorIndexPosition, session.history.length);
     }
@@ -449,11 +912,15 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
     throw new Error(`Session \`${sessionId}\` not found.`);
   }
 
+  discardPendingCompactWork(sessionId);
+
   session.history = [];
+  session.contextFrontier = [];
   session.queue = [];
   session.stopping = false;
   session.busy = false;
   session.vectorIndexPosition = 0;
+  session.nextBlockId = 1;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
   session.meta = {
@@ -615,30 +1082,36 @@ export async function checkAndCompactIfNeeded(deps: SessionHistoryDeps, sessionI
 
   if (currentSize > compactThreshold) {
     logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens }, 'Auto compact');
-    await compactHistory(deps, sessionId).catch(e => logger.error(e, 'Auto-compact failed'));
+    await runCompactionWithMode(deps, sessionId, {
+      keepPercent: COMPACT_PERCENT,
+      completionMarker: 'Compaction completed.',
+      startLogMessage: 'Auto compaction starting',
+      startBroadcastMessage: '⚠️ Context size limit reached, compacting history...',
+    }, 'auto').catch(e => logger.error(e, 'Auto-compact failed'));
   }
 }
 
 export async function processSessionCompactionRequest(
   deps: SessionHistoryDeps,
   sessionId: string,
-  item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>
+  item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>,
+  executionMode: CompactExecutionMode = 'auto',
 ): Promise<void> {
   if (item.compactGuidance?.trim()) {
-    await compactHistoryWithSummary(
-      deps,
-      sessionId,
-      item.compactGuidance,
-      item.keepPercent,
-      item.completionMarker || 'Compaction completed.'
-    );
+    await runCompactionWithMode(deps, sessionId, {
+      keepPercent: item.keepPercent,
+      completionMarker: item.completionMarker || 'Compaction completed.',
+      compactGuidance: `Manual compaction hint from requester: ${item.compactGuidance.trim()}`,
+      startLogMessage: 'Manual compaction starting',
+      startBroadcastMessage: '⚠️ Manual compaction starting...',
+    }, executionMode);
     return;
   }
 
-  await compactHistory(
-    deps,
-    sessionId,
-    item.keepPercent,
-    item.completionMarker || 'Compaction completed.'
-  );
+  await runCompactionWithMode(deps, sessionId, {
+    keepPercent: item.keepPercent,
+    completionMarker: item.completionMarker || 'Compaction completed.',
+    startLogMessage: 'Compaction starting',
+    startBroadcastMessage: '⚠️ Context size limit reached, compacting history...',
+  }, executionMode);
 }

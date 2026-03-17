@@ -63,6 +63,14 @@ async function appendStubModelMessage(session: Session, parts: MessagePart[]): P
   });
 }
 
+function appendLocalMessage(session: Session, role: 'user' | 'model' | 'tool', parts: MessagePart[]): void {
+  session.history.push({
+    role,
+    parts,
+    __meta: { timestamp: Date.now() },
+  });
+}
+
 function assertLastModelText(session: Session, expected: string): void {
   const last = session.history[session.history.length - 1];
   assert(last, 'expected session history to be non-empty');
@@ -287,7 +295,14 @@ async function main(): Promise<void> {
       let llmCallCount = 0;
 
       (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
-        await appendStubUserMessage(activeSession, parts);
+        const isCompactJob = Boolean((activeSession as any).__compactJob);
+        if (parts?.length) {
+          if (isCompactJob) {
+            appendLocalMessage(activeSession, 'user', parts);
+          } else {
+            await appendStubUserMessage(activeSession, parts);
+          }
+        }
         llmCallCount += 1;
 
         if (llmCallCount === 1) {
@@ -296,54 +311,53 @@ async function main(): Promise<void> {
             name: 'compact_session',
             args: { keepPercent: 0.25 },
           };
-          await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+          if (isCompactJob) {
+            appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
+          } else {
+            await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+          }
           return { text: '', toolCalls: [toolCall] };
         }
 
         if (llmCallCount === 2) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
-          const blockIds = Array.from(systemText.matchAll(/- (block_[^\n]+)/g)).map(match => match[1]);
-          assert(blockIds.length > 0, 'expected compaction prompt to include at least one block id');
+          assert.match(systemText, /M#1/);
           const toolCall = {
             id: 'compact-plan-invalid',
             name: 'submit_compact_plan',
             args: {
-              summary: '',
-              keepBlockIds: [] as string[],
-              dropBlockIds: [] as string[],
+              createBlocks: [] as any[],
             },
           };
-          await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+          appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
           return { text: '', toolCalls: [toolCall] };
         }
 
         if (llmCallCount === 3) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
-          assert.match(systemText, /summary: must be a non-empty string/);
-          const originalPrompt = activeSession.history
-            .find(msg => msg.role === 'user' && msg.parts.some(part => typeof part.system === 'string' && part.system.includes('COMPACTION STARTED')))
-            ?.parts.find(part => typeof part.system === 'string')?.system || '';
-          const blockIds = Array.from(originalPrompt.matchAll(/- (block_[^\n]+)/g)).map(match => match[1]);
-          assert(blockIds.length > 0, 'expected original compaction prompt to remain available in history');
+          assert.match(systemText, /createBlocks must contain at least one block/);
           const toolCall = {
             id: 'compact-plan',
             name: 'submit_compact_plan',
             args: {
-              summary: 'compacted summary',
-              keepBlockIds: [] as string[],
-              dropBlockIds: blockIds,
+              createBlocks: [{
+                level: 1,
+                sourceKind: 'message',
+                sourceStart: 1,
+                sourceEnd: 3,
+                summary: 'layered compact summary',
+              }],
             },
           };
-          await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+          appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
           return { text: '', toolCalls: [toolCall] };
         }
 
         if (llmCallCount === 4) {
           assert.strictEqual(parts, null);
-          assert(activeSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
-          assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('compacted summary'))));
+          assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
           await appendStubModelMessage(activeSession, [{ text: 'continued after compact' }]);
           return { text: 'continued after compact' };
         }
@@ -358,11 +372,106 @@ async function main(): Promise<void> {
       const finalSession = await sessionManager.getSession(sessionId);
       assert.strictEqual(llmCallCount, 4);
       assert.strictEqual(finalSession.busy, false);
-      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
-      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compacted message placeholder:') && (part.system || '').includes('get_archived_messages') && (part.system || '').includes('#1-#3'))));
-      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('compacted summary'))));
+      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
+      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('layered compact summary'))));
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed'))));
       assertLastModelText(finalSession, 'continued after compact');
+    });
+
+    await test('queued compact request can run asynchronously and commit a compatible prefix later', async () => {
+      const sessionId = makeSessionId('selftest_async_compact_queue');
+      createdSessionIds.push(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await sessionManager.appendSessionMessage(session, {
+        role: 'user',
+        parts: [{ text: 'async compact message 1' }],
+      });
+      await sessionManager.appendSessionMessage(session, {
+        role: 'model',
+        parts: [{ text: 'async compact message 2' }],
+      });
+      await sessionManager.appendSessionMessage(session, {
+        role: 'user',
+        parts: [{ text: 'async compact message 3' }],
+      });
+      await sessionManager.appendSessionMessage(session, {
+        role: 'model',
+        parts: [{ text: 'recent message kept verbatim' }],
+      });
+
+      let llmCallCount = 0;
+      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+        const isCompactJob = Boolean((activeSession as any).__compactJob);
+        if (parts?.length) {
+          if (isCompactJob) {
+            appendLocalMessage(activeSession, 'user', parts);
+          } else {
+            await appendStubUserMessage(activeSession, parts);
+          }
+        }
+        llmCallCount += 1;
+
+        const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
+        assert.match(systemText, /COMPACTION STARTED/);
+        const toolCall = {
+          id: 'async-compact-plan',
+          name: 'submit_compact_plan',
+          args: {
+            createBlocks: [{
+              level: 1,
+              sourceKind: 'message',
+              sourceStart: 1,
+              sourceEnd: 3,
+              summary: 'async compact summary',
+            }],
+          },
+        };
+        if (isCompactJob) {
+          appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
+        } else {
+          await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+        }
+        return { text: '', toolCalls: [toolCall] };
+      };
+
+      await sessionManager.requestSessionCompaction(sessionId, {
+        keepPercent: 0.25,
+        completionMarker: 'Compaction completed.',
+      });
+      await router.processSessionQueue(sessionId);
+
+      for (let attempt = 0; attempt < 50 && llmCallCount < 1; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+      const afterQueueStart = await sessionManager.getSession(sessionId);
+      assert.strictEqual(afterQueueStart.busy, false);
+      assert.strictEqual(llmCallCount, 1);
+
+      await sessionManager.appendSessionMessage(afterQueueStart, {
+        role: 'user',
+        parts: [{ text: 'tail message appended after async compact job started' }],
+      });
+
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const maybeReady = await sessionManager.getSession(sessionId);
+        if (maybeReady.queue.some(item => item.type === 'compact-commit')) {
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+      const beforeCommit = await sessionManager.getSession(sessionId);
+      assert(beforeCommit.queue.some(item => item.type === 'compact-commit'));
+
+      await router.processSessionQueue(sessionId);
+
+      const finalSession = await sessionManager.getSession(sessionId);
+      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
+      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('async compact summary'))));
+      assert(finalSession.history.some(msg => msg.parts.some(part => (part.text || '').includes('tail message appended after async compact job started'))));
+      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed.'))));
     });
 
     await test('get_archived_messages reads archived session history by seq range', async () => {
@@ -398,7 +507,7 @@ async function main(): Promise<void> {
       assert.doesNotMatch(String(output), /archived alpha/);
     });
 
-    await test('automatic in-turn compaction after tool calls resumes with compacted history', async () => {
+    await test('automatic in-turn compaction after tool calls continues immediately and commits async compact later', async () => {
       const sessionId = makeSessionId('selftest_auto_compact_current');
       createdSessionIds.push(sessionId);
       await ensureSession(sessionId);
@@ -406,36 +515,43 @@ async function main(): Promise<void> {
       const sampleFile = path.join(tempRoot, 'auto-compact-read.txt');
       await fs.writeFile(sampleFile, 'auto compact\n');
 
-      let llmCallCount = 0;
-      (sessionManager as any).compactHistory = async (targetSessionId: string) => {
-        assert.strictEqual(targetSessionId, sessionId);
-        const targetSession = await sessionManager.getSession(targetSessionId);
-        targetSession.history = [
-          {
-            role: 'user',
-            parts: [{ system: 'This session has been compacted. Messages before this are removed.' }],
-            __meta: { timestamp: Date.now() }
-          },
-          {
-            role: 'model',
-            parts: [{ text: 'auto compact summary' }],
-            __meta: { timestamp: Date.now() }
-          },
-          {
-            role: 'user',
-            parts: [{ system: 'Compaction completed. You can continue working now.' }],
-            __meta: { timestamp: Date.now() }
-          },
-        ];
-        await sessionManager.saveSession(targetSessionId);
-      };
+      let mainTurnCallCount = 0;
+      let compactJobCallCount = 0;
 
       (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
         assert.strictEqual(activeSession.id, sessionId);
-        await appendStubUserMessage(activeSession, parts);
-        llmCallCount += 1;
+        const isCompactJob = Boolean((activeSession as any).__compactJob);
+        if (parts?.length) {
+          if (isCompactJob) {
+            appendLocalMessage(activeSession, 'user', parts);
+          } else {
+            await appendStubUserMessage(activeSession, parts);
+          }
+        }
 
-        if (llmCallCount === 1) {
+        if (isCompactJob) {
+          compactJobCallCount += 1;
+          const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
+          assert.match(systemText, /COMPACTION STARTED/);
+          const toolCall = {
+            id: 'auto-compact-plan',
+            name: 'submit_compact_plan',
+            args: {
+              createBlocks: [{
+                level: 1,
+                sourceKind: 'message',
+                sourceStart: 1,
+                sourceEnd: 3,
+                summary: 'auto compact summary',
+              }],
+            },
+          };
+          appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
+          return { text: '', toolCalls: [toolCall] };
+        }
+
+        mainTurnCallCount += 1;
+        if (mainTurnCallCount === 1) {
           const toolCall = { id: 'auto-compact-read', name: 'read', args: { filePath: sampleFile } };
           await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
           return {
@@ -445,30 +561,48 @@ async function main(): Promise<void> {
           };
         }
 
-        if (llmCallCount === 2) {
+        if (mainTurnCallCount === 2) {
           assert.strictEqual(parts, null);
-          assert(activeSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('This session has been compacted'))));
-          assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary'))));
-          await appendStubModelMessage(activeSession, [{ text: 'continued after auto compact' }]);
-          return { text: 'continued after auto compact' };
+          assert(!activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
+          await appendStubModelMessage(activeSession, [{ text: 'continued before async compact commit' }]);
+          return { text: 'continued before async compact commit' };
         }
 
-        throw new Error(`automatic in-turn compaction should resume exactly once after compaction, got LLM call ${llmCallCount}`);
+        throw new Error(`automatic in-turn compaction should keep main turn to two calls, got main=${mainTurnCallCount} compact=${compactJobCallCount}`);
       };
 
-      try {
-        await (router as any).runSessionTurn(sessionId, {
-          parts: [{ text: 'trigger auto compact now' }],
-        });
-      } finally {
-        (sessionManager as any).compactHistory = originalCompactHistory;
+      await (router as any).runSessionTurn(sessionId, {
+        parts: [{ text: 'trigger auto compact now' }],
+      });
+
+      let compactCommittedInline = false;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const maybeReady = await sessionManager.getSession(sessionId);
+        if (maybeReady.queue.some(item => item.type === 'compact-commit')) {
+          break;
+        }
+        if (maybeReady.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary')))) {
+          compactCommittedInline = true;
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+      const beforeCommit = await sessionManager.getSession(sessionId);
+      if (beforeCommit.queue.some(item => item.type === 'compact-commit')) {
+        await router.processSessionQueue(sessionId);
+      } else {
+        assert(compactCommittedInline || beforeCommit.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary'))));
       }
 
       const finalSession = await sessionManager.getSession(sessionId);
-      assert.strictEqual(llmCallCount, 2);
+      assert.strictEqual(mainTurnCallCount, 2);
+      assert.strictEqual(compactJobCallCount, 1);
       assert.strictEqual(finalSession.busy, false);
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary'))));
-      assertLastModelText(finalSession, 'continued after auto compact');
+      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
+      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed. You can continue working now.'))));
+      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('continued before async compact commit'))));
     });
 
     await test('tool-noise compaction replaces oversized archived tool parts in older history only', async () => {

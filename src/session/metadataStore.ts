@@ -11,13 +11,13 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'historyVersion',
   'displayName',
   'currentNode',
-  'isolated',
   'model',
   'agent',
   'verbose',
   'aliases',
   'busy',
   'nextMessageSeq',
+  'nextBlockId',
   'todoState',
 ] as const;
 
@@ -33,13 +33,13 @@ const SESSION_METADATA_FIELDS = [
   'displayName',
   'archived',
   'currentNode',
-  'isolated',
   'model',
   'verbose',
   'vectorIndexPosition',
   'indexingState',
   'historyVersion',
   'nextMessageSeq',
+  'nextBlockId',
   'parentSessionId',
   'todoState',
 ] as const;
@@ -179,6 +179,7 @@ export function buildRecoveredSessionMetadata(sessionId: string, historyData: Re
     currentNode: historyData.currentNode || 'master',
     agent: inferredAgent,
     nextMessageSeq: inferredNextSeq > 0 ? inferredNextSeq : 1,
+    nextBlockId: typeof historyData.nextBlockId === 'number' && historyData.nextBlockId > 0 ? historyData.nextBlockId : 1,
     historyVersion: historyData.historyVersion ?? 0,
   };
 }

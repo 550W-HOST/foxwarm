@@ -23,7 +23,7 @@ until curl --noproxy "*" -fsS "${NODE_MASTER_URL%/}/login.html" >/dev/null 2>&1;
   sleep 1
 done
 
-exec node lib/nodeClient.js \
+exec node lib/nodes/client.js \
   --host "$NODE_MASTER_URL" \
   --id "$NODE_IDENTIFIER" \
   --token "$RESOLVED_NODE_TOKEN" \

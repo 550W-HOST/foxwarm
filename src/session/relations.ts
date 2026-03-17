@@ -160,7 +160,10 @@ export async function sendToSession(
 
   const targetSession = await checkIsolatedPermission(deps, fromSession, targetSessionId);
 
-  if ((fromSession?.isolated || targetSession?.isolated) && fromSession && !isDirectSessionLink(fromSession, targetSession)) {
+  const sourceAgentMeta = fromSession ? deps.getAgentMetadata(fromSession.agent || 'main') : undefined;
+  const targetAgentMeta = deps.getAgentMetadata(targetSession.agent || 'main');
+
+  if ((sourceAgentMeta?.isolated || targetAgentMeta.isolated) && fromSession && !isDirectSessionLink(fromSession, targetSession)) {
     throw new Error('Isolated sessions can only communicate with themselves or their direct parent/child sessions.');
   }
 

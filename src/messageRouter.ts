@@ -113,7 +113,7 @@ export class MessageRouter {
   private drainLeadingQueuedMessageParts(session: Session): MessagePart[] {
     const queuedParts: MessagePart[] = [];
 
-    while (session.queue[0] && session.queue[0].type !== 'compact') {
+    while (session.queue[0] && session.queue[0].type !== 'compact' && session.queue[0].type !== 'compact-commit') {
       const item = session.queue.shift();
       if (!item?.parts) continue;
 
@@ -153,7 +153,7 @@ export class MessageRouter {
 
     await sessionManager.saveSession(session.id);
 
-    if (session.queue[0]?.type === 'compact') {
+    if (session.queue[0]?.type === 'compact' || session.queue[0]?.type === 'compact-commit') {
       const nextItem = session.queue.shift();
       if (!nextItem) {
         return false;
@@ -178,18 +178,22 @@ export class MessageRouter {
 
   private async runPendingCompactionIfNeeded(sessionId: string, session: Session): Promise<'continued' | 'stop' | false> {
     const nextItem = session.queue[0];
-    if (nextItem?.type !== 'compact') {
+    if (nextItem?.type !== 'compact' && nextItem?.type !== 'compact-commit') {
       return false;
     }
 
     session.queue.shift();
 
     try {
-      await sessionManager.processSessionCompactionRequest(sessionId, {
-        keepPercent: nextItem.keepPercent,
-        compactGuidance: nextItem.compactGuidance,
-        completionMarker: nextItem.completionMarker || 'Compaction completed. You can continue working now.',
-      });
+      if (nextItem.type === 'compact-commit') {
+        await sessionManager.applyCompletedCompactJob(sessionId);
+      } else {
+        await sessionManager.processSessionCompactionRequest(sessionId, {
+          keepPercent: nextItem.keepPercent,
+          compactGuidance: nextItem.compactGuidance,
+          completionMarker: nextItem.completionMarker || 'Compaction completed. You can continue working now.',
+        }, 'await');
+      }
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'In-turn queued compaction failed');
       await this.sendSessionError(session, undefined, e);
@@ -200,11 +204,15 @@ export class MessageRouter {
 
   private async runQueuedCompaction(sessionId: string, session: Session, item: QueueItem): Promise<void> {
     try {
-      await sessionManager.processSessionCompactionRequest(sessionId, {
-        keepPercent: item.keepPercent,
-        compactGuidance: item.compactGuidance,
-        completionMarker: item.completionMarker || 'Compaction completed.',
-      });
+      if (item.type === 'compact-commit') {
+        await sessionManager.applyCompletedCompactJob(sessionId);
+      } else {
+        await sessionManager.processSessionCompactionRequest(sessionId, {
+          keepPercent: item.keepPercent,
+          compactGuidance: item.compactGuidance,
+          completionMarker: item.completionMarker || 'Compaction completed.',
+        });
+      }
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'Queued compaction failed');
       await this.sendSessionError(session, undefined, e);
@@ -219,7 +227,7 @@ export class MessageRouter {
   }
 
   private async processQueuedItem(sessionId: string, session: Session, item: QueueItem): Promise<void> {
-    if (item.type === 'compact') {
+    if (item.type === 'compact' || item.type === 'compact-commit') {
       await this.runQueuedCompaction(sessionId, session, item);
       return;
     }
@@ -493,8 +501,10 @@ export class MessageRouter {
           const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
           if (currentSize > compactThreshold) {
             logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration }, 'Context size exceeded threshold during tool calls, triggering compact');
-            await sessionManager.compactHistory(session.id, undefined, 'Compaction completed. You can continue working now.');
-            logger.info('Compact completed, continuing with updated history');
+            await sessionManager.processSessionCompactionRequest(session.id, {
+              completionMarker: 'Compaction completed. You can continue working now.',
+            }, 'auto');
+            logger.info('Compact requested, continuing with current history');
           }
         }
 

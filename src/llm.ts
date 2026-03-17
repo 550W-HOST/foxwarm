@@ -209,7 +209,14 @@ function buildReasoningSummaryText(summaryParts: Map<string, string>): string {
         .join('\n');
 }
 
-async function collectOpenAIResponsesStream(stream: any, session: Session, signal: AbortSignal): Promise<any> {
+async function collectOpenAIResponsesStream(
+    stream: any,
+    session: Session,
+    signal: AbortSignal,
+    options?: {
+        onReasoningSummary?: (text: string) => void;
+    },
+): Promise<any> {
     if (signal.aborted) {
         throw makeAbortError();
     }
@@ -246,10 +253,14 @@ async function collectOpenAIResponsesStream(stream: any, session: Session, signa
             }
 
             lastSummaryText = nextText;
-            sessionManager.notifySessionEvent(session.id, {
-                type: 'reasoning-summary',
-                text: nextText,
-            });
+            if (options?.onReasoningSummary) {
+                options.onReasoningSummary(nextText);
+            } else {
+                sessionManager.notifySessionEvent(session.id, {
+                    type: 'reasoning-summary',
+                    text: nextText,
+                });
+            }
         };
 
         const handleEvent = (event: any) => {
@@ -1122,9 +1133,30 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const toolArgs = { ...call.args };
         delete toolArgs.node;
         
+        // Tools that must run on master because they depend on host-local
+        // session/channel/agent/vector/MCP state rather than remote node files.
+        const masterOnlyTools = [
+            'remote_node', 'list_nodes', 'node_tools',
+            'search_memory', 'get_memory_context',
+            'list_files', 'delete_file',
+            'copy_between_nodes',
+            'create_child_session', 'send_to_session', 'send_to_channel', 'send_file',
+            'list_sessions', 'list_agents', 'list_skills',
+            'attach_agent_skill', 'detach_agent_skill', 'load_skill',
+            'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'delete_session',
+            'update_session_name', 'set_todo', 'update_session_snapshot', 'stop_session',
+            'compact_session', 'compress_session',
+            'create_timer', 'list_timers', 'delete_timer',
+            'mcp_config', 'call_mcp', 'search_mcp_tools',
+            'change_current_node',
+            'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
+        ];
+        const forceMaster = masterOnlyTools.includes(call.name);
+        const executionNode = forceMaster ? 'master' : targetNode;
+
         // Check isolated session tool permission (includes path access check for master)
         try {
-            await checkToolPermission(call.name, sessionId, targetNode, toolArgs);
+            await checkToolPermission(call.name, sessionId, executionNode, toolArgs);
         } catch (e: any) {
             result = { error: e.message || String(e) };
         }
@@ -1133,14 +1165,10 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             // Skip tool execution if permission check failed
         } else {
         
-        // Tools that must run on master (node management tools, timers)
-        const masterOnlyTools = ['remote_node', 'list_nodes', 'node_tools', 'create_timer', 'list_timers', 'delete_timer'];
-        const forceMaster = masterOnlyTools.includes(call.name);
-        
-        if (targetNode !== 'master' && !forceMaster) {
+        if (executionNode !== 'master') {
             // Execute on remote node
             try {
-                result = normalizeToolResult(await nodesManager.executeTool(targetNode, call.name, toolArgs, sessionId));
+                result = normalizeToolResult(await nodesManager.executeTool(executionNode, call.name, toolArgs, sessionId));
             } catch (e: any) {
                 result = { error: e.message || String(e) };
             }
@@ -1148,8 +1176,8 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             // Execute locally on master
             try {
                 result = normalizeToolResult(await toolFn(toolArgs, toolContext));
-            } catch (e) {
-                result = { error: e.message };
+            } catch (e: any) {
+                result = { error: e?.message || String(e) };
             }
         } else {
             result = { error: `Unknown tool: ${call.name}` };
@@ -1214,9 +1242,16 @@ export async function chat(
     iteration = 0,
     options?: {
         toolDefinitions?: ToolDefinition[];
+        appendMessage?: (message: Message) => Promise<void>;
+        notifySessionEvents?: boolean;
+        registerAbortController?: boolean;
     },
 ): Promise<ChatResult> {
     const appendMessage = async (message: Message) => {
+        if (options?.appendMessage) {
+            await options.appendMessage(message);
+            return;
+        }
         await sessionManager.appendSessionMessage(session, message);
     };
 
@@ -1387,8 +1422,15 @@ export async function chat(
     let resp: any;
     const maxRetries = 3;
     const abortController = new AbortController();
-    sessionManager.registerSessionAbortController(session.id, abortController);
-    sessionManager.notifySessionEvent(session.id, { type: 'reasoning-summary-reset' });
+    const shouldRegisterAbortController = options?.registerAbortController !== false;
+    const shouldNotifySessionEvents = options?.notifySessionEvents !== false;
+
+    if (shouldRegisterAbortController) {
+        sessionManager.registerSessionAbortController(session.id, abortController);
+    }
+    if (shouldNotifySessionEvents) {
+        sessionManager.notifySessionEvent(session.id, { type: 'reasoning-summary-reset' });
+    }
 
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -1421,7 +1463,11 @@ export async function chat(
                         continue;
                     }
 
-                    resp = await collectOpenAIResponsesStream(response.data, session, abortController.signal);
+                    resp = await collectOpenAIResponsesStream(response.data, session, abortController.signal, {
+                        onReasoningSummary: shouldNotifySessionEvents
+                            ? undefined
+                            : () => {},
+                    });
                     await logResponse({
                         status: response.status + ' ' + response.statusText,
                         headers: response.headers,
@@ -1479,7 +1525,9 @@ export async function chat(
             }
         }
     } finally {
-        sessionManager.clearSessionAbortController(session.id, abortController);
+        if (shouldRegisterAbortController) {
+            sessionManager.clearSessionAbortController(session.id, abortController);
+        }
     }
     
     // Extract response content blocks and tool calls

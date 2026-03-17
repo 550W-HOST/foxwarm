@@ -10,6 +10,8 @@ models:
     provider: openai
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
+    # Optional: disable background compact jobs for this model entry.
+    # asyncCompact: false
     # Optional: enable compressed request bodies for this model provider entry.
     # requestCompression: gzip  # or: br
     model:

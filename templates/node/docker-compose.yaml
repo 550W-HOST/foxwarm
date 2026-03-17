@@ -1,0 +1,59 @@
+services:
+  foxwarm-node:
+    build:
+      context: .
+      args:
+        NODE_SOURCE_URL: ${NODE_SOURCE_URL}
+      dockerfile_inline: |
+        FROM node:22-bookworm-slim
+
+        ARG NODE_SOURCE_URL
+
+        RUN apt-get update \
+            && apt-get install -y --no-install-recommends \
+                ca-certificates \
+                curl \
+                dnsutils \
+                file \
+                git \
+                iproute2 \
+                iputils-ping \
+                jq \
+                less \
+                lsof \
+                netcat-openbsd \
+                procps \
+                python-is-python3 \
+                python3 \
+                python3-pip \
+                rsync \
+                ripgrep \
+                tmux \
+                unzip \
+                vim-tiny \
+                xz-utils \
+                zip \
+                build-essential \
+                pkg-config \
+            && rm -rf /var/lib/apt/lists/*
+
+        WORKDIR /app
+
+        RUN test -n "$NODE_SOURCE_URL"
+        RUN curl -fsSL "$NODE_SOURCE_URL" | tar -xzf - -C /app
+
+        RUN npm ci && npm run build
+        RUN chmod +x /app/scripts/start-sandbox-node.sh
+
+        ENV NODE_ENV=production
+
+        CMD ["/app/scripts/start-sandbox-node.sh"]
+    restart: unless-stopped
+    environment:
+      NODE_URL: ${NODE_HOST}
+      NODE_ID: ${NODE_ID:-foxwarm-node}
+      NODE_TOKEN: ${NODE_PAIRING_TOKEN:-}
+      NODE_CREDENTIALS_FILE: ${NODE_CREDENTIALS_FILE:-/data/state/node_credentials.json}
+      FOXWARM_DATA_DIR: /data
+    volumes:
+      - ${NODE_DATA_DIR:-./data}:/data

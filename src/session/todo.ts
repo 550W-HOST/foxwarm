@@ -71,6 +71,25 @@ export function getLatestCountedMessageSeq(session: Session): number {
   return getLatestSessionMessageSeq(session);
 }
 
+export function countNonReminderMessagesAfterSeq(session: Session, anchorSeq: number): number {
+  let count = 0;
+
+  for (let i = session.history.length - 1; i >= 0; i--) {
+    const message = session.history[i];
+    const seq = message.__meta?.seq;
+
+    if (typeof seq !== 'number' || seq <= anchorSeq) {
+      break;
+    }
+
+    if (!isTodoReminderMessage(message)) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
 export function setSessionTodo(session: Session, todo: string, remindEvery: number): SessionTodoState {
   const normalizedTodo = normalizeTodoText(todo);
   const normalizedRemindEvery = normalizeRemindEvery(remindEvery);
@@ -78,7 +97,7 @@ export function setSessionTodo(session: Session, todo: string, remindEvery: numb
   const state: SessionTodoState = {
     todo: normalizedTodo,
     remindEvery: normalizedRemindEvery,
-    anchorSeq: getLatestSessionMessageSeq(session) + 1,
+    anchorSeq: getLatestSessionMessageSeq(session),
     updatedAt: Date.now(),
   };
 
@@ -95,31 +114,20 @@ export function clearSessionTodo(session: Session): boolean {
   return true;
 }
 
-export function clearTodoBusySuppression(session: Session): void {
-  if (!session.todoState?.remindedWhileBusy) {
-    return;
-  }
-
-  delete session.todoState.remindedWhileBusy;
-}
-
 export function maybeBuildTodoReminderMessage(session: Session): Message | null {
   const state = session.todoState;
   if (!state) {
     return null;
   }
 
-  const currentSeq = getLatestCountedMessageSeq(session);
-  if (currentSeq < state.anchorSeq + state.remindEvery) {
+  const countedMessagesSinceAnchor = countNonReminderMessagesAfterSeq(session, state.anchorSeq);
+  if (countedMessagesSinceAnchor < state.remindEvery) {
     return null;
   }
 
-  if (session.busy && state.remindedWhileBusy) {
-    return null;
-  }
+  const currentSeq = getLatestCountedMessageSeq(session);
 
   state.anchorSeq = currentSeq;
-  state.remindedWhileBusy = !!session.busy;
 
   return {
     role: 'user',

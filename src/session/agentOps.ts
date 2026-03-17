@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import * as llm from '../llm';
-import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, SESSIONS_DIR } from '../config';
+import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, getSessionBlockArchiveLogPath, getSessionFrontierPath, SESSIONS_DIR } from '../config';
 import { Session } from '../types';
 
 interface SessionAgentOpsDeps {
@@ -124,6 +124,20 @@ async function renameSessionIdentity(options: {
     await fs.move(oldArchiveImagesDir, newArchiveImagesDir, { overwrite: true });
   }
 
+  const oldBlockArchive = getSessionBlockArchiveLogPath(oldRealId);
+  const newBlockArchive = getSessionBlockArchiveLogPath(targetSessionId);
+  if (await fs.pathExists(oldBlockArchive)) {
+    await fs.ensureDir(path.dirname(newBlockArchive));
+    await fs.move(oldBlockArchive, newBlockArchive, { overwrite: true });
+  }
+
+  const oldFrontierFile = getSessionFrontierPath(oldRealId);
+  const newFrontierFile = getSessionFrontierPath(targetSessionId);
+  if (await fs.pathExists(oldFrontierFile)) {
+    await fs.ensureDir(path.dirname(newFrontierFile));
+    await fs.move(oldFrontierFile, newFrontierFile, { overwrite: true });
+  }
+
   const updatedChildren = await deps.updateChildSessionParentIds(oldRealId, targetSessionId);
   await deps.moveSessionArchiveIndex(oldRealId, targetSessionId);
 
@@ -163,6 +177,11 @@ export async function createSessionInAgent(options: {
     throw new Error(`Session "${sessionId}" already exists.`);
   }
 
+  const agentMeta = deps.getAgentMetadata(agentName);
+  const isolatedNode = agentMeta.isolated && typeof agentMeta.isolatedNode === 'string' && agentMeta.isolatedNode.trim()
+    ? agentMeta.isolatedNode.trim()
+    : undefined;
+
   const snapshot = await llm.getPersistentMemory(agentName);
   await deps.createSession(sessionId, {
     id: sessionId,
@@ -182,7 +201,7 @@ export async function createSessionInAgent(options: {
     vectorIndexPosition: 0,
     nextMessageSeq: 1,
     parentSessionId,
-    currentNode: currentNode || 'master',
+    currentNode: isolatedNode || currentNode || 'master',
     model,
   });
 
@@ -233,6 +252,10 @@ export async function createAgentWithMainSession(options: {
   }
 
   const mainSessionId = buildSessionId(agentName, 'main');
+  const targetAgentMeta = deps.getAgentMetadata(agentName);
+  const isolatedNode = targetAgentMeta.isolated && typeof targetAgentMeta.isolatedNode === 'string' && targetAgentMeta.isolatedNode.trim()
+    ? targetAgentMeta.isolatedNode.trim()
+    : undefined;
 
   if (convertSessionId) {
     const sourceToConvert = await deps.getExistingSession(convertSessionId);
@@ -290,7 +313,7 @@ export async function createAgentWithMainSession(options: {
     meta: { lastMessageTime: Date.now() },
     vectorIndexPosition: 0,
     nextMessageSeq: 1,
-    currentNode: currentNode || sourceSession?.currentNode || 'master',
+    currentNode: isolatedNode || currentNode || sourceSession?.currentNode || 'master',
     model: model ?? sourceSession?.model,
   });
 

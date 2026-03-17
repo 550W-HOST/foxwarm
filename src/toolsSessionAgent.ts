@@ -112,6 +112,36 @@ function formatArchivedMessagePreview(
   return result;
 }
 
+
+function formatArchivedBlockPreview(
+  sessionId: string,
+  records: Array<{ id: number; level: number; rawStartSeq: number; rawEndSeq: number; summary: string; sourceKind: string; sourceStart: number; sourceEnd: number; }>,
+  meta: { totalMatched: number; startId?: number; endId?: number },
+  previewLength: number,
+): string {
+  if (records.length === 0) {
+    const rangeLabel = typeof meta.startId === 'number' || typeof meta.endId === 'number'
+      ? ` for ${typeof meta.startId === 'number' ? `#${meta.startId}` : '?'}-${typeof meta.endId === 'number' ? `#${meta.endId}` : '?'}`
+      : '';
+    return `No archived blocks found in session \`${sessionId}\`${rangeLabel}.`;
+  }
+
+  const rangeBits: string[] = [];
+  if (typeof meta.startId === 'number') rangeBits.push(`startId=#${meta.startId}`);
+  if (typeof meta.endId === 'number') rangeBits.push(`endId=#${meta.endId}`);
+  const rangeLabel = rangeBits.length ? ` (${rangeBits.join(', ')})` : '';
+
+  let result = `Archived layered-context blocks for session \`${sessionId}\` - showing ${records.length} of ${meta.totalMatched} matched block(s)${rangeLabel}.
+
+`;
+  for (const record of records) {
+    const prefix = `[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
+    result += `${formatPrefixedMultilineText(prefix, (record.summary || '').slice(0, previewLength) || '[empty summary]')}
+`;
+  }
+  return result;
+}
+
 async function prepareChannelFile(filePath: string, ctx?: ToolContext): Promise<ChannelFile> {
   const agentName = ctx?.session?.agent || 'main';
   const fullPath = resolveAgentPath(filePath, agentName);
@@ -153,14 +183,14 @@ function formatSendFileSessionResult(targetSessionId: string, file: ChannelFile,
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  const { suffix, fork = true, message, node, isolated, noFurtherAssistantReply } = args;
+  const { suffix, fork = true, message, node, noFurtherAssistantReply } = args;
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
   }
 
   const currentSessionId = ctx.sessionId;
-  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork, { node, isolated });
+  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork, { node });
 
   if (message) {
     sessionManager.sendToSession(childSessionId, message, currentSessionId).catch(err => {
@@ -296,7 +326,7 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   const entries = await fs.readdir(agentsDir, { withFileTypes: true });
-  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, skills?: string[]}> = [];
+  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, skills?: string[], isolated?: boolean, isolatedNode?: string}> = [];
 
   for (const entry of entries) {
     if (entry.isDirectory()) {
@@ -310,6 +340,8 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
         sessionCount: sessions.length,
         inherit: sessionManager.getAgentMetadata(agentName).inherit,
         skills: sessionManager.getAgentSkills(agentName),
+        isolated: sessionManager.getAgentMetadata(agentName).isolated,
+        isolatedNode: sessionManager.getAgentIsolationNode(agentName),
       });
     }
   }
@@ -326,6 +358,9 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
     }
     if (agent.inherit) {
       result += ` [inherits: ${agent.inherit}]`;
+    }
+    if (agent.isolated) {
+      result += ` [isolated${agent.isolatedNode ? `:${agent.isolatedNode}` : ''}]`;
     }
     if (agent.skills && agent.skills.length > 0) {
       result += ` [skills: ${agent.skills.join(', ')}]`;
@@ -509,6 +544,28 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
     totalMatched: result.totalMatched,
     startSeq: result.requestedRange.startSeq,
     endSeq: result.requestedRange.endSeq,
+  }, previewLength);
+}
+
+
+export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'get_archived_blocks');
+  const targetSessionId = args.sessionId || ctx?.sessionId;
+  const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
+
+  if (!targetSessionId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  const result = await sessionManager.getArchivedBlocks(targetSessionId, {
+    startId: typeof args.startId === 'number' ? args.startId : undefined,
+    endId: typeof args.endId === 'number' ? args.endId : undefined,
+  });
+
+  return formatArchivedBlockPreview(targetSessionId, result.records, {
+    totalMatched: result.totalMatched,
+    startId: result.requestedRange.startId,
+    endId: result.requestedRange.endId,
   }, previewLength);
 }
 
@@ -831,6 +888,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
     convertSession = false,
     createMainSession = true,
     inherit,
+    isolatedNode,
   } = args;
 
   if (!agentName || typeof agentName !== 'string') {
@@ -850,6 +908,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
     model: ctx.session?.model,
     createMainSession,
     inherit: normalizedInherit,
+    isolatedNode,
   });
 
   if (result.convertedFromSessionId) {
@@ -869,6 +928,9 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
   let message = `Agent "${agentName}" created successfully.\nAgent folder: ${result.agentDir}`;
   if (normalizedInherit) {
     message += `\nShared memory inherits from: ${normalizedInherit}`;
+  }
+  if (isolatedNode) {
+    message += `\nIsolation: enabled on node ${isolatedNode}`;
   }
   if (result.createdMainSession) {
     message += `\nMain session: ${result.mainSessionId}`;
@@ -935,6 +997,28 @@ export async function tool_set_agent_inherit(args: ToolArgs, ctx?: ToolContext) 
   return message;
 }
 
+export async function tool_set_agent_isolated(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'set_agent_isolated');
+  const { agentName, nodeId } = args;
+
+  if (!agentName || typeof agentName !== 'string') {
+    throw new Error('agentName is required');
+  }
+
+  const result = await sessionManager.setAgentIsolation(
+    agentName,
+    typeof nodeId === 'string' && nodeId.trim() ? nodeId.trim() : undefined,
+  );
+
+  let message = result.isolated
+    ? `Agent "${agentName}" is now isolated on node "${result.node}".`
+    : `Agent "${agentName}" isolation cleared.`;
+  if (result.affectedSessions.length > 0) {
+    message += `\nUpdated ${result.affectedSessions.length} session(s).`;
+  }
+  return message;
+}
+
 export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
   const {
     sessionId,
@@ -954,7 +1038,7 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
     throw new Error(`Session "${sourceId}" not found.`);
   }
 
-  if (sourceSession.isolated) {
+  if (sessionManager.isSessionEffectivelyIsolated(sourceSession)) {
     throw new Error('Isolated session cannot use move_session tool.');
   }
 

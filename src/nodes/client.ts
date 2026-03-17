@@ -9,6 +9,7 @@ import WebSocket from 'ws';
 import { logger } from '../common';
 import * as tools from '../tools';
 import { initializeExecManager } from '../execManager';
+import { readNodeTransferFile, writeNodeTransferFile } from '../nodeFileTransfer';
 
 interface NodeClientOptions {
   host: string;
@@ -335,8 +336,60 @@ class NodeClient {
       case 'tool_call':
         await this.handleToolCall(message);
         break;
+      case 'file_read_request':
+        await this.handleFileReadRequest(message);
+        break;
+      case 'file_write_request':
+        await this.handleFileWriteRequest(message);
+        break;
       default:
         logger.warn({ type: message.type }, 'Unknown message type from master');
+    }
+  }
+
+  private async handleFileReadRequest(message: any): Promise<void> {
+    const transferId = String(message.transferId || '');
+    const filePath = String(message.filePath || '');
+    const agentName = typeof message.agentName === 'string' && message.agentName.trim().length > 0
+      ? message.agentName
+      : 'main';
+
+    try {
+      const file = await readNodeTransferFile(filePath, agentName);
+      this.send({
+        type: 'file_read_response',
+        transferId,
+        file,
+      });
+    } catch (e: any) {
+      this.send({
+        type: 'file_transfer_error',
+        transferId,
+        error: e.message || String(e),
+      });
+    }
+  }
+
+  private async handleFileWriteRequest(message: any): Promise<void> {
+    const transferId = String(message.transferId || '');
+    const filePath = String(message.filePath || '');
+    const agentName = typeof message.agentName === 'string' && message.agentName.trim().length > 0
+      ? message.agentName
+      : 'main';
+
+    try {
+      const result = await writeNodeTransferFile(filePath, agentName, String(message.dataBase64 || ''), message.overwrite === true);
+      this.send({
+        type: 'file_write_response',
+        transferId,
+        result,
+      });
+    } catch (e: any) {
+      this.send({
+        type: 'file_transfer_error',
+        transferId,
+        error: e.message || String(e),
+      });
     }
   }
 

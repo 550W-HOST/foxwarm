@@ -1,5 +1,6 @@
 import fs from 'fs-extra'
 import path from 'path'
+import crypto from 'crypto'
 import { ChannelContext } from './channel'
 import { nodesManager } from './nodes/manager'
 import { approvePendingPairing, listApprovedNodes, listPendingPairings, rejectPendingPairing } from './nodes/registry'
@@ -8,7 +9,7 @@ import * as sessionManager from './sessionManager'
 import * as skills from './skills'
 import * as tools from './tools'
 import { estimateSessionTokens } from './tokenCount'
-import { AGENTS_DIR, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, resolveModelConfig } from './config'
+import { AGENTS_DIR, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, HTTP_PORT, NODE_TOKEN_FILE, resolveModelConfig } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
 
@@ -108,15 +109,6 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
       literalNode('unset', 'Alias of clear'),
     ],
   }),
-  literalNode('isolated', 'Toggle isolated mode', {
-    usage: '/session isolated [on|off] [node]',
-    children: [
-      literalNode('on', 'Enable isolated mode', {
-        children: [placeholderNode('[node]', 'Optional node to bind while isolated')],
-      }),
-      literalNode('off', 'Disable isolated mode'),
-    ],
-  }),
   literalNode('index', 'Force archive indexing for the current session'),
   literalNode('move', 'Rename the current session or move it to an existing agent', {
     usage: '/session move <new-session-id>|<existing-agent>/<new-session-id>',
@@ -147,10 +139,23 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 const AGENT_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('list', 'List all agents'),
   literalNode('create', 'Create a new agent', {
-    usage: '/agent create <name> [--no-main]',
+    usage: '/agent create <name> [--no-main] [--isolated <node-id>]',
     children: [
       placeholderNode('<name>', 'New agent name', {
-        children: [literalNode('--no-main', 'Create the agent without a main session')],
+        children: [
+          literalNode('--no-main', 'Create the agent without a main session'),
+          literalNode('--isolated', 'Create the agent in isolated mode bound to a node', {
+            children: [placeholderNode('<node-id>', 'Bound non-master node id')],
+          }),
+        ],
+      }),
+    ],
+  }),
+  literalNode('isolated', 'Set or clear agent-level isolation', {
+    usage: '/agent isolated <agent> <node-id|off>',
+    children: [
+      placeholderNode('<agent>', 'Agent name', {
+        children: [placeholderNode('<node-id|off>', 'Bind to node id or disable isolation with off')],
       }),
     ],
   }),
@@ -197,9 +202,11 @@ const SKILL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 ]
 
 const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
-  literalNode('pair', 'Manage pending node pairing requests', {
+  literalNode('pair', 'Node pairing token, help, and pending requests', {
     children: [
+      literalNode('help', 'Show node pairing/bootstrap help'),
       literalNode('list', 'List pending node pairing requests'),
+      literalNode('token', 'Show the current node pairing token'),
       literalNode('approve', 'Approve a pending node pairing request', {
         usage: '/node pair approve <pending-id> [node-id]',
         children: [
@@ -217,6 +224,72 @@ const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('known', 'List approved nodes, including offline ones'),
   placeholderNode('<node-id>', 'Existing node id; omit it to list nodes'),
 ]
+
+async function ensureNodePairingToken(): Promise<string> {
+  try {
+    const token = await fs.readFile(NODE_TOKEN_FILE, 'utf8')
+    return token.trim()
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') {
+      const token = crypto.randomBytes(32).toString('hex')
+      await fs.ensureDir(path.dirname(NODE_TOKEN_FILE))
+      await fs.writeFile(NODE_TOKEN_FILE, token)
+      return token
+    }
+    throw err
+  }
+}
+
+function buildNodePairHelp(token: string): string {
+  const baseUrl = `http://localhost:${HTTP_PORT}`
+
+  return [
+    '🧩 **Node Pairing / Bootstrap Help**',
+    '',
+    `Current pairing token: \`${token}\``,
+    '',
+    'Use `/node pair token` if you only want the raw token for copying.',
+    '',
+    `Default examples below use \`${baseUrl}\`. If the node runs on another machine or phone, replace \`localhost\` with a reachable host/IP/domain for this Foxwarm master.`,
+    '',
+    '**Bare metal (recommended Linux host bootstrap)**',
+    '```bash',
+    `curl -fsSL ${baseUrl}/node/run.sh | bash -s -- \\\n  --host=${baseUrl} \\\n  --pairing=${token} \\\n  --node-id=my-node`,
+    '```',
+    '',
+    '**Docker bootstrap**',
+    '```bash',
+    `curl -fsSL ${baseUrl}/node/run-docker.sh | bash -s -- \\\n  --host=${baseUrl} \\\n  --pairing=${token} \\\n  --node-id=my-node`,
+    '```',
+    '',
+    '**Manual docker-compose template**',
+    '```bash',
+    `curl -fsSL ${baseUrl}/node/docker-compose.yaml -o docker-compose.yaml`,
+    'cat > .env <<\'EOF\'',
+    `NODE_HOST=${baseUrl}`,
+    `NODE_SOURCE_URL=${baseUrl}/node/source.tar.gz`,
+    `NODE_PAIRING_TOKEN=${token}`,
+    'NODE_ID=my-node',
+    'NODE_DATA_DIR=./data',
+    'EOF',
+    '',
+    'docker compose up -d --build',
+    '```',
+    '',
+    '**Approve the pending node from Foxwarm**',
+    '```text',
+    '/node pair list',
+    '/node pair approve <pending-id> my-node',
+    '/node known',
+    '/node',
+    '```',
+    '',
+    'Notes:',
+    '- `/node/run.sh` = bare-metal bootstrap',
+    '- `/node/run-docker.sh` = Docker bootstrap',
+    '- `/node/docker-compose.yaml` = inspect/customize the self-contained compose template first',
+  ].join('\n')
+}
 
 const MESSAGES_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   placeholderNode('<num>', 'Positive = oldest messages, negative = newest', {
@@ -251,6 +324,19 @@ const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
       literalNode('no', 'Disable allow-all mode'),
     ],
   }),
+]
+
+const SEARCH_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('--session', 'Restrict search to one session in your allowed scope', {
+    children: [placeholderNode('<session-id>', 'Session id within your allowed scope')],
+  }),
+  literalNode('--agent', 'Restrict search to your current agent', {
+    children: [placeholderNode('<agent-name>', 'Current agent only')],
+  }),
+  literalNode('--limit', 'Maximum number of matches', {
+    children: [placeholderNode('<n>', 'Result limit, default 5')],
+  }),
+  placeholderNode('<query>', 'Search query text'),
 ]
 
 const messagesUsage = 'Usage: `/messages <num>` | `/messages <start> <end>`'
@@ -652,7 +738,6 @@ export const COMMANDS: Record<string, CommandDef> = {
       
       const subcommand = args[0]
       const subArgs = args.slice(1)
-
       if (!subcommand) {
         let resp = '📋 *Session Commands*\n\n'
         resp += '`/session list` - List all sessions\n'
@@ -664,7 +749,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         resp += '`/session rename <name>` - Rename session\n'
         resp += '`/session update-snapshot [session-id]` - Refresh session prompt snapshot\n'
         resp += '`/session compact-threshold [tokens|Nk|clear|unset]` - Get/set auto-compact threshold override for current session\n'
-        resp += '`/session isolated [on|off] [node]` - Toggle isolated mode\n'
         resp += '`/session index` - Index messages to vector database\n'
         resp += '`/session move <new-session-id>|<existing-agent>/<new-session-id>` - Move/rename session\n'
         resp += '`/session parent <parent-session-id> [child-session-id]` - Set parent session\n'
@@ -715,7 +799,7 @@ export const COMMANDS: Record<string, CommandDef> = {
             const msgCount = sess.meta?.messageCount || sess.history.length
             const displayName = sess.displayName ? ` (${sess.displayName})` : ''
             const node = sess.currentNode || 'master'
-            const isolated = sess.isolated ? ' isolated' : ''
+            const isolated = sessionManager.isSessionEffectivelyIsolated(sess) ? ' isolated' : ''
             resp += `\`${sid}\`${displayName} - ${msgCount} msgs - node: \`${node}\`${isolated}\n`
             if (attachedChannels.length) {
               resp += `    - channels: \`${attachedChannels.join(', ')}\`\n`
@@ -922,37 +1006,13 @@ export const COMMANDS: Record<string, CommandDef> = {
             return
           }
 
-          if (subArgs.length === 0) {
-            const node = session.currentNode || 'master'
-            const state = session.isolated ? 'on' : 'off'
-            ctx.reply(`🔒 Isolated: \`${state}\` (node: \`${node}\`)`)
+          const agentIsolationNode = sessionManager.getAgentIsolationNode(session.agent || 'main')
+          if (agentIsolationNode) {
+            ctx.reply(`🔒 Session-level isolated mode has been removed. This session inherits agent isolation on node \`${agentIsolationNode}\`. Use \`/agent isolated\` to change it.`)
             return
           }
 
-          const mode = subArgs[0]
-          if (mode !== 'on' && mode !== 'off') {
-            ctx.reply('Usage: /session isolated [on|off] [node]')
-            return
-          }
-
-          if (mode === 'on') {
-            const nodeId = subArgs[1]
-            if (nodeId) {
-              if (nodeId !== 'master' && !nodesManager.getNode(nodeId)) {
-                ctx.reply(`❌ Node \`${nodeId}\` not found.`)
-                return
-              }
-              session.currentNode = nodeId
-            }
-            session.isolated = true
-            await sessionManager.saveSession(sessionId)
-            ctx.reply(`✅ Isolated mode enabled (node: \`${session.currentNode || 'master'}\`)`)
-            return
-          }
-
-          session.isolated = false
-          await sessionManager.saveSession(sessionId)
-          ctx.reply('✅ Isolated mode disabled.')
+          ctx.reply('ℹ️ Session-level isolated mode has been removed. Use `currentNode` for ordinary node selection, or `/agent isolated <agent> <node-id|off>` for agent-level isolation.')
           break
         }
 
@@ -988,16 +1048,23 @@ export const COMMANDS: Record<string, CommandDef> = {
           
           try {
             const { newSessionId, newAgentName } = parseSessionMoveTarget(targetId)
-            await tools.move_session({ 
-              sessionId: sessionId,
+            const result = await sessionManager.moveSessionToTarget({
+              sourceSessionId: sessionId,
               newSessionId,
               newAgentName,
-            }, { 
-              session,
-              sessionId: sessionId,
-              broadcast: async (msg: string) => ctx.reply(msg)
             })
-            // move_session already sends reply via broadcast
+
+            let message = `✅ Session \`${sessionId}\` moved to \`${result.targetSessionId}\`.`
+            if (result.createdAgent) {
+              message += `\nAgent \`${result.targetAgent}\` created.`
+            }
+            if (result.aliases.length > 0) {
+              message += `\nAliases: ${result.aliases.map(alias => `\`${alias}\``).join(', ')}`
+            }
+            if (result.updatedChildren.length > 0) {
+              message += `\nUpdated ${result.updatedChildren.length} child session parent reference(s).`
+            }
+            ctx.reply(message)
           } catch (e: any) {
             ctx.reply(`❌ Move failed: ${e.message}`)
           }
@@ -1122,6 +1189,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       children: [placeholderNode('<sessionId>', 'Existing session id')],
     },
     handler: async (ctx, args) => {
+      const currentSessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId)
       if (args.length === 0) {
         ctx.reply('Usage: /attach <sessionId>\nUse /sessions to see available sessions.')
         return
@@ -1146,13 +1214,15 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: false,
     autocomplete: { children: AGENT_AUTOCOMPLETE },
     handler: async (ctx, args) => {
+      const currentSessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId)
       const subcommand = args[0]
       const subArgs = args.slice(1)
 
       if (!subcommand) {
         let resp = '🤖 *Agent Commands*\n\n'
         resp += '`/agent list` - List all agents\n'
-        resp += '`/agent create <name> [--no-main]` - Create new agent (optionally without creating main session)\n'
+        resp += '`/agent create <name> [--no-main] [--isolated <node-id>]` - Create new agent\n'
+        resp += '`/agent isolated <agent> <node-id|off>` - Set or clear agent isolation\n'
         resp += '`/agent inherit <agent> <parent-agent|none>` - Set or clear shared memory inheritance\n'
         resp += '`/agent delete <name> [--confirm]` - Delete agent (requires confirmation)\n'
         ctx.reply(resp)
@@ -1169,7 +1239,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           }
           
           const entries = await fs.readdir(agentsDir, { withFileTypes: true })
-          const agents: Array<{name: string, sessionCount: number, inherit?: string, skills?: string[]}> = []
+          const agents: Array<{name: string, sessionCount: number, inherit?: string, skills?: string[], isolated?: boolean, isolatedNode?: string}> = []
           
           for (const entry of entries) {
             if (entry.isDirectory()) {
@@ -1181,7 +1251,9 @@ export const COMMANDS: Record<string, CommandDef> = {
                 name: agentName,
                 sessionCount: sessions.length,
                 inherit: sessionManager.getAgentMetadata(agentName).inherit,
-                skills: sessionManager.getAgentSkills(agentName)
+                skills: sessionManager.getAgentSkills(agentName),
+                isolated: sessionManager.getAgentMetadata(agentName).isolated,
+                isolatedNode: sessionManager.getAgentIsolationNode(agentName),
               })
             }
           }
@@ -1200,6 +1272,9 @@ export const COMMANDS: Record<string, CommandDef> = {
             if (agent.inherit) {
               resp += ` - inherits \`${agent.inherit}\``
             }
+            if (agent.isolated) {
+              resp += ` - isolated${agent.isolatedNode ? ` on \`${agent.isolatedNode}\`` : ''}`
+            }
             if (agent.skills && agent.skills.length > 0) {
               resp += ` - skills: ${agent.skills.map(skill => `\`${skill}\``).join(', ')}`
             }
@@ -1211,12 +1286,14 @@ export const COMMANDS: Record<string, CommandDef> = {
 
         case 'create': {
           if (subArgs.length === 0) {
-            ctx.reply('Usage: /agent create <name> [--no-main]\nExample: /agent create my-assistant\nExample: /agent create my-agent --no-main')
+            ctx.reply('Usage: /agent create <name> [--no-main] [--isolated <node-id>]\nExample: /agent create my-assistant\nExample: /agent create my-agent --no-main\nExample: /agent create sandbox-agent --isolated sandbox-node')
             return
           }
 
           const agentName = subArgs[0]
           const createMainSession = !subArgs.includes('--no-main')
+          const isolatedFlagIndex = subArgs.indexOf('--isolated')
+          const isolatedNode = isolatedFlagIndex >= 0 ? subArgs[isolatedFlagIndex + 1] : undefined
           
           try {
             sessionManager.validateAgentName(agentName)
@@ -1238,16 +1315,43 @@ export const COMMANDS: Record<string, CommandDef> = {
               agentName,
               initialMemoryFiles: { 'SOUL.md': soulContent },
               currentNode: 'master',
-              createMainSession
+              createMainSession,
+              isolatedNode,
             })
 
             let resp = `✅ Agent "${agentName}" created successfully!\n\nAgent folder: \`agents/${agentName}\``
             resp += createMainSession
               ? `\nMain session: \`${result.mainSessionId}\``
               : '\nMain session: not created (`--no-main`)'
+            if (isolatedNode) {
+              resp += `\nIsolation: enabled on \`${isolatedNode}\``
+            }
             ctx.reply(resp)
           } catch (e: any) {
             ctx.reply(`❌ Failed to create agent: ${e.message}`)
+          }
+          break
+        }
+
+        case 'isolated': {
+          if (subArgs.length < 2) {
+            ctx.reply('Usage: /agent isolated <agent> <node-id|off>')
+            break
+          }
+
+          const agentName = subArgs[0]
+          const mode = subArgs[1]
+          try {
+            const result = await sessionManager.setAgentIsolation(agentName, mode === 'off' ? undefined : mode)
+            let resp = result.isolated
+              ? `✅ Agent "${agentName}" is now isolated on node \`${result.node}\`.`
+              : `✅ Agent "${agentName}" isolation cleared.`
+            if (result.affectedSessions.length > 0) {
+              resp += `\nUpdated ${result.affectedSessions.length} session(s).`
+            }
+            ctx.reply(resp)
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to update agent isolation: ${e.message}`)
           }
           break
         }
@@ -1512,9 +1616,39 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
+      const boundNode = sessionManager.getAgentIsolationNode(session.agent || 'main')
 
       if (args[0] === 'pair') {
         const sub = args[1]
+
+        if (sub === 'token') {
+          try {
+            const token = await ensureNodePairingToken()
+            const baseUrl = `http://localhost:${HTTP_PORT}`
+            ctx.reply(
+              `🔑 **Current node pairing token**\n\n` +
+              `\`${token}\`\n\n` +
+              `Direct copy:\n` +
+              `\`--pairing=${token}\`\n\n` +
+              `Default local master URL: \`${baseUrl}\`\n` +
+              `If the node is on another machine/device, replace \`localhost\` with a reachable host/IP/domain.\n\n` +
+              `Pairing/bootstrap examples: \`/node pair help\``
+            )
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to read node pairing token: ${e.message}`)
+          }
+          return
+        }
+
+        if (sub === 'help') {
+          try {
+            const token = await ensureNodePairingToken()
+            ctx.reply(buildNodePairHelp(token))
+          } catch (e: any) {
+            ctx.reply(`❌ Failed to build node pairing help: ${e.message}`)
+          }
+          return
+        }
 
         if (!sub || sub === 'list') {
           const pending = await listPendingPairings()
@@ -1529,7 +1663,7 @@ export const COMMANDS: Record<string, CommandDef> = {
             const connected = entry.connected ? ' online' : ' offline'
             reply += `- \`${entry.id}\` [${entry.nodeType}]${requestedName} code=\`${entry.pairCode}\`${connected}\n`
           }
-          reply += '\nApprove: `/node pair approve <pending-id> [node-id]`\nReject: `/node pair reject <pending-id>`'
+          reply += '\nApprove: `/node pair approve <pending-id> [node-id]`\nReject: `/node pair reject <pending-id>`\nToken: `/node pair token`\nBootstrap help: `/node pair help`'
           ctx.reply(reply)
           return
         }
@@ -1573,7 +1707,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           return
         }
 
-        ctx.reply('Usage: `/node pair list` | `/node pair approve <pending-id> [node-id]` | `/node pair reject <pending-id>`')
+        ctx.reply('Usage: `/node pair help` | `/node pair token` | `/node pair list` | `/node pair approve <pending-id> [node-id]` | `/node pair reject <pending-id>`')
         return
       }
 
@@ -1598,25 +1732,27 @@ export const COMMANDS: Record<string, CommandDef> = {
       // No args: list nodes
       if (args.length === 0) {
         const nodes = nodesManager.listNodes()
-        const currentNode = session.currentNode || 'master'
+        const remoteNodes = nodes.filter(node => node.id !== 'master')
+        const currentNode = boundNode || session.currentNode || 'master'
 
-        if (nodes.length === 0) {
-          ctx.reply('📋 No remote nodes registered.\n\n✅ Master node (local) is always available.')
-          return
-        }
-
-        let reply = `📋 **Available Nodes** (${nodes.length + 1} total):\n\n`
+        let reply = `📋 **Available Nodes** (${remoteNodes.length + 1} total):\n\n`
 
         reply += currentNode === 'master' ? '✅ ' : '  '
         reply += '`master` (local)\n'
 
-        for (const node of nodes) {
-          if (node.id === 'master') continue
+        for (const node of remoteNodes) {
           reply += currentNode === node.id ? '✅ ' : '  '
           reply += `\`${node.id}\` - Last activity: ${new Date(node.lastActivity).toLocaleString()}\n`
         }
 
-        reply += `\n💡 Current node: \`${currentNode}\``
+        if (remoteNodes.length === 0) {
+          reply += '\n(No remote nodes currently online)'
+        }
+
+        reply += `\n\n💡 Current node: \`${currentNode}\``
+        if (boundNode) {
+          reply += `\n🔒 Runtime is bound by agent isolation to \`${boundNode}\`.`
+        }
 
         ctx.reply(reply)
         return
@@ -1624,6 +1760,11 @@ export const COMMANDS: Record<string, CommandDef> = {
 
       // With args: switch node
       const nodeId = args[0]
+
+      if (boundNode) {
+        ctx.reply(`🔒 Current session belongs to an isolated agent bound to node \`${boundNode}\`. Changing \`currentNode\` here would not affect runtime execution. Use \`/agent isolated <agent> off\` first if you really want to unbind it.`)
+        return
+      }
 
       if (nodeId !== 'master' && !nodesManager.getNode(nodeId)) {
         ctx.reply(`❌ Node \`${nodeId}\` not found.\n\nUse \`/node\` to list available nodes.`)
@@ -1637,6 +1778,63 @@ export const COMMANDS: Record<string, CommandDef> = {
         ctx.reply(`✅ Switched to node \`${nodeId}\`\n\nAll file/exec/browser tools will now execute on this node.`)
       } catch (e: any) {
         ctx.reply(`❌ Failed to switch node: ${e.message}`)
+      }
+    }
+  },
+  '/search': {
+    description: 'Search archived messages within your allowed memory scope',
+    requiresSession: true,
+    autocomplete: { children: SEARCH_AUTOCOMPLETE },
+    handler: async (ctx, args, sessionId, session) => {
+      if (!sessionId || !session) {
+        ctx.reply('❌ No active session.')
+        return
+      }
+
+      let limit = 5
+      let targetSessionId: string | undefined
+      let targetAgentName: string | undefined
+      const queryParts: string[] = []
+
+      for (let i = 0; i < args.length; i += 1) {
+        const arg = args[i]
+        if (arg === '--limit' && i + 1 < args.length) {
+          const parsed = parseInt(args[i + 1], 10)
+          if (!Number.isNaN(parsed) && parsed > 0) {
+            limit = parsed
+          }
+          i += 1
+          continue
+        }
+        if (arg === '--session' && i + 1 < args.length) {
+          targetSessionId = args[i + 1]
+          i += 1
+          continue
+        }
+        if (arg === '--agent' && i + 1 < args.length) {
+          targetAgentName = args[i + 1]
+          i += 1
+          continue
+        }
+        queryParts.push(arg)
+      }
+
+      const query = queryParts.join(' ').trim()
+      if (!query) {
+        ctx.reply('Usage: /search [--session <session-id>] [--agent <agent-name>] [--limit <n>] <query>')
+        return
+      }
+
+      try {
+        const result = await tools.search_memory({
+          query,
+          limit,
+          sessionId: targetSessionId,
+          agentName: targetAgentName,
+        }, { sessionId, session })
+        ctx.reply(result)
+      } catch (e: any) {
+        ctx.reply(`❌ Search failed: ${e.message}`)
       }
     }
   },

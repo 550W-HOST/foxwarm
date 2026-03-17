@@ -3,8 +3,10 @@
  */
 
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import fs from 'fs-extra';
+import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelMessage } from '../channel';
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
@@ -12,6 +14,7 @@ import * as sessionManager from '../sessionManager';
 import { BASE_DIR } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
+import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 
 // Extend Express Request to include cookies
 declare global {
@@ -171,7 +174,7 @@ export class WebUIChannel implements Channel {
                 displayName: session.displayName || null,
                 archived: session.archived || false,
                 currentNode: session.currentNode || 'master',
-                isolated: session.isolated || false,
+                isolated: sessionManager.isSessionEffectivelyIsolated(session),
               }))
               .sort((a, b) => b.lastMessageTime - a.lastMessageTime); // Sort by lastMessageTime descending
             res.json({ sessions });
@@ -560,6 +563,144 @@ export class WebUIChannel implements Channel {
             res.status(500).json({ error: e.message });
           }
         },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/asr/status',
+        method: 'GET',
+        handler: async (_req: express.Request, res: express.Response) => {
+          res.json(await getAsrServiceStatus());
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/asr/transcribe',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const multer = require('multer');
+            const os = require('os');
+            const uploadDir = path.join(os.tmpdir(), 'foxwarm-asr-proxy');
+
+            await fs.ensureDir(uploadDir);
+
+            const upload = multer({
+              dest: uploadDir,
+              limits: { fileSize: 25 * 1024 * 1024 },
+            });
+
+            upload.single('audio')(req, res, async (err: any) => {
+              if (err) {
+                res.status(400).json({ error: err.message });
+                return;
+              }
+
+              if (!req.file) {
+                res.status(400).json({ error: 'No audio uploaded' });
+                return;
+              }
+
+              try {
+                const fileBuffer = await fs.readFile(req.file.path);
+                const result = await transcribeWithAsrService({
+                  fileBuffer,
+                  fileName: req.file.originalname || 'audio.wav',
+                  mimeType: req.file.mimetype,
+                  context: typeof req.body?.context === 'string' ? req.body.context : '',
+                  language: typeof req.body?.language === 'string' ? req.body.language : '',
+                  segmentSeconds: typeof req.body?.segmentSeconds === 'string' ? req.body.segmentSeconds : '',
+                });
+
+                res.status(result.status).json(result.body);
+              } catch (proxyError: any) {
+                logger.error({ err: proxyError }, 'ASR proxy error');
+                res.status(502).json({ error: proxyError?.message || 'ASR proxy request failed' });
+              } finally {
+                await fs.remove(req.file.path).catch(() => {});
+              }
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'ASR route error');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addWebSocket('/api/asr/stream', async (ws: WebSocket, req: http.IncomingMessage) => {
+        if (!httpServerInstance.checkIncomingToken(req)) {
+          ws.close(1008, 'Unauthorized');
+          return;
+        }
+
+        const upstream = createAsrServiceWebSocket();
+        if (!upstream) {
+          ws.close(1011, 'ASR service is not configured');
+          return;
+        }
+
+        const pendingMessages: Array<{ data: any; isBinary: boolean }> = [];
+        let upstreamOpen = false;
+        let closed = false;
+
+        const closeBoth = (code?: number, reason?: string) => {
+          if (closed) return;
+          closed = true;
+          try {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.close(code, reason);
+            }
+          } catch {}
+          try {
+            if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
+              upstream.close();
+            }
+          } catch {}
+        };
+
+        const forwardToUpstream = (data: any, isBinary: boolean) => {
+          if (upstreamOpen && upstream.readyState === WebSocket.OPEN) {
+            upstream.send(data, { binary: isBinary });
+          } else {
+            pendingMessages.push({ data, isBinary });
+          }
+        };
+
+        upstream.on('open', () => {
+          upstreamOpen = true;
+          for (const pending of pendingMessages.splice(0)) {
+            upstream.send(pending.data, { binary: pending.isBinary });
+          }
+        });
+
+        upstream.on('message', (data, isBinary) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(data, { binary: isBinary });
+          }
+        });
+
+        upstream.on('error', (error) => {
+          logger.error({ err: error }, 'ASR upstream websocket error');
+          closeBoth(1011, 'ASR upstream error');
+        });
+
+        upstream.on('close', (code, reason) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.close(code || 1000, reason.toString() || undefined);
+          }
+        });
+
+        ws.on('message', (data, isBinary) => {
+          forwardToUpstream(data, isBinary);
+        });
+
+        ws.on('close', () => {
+          closeBoth();
+        });
+
+        ws.on('error', (error) => {
+          logger.error({ err: error }, 'ASR client websocket error');
+          closeBoth();
+        });
       });
 
       // Send message

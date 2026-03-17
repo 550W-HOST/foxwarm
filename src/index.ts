@@ -33,6 +33,7 @@ import {
 } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
 import { registerNodeWebSocket } from './nodes/websocket';
+import { registerNodeHttpRoutes } from './nodes/httpRoutes';
 import { initializeNodeRegistry } from './nodes/registry';
 import { cleanupLegacyTopLevelLogDirs, scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
@@ -276,6 +277,7 @@ async function start() {
         
         // Add nodes WebSocket handler to HTTP server
         registerNodeWebSocket(httpServerInstance, nodeToken);
+        registerNodeHttpRoutes(httpServerInstance);
         
         // Start HTTP server
         await httpServerInstance.start();

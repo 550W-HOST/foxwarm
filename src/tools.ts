@@ -31,6 +31,7 @@ import {
     tool_load_skill,
     tool_get_session_messages,
     tool_get_archived_messages,
+    tool_get_archived_blocks,
     tool_delete_session,
     tool_update_session_name,
     tool_set_todo,
@@ -45,6 +46,7 @@ import {
     tool_create_agent,
     tool_create_session,
     tool_set_agent_inherit,
+    tool_set_agent_isolated,
     tool_move_session,
 } from './toolsSessionAgent';
 
@@ -218,6 +220,126 @@ async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
     return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;
 }
 
+type ListFilesEntry = {
+    path: string;
+    type: 'file' | 'directory';
+    size?: number;
+    modifiedAt: string;
+};
+
+async function collectFileEntries(baseDir: string, relativeDir: string, options: {
+    recursive: boolean;
+    includeHidden: boolean;
+    limit: number;
+}, bucket: ListFilesEntry[]): Promise<void> {
+    if (bucket.length >= options.limit) {
+        return;
+    }
+
+    const fullDir = path.join(baseDir, relativeDir);
+    const entries = await fs.readdir(fullDir, { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const entry of entries) {
+        if (!options.includeHidden && entry.name.startsWith('.')) {
+            continue;
+        }
+        if (bucket.length >= options.limit) {
+            return;
+        }
+
+        const relPath = relativeDir ? path.posix.join(relativeDir.split(path.sep).join(path.posix.sep), entry.name) : entry.name;
+        const fullPath = path.join(fullDir, entry.name);
+        const stats = await fs.stat(fullPath);
+        bucket.push({
+            path: relPath,
+            type: entry.isDirectory() ? 'directory' : 'file',
+            size: entry.isDirectory() ? undefined : stats.size,
+            modifiedAt: stats.mtime.toISOString(),
+        });
+
+        if (options.recursive && entry.isDirectory()) {
+            await collectFileEntries(baseDir, path.join(relativeDir, entry.name), options, bucket);
+        }
+    }
+}
+
+async function tool_list_files(args: ToolArgs, ctx: ToolContext) {
+    const { dirPath = '.', recursive = false, includeHidden = false, limit = 200 } = args;
+    const agentName = ctx.session?.agent || 'main';
+    const fullPath = resolveAgentPath(dirPath, agentName);
+
+    if (sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
+        checkPathAccess(fullPath, agentName);
+    }
+
+    const stats = await fs.stat(fullPath);
+    if (!stats.isDirectory()) {
+        throw new Error(`Not a directory: ${dirPath}`);
+    }
+
+    const entries: ListFilesEntry[] = [];
+    await collectFileEntries(fullPath, '', {
+        recursive: recursive === true,
+        includeHidden: includeHidden === true,
+        limit: Math.max(1, Math.min(Number(limit) || 200, 1000)),
+    }, entries);
+
+    const rootLabel = dirPath === '.' ? agentName : dirPath;
+    if (entries.length === 0) {
+        return `No files found under \`${rootLabel}\`.`;
+    }
+
+    return `Files under \`${rootLabel}\` (${entries.length}):\n\n` + entries.map(entry => {
+        const sizeLabel = entry.type === 'file' ? ` (${entry.size} B)` : '/';
+        return `- \`${entry.path}\`${sizeLabel} - ${entry.modifiedAt}`;
+    }).join('\n');
+}
+
+async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
+    const { filePath } = args;
+    if (!filePath || typeof filePath !== 'string') {
+        throw new Error('filePath is required');
+    }
+
+    const agentName = ctx.session?.agent || 'main';
+    const fullPath = resolveAgentPath(filePath, agentName);
+
+    if (sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
+        checkPathAccess(fullPath, agentName);
+    }
+
+    const stats = await fs.lstat(fullPath);
+    if (stats.isDirectory()) {
+        throw new Error('delete_file only supports files or symlinks, not directories.');
+    }
+
+    await fs.remove(fullPath);
+    return `Deleted file \`${filePath}\``;
+}
+
+async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
+    const { sourceNode, sourcePath, targetNode, targetPath, overwrite = false } = args;
+
+    if (!ctx.sessionId) {
+        throw new Error('copy_between_nodes requires an active session context.');
+    }
+
+    if (!sourceNode || !targetNode || !sourcePath || !targetPath) {
+        throw new Error('copy_between_nodes requires sourceNode, sourcePath, targetNode, and targetPath.');
+    }
+
+    const file = await nodesManager.readFileFromNode(String(sourceNode), String(sourcePath), ctx.sessionId);
+    const result = await nodesManager.writeFileToNode(String(targetNode), String(targetPath), file.dataBase64, overwrite === true, ctx.sessionId);
+
+    return [
+        `Copied \`${sourcePath}\` from node \`${sourceNode}\` to \`${targetPath}\` on node \`${targetNode}\`.`,
+        `Size: ${file.sizeBytes} B`,
+        `SHA256: ${result.sha256}`,
+        `Overwrote existing file: ${result.overwritten ? 'yes' : 'no'}`,
+    ].join('\n');
+}
+
 async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     const { command } = args;
 
@@ -248,26 +370,67 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     return await buildBackgroundTimeoutResult(execEntry);
 }
 
-async function tool_search_memory({ query, limit = 5, scope = 'all' }: { query: string; limit?: number; scope?: 'all' | 'current-session' | 'current-agent' }, ctx?: ToolContext) {
-    let searchOptions: { sessionIds?: string[]; agent?: string } | undefined;
-
-    if (scope === 'current-session') {
-        if (!ctx?.sessionId) {
-            throw new Error('scope=current-session requires an active session context.');
-        }
-
-        const session = await sessionManager.getSession(ctx.sessionId);
-        searchOptions = { sessionIds: [session.id, ...(session.aliases || [])] };
-    } else if (scope === 'current-agent') {
-        if (!ctx?.sessionId) {
-            throw new Error('scope=current-agent requires an active session context.');
-        }
-
-        const session = await sessionManager.getSession(ctx.sessionId);
-        searchOptions = { agent: session.agent || 'main' };
+export async function resolveMemorySearchOptions(
+    request: {
+        scope?: 'all' | 'current-session' | 'current-agent';
+        targetSessionId?: string;
+        targetAgentName?: string;
+    },
+    ctx?: ToolContext,
+): Promise<{ searchOptions: { sessionIds?: string[]; agent?: string }; effectiveScope: 'current-session' | 'current-agent' }> {
+    if (!ctx?.sessionId) {
+        throw new Error('search_memory requires an active session context.');
     }
 
-    const results = await vector.search(query, limit, false, searchOptions);
+    const session = await sessionManager.getSession(ctx.sessionId);
+    const agentName = session.agent || 'main';
+    const effectiveIsolated = sessionManager.isSessionEffectivelyIsolated(session);
+
+    if (effectiveIsolated) {
+        if (request.targetAgentName && request.targetAgentName !== agentName) {
+            throw new Error('Isolated session can only search the current session.');
+        }
+        if (request.targetSessionId && request.targetSessionId !== session.id && !(session.aliases || []).includes(request.targetSessionId)) {
+            throw new Error('Isolated session can only search the current session.');
+        }
+        return {
+            searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+            effectiveScope: 'current-session',
+        };
+    }
+
+    if (request.targetAgentName && request.targetAgentName !== agentName) {
+        throw new Error('search_memory cannot access memories outside the current agent.');
+    }
+
+    if (request.targetSessionId) {
+        const targetSession = await sessionManager.getExistingSession(request.targetSessionId);
+        if (!targetSession) {
+            throw new Error(`Session \`${request.targetSessionId}\` not found.`);
+        }
+        if ((targetSession.agent || 'main') !== agentName) {
+            throw new Error('search_memory cannot access memories outside the current agent.');
+        }
+        return {
+            searchOptions: { sessionIds: [targetSession.id, ...(targetSession.aliases || [])] },
+            effectiveScope: 'current-session',
+        };
+    }
+
+    if (request.scope === 'current-session') {
+        return {
+            searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+            effectiveScope: 'current-session',
+        };
+    }
+
+    return {
+        searchOptions: { agent: agentName },
+        effectiveScope: 'current-agent',
+    };
+}
+
+export function formatMemorySearchResults(results: any): string {
     if (!results || !Array.isArray(results) || results.length === 0) return 'No relevant memories found.';
 
     return results.map(r => {
@@ -292,6 +455,17 @@ async function tool_search_memory({ query, limit = 5, scope = 'all' }: { query: 
             `[ID: ${idStr}]`,
         ].filter(Boolean).join(' ') + `\n${r.text}`;
     }).join('\n\n---\n\n');
+}
+
+async function tool_search_memory({ query, limit = 5, scope = 'all', sessionId, agentName }: { query: string; limit?: number; scope?: 'all' | 'current-session' | 'current-agent'; sessionId?: string; agentName?: string }, ctx?: ToolContext) {
+    const { searchOptions } = await resolveMemorySearchOptions({
+        scope,
+        targetSessionId: sessionId,
+        targetAgentName: agentName,
+    }, ctx);
+
+    const results = await vector.search(query, limit, false, searchOptions);
+    return formatMemorySearchResults(results);
 }
 
 async function tool_get_memory_context({ timestamp, limit = 10 }: { timestamp: number; limit?: number }) {
@@ -381,8 +555,8 @@ async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
     const session = ctx.sessionId ? await sessionManager.getExistingSession(ctx.sessionId) : undefined;
     
     // Isolated sessions can only call tools on their bound node
-    if (session?.isolated && action === 'call') {
-        const currentNode = session.currentNode || 'master';
+    if (sessionManager.isSessionEffectivelyIsolated(session) && action === 'call') {
+        const currentNode = sessionManager.getAgentIsolationNode(session?.agent || 'main') || session?.currentNode || 'master';
         if (nodeId !== currentNode) {
             throw new Error('Isolated session can only call tools on its bound node.');
         }
@@ -507,6 +681,9 @@ export const read = tool_read;
 export const write = tool_write;
 export const edit = tool_edit;
 export const apply_patch = tool_apply_patch;
+export const list_files = tool_list_files;
+export const delete_file = tool_delete_file;
+export const copy_between_nodes = tool_copy_between_nodes;
 export const exec = tool_exec;
 export const search_memory = tool_search_memory;
 export const get_memory_context = tool_get_memory_context;
@@ -514,6 +691,7 @@ export const create_child_session = tool_create_child_session;
 export const create_agent = tool_create_agent;
 export const create_session = tool_create_session;
 export const set_agent_inherit = tool_set_agent_inherit;
+export const set_agent_isolated = tool_set_agent_isolated;
 export const move_session = tool_move_session;
 export const send_to_session = tool_send_to_session;
 export const send_to_channel = tool_send_to_channel;
@@ -526,6 +704,7 @@ export const detach_agent_skill = tool_detach_agent_skill;
 export const load_skill = tool_load_skill;
 export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
+export const get_archived_blocks = tool_get_archived_blocks;
 export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
 export const set_todo = tool_set_todo;
@@ -574,7 +753,7 @@ export const change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
   }
 
   const session = await sessionManager.getSession(ctx.sessionId);
-  if (session.isolated) {
+  if (sessionManager.isSessionEffectivelyIsolated(session)) {
     throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
   }
   
@@ -643,6 +822,47 @@ export const definitions = [
             }
         },
         {
+            name: 'list_files',
+            description: 'List files under the current agent directory. Can recurse, but path traversal outside the agent folder is blocked.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    dirPath: { type: 'string', description: 'Directory path relative to the current agent folder. Defaults to .' },
+                    recursive: { type: 'boolean', description: 'Whether to recurse into subdirectories. Default: false' },
+                    includeHidden: { type: 'boolean', description: 'Whether to include dotfiles. Default: false' },
+                    limit: { type: 'number', description: 'Maximum number of entries to return. Default: 200, max: 1000' },
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
+                }
+            }
+        },
+        {
+            name: 'delete_file',
+            description: 'Delete a single file or symlink inside the current agent folder. Refuses to delete directories.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    filePath: { type: 'string', description: 'File path relative to the current agent folder.' },
+                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
+                },
+                required: ['filePath']
+            }
+        },
+        {
+            name: 'copy_between_nodes',
+            description: 'Copy a file between master/remote nodes using the current session agent directory on each endpoint. Paths must be relative to the agent folder.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sourceNode: { type: 'string', description: 'Source node id. Use `master` for local files.' },
+                    sourcePath: { type: 'string', description: 'Relative file path inside the current agent folder on the source node.' },
+                    targetNode: { type: 'string', description: 'Target node id. Use `master` for local files.' },
+                    targetPath: { type: 'string', description: 'Relative file path inside the current agent folder on the target node.' },
+                    overwrite: { type: 'boolean', description: 'Overwrite the target file if it already exists. Default: false' },
+                },
+                required: ['sourceNode', 'sourcePath', 'targetNode', 'targetPath']
+            }
+        },
+        {
             name: 'exec',
             description: 'Execute a shell command in agent-folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running over 10 seconds will time out and run in background.',
             parameters: {
@@ -653,13 +873,15 @@ export const definitions = [
         },
         {
             name: 'search_memory',
-            description: 'Search for relevant past conversations in the vector memory. Supports all/current-session/current-agent scope filtering.',
+            description: 'Search for relevant past conversations in vector memory within the caller\'s allowed scope. Non-isolated sessions are limited to the current agent; isolated sessions are limited to the current session.',
             parameters: {
                 type: 'object',
                 properties: { 
                     query: { type: 'string', description: 'The search query' },
                     limit: { type: 'number' },
-                    scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: 'Search scope. Defaults to all.' }
+                    scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: 'Requested scope. It will be capped to the caller\'s allowed range.' },
+                    sessionId: { type: 'string', description: 'Optional specific session id, limited to your allowed scope.' },
+                    agentName: { type: 'string', description: 'Optional agent name, limited to your current agent.' }
                 },
                 required: ['query']
             }
@@ -686,8 +908,7 @@ export const definitions = [
                     fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: true', default: true },
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
                     noFurtherAssistantReply: { type: 'boolean', description: 'If true, stop the current assistant turn immediately after creating the child (and after sending the optional initial message). Use when the handoff itself is the whole reply and no extra reply is needed here.' },
-                    node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' },
-                    isolated: { type: 'boolean', description: 'Whether to isolate this session to its node (children inherit)' }
+                    node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' }
                 },
                 required: ['suffix']
             }
@@ -824,6 +1045,19 @@ export const definitions = [
                     startSeq: { type: 'number', description: 'Optional inclusive starting seq number' },
                     endSeq: { type: 'number', description: 'Optional inclusive ending seq number' },
                     previewLength: { type: 'number', description: 'Maximum preview length per archived message (default: 1000)' }
+                }
+            }
+        },
+        {
+            name: 'get_archived_blocks',
+            description: 'Read archived layered-context block summaries by block id range for a session.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
+                    startId: { type: 'number', description: 'Optional inclusive starting block id' },
+                    endId: { type: 'number', description: 'Optional inclusive ending block id' },
+                    previewLength: { type: 'number', description: 'Maximum length per block summary preview (default: 1000)' }
                 }
             }
         },
@@ -1142,6 +1376,7 @@ export const definitions = [
                     agentName: { type: 'string', description: 'Agent name (alphanumeric, hyphens, underscores only)' },
                     inheritMemory: { type: 'boolean', description: 'Legacy compatibility: copy memory files from the source agent into the new agent directory.' },
                     inherit: { type: 'string', description: 'Optional shared-memory parent agent name for agent.inherit.' },
+                    isolatedNode: { type: 'string', description: 'Optional non-master node id to make the agent isolated and bound to that node.' },
                     createMainSession: { type: 'boolean', description: 'Whether to also create {agentName}/main (default: true).' },
                     sourceSessionId: { type: 'string', description: 'Optional source session ID to inherit current node/model from (default: current session)' },
                     convertSession: { type: 'boolean', description: 'If true, convert an existing session into the agent main session (requires createMainSession=true).' }
@@ -1171,6 +1406,18 @@ export const definitions = [
                 properties: {
                     agentName: { type: 'string', description: 'Agent whose shared memory inheritance should be updated.' },
                     inheritAgentName: { type: 'string', description: 'Parent agent to inherit shared memory from. Use empty string to clear inheritance.' }
+                },
+                required: ['agentName']
+            }
+        },
+        {
+            name: 'set_agent_isolated',
+            description: 'Set or clear agent-level isolation. Isolated agents are bound to a non-master node and their sessions inherit isolated restrictions.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    agentName: { type: 'string', description: 'Agent whose isolation setting should be updated.' },
+                    nodeId: { type: 'string', description: 'Bound non-master node id. Use empty string to clear isolation.' }
                 },
                 required: ['agentName']
             }

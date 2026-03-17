@@ -96,27 +96,75 @@ What `test.py` currently exercises:
 
 ---
 
-## Mode 2: dynamic registration into foxwarm
+## Mode 2: dynamic registration into foxwarm (pairing-based auth)
 
-Set `ALPHABOT_URL` to the backend node websocket URL.
+The current backend no longer allows direct `?token=...&id=...` registration.
+Android node now follows the same pairing-based flow as the shared node client:
 
-### betabot (3001)
+1. connect with the pairing token
+2. create a pending pairing request
+3. approve it from foxwarm with `/node pair approve ...`
+4. store per-node credentials locally
+5. reconnect with `?id=...&auth=...`
+
+### Recommended env vars
 
 ```bash
 cd packages/android-node
 . .venv/bin/activate
-export ALPHABOT_URL="ws://localhost:3001/node_ws?token=$(cat ../../state/node_token)&id=android-e2e"
+export FOXWARM_HOST="http://localhost:3002"
+export FOXWARM_NODE_TOKEN="$(cat ../../test/state/node_token)"
+export FOXWARM_NODE_ID="android-e2e"
+export FOXWARM_NODE_CREDENTIALS_FILE="./node_credentials.json"
 python server.py
 ```
 
-If registration succeeds, the log will look like:
+Typical first-run log now looks like:
 
 ```text
-Connecting to Alphabot at ws://localhost:3001/node_ws?... 
-Sending node registration...
-✅ Successfully registered as node: android-e2e-test
-Waiting for tool calls...
+🚀 Starting in foxwarm pairing/auth mode
+Sending pair request...
+⏳ Pairing pending approval: pendingId=... pairCode=... requested=android-e2e
 ```
+
+Then approve it from foxwarm:
+
+```text
+/node pair list
+/node pair approve <pending-id> android-e2e
+```
+
+After approval, the node stores credentials in `node_credentials.json` and reconnects automatically. A successful post-approval log looks like:
+
+```text
+✅ Pairing approved for node: android-e2e
+Sending node registration...
+✅ Successfully registered as node: android-e2e
+```
+
+### Backward-compatible env support
+
+The server also still accepts older env names for convenience:
+
+- `ALPHABOT_URL`
+- `ALPHABOT_HOST`
+- `ALPHABOT_NODE_TOKEN`
+- `ALPHABOT_NODE_ID`
+- `ALPHABOT_NODE_CREDENTIALS_FILE`
+
+If you still pass an old-style URL like:
+
+```bash
+export ALPHABOT_URL="ws://localhost:3002/node_ws?token=...&id=android-e2e"
+```
+
+it is now interpreted as:
+
+- host = `http://localhost:3002`
+- pairing token = `...`
+- requested node name = `android-e2e`
+
+instead of trying the removed direct-registration flow.
 
 Then from a foxwarm/alphabot session, use:
 - `remote_node(action="list")`
@@ -137,7 +185,7 @@ This is the flow that has actually been exercised on a real Android device:
 1. `adb devices -l`
 2. `python server.py` in standalone mode
 3. `python test.py`
-4. restart `server.py` with `ALPHABOT_URL=ws://localhost:3002/node_ws?...`
+4. restart `server.py` with `FOXWARM_HOST=http://localhost:3002` and `FOXWARM_NODE_TOKEN=...`
 5. from alphabot test, call:
    - `remote_node(list)`
    - `remote_node(call -> android_screenshot)`
@@ -152,5 +200,6 @@ A real screenshot file was successfully produced through the remote-node path du
 
 - This package is still experimental.
 - Current docs only describe the ADB host-run workflow because that is the path that has actually been tested.
+- Pairing credentials use the same JSON shape as the shared node client: `nodeId`, `authToken`, `pairedAt`.
 - Do not rely on the deleted older markdown files; they were stale.
 - If you need richer device control (for example dedicated unlock / keyevent helpers), add explicit tools rather than relying on undocumented behavior.

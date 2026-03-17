@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, ChevronDown, Paperclip, Plus } from 'lucide-react'
+import { ArrowUp, Mic, Paperclip, Plus, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import {
   applySlashCommandSuggestion,
@@ -14,22 +14,49 @@ interface ChatComposerProps {
   sessionId: string
   sessionMissing: boolean
   loading: boolean
+  asrAvailable: boolean
   sendKeyMode: SendKeyMode
   onToggleSendKeyMode: () => void
   onSend: (payload: { text: string; attachments: File[] }) => Promise<boolean>
+  onTranscribeAudio: (file: File, context: string) => Promise<{
+    text: string
+    status: number
+    rawLength: number
+    textLength: number
+    responsePreview: string
+  }>
+  onCreateStreamingTranscriber: (options: {
+    draftText: string
+    onPartial: (text: string) => void
+    onFinal: (text: string) => void
+    onError: (message: string) => void
+    onDebug: (message: string) => void
+  }) => Promise<{
+    sendAudioChunk: (chunk: ArrayBuffer) => void
+    stop: () => void
+    cancel: () => void
+  }>
 }
 
 const ChatComposer = memo(function ChatComposer({
   sessionId,
   sessionMissing,
   loading,
+  asrAvailable,
   sendKeyMode,
   onToggleSendKeyMode,
   onSend,
+  onTranscribeAudio,
+  onCreateStreamingTranscriber,
 }: ChatComposerProps) {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<File[]>([])
   const [isDragging, setIsDragging] = useState(false)
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false)
+  const [transcribingAudio, setTranscribingAudio] = useState(false)
+  const [transcribeError, setTranscribeError] = useState<string | null>(null)
+  const [liveTranscriptionPreview, setLiveTranscriptionPreview] = useState('')
+  const [waveformBars, setWaveformBars] = useState<number[]>(() => Array.from({ length: 5 }, () => 0.22))
   const [availableCommands, setAvailableCommands] = useState<SlashCommandOption[]>([])
   const [commandsLoading, setCommandsLoading] = useState(false)
   const [commandsError, setCommandsError] = useState<string | null>(null)
@@ -39,6 +66,27 @@ const ChatComposer = memo(function ChatComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
+  const audioGainRef = useRef<GainNode | null>(null)
+  const audioAnalyserRef = useRef<AnalyserNode | null>(null)
+  const audioStreamRef = useRef<MediaStream | null>(null)
+  const audioSampleRateRef = useRef<number>(16000)
+  const recordingActiveRef = useRef(false)
+  const waveformFrameRef = useRef<number | null>(null)
+  const waveformPeakRef = useRef<number>(0.12)
+  const audioChunkCountRef = useRef(0)
+  const audioMaxPeakRef = useRef(0)
+  const audioMaxRmsRef = useRef(0)
+  const audioRmsSumRef = useRef(0)
+  const pendingStreamingChunksRef = useRef<Int16Array[]>([])
+  const streamingFlushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const streamingSessionRef = useRef<{
+    sendAudioChunk: (chunk: ArrayBuffer) => void
+    stop: () => void
+    cancel: () => void
+  } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -82,6 +130,10 @@ const ChatComposer = memo(function ChatComposer({
     const savedDraft = localStorage.getItem(draftKey)
     setInput(savedDraft || '')
     setAttachments([])
+    setIsRecordingAudio(false)
+    setTranscribeError(null)
+    setLiveTranscriptionPreview('')
+    setWaveformBars(Array.from({ length: 5 }, () => 0.22))
     setDismissedSlashQuery(null)
 
     setTimeout(() => {
@@ -109,6 +161,49 @@ const ChatComposer = memo(function ChatComposer({
       }
     }
   }, [input, sessionId])
+
+  const cleanupRecording = useCallback(async () => {
+    recordingActiveRef.current = false
+    if (waveformFrameRef.current !== null) {
+      cancelAnimationFrame(waveformFrameRef.current)
+      waveformFrameRef.current = null
+    }
+    if (streamingFlushTimerRef.current) {
+      clearInterval(streamingFlushTimerRef.current)
+      streamingFlushTimerRef.current = null
+    }
+    audioProcessorRef.current?.disconnect()
+    audioSourceRef.current?.disconnect()
+    audioGainRef.current?.disconnect()
+    audioAnalyserRef.current?.disconnect()
+    audioStreamRef.current?.getTracks().forEach(track => track.stop())
+
+    audioProcessorRef.current = null
+    audioSourceRef.current = null
+    audioGainRef.current = null
+    audioAnalyserRef.current = null
+    audioStreamRef.current = null
+    waveformPeakRef.current = 0.12
+    audioChunkCountRef.current = 0
+    audioMaxPeakRef.current = 0
+    audioMaxRmsRef.current = 0
+    audioRmsSumRef.current = 0
+    pendingStreamingChunksRef.current = []
+    setWaveformBars(Array.from({ length: 5 }, () => 0.22))
+
+    if (audioContextRef.current) {
+      await audioContextRef.current.close().catch(() => {})
+      audioContextRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      streamingSessionRef.current?.cancel()
+      streamingSessionRef.current = null
+      void cleanupRecording()
+    }
+  }, [cleanupRecording])
 
   const slashCompletion = useMemo(() => getSlashCommandCompletion(input, availableCommands), [availableCommands, input])
   const slashCommandSuggestions = slashCompletion?.suggestions || []
@@ -273,6 +368,337 @@ const ChatComposer = memo(function ChatComposer({
     }
   }, [])
 
+  const appendTranscriptToDraft = useCallback((transcript: string) => {
+    const trimmed = transcript.trim()
+    if (!trimmed) return
+
+    setInput(prev => {
+      const prefix = prev.trim()
+      return prefix ? `${prefix}\n\n${trimmed}` : trimmed
+    })
+
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        resizeTextarea(textareaRef.current)
+        textareaRef.current.focus()
+        const caret = textareaRef.current.value.length
+        textareaRef.current.setSelectionRange(caret, caret)
+      }
+    })
+  }, [])
+
+  const pushAsrDebug = useCallback((message: string) => {
+    const timestamp = new Date().toLocaleTimeString([], { hour12: false })
+    const line = `${timestamp} ${message}`
+    console.info('[ASR debug]', line)
+  }, [])
+
+  const downsampleTo16k = useCallback((inputData: Float32Array, inputSampleRate: number) => {
+    if (inputSampleRate === 16000) {
+      return inputData
+    }
+
+    const ratio = inputSampleRate / 16000
+    const outputLength = Math.max(1, Math.round(inputData.length / ratio))
+    const output = new Float32Array(outputLength)
+    let offsetResult = 0
+    let offsetBuffer = 0
+
+    while (offsetResult < output.length) {
+      const nextOffsetBuffer = Math.min(inputData.length, Math.round((offsetResult + 1) * ratio))
+      let accum = 0
+      let count = 0
+      for (let i = offsetBuffer; i < nextOffsetBuffer; i++) {
+        accum += inputData[i]
+        count++
+      }
+      output[offsetResult] = count > 0 ? accum / count : 0
+      offsetResult++
+      offsetBuffer = nextOffsetBuffer
+    }
+
+    return output
+  }, [])
+
+  const floatChunkToPcm16Buffer = useCallback((inputData: Float32Array, inputSampleRate: number) => {
+    const downsampled = downsampleTo16k(inputData, inputSampleRate)
+    const pcm16 = new Int16Array(downsampled.length)
+    for (let i = 0; i < downsampled.length; i++) {
+      const sample = Math.max(-1, Math.min(1, downsampled[i]))
+      pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+    }
+    return pcm16.buffer
+  }, [downsampleTo16k])
+
+  const mergePcmChunksToBuffer = useCallback((chunks: Int16Array[]) => {
+    const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+    const merged = new Int16Array(totalSamples)
+    let offset = 0
+    for (const chunk of chunks) {
+      merged.set(chunk, offset)
+      offset += chunk.length
+    }
+    return merged.buffer
+  }, [])
+
+  const analyzeAudioChunk = useCallback((inputData: Float32Array) => {
+    let peak = 0
+    let sumSquares = 0
+
+    for (let i = 0; i < inputData.length; i++) {
+      const sample = inputData[i]
+      const abs = Math.abs(sample)
+      if (abs > peak) {
+        peak = abs
+      }
+      sumSquares += sample * sample
+    }
+
+    const rms = inputData.length > 0 ? Math.sqrt(sumSquares / inputData.length) : 0
+    return { rms, peak }
+  }, [])
+
+  const flushPendingStreamingChunks = useCallback((reason: string) => {
+    const streamingSession = streamingSessionRef.current
+    const chunks = pendingStreamingChunksRef.current
+    if (!streamingSession || chunks.length === 0) {
+      return
+    }
+
+    const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+    const chunkCount = chunks.length
+    const payload = mergePcmChunksToBuffer(chunks)
+    pendingStreamingChunksRef.current = []
+    pushAsrDebug(`ws batch sent; reason=${reason} chunkCount=${chunkCount} bytes=${totalBytes}`)
+    streamingSession.sendAudioChunk(payload)
+  }, [mergePcmChunksToBuffer, pushAsrDebug])
+
+  const startWaveformLoop = useCallback(() => {
+    const analyser = audioAnalyserRef.current
+    if (!analyser) return
+
+    const data = new Uint8Array(analyser.frequencyBinCount)
+    const barCount = 5
+    const minVoiceHz = 120
+    const maxVoiceHz = 4000
+
+    const tick = () => {
+      const activeAnalyser = audioAnalyserRef.current
+      if (!recordingActiveRef.current || !activeAnalyser) {
+        waveformFrameRef.current = null
+        return
+      }
+
+      activeAnalyser.getByteFrequencyData(data)
+      const sampleRate = activeAnalyser.context.sampleRate || 16000
+      const binHz = sampleRate / activeAnalyser.fftSize
+      const startBin = Math.max(0, Math.floor(minVoiceHz / binHz))
+      const endBinExclusive = Math.max(startBin + 1, Math.min(data.length, Math.ceil(maxVoiceHz / binHz)))
+      const voiceBinCount = Math.max(1, endBinExclusive - startBin)
+      const binsPerBar = Math.max(1, Math.floor(voiceBinCount / barCount))
+
+      const rawBars = Array.from({ length: barCount }, (_, index) => {
+        const start = startBin + index * binsPerBar
+        const end = index === barCount - 1
+          ? endBinExclusive
+          : Math.min(endBinExclusive, start + binsPerBar)
+        let sum = 0
+        for (let i = start; i < end; i++) {
+          sum += data[i]
+        }
+        const avg = end > start ? sum / (end - start) : 0
+        return avg / 255
+      })
+
+      const framePeak = rawBars.reduce((max, value) => Math.max(max, value), 0)
+      waveformPeakRef.current = Math.max(framePeak, waveformPeakRef.current * 0.92, 0.06)
+
+      // Auto-normalize quiet input for display only, capped at +20 dB (~10x amplitude).
+      const targetPeak = 0.78
+      const normalizationScale = Math.min(10, targetPeak / waveformPeakRef.current)
+      const centerWeight = [0.72, 0.88, 1, 0.88, 0.72]
+      const nextBars = rawBars.map((value, index) => {
+        const weighted = value * normalizationScale * centerWeight[index]
+        return Math.max(0.22, Math.min(1, weighted))
+      })
+
+      setWaveformBars(nextBars)
+      waveformFrameRef.current = requestAnimationFrame(tick)
+    }
+
+    if (waveformFrameRef.current !== null) {
+      cancelAnimationFrame(waveformFrameRef.current)
+    }
+    waveformFrameRef.current = requestAnimationFrame(tick)
+  }, [])
+
+  const handleAudioPick = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+
+    const file = files[0]
+    setTranscribeError(null)
+    setTranscribingAudio(true)
+    pushAsrDebug(`file start; name=${file.name} size=${file.size} type=${file.type || 'unknown'}`)
+
+    try {
+      const result = await onTranscribeAudio(file, input)
+      pushAsrDebug(`file response; status=${result.status} rawLength=${result.rawLength} textLength=${result.textLength}`)
+      if (result.responsePreview) {
+        pushAsrDebug(`file preview=${JSON.stringify(result.responsePreview)}`)
+      }
+      const transcript = result.text
+      if (!transcript.trim()) {
+        throw new Error(`ASR returned empty text (status=${result.status}, rawLength=${result.rawLength}, textLength=${result.textLength})`)
+      }
+
+      appendTranscriptToDraft(transcript)
+      pushAsrDebug(`file append success; trimmedLength=${transcript.trim().length}`)
+    } catch (e) {
+      console.error('ASR transcription failed:', e)
+      setTranscribeError(e instanceof Error ? e.message : 'ASR transcription failed')
+      pushAsrDebug(`file error; ${e instanceof Error ? e.message : 'ASR transcription failed'}`)
+    } finally {
+      setTranscribingAudio(false)
+    }
+  }, [appendTranscriptToDraft, input, onTranscribeAudio, pushAsrDebug])
+
+  const handleRecordToggle = useCallback(async () => {
+    if (transcribingAudio) return
+
+    if (isRecordingAudio) {
+      setIsRecordingAudio(false)
+      setTranscribingAudio(true)
+      setTranscribeError(null)
+
+      if (audioChunkCountRef.current > 0) {
+        const avgRms = audioRmsSumRef.current / audioChunkCountRef.current
+        pushAsrDebug(
+          `rec stop requested; chunkCount=${audioChunkCountRef.current} avgRms=${avgRms.toFixed(4)} maxRms=${audioMaxRmsRef.current.toFixed(4)} maxPeak=${audioMaxPeakRef.current.toFixed(4)}`
+        )
+      } else {
+        pushAsrDebug('rec stop requested; no audio chunks captured')
+      }
+
+      try {
+        flushPendingStreamingChunks('stop')
+        await cleanupRecording()
+        streamingSessionRef.current?.stop()
+      } catch (e) {
+        console.error('Failed to stop streaming audio recording:', e)
+        setTranscribeError(e instanceof Error ? e.message : 'Failed to stop streaming audio recording')
+        pushAsrDebug(`rec stop error; ${e instanceof Error ? e.message : 'Failed to stop streaming audio recording'}`)
+        setTranscribingAudio(false)
+      }
+      return
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setTranscribeError('Current browser does not support microphone recording')
+      return
+    }
+
+    try {
+      setTranscribeError(null)
+      setLiveTranscriptionPreview('')
+      pushAsrDebug('rec start requested')
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      pushAsrDebug('mic stream granted')
+      const streamingSession = await onCreateStreamingTranscriber({
+        draftText: input,
+        onPartial: (text) => {
+          setLiveTranscriptionPreview(text)
+        },
+        onFinal: (text) => {
+          setLiveTranscriptionPreview(text)
+          if (text.trim()) {
+            appendTranscriptToDraft(text)
+            pushAsrDebug(`rec append success; trimmedLength=${text.trim().length}`)
+          } else {
+            pushAsrDebug('rec final text empty after trim')
+          }
+          setTranscribingAudio(false)
+          setIsRecordingAudio(false)
+          streamingSessionRef.current = null
+          setTimeout(() => {
+            setLiveTranscriptionPreview('')
+          }, 1200)
+        },
+        onError: (message) => {
+          setTranscribeError(message)
+          setTranscribingAudio(false)
+          setIsRecordingAudio(false)
+          setLiveTranscriptionPreview('')
+          streamingSessionRef.current = null
+          void cleanupRecording()
+        },
+        onDebug: pushAsrDebug,
+      })
+
+      const audioContext = new AudioContext()
+      await audioContext.resume().catch(() => {})
+      const source = audioContext.createMediaStreamSource(stream)
+      const processor = audioContext.createScriptProcessor(4096, 1, 1)
+      const gain = audioContext.createGain()
+      const analyser = audioContext.createAnalyser()
+      gain.gain.value = 0
+      analyser.fftSize = 512
+      analyser.smoothingTimeConstant = 0.82
+
+      audioSampleRateRef.current = audioContext.sampleRate
+      recordingActiveRef.current = true
+      audioChunkCountRef.current = 0
+      audioMaxPeakRef.current = 0
+      audioMaxRmsRef.current = 0
+      audioRmsSumRef.current = 0
+      pendingStreamingChunksRef.current = []
+      streamingSessionRef.current = streamingSession
+      streamingFlushTimerRef.current = setInterval(() => {
+        flushPendingStreamingChunks('timer')
+      }, 600)
+
+      processor.onaudioprocess = (event) => {
+        if (!recordingActiveRef.current) {
+          return
+        }
+        const channelData = event.inputBuffer.getChannelData(0)
+        const chunk = new Float32Array(channelData)
+        const { rms, peak } = analyzeAudioChunk(chunk)
+        const pcm16 = new Int16Array(floatChunkToPcm16Buffer(chunk, audioSampleRateRef.current))
+        audioChunkCountRef.current += 1
+        audioMaxPeakRef.current = Math.max(audioMaxPeakRef.current, peak)
+        audioMaxRmsRef.current = Math.max(audioMaxRmsRef.current, rms)
+        audioRmsSumRef.current += rms
+        pendingStreamingChunksRef.current.push(pcm16)
+        if (audioChunkCountRef.current <= 3 || audioChunkCountRef.current % 20 === 0) {
+          pushAsrDebug(`mic chunk stats; count=${audioChunkCountRef.current} rms=${rms.toFixed(4)} peak=${peak.toFixed(4)}`)
+        }
+      }
+
+      source.connect(analyser)
+      source.connect(processor)
+      processor.connect(gain)
+      gain.connect(audioContext.destination)
+
+      audioContextRef.current = audioContext
+      audioSourceRef.current = source
+      audioProcessorRef.current = processor
+      audioGainRef.current = gain
+      audioAnalyserRef.current = analyser
+      audioStreamRef.current = stream
+      setIsRecordingAudio(true)
+      pushAsrDebug(`rec started; audioContextSampleRate=${audioContext.sampleRate}; streaming batched by 600ms window`)
+      startWaveformLoop()
+    } catch (e) {
+      console.error('Failed to start microphone recording:', e)
+      setTranscribeError(e instanceof Error ? e.message : 'Failed to start microphone recording')
+      pushAsrDebug(`rec start error; ${e instanceof Error ? e.message : 'Failed to start microphone recording'}`)
+      streamingSessionRef.current?.cancel()
+      streamingSessionRef.current = null
+      await cleanupRecording()
+      setIsRecordingAudio(false)
+    }
+  }, [analyzeAudioChunk, appendTranscriptToDraft, cleanupRecording, floatChunkToPcm16Buffer, flushPendingStreamingChunks, input, isRecordingAudio, onCreateStreamingTranscriber, pushAsrDebug, transcribingAudio])
+
   return (
     <div
       className="absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
@@ -290,19 +716,21 @@ const ChatComposer = memo(function ChatComposer({
       )}
 
       <div className="mx-auto max-w-5xl">
-        {attachments.length > 0 && (
-          <div className="mb-3 flex flex-wrap gap-2">
-            {attachments.map((file, idx) => (
-              <div key={`${file.name}-${idx}`} className="relative inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                <span className="text-gray-700 dark:text-gray-300">{file.name}</span>
-                <button
-                  onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
-                  className="text-gray-400 transition hover:text-red-500"
-                >
-                  ×
-                </button>
+        {transcribeError && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
+            ASR 实验入口失败：{transcribeError}
+          </div>
+        )}
+        {(isRecordingAudio || transcribingAudio || liveTranscriptionPreview) && (
+          <div className="mb-3 flex justify-start">
+            <div className="max-w-[min(100%,32rem)] rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 shadow-sm dark:border-blue-800/80 dark:bg-blue-900/20 dark:text-blue-100">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-blue-700 dark:text-blue-300">
+                <span>{isRecordingAudio ? 'Live ASR preview' : 'ASR finalizing'}</span>
               </div>
-            ))}
+              <div className="whitespace-pre-wrap break-words">
+                {liveTranscriptionPreview || (isRecordingAudio ? 'Listening…' : 'Waiting for final transcript…')}
+              </div>
+            </div>
           </div>
         )}
 
@@ -375,7 +803,7 @@ const ChatComposer = memo(function ChatComposer({
 
         <form
           onSubmit={handleSubmit}
-          className={`rounded-[30px] border border-gray-200 bg-gray-50/95 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] transition focus-within:border-gray-300 focus-within:bg-white dark:border-gray-700 dark:bg-gray-800/95 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800 ${
+          className={`rounded-[30px] border border-gray-200/90 bg-gray-50/75 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] backdrop-blur-[5px] transition focus-within:border-gray-300 focus-within:bg-white/92 dark:border-gray-700/90 dark:bg-gray-800/70 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800/92 ${
             isDragging ? 'border-blue-400 dark:border-blue-500' : ''
           }`}
         >
@@ -388,6 +816,16 @@ const ChatComposer = memo(function ChatComposer({
             if (e.target.files) {
               setAttachments(prev => [...prev, ...Array.from(e.target.files!)])
             }
+          }}
+          className="hidden"
+        />
+        <input
+          type="file"
+          id="audio-upload"
+          accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm"
+          onChange={(e) => {
+            void handleAudioPick(e.target.files)
+            e.currentTarget.value = ''
           }}
           className="hidden"
         />
@@ -427,6 +865,73 @@ const ChatComposer = memo(function ChatComposer({
             >
               <Plus size={18} />
             </label>
+            <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+              {attachments.length === 0 ? (
+                <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-gray-500 dark:text-gray-400">
+                  <Paperclip size={13} />
+                  <span>No files</span>
+                </div>
+              ) : (
+                attachments.map((file, idx) => (
+                  <div
+                    key={`${file.name}-${idx}`}
+                    className="inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-full border border-gray-200 bg-white px-3 text-[13px] shadow-sm dark:border-gray-700 dark:bg-gray-800"
+                  >
+                    <Paperclip size={12} className="shrink-0 text-gray-400 dark:text-gray-500" />
+                    <span className="truncate text-gray-700 dark:text-gray-300">{file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
+                      className="shrink-0 text-gray-400 transition hover:text-red-500"
+                      title="Remove attachment"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+            {asrAvailable && (
+              <>
+                <div className="inline-flex shrink-0 items-center rounded-full bg-transparent">
+                  <button
+                    type="button"
+                    onClick={() => void handleRecordToggle()}
+                    disabled={transcribingAudio}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-l-full rounded-r-none px-3 text-[13px] font-medium leading-none transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200 dark:hover:bg-red-900/60' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : ''}`}
+                    title={isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
+                  >
+                    {isRecordingAudio ? <Square size={13} className="shrink-0" /> : <Mic size={13} className="shrink-0" />}
+                    {!isRecordingAudio && (
+                      <span className="leading-none">Rec</span>
+                    )}
+                    {(isRecordingAudio || transcribingAudio) && (
+                      <span className="ml-1 inline-flex h-[14px] items-center gap-[2px] self-center">
+                        {waveformBars.map((value, index) => (
+                          <span
+                            key={index}
+                            className={`w-[3px] rounded-full transition-all duration-75 ${isRecordingAudio ? 'bg-current opacity-90' : 'bg-current opacity-60'}`}
+                            style={{ height: `${Math.max(4, Math.round(value * 14))}px` }}
+                          />
+                        ))}
+                      </span>
+                    )}
+                  </button>
+                  <label
+                    htmlFor="audio-upload"
+                    onClick={(e) => {
+                      if (isRecordingAudio || transcribingAudio) {
+                        e.preventDefault()
+                      }
+                    }}
+                    className={`inline-flex h-8 shrink-0 items-center justify-center rounded-r-full rounded-l-none px-3 text-[13px] font-medium transition ${isRecordingAudio || transcribingAudio ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${isRecordingAudio ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200' : ''}`}
+                    title="Upload audio file and append transcript to draft"
+                  >
+                    <span>file</span>
+                  </label>
+                </div>
+              </>
+            )}
             <button
               type="button"
               onClick={onToggleSendKeyMode}
@@ -434,12 +939,7 @@ const ChatComposer = memo(function ChatComposer({
               title="Toggle send key"
             >
               <span>{sendKeyMode === 'enter' ? 'Enter to send' : 'Ctrl/Cmd+Enter'}</span>
-              <ChevronDown size={13} />
             </button>
-            <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-gray-500 dark:text-gray-400">
-              <Paperclip size={13} />
-              <span>{attachments.length > 0 ? `${attachments.length} file${attachments.length > 1 ? 's' : ''}` : 'No files'}</span>
-            </div>
           </div>
           <button
             type="submit"

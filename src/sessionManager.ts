@@ -11,15 +11,16 @@ import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir } from './config';
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getSessionArchiveImagesDir, getSessionArchiveLogPath } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
-import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq, stripMessageSeq } from './session/archive';
+import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq } from './session/archive';
+import { appendMessagesToContextFrontier, copyLayeredContextFiles, ensureContextFrontier, loadSessionFrontier, moveLayeredContextFiles, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
-import { clearTodoBusySuppression, maybeBuildTodoReminderMessage } from './session/todo';
+import { maybeBuildTodoReminderMessage } from './session/todo';
 
 function systemPart(system: string): MessagePart {
   return { system };
@@ -269,6 +270,7 @@ export async function getSession(sessionId: string): Promise<Session> {
           session.persistentMemorySnapshot = historyData.persistentMemorySnapshot;
         }
         applySessionHistoryState(session, historyData);
+        await loadSessionFrontier(session);
         if (historyData.indexingState) {
           // Check if indexing was interrupted
           await resumeIndexingIfNeeded(sessionId, session);
@@ -298,8 +300,12 @@ export async function getSession(sessionId: string): Promise<Session> {
   if (session.busy === undefined) session.busy = false;
   if (!session.meta) session.meta = { lastMessageTime: Date.now() };
   if (!session.currentNode) session.currentNode = 'master'; // Default to master node
+  delete (session as any).isolated;
   if (session.nextMessageSeq === undefined) {
     session.nextMessageSeq = getNextSessionMessageSeq(session);
+  }
+  if (session.contextFrontier && session.contextFrontier.length > 0 && session.history.length !== session.contextFrontier.length) {
+    session.history = await renderHistoryFromFrontier(session);
   }
 
   // Setup broadcast function
@@ -326,6 +332,9 @@ export async function createEmptySession(sessionId?: string): Promise<{ session:
  * Create a new session with given data
  */
 export async function createSession(sessionId: string, sessionData: any): Promise<void> {
+  if (sessionData && typeof sessionData === 'object') {
+    delete sessionData.isolated;
+  }
   sessions.set(sessionId, sessionData);
   await saveSession(sessionId);
   logger.info({ sessionId }, 'Session created');
@@ -364,6 +373,7 @@ function getSessionHistoryDeps() {
     getSessionById: (sessionId: string) => sessions.get(sessionId),
     getExistingSession,
     saveSession,
+    enqueueSessionItem,
   };
 }
 
@@ -383,6 +393,18 @@ function getAgentMetadataDeps() {
 
 export function getAgentMetadata(agentName: string): sessionAgentMetadata.AgentMetadata {
   return sessionAgentMetadata.getAgentMetadata(agentName);
+}
+
+export function getAgentIsolationNode(agentName: string): string | undefined {
+  return sessionAgentMetadata.getAgentIsolationNode(agentName);
+}
+
+export function isAgentIsolated(agentName: string): boolean {
+  return sessionAgentMetadata.isAgentIsolated(agentName);
+}
+
+export function isSessionEffectivelyIsolated(session?: Session | null): boolean {
+  return sessionAgentMetadata.isSessionEffectivelyIsolated(session);
 }
 
 export async function setAgentMetadata(agentName: string, meta: sessionAgentMetadata.AgentMetadata): Promise<void> {
@@ -405,6 +427,10 @@ export async function setAgentInherit(agentName: string, inheritAgentName?: stri
   return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName);
 }
 
+export async function setAgentIsolation(agentName: string, isolatedNode?: string): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
+  return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, isolatedNode);
+}
+
 export async function attachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
   return sessionAgentMetadata.attachAgentSkill(getAgentMetadataDeps(), agentName, skillName);
 }
@@ -424,6 +450,7 @@ export async function createAgentWithMainSession(options: {
   model?: string;
   createMainSession?: boolean;
   inherit?: string;
+  isolatedNode?: string;
 }): Promise<{
   agentDir: string;
   mainSessionId: string;
@@ -432,10 +459,14 @@ export async function createAgentWithMainSession(options: {
   updatedChildren: string[];
   createdMainSession: boolean;
 }> {
-  const { inherit, ...createOptions } = options;
+  const { inherit, isolatedNode, ...createOptions } = options;
   const normalizedInherit = inherit && String(inherit).trim() ? String(inherit).trim() : undefined;
+  const normalizedIsolatedNode = isolatedNode && String(isolatedNode).trim() ? String(isolatedNode).trim() : undefined;
 
   if (normalizedInherit !== undefined) {
+    if (normalizedIsolatedNode) {
+      throw new Error('Isolated agent cannot also inherit shared memory.');
+    }
     validateAgentName(normalizedInherit);
     if (!await fs.pathExists(getAgentDir(normalizedInherit))) {
       throw new Error(`Inherited agent "${normalizedInherit}" does not exist.`);
@@ -443,6 +474,9 @@ export async function createAgentWithMainSession(options: {
   }
 
   const result = await sessionAgentOps.createAgentWithMainSession(createOptions, getSessionAgentOpsDeps());
+  if (normalizedIsolatedNode !== undefined) {
+    await setAgentIsolation(options.agentName, normalizedIsolatedNode);
+  }
   if (normalizedInherit !== undefined) {
     await setAgentInherit(options.agentName, normalizedInherit);
   }
@@ -563,7 +597,7 @@ export function getChannelBySession(sessionId: string): { platform: string; chan
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; isolated?: boolean }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string }): Promise<string> {
   const sourceSession = await getSession(sourceSessionId);
   const newSessionId = suffix 
     ? `${sourceSessionId}_${suffix}`
@@ -571,7 +605,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 
   const forkedSession: Session = {
     id: newSessionId,
-    history: sourceSession.history.map(stripMessageSeq),
+    history: structuredClone(sourceSession.history),
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
     stats: {
       totalCachedTokens: 0,
@@ -583,10 +617,11 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     queue: [],
     meta: { lastMessageTime: Date.now() },
     vectorIndexPosition: sourceSession.history.length, // Inherit parent's index position to avoid re-indexing
-    nextMessageSeq: 1,
+    nextMessageSeq: sourceSession.nextMessageSeq,
+    nextBlockId: sourceSession.nextBlockId,
+    contextFrontier: sourceSession.contextFrontier ? structuredClone(sourceSession.contextFrontier) : undefined,
     parentSessionId: isChildSession ? sourceSessionId : null,
     currentNode: options?.node || sourceSession.currentNode || 'master',
-    isolated: options?.isolated ?? sourceSession.isolated,
     agent: sourceSession.agent,
     verbose: sourceSession.verbose,
     model: sourceSession.model
@@ -657,6 +692,22 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   }
 
   sessions.set(newSessionId, forkedSession);
+
+  const sourceArchiveLog = getSessionArchiveLogPath(sourceSessionId);
+  const targetArchiveLog = getSessionArchiveLogPath(newSessionId);
+  if (await fs.pathExists(sourceArchiveLog)) {
+    await fs.ensureDir(path.dirname(targetArchiveLog));
+    await fs.copy(sourceArchiveLog, targetArchiveLog, { overwrite: true });
+  }
+
+  const sourceArchiveImagesDir = getSessionArchiveImagesDir(sourceSessionId);
+  const targetArchiveImagesDir = getSessionArchiveImagesDir(newSessionId);
+  if (await fs.pathExists(sourceArchiveImagesDir)) {
+    await fs.ensureDir(path.dirname(targetArchiveImagesDir));
+    await fs.copy(sourceArchiveImagesDir, targetArchiveImagesDir, { overwrite: true });
+  }
+
+  await copyLayeredContextFiles(sourceSessionId, newSessionId);
   await appendSessionMessages(forkedSession, appendedForkMessages);
 
   logger.info({ sourceSessionId, newSessionId, isChildSession }, 'Session forked');
@@ -671,7 +722,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
  * @param fork Whether to fork (inherit context) or create new
  * @returns New child session ID
  */
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = true, options?: { node?: string; isolated?: boolean }): Promise<string> {
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = true, options?: { node?: string }): Promise<string> {
   if (fork) {
     // Fork from parent (inherit context)
     return await forkSession(parentSessionId, suffix, true, options);
@@ -700,7 +751,6 @@ export async function createChildSession(parentSessionId: string, suffix: string
       nextMessageSeq: 1,
       parentSessionId: parentSessionId,
       currentNode: options?.node || parentSession.currentNode || 'master',
-      isolated: options?.isolated ?? parentSession.isolated,
       model: parentSession.model
     };
 
@@ -765,10 +815,6 @@ export async function saveSession(sessionId: string): Promise<void> {
       session.historyVersion = 0;
     }
 
-    if (!session.busy) {
-      clearTodoBusySuppression(session);
-    }
-
     // Update message count in metadata
     session.meta.messageCount = session.history.length;
 
@@ -779,6 +825,7 @@ export async function saveSession(sessionId: string): Promise<void> {
     const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
     await fs.ensureDir(path.dirname(historyFile));
     await fs.writeJson(historyFile, serializeSessionHistoryPayload(session), { spaces: 2 });
+    await saveSessionFrontier(session);
     
     // Save metadata (lightweight operation)
     await saveSessionsMetadata();
@@ -862,6 +909,8 @@ export async function loadSessions(): Promise<void> {
         history: [], // Empty, will be loaded when getSession is called
         queue: metadata.queue || [],
       };
+
+      delete (session as any).isolated;
 
       sessions.set(sessionId, session);
     }
@@ -947,7 +996,7 @@ export async function requestSessionCompaction(
 ): Promise<{ alreadyQueued: boolean; startedImmediately: boolean; queueLength: number }> {
   const session = await getSession(sessionId);
 
-  if (session.queue.some(item => item.type === 'compact')) {
+  if (session.queue.some(item => item.type === 'compact' || item.type === 'compact-commit') || sessionHistory.hasPendingCompactWork(sessionId)) {
     return {
       alreadyQueued: true,
       startedImmediately: false,
@@ -972,8 +1021,16 @@ export async function requestSessionCompaction(
   };
 }
 
-export async function processSessionCompactionRequest(sessionId: string, item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>): Promise<void> {
-  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item);
+export async function processSessionCompactionRequest(
+  sessionId: string,
+  item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>,
+  executionMode: 'auto' | 'await' | 'background' = 'auto'
+): Promise<void> {
+  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode);
+}
+
+export async function applyCompletedCompactJob(sessionId: string): Promise<boolean> {
+  return sessionHistory.applyCompletedCompactJob(getSessionHistoryDeps(), sessionId);
 }
 
 /**
@@ -1029,12 +1086,14 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
   for (const message of messages) {
     session.history.push(message);
   }
+  appendMessagesToContextFrontier(session, messages);
 
   const todoReminderMessage = maybeBuildTodoReminderMessage(session);
   const messagesToNotify = [...messages];
   if (todoReminderMessage) {
     await appendMessagesToArchive(session, [todoReminderMessage]);
     session.history.push(todoReminderMessage);
+    appendMessagesToContextFrontier(session, [todoReminderMessage]);
     messagesToNotify.push(todoReminderMessage);
   }
 
@@ -1071,7 +1130,7 @@ export function listSessions(): Array<{ id: string; messageCount: number; lastMe
       hasChannel: !!channel,
       displayName: session.displayName,
       currentNode: session.currentNode,
-      isolated: session.isolated,
+      isolated: isSessionEffectivelyIsolated(session),
       busy: session.busy,
       queueLength: session.queue?.length || 0
     });
@@ -1105,6 +1164,19 @@ export async function getArchivedMessages(sessionId: string, options: {
   endSeq?: number;
 } = {}) {
   return sessionHistory.getArchivedMessages(sessionId, options);
+}
+
+export async function getArchivedBlocks(sessionId: string, options: {
+  startId?: number;
+  endId?: number;
+} = {}) {
+  const records = await readArchiveBlocksByIdRange(sessionId, options.startId, options.endId);
+  return {
+    records,
+    totalMatched: records.length,
+    returnedCount: records.length,
+    requestedRange: { startId: options.startId, endId: options.endId },
+  };
 }
 
 export async function compactSessionToolMessages(sessionId: string, keepPercent: number = COMPACT_PERCENT, thresholdTokens?: number) {
@@ -1156,6 +1228,8 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
   if (!sessions.has(sessionId)) {
     return false;
   }
+
+  sessionHistory.discardPendingCompactWork(sessionId);
   
   // Remove from memory
   sessions.delete(sessionId);

@@ -6,12 +6,75 @@ import ChatTimeline from './ChatTimeline'
 import ProcessingStatus from './ProcessingStatus'
 import type { Message, MessagePart, SendKeyMode, SessionStreamEvent } from './chatShared'
 
+function getAsrStreamUrl() {
+  const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
+  return base.replace(/^http/i, 'ws')
+}
+
+type AsrTranscribeResult = {
+  text: string
+  status: number
+  rawLength: number
+  textLength: number
+  responsePreview: string
+}
+
+const ASR_CONTEXT_MAX_CHARS = 2400
+const ASR_CONTEXT_MAX_MESSAGES = 8
+
+function getMessagePlainText(message: Message): string {
+  return message.parts
+    .map((part) => part.text?.trim() || '')
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
+
+function buildAsrContext(messages: Message[], draftText: string): string {
+  const recentMessages = messages
+    .filter((message) => (message.role === 'user' || message.role === 'model') && !message.__meta?.temporary)
+    .map((message) => ({
+      role: message.role,
+      text: getMessagePlainText(message),
+    }))
+    .filter((message) => Boolean(message.text))
+    .slice(-ASR_CONTEXT_MAX_MESSAGES)
+
+  const blocks = recentMessages.map((message) => (
+    `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.text}`
+  ))
+
+  const trimmedDraft = draftText.trim()
+  if (trimmedDraft) {
+    blocks.push(`Current draft: ${trimmedDraft}`)
+  }
+
+  let combined = blocks.join('\n\n').trim()
+  if (combined.length <= ASR_CONTEXT_MAX_CHARS) {
+    return combined
+  }
+
+  combined = combined.slice(combined.length - ASR_CONTEXT_MAX_CHARS)
+  const newlineIndex = combined.indexOf('\n')
+  if (newlineIndex > 0 && newlineIndex < 200) {
+    combined = combined.slice(newlineIndex + 1)
+  }
+
+  return `[recent session context]\n${combined}`
+}
+
 interface ChatProps {
   sessionId: string
   sessionDisplayName?: string
   onBack?: () => void
   themeMode: 'auto' | 'light' | 'dark'
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
+}
+
+type StreamingAsrSession = {
+  sendAudioChunk: (chunk: ArrayBuffer) => void
+  stop: () => void
+  cancel: () => void
 }
 
 const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange }: ChatProps) {
@@ -35,6 +98,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   })
   const [showMenu, setShowMenu] = useState(false)
   const [processingReasoningSummary, setProcessingReasoningSummary] = useState('')
+  const [asrAvailable, setAsrAvailable] = useState(false)
 
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
@@ -52,6 +116,30 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   useEffect(() => {
     setProcessingReasoningSummary('')
   }, [sessionId])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchAsrStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE_PATH}/asr/status`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (!cancelled) {
+          setAsrAvailable(Boolean(data?.configured && data?.available))
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setAsrAvailable(false)
+        }
+      }
+    }
+
+    fetchAsrStatus()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     if (!sessionBusy) {
@@ -399,6 +487,161 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     setSendKeyMode(prev => prev === 'enter' ? 'mod-enter' : 'enter')
   }, [])
 
+  const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
+    const formData = new FormData()
+    formData.append('audio', file)
+    const context = buildAsrContext(messages, draftText)
+    if (context.trim()) {
+      formData.append('context', context.trim())
+    }
+
+    const response = await fetch(`${API_BASE_PATH}/asr/transcribe`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    const responseText = await response.text()
+    let data: any = {}
+    try {
+      data = responseText ? JSON.parse(responseText) : {}
+    } catch {
+      data = { error: responseText || 'ASR request failed' }
+    }
+
+    if (!response.ok) {
+      throw new Error(data?.error || `ASR request failed (${response.status})`)
+    }
+
+    const text = typeof data?.text === 'string' ? data.text : ''
+    return {
+      text,
+      status: response.status,
+      rawLength: responseText.length,
+      textLength: text.length,
+      responsePreview: responseText.slice(0, 200),
+    }
+  }, [messages])
+
+  const handleCreateStreamingTranscriber = useCallback(async ({
+    draftText,
+    onPartial,
+    onFinal,
+    onError,
+    onDebug,
+  }: {
+    draftText: string
+    onPartial: (text: string) => void
+    onFinal: (text: string) => void
+    onError: (message: string) => void
+    onDebug: (message: string) => void
+  }): Promise<StreamingAsrSession> => {
+    const context = buildAsrContext(messages, draftText)
+
+    return await new Promise<StreamingAsrSession>((resolve, reject) => {
+      const socket = new WebSocket(getAsrStreamUrl())
+      let resolved = false
+      let settled = false
+
+      const fail = (message: string) => {
+        onError(message)
+        if (!settled) {
+          settled = true
+          if (!resolved) {
+            reject(new Error(message))
+          }
+        }
+        try {
+          socket.close()
+        } catch {}
+      }
+
+      socket.binaryType = 'arraybuffer'
+
+      socket.onopen = () => {
+        onDebug(`ws open; contextLength=${context.length} language=auto`)
+        socket.send(JSON.stringify({
+          type: 'start',
+          context,
+        }))
+        onDebug('ws start sent')
+      }
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(String(event.data))
+          if (payload.type === 'ready') {
+            onDebug('ws ready received')
+            if (resolved) return
+            resolved = true
+            settled = true
+            let chunkCount = 0
+            let totalBytes = 0
+            resolve({
+              sendAudioChunk: (chunk: ArrayBuffer) => {
+                if (socket.readyState === WebSocket.OPEN) {
+                  socket.send(chunk)
+                  chunkCount += 1
+                  totalBytes += chunk.byteLength
+                  if (chunkCount <= 3 || chunkCount % 20 === 0) {
+                    onDebug(`ws chunk sent; count=${chunkCount} bytes=${chunk.byteLength} totalBytes=${totalBytes}`)
+                  }
+                }
+              },
+              stop: () => {
+                if (socket.readyState === WebSocket.OPEN) {
+                  socket.send(JSON.stringify({ type: 'stop' }))
+                  onDebug(`ws stop sent; chunkCount=${chunkCount} totalBytes=${totalBytes}`)
+                }
+              },
+              cancel: () => {
+                onDebug('ws cancel called')
+                try {
+                  socket.close()
+                } catch {}
+              },
+            })
+            return
+          }
+
+          if (payload.type === 'partial') {
+            onDebug(`ws partial received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
+            onPartial(typeof payload.text === 'string' ? payload.text : '')
+            return
+          }
+
+          if (payload.type === 'final') {
+            onDebug(`ws final received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
+            onFinal(typeof payload.text === 'string' ? payload.text : '')
+            try {
+              socket.close()
+            } catch {}
+            return
+          }
+
+          if (payload.type === 'error') {
+            onDebug(`ws error payload; ${payload.error || 'unknown error'}`)
+            fail(payload.error || 'Streaming ASR failed')
+          }
+        } catch (error) {
+          onDebug(`ws invalid payload; ${error instanceof Error ? error.message : 'unknown error'}`)
+          fail(error instanceof Error ? error.message : 'Invalid streaming ASR response')
+        }
+      }
+
+      socket.onerror = () => {
+        onDebug('ws onerror fired')
+        fail('Failed to connect to streaming ASR service')
+      }
+
+      socket.onclose = () => {
+        onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)}`)
+        if (!resolved && !settled) {
+          reject(new Error('Streaming ASR connection closed before ready'))
+        }
+      }
+    })
+  }, [messages])
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
       <div className="sticky top-0 z-30 h-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4">
@@ -550,9 +793,12 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         sessionId={sessionId}
         sessionMissing={sessionMissing}
         loading={loading}
+        asrAvailable={asrAvailable}
         sendKeyMode={sendKeyMode}
         onToggleSendKeyMode={toggleSendKeyMode}
         onSend={handleSend}
+        onTranscribeAudio={handleTranscribeAudio}
+        onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
       />
     </div>
   )
