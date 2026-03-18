@@ -476,11 +476,11 @@ async function handleCompactCommand(ctx: ChannelContext, args: string[], session
   }
 
   if (result.startedImmediately) {
-    ctx.reply('🔄 Compaction started...')
+    ctx.reply('🗜️ Background compaction started. It runs in parallel, so this chat can continue normally.')
     return
   }
 
-  ctx.reply(`⏳ Compaction queued. Pending queue length: ${result.queueLength}`)
+  ctx.reply(`⏳ Background compaction queued. Once it starts, it will run without blocking this chat. Pending queue length: ${result.queueLength}`)
 }
 
 export const COMMANDS: Record<string, CommandDef> = {

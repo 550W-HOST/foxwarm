@@ -77,6 +77,7 @@ type SessionHistoryDeps = {
   getExistingSession: (sessionId: string) => Promise<Session | null>;
   saveSession: (sessionId: string) => Promise<void>;
   enqueueSessionItem?: (sessionId: string, item: QueueItem) => Promise<void>;
+  notifyHistoryUpdate?: (sessionId: string, message: Message) => void;
 };
 
 type CompactionRunOptions = {
@@ -85,6 +86,7 @@ type CompactionRunOptions = {
   compactGuidance?: string;
   startLogMessage?: string;
   startBroadcastMessage?: string;
+  completionBroadcastMessage?: string;
 };
 
 type CompactExecutionMode = 'auto' | 'await' | 'background';
@@ -99,6 +101,7 @@ type CompactJobSnapshot = {
   transientSession: Session;
   keepPercent: number;
   completionMarker: string;
+  completionBroadcastMessage?: string;
   compactGuidance?: string;
 };
 
@@ -125,6 +128,7 @@ type CompactJobResult =
   | {
       status: 'ready';
       completionMarker: string;
+      completionBroadcastMessage?: string;
       snapshotFrontier: ContextFrontierItem[];
       consumedFrontierCount: number;
       operations: CompactJobOperation[];
@@ -150,6 +154,33 @@ type CompactJobState = {
 };
 
 const compactJobStates = new Map<string, CompactJobState>();
+const compactPreviewLastTimestamp = new Map<string, number>();
+
+const ASYNC_COMPACT_START_NOTICE = '🗜️ Background compaction started. I’m compacting older context in parallel, and this chat can continue normally.';
+const ASYNC_COMPACT_DONE_NOTICE = '🗜️ Background compaction finished and has been applied. This chat stayed available while it was running.';
+
+function nextCompactPreviewTimestamp(sessionId: string): number {
+  const now = Date.now();
+  const last = compactPreviewLastTimestamp.get(sessionId) || 0;
+  const next = Math.max(now, last + 1);
+  compactPreviewLastTimestamp.set(sessionId, next);
+  return next;
+}
+
+function mirrorTemporaryCompactMessage(deps: SessionHistoryDeps, sessionId: string, message: Message): void {
+  if (!deps.notifyHistoryUpdate) {
+    return;
+  }
+
+  const mirrored: Message = structuredClone(message);
+  mirrored.__meta = {
+    ...(mirrored.__meta || {}),
+    timestamp: nextCompactPreviewTimestamp(sessionId),
+    temporary: true,
+    compactPreview: true,
+  };
+  deps.notifyHistoryUpdate(sessionId, mirrored);
+}
 
 export async function forceIndexSession(deps: SessionHistoryDeps, sessionId: string): Promise<void> {
   const session = deps.getSessionById(sessionId);
@@ -286,6 +317,7 @@ function cloneSessionForCompactJob(session: Session, historySnapshot: Message[],
 function buildCompactJobSnapshot(session: Session, options: CompactionRunOptions = {}): CompactJobSnapshot | null {
   const keepPercent = typeof options.keepPercent === 'number' ? options.keepPercent : COMPACT_PERCENT;
   const completionMarker = options.completionMarker || 'Compaction completed.';
+  const completionBroadcastMessage = options.completionBroadcastMessage?.trim() || undefined;
   const compactGuidance = options.compactGuidance?.trim();
   const historySnapshot = structuredClone(session.history);
 
@@ -306,6 +338,7 @@ function buildCompactJobSnapshot(session: Session, options: CompactionRunOptions
     transientSession: cloneSessionForCompactJob(session, historySnapshot, frontierSnapshot),
     keepPercent,
     completionMarker,
+    completionBroadcastMessage,
     compactGuidance,
   };
 }
@@ -511,6 +544,7 @@ async function finalizeCompaction(
   session: Session,
   newFrontier: ContextFrontierItem[],
   completionMarker: string,
+  completionBroadcastMessage: string | undefined,
   createdBlockCount: number,
   replacedItemCount: number,
 ): Promise<void> {
@@ -533,14 +567,15 @@ async function finalizeCompaction(
 
   await deps.saveSession(sessionId);
   logger.info({ createdBlockCount, replacedItemCount, renderedCount: session.history.length }, 'Layered context compaction completed successfully');
+  compactPreviewLastTimestamp.delete(sessionId);
 
   if (session.broadcast) {
-    session.broadcast(`Layered-context compaction completed. Created ${createdBlockCount} block(s) replacing ${replacedItemCount} older item(s).`);
+    session.broadcast(completionBroadcastMessage || `Layered-context compaction completed. Created ${createdBlockCount} block(s) replacing ${replacedItemCount} older item(s).`);
   }
 }
 
-async function runCompactJob(snapshot: CompactJobSnapshot): Promise<CompactJobResult> {
-  const { sessionId, transientSession, historySnapshot, frontierSnapshot, keepPercent, compactGuidance, completionMarker } = snapshot;
+async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot): Promise<CompactJobResult> {
+  const { sessionId, transientSession, historySnapshot, frontierSnapshot, keepPercent, compactGuidance, completionMarker, completionBroadcastMessage } = snapshot;
   const splitIndex = resolveCompactionSplitIndex(historySnapshot, keepPercent);
   if (splitIndex <= 0) {
     logger.info({ sessionId, keepPercent }, 'Compaction skipped because there are no older messages to compact');
@@ -589,7 +624,10 @@ async function runCompactJob(snapshot: CompactJobSnapshot): Promise<CompactJobRe
   for (let attempt = 1; attempt <= maxCompactAttempts; attempt += 1) {
     const result = await llm.chat(nextPromptParts, transientSession, attempt - 1, {
       toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION],
-      appendMessage: (message) => appendTransientSessionMessage(transientSession, message),
+      appendMessage: async (message) => {
+        await appendTransientSessionMessage(transientSession, message);
+        mirrorTemporaryCompactMessage(deps, sessionId, message);
+      },
       notifySessionEvents: false,
       registerAbortController: false,
     });
@@ -629,6 +667,7 @@ async function runCompactJob(snapshot: CompactJobSnapshot): Promise<CompactJobRe
   return {
     status: 'ready',
     completionMarker,
+      completionBroadcastMessage,
     snapshotFrontier: frontierSnapshot,
     consumedFrontierCount: splitIndex,
     operations: operations.map(operation => ({
@@ -702,6 +741,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     session,
     newFrontier,
     result.completionMarker,
+    result.completionBroadcastMessage,
     createdRecords.length,
     result.replacedItemCount,
   );
@@ -724,7 +764,7 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
   }
 
   try {
-    const result = await runCompactJob(snapshot);
+    const result = await runCompactJob(deps, snapshot);
     return await applyCompactJobResult(deps, sessionId, result);
   } catch (e) {
     logger.error(e, 'Compaction failed');
@@ -771,7 +811,7 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
 
   void (async () => {
     try {
-      const result = await runCompactJob(snapshot);
+      const result = await runCompactJob(deps, snapshot);
       compactJobStates.set(sessionId, {
         status: 'ready',
         startedAt: Date.now(),
@@ -784,6 +824,7 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
         result,
       });
     } catch (error: any) {
+      compactPreviewLastTimestamp.delete(sessionId);
       compactJobStates.set(sessionId, {
         status: 'failed',
         startedAt: Date.now(),
@@ -800,6 +841,7 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
     const liveSession = deps.getSessionById(sessionId);
     if (!liveSession) {
       compactJobStates.delete(sessionId);
+      compactPreviewLastTimestamp.delete(sessionId);
       return;
     }
     if (!liveSession.queue.some(item => item.type === 'compact-commit')) {
@@ -827,7 +869,11 @@ async function runCompactionWithMode(deps: SessionHistoryDeps, sessionId: string
     || (executionMode === 'auto' && isAsyncCompactEnabled(session));
 
   if (shouldBackground) {
-    return startBackgroundCompaction(deps, sessionId, options);
+    return startBackgroundCompaction(deps, sessionId, {
+      ...options,
+      startBroadcastMessage: options.startBroadcastMessage || ASYNC_COMPACT_START_NOTICE,
+      completionBroadcastMessage: options.completionBroadcastMessage || ASYNC_COMPACT_DONE_NOTICE,
+    });
   }
 
   return runCompaction(deps, sessionId, options);
@@ -842,10 +888,15 @@ export async function applyCompletedCompactJob(deps: SessionHistoryDeps, session
   compactJobStates.delete(sessionId);
 
   if (state.status === 'failed') {
+    compactPreviewLastTimestamp.delete(sessionId);
     throw state.error || new Error('Background compact job failed.');
   }
 
-  return applyCompactJobResult(deps, sessionId, state.result!);
+  const applied = await applyCompactJobResult(deps, sessionId, state.result!);
+  if (!applied) {
+    compactPreviewLastTimestamp.delete(sessionId);
+  }
+  return applied;
 }
 
 export async function compactHistory(deps: SessionHistoryDeps, sessionId: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
@@ -1087,7 +1138,6 @@ export async function checkAndCompactIfNeeded(deps: SessionHistoryDeps, sessionI
       keepPercent: COMPACT_PERCENT,
       completionMarker: 'Compaction completed.',
       startLogMessage: 'Auto compaction starting',
-      startBroadcastMessage: '⚠️ Context size limit reached, compacting history...',
     }, 'auto').catch(e => logger.error(e, 'Auto-compact failed'));
   }
 }
@@ -1104,7 +1154,6 @@ export async function processSessionCompactionRequest(
       completionMarker: item.completionMarker || 'Compaction completed.',
       compactGuidance: `Manual compaction hint from requester: ${item.compactGuidance.trim()}`,
       startLogMessage: 'Manual compaction starting',
-      startBroadcastMessage: '⚠️ Manual compaction starting...',
     }, executionMode);
     return;
   }
@@ -1113,6 +1162,5 @@ export async function processSessionCompactionRequest(
     keepPercent: item.keepPercent,
     completionMarker: item.completionMarker || 'Compaction completed.',
     startLogMessage: 'Compaction starting',
-    startBroadcastMessage: '⚠️ Context size limit reached, compacting history...',
   }, executionMode);
 }
