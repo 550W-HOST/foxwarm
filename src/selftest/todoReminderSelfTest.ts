@@ -12,7 +12,7 @@ function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function createBaseSession(id: string): Session {
+function createBaseSession(id: string, parentSessionId?: string): Session {
   return {
     id,
     agent: 'main',
@@ -22,12 +22,13 @@ function createBaseSession(id: string): Session {
     busy: false,
     queue: [],
     meta: { lastMessageTime: Date.now() },
+    parentSessionId,
   };
 }
 
-async function ensureSession(id: string): Promise<Session> {
+async function ensureSession(id: string, parentSessionId?: string): Promise<Session> {
   const existing = await sessionManager.getSession(id);
-  Object.assign(existing, createBaseSession(id));
+  Object.assign(existing, createBaseSession(id, parentSessionId));
   await sessionManager.saveSession(id);
   return existing;
 }
@@ -238,6 +239,47 @@ async function main(): Promise<void> {
 
       reminderMessages = session.history.filter(message => message.__meta?.todoReminder === true);
       assert.strictEqual(reminderMessages.length, 1);
+    });
+
+    await test('turn-end reminder still appears when child reminder queues a background follow-up', async () => {
+      const sessionId = makeSessionId('selftest_todo_child_endturn');
+      const parentSessionId = makeSessionId('selftest_todo_child_parent');
+      createdSessionIds.push(parentSessionId, sessionId);
+      await ensureSession(parentSessionId);
+      const session = await ensureSession(sessionId, parentSessionId);
+
+      await tool_set_todo({ todo: '- [ ] child end-turn reminder', remindEvery: 99 }, { sessionId, session });
+
+      (llm as any).chat = async (parts: Message['parts'] | null, activeSession: Session) => {
+        assert.strictEqual(activeSession.id, sessionId);
+        await appendStubUserMessage(activeSession, parts);
+
+        const lastUserSystems = activeSession.history
+          .slice()
+          .reverse()
+          .find(message => message.role === 'user')
+          ?.parts.filter(part => typeof part.system === 'string').map(part => part.system || '') || [];
+
+        if (lastUserSystems.some(systemText => systemText.includes('message ended without send_to_session call'))) {
+          await appendStubModelMessage(activeSession, '[NO_ACTION]');
+          return { text: '[NO_ACTION]' };
+        }
+
+        await appendStubModelMessage(activeSession, 'Child finished local work');
+        return { text: 'Child finished local work' };
+      };
+
+      await (router as any).runSessionTurn(sessionId, {
+        parts: [{ text: 'child timer-like turn' }],
+        session,
+        preclaimed: true,
+      });
+
+      const refreshedSession = await sessionManager.getSession(sessionId);
+      const reminderMessages = refreshedSession.history.filter(message => message.__meta?.todoReminder === true);
+      assert.strictEqual(reminderMessages.length, 1);
+      assert.strictEqual(reminderMessages[0].__meta?.todoReminderKind, 'end-turn');
+      assert.strictEqual(refreshedSession.queue.length, 0);
     });
 
     console.log('todo reminder selftest passed');

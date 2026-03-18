@@ -320,7 +320,7 @@ export class MessageRouter {
   }
 
   private async maybeAppendTodoEndTurnReminder(session: Session): Promise<void> {
-    if (session.queue.length > 0) {
+    if (session.queue.some(item => item.type !== 'background')) {
       return;
     }
 
