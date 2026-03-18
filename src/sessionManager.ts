@@ -398,6 +398,7 @@ function getSessionHistoryDeps() {
     getExistingSession,
     saveSession,
     enqueueSessionItem,
+    notifyHistoryUpdate,
   };
 }
 
