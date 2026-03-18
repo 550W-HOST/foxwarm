@@ -9,8 +9,16 @@ interface ArchitectureViewProps {
   onBack?: () => void
 }
 
-const ROOT_CHILD_PREVIEW_COUNT = 8
-const CHILD_PREVIEW_COUNT = 6
+const ROOT_CHILD_PREVIEW_COUNT = 10
+const CHILD_PREVIEW_COUNT = 8
+
+const ROOT_GRID_STYLE = {
+  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+}
+
+const CHILD_GRID_STYLE = {
+  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+}
 
 const sortSessions = (a: Session, b: Session) => {
   if ((a.busy || false) !== (b.busy || false)) {
@@ -70,7 +78,7 @@ const renderMetaBadge = (label: string, tone: 'default' | 'active' | 'warning' |
   }
 
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${toneClasses[tone]}`}>
+    <span className={`inline-flex items-center rounded-full px-2 py-1 text-[11px] font-medium ${toneClasses[tone]}`}>
       {label}
     </span>
   )
@@ -115,32 +123,32 @@ function SessionNode({
   const tokenUsage = session.tokenUsage || { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
   const totalTokens = tokenUsage.cachedTokens + tokenUsage.inputTokens + tokenUsage.outputTokens
   const sessionName = session.displayName || session.id
+  const wrapperStyle = depth === 0 && expanded ? { gridColumn: '1 / -1' } : undefined
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" style={wrapperStyle}>
       <div
-        className={`relative rounded-2xl border p-4 shadow-sm transition-colors ${
+        className={`rounded-2xl border px-4 py-3 shadow-sm transition-colors ${
           currentSession === session.id
             ? 'border-blue-300 bg-blue-50/80 dark:border-blue-700 dark:bg-blue-950/30'
             : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'
         } ${session.archived ? 'opacity-80' : ''}`}
       >
-        <div className="absolute right-4 top-4">
-          {renderMetaBadge(`agent:${session.agent || 'main'}`, 'default')}
-        </div>
-
-        <div className="flex flex-wrap items-start justify-between gap-3 pr-24">
+        <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="truncate text-sm font-semibold text-gray-900 dark:text-white">{sessionName}</h3>
+              <h3 title={sessionName} className="truncate text-sm font-semibold text-gray-900 dark:text-white">
+                {sessionName}
+              </h3>
+              {renderMetaBadge(`agent:${session.agent || 'main'}`, 'default')}
               {currentSession === session.id && renderMetaBadge('current', 'active')}
               {session.archived && renderMetaBadge('archived', 'muted')}
               {session.isolated && renderMetaBadge('isolated', 'warning')}
             </div>
             {session.displayName && (
-              <div className="mt-1 truncate font-mono text-xs text-gray-500 dark:text-gray-400">{session.id}</div>
+              <div className="mt-1 truncate font-mono text-[11px] text-gray-500 dark:text-gray-400">{session.id}</div>
             )}
-            <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
               {parent ? (
                 <>
                   child of{' '}
@@ -158,19 +166,19 @@ function SessionNode({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             {children.length > 0 && (
               <button
                 onClick={() => onToggleExpanded(session.id)}
-                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
               >
                 {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                <span>{expanded ? 'Collapse' : 'Expand'}</span>
+                <span>{expanded ? 'Collapse' : `Expand ${children.length}`}</span>
               </button>
             )}
             <button
               onClick={() => onSelectSession(session.id)}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               <span>Jump</span>
@@ -178,38 +186,22 @@ function SessionNode({
           </div>
         </div>
 
-        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl bg-gray-50 p-3 dark:bg-gray-900/70">
-            <div className="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400">Status</div>
-            <div className="mt-1 flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-white">
-              {session.busy ? renderMetaBadge('busy', 'active') : renderMetaBadge('idle', 'muted')}
-              {session.queueLength ? renderMetaBadge(`${session.queueLength} queued`, 'warning') : null}
-            </div>
-            <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-              busy time {session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}
-            </div>
-          </div>
-
-          <div className="rounded-xl bg-gray-50 p-3 dark:bg-gray-900/70">
-            <div className="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400">Messages</div>
-            <div className="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{session.messageCount || 0}</div>
-            <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">children {children.length} · node {session.currentNode || 'master'}</div>
-          </div>
-
-          <div className="rounded-xl bg-gray-50 p-3 dark:bg-gray-900/70 sm:col-span-2">
-            <div className="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400">Token usage</div>
-            <div className="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{formatTokenMillions(totalTokens)} total</div>
-            <div className="mt-2 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
-              <span>cached {formatTokenMillions(tokenUsage.cachedTokens)}</span>
-              <span>input {formatTokenMillions(tokenUsage.inputTokens)}</span>
-              <span>output {formatTokenMillions(tokenUsage.outputTokens)}</span>
-            </div>
-          </div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {session.busy ? renderMetaBadge('busy', 'active') : renderMetaBadge('idle', 'muted')}
+          {renderMetaBadge(`busy ${session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}`, session.busy ? 'active' : 'muted')}
+          {renderMetaBadge(`${session.messageCount || 0} msgs`, 'default')}
+          {renderMetaBadge(`${children.length} children`, 'default')}
+          {renderMetaBadge(`node:${session.currentNode || 'master'}`, 'muted')}
+          {!!session.queueLength && renderMetaBadge(`${session.queueLength} queued`, 'warning')}
+          {renderMetaBadge(`${formatTokenMillions(totalTokens)} total`, 'default')}
+          <span className="inline-flex items-center rounded-full bg-gray-50 px-2 py-1 text-[11px] text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+            c {formatTokenMillions(tokenUsage.cachedTokens)} · in {formatTokenMillions(tokenUsage.inputTokens)} · out {formatTokenMillions(tokenUsage.outputTokens)}
+          </span>
         </div>
       </div>
 
       {expanded && children.length > 0 && (
-        <div className={`${depth > 0 ? 'ml-4 border-l border-gray-200 pl-4 dark:border-gray-700' : ''} space-y-3`}>
+        <div className={`${depth > 0 ? 'ml-3 border-l border-gray-200 pl-3 dark:border-gray-700' : ''} space-y-2`}>
           <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <div className="text-sm font-medium text-gray-700 dark:text-gray-200">
               {children.length} child session{children.length > 1 ? 's' : ''}
@@ -217,14 +209,14 @@ function SessionNode({
             {hiddenChildrenCount > 0 && (
               <button
                 onClick={() => onToggleShowMore(session.id)}
-                className="rounded-lg border border-gray-200 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                className="rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
               >
                 {showingAllChildren ? 'Show less' : `Show ${hiddenChildrenCount} more`}
               </button>
             )}
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+          <div className="grid gap-3" style={CHILD_GRID_STYLE}>
             {visibleChildren.map(child => (
               <SessionNode
                 key={child.id}
@@ -389,8 +381,8 @@ export default function ArchitectureView({
 
   return (
     <div className="h-full overflow-y-auto bg-gray-100 dark:bg-gray-900">
-      <div className="mx-auto max-w-7xl p-4 md:p-6 lg:p-8">
-        <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      <div className="mx-auto max-w-[1500px] p-4 md:p-5 lg:p-6">
+        <div className="mb-5 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
@@ -406,8 +398,8 @@ export default function ArchitectureView({
                 <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Architecture</h1>
               </div>
               <p className="mt-2 max-w-4xl text-sm text-gray-600 dark:text-gray-300">
-                Tree view of runtime session hierarchy. Top-level sessions appear first; expand a node to reveal wrapped child rows,
-                busy duration, message counts, child counts, agent ownership, and total token usage.
+                Compact tree view of runtime session hierarchy. Expand a session to use the full row for its children while keeping status,
+                busy time, message counts, agent ownership, and token usage visible.
               </p>
             </div>
           </div>
@@ -444,17 +436,15 @@ export default function ArchitectureView({
           </div>
         </div>
 
-        <section className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Top-level sessions</h2>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Click expand on any node to reveal its children below. Large child sets wrap automatically and can be expanded further.
-              </p>
-            </div>
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Top-level sessions</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Expanded nodes take the full row so child sessions have enough horizontal space and can wrap more naturally.
+            </p>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-2">
+          <div className="grid gap-3" style={ROOT_GRID_STYLE}>
             {roots.map(root => (
               <SessionNode
                 key={root.id}
