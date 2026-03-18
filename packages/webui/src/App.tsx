@@ -285,7 +285,7 @@ function App() {
     if (showSessionList) {
       return <SessionList 
         sessions={sessions} 
-        currentSession={currentSession}
+        currentSession={currentView === 'chat' ? currentSession : undefined}
         currentView={currentView}
         onSelectSession={handleSelectSession}
         onSelectArchitecture={handleSelectArchitecture}
@@ -325,7 +325,7 @@ function App() {
     <div className="flex bg-gray-100 dark:bg-gray-900 h-screen">
       <Sidebar 
         sessions={sessions}
-        currentSession={currentSession}
+        currentSession={currentView === 'chat' ? currentSession : ''}
         currentView={currentView}
         onSelectSession={handleSelectSession}
         onSelectArchitecture={handleSelectArchitecture}

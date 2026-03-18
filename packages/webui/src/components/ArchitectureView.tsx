@@ -124,6 +124,13 @@ function SessionNode({
   const totalTokens = tokenUsage.cachedTokens + tokenUsage.inputTokens + tokenUsage.outputTokens
   const sessionName = session.displayName || session.id
   const wrapperStyle = depth === 0 && expanded ? { gridColumn: '1 / -1' } : undefined
+  const canExpand = children.length > 0
+
+  const handleCardClick = () => {
+    if (canExpand) {
+      onToggleExpanded(session.id)
+    }
+  }
 
   return (
     <div className="space-y-3" style={wrapperStyle}>
@@ -132,7 +139,8 @@ function SessionNode({
           currentSession === session.id
             ? 'border-blue-300 bg-blue-50/80 dark:border-blue-700 dark:bg-blue-950/30'
             : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'
-        } ${session.archived ? 'opacity-80' : ''}`}
+        } ${session.archived ? 'opacity-80' : ''} ${canExpand ? 'cursor-pointer hover:border-gray-300 dark:hover:border-gray-600' : ''}`}
+        onClick={handleCardClick}
       >
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
@@ -169,7 +177,7 @@ function SessionNode({
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             {children.length > 0 && (
               <button
-                onClick={() => onToggleExpanded(session.id)}
+                onClick={(e) => { e.stopPropagation(); onToggleExpanded(session.id) }}
                 className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
               >
                 {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -177,7 +185,7 @@ function SessionNode({
               </button>
             )}
             <button
-              onClick={() => onSelectSession(session.id)}
+              onClick={(e) => { e.stopPropagation(); onSelectSession(session.id) }}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
             >
               <ExternalLink className="h-3.5 w-3.5" />
@@ -186,17 +194,21 @@ function SessionNode({
           </div>
         </div>
 
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {session.busy ? renderMetaBadge('busy', 'active') : renderMetaBadge('idle', 'muted')}
-          {renderMetaBadge(`busy ${session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}`, session.busy ? 'active' : 'muted')}
-          {renderMetaBadge(`${session.messageCount || 0} msgs`, 'default')}
-          {renderMetaBadge(`${children.length} children`, 'default')}
-          {renderMetaBadge(`node:${session.currentNode || 'master'}`, 'muted')}
-          {!!session.queueLength && renderMetaBadge(`${session.queueLength} queued`, 'warning')}
-          {renderMetaBadge(`${formatTokenMillions(totalTokens)} total`, 'default')}
-          <span className="inline-flex items-center rounded-full bg-gray-50 px-2 py-1 text-[11px] text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-            c {formatTokenMillions(tokenUsage.cachedTokens)} · in {formatTokenMillions(tokenUsage.inputTokens)} · out {formatTokenMillions(tokenUsage.outputTokens)}
-          </span>
+        <div className="mt-3 space-y-1 text-xs text-gray-600 dark:text-gray-300">
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">status</span> {session.busy ? 'busy' : 'idle'}</span>
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">busy</span> {session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}</span>
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">msgs</span> {session.messageCount || 0}</span>
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">children</span> {children.length}</span>
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">node</span> {session.currentNode || 'master'}</span>
+            {!!session.queueLength && <span><span className="font-medium text-gray-900 dark:text-gray-100">queued</span> {session.queueLength}</span>}
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">total</span> {formatTokenMillions(totalTokens)}</span>
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">cached</span> {formatTokenMillions(tokenUsage.cachedTokens)}</span>
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">in</span> {formatTokenMillions(tokenUsage.inputTokens)}</span>
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">out</span> {formatTokenMillions(tokenUsage.outputTokens)}</span>
+          </div>
         </div>
       </div>
 
@@ -208,7 +220,7 @@ function SessionNode({
             </div>
             {hiddenChildrenCount > 0 && (
               <button
-                onClick={() => onToggleShowMore(session.id)}
+                onClick={(e) => { e.stopPropagation(); onToggleShowMore(session.id) }}
                 className="rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
               >
                 {showingAllChildren ? 'Show less' : `Show ${hiddenChildrenCount} more`}
