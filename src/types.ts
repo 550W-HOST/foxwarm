@@ -72,6 +72,12 @@ export interface SessionStats {
   lastUsage: TokenUsage | null;
 }
 
+export interface SessionTokenTotals {
+  cachedTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export interface TokenUsage {
   cachedTokens: number;
   inputTokens: number;
@@ -118,6 +124,7 @@ export interface Session {
   persistentMemorySnapshot: string;
   stats: SessionStats;
   busy: boolean;
+  busyStartedAt?: number;
   stopping?: boolean; // Flag to stop ongoing tool call recursion
   queue: QueueItem[];
   meta: SessionMeta;

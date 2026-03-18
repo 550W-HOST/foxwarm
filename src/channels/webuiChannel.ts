@@ -170,11 +170,17 @@ export class WebUIChannel implements Channel {
                 childSessions: childrenMap.get(id) || [],
                 aliases: session.aliases || [],
                 busy: session.busy || false,
+                busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
                 queueLength: session.queue?.length || 0,
                 displayName: session.displayName || null,
                 archived: session.archived || false,
                 currentNode: session.currentNode || 'master',
                 isolated: sessionManager.isSessionEffectivelyIsolated(session),
+                tokenUsage: {
+                  cachedTokens: session.stats?.totalCachedTokens || 0,
+                  inputTokens: session.stats?.totalInputTokens || 0,
+                  outputTokens: session.stats?.totalOutputTokens || 0,
+                },
               }))
               .sort((a, b) => b.lastMessageTime - a.lastMessageTime); // Sort by lastMessageTime descending
             res.json({ sessions });

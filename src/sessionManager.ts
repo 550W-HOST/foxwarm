@@ -298,6 +298,7 @@ export async function getSession(sessionId: string): Promise<Session> {
   if (session.stats.totalCachedTokens === null) session.stats.totalCachedTokens = 0;
   if (!session.queue) session.queue = [];
   if (session.busy === undefined) session.busy = false;
+  if (session.busy && typeof session.busyStartedAt !== 'number') session.busyStartedAt = Date.now();
   if (!session.meta) session.meta = { lastMessageTime: Date.now() };
   if (!session.currentNode) session.currentNode = 'master'; // Default to master node
   delete (session as any).isolated;
@@ -326,6 +327,29 @@ export async function createEmptySession(sessionId?: string): Promise<{ session:
   const session = await getSession(targetSessionId);
   await saveSession(session.id);
   return { session, created: true };
+}
+
+export async function updateSessionBusyState(session: Session, busy: boolean): Promise<void> {
+  const changed = session.busy !== busy;
+  const busyStartedChanged = busy
+    ? typeof session.busyStartedAt !== 'number'
+    : session.busyStartedAt !== undefined;
+
+  session.busy = busy;
+  if (busy) {
+    if (typeof session.busyStartedAt !== 'number') {
+      session.busyStartedAt = Date.now();
+    }
+  } else {
+    session.busyStartedAt = undefined;
+  }
+
+  if (!changed && !busyStartedChanged) {
+    return;
+  }
+
+  await saveSessionsMetadata();
+  notifySessionListUpdated();
 }
 
 /**
@@ -1328,6 +1352,7 @@ export async function resumeBusySessions(): Promise<void> {
       const session = await getSession(sessionId);
       // Reset busy flag and trigger
       session.busy = false;
+      session.busyStartedAt = undefined;
       // Will save session inside, no need to call saveSession() here.
       await queueSessionSystemEvent(sessionId, 'session resumed after process restart');
       logger.info({ sessionId }, 'Busy session resumed');

@@ -16,6 +16,7 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'verbose',
   'aliases',
   'busy',
+  'busyStartedAt',
   'nextMessageSeq',
   'nextBlockId',
   'todoState',
@@ -27,6 +28,7 @@ const SESSION_METADATA_FIELDS = [
   'aliases',
   'stats',
   'busy',
+  'busyStartedAt',
   'stopping',
   'queue',
   'meta',
@@ -164,6 +166,7 @@ export function buildRecoveredSessionMetadata(sessionId: string, historyData: Re
     ...recovered,
     id: sessionId,
     busy: historyData.busy ?? false,
+    busyStartedAt: typeof historyData.busyStartedAt === 'number' ? historyData.busyStartedAt : undefined,
     queue: historyData.queue || [],
     meta: {
       ...(historyData.meta || {}),

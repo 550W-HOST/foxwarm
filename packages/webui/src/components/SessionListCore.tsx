@@ -11,11 +11,17 @@ export interface Session {
   childSessions: string[]
   aliases?: string[]
   busy?: boolean
+  busyStartedAt?: number | null
   queueLength?: number
   displayName?: string
   archived?: boolean
   currentNode?: string
   isolated?: boolean
+  tokenUsage?: {
+    cachedTokens: number
+    inputTokens: number
+    outputTokens: number
+  }
 }
 
 interface SessionListCoreProps {
