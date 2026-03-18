@@ -919,6 +919,7 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
   session.queue = [];
   session.stopping = false;
   session.busy = false;
+  session.busyStartedAt = undefined;
   session.vectorIndexPosition = 0;
   session.nextBlockId = 1;
   session.historyVersion = (session.historyVersion || 0) + 1;

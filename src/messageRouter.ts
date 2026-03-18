@@ -134,7 +134,7 @@ export class MessageRouter {
       return false;
     }
 
-    session.busy = true;
+    void sessionManager.updateSessionBusyState(session, true);
     return true;
   }
 
@@ -223,6 +223,7 @@ export class MessageRouter {
       }
 
       session.busy = false;
+      session.busyStartedAt = undefined;
       await sessionManager.saveSession(session.id);
     }
   }
@@ -396,7 +397,7 @@ export class MessageRouter {
   ): Promise<void> {
     const session = options.session ?? await sessionManager.getSession(sessionId);
     if (!options.preclaimed) {
-      session.busy = true;
+      await sessionManager.updateSessionBusyState(session, true);
     }
 
     const broadcast = session.broadcast;
@@ -554,6 +555,7 @@ export class MessageRouter {
       }
 
       session.busy = false;
+      session.busyStartedAt = undefined;
       await sessionManager.saveSession(session.id);
     }
   }
@@ -644,6 +646,7 @@ export class MessageRouter {
       }
 
       session.busy = false;
+      session.busyStartedAt = undefined;
       await sessionManager.saveSession(session.id);
     } finally {
       this.processingSessions.delete(sessionId);
