@@ -1,8 +1,11 @@
 import { Message, Session, SessionTodoState } from '../types';
+import { partsContainNoActionSignal } from './childSessionReminder';
 
 const TODO_REMINDER_META_KEY = 'todoReminder';
 const TODO_REMINDER_SYSTEM_PREFIX = 'TODO reminder for this session:';
 const CHECKLIST_ITEM_REGEX = /(?:^|\n)\s*-\s*\[\s\]\s+\S/;
+
+type TodoReminderKind = 'interval' | 'end-turn';
 
 export function normalizeRemindEvery(value: unknown): number {
   const num = typeof value === 'string' ? Number(value) : value;
@@ -71,6 +74,50 @@ export function getLatestCountedMessageSeq(session: Session): number {
   return getLatestSessionMessageSeq(session);
 }
 
+function getLatestNonReminderMessage(session: Session): Message | null {
+  for (let i = session.history.length - 1; i >= 0; i--) {
+    const message = session.history[i];
+    if (!isTodoReminderMessage(message)) {
+      return message;
+    }
+  }
+
+  return null;
+}
+
+function latestMessageSuppressesTodoReminder(session: Session): boolean {
+  const latestMessage = getLatestNonReminderMessage(session);
+  return latestMessage?.role === 'model' && partsContainNoActionSignal(latestMessage.parts);
+}
+
+function hasTodoReminderForAnchorSeq(session: Session, anchorSeq: number): boolean {
+  if (anchorSeq <= 0) {
+    return false;
+  }
+
+  for (let i = session.history.length - 1; i >= 0; i--) {
+    const message = session.history[i];
+    if (isTodoReminderMessage(message) && message.__meta?.todoAnchorSeq === anchorSeq) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function buildTodoReminderMessage(state: SessionTodoState, anchorSeq: number, kind: TodoReminderKind): Message {
+  return {
+    role: 'user',
+    parts: [{ system: `${TODO_REMINDER_SYSTEM_PREFIX}\n${state.todo}` }],
+    __meta: {
+      timestamp: Date.now(),
+      [TODO_REMINDER_META_KEY]: true,
+      todoAnchorSeq: anchorSeq,
+      todoReminderKind: kind,
+    },
+  };
+}
+
 export function countNonReminderMessagesAfterSeq(session: Session, anchorSeq: number): number {
   let count = 0;
 
@@ -120,22 +167,44 @@ export function maybeBuildTodoReminderMessage(session: Session): Message | null 
     return null;
   }
 
+  if (latestMessageSuppressesTodoReminder(session)) {
+    return null;
+  }
+
   const countedMessagesSinceAnchor = countNonReminderMessagesAfterSeq(session, state.anchorSeq);
   if (countedMessagesSinceAnchor < state.remindEvery) {
     return null;
   }
 
   const currentSeq = getLatestCountedMessageSeq(session);
+  if (hasTodoReminderForAnchorSeq(session, currentSeq)) {
+    return null;
+  }
 
   state.anchorSeq = currentSeq;
 
-  return {
-    role: 'user',
-    parts: [{ system: `${TODO_REMINDER_SYSTEM_PREFIX}\n${state.todo}` }],
-    __meta: {
-      timestamp: Date.now(),
-      [TODO_REMINDER_META_KEY]: true,
-      todoAnchorSeq: currentSeq,
-    },
-  };
+  return buildTodoReminderMessage(state, currentSeq, 'interval');
+}
+
+export function maybeBuildTodoEndTurnReminderMessage(session: Session): Message | null {
+  const state = session.todoState;
+  if (!state) {
+    return null;
+  }
+
+  if (latestMessageSuppressesTodoReminder(session)) {
+    return null;
+  }
+
+  const currentSeq = getLatestCountedMessageSeq(session);
+  if (currentSeq <= state.anchorSeq) {
+    return null;
+  }
+
+  if (hasTodoReminderForAnchorSeq(session, currentSeq)) {
+    return null;
+  }
+
+  state.anchorSeq = currentSeq;
+  return buildTodoReminderMessage(state, currentSeq, 'end-turn');
 }

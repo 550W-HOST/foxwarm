@@ -5,6 +5,7 @@
 import { logger } from './common';
 import { ChannelContext, ChannelMessage } from './channel';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
+import { maybeBuildTodoEndTurnReminderMessage } from './session/todo';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
@@ -318,6 +319,19 @@ export class MessageRouter {
     }
   }
 
+  private async maybeAppendTodoEndTurnReminder(session: Session): Promise<void> {
+    if (session.queue.length > 0) {
+      return;
+    }
+
+    const reminder = maybeBuildTodoEndTurnReminderMessage(session);
+    if (!reminder) {
+      return;
+    }
+
+    await sessionManager.appendSessionMessage(session, reminder);
+  }
+
   private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean): Promise<void> {
     if (!alreadyBroadcasted && response) {
       await this.sendSessionReply(session, sourceCtx, response || '<empty string>', { excludePlatforms: ['webui'] });
@@ -525,6 +539,7 @@ export class MessageRouter {
 
       await this.maybeQueueChildReminder(session);
       await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted);
+      await this.maybeAppendTodoEndTurnReminder(session);
       await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
     } catch (e: any) {
       logger.error(e, 'Error handling message');
@@ -532,6 +547,7 @@ export class MessageRouter {
       await this.appendTerminalModelMessage(session, errorText);
       await this.maybeQueueChildReminder(session);
       await this.sendSessionError(session, options.sourceCtx, e);
+      await this.maybeAppendTodoEndTurnReminder(session);
     } finally {
       if (await this.continueWithQueuedWork(session)) {
         return;

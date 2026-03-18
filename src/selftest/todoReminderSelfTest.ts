@@ -1,5 +1,7 @@
 import assert from 'assert';
 import fs from 'fs-extra';
+import { MessageRouter } from '../messageRouter';
+import * as llm from '../llm';
 import * as sessionManager from '../sessionManager';
 import * as vector from '../vector';
 import { Message, Session } from '../types';
@@ -44,6 +46,24 @@ async function append(session: Session, message: Message): Promise<void> {
   await sessionManager.appendSessionMessage(session, message);
 }
 
+async function appendStubUserMessage(session: Session, parts: Message['parts'] | null): Promise<void> {
+  if (!parts?.length) {
+    return;
+  }
+
+  await sessionManager.appendSessionMessage(session, {
+    role: 'user',
+    parts,
+  });
+}
+
+async function appendStubModelMessage(session: Session, text: string): Promise<void> {
+  await sessionManager.appendSessionMessage(session, {
+    role: 'model',
+    parts: [{ text }],
+  });
+}
+
 function countTodoReminders(session: Session): number {
   return session.history.filter(message => message.__meta?.todoReminder === true).length;
 }
@@ -61,8 +81,10 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 async function main(): Promise<void> {
   await sessionManager.loadSessions();
 
+  const originalChat = llm.chat;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
+  const router = new MessageRouter();
   const createdSessionIds: string[] = [];
 
   try {
@@ -160,8 +182,67 @@ async function main(): Promise<void> {
       );
     });
 
+    await test('turn-end reminder appears once unless final response ends with [NO_ACTION] or todo is cleared', async () => {
+      const sessionId = makeSessionId('selftest_todo_endturn');
+      createdSessionIds.push(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await tool_set_todo({ todo: '- [ ] verify end-turn reminder', remindEvery: 99 }, { sessionId, session });
+
+      let callIndex = 0;
+      (llm as any).chat = async (parts: Message['parts'] | null, activeSession: Session) => {
+        assert.strictEqual(activeSession.id, sessionId);
+        await appendStubUserMessage(activeSession, parts);
+        callIndex += 1;
+
+        if (callIndex === 1) {
+          await appendStubModelMessage(activeSession, 'First normal reply');
+          return { text: 'First normal reply' };
+        }
+
+        if (callIndex === 2) {
+          await appendStubModelMessage(activeSession, 'Second quiet reply [NO_ACTION]');
+          return { text: 'Second quiet reply [NO_ACTION]' };
+        }
+
+        await appendStubModelMessage(activeSession, 'Third reply after clear');
+        return { text: 'Third reply after clear' };
+      };
+
+      await (router as any).runSessionTurn(sessionId, {
+        parts: [{ text: 'normal turn' }],
+        session,
+        preclaimed: true,
+      });
+
+      let reminderMessages = session.history.filter(message => message.__meta?.todoReminder === true);
+      assert.strictEqual(reminderMessages.length, 1);
+      assert.strictEqual(reminderMessages[0].__meta?.todoReminderKind, 'end-turn');
+
+      await (router as any).runSessionTurn(sessionId, {
+        parts: [{ text: 'quiet turn' }],
+        session,
+        preclaimed: true,
+      });
+
+      reminderMessages = session.history.filter(message => message.__meta?.todoReminder === true);
+      assert.strictEqual(reminderMessages.length, 1);
+
+      await tool_set_todo({ clear: true }, { sessionId, session });
+
+      await (router as any).runSessionTurn(sessionId, {
+        parts: [{ text: 'after clear' }],
+        session,
+        preclaimed: true,
+      });
+
+      reminderMessages = session.history.filter(message => message.__meta?.todoReminder === true);
+      assert.strictEqual(reminderMessages.length, 1);
+    });
+
     console.log('todo reminder selftest passed');
   } finally {
+    (llm as any).chat = originalChat;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     await cleanupSessions(createdSessionIds);
   }

@@ -132,7 +132,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   const shouldCollapse = !expanded
 
   return (
-    <div className="w-full max-w-[80%] overflow-x-hidden">
+    <div className="w-full overflow-x-hidden">
       <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-3 text-slate-700 dark:text-slate-300">
         <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : undefined}>
           <pre className="whitespace-pre-wrap font-sans text-sm" style={{ lineHeight: '1.5em' }}>
