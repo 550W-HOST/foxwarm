@@ -86,7 +86,6 @@ const renderMetaBadge = (label: string, tone: 'default' | 'active' | 'warning' |
 
 interface SessionNodeProps {
   session: Session
-  currentSession?: string
   parent: Session | null
   children: Session[]
   depth: number
@@ -102,7 +101,6 @@ interface SessionNodeProps {
 
 function SessionNode({
   session,
-  currentSession,
   parent,
   children,
   depth,
@@ -136,9 +134,7 @@ function SessionNode({
     <div className="space-y-3">
       <div
         className={`rounded-2xl border px-4 py-3 shadow-sm transition-colors ${
-          currentSession === session.id
-            ? 'border-blue-300 bg-blue-50/80 dark:border-blue-700 dark:bg-blue-950/30'
-            : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'
+          'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'
         } ${session.archived ? 'opacity-80' : ''} ${canExpand ? 'cursor-pointer hover:border-gray-300 dark:hover:border-gray-600' : ''}`}
         onClick={handleCardClick}
       >
@@ -149,7 +145,6 @@ function SessionNode({
                 {sessionName}
               </h3>
               {renderMetaBadge(`agent:${session.agent || 'main'}`, 'default')}
-              {currentSession === session.id && renderMetaBadge('current', 'active')}
               {session.archived && renderMetaBadge('archived', 'muted')}
               {session.isolated && renderMetaBadge('isolated', 'warning')}
             </div>
@@ -227,7 +222,6 @@ function SessionNode({
               <SessionNode
                 key={child.id}
                 session={child}
-                currentSession={currentSession}
                 parent={sessionMap.get(session.id) || null}
                 children={childrenMap.get(child.id) || []}
                 depth={depth + 1}
@@ -455,7 +449,6 @@ export default function ArchitectureView({
               <SessionNode
                 key={root.id}
                 session={root}
-                currentSession={currentSession}
                 parent={null}
                 children={childrenMap.get(root.id) || []}
                 depth={0}
