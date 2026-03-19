@@ -5,13 +5,19 @@ import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
-import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, OpenAIResponsesContent, TokenUsage, ToolDefinition } from './types';
+import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition } from './types';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir } from './config';
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { loadSkillDocuments } from './skills';
 import { checkToolPermission, checkPathAccess } from './isolatedCheck';
+import {
+    collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
+    collectOpenAIResponsesStream as collectOpenAIResponsesStreamProvider,
+    convertToOpenAIFormat as convertToOpenAIFormatProvider,
+    convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
+} from './llmProviders/openai';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -136,27 +142,6 @@ function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
     });
 }
 
-function parseSseEventBlock(block: string): any | null {
-    const dataLines: string[] = [];
-
-    for (const rawLine of block.replace(/\r/g, '').split('\n')) {
-        if (rawLine.startsWith('data:')) {
-            dataLines.push(rawLine.slice(5).trimStart());
-        }
-    }
-
-    if (dataLines.length === 0) {
-        return null;
-    }
-
-    const payload = dataLines.join('\n');
-    if (!payload || payload === '[DONE]') {
-        return null;
-    }
-
-    return JSON.parse(payload);
-}
-
 function stripWrappingBlankLines(text: string): string {
     return text.replace(/^\s*\n/, '').replace(/\n\s*$/, '');
 }
@@ -191,173 +176,6 @@ function extractAnthropicThinkingTaggedParts(text: string): MessagePart[] | null
     }
 
     return parts.length > 0 ? parts : null;
-}
-
-function buildReasoningSummaryText(summaryParts: Map<string, string>): string {
-    return Array.from(summaryParts.entries())
-        .sort(([leftKey], [rightKey]) => {
-            const [leftOutput = '0', leftSummary = '0'] = leftKey.split(':');
-            const [rightOutput = '0', rightSummary = '0'] = rightKey.split(':');
-            const outputDelta = Number(leftOutput) - Number(rightOutput);
-            if (outputDelta !== 0) {
-                return outputDelta;
-            }
-            return Number(leftSummary) - Number(rightSummary);
-        })
-        .map(([, text]) => text)
-        .filter(Boolean)
-        .join('\n');
-}
-
-async function collectOpenAIResponsesStream(
-    stream: any,
-    session: Session,
-    signal: AbortSignal,
-    options?: {
-        onReasoningSummary?: (text: string) => void;
-    },
-): Promise<any> {
-    if (signal.aborted) {
-        throw makeAbortError();
-    }
-
-    return new Promise((resolve, reject) => {
-        let settled = false;
-        let buffer = '';
-        let completedResponse: any = null;
-        let lastSummaryText = '';
-        const summaryParts = new Map<string, string>();
-        const decoder = new StringDecoder('utf8');
-
-        const cleanup = () => {
-            signal.removeEventListener('abort', onAbort);
-            stream.off?.('data', onData);
-            stream.off?.('end', onEnd);
-            stream.off?.('error', onError);
-        };
-
-        const finish = (callback: () => void) => {
-            if (settled) {
-                return;
-            }
-
-            settled = true;
-            cleanup();
-            callback();
-        };
-
-        const emitSummaryUpdate = () => {
-            const nextText = buildReasoningSummaryText(summaryParts);
-            if (nextText === lastSummaryText) {
-                return;
-            }
-
-            lastSummaryText = nextText;
-            if (options?.onReasoningSummary) {
-                options.onReasoningSummary(nextText);
-            } else {
-                sessionManager.notifySessionEvent(session.id, {
-                    type: 'reasoning-summary',
-                    text: nextText,
-                });
-            }
-        };
-
-        const handleEvent = (event: any) => {
-            const key = `${event.output_index ?? 0}:${event.summary_index ?? 0}`;
-
-            switch (event.type) {
-                case 'response.reasoning_summary_part.done':
-                    if (event.part?.text) {
-                        summaryParts.set(key, event.part.text);
-                        emitSummaryUpdate();
-                    }
-                    return;
-                case 'response.reasoning_summary_text.delta':
-                    summaryParts.set(key, `${summaryParts.get(key) || ''}${event.delta || ''}`);
-                    emitSummaryUpdate();
-                    return;
-                case 'response.reasoning_summary_text.done':
-                    summaryParts.set(key, event.text || summaryParts.get(key) || '');
-                    emitSummaryUpdate();
-                    return;
-                case 'response.completed':
-                    completedResponse = event.response;
-                    return;
-                case 'response.failed':
-                    finish(() => reject(new Error(event.response?.error?.message || 'OpenAI Responses request failed.')));
-                    return;
-                case 'response.error':
-                    finish(() => reject(new Error(event.error?.message || 'OpenAI Responses stream error.')));
-                    return;
-                default:
-                    return;
-            }
-        };
-
-        const appendDecodedText = (text: string) => {
-            if (!text) {
-                return;
-            }
-
-            buffer += text;
-            buffer = buffer.replace(/\r\n/g, '\n');
-
-            let boundaryIndex = buffer.indexOf('\n\n');
-            while (boundaryIndex !== -1) {
-                const block = buffer.slice(0, boundaryIndex);
-                buffer = buffer.slice(boundaryIndex + 2);
-
-                try {
-                    const event = parseSseEventBlock(block);
-                    if (event) {
-                        handleEvent(event);
-                    }
-                } catch (error) {
-                    finish(() => reject(error));
-                    return;
-                }
-
-                boundaryIndex = buffer.indexOf('\n\n');
-            }
-        };
-
-        const onAbort = () => {
-            try {
-                stream.destroy?.(makeAbortError());
-            } catch {}
-            finish(() => reject(makeAbortError()));
-        };
-
-        const onData = (chunk: any) => {
-            appendDecodedText(
-                typeof chunk === 'string'
-                    ? chunk
-                    : decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-            );
-        };
-
-        const onEnd = () => {
-            appendDecodedText(decoder.end());
-            finish(() => {
-                if (completedResponse) {
-                    resolve(completedResponse);
-                    return;
-                }
-
-                reject(new Error('OpenAI Responses stream ended before response.completed.'));
-            });
-        };
-
-        const onError = (error: any) => {
-            finish(() => reject(error));
-        };
-
-        signal.addEventListener('abort', onAbort, { once: true });
-        stream.on('data', onData);
-        stream.on('end', onEnd);
-        stream.on('error', onError);
-    });
 }
 
 function formatMemoryBlock(filePath: string, agentName: string, kind: 'self' | 'inherited', content: string): string {
@@ -681,352 +499,12 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
  * Internal format: { role: 'user'|'model'|'tool', parts: [{ text, thinking, functionCall, functionResponse }] }
  * OpenAI format: { role: 'user'|'assistant'|'tool', content: string | array, tool_calls?: array, reasoning_content?: string }
  */
-export function convertToOpenAIFormat(contents: Message[]): any[] {
-    const openaiMessages = [];
-    
-    for (const msg of contents) {
-        let role = msg.role as any;
-        if (role === 'model') role = 'assistant';
-        
-        // Handle tool response messages
-        if (role === 'tool') {
-            const groupedByToolId = new Map<string, any[]>();
-            const toolIdOrder: string[] = [];
-            const pendingInlineWithoutId: any[] = [];
-
-            const ensureGroup = (toolId: string) => {
-                if (!groupedByToolId.has(toolId)) {
-                    groupedByToolId.set(toolId, []);
-                    toolIdOrder.push(toolId);
-                }
-            };
-
-            const pushGroupPart = (toolId: string, part: any) => {
-                ensureGroup(toolId);
-                groupedByToolId.get(toolId)!.push(part);
-            };
-
-            for (const part of msg.parts || []) {
-                // Handle inline data (images/screenshots)
-                if (part.inlineData) {
-                    const imagePart = {
-                        type: 'image_url',
-                        image_url: {
-                            url: `data:${part.inlineData.mimeType || part.inlineData.mime_type || 'image/png'};base64,${part.inlineData.data}`
-                        }
-                    };
-
-                    const toolId = part.toolUseId;
-                    if (toolId) {
-                        pushGroupPart(toolId, imagePart);
-                    } else {
-                        // Backward compatibility: older history might miss toolUseId on inlineData.
-                        // Try to attach it to the next functionResponse in this same tool message.
-                        pendingInlineWithoutId.push(imagePart);
-                    }
-                    continue;
-                }
-                
-                if (part.functionResponse) {
-                    const resp = part.functionResponse.response || {};
-                    const output = extractToolResponseOutput(resp);
-                    const toolId = part.functionResponse.tool_use_id || part.toolUseId;
-                    if (!toolId) {
-                        logger.warn({ part }, 'Skipping tool response without tool_call_id');
-                        continue;
-                    }
-
-                    ensureGroup(toolId);
-
-                    // Attach orphaned inline images (if any) to this tool id.
-                    if (pendingInlineWithoutId.length > 0) {
-                        for (const imagePart of pendingInlineWithoutId) {
-                            pushGroupPart(toolId, imagePart);
-                        }
-                        pendingInlineWithoutId.length = 0;
-                    }
-
-                    const outputText = stringifyToolOutput(output);
-                    if (outputText !== '') {
-                        pushGroupPart(toolId, { type: 'text', text: outputText });
-                    }
-                }
-            }
-
-            // Any orphaned inlineData that still has no tool id must not be sent as tool output.
-            if (pendingInlineWithoutId.length > 0) {
-                logger.warn({ orphanCount: pendingInlineWithoutId.length }, 'Dropping inlineData without tool_call_id in tool message');
-            }
-
-            for (const toolId of toolIdOrder) {
-                const groupedParts = groupedByToolId.get(toolId) || [];
-                const hasNonTextPart = groupedParts.some((x: any) => x.type !== 'text');
-                const content = groupedParts.length === 0
-                    ? ''
-                    : !hasNonTextPart && groupedParts.length === 1
-                    ? groupedParts[0].text
-                    : groupedParts;
-
-                openaiMessages.push({
-                    role: 'tool',
-                    tool_call_id: toolId,
-                    content,
-                });
-            }
-
-            continue;
-        }
-
-        let content = [];
-        let toolCalls = [];
-        let reasoningContent = null;
-
-        let parts = msg.parts || [];
-        if (role === 'user' && parts.length > 1) {
-            const allTextOnly = parts.every(p => (p.text !== undefined || p.system !== undefined) && !p.thinking && !p.functionCall && !p.functionResponse && !p.inlineData);
-            if (allTextOnly) {
-                const mergedText = parts
-                    .map(p => p.system !== undefined ? `[SYSTEM: ${p.system}]` : p.text)
-                    .filter(Boolean)
-                    .join('\n');
-                parts = [{ text: mergedText }];
-            }
-        }
-        
-        for (const part of parts) {
-            // Handle thinking/reasoning (for o1 models and compatible APIs)
-            if (part.thinking) {
-                reasoningContent = part.thinking;
-            }
-            
-            // Handle system/meta parts by merging them back into user text for providers without developer messages
-            if (part.system) {
-                content.push({ type: 'text', text: `[SYSTEM: ${part.system}]` });
-            }
-
-            // Handle text
-            if (part.text) {
-                content.push({ type: 'text', text: part.text });
-            }
-            
-            // Handle function call
-            if (part.functionCall) {
-                toolCalls.push({
-                    id: part.functionCall.id || `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                    type: 'function',
-                    function: {
-                        name: part.functionCall.name,
-                        arguments: JSON.stringify(part.functionCall.args || {})
-                    }
-                });
-            }
-
-            // Handle image data
-            if (part.inlineData) {
-                content.push({
-                    type: 'image_url',
-                    image_url: {
-                        url: `data:${part.inlineData.mimeType || part.inlineData.mime_type || 'image/jpeg'};base64,${part.inlineData.data}`
-                    }
-                });
-            }
-        }
-        
-        // Build message
-        const message: any = { role };
-        
-        // Add reasoning content if present (for o1 models and compatible APIs)
-        // Note: Official OpenAI API may not accept this in requests, but some
-        // compatible APIs (local models, etc.) might support it
-        if (reasoningContent) {
-            message.reasoning_content = reasoningContent;
-        }
-        
-        // Simplify: if only one text part, use string content
-        if (content.length === 1 && content[0].type === 'text') {
-            message.content = content[0].text;
-        } else if (content.length > 0) {
-            message.content = content;
-        } else {
-            message.content = (msg as any).content || '';
-        }
-        
-        // Add tool calls if present
-        if (toolCalls.length > 0) {
-            message.tool_calls = toolCalls;
-        }
-        
-        openaiMessages.push(message);
-    }
-    
-    return openaiMessages;
-}
-
 /**
  * Convert internal message format to OpenAI Responses API input items.
  * - user messages => input_text / input_image message items
  * - assistant messages => output_text message items + function_call items
  * - tool messages => function_call_output items
  */
-export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
-    const responseInput = [];
-
-    const flushMessageContent = (
-        role: 'user' | 'assistant',
-        content: Array<OpenAIResponsesContent>
-    ) => {
-        if (content.length === 0) return;
-
-        const message: any = {
-            type: 'message',
-            role,
-            content: [...content]
-        };
-
-        if (role === 'assistant') {
-            message.phase = 'final_answer';
-        }
-
-        responseInput.push(message);
-        content.length = 0;
-    };
-
-    for (const msg of contents) {
-        if (msg.role === 'tool') {
-            const groupedByToolId = new Map<string, any[]>();
-            const toolIdOrder: string[] = [];
-            const pendingInlineWithoutId: any[] = [];
-
-            const ensureGroup = (toolId: string) => {
-                if (!groupedByToolId.has(toolId)) {
-                    groupedByToolId.set(toolId, []);
-                    toolIdOrder.push(toolId);
-                }
-            };
-
-            const pushGroupPart = (toolId: string, part: any) => {
-                ensureGroup(toolId);
-                groupedByToolId.get(toolId)!.push(part);
-            };
-
-            for (const part of msg.parts || []) {
-                if (part.inlineData) {
-                    const imagePart = {
-                        type: 'input_image',
-                        image_url: `data:${part.inlineData.mimeType || part.inlineData.mime_type || 'image/png'};base64,${part.inlineData.data}`
-                    };
-
-                    const toolId = part.toolUseId;
-                    if (toolId) {
-                        pushGroupPart(toolId, imagePart);
-                    } else {
-                        pendingInlineWithoutId.push(imagePart);
-                    }
-                    continue;
-                }
-
-                if (part.functionResponse) {
-                    const resp = part.functionResponse.response || {};
-                    const output = extractToolResponseOutput(resp);
-                    const toolId = part.functionResponse.tool_use_id || part.toolUseId;
-
-                    if (!toolId) {
-                        logger.warn({ part }, 'Skipping Responses tool output without call_id');
-                        continue;
-                    }
-
-                    ensureGroup(toolId);
-
-                    if (pendingInlineWithoutId.length > 0) {
-                        for (const imagePart of pendingInlineWithoutId) {
-                            pushGroupPart(toolId, imagePart);
-                        }
-                        pendingInlineWithoutId.length = 0;
-                    }
-
-                    const outputText = stringifyToolOutput(output);
-                    if (outputText !== '') {
-                        pushGroupPart(toolId, { type: 'input_text', text: outputText });
-                    }
-                }
-            }
-
-            if (pendingInlineWithoutId.length > 0) {
-                logger.warn({ orphanCount: pendingInlineWithoutId.length }, 'Dropping inlineData without call_id in Responses tool output');
-            }
-
-            for (const toolId of toolIdOrder) {
-                const outputParts = groupedByToolId.get(toolId) || [];
-                const output = outputParts.length === 0
-                    ? ''
-                    : outputParts.length === 1 && outputParts[0].type === 'input_text'
-                        ? outputParts[0].text
-                        : outputParts;
-
-                responseInput.push({
-                    type: 'function_call_output',
-                    call_id: toolId,
-                    output
-                });
-            }
-
-            continue;
-        }
-
-        const role = msg.role === 'model' ? 'assistant' : 'user';
-        const content: Array<OpenAIResponsesContent> = [];
-
-        for (const part of msg.parts || []) {
-            if (part.system) {
-                content.push({
-                    type: role === 'assistant' ? 'output_text' : 'input_text',
-                    text: `[SYSTEM: ${part.system}]`
-                });
-            }
-
-            if (part.providerMeta?.thinkingSummaries || part.providerMeta?.encryptedThinking) {
-                responseInput.push({
-                    type: 'reasoning',
-                    summary: part.providerMeta.thinkingSummaries.map(text => ({ text, type: 'summary_text' })),
-                    encrypted_content: part.providerMeta.encryptedThinking,
-                });
-            }
-
-            if (part.text) {
-                content.push({
-                    type: role === 'assistant' ? 'output_text' : 'input_text',
-                    text: part.text
-                });
-            }
-
-            if (part.inlineData) {
-                if (role === 'assistant') {
-                    logger.warn('Dropping assistant inlineData for Responses API history');
-                } else {
-                    content.push({
-                        type: 'input_image',
-                        image_url: `data:${part.inlineData.mimeType || part.inlineData.mime_type || 'image/jpeg'};base64,${part.inlineData.data}`
-                    });
-                }
-            }
-
-            if (part.functionCall) {
-                flushMessageContent(role, content);
-                responseInput.push({
-                    type: 'function_call',
-                    call_id: part.functionCall.id || `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                    name: part.functionCall.name,
-                    arguments: JSON.stringify(part.functionCall.args || {})
-                });
-            }
-        }
-
-        flushMessageContent(role, content);
-    }
-
-    return responseInput;
-}
-
 /**
  * Execute tools and return results as a single message with multiple parts
  */
@@ -1298,6 +776,8 @@ export async function chat(
     logger.info(`Requesting LLM (${modelKey}, type ${providerType}, iteration ${iteration})...`);
 
     const useOpenAIResponsesApi = shouldUseOpenAIResponsesApi(providerType, modelName);
+    const useOpenAIChatStream = providerType === 'openai';
+    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatStream;
     const availableToolDefinitions = options?.toolDefinitions ?? tools.definitions;
 
     const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh' :
@@ -1307,7 +787,7 @@ export async function chat(
                          : undefined;
 
     if (useOpenAIResponsesApi) {
-        messages = convertToOpenAIResponsesFormat(fixedContents);
+        messages = convertToOpenAIResponsesFormatProvider(fixedContents);
         url = `${baseUrl}/responses`;
         headers = {
             'Content-Type': 'application/json',
@@ -1342,7 +822,7 @@ export async function chat(
         };
     } else if (providerType === 'openai') {
         // OpenAI format
-        messages = convertToOpenAIFormat(fixedContents);
+        messages = convertToOpenAIFormatProvider(fixedContents);
         url = `${baseUrl}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',
@@ -1355,6 +835,8 @@ export async function chat(
             max_tokens: MAX_OUTPUT,
             prompt_cache_key: promptCacheKey,
             reasoning_effort: openaiEffort,
+            stream: true,
+            stream_options: { include_usage: true },
             messages: [
                 { role: 'system', content: systemPrompt },
                 ...messages
@@ -1440,10 +922,10 @@ export async function chat(
                     timeout: 180000, // 3 minutes
                     validateStatus: () => true,
                     signal: abortController.signal,
-                    ...(useOpenAIResponsesApi ? { responseType: 'stream' as const } : {}),
+                    ...(useStreamingApi ? { responseType: 'stream' as const } : {}),
                 });
 
-                if (useOpenAIResponsesApi) {
+                if (useStreamingApi) {
                     if (response.status !== 200) {
                         const errorBody = await readStreamAsText(response.data, abortController.signal);
                         await logResponse({
@@ -1463,11 +945,21 @@ export async function chat(
                         continue;
                     }
 
-                    resp = await collectOpenAIResponsesStream(response.data, session, abortController.signal, {
-                        onReasoningSummary: shouldNotifySessionEvents
-                            ? undefined
-                            : () => {},
-                    });
+                    if (useOpenAIResponsesApi) {
+                        resp = await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, {
+                            onReasoningSummary: shouldNotifySessionEvents
+                                ? (text) => {
+                                    sessionManager.notifySessionEvent(session.id, {
+                                        type: 'reasoning-summary',
+                                        text,
+                                    });
+                                }
+                                : () => {},
+                        });
+                    } else {
+                        resp = await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal);
+                    }
+
                     await logResponse({
                         status: response.status + ' ' + response.statusText,
                         headers: response.headers,
