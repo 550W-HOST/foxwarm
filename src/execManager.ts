@@ -16,6 +16,7 @@ const MISSING_STATUS_GRACE_MS = 3000;
 const PARTIAL_LOG_BYTES = 4000;
 const INLINE_LOG_LIMIT_BYTES = 20000;
 const INLINE_EXCERPT_HALF_BYTES = 5000;
+const BACKGROUND_COMMAND_PREVIEW_LIMIT = 100;
 
 export interface ExecStatus {
   exitCode: number | null;
@@ -68,6 +69,14 @@ function sleep(ms: number): Promise<void> {
 
 function escapeInlineCode(text: string): string {
   return text.replace(/`/g, '\\`');
+}
+
+function summarizeCommandForNotification(text: string, maxLength: number = BACKGROUND_COMMAND_PREVIEW_LIMIT): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) {
+    return compact;
+  }
+  return `${compact.slice(0, maxLength)}...`;
 }
 
 function isPidRunning(pid: number): boolean {
@@ -156,7 +165,7 @@ async function updateRunningExec(id: string, updates: Partial<RunningExecEntry>)
 function buildWrapperScript(): string {
   return [
     'set +e',
-    'eval "$FOXWARM_EXEC_COMMAND"',
+    'bash "$FOXWARM_EXEC_SCRIPT_PATH"',
     'exit_code=$?',
     'finished_at="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")"',
     'tmp_path="${FOXWARM_EXEC_STATUS_PATH}.tmp.$$"',
@@ -294,7 +303,7 @@ function buildCompletionMessage(entry: RunningExecEntry, status: ExecStatus): st
   const exitText = status.exitCode === null ? 'unknown' : String(status.exitCode);
   const nodeLine = entry.nodeId && entry.nodeId !== 'master' ? `\nNode: \`${entry.nodeId}\`` : '';
   const errorLine = status.error ? `\nError: ${status.error}` : '';
-  return `Background Process Finished\ncommand: \`${escapeInlineCode(entry.command)}\`${nodeLine}\nExit code: ${exitText}${errorLine}\nFull output in ${entry.logPath}`;
+  return `Background Process Finished\ncommand: \`${escapeInlineCode(summarizeCommandForNotification(entry.command))}\`${nodeLine}\nExit code: ${exitText}${errorLine}\nFull output in ${entry.logPath}`;
 }
 
 async function reconcileRunningExecs(): Promise<void> {
@@ -393,7 +402,10 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
   const logFileName = `${execId}_${formatTime()}.log`;
   const logPath = await getDatedLogPath(tempDir, logFileName);
   const statusPath = `${logPath}.exit.json`;
+  const scriptPath = `${logPath}.command.sh`;
   const logHandle = await fsp.open(logPath, 'a');
+
+  await fs.writeFile(scriptPath, `#!/usr/bin/env bash\n${command}${command.endsWith('\n') ? '' : '\n'}`, { mode: 0o700 });
 
   let child: ChildProcess;
   try {
@@ -402,7 +414,7 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
       env: {
         ...process.env,
         TERM: 'xterm-256color',
-        FOXWARM_EXEC_COMMAND: command,
+        FOXWARM_EXEC_SCRIPT_PATH: scriptPath,
         FOXWARM_EXEC_STATUS_PATH: statusPath,
       },
       stdio: ['ignore', logHandle.fd, logHandle.fd],
@@ -489,7 +501,7 @@ export async function buildForegroundExecResult(entry: RunningExecEntry, status:
 
 export async function buildBackgroundTimeoutResult(entry: RunningExecEntry): Promise<string> {
   const partialOutput = await readPartialLog(entry.logPath);
-  return `[Process running longer than 10s, switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification (unless working on other tasks in parallel).]\nPID: ${entry.pid}\nLog file: ${entry.logPath}\n\nPartial Output:\n${partialOutput}`;
+  return `[Process running longer than 15s, switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification (unless working on other tasks in parallel).]\nPID: ${entry.pid}\nLog file: ${entry.logPath}\n\nPartial Output:\n${partialOutput}`;
 }
 
 export function listRunningExecs(): RunningExecEntry[] {
