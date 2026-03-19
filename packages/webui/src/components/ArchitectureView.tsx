@@ -90,8 +90,10 @@ interface SessionNodeProps {
   children: Session[]
   depth: number
   now: number
+  activeRootSessionId?: string | null
   expandedSessions: Set<string>
   showMoreChildren: Set<string>
+  onToggleRootExpanded: (sessionId: string) => void
   onToggleExpanded: (sessionId: string) => void
   onToggleShowMore: (sessionId: string) => void
   onSelectSession: (sessionId: string) => void
@@ -105,8 +107,10 @@ function SessionNode({
   children,
   depth,
   now,
+  activeRootSessionId,
   expandedSessions,
   showMoreChildren,
+  onToggleRootExpanded,
   onToggleExpanded,
   onToggleShowMore,
   onSelectSession,
@@ -123,10 +127,15 @@ function SessionNode({
   const sessionName = session.displayName || session.id
   const canExpand = children.length > 0
   const statusText = `${session.busy ? 'busy' : 'idle'} ${session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}`
+  const isExpandedRoot = depth === 0 && activeRootSessionId === session.id
 
   const handleCardClick = () => {
     if (canExpand) {
-      onToggleExpanded(session.id)
+      if (depth === 0) {
+        onToggleRootExpanded(session.id)
+      } else {
+        onToggleExpanded(session.id)
+      }
     }
   }
 
@@ -134,7 +143,9 @@ function SessionNode({
     <div className="space-y-3">
       <div
         className={`rounded-2xl border px-4 py-3 shadow-sm transition-colors ${
-          'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'
+          isExpandedRoot
+            ? 'border-blue-300 bg-blue-50/70 dark:border-blue-700 dark:bg-blue-950/20'
+            : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'
         } ${session.archived ? 'opacity-80' : ''} ${canExpand ? 'cursor-pointer hover:border-gray-300 dark:hover:border-gray-600' : ''}`}
         onClick={handleCardClick}
       >
@@ -185,7 +196,7 @@ function SessionNode({
           <div className="flex flex-wrap gap-x-3 gap-y-1">
             <span><span className="font-medium text-gray-900 dark:text-gray-100">status</span> {statusText}</span>
             <span><span className="font-medium text-gray-900 dark:text-gray-100">msgs</span> {session.messageCount || 0}</span>
-            <span><span className="font-medium text-gray-900 dark:text-gray-100">children</span> {children.length}</span>
+            {children.length > 0 && <span><span className="font-medium text-gray-900 dark:text-gray-100">children</span> {children.length}</span>}
             <span><span className="font-medium text-gray-900 dark:text-gray-100">node</span> {session.currentNode || 'master'}</span>
             {!!session.queueLength && <span><span className="font-medium text-gray-900 dark:text-gray-100">queued</span> {session.queueLength}</span>}
           </div>
@@ -198,10 +209,9 @@ function SessionNode({
         </div>
       </div>
 
-      {expanded && children.length > 0 && (
+      {depth > 0 && expanded && children.length > 0 && (
         <div
-          className={`${depth > 0 ? 'ml-3 border-l border-gray-200 pl-3 dark:border-gray-700' : ''} space-y-2`}
-          style={depth === 0 ? { gridColumn: '1 / -1' } : undefined}
+          className="ml-3 space-y-2 border-l border-gray-200 pl-3 dark:border-gray-700"
         >
           <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <div className="text-sm font-medium text-gray-700 dark:text-gray-200">
@@ -226,8 +236,10 @@ function SessionNode({
                 children={childrenMap.get(child.id) || []}
                 depth={depth + 1}
                 now={now}
+                activeRootSessionId={activeRootSessionId}
                 expandedSessions={expandedSessions}
                 showMoreChildren={showMoreChildren}
+                onToggleRootExpanded={onToggleRootExpanded}
                 onToggleExpanded={onToggleExpanded}
                 onToggleShowMore={onToggleShowMore}
                 onSelectSession={onSelectSession}
@@ -248,6 +260,7 @@ export default function ArchitectureView({
   onSelectSession,
   onBack,
 }: ArchitectureViewProps) {
+  const [activeRootSessionId, setActiveRootSessionId] = useState<string | null>(null)
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [showMoreChildren, setShowMoreChildren] = useState<Set<string>>(new Set())
   const [now, setNow] = useState(Date.now())
@@ -322,8 +335,10 @@ export default function ArchitectureView({
 
     const next = new Set<string>()
     let cursor: string | null | undefined = currentSession
+    let rootId: string | null = null
     while (cursor) {
       next.add(cursor)
+      rootId = cursor
       cursor = normalizedParentMap.get(cursor)
     }
 
@@ -332,6 +347,10 @@ export default function ArchitectureView({
       for (const id of next) merged.add(id)
       return merged
     })
+
+    if (rootId) {
+      setActiveRootSessionId(rootId)
+    }
   }, [currentSession, normalizedParentMap])
 
   const summary = useMemo(() => {
@@ -367,6 +386,10 @@ export default function ArchitectureView({
     })
   }
 
+  const toggleRootExpanded = (sessionId: string) => {
+    setActiveRootSessionId(prev => prev === sessionId ? null : sessionId)
+  }
+
   const toggleShowMore = (sessionId: string) => {
     setShowMoreChildren(prev => {
       const next = new Set(prev)
@@ -378,6 +401,9 @@ export default function ArchitectureView({
       return next
     })
   }
+
+  const activeRootSession = activeRootSessionId ? sessionMap.get(activeRootSessionId) || null : null
+  const activeRootChildren = activeRootSession ? childrenMap.get(activeRootSession.id) || [] : []
 
   return (
     <div className="h-full overflow-y-auto bg-gray-100 dark:bg-gray-900">
@@ -453,8 +479,10 @@ export default function ArchitectureView({
                 children={childrenMap.get(root.id) || []}
                 depth={0}
                 now={now}
+                activeRootSessionId={activeRootSessionId}
                 expandedSessions={expandedSessions}
                 showMoreChildren={showMoreChildren}
+                onToggleRootExpanded={toggleRootExpanded}
                 onToggleExpanded={toggleExpanded}
                 onToggleShowMore={toggleShowMore}
                 onSelectSession={onSelectSession}
@@ -463,6 +491,49 @@ export default function ArchitectureView({
               />
             ))}
           </div>
+
+          {activeRootSession && activeRootChildren.length > 0 && (
+            <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-3 dark:border-gray-700">
+                <div>
+                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                    {activeRootChildren.length} child session{activeRootChildren.length > 1 ? 's' : ''}
+                  </div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">
+                    Expanded from <span className="font-mono">{activeRootSession.displayName || activeRootSession.id}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setActiveRootSessionId(null)}
+                  className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                >
+                  Collapse children
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-3" style={CHILD_GRID_STYLE}>
+                {activeRootChildren.map(child => (
+                  <SessionNode
+                    key={child.id}
+                    session={child}
+                    parent={activeRootSession}
+                    children={childrenMap.get(child.id) || []}
+                    depth={1}
+                    now={now}
+                    activeRootSessionId={activeRootSessionId}
+                    expandedSessions={expandedSessions}
+                    showMoreChildren={showMoreChildren}
+                    onToggleRootExpanded={toggleRootExpanded}
+                    onToggleExpanded={toggleExpanded}
+                    onToggleShowMore={toggleShowMore}
+                    onSelectSession={onSelectSession}
+                    sessionMap={sessionMap}
+                    childrenMap={childrenMap}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       </div>
     </div>
