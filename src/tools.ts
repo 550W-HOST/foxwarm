@@ -357,7 +357,7 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
         nodeId,
     });
 
-    const status = await waitForExecCompletion(execEntry.id, 10000);
+    const status = await waitForExecCompletion(execEntry.id, 15000);
     if (status) {
         try {
             return await buildForegroundExecResult(execEntry, status);
@@ -864,7 +864,7 @@ export const definitions = [
         },
         {
             name: 'exec',
-            description: 'Execute a shell command in agent-folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running over 10 seconds will time out and run in background.',
+            description: 'Execute a shell command in agent-folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running over 15 seconds will time out, continue in the background, and send a completion system message later.',
             parameters: {
                 type: 'object',
                 properties: { command: { type: 'string' } },

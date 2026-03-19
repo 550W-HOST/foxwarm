@@ -82,7 +82,7 @@ const NODE_CAPABILITIES = {
     },
     {
       name: 'exec',
-      description: 'Execute a shell command in agent-folder.',
+      description: 'Execute a shell command in agent-folder. Commands running over 15 seconds time out, continue in the background, and send a completion message later.',
       parameters: {
         type: 'object',
         properties: {
