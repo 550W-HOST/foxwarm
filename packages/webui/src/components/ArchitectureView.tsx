@@ -140,7 +140,7 @@ function SessionNode({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="relative space-y-3">
       <div
         className={`rounded-2xl border px-4 py-3 shadow-sm transition-colors ${
           isExpandedRoot
@@ -235,6 +235,60 @@ function SessionNode({
                 parent={sessionMap.get(session.id) || null}
                 children={childrenMap.get(child.id) || []}
                 depth={depth + 1}
+                now={now}
+                activeRootSessionId={activeRootSessionId}
+                expandedSessions={expandedSessions}
+                showMoreChildren={showMoreChildren}
+                onToggleRootExpanded={onToggleRootExpanded}
+                onToggleExpanded={onToggleExpanded}
+                onToggleShowMore={onToggleShowMore}
+                onSelectSession={onSelectSession}
+                sessionMap={sessionMap}
+                childrenMap={childrenMap}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {depth === 0 && isExpandedRoot && children.length > 0 && (
+        <div className="absolute left-0 top-[calc(100%+0.75rem)] z-30 w-[min(980px,calc(100vw-20rem))] max-w-[calc(100vw-2rem)] rounded-2xl border border-gray-200 bg-white p-4 shadow-2xl dark:border-gray-700 dark:bg-gray-800">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-3 dark:border-gray-700">
+            <div>
+              <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                {children.length} child session{children.length > 1 ? 's' : ''}
+              </div>
+              <div className="text-sm text-gray-500 dark:text-gray-400">
+                Expanded from <span className="font-mono">{session.displayName || session.id}</span>
+              </div>
+            </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleRootExpanded(session.id) }}
+              className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+            >
+              Close
+            </button>
+          </div>
+
+          {hiddenChildrenCount > 0 && (
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={(e) => { e.stopPropagation(); onToggleShowMore(session.id) }}
+                className="rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              >
+                {showingAllChildren ? 'Show less' : `Show ${hiddenChildrenCount} more`}
+              </button>
+            </div>
+          )}
+
+          <div className="mt-4 grid gap-3" style={CHILD_GRID_STYLE}>
+            {visibleChildren.map(child => (
+              <SessionNode
+                key={child.id}
+                session={child}
+                parent={session}
+                children={childrenMap.get(child.id) || []}
+                depth={1}
                 now={now}
                 activeRootSessionId={activeRootSessionId}
                 expandedSessions={expandedSessions}
@@ -402,9 +456,6 @@ export default function ArchitectureView({
     })
   }
 
-  const activeRootSession = activeRootSessionId ? sessionMap.get(activeRootSessionId) || null : null
-  const activeRootChildren = activeRootSession ? childrenMap.get(activeRootSession.id) || [] : []
-
   return (
     <div className="h-full overflow-y-auto bg-gray-100 dark:bg-gray-900">
       <div className="mx-auto max-w-[1500px] p-4 md:p-5 lg:p-6">
@@ -491,49 +542,6 @@ export default function ArchitectureView({
               />
             ))}
           </div>
-
-          {activeRootSession && activeRootChildren.length > 0 && (
-            <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-3 dark:border-gray-700">
-                <div>
-                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
-                    {activeRootChildren.length} child session{activeRootChildren.length > 1 ? 's' : ''}
-                  </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    Expanded from <span className="font-mono">{activeRootSession.displayName || activeRootSession.id}</span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setActiveRootSessionId(null)}
-                  className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-                >
-                  Collapse children
-                </button>
-              </div>
-
-              <div className="mt-4 grid gap-3" style={CHILD_GRID_STYLE}>
-                {activeRootChildren.map(child => (
-                  <SessionNode
-                    key={child.id}
-                    session={child}
-                    parent={activeRootSession}
-                    children={childrenMap.get(child.id) || []}
-                    depth={1}
-                    now={now}
-                    activeRootSessionId={activeRootSessionId}
-                    expandedSessions={expandedSessions}
-                    showMoreChildren={showMoreChildren}
-                    onToggleRootExpanded={toggleRootExpanded}
-                    onToggleExpanded={toggleExpanded}
-                    onToggleShowMore={toggleShowMore}
-                    onSelectSession={onSelectSession}
-                    sessionMap={sessionMap}
-                    childrenMap={childrenMap}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
         </section>
       </div>
     </div>
