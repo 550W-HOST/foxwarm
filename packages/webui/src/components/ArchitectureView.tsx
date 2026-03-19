@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
+import { ArrowLeft, ExternalLink } from 'lucide-react'
 import type { Session } from './SessionListCore'
 
 interface ArchitectureViewProps {
@@ -125,6 +125,7 @@ function SessionNode({
   const sessionName = session.displayName || session.id
   const wrapperStyle = depth === 0 && expanded ? { gridColumn: '1 / -1' } : undefined
   const canExpand = children.length > 0
+  const statusText = `${session.busy ? 'busy' : 'idle'} ${session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}`
 
   const handleCardClick = () => {
     if (canExpand) {
@@ -156,34 +157,9 @@ function SessionNode({
             {session.displayName && (
               <div className="mt-1 truncate font-mono text-[11px] text-gray-500 dark:text-gray-400">{session.id}</div>
             )}
-            <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-              {parent ? (
-                <>
-                  child of{' '}
-                  <button
-                    onClick={() => onSelectSession(parent.id)}
-                    className="rounded font-mono text-blue-600 underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
-                  >
-                    {parent.displayName || parent.id}
-                  </button>
-                </>
-              ) : (
-                <span>top-level session</span>
-              )}
-              <span className="ml-2">updated {formatRelativeTime(session.lastMessageTime)}</span>
-            </div>
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center gap-2">
-            {children.length > 0 && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onToggleExpanded(session.id) }}
-                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-              >
-                {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                <span>{expanded ? 'Collapse' : `Expand ${children.length}`}</span>
-              </button>
-            )}
             <button
               onClick={(e) => { e.stopPropagation(); onSelectSession(session.id) }}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
@@ -194,10 +170,26 @@ function SessionNode({
           </div>
         </div>
 
+        <div className="mt-1 w-full text-[11px] text-gray-500 dark:text-gray-400">
+          {parent ? (
+            <>
+              child of{' '}
+              <button
+                onClick={(e) => { e.stopPropagation(); onSelectSession(parent.id) }}
+                className="rounded font-mono text-blue-600 underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
+              >
+                {parent.displayName || parent.id}
+              </button>
+            </>
+          ) : (
+            <span>top-level session</span>
+          )}
+          <span className="ml-2">updated {formatRelativeTime(session.lastMessageTime)}</span>
+        </div>
+
         <div className="mt-3 space-y-1 text-xs text-gray-600 dark:text-gray-300">
           <div className="flex flex-wrap gap-x-3 gap-y-1">
-            <span><span className="font-medium text-gray-900 dark:text-gray-100">status</span> {session.busy ? 'busy' : 'idle'}</span>
-            <span><span className="font-medium text-gray-900 dark:text-gray-100">busy</span> {session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}</span>
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">status</span> {statusText}</span>
             <span><span className="font-medium text-gray-900 dark:text-gray-100">msgs</span> {session.messageCount || 0}</span>
             <span><span className="font-medium text-gray-900 dark:text-gray-100">children</span> {children.length}</span>
             <span><span className="font-medium text-gray-900 dark:text-gray-100">node</span> {session.currentNode || 'master'}</span>
