@@ -123,7 +123,6 @@ function SessionNode({
   const tokenUsage = session.tokenUsage || { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
   const totalTokens = tokenUsage.cachedTokens + tokenUsage.inputTokens + tokenUsage.outputTokens
   const sessionName = session.displayName || session.id
-  const wrapperStyle = depth === 0 && expanded ? { gridColumn: '1 / -1' } : undefined
   const canExpand = children.length > 0
   const statusText = `${session.busy ? 'busy' : 'idle'} ${session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}`
 
@@ -134,7 +133,7 @@ function SessionNode({
   }
 
   return (
-    <div className="space-y-3" style={wrapperStyle}>
+    <div className="space-y-3">
       <div
         className={`rounded-2xl border px-4 py-3 shadow-sm transition-colors ${
           currentSession === session.id
@@ -205,7 +204,10 @@ function SessionNode({
       </div>
 
       {expanded && children.length > 0 && (
-        <div className={`${depth > 0 ? 'ml-3 border-l border-gray-200 pl-3 dark:border-gray-700' : ''} space-y-2`}>
+        <div
+          className={`${depth > 0 ? 'ml-3 border-l border-gray-200 pl-3 dark:border-gray-700' : ''} space-y-2`}
+          style={depth === 0 ? { gridColumn: '1 / -1' } : undefined}
+        >
           <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <div className="text-sm font-medium text-gray-700 dark:text-gray-200">
               {children.length} child session{children.length > 1 ? 's' : ''}
