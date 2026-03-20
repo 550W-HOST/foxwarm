@@ -3,15 +3,17 @@ import Chat from './components/Chat'
 import ArchitectureView from './components/ArchitectureView'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
+import WorkspaceView from './components/WorkspaceView'
 import type { Session } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
-type AppView = 'chat' | 'architecture'
+type AppView = 'chat' | 'architecture' | 'workspace'
 
 const LIGHT_THEME_COLOR = '#f3f4f6'
 const DARK_THEME_COLOR = '#111827'
 const ARCHITECTURE_HASH = '__architecture__'
+const WORKSPACE_HASH_PREFIX = '__workspace__:'
 
 const getHashState = (): { view: AppView; sessionId: string } => {
   const hash = decodeURIComponent(window.location.hash.slice(1))
@@ -22,6 +24,11 @@ const getHashState = (): { view: AppView; sessionId: string } => {
 
   if (hash === ARCHITECTURE_HASH) {
     return { view: 'architecture', sessionId: 'main' }
+  }
+
+  if (hash.startsWith(WORKSPACE_HASH_PREFIX)) {
+    const sessionId = hash.slice(WORKSPACE_HASH_PREFIX.length) || 'main'
+    return { view: 'workspace', sessionId }
   }
 
   return { view: 'chat', sessionId: hash }
@@ -219,6 +226,16 @@ function App() {
     }
   }
 
+  const handleSelectWorkspace = (sessionId?: string) => {
+    const targetSessionId = sessionId || currentSession || 'main'
+    window.location.hash = `${WORKSPACE_HASH_PREFIX}${encodeURIComponent(targetSessionId)}`
+    setCurrentView('workspace')
+    setCurrentSession(targetSessionId)
+    if (isMobile) {
+      setShowSessionList(false)
+    }
+  }
+
   const handleCreateSession = () => {
     fetch(`${API_BASE_PATH}/sessions`, {
       method: 'POST',
@@ -289,6 +306,7 @@ function App() {
         currentView={currentView}
         onSelectSession={handleSelectSession}
         onSelectArchitecture={handleSelectArchitecture}
+        onSelectWorkspace={handleSelectWorkspace}
         onCreateSession={handleCreateSession}
       />
     }
@@ -301,6 +319,19 @@ function App() {
             currentSession={currentSession}
             onSelectSession={handleSelectSession}
             onBack={handleBackToList}
+          />
+        </div>
+      )
+    }
+
+    if (currentView === 'workspace') {
+      return (
+        <div className="fixed inset-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
+          <WorkspaceView
+            sessionId={currentSession}
+            session={currentSessionRecord}
+            onBack={handleBackToList}
+            onSessionsChanged={() => { void fetchSessions() }}
           />
         </div>
       )
@@ -329,6 +360,7 @@ function App() {
         currentView={currentView}
         onSelectSession={handleSelectSession}
         onSelectArchitecture={handleSelectArchitecture}
+        onSelectWorkspace={handleSelectWorkspace}
         onCreateSession={handleCreateSession}
       />
       <div className="flex-1 h-screen overflow-hidden">
@@ -337,6 +369,12 @@ function App() {
             sessions={sessions}
             currentSession={currentSession}
             onSelectSession={handleSelectSession}
+          />
+        ) : currentView === 'workspace' ? (
+          <WorkspaceView
+            sessionId={currentSession}
+            session={currentSessionRecord}
+            onSessionsChanged={() => { void fetchSessions() }}
           />
         ) : (
           <Chat 
