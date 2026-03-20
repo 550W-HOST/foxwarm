@@ -16,6 +16,7 @@ export interface Session {
   displayName?: string
   archived?: boolean
   currentNode?: string
+  cwd?: string | null
   isolated?: boolean
   tokenUsage?: {
     cachedTokens: number
@@ -525,6 +526,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 </>
               )}
             </div>
+            {session.cwd && (
+              <div className="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500" title={session.cwd}>
+                cwd: {session.cwd}
+              </div>
+            )}
           </div>
           {/* Menu button - only visible on mobile */}
           <button
