@@ -200,6 +200,11 @@ function SessionNode({
             <span><span className="font-medium text-gray-900 dark:text-gray-100">node</span> {session.currentNode || 'master'}</span>
             {!!session.queueLength && <span><span className="font-medium text-gray-900 dark:text-gray-100">queued</span> {session.queueLength}</span>}
           </div>
+          {session.cwd && (
+            <div className="truncate font-mono text-[11px] text-gray-500 dark:text-gray-400" title={session.cwd}>
+              cwd {session.cwd}
+            </div>
+          )}
           <div className="flex flex-wrap gap-x-3 gap-y-1">
             <span><span className="font-medium text-gray-900 dark:text-gray-100">total</span> {formatTokenMillions(totalTokens)}</span>
             <span><span className="font-medium text-gray-900 dark:text-gray-100">cached</span> {formatTokenMillions(tokenUsage.cachedTokens)}</span>

@@ -417,6 +417,50 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     return cwdNotice ? `${cwdNotice}\n\n${result}` : result;
 }
 
+async function tool_change_directory(args: ToolArgs, ctx: ToolContext) {
+    const { path: targetPath } = args;
+
+    if (!ctx.sessionId || !ctx.session) {
+        throw new Error('change_directory requires an active session context.');
+    }
+    if (typeof targetPath !== 'string' || targetPath.trim().length === 0) {
+        throw new Error('path is required');
+    }
+
+    const agentName = ctx.session.agent || 'main';
+    const resolvedPath = resolveExecCwd(targetPath, ctx, agentName);
+    if (!resolvedPath) {
+        throw new Error('path is required');
+    }
+
+    const nodeId = ctx.runtimeNodeId || ctx.session.currentNode || 'master';
+    if (nodeId === 'master') {
+        let stat: fs.Stats | null = null;
+        try {
+            stat = await fs.stat(resolvedPath);
+        } catch {
+            stat = null;
+        }
+        if (!stat) {
+            throw new Error(`Directory does not exist: ${resolvedPath}`);
+        }
+        if (!stat.isDirectory()) {
+            throw new Error(`Path is not a directory: ${resolvedPath}`);
+        }
+    } else {
+        await nodesManager.executeTool(nodeId, 'exec', { command: 'pwd', cwd: resolvedPath }, ctx.sessionId);
+    }
+
+    const changed = await sessionManager.setSessionCwd(ctx.sessionId, resolvedPath);
+    if (!changed.changed) {
+        return `Working directory unchanged: \`${resolvedPath}\`.`;
+    }
+
+    return changed.previous
+        ? `Working directory changed: \`${changed.previous}\` → \`${resolvedPath}\`.`
+        : `Working directory changed to \`${resolvedPath}\`.`;
+}
+
 export async function resolveMemorySearchOptions(
     request: {
         scope?: 'all' | 'current-session' | 'current-agent';
@@ -732,6 +776,7 @@ export const list_files = tool_list_files;
 export const delete_file = tool_delete_file;
 export const copy_between_nodes = tool_copy_between_nodes;
 export const exec = tool_exec;
+export const change_directory = tool_change_directory;
 export const search_memory = tool_search_memory;
 export const get_memory_context = tool_get_memory_context;
 export const create_child_session = tool_create_child_session;
@@ -919,6 +964,17 @@ export const definitions = [
                     cwd: { type: 'string', description: 'Optional working directory override. Defaults to session.cwd when set.' }
                 },
                 required: ['command']
+            }
+        },
+        {
+            name: 'change_directory',
+            description: 'Change the current session working directory (session.cwd). Relative paths resolve from the current session cwd when set, otherwise from the agent folder.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: { type: 'string', description: 'Target directory path. May be absolute or relative.' }
+                },
+                required: ['path']
             }
         },
         {
