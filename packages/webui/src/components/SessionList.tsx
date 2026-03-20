@@ -1,13 +1,14 @@
-import { Plus, Workflow } from 'lucide-react'
+import { FolderOpen, Plus, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 
 interface SessionListProps {
   sessions: Session[]
   currentSession?: string
-  currentView: 'chat' | 'architecture'
+  currentView: 'chat' | 'architecture' | 'workspace'
   onSelectSession: (sessionId: string) => void
   onSelectArchitecture: () => void
+  onSelectWorkspace: (sessionId?: string) => void
   onCreateSession: () => void
 }
 
@@ -17,6 +18,7 @@ export default function SessionList({
   currentView,
   onSelectSession,
   onSelectArchitecture,
+  onSelectWorkspace,
   onCreateSession,
 }: SessionListProps) {
   return (
@@ -45,6 +47,17 @@ export default function SessionList({
         >
           <Workflow className="w-4 h-4" />
           <span>Architecture</span>
+        </button>
+        <button
+          onClick={() => onSelectWorkspace(currentSession)}
+          className={`mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition-colors ${
+            currentView === 'workspace'
+              ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700'
+          }`}
+        >
+          <FolderOpen className="w-4 h-4" />
+          <span>Workspace</span>
         </button>
       </div>
       

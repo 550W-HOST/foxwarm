@@ -16,6 +16,14 @@ import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 
+type WorkspaceNodeEntry = {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size: number;
+  modifiedAt: number;
+};
+
 // Extend Express Request to include cookies
 declare global {
   namespace Express {
@@ -41,6 +49,110 @@ export class WebUIChannel implements Channel {
   private enableTrigger: boolean;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
   private globalSseClients: express.Response[] = []; // Global clients for session list updates
+
+  private resolveWorkspacePath(inputPath: unknown): string {
+    if (typeof inputPath !== 'string' || inputPath.trim().length === 0) {
+      throw new Error('path is required');
+    }
+
+    return path.resolve(inputPath.trim());
+  }
+
+  private async listWorkspaceEntries(nodeId: string, inputPath: unknown): Promise<{ nodeId: string; path: string; entries: WorkspaceNodeEntry[] }> {
+    if (nodeId !== 'master') {
+      throw new Error('Workspace file APIs currently support only master in this MVP.');
+    }
+
+    const resolvedPath = this.resolveWorkspacePath(inputPath);
+    let stat: fs.Stats | null = null;
+    try {
+      stat = await fs.stat(resolvedPath);
+    } catch {
+      stat = null;
+    }
+    if (!stat) {
+      throw new Error(`Path not found: ${resolvedPath}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`Path is not a directory: ${resolvedPath}`);
+    }
+
+    const dirents = await fs.readdir(resolvedPath, { withFileTypes: true });
+    const entries = await Promise.all(dirents.map(async (dirent) => {
+      const entryPath = path.join(resolvedPath, dirent.name);
+      let entryStat: fs.Stats | null = null;
+      try {
+        entryStat = await fs.stat(entryPath);
+      } catch {
+        entryStat = null;
+      }
+      return {
+        name: dirent.name,
+        path: entryPath,
+        isDirectory: dirent.isDirectory(),
+        size: entryStat?.size || 0,
+        modifiedAt: entryStat ? entryStat.mtimeMs : 0,
+      } as WorkspaceNodeEntry;
+    }));
+
+    entries.sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) {
+        return a.isDirectory ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+    return { nodeId, path: resolvedPath, entries };
+  }
+
+  private async readWorkspaceFile(nodeId: string, inputPath: unknown): Promise<{ nodeId: string; path: string; content: string; size: number; modifiedAt: number }> {
+    if (nodeId !== 'master') {
+      throw new Error('Workspace file APIs currently support only master in this MVP.');
+    }
+
+    const resolvedPath = this.resolveWorkspacePath(inputPath);
+    let stat: fs.Stats | null = null;
+    try {
+      stat = await fs.stat(resolvedPath);
+    } catch {
+      stat = null;
+    }
+    if (!stat) {
+      throw new Error(`Path not found: ${resolvedPath}`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`Path is not a file: ${resolvedPath}`);
+    }
+
+    const content = await fs.readFile(resolvedPath, 'utf8');
+    return {
+      nodeId,
+      path: resolvedPath,
+      content,
+      size: stat.size,
+      modifiedAt: stat.mtimeMs,
+    };
+  }
+
+  private async writeWorkspaceFile(nodeId: string, inputPath: unknown, content: unknown): Promise<{ nodeId: string; path: string; size: number; modifiedAt: number }> {
+    if (nodeId !== 'master') {
+      throw new Error('Workspace file APIs currently support only master in this MVP.');
+    }
+    if (typeof content !== 'string') {
+      throw new Error('content must be a string');
+    }
+
+    const resolvedPath = this.resolveWorkspacePath(inputPath);
+    await fs.ensureDir(path.dirname(resolvedPath));
+    await fs.writeFile(resolvedPath, content, 'utf8');
+    const stat = await fs.stat(resolvedPath);
+    return {
+      nodeId,
+      path: resolvedPath,
+      size: stat.size,
+      modifiedAt: stat.mtimeMs,
+    };
+  }
 
   constructor(options: WebUIChannelOptions) {
     this.router = options.router;
@@ -216,6 +328,73 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to create session');
             res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/cwd',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
+            const cwd = typeof req.body?.cwd === 'string' ? req.body.cwd : undefined;
+            const result = await sessionManager.setSessionCwd(sessionId, cwd);
+            this.broadcastSessionListUpdate();
+            res.json({
+              success: true,
+              changed: result.changed,
+              previous: result.previous || null,
+              cwd: result.current || null,
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to update session cwd');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/fs/tree',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const nodeId = typeof req.query.nodeId === 'string' && req.query.nodeId.trim() ? req.query.nodeId.trim() : 'master';
+            const data = await this.listWorkspaceEntries(nodeId, req.query.path);
+            res.json(data);
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to list workspace entries');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/fs/read',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const nodeId = typeof req.query.nodeId === 'string' && req.query.nodeId.trim() ? req.query.nodeId.trim() : 'master';
+            const data = await this.readWorkspaceFile(nodeId, req.query.path);
+            res.json(data);
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to read workspace file');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/fs/write',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const nodeId = typeof req.body?.nodeId === 'string' && req.body.nodeId.trim() ? req.body.nodeId.trim() : 'master';
+            const data = await this.writeWorkspaceFile(nodeId, req.body?.path, req.body?.content);
+            res.json({ success: true, ...data });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to write workspace file');
+            res.status(400).json({ error: e.message });
           }
         },
       });
