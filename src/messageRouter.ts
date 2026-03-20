@@ -26,6 +26,10 @@ function formatCurrentTimeForPrompt(date: Date): string {
   return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')} (Asia/Shanghai)`;
 }
 
+export function shouldBroadcastChannelText(text: string | undefined | null): boolean {
+  return typeof text === 'string' && text.trim().length > 0;
+}
+
 export class MessageRouter {
   private authorizedUsers: Map<string, boolean> = new Map();
   private processingSessions: Set<string> = new Set();
@@ -334,8 +338,8 @@ export class MessageRouter {
   }
 
   private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean): Promise<void> {
-    if (!alreadyBroadcasted && response) {
-      await this.sendSessionReply(session, sourceCtx, response || '<empty string>', { excludePlatforms: ['webui'] });
+    if (!alreadyBroadcasted && shouldBroadcastChannelText(response)) {
+      await this.sendSessionReply(session, sourceCtx, response, { excludePlatforms: ['webui'] });
     }
   }
 
@@ -477,7 +481,7 @@ export class MessageRouter {
           break;
         }
 
-        if (result.text && broadcast) {
+        if (shouldBroadcastChannelText(result.text) && broadcast) {
           await broadcast(result.text, { parse_mode: 'Markdown', excludePlatforms: ['webui'] });
           lastTextBroadcasted = true;
         }
