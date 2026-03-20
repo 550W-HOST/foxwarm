@@ -31,8 +31,10 @@ export interface RunningExecEntry {
   agentName: string;
   nodeId: string;
   command: string;
+  initialCwd: string;
   logPath: string;
   statusPath: string;
+  cwdPath: string;
   startedAt: number;
   notifyOnCompletion: boolean;
   recoveredAfterRestart?: boolean;
@@ -47,6 +49,7 @@ interface StartPersistentExecOptions {
   sessionId?: string;
   agentName?: string;
   nodeId?: string;
+  cwd?: string;
 }
 
 type ExecCompletionDispatcher = (entry: RunningExecEntry, status: ExecStatus, message: string) => Promise<void>;
@@ -125,8 +128,10 @@ async function loadRunningExecs(): Promise<void> {
         agentName: typeof raw.agentName === 'string' && raw.agentName.trim().length > 0 ? raw.agentName : 'main',
         nodeId: typeof raw.nodeId === 'string' && raw.nodeId.trim().length > 0 ? raw.nodeId : 'master',
         command: typeof raw.command === 'string' ? raw.command : '',
+        initialCwd: typeof raw.initialCwd === 'string' && raw.initialCwd.trim().length > 0 ? raw.initialCwd : getAgentDir(typeof raw.agentName === 'string' && raw.agentName.trim().length > 0 ? raw.agentName : 'main'),
         logPath: raw.logPath,
         statusPath: raw.statusPath,
+        cwdPath: typeof raw.cwdPath === 'string' && raw.cwdPath.trim().length > 0 ? raw.cwdPath : `${raw.logPath}.cwd.txt`,
         startedAt: Number(raw.startedAt),
         notifyOnCompletion: raw.notifyOnCompletion === true,
         recoveredAfterRestart: raw.recoveredAfterRestart === true,
@@ -162,17 +167,50 @@ async function updateRunningExec(id: string, updates: Partial<RunningExecEntry>)
   return updated;
 }
 
-function buildWrapperScript(): string {
+function buildManagedExecScript(command: string): string {
   return [
+    '#!/usr/bin/env bash',
     'set +e',
-    'bash "$FOXWARM_EXEC_SCRIPT_PATH"',
-    'exit_code=$?',
-    'finished_at="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")"',
-    'tmp_path="${FOXWARM_EXEC_STATUS_PATH}.tmp.$$"',
-    'printf "{\\"exitCode\\":%s,\\"finishedAt\\":\\"%s\\"}\\n" "$exit_code" "$finished_at" > "$tmp_path"',
-    'mv "$tmp_path" "$FOXWARM_EXEC_STATUS_PATH"',
-    'exit 0',
+    'foxwarm_exec_finalize() {',
+    '  exit_code=$?',
+    '  finished_at="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")"',
+    '  cwd_tmp="${FOXWARM_EXEC_CWD_PATH}.tmp.$$"',
+    '  status_tmp="${FOXWARM_EXEC_STATUS_PATH}.tmp.$$"',
+    '  pwd > "$cwd_tmp"',
+    '  mv "$cwd_tmp" "$FOXWARM_EXEC_CWD_PATH"',
+    '  printf "{\\"exitCode\\":%s,\\"finishedAt\\":\\"%s\\"}\\n" "$exit_code" "$finished_at" > "$status_tmp"',
+    '  mv "$status_tmp" "$FOXWARM_EXEC_STATUS_PATH"',
+    '}',
+    'trap foxwarm_exec_finalize EXIT',
+    'set +e',
+    command,
   ].join('\n');
+}
+
+async function readExecCwd(cwdPath: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(cwdPath, 'utf8');
+    const cwd = raw.trim();
+    return cwd || null;
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function readProcessCwd(pid: number): Promise<string | null> {
+  try {
+    const raw = await fsp.readlink(`/proc/${pid}/cwd`);
+    const cwd = raw.trim();
+    return cwd || null;
+  } catch (err: any) {
+    if (err?.code === 'ENOENT' || err?.code === 'ESRCH') {
+      return null;
+    }
+    throw err;
+  }
 }
 
 async function readWindow(filePath: string, offset: number, length: number): Promise<Buffer> {
@@ -395,6 +433,7 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
   const nodeId = options.nodeId || 'master';
   const sessionId = options.sessionId;
   const agentDir = getAgentDir(agentName);
+  const initialCwd = typeof options.cwd === 'string' && options.cwd.trim().length > 0 ? options.cwd.trim() : agentDir;
   const tempDir = path.join(agentDir, '.temp', 'exec');
 
   await fs.ensureDir(tempDir);
@@ -403,19 +442,20 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
   const logPath = await getDatedLogPath(tempDir, logFileName);
   const statusPath = `${logPath}.exit.json`;
   const scriptPath = `${logPath}.command.sh`;
+  const cwdPath = `${logPath}.cwd.txt`;
   const logHandle = await fsp.open(logPath, 'a');
 
-  await fs.writeFile(scriptPath, `#!/usr/bin/env bash\n${command}${command.endsWith('\n') ? '' : '\n'}`, { mode: 0o700 });
+  await fs.writeFile(scriptPath, `${buildManagedExecScript(command)}${command.endsWith('\n') ? '' : '\n'}`, { mode: 0o700 });
 
   let child: ChildProcess;
   try {
-    child = spawn('bash', ['-lc', buildWrapperScript()], {
-      cwd: agentDir,
+    child = spawn('bash', [scriptPath], {
+      cwd: initialCwd,
       env: {
         ...process.env,
         TERM: 'xterm-256color',
-        FOXWARM_EXEC_SCRIPT_PATH: scriptPath,
         FOXWARM_EXEC_STATUS_PATH: statusPath,
+        FOXWARM_EXEC_CWD_PATH: cwdPath,
       },
       stdio: ['ignore', logHandle.fd, logHandle.fd],
       detached: true,
@@ -443,8 +483,10 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
     agentName,
     nodeId,
     command,
+    initialCwd,
     logPath,
     statusPath,
+    cwdPath,
     startedAt: Date.now(),
     notifyOnCompletion: false,
   };
@@ -502,6 +544,14 @@ export async function buildForegroundExecResult(entry: RunningExecEntry, status:
 export async function buildBackgroundTimeoutResult(entry: RunningExecEntry): Promise<string> {
   const partialOutput = await readPartialLog(entry.logPath);
   return `[Process running longer than 15s, switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification (unless working on other tasks in parallel).]\nPID: ${entry.pid}\nLog file: ${entry.logPath}\n\nPartial Output:\n${partialOutput}`;
+}
+
+export async function readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
+  return await readExecCwd(entry.cwdPath);
+}
+
+export async function readLiveExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
+  return await readProcessCwd(entry.pid);
 }
 
 export function listRunningExecs(): RunningExecEntry[] {

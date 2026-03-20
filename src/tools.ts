@@ -14,6 +14,8 @@ import {
     buildForegroundExecResult,
     finalizeForegroundExec,
     markExecForBackgroundNotification,
+    readFinishedExecWorkingDirectory,
+    readLiveExecWorkingDirectory,
     startPersistentExec,
     waitForExecCompletion,
 } from './execManager';
@@ -83,6 +85,45 @@ function resolveAgentPath(filePath: string, agentName: string = 'main'): string 
     }
 
     return resolved;
+}
+
+function resolveExecCwd(cwdValue: unknown, ctx: ToolContext, agentName: string): string | undefined {
+    if (typeof cwdValue !== 'string' || cwdValue.trim().length === 0) {
+        return undefined;
+    }
+
+    const raw = cwdValue.trim();
+    if (path.isAbsolute(raw)) {
+        return raw;
+    }
+
+    const base = (typeof ctx.session?.cwd === 'string' && ctx.session.cwd.trim().length > 0)
+        ? ctx.session.cwd.trim()
+        : getAgentDir(agentName);
+    return path.resolve(base, raw);
+}
+
+async function maybeSyncSessionCwdFromExec(ctx: ToolContext, entry: { initialCwd?: string }, nextCwd: string | null | undefined): Promise<string | null> {
+    if (!ctx.sessionId || typeof nextCwd !== 'string' || nextCwd.trim().length === 0) {
+        return null;
+    }
+
+    const normalizedNext = nextCwd.trim();
+    const normalizedInitial = typeof entry.initialCwd === 'string' ? entry.initialCwd.trim() : '';
+    if (normalizedInitial && normalizedNext === normalizedInitial) {
+        return null;
+    }
+
+    const syncResult = await sessionManager.setSessionCwd(ctx.sessionId, normalizedNext);
+    if (!syncResult.changed || !syncResult.current) {
+        return null;
+    }
+
+    if (syncResult.previous) {
+        return `Working directory changed: \`${syncResult.previous}\` → \`${syncResult.current}\` (session cwd updated).`;
+    }
+
+    return `Working directory changed to \`${syncResult.current}\` (session cwd updated).`;
 }
 
 async function tool_read(args: ToolArgs, ctx: ToolContext) {
@@ -341,7 +382,7 @@ async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
 }
 
 async function tool_exec(args: ToolArgs, ctx: ToolContext) {
-    const { command } = args;
+    const { command, cwd } = args;
 
     // Mark that we're about to exec, then save session
     if (ctx && ctx.sessionId) {
@@ -350,24 +391,30 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
 
     const agentName = ctx.session?.agent || 'main';
     const nodeId = ctx.runtimeNodeId || 'master';
+    const execCwd = resolveExecCwd(cwd, ctx, agentName) || ctx.session?.cwd || undefined;
     const execEntry = await startPersistentExec({
         command,
         sessionId: ctx.sessionId,
         agentName,
         nodeId,
+        cwd: execCwd,
     });
 
     const status = await waitForExecCompletion(execEntry.id, 15000);
     if (status) {
         try {
-            return await buildForegroundExecResult(execEntry, status);
+            const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readFinishedExecWorkingDirectory(execEntry));
+            const result = await buildForegroundExecResult(execEntry, status);
+            return cwdNotice ? `${cwdNotice}\n\n${result}` : result;
         } finally {
             await finalizeForegroundExec(execEntry.id);
         }
     }
 
+    const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readLiveExecWorkingDirectory(execEntry));
     await markExecForBackgroundNotification(execEntry.id);
-    return await buildBackgroundTimeoutResult(execEntry);
+    const result = await buildBackgroundTimeoutResult(execEntry);
+    return cwdNotice ? `${cwdNotice}\n\n${result}` : result;
 }
 
 export async function resolveMemorySearchOptions(
@@ -864,10 +911,13 @@ export const definitions = [
         },
         {
             name: 'exec',
-            description: 'Execute a shell command in agent-folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running over 15 seconds will time out, continue in the background, and send a completion system message later.',
+            description: 'Execute a shell command in agent-folder. Defaults to the session cwd when set; otherwise uses the agent folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running over 15 seconds will time out, continue in the background, and send a completion system message later.',
             parameters: {
                 type: 'object',
-                properties: { command: { type: 'string' } },
+                properties: {
+                    command: { type: 'string' },
+                    cwd: { type: 'string', description: 'Optional working directory override. Defaults to session.cwd when set.' }
+                },
                 required: ['command']
             }
         },

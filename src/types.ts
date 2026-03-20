@@ -131,6 +131,7 @@ export interface Session {
   displayName?: string; // User-defined display name for the session
   archived?: boolean; // Whether the session is archived
   currentNode?: string; // Current node ID for tool execution (default: 'master')
+  cwd?: string; // Default working directory for exec/terminal-style operations on currentNode
   model?: string; // Model key for this session (default: global)
   verbose?: boolean; // Whether to broadcast tool call info (default: false)
   vectorIndexPosition?: number; // Track last indexed message position
