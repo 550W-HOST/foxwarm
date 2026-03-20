@@ -80,6 +80,9 @@ export class MessageRouter {
   }
 
   private getSessionReply(session: Session, sourceCtx?: ChannelContext): SessionReply | undefined {
+    if (sourceCtx?.preferDirectReply && sourceCtx.reply) {
+      return sourceCtx.reply.bind(sourceCtx);
+    }
     return session.broadcast ?? sourceCtx?.reply?.bind(sourceCtx);
   }
 

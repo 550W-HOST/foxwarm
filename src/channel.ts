@@ -18,6 +18,7 @@ export interface ChannelContext {
   sendTyping: () => Promise<void>;
   platform: string; // 'telegram' | 'matrix'
   senderId?: string; // 发送者用户ID（用于权限检查，在某些平台如 wecom 中与 channelUserId 不同）
+  preferDirectReply?: boolean; // Prefer the source reply path instead of session broadcast for this turn
   // `sessionId` is set in handleMessage internal only for tools that need it.
   // If you want to specify the session, should use `attachChannel(platform, channelUserId, targetSession)`.
 }
