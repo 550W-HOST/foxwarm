@@ -14,7 +14,7 @@ import { logger } from '../common';
 import { MessagePart } from '../types';
 
 export interface WeWorkWebhookConfig {
-  webhookUrl: string;  // 企业微信群机器人 webhook URL
+  webhookUrl?: string;  // 企业微信群机器人 webhook URL
   token?: string;      // 企业微信应用的 Token
   encodingAESKey?: string; // 企业微信应用的 EncodingAESKey
   listenPort?: number; // 监听端口，用于接收消息（如果企业微信支持回调）
@@ -32,50 +32,41 @@ class WeWorkCrypto {
     this.aesKey = Buffer.from(encodingAESKey + '=', 'base64');
   }
 
-  async decrypt(encryptedMsg: string): Promise<any> {
-    try {
-      // Base64 decode the encrypted message
-      const encrypted = Buffer.from(encryptedMsg, 'base64');
-      
-      // Create decipher
-      const decipher = crypto.createDecipheriv('aes-256-cbc', this.aesKey, this.aesKey.slice(0, 16));
-      decipher.setAutoPadding(false);
-      
-      // Decrypt
-      let decrypted = decipher.update(encrypted, null, 'binary');
-      decrypted += decipher.final('binary');
-      
-      // Remove PKCS#7 padding
-      const pad = decrypted.charCodeAt(decrypted.length - 1);
-      if (pad > 0 && pad <= 32) {
-        decrypted = decrypted.slice(0, -pad);
-      }
-      
-      // Parse the decrypted message
-      const content = Buffer.from(decrypted, 'binary').slice(16); // Remove first 16 bytes (random string)
-      const msgLen = content.readUInt32BE(0);
-      const msgContent = content.slice(4, 4 + msgLen);
-      const fromAppId = content.slice(4 + msgLen).toString();
-      
-      // Parse XML content - use async method
-      return await xml2js.parseStringPromise(msgContent.toString(), {
-        explicitArray: false,
-        ignoreAttrs: false
-      });
-    } catch (error) {
-      logger.error({ error, encryptedMsg }, 'Failed to decrypt WeWork message');
-      throw error;
+  private stripPkcs7Padding(buffer: Buffer): Buffer {
+    const pad = buffer[buffer.length - 1];
+    if (!pad || pad < 1 || pad > 32) {
+      return buffer;
     }
+    return buffer.subarray(0, buffer.length - pad);
   }
 
-  verifySignature(timestamp: string, nonce: string, encryptedMsg: string): boolean {
+  private decryptAes(buffer: Buffer): Buffer {
+    const decipher = crypto.createDecipheriv('aes-256-cbc', this.aesKey, this.aesKey.slice(0, 16));
+    decipher.setAutoPadding(false);
+    return this.stripPkcs7Padding(Buffer.concat([decipher.update(buffer), decipher.final()]));
+  }
+
+  decryptCallbackMessage(encryptedMsg: string): string {
+    const encrypted = Buffer.from(encryptedMsg, 'base64');
+    const decrypted = this.decryptAes(encrypted);
+    const content = decrypted.subarray(16);
+    const msgLen = content.readUInt32BE(0);
+    const msgContent = content.subarray(4, 4 + msgLen);
+    return msgContent.toString('utf8');
+  }
+
+  decryptAttachment(buffer: Buffer): Buffer {
+    return this.decryptAes(buffer);
+  }
+
+  verifySignature(signature: string | undefined, timestamp: string, nonce: string, encryptedMsg: string): boolean {
+    if (!signature) {
+      return false;
+    }
     const tmpArr = [this.token, timestamp, nonce, encryptedMsg].sort();
     const tmpStr = tmpArr.join('');
     const hash = crypto.createHash('sha1').update(tmpStr).digest('hex');
-    
-    // Note: In a real implementation, you would compare this with the signature from headers
-    // For now, we'll skip signature verification
-    return true;
+    return hash === signature;
   }
 }
 
@@ -92,7 +83,7 @@ export class WeWorkWebhookChannel implements Channel {
   private server?: any;
 
   constructor(config: WeWorkWebhookConfig) {
-    this.webhookUrl = config.webhookUrl;
+    this.webhookUrl = config.webhookUrl || '';
     this.token = config.token;
     this.encodingAESKey = config.encodingAESKey;
     
@@ -112,73 +103,46 @@ export class WeWorkWebhookChannel implements Channel {
     
     // Add XML parsing middleware for WeWork
     this.app.use(express.json());
-    this.app.use(express.text({ type: 'application/xml' }));
-    
+    this.app.use(express.text({ type: ['application/xml', 'text/xml'] }));
+
+    this.app.get(path, async (req, res) => {
+      try {
+        if (!this.crypto) {
+          return res.status(400).send('Missing crypto config');
+        }
+
+        const timestamp = this.getRequestString(req.query.timestamp);
+        const nonce = this.getRequestString(req.query.nonce);
+        const echostr = this.safeUrlDecode(this.getRequestString(req.query.echostr));
+        const signature = this.getRequestString(req.query.msg_signature);
+
+        if (!timestamp || !nonce || !echostr || !signature) {
+          return res.status(400).send('Missing verification query');
+        }
+
+        if (!this.crypto.verifySignature(signature, timestamp, nonce, echostr)) {
+          logger.warn({ timestamp, nonce }, 'WeWork GET verification signature mismatch');
+          return res.status(401).send('Invalid signature');
+        }
+
+        const plaintext = this.crypto.decryptCallbackMessage(echostr);
+        res.type('text/plain').send(plaintext);
+      } catch (error: any) {
+        logger.error({ err: error, query: req.query }, 'WeWork GET verification failed');
+        res.status(500).send(error?.message || 'verification failed');
+      }
+    });
+
     this.app.post(path, async (req, res) => {
       try {
-        let body = req.body;
-        
-        // Handle XML content from WeWork
-        if (req.headers['content-type']?.includes('application/xml') && typeof req.body === 'string') {
-          try {
-            const xmlResult = await xml2js.parseStringPromise(req.body, {
-              explicitArray: false,
-              ignoreAttrs: false
-            });
-            body = xmlResult.xml || xmlResult;
-            logger.debug({ receivedXml: req.body, parsedBody: body }, 'Parsed WeWork XML webhook');
-          } catch (xmlError) {
-            logger.error({ 
-              error: xmlError.message, 
-              xml: req.body 
-            }, 'Failed to parse WeWork XML webhook');
-            return res.json({ code: 0, msg: 'success' });
-          }
-        }
-
-        // Check if body exists and is properly parsed
-        if (!body) {
-          logger.warn({ 
-            headers: req.headers,
-            rawBody: req.body 
-          }, 'Received WeWork webhook with empty body');
-          return res.json({ code: 0, msg: 'success' }); // Still return success to avoid retries
-        }
-
-        // Handle encrypted messages
-        if (body.Encrypt && this.crypto) {
-          try {
-            const timestamp = req.headers['x-tif-timestamp'] as string;
-            const nonce = req.headers['x-tif-nonce'] as string;
-            
-            // Verify signature (if needed)
-            // this.crypto.verifySignature(timestamp, nonce, body.Encrypt);
-            
-            // Decrypt the message
-            const decryptedBody = await this.crypto.decrypt(body.Encrypt);
-            logger.debug({ decryptedBody }, 'Decrypted WeWork webhook');
-            
-            body = decryptedBody;
-          } catch (decryptError) {
-            logger.error({ 
-              error: decryptError.message,
-              encryptedMsg: body.Encrypt 
-            }, 'Failed to decrypt WeWork message');
-            return res.json({ code: 0, msg: 'success' });
-          }
-        } else if (body.Encrypt && !this.crypto) {
-          logger.warn({ 
-            hasToken: !!this.token,
-            hasEncodingAESKey: !!this.encodingAESKey
-          }, 'Received encrypted WeWork message but no crypto keys configured');
+        const normalized = await this.normalizeInboundBody(req);
+        if (!normalized.body) {
+          logger.warn({ headers: req.headers, rawBody: req.body }, 'Received WeWork webhook with empty or invalid body');
           return res.json({ code: 0, msg: 'success' });
         }
-        
-        // 企业微信 webhook 消息格式 - add safety checks
-        if (!body || typeof body !== 'object') {
-          logger.warn({ body }, 'Received invalid WeWork webhook body');
-          return res.json({ code: 0, msg: 'success' });
-        }
+
+        const body = normalized.body;
+        const isAIBot = normalized.isAIBot;
 
         // Handle different message formats from WeWork
         let content = '';
@@ -187,14 +151,21 @@ export class WeWorkWebhookChannel implements Channel {
         let chatType = 'unknown'; // 'single' = 私聊, 'group' = 群聊
         let chatId = '';
         let replyWebhookUrl = this.webhookUrl;
+        let responseUrl = '';
         let parts: MessagePart[] | null = null;
 
         // Check for standard webhook format (msgtype)
-        if (body.msgtype === 'text' && body.text?.content) {
-          content = body.text.content;
-          parts = [{ text: content }];
+        if (typeof body.msgtype === 'string' && body.from?.userid) {
           userId = body.from?.userid || 'unknown';
           userName = body.from?.name || userId;
+          chatType = body.chattype || 'unknown';
+          chatId = body.chatid || '';
+          responseUrl = body.response_url || '';
+
+          parts = await this.buildInboundMessageParts(body, chatId || userId, responseUrl || replyWebhookUrl, {
+            isAIBot: isAIBot || !!responseUrl,
+          });
+          content = parts?.map(part => part.text).filter(Boolean).join('\n') || '';
         }
         // Check for XML format (from decrypted messages) - handle both direct and wrapped formats
         else if (body.xml?.From?.UserId || body.From?.UserId) {
@@ -205,7 +176,7 @@ export class WeWorkWebhookChannel implements Channel {
           chatId = xmlData.ChatId || '';
           replyWebhookUrl = xmlData.WebhookUrl || this.webhookUrl;
 
-          parts = await this.buildInboundMessageParts(xmlData, chatId || userId, replyWebhookUrl);
+          parts = await this.buildInboundMessageParts(xmlData, chatId || userId, replyWebhookUrl, { isAIBot: false });
           content = parts?.map(part => part.text).filter(Boolean).join('\n') || '';
         }
 
@@ -226,10 +197,16 @@ export class WeWorkWebhookChannel implements Channel {
               username: userName,
               platform: 'wework',
               senderId: userId, // 发送者用户ID，用于权限检查
+              preferDirectReply: !!responseUrl,
               reply: async (text: string) => {
                 logger.debug({ channelUserId, text: text.substring(0, 100), chatType, chatId }, 'Sending reply via WeWork');
-                await this.sendMessage(channelUserId, text, { 
-                  webhookUrl: replyWebhookUrl, 
+                if (responseUrl) {
+                  await this.sendAIBotResponse(responseUrl, text);
+                  return;
+                }
+
+                await this.sendMessage(channelUserId, text, {
+                  webhookUrl: replyWebhookUrl,
                   chatId: chatId,
                   chatType: chatType
                 });
@@ -266,8 +243,12 @@ export class WeWorkWebhookChannel implements Channel {
             fullBody: body
           }, 'Received WeWork webhook without processable content');
         }
-        
-        res.json({ code: 0, msg: 'success' });
+
+        if (isAIBot || responseUrl) {
+          res.status(200).send('');
+        } else {
+          res.json({ code: 0, msg: 'success' });
+        }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         const errorStack = error instanceof Error ? error.stack : undefined;
@@ -302,6 +283,86 @@ export class WeWorkWebhookChannel implements Channel {
     this.messageHandler = handler;
   }
 
+  private getRequestString(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
+    return '';
+  }
+
+  private safeUrlDecode(value: string): string {
+    if (!value) return value;
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  private async parseXmlBody(xml: string): Promise<any> {
+    const xmlResult = await xml2js.parseStringPromise(xml, {
+      explicitArray: false,
+      ignoreAttrs: false
+    });
+    return xmlResult.xml || xmlResult;
+  }
+
+  private async parseDecryptedPayload(plaintext: string): Promise<any> {
+    const trimmed = plaintext.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      return JSON.parse(trimmed);
+    }
+
+    return this.parseXmlBody(trimmed);
+  }
+
+  private async normalizeInboundBody(req: express.Request): Promise<{ body: any; isAIBot: boolean }> {
+    let body = req.body;
+    const contentType = String(req.headers['content-type'] || '');
+
+    if (typeof body === 'string' && (contentType.includes('xml') || body.trim().startsWith('<'))) {
+      body = await this.parseXmlBody(body);
+      logger.debug({ parsedBody: body }, 'Parsed WeWork XML webhook');
+    }
+
+    if (!body) {
+      return { body: null, isAIBot: false };
+    }
+
+    const encrypted = typeof body?.encrypt === 'string'
+      ? body.encrypt
+      : (typeof body?.Encrypt === 'string' ? body.Encrypt : undefined);
+    if (!encrypted) {
+      return { body, isAIBot: false };
+    }
+
+    if (!this.crypto) {
+      logger.warn({ hasToken: !!this.token, hasEncodingAESKey: !!this.encodingAESKey }, 'Received encrypted WeWork message but no crypto keys configured');
+      return { body: null, isAIBot: false };
+    }
+
+    const timestamp = this.getRequestString(req.query.timestamp || req.headers['x-tif-timestamp']);
+    const nonce = this.getRequestString(req.query.nonce || req.headers['x-tif-nonce']);
+    const signature = this.getRequestString(req.query.msg_signature || req.headers['x-tif-signature']);
+
+    if (timestamp && nonce && signature && !this.crypto.verifySignature(signature, timestamp, nonce, encrypted)) {
+      logger.warn({ timestamp, nonce }, 'WeWork encrypted callback signature mismatch');
+      throw new Error('Invalid WeWork callback signature');
+    }
+
+    const plaintext = this.crypto.decryptCallbackMessage(encrypted);
+    const parsed = await this.parseDecryptedPayload(plaintext);
+    logger.debug({ decryptedType: typeof parsed, keys: parsed && typeof parsed === 'object' ? Object.keys(parsed) : undefined }, 'Decrypted WeWork webhook');
+
+    return {
+      body: parsed,
+      isAIBot: typeof body?.encrypt === 'string' || typeof parsed?.response_url === 'string' || typeof parsed?.aibotid === 'string',
+    };
+  }
+
   private extractWebhookKey(webhookUrl: string): string | undefined {
     try {
       return new URL(webhookUrl).searchParams.get('key') || undefined;
@@ -314,13 +375,15 @@ export class WeWorkWebhookChannel implements Channel {
     webhookUrl: string;
     directUrl?: string;
     mediaId?: string;
+    encrypted?: boolean;
   }): Promise<Buffer> {
     if (options.directUrl) {
       const response = await axios.get(options.directUrl, {
         responseType: 'arraybuffer',
         timeout: 20000,
       });
-      return Buffer.from(response.data);
+      const buffer = Buffer.from(response.data);
+      return options.encrypted && this.crypto ? this.crypto.decryptAttachment(buffer) : buffer;
     }
 
     if (options.mediaId) {
@@ -344,31 +407,116 @@ export class WeWorkWebhookChannel implements Channel {
         }
       }
 
-      return Buffer.from(response.data);
+      const buffer = Buffer.from(response.data);
+      return options.encrypted && this.crypto ? this.crypto.decryptAttachment(buffer) : buffer;
     }
 
+    logger.warn({ options }, 'No WeWork media download source available');
     throw new Error('No WeWork media download source available');
   }
 
-  private async buildInboundMessageParts(xmlData: any, channelUserId: string, replyWebhookUrl: string): Promise<MessagePart[] | null> {
-    if (xmlData.MsgType === 'text' && (xmlData.Content || xmlData.Text?.Content)) {
-      const content = xmlData.Content || xmlData.Text?.Content || '';
-      logger.debug({ content, userId: xmlData.From?.UserId, chatId: xmlData.ChatId }, 'Extracted text content from WeWork XML');
-      return [{ text: content }];
+  private buildQuoteText(payload: any): string | undefined {
+    if (!payload?.quote?.msgtype) return undefined;
+    const quoteType = payload.quote.msgtype;
+    if (quoteType === 'text' && payload.quote.text?.content) {
+      return `[Quoted text]\n${payload.quote.text.content}`;
+    }
+    return `[Quoted ${quoteType} message]`;
+  }
+
+  private appendQuote(parts: MessagePart[], payload: any): MessagePart[] {
+    const quoteText = this.buildQuoteText(payload);
+    if (quoteText) {
+      parts.push({ text: quoteText });
+    }
+    return parts;
+  }
+
+  private async buildAIBotFileParts(payload: any, channelUserId: string, kind: 'image' | 'file'): Promise<MessagePart[]> {
+    const media = payload[kind] || {};
+    const url = media.url;
+    const msgId = payload.msgid || payload.msgId || 'upload';
+    const fallbackName = kind === 'image'
+      ? `wework-image-${msgId}.jpg`
+      : `wework-file-${msgId}`;
+
+    const buffer = await this.downloadInboundMedia({
+      webhookUrl: payload.response_url || this.webhookUrl,
+      directUrl: url,
+      encrypted: true,
+    });
+    const saved = await saveInboundChannelFile({
+      platform: this.platform,
+      channelUserId,
+      buffer,
+      fileName: media.filename || media.file_name || payload.file_name || fallbackName,
+      mimeType: media.mime_type || media.mimetype || (kind === 'image' ? 'image/jpeg' : 'application/octet-stream'),
+      isImage: kind === 'image',
+    });
+
+    const parts: MessagePart[] = [{ text: buildSavedFileText(saved, kind) }];
+    if (kind === 'image') {
+      parts.push({ inlineData: { mimeType: saved.mimeType, data: buffer.toString('base64') } });
+    }
+    return parts;
+  }
+
+  private async buildMixedMessageParts(payload: any, channelUserId: string): Promise<MessagePart[]> {
+    const parts: MessagePart[] = [];
+    const items = Array.isArray(payload?.mixed?.msg_item) ? payload.mixed.msg_item : [];
+    for (const item of items) {
+      if (item?.msgtype === 'text' && item.text?.content) {
+        parts.push({ text: item.text.content });
+      } else if (item?.msgtype === 'image') {
+        const nestedPayload = { ...payload, msgtype: 'image', image: item.image, quote: undefined };
+        parts.push(...await this.buildAIBotFileParts(nestedPayload, channelUserId, 'image'));
+      } else {
+        parts.push({ text: `[Mixed item: ${item?.msgtype || 'unknown'}]` });
+      }
+    }
+    return parts;
+  }
+
+  private async buildInboundMessageParts(payload: any, channelUserId: string, replyWebhookUrl: string, options: { isAIBot: boolean }): Promise<MessagePart[] | null> {
+    const msgType = payload.msgtype || payload.MsgType;
+
+    if (msgType === 'text' && (payload.text?.content || payload.Content || payload.Text?.Content)) {
+      const content = payload.text?.content || payload.Content || payload.Text?.Content || '';
+      logger.debug({ content, userId: payload.from?.userid || payload.From?.UserId, chatId: payload.chatid || payload.ChatId }, 'Extracted WeWork text content');
+      return this.appendQuote([{ text: content }], payload);
     }
 
-    if (xmlData.MsgType === 'image') {
+    if (options.isAIBot && msgType === 'image') {
+      return this.appendQuote(await this.buildAIBotFileParts(payload, channelUserId, 'image'), payload);
+    }
+
+    if (options.isAIBot && msgType === 'file') {
+      return this.appendQuote(await this.buildAIBotFileParts(payload, channelUserId, 'file'), payload);
+    }
+
+    if (options.isAIBot && msgType === 'mixed') {
+      return this.appendQuote(await this.buildMixedMessageParts(payload, channelUserId), payload);
+    }
+
+    if (options.isAIBot && msgType === 'voice' && payload.voice?.content) {
+      return this.appendQuote([{ text: payload.voice.content }], payload);
+    }
+
+    if (msgType === 'image') {
+      const directUrl = payload.ImageUrl || payload.PicUrl || payload.Url || payload.image?.url;
+      const mediaId = payload.MediaId || payload.media_id;
       const buffer = await this.downloadInboundMedia({
         webhookUrl: replyWebhookUrl,
-        directUrl: xmlData.ImageUrl || xmlData.PicUrl || xmlData.Url,
-        mediaId: xmlData.MediaId,
+        directUrl,
+        mediaId,
+        encrypted: !!payload.image?.url,
       });
       const saved = await saveInboundChannelFile({
         platform: this.platform,
         channelUserId,
         buffer,
-        fileName: xmlData.FileName || `wework-image-${xmlData.MsgId || xmlData.MediaId || 'upload'}.jpg`,
-        mimeType: xmlData.MimeType || 'image/jpeg',
+        fileName: payload.FileName || payload.file_name || `wework-image-${payload.MsgId || payload.msgid || payload.MediaId || mediaId || 'upload'}.jpg`,
+        mimeType: payload.MimeType || payload.mime_type || 'image/jpeg',
         isImage: true,
       });
       return [
@@ -377,36 +525,41 @@ export class WeWorkWebhookChannel implements Channel {
       ];
     }
 
-    if (xmlData.MsgType === 'file') {
+    if (msgType === 'file') {
+      const directUrl = payload.Url || payload.file?.url;
+      const mediaId = payload.MediaId || payload.media_id;
       const buffer = await this.downloadInboundMedia({
         webhookUrl: replyWebhookUrl,
-        directUrl: xmlData.Url,
-        mediaId: xmlData.MediaId,
+        directUrl,
+        mediaId,
+        encrypted: !!payload.file?.url,
       });
       const saved = await saveInboundChannelFile({
         platform: this.platform,
         channelUserId,
         buffer,
-        fileName: xmlData.FileName || `wework-file-${xmlData.MsgId || xmlData.MediaId || 'upload'}`,
-        mimeType: xmlData.MimeType || 'application/octet-stream',
+        fileName: payload.FileName || payload.file_name || `wework-file-${payload.MsgId || payload.msgid || payload.MediaId || mediaId || 'upload'}`,
+        mimeType: payload.MimeType || payload.mime_type || 'application/octet-stream',
         isImage: false,
       });
       return [{ text: buildSavedFileText(saved, 'file') }];
     }
 
-    if (xmlData.MsgType === 'event') {
+    if (msgType === 'event') {
       logger.info('Ignored WeWork event');
       return null;
     }
 
     logger.info({
-      msgType: xmlData.MsgType,
-      userId: xmlData.From?.UserId,
-      chatType: xmlData.ChatType,
-      chatId: xmlData.ChatId,
-      msgId: xmlData.MsgId
-    }, 'Received unsupported WeWork message type');
-    return [{ text: `[${xmlData.MsgType || 'Unknown'} message]` }];
+      msgType,
+      userId: payload.from?.userid || payload.From?.UserId,
+      chatType: payload.chattype || payload.ChatType,
+      chatId: payload.chatid || payload.ChatId,
+      msgId: payload.msgid || payload.MsgId,
+      imageKeys: payload.image ? Object.keys(payload.image) : undefined,
+      fileKeys: payload.file ? Object.keys(payload.file) : undefined,
+    }, 'Received unsupported or partially supported WeWork message type');
+    return [{ text: `[${msgType || 'Unknown'} message]` }];
   }
 
   private getEffectiveChatId(userId: string, options?: any): string | undefined {
@@ -443,6 +596,30 @@ export class WeWorkWebhookChannel implements Channel {
         }
         throw error;
       }
+    }
+  }
+
+  private async sendAIBotResponse(responseUrl: string, text: string): Promise<void> {
+    if (!responseUrl) {
+      throw new Error('Missing WeWork response_url for active reply');
+    }
+
+    const payload = {
+      msgtype: 'markdown',
+      markdown: {
+        content: text,
+      }
+    };
+
+    const response = await axios.post(responseUrl, payload, {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000,
+    });
+
+    if (response.data?.errcode !== undefined && response.data.errcode !== 0) {
+      throw new Error(`WeWork aibot response failed: ${response.data.errmsg || 'unknown'} (code: ${response.data.errcode})`);
     }
   }
 
@@ -493,6 +670,9 @@ export class WeWorkWebhookChannel implements Channel {
       
       // Use provided webhookUrl or fall back to configured one
       const webhookUrl = options?.webhookUrl || this.webhookUrl;
+      if (!webhookUrl) {
+        throw new Error('WeWork webhookUrl is not configured for proactive sendMessage');
+      }
       logger.debug({ webhookUrl: webhookUrl.substring(0, 50) + '...', hasCustomUrl: !!options?.webhookUrl }, 'Sending WeWork message');
       
       let payload: any;
@@ -557,6 +737,9 @@ export class WeWorkWebhookChannel implements Channel {
 
   async sendFile(userId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
     const webhookUrl = options?.webhookUrl || this.webhookUrl;
+    if (!webhookUrl) {
+      throw new Error('WeWork webhookUrl is not configured for proactive sendFile');
+    }
     const effectiveChatId = this.getEffectiveChatId(userId, options);
 
     if (options?.caption) {
