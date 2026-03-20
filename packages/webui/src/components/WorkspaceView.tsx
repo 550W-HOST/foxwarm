@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { ArrowLeft, ChevronDown, ChevronRight, Folder, FolderOpen, FileText, Plus, Save, RefreshCw, Crosshair, CornerDownRight } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { API_BASE_PATH } from '../config'
@@ -167,11 +167,6 @@ export default function WorkspaceView({ sessionId, session, onBack, onSessionsCh
   const selectedDirectoryPath = selectedIsDirectory
     ? selectedPath
     : (selectedPath ? selectedPath.split('/').slice(0, -1).join('/') || '/' : null)
-
-  const currentDirectoryEntries = useMemo(() => {
-    if (!selectedNodeId || !selectedDirectoryPath) return []
-    return childrenMap.get(makeNodeKey(selectedNodeId, selectedDirectoryPath)) || []
-  }, [childrenMap, selectedDirectoryPath, selectedNodeId])
 
   const isDirty = editorPath !== null && editorContent !== savedContent
 
@@ -502,39 +497,12 @@ export default function WorkspaceView({ sessionId, session, onBack, onSessionsCh
         </div>
 
         <div className="flex min-h-0 min-w-0 flex-1">
-          <div className="flex w-[320px] shrink-0 flex-col border-r border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/40">
-            <div className="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-              <div className="text-sm font-medium text-gray-900 dark:text-white">Directory</div>
-              <div className="truncate font-mono text-xs text-gray-500 dark:text-gray-400" title={selectedDirectoryPath || ''}>
-                {selectedDirectoryPath || 'Select a directory'}
-              </div>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-2">
-              {currentDirectoryEntries.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-gray-300 p-4 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
-                  No entries loaded.
-                </div>
-              ) : (
-                currentDirectoryEntries.map((entry) => (
-                  <button
-                    key={entry.path}
-                    onClick={() => { void handleSelectEntry(selectedNodeId, entry) }}
-                    className={`mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${selectedPath === entry.path ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'}`}
-                  >
-                    {entry.isDirectory ? <Folder className="h-4 w-4 shrink-0" /> : <FileText className="h-4 w-4 shrink-0" />}
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate">{entry.name}</div>
-                      <div className="text-[11px] text-gray-400">{entry.isDirectory ? 'directory' : `${formatSize(entry.size)} · ${formatTimestamp(entry.modifiedAt)}`}</div>
-                    </div>
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="border-b border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-800">
               <div className="text-sm font-medium text-gray-900 dark:text-white">Editor</div>
+              <div className="mt-1 truncate font-mono text-xs text-gray-500 dark:text-gray-400" title={selectedDirectoryPath || ''}>
+                directory {selectedDirectoryPath || '—'}
+              </div>
               <div className="truncate font-mono text-xs text-gray-500 dark:text-gray-400" title={editorPath || ''}>
                 {editorPath || 'Select a file'}
               </div>
