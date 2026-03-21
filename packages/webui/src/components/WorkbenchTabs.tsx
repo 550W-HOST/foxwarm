@@ -22,8 +22,8 @@ function TabIcon({ type }: { type: WorkbenchTab['type'] }) {
 
 export default function WorkbenchTabs({ tabs, activeTabId, onSelectTab, onCloseTab }: WorkbenchTabsProps) {
   return (
-    <div className="border-b border-gray-200 bg-white px-3 py-2 dark:border-gray-700 dark:bg-gray-800">
-      <div className="flex gap-2 overflow-x-auto">
+    <div className="border-b border-gray-200 bg-gray-100 px-3 pt-2 dark:border-gray-700 dark:bg-gray-900">
+      <div className="flex items-end gap-1 overflow-x-auto">
         {tabs.map((tab) => {
           const active = tab.id === activeTabId
           return (
@@ -32,13 +32,24 @@ export default function WorkbenchTabs({ tabs, activeTabId, onSelectTab, onCloseT
               role="button"
               tabIndex={0}
               onClick={() => onSelectTab(tab.id)}
+              onMouseDown={(event) => {
+                if (event.button === 1) {
+                  event.preventDefault()
+                  onCloseTab(tab.id)
+                }
+              }}
+              onAuxClick={(event) => {
+                if (event.button === 1) {
+                  event.preventDefault()
+                }
+              }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
                   onSelectTab(tab.id)
                 }
               }}
-              className={`group flex min-w-0 max-w-[24rem] cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${active ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800/80 dark:bg-blue-900/30 dark:text-blue-200' : 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-200 dark:hover:bg-gray-700/70'}`}
+              className={`group relative -mb-px flex min-w-0 max-w-[24rem] cursor-pointer items-center gap-2 rounded-t-lg border border-b-0 px-3 py-2 text-sm transition-colors ${active ? 'border-gray-200 bg-white text-blue-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-blue-200' : 'border-transparent bg-gray-200/70 text-gray-700 hover:bg-white/70 dark:bg-gray-800/70 dark:text-gray-300 dark:hover:bg-gray-800'}`}
               title={tab.title}
             >
               <TabIcon type={tab.type} />

@@ -7,7 +7,6 @@ interface SessionListProps {
   sessions: Session[]
   currentSession?: string
   currentView: 'session' | 'architecture'
-  activeWorkbenchTabType?: 'chat' | 'workspace' | 'file' | 'terminal' | null
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onSelectArchitecture: () => void
@@ -20,7 +19,6 @@ export default function SessionList({
   sessions,
   currentSession,
   currentView,
-  activeWorkbenchTabType,
   currentSessionRecord,
   onSelectSession,
   onSelectArchitecture,
@@ -65,7 +63,6 @@ export default function SessionList({
             defaultNodeId={defaultNodeId}
             defaultPath={defaultPath}
             sessionLabel={sessionLabel}
-            accent={activeWorkbenchTabType === 'workspace' || activeWorkbenchTabType === 'file'}
             onCreate={(options) => onCreateWorkspaceTab(options)}
           />
         </div>
@@ -75,7 +72,6 @@ export default function SessionList({
             defaultNodeId={defaultNodeId}
             defaultPath={defaultPath}
             sessionLabel={sessionLabel}
-            accent={activeWorkbenchTabType === 'terminal'}
             onCreate={(options) => onCreateTerminalTab(options)}
           />
         </div>

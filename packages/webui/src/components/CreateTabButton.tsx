@@ -8,11 +8,10 @@ interface CreateTabButtonProps {
   defaultNodeId: string
   defaultPath: string
   sessionLabel: string
-  accent?: boolean
   onCreate: (options: { nodeId: string; path: string }) => void
 }
 
-export default function CreateTabButton({ kind, defaultNodeId, defaultPath, sessionLabel, accent = false, onCreate }: CreateTabButtonProps) {
+export default function CreateTabButton({ kind, defaultNodeId, defaultPath, sessionLabel, onCreate }: CreateTabButtonProps) {
   const [open, setOpen] = useState(false)
   const [nodeId, setNodeId] = useState(defaultNodeId || 'master')
   const [path, setPath] = useState(defaultPath || '')
@@ -42,9 +41,7 @@ export default function CreateTabButton({ kind, defaultNodeId, defaultPath, sess
   const isWorkspace = kind === 'workspace'
   const Icon = isWorkspace ? FolderOpen : SquareTerminal
   const label = isWorkspace ? 'Workspace' : 'Terminal'
-  const baseClass = accent
-    ? 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-200 dark:hover:bg-blue-900/60'
-    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
+  const baseClass = 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
 
   const handleDefaultCreate = () => {
     onCreate({ nodeId: defaultNodeId || 'master', path: defaultPath || '/' })
