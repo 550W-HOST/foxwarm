@@ -26,13 +26,14 @@ interface TerminalViewProps {
   session?: Session
   initialCwd?: string
   initialTerminalId?: string
+  createMode?: 'new' | 'reuse'
   onBack?: () => void
   onSessionsChanged?: () => void
   onTerminalReady?: (terminal: TerminalInfo) => void
   onTerminalClosed?: (terminalId: string) => void
 }
 
-export default function TerminalView({ sessionId, session, initialCwd, initialTerminalId, onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
+export default function TerminalView({ sessionId, session, initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -154,7 +155,7 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
           }
         }
 
-        if (!terminalId) {
+        if (!terminalId && createMode !== 'new') {
           const listRes = await fetch(`${API_BASE_PATH}/terminals?sessionId=${encodeURIComponent(sessionId)}`)
           const listData = await listRes.json().catch(() => ({}))
           if (!listRes.ok) {
@@ -281,7 +282,7 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [sessionId, requestedCwd, initialTerminalId, reloadNonce])
+  }, [sessionId, requestedCwd, initialTerminalId, createMode, reloadNonce])
 
   const handleClose = async () => {
     if (!terminalIdRef.current) return
