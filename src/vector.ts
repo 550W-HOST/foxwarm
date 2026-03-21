@@ -1,5 +1,4 @@
 import * as lancedb from '@lancedb/lancedb';
-import { Ollama } from 'ollama';
 import fs from 'fs-extra';
 import path from 'path';
 import { Message } from './types';
@@ -11,7 +10,7 @@ import { formatMessageText } from './utils/messageFormat';
 const DB_PATH = DB_DIR;
 const TABLE_NAME = 'messages_v6';
 const CHECKPOINTS_PATH = path.join(DB_DIR, 'vector-index-checkpoints-v2.json');
-const ollama = new Ollama({ host: OLLAMA_BASE_URL });
+const EMBEDDING_MODEL = 'qwen3-embedding:0.6b';
 
 // Keep a conservative margin under the embedding model's real 4096-token limit
 // because estimateTokenCount() can undercount slightly on some inputs.
@@ -357,11 +356,40 @@ function createRowsFromSegment(segment: ArchiveSegment): Omit<VectorRow, 'vector
 
 async function getEmbedding(text: string) {
     const truncated = truncateToTokenLimit(text, EMBEDDING_MAX_LENGTH);
-    const response = await ollama.embeddings({
-        model: 'qwen3-embedding:0.6b',
-        prompt: truncated,
+    // Keep using the existing OLLAMA_BASE_URL config key for compatibility,
+    // but send embeddings requests through the OpenAI-compatible /v1/embeddings API.
+    const baseUrl = OLLAMA_BASE_URL.replace(/\/+$/, '');
+    const response = await fetch(`${baseUrl}/v1/embeddings`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            model: EMBEDDING_MODEL,
+            input: truncated,
+        }),
+        signal: AbortSignal.timeout(60_000),
     });
-    return response.embedding;
+    const responseText = await response.text();
+
+    let body: any = {};
+    try {
+        body = responseText ? JSON.parse(responseText) : {};
+    } catch {
+        throw new Error(`Embedding service returned non-JSON response (${response.status}): ${responseText.slice(0, 500)}`);
+    }
+
+    if (!response.ok) {
+        const message = body?.error?.message || body?.error || responseText || `HTTP ${response.status}`;
+        throw new Error(`Embedding request failed (${response.status}): ${message}`);
+    }
+
+    const embedding = body?.data?.[0]?.embedding;
+    if (!Array.isArray(embedding) || embedding.length === 0 || embedding.some((value: unknown) => typeof value !== 'number')) {
+        throw new Error(`Embedding service returned invalid embeddings payload: ${responseText.slice(0, 500)}`);
+    }
+
+    return embedding;
 }
 
 async function loadCheckpoints() {
