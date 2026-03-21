@@ -606,21 +606,20 @@ function App() {
           onBack={onBack}
           themeMode={themeMode}
           onThemeChange={setThemeMode}
+          onOpenWorkspace={() => openWorkspaceTab(activeTab.sessionId)}
+          onOpenTerminal={() => openTerminalTab(activeTab.sessionId)}
         />
       )
     }
 
     if (activeTab.type === 'workspace') {
       const sessionId = activeTab.contextSessionId || currentContextSessionId
-      const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
       return (
         <WorkspaceView
-          sessionId={sessionId}
-          session={sessionRecord}
+          key={activeTab.id}
           initialNodeId={activeTab.nodeId}
           initialPath={activeTab.path}
           onBack={onBack}
-          onSessionsChanged={() => { void fetchSessions() }}
           onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: activeTab.nodeId, path: cwd || activeTab.path })}
           onOpenFile={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
         />
@@ -629,16 +628,14 @@ function App() {
 
     if (activeTab.type === 'file') {
       const sessionId = activeTab.contextSessionId || currentContextSessionId
-      const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
       return (
         <FileEditorView
-          sessionId={sessionId}
-          session={sessionRecord}
+          key={activeTab.id}
           nodeId={activeTab.nodeId}
           filePath={activeTab.path}
           onBack={onBack}
-          onSessionsChanged={() => { void fetchSessions() }}
           onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: activeTab.nodeId, path: cwd || activeTab.path.split('/').slice(0, -1).join('/') || '/' })}
+          onOpenFileTab={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
         />
       )
     }
@@ -657,6 +654,7 @@ function App() {
         onSessionsChanged={() => { void fetchSessions() }}
         onTerminalReady={(terminal) => handleTerminalReady(activeTab.id, terminal)}
         onTerminalClosed={handleTerminalClosed}
+        onOpenWorkspace={(cwd) => openWorkspaceTab(sessionId, { nodeId: activeTab.nodeId, path: cwd || activeTab.cwd || '/' })}
       />
     )
   }
