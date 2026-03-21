@@ -23,6 +23,7 @@ interface WorkspaceViewProps {
   onBack?: () => void
   onSessionsChanged?: () => void
   onOpenTerminal?: (cwd?: string) => void
+  onOpenFile?: (nodeId: string, path: string) => void
 }
 
 const ROOTS_STORAGE_KEY = 'foxwarm_workspace_roots_v1'
@@ -136,7 +137,7 @@ function WorkspaceTreeNode({
   )
 }
 
-export default function WorkspaceView({ sessionId, session, onBack, onSessionsChanged, onOpenTerminal }: WorkspaceViewProps) {
+export default function WorkspaceView({ sessionId, session, onBack, onSessionsChanged, onOpenTerminal, onOpenFile }: WorkspaceViewProps) {
   const [roots, setRoots] = useState<WorkspaceRoot[]>(() => loadStoredRoots())
   const [selectedRootId, setSelectedRootId] = useState<string | null>(null)
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
@@ -287,6 +288,10 @@ export default function WorkspaceView({ sessionId, session, onBack, onSessionsCh
       if (entry.isDirectory) {
         await openDirectory(nodeId, entry.path)
       } else {
+        if (onOpenFile) {
+          onOpenFile(nodeId, entry.path)
+          return
+        }
         await openFile(nodeId, entry.path)
       }
     } catch (err) {

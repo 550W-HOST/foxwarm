@@ -15,7 +15,7 @@ import { BASE_DIR } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
-import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, resizeTerminal, writeTerminalInput } from '../terminalManager';
+import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
 
 type WorkspaceNodeEntry = {
   name: string;
@@ -402,6 +402,21 @@ export class WebUIChannel implements Channel {
 
       httpServerInstance.addRoute({
         path: '/api/terminals',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId.trim() ? req.query.sessionId.trim() : undefined;
+            const terminals = await listTerminalRecords({ sessionId });
+            res.json({ terminals });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to list terminals');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/terminals',
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
@@ -423,6 +438,24 @@ export class WebUIChannel implements Channel {
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to create terminal');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/terminals/:terminalId',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const terminalId = Array.isArray(req.params.terminalId) ? req.params.terminalId[0] : req.params.terminalId;
+            const terminal = await getTerminalRecord(terminalId);
+            if (!terminal) {
+              return res.status(404).json({ error: 'Terminal not found' });
+            }
+            res.json({ terminal });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get terminal');
             res.status(400).json({ error: e.message });
           }
         },
@@ -948,11 +981,12 @@ export class WebUIChannel implements Channel {
 
         let attachedTerminalId = '';
         try {
-          const terminal = attachTerminalClient(terminalId, ws);
+          const { terminal, backlog } = await attachTerminalClient(terminalId, ws);
           attachedTerminalId = terminal.id;
           ws.send(JSON.stringify({
             type: 'ready',
             terminal,
+            backlog,
           }));
         } catch (err: any) {
           ws.close(1008, err?.message || 'Failed to attach terminal');

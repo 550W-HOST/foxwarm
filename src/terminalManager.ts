@@ -7,8 +7,6 @@ import { getAgentDir } from './config';
 import { logger } from './common';
 import * as sessionManager from './sessionManager';
 
-const ORPHAN_TERMINAL_TTL_MS = 30_000;
-
 export type TerminalRecord = {
   id: string;
   sessionId: string;
@@ -25,11 +23,13 @@ export type TerminalRecord = {
 type ManagedTerminal = TerminalRecord & {
   ptyProcess: pty.IPty;
   clients: Set<WebSocket>;
-  closeTimer: NodeJS.Timeout | null;
   closed: boolean;
+  outputBuffer: string;
   rcFilePath?: string;
   cwdPath?: string;
 };
+
+const TERMINAL_OUTPUT_BUFFER_LIMIT = 200_000;
 
 const terminals = new Map<string, ManagedTerminal>();
 
@@ -61,10 +61,14 @@ async function buildRcFile(agentName: string, terminalId: string, cwdPath: strin
   const script = [
     'if [ -f /etc/bash.bashrc ]; then source /etc/bash.bashrc; fi',
     'if [ -f "$HOME/.bashrc" ]; then source "$HOME/.bashrc"; fi',
-    '__foxwarm_terminal_finalize() {',
+    '__foxwarm_terminal_sync_cwd() {',
     '  local tmp_path="${FOXWARM_TERMINAL_CWD_PATH}.tmp.$$"',
     '  pwd > "$tmp_path" 2>/dev/null || true',
     '  mv "$tmp_path" "$FOXWARM_TERMINAL_CWD_PATH" 2>/dev/null || true',
+    '}',
+    'PROMPT_COMMAND="__foxwarm_terminal_sync_cwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"',
+    '__foxwarm_terminal_finalize() {',
+    '  __foxwarm_terminal_sync_cwd',
     '}',
     'trap __foxwarm_terminal_finalize EXIT',
     '',
@@ -84,27 +88,16 @@ async function readTrackedCwd(cwdPath?: string): Promise<string | null> {
   }
 }
 
-async function updateSessionCwdFromTerminal(record: ManagedTerminal): Promise<void> {
-  const finalCwd = await readTrackedCwd(record.cwdPath);
-  if (!finalCwd) {
-    return;
-  }
-
-  try {
-    await sessionManager.setSessionCwd(record.sessionId, finalCwd);
-  } catch (err) {
-    logger.warn({ err, terminalId: record.id, sessionId: record.sessionId, finalCwd }, 'Failed to sync session cwd from terminal');
+async function refreshTerminalCwd(record: ManagedTerminal): Promise<void> {
+  const currentCwd = await readTrackedCwd(record.cwdPath);
+  if (currentCwd) {
+    record.cwd = currentCwd;
   }
 }
 
 async function cleanupTerminal(record: ManagedTerminal): Promise<void> {
-  if (record.closeTimer) {
-    clearTimeout(record.closeTimer);
-    record.closeTimer = null;
-  }
-
   terminals.delete(record.id);
-  await updateSessionCwdFromTerminal(record);
+  await refreshTerminalCwd(record);
 
   for (const client of record.clients) {
     try {
@@ -119,17 +112,6 @@ async function cleanupTerminal(record: ManagedTerminal): Promise<void> {
     record.rcFilePath ? fs.remove(record.rcFilePath).catch(() => {}) : Promise.resolve(),
     record.cwdPath ? fs.remove(record.cwdPath).catch(() => {}) : Promise.resolve(),
   ]);
-}
-
-function scheduleOrphanClose(record: ManagedTerminal): void {
-  if (record.closeTimer || record.closed) {
-    return;
-  }
-
-  record.closeTimer = setTimeout(() => {
-    record.closeTimer = null;
-    void closeTerminal(record.id, 'orphan-timeout');
-  }, ORPHAN_TERMINAL_TTL_MS);
 }
 
 export async function createTerminal(options: {
@@ -203,8 +185,8 @@ export async function createTerminal(options: {
     pid: ptyProcess.pid,
     ptyProcess,
     clients: new Set(),
-    closeTimer: null,
     closed: false,
+    outputBuffer: '',
     rcFilePath,
     cwdPath,
   };
@@ -212,6 +194,11 @@ export async function createTerminal(options: {
   terminals.set(record.id, record);
 
   ptyProcess.onData((data: string) => {
+    record.outputBuffer = `${record.outputBuffer}${data}`;
+    if (record.outputBuffer.length > TERMINAL_OUTPUT_BUFFER_LIMIT) {
+      record.outputBuffer = record.outputBuffer.slice(record.outputBuffer.length - TERMINAL_OUTPUT_BUFFER_LIMIT);
+    }
+
     for (const client of record.clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(JSON.stringify({ type: 'output', data }));
@@ -246,19 +233,38 @@ export function getTerminal(terminalId: string): TerminalRecord | null {
   return record ? sanitizeTerminalRecord(record) : null;
 }
 
-export function attachTerminalClient(terminalId: string, client: WebSocket): TerminalRecord {
+export async function getTerminalRecord(terminalId: string): Promise<TerminalRecord | null> {
+  const record = terminals.get(terminalId);
+  if (!record) {
+    return null;
+  }
+  await refreshTerminalCwd(record);
+  return sanitizeTerminalRecord(record);
+}
+
+export async function listTerminalRecords(options: { sessionId?: string } = {}): Promise<TerminalRecord[]> {
+  const filtered = Array.from(terminals.values())
+    .filter((record) => !options.sessionId || record.sessionId === options.sessionId);
+
+  await Promise.all(filtered.map((record) => refreshTerminalCwd(record)));
+
+  return filtered
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((record) => sanitizeTerminalRecord(record));
+}
+
+export async function attachTerminalClient(terminalId: string, client: WebSocket): Promise<{ terminal: TerminalRecord; backlog: string }> {
   const record = terminals.get(terminalId);
   if (!record) {
     throw new Error(`Terminal not found: ${terminalId}`);
   }
 
-  if (record.closeTimer) {
-    clearTimeout(record.closeTimer);
-    record.closeTimer = null;
-  }
-
   record.clients.add(client);
-  return sanitizeTerminalRecord(record);
+  await refreshTerminalCwd(record);
+  return {
+    terminal: sanitizeTerminalRecord(record),
+    backlog: record.outputBuffer,
+  };
 }
 
 export function detachTerminalClient(terminalId: string, client: WebSocket): void {
@@ -268,9 +274,6 @@ export function detachTerminalClient(terminalId: string, client: WebSocket): voi
   }
 
   record.clients.delete(client);
-  if (record.clients.size === 0) {
-    scheduleOrphanClose(record);
-  }
 }
 
 export function writeTerminalInput(terminalId: string, data: string): void {
@@ -301,10 +304,6 @@ export async function closeTerminal(terminalId: string, reason: string = 'manual
   }
 
   record.closed = true;
-  if (record.closeTimer) {
-    clearTimeout(record.closeTimer);
-    record.closeTimer = null;
-  }
 
   logger.info({ terminalId, reason }, 'Closing terminal');
   try {
