@@ -3,19 +3,21 @@ import Chat from './components/Chat'
 import ArchitectureView from './components/ArchitectureView'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
+import TerminalView from './components/TerminalView'
 import WorkspaceView from './components/WorkspaceView'
 import type { Session } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
-type AppView = 'chat' | 'architecture' | 'workspace'
+type AppView = 'chat' | 'architecture' | 'workspace' | 'terminal'
 
 const LIGHT_THEME_COLOR = '#f3f4f6'
 const DARK_THEME_COLOR = '#111827'
 const ARCHITECTURE_HASH = '__architecture__'
 const WORKSPACE_HASH_PREFIX = '__workspace__:'
+const TERMINAL_HASH_PREFIX = '__terminal__:'
 
-const getHashState = (): { view: AppView; sessionId: string } => {
+const getHashState = (): { view: AppView; sessionId: string; cwd?: string } => {
   const hash = decodeURIComponent(window.location.hash.slice(1))
 
   if (!hash || hash.startsWith('token=')) {
@@ -31,6 +33,17 @@ const getHashState = (): { view: AppView; sessionId: string } => {
     return { view: 'workspace', sessionId }
   }
 
+  if (hash.startsWith(TERMINAL_HASH_PREFIX)) {
+    const remainder = hash.slice(TERMINAL_HASH_PREFIX.length)
+    const [sessionIdPart, queryPart = ''] = remainder.split('?')
+    const params = new URLSearchParams(queryPart)
+    return {
+      view: 'terminal',
+      sessionId: sessionIdPart || 'main',
+      cwd: params.get('cwd') || undefined,
+    }
+  }
+
   return { view: 'chat', sessionId: hash }
 }
 
@@ -38,6 +51,7 @@ function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [currentView, setCurrentView] = useState<AppView>(() => getHashState().view)
   const [currentSession, setCurrentSession] = useState<string>(() => getHashState().sessionId)
+  const [terminalInitialCwd, setTerminalInitialCwd] = useState<string | undefined>(() => getHashState().cwd)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [showSessionList, setShowSessionList] = useState<boolean>(() => {
     // Show session list if no hash (mobile only)
@@ -182,12 +196,14 @@ function App() {
       if (window.location.hash) {
         setCurrentView(nextState.view)
         setCurrentSession(nextState.sessionId)
+        setTerminalInitialCwd(nextState.cwd)
         if (isMobile) {
           setShowSessionList(false)
         }
       } else {
         setCurrentView('chat')
         setCurrentSession('main')
+        setTerminalInitialCwd(undefined)
         if (isMobile) {
           setShowSessionList(true)
         }
@@ -213,6 +229,7 @@ function App() {
     window.location.hash = encodeURIComponent(sessionId)
     setCurrentView('chat')
     setCurrentSession(sessionId)
+    setTerminalInitialCwd(undefined)
     if (isMobile) {
       setShowSessionList(false)
     }
@@ -221,6 +238,7 @@ function App() {
   const handleSelectArchitecture = () => {
     window.location.hash = ARCHITECTURE_HASH
     setCurrentView('architecture')
+    setTerminalInitialCwd(undefined)
     if (isMobile) {
       setShowSessionList(false)
     }
@@ -231,6 +249,19 @@ function App() {
     window.location.hash = `${WORKSPACE_HASH_PREFIX}${encodeURIComponent(targetSessionId)}`
     setCurrentView('workspace')
     setCurrentSession(targetSessionId)
+    setTerminalInitialCwd(undefined)
+    if (isMobile) {
+      setShowSessionList(false)
+    }
+  }
+
+  const handleSelectTerminal = (sessionId?: string, cwd?: string) => {
+    const targetSessionId = sessionId || currentSession || 'main'
+    const suffix = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
+    window.location.hash = `${TERMINAL_HASH_PREFIX}${encodeURIComponent(targetSessionId)}${suffix}`
+    setCurrentView('terminal')
+    setCurrentSession(targetSessionId)
+    setTerminalInitialCwd(cwd)
     if (isMobile) {
       setShowSessionList(false)
     }
@@ -307,6 +338,7 @@ function App() {
         onSelectSession={handleSelectSession}
         onSelectArchitecture={handleSelectArchitecture}
         onSelectWorkspace={handleSelectWorkspace}
+        onSelectTerminal={handleSelectTerminal}
         onCreateSession={handleCreateSession}
       />
     }
@@ -330,6 +362,21 @@ function App() {
           <WorkspaceView
             sessionId={currentSession}
             session={currentSessionRecord}
+            onBack={handleBackToList}
+            onSessionsChanged={() => { void fetchSessions() }}
+            onOpenTerminal={(cwd) => handleSelectTerminal(currentSession, cwd)}
+          />
+        </div>
+      )
+    }
+
+    if (currentView === 'terminal') {
+      return (
+        <div className="fixed inset-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
+          <TerminalView
+            sessionId={currentSession}
+            session={currentSessionRecord}
+            initialCwd={terminalInitialCwd}
             onBack={handleBackToList}
             onSessionsChanged={() => { void fetchSessions() }}
           />
@@ -361,6 +408,7 @@ function App() {
         onSelectSession={handleSelectSession}
         onSelectArchitecture={handleSelectArchitecture}
         onSelectWorkspace={handleSelectWorkspace}
+        onSelectTerminal={handleSelectTerminal}
         onCreateSession={handleCreateSession}
       />
       <div className="flex-1 h-screen overflow-hidden">
@@ -374,6 +422,14 @@ function App() {
           <WorkspaceView
             sessionId={currentSession}
             session={currentSessionRecord}
+            onSessionsChanged={() => { void fetchSessions() }}
+            onOpenTerminal={(cwd) => handleSelectTerminal(currentSession, cwd)}
+          />
+        ) : currentView === 'terminal' ? (
+          <TerminalView
+            sessionId={currentSession}
+            session={currentSessionRecord}
+            initialCwd={terminalInitialCwd}
             onSessionsChanged={() => { void fetchSessions() }}
           />
         ) : (

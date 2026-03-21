@@ -15,6 +15,7 @@ import { BASE_DIR } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
+import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, resizeTerminal, writeTerminalInput } from '../terminalManager';
 
 type WorkspaceNodeEntry = {
   name: string;
@@ -394,6 +395,49 @@ export class WebUIChannel implements Channel {
             res.json({ success: true, ...data });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to write workspace file');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/terminals',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+            const nodeId = typeof req.body?.nodeId === 'string' && req.body.nodeId.trim() ? req.body.nodeId.trim() : undefined;
+            const cwd = typeof req.body?.cwd === 'string' && req.body.cwd.trim() ? req.body.cwd.trim() : undefined;
+            const cols = typeof req.body?.cols === 'number' ? req.body.cols : undefined;
+            const rows = typeof req.body?.rows === 'number' ? req.body.rows : undefined;
+
+            if (!sessionId) {
+              throw new Error('sessionId is required');
+            }
+
+            const terminal = await createTerminal({ sessionId, nodeId, cwd, cols, rows });
+            res.json({
+              success: true,
+              terminal,
+              streamPath: '/api/terminals/stream',
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to create terminal');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/terminals/:terminalId',
+        method: 'DELETE',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const terminalId = Array.isArray(req.params.terminalId) ? req.params.terminalId[0] : req.params.terminalId;
+            await closeTerminal(terminalId, 'api-delete');
+            res.json({ success: true });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to close terminal');
             res.status(400).json({ error: e.message });
           }
         },
@@ -886,6 +930,66 @@ export class WebUIChannel implements Channel {
         ws.on('error', (error) => {
           logger.error({ err: error }, 'ASR client websocket error');
           closeBoth();
+        });
+      });
+
+      httpServerInstance.addWebSocket('/api/terminals/stream', async (ws: WebSocket, req: http.IncomingMessage) => {
+        if (!httpServerInstance.checkIncomingToken(req)) {
+          ws.close(1008, 'Unauthorized');
+          return;
+        }
+
+        const requestUrl = new URL(req.url || '/api/terminals/stream', 'http://localhost');
+        const terminalId = requestUrl.searchParams.get('terminalId') || '';
+        if (!terminalId) {
+          ws.close(1008, 'Missing terminalId');
+          return;
+        }
+
+        let attachedTerminalId = '';
+        try {
+          const terminal = attachTerminalClient(terminalId, ws);
+          attachedTerminalId = terminal.id;
+          ws.send(JSON.stringify({
+            type: 'ready',
+            terminal,
+          }));
+        } catch (err: any) {
+          ws.close(1008, err?.message || 'Failed to attach terminal');
+          return;
+        }
+
+        ws.on('message', async (raw) => {
+          try {
+            const payload = JSON.parse(raw.toString());
+            if (payload?.type === 'input' && typeof payload.data === 'string') {
+              writeTerminalInput(attachedTerminalId, payload.data);
+              return;
+            }
+
+            if (payload?.type === 'resize') {
+              resizeTerminal(attachedTerminalId, Number(payload.cols || 0), Number(payload.rows || 0));
+              return;
+            }
+
+            if (payload?.type === 'close') {
+              await closeTerminal(attachedTerminalId, 'ws-close-message');
+              return;
+            }
+
+            ws.send(JSON.stringify({ type: 'error', message: 'Unsupported terminal message type' }));
+          } catch (err: any) {
+            ws.send(JSON.stringify({ type: 'error', message: err?.message || 'Terminal stream error' }));
+          }
+        });
+
+        ws.on('close', () => {
+          detachTerminalClient(attachedTerminalId, ws);
+        });
+
+        ws.on('error', (error) => {
+          logger.error({ err: error, terminalId: attachedTerminalId }, 'Terminal websocket client error');
+          detachTerminalClient(attachedTerminalId, ws);
         });
       });
 
