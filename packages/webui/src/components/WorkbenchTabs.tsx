@@ -32,7 +32,7 @@ export default function WorkbenchTabs({ tabs, activeTabId, onSelectTab, onCloseT
               role="button"
               tabIndex={0}
               onClick={() => onSelectTab(tab.id)}
-              onMouseDown={(event) => {
+              onMouseUp={(event) => {
                 if (event.button === 1) {
                   event.preventDefault()
                   onCloseTab(tab.id)
