@@ -641,12 +641,10 @@ function App() {
     }
 
     const sessionId = activeTab.contextSessionId || currentContextSessionId
-    const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
     return (
       <TerminalView
         key={activeTab.id}
         sessionId={sessionId}
-        session={sessionRecord}
         initialCwd={activeTab.cwd}
         initialTerminalId={activeTab.terminalId}
         createMode={activeTab.createMode || 'reuse'}
