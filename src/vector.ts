@@ -852,6 +852,23 @@ async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: str
     await saveCheckpoints();
 }
 
+async function copySessionArchiveIndexCheckpoint(sourceSessionId: string, targetSessionId: string): Promise<void> {
+    const sourceCheckpoint = checkpoints.sessions[sourceSessionId];
+    if (!sourceCheckpoint) {
+        return;
+    }
+
+    checkpoints.sessions[targetSessionId] = {
+        lastIndexedSeq: sourceCheckpoint.lastIndexedSeq,
+        // Forked sessions copy archive files but not vector rows. Start future tail rewinds
+        // strictly after the inherited indexed range so child-only new messages do not
+        // rebuild the parent's inherited archive tail under the forked session id.
+        tailStartSeq: sourceCheckpoint.lastIndexedSeq > 0 ? sourceCheckpoint.lastIndexedSeq + 1 : 0,
+        updatedAt: Date.now(),
+    };
+    await saveCheckpoints();
+}
+
 function formatSeqLabel(startSeq: number, endSeq: number): string {
     return startSeq === endSeq ? `${startSeq}` : `${startSeq}-${endSeq}`;
 }
@@ -1002,6 +1019,7 @@ function getArchiveIndexStatus(sessionId: string): { lastIndexedSeq: number; tai
 export {
     buildArchiveSegments,
     calculateNextSegmentStartIndex,
+    copySessionArchiveIndexCheckpoint,
     createRowsFromSegment,
     estimateArchiveMessageTokenCount,
     getArchiveIndexBatchDecision,

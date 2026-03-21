@@ -733,6 +733,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   }
 
   await copyLayeredContextFiles(sourceSessionId, newSessionId);
+  await vector.copySessionArchiveIndexCheckpoint(sourceSessionId, newSessionId);
   await appendSessionMessages(forkedSession, appendedForkMessages);
 
   logger.info({ sourceSessionId, newSessionId, isChildSession }, 'Session forked');
