@@ -25,11 +25,14 @@ interface TerminalViewProps {
   sessionId: string
   session?: Session
   initialCwd?: string
+  initialTerminalId?: string
   onBack?: () => void
   onSessionsChanged?: () => void
+  onTerminalReady?: (terminal: TerminalInfo) => void
+  onTerminalClosed?: (terminalId: string) => void
 }
 
-export default function TerminalView({ sessionId, session, initialCwd, onBack, onSessionsChanged }: TerminalViewProps) {
+export default function TerminalView({ sessionId, session, initialCwd, initialTerminalId, onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -37,6 +40,8 @@ export default function TerminalView({ sessionId, session, initialCwd, onBack, o
   const terminalIdRef = useRef<string | null>(null)
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const onSessionsChangedRef = useRef(onSessionsChanged)
+  const onTerminalReadyRef = useRef(onTerminalReady)
+  const onTerminalClosedRef = useRef(onTerminalClosed)
 
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
@@ -57,6 +62,14 @@ export default function TerminalView({ sessionId, session, initialCwd, onBack, o
   useEffect(() => {
     onSessionsChangedRef.current = onSessionsChanged
   }, [onSessionsChanged])
+
+  useEffect(() => {
+    onTerminalReadyRef.current = onTerminalReady
+  }, [onTerminalReady])
+
+  useEffect(() => {
+    onTerminalClosedRef.current = onTerminalClosed
+  }, [onTerminalClosed])
 
   useEffect(() => {
     const term = new Terminal({
@@ -115,7 +128,6 @@ export default function TerminalView({ sessionId, session, initialCwd, onBack, o
     if (!term) return
 
     let disposed = false
-    let cleanupTerminalId: string | null = null
     let inputDisposable: { dispose: () => void } | null = null
 
     setStatus('connecting')
@@ -124,47 +136,68 @@ export default function TerminalView({ sessionId, session, initialCwd, onBack, o
     setIsClosing(false)
     terminalIdRef.current = null
     term.reset()
-    term.writeln('Starting terminal...')
-
-    const closeRemoteTerminal = async (terminalId: string | null) => {
-      if (!terminalId) return
-      try {
-        await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(terminalId)}`, { method: 'DELETE' })
-      } catch {
-        // ignore cleanup errors
-      }
-    }
 
     const start = async () => {
       try {
         const cols = term.cols || 100
         const rows = term.rows || 30
-        const res = await fetch(`${API_BASE_PATH}/terminals`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId,
-            nodeId: 'master',
-            cwd: requestedCwd,
-            cols,
-            rows,
-          }),
-        })
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) {
-          throw new Error(data.error || 'Failed to create terminal')
+
+        let terminalId = initialTerminalId || null
+
+        if (terminalId) {
+          const lookupRes = await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(terminalId)}`)
+          const lookupData = await lookupRes.json().catch(() => ({}))
+          if (lookupRes.ok && lookupData.terminal) {
+            // keep existing terminal
+          } else {
+            terminalId = null
+          }
         }
 
-        if (disposed) {
-          await closeRemoteTerminal(data?.terminal?.id || null)
+        if (!terminalId) {
+          const listRes = await fetch(`${API_BASE_PATH}/terminals?sessionId=${encodeURIComponent(sessionId)}`)
+          const listData = await listRes.json().catch(() => ({}))
+          if (!listRes.ok) {
+            throw new Error(listData.error || 'Failed to list terminals')
+          }
+
+          const terminals: TerminalInfo[] = Array.isArray(listData.terminals) ? listData.terminals : []
+          const reused = requestedCwd
+            ? terminals.find((item) => item.cwd === requestedCwd)
+            : terminals[0]
+
+          if (reused) {
+            terminalId = reused.id
+          }
+        }
+
+        if (!terminalId) {
+          const createRes = await fetch(`${API_BASE_PATH}/terminals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId,
+              nodeId: 'master',
+              cwd: requestedCwd,
+              cols,
+              rows,
+            }),
+          })
+          const createData = await createRes.json().catch(() => ({}))
+          if (!createRes.ok) {
+            throw new Error(createData.error || 'Failed to create terminal')
+          }
+          terminalId = createData.terminal.id
+        }
+
+        if (disposed || !terminalId) {
           return
         }
 
-        cleanupTerminalId = data.terminal.id
-        terminalIdRef.current = data.terminal.id
+        terminalIdRef.current = terminalId
 
         const wsUrl = makeWebSocketUrl('/terminals/stream')
-        wsUrl.searchParams.set('terminalId', data.terminal.id)
+        wsUrl.searchParams.set('terminalId', terminalId)
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 
@@ -187,8 +220,13 @@ export default function TerminalView({ sessionId, session, initialCwd, onBack, o
           try {
             const payload = JSON.parse(event.data)
             if (payload.type === 'ready') {
+              term.reset()
+              if (typeof payload.backlog === 'string' && payload.backlog.length > 0) {
+                term.write(payload.backlog)
+              }
               setTerminalInfo(payload.terminal)
               setStatus('ready')
+              onTerminalReadyRef.current?.(payload.terminal)
               return
             }
 
@@ -202,6 +240,9 @@ export default function TerminalView({ sessionId, session, initialCwd, onBack, o
               setTerminalInfo((current) => current ? { ...current, cwd: payload.cwd || current.cwd } : current)
               term.writeln('')
               term.writeln(`[terminal exited: code=${payload.exitCode ?? 'unknown'}]`)
+              if (terminalIdRef.current) {
+                onTerminalClosedRef.current?.(terminalIdRef.current)
+              }
               onSessionsChangedRef.current?.()
               return
             }
@@ -239,9 +280,8 @@ export default function TerminalView({ sessionId, session, initialCwd, onBack, o
       inputDisposable?.dispose()
       wsRef.current?.close()
       wsRef.current = null
-      void closeRemoteTerminal(cleanupTerminalId)
     }
-  }, [sessionId, requestedCwd, reloadNonce])
+  }, [sessionId, requestedCwd, initialTerminalId, reloadNonce])
 
   const handleClose = async () => {
     if (!terminalIdRef.current) return
@@ -251,6 +291,7 @@ export default function TerminalView({ sessionId, session, initialCwd, onBack, o
       wsRef.current?.close()
       wsRef.current = null
       setStatus('closed')
+      onTerminalClosedRef.current?.(terminalIdRef.current)
       onSessionsChangedRef.current?.()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

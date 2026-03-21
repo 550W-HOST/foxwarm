@@ -5,7 +5,8 @@ import type { Session } from './SessionListCore'
 interface SidebarProps {
   sessions: Session[]
   currentSession: string
-  currentView: 'chat' | 'architecture' | 'workspace' | 'terminal'
+  currentView: 'workbench' | 'architecture' | 'workspace'
+  activeWorkbenchTabType?: 'chat' | 'file' | 'terminal' | null
   onSelectSession: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectWorkspace: (sessionId?: string) => void
@@ -17,6 +18,7 @@ export default function Sidebar({
   sessions,
   currentSession,
   currentView,
+  activeWorkbenchTabType,
   onSelectSession,
   onSelectArchitecture,
   onSelectWorkspace,
@@ -53,7 +55,7 @@ export default function Sidebar({
           <button
             onClick={() => onSelectWorkspace(currentSession)}
             className={`inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              currentView === 'workspace'
+              currentView === 'workspace' || activeWorkbenchTabType === 'file'
                 ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
             }`}
@@ -65,7 +67,7 @@ export default function Sidebar({
           <button
             onClick={() => onSelectTerminal(currentSession)}
             className={`inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              currentView === 'terminal'
+              currentView === 'workbench' && activeWorkbenchTabType === 'terminal'
                 ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
             }`}
