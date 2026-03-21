@@ -701,10 +701,7 @@ const ChatComposer = memo(function ChatComposer({
 
   return (
     <div
-      className="absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
     >
       {isDragging && (
         <div className="absolute inset-0 flex items-center justify-center bg-blue-100/80 dark:bg-blue-900/40 pointer-events-none">
@@ -715,7 +712,12 @@ const ChatComposer = memo(function ChatComposer({
         </div>
       )}
 
-      <div className="mx-auto max-w-5xl">
+      <div
+        className="pointer-events-auto mx-auto max-w-5xl"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         {transcribeError && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
             ASR 实验入口失败：{transcribeError}
