@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Copy, Menu, X } from 'lucide-react'
+import { Check, Copy, FolderOpen, Menu, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import ChatTimeline from './ChatTimeline'
@@ -70,6 +70,8 @@ interface ChatProps {
   onBack?: () => void
   themeMode: 'auto' | 'light' | 'dark'
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
+  onOpenWorkspace?: () => void
+  onOpenTerminal?: () => void
 }
 
 type StreamingAsrSession = {
@@ -131,7 +133,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   return { resolvedPath: null, payload: null }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange, onOpenWorkspace, onOpenTerminal }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -867,16 +869,33 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
               )}
             </div>
           </div>
-          <div className="relative">
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setShowMenu(!showMenu)}
-              className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-              title="Menu"
+              onClick={onOpenWorkspace}
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              title="Open workspace"
             >
-              <Menu size={20} />
+              <FolderOpen className="h-4 w-4" />
+              <span className="hidden md:inline">Open workspace</span>
             </button>
-            {showMenu && (
-              <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 text-gray-900 dark:text-gray-100">
+            <button
+              onClick={onOpenTerminal}
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              title="Open terminal"
+            >
+              <SquareTerminal className="h-4 w-4" />
+              <span className="hidden md:inline">Open terminal</span>
+            </button>
+            <div className="relative">
+              <button
+                onClick={() => setShowMenu(!showMenu)}
+                className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                title="Menu"
+              >
+                <Menu size={20} />
+              </button>
+              {showMenu && (
+                <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 text-gray-900 dark:text-gray-100">
                 <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
                   <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Theme</div>
                   <div className="flex gap-1">
@@ -945,7 +964,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
                   debug info
                 </button>
               </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -1071,7 +1091,9 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   prev.sessionId === next.sessionId &&
   prev.sessionDisplayName === next.sessionDisplayName &&
   prev.themeMode === next.themeMode &&
-  Boolean(prev.onBack) === Boolean(next.onBack)
+  Boolean(prev.onBack) === Boolean(next.onBack) &&
+  prev.onOpenWorkspace === next.onOpenWorkspace &&
+  prev.onOpenTerminal === next.onOpenTerminal
 ))
 
 export default Chat

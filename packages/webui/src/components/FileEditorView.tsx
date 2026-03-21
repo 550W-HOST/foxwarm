@@ -1,16 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, CornerDownRight, Save, SquareTerminal } from 'lucide-react'
-import type { Session } from './SessionListCore'
+import { ArrowLeft, FileText, Save, SquareTerminal } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 
 interface FileEditorViewProps {
-  sessionId: string
-  session?: Session
   nodeId: string
   filePath: string
   onBack?: () => void
-  onSessionsChanged?: () => void
   onOpenTerminal?: (cwd?: string) => void
+  onOpenFileTab?: (nodeId: string, path: string) => void
 }
 
 function formatTimestamp(value: number) {
@@ -24,7 +21,7 @@ function formatSize(size: number) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export default function FileEditorView({ sessionId, session, nodeId, filePath, onBack, onSessionsChanged, onOpenTerminal }: FileEditorViewProps) {
+export default function FileEditorView({ nodeId, filePath, onBack, onOpenTerminal, onOpenFileTab }: FileEditorViewProps) {
   const [content, setContent] = useState('')
   const [savedContent, setSavedContent] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -96,24 +93,6 @@ export default function FileEditorView({ sessionId, session, nodeId, filePath, o
     }
   }
 
-  const handleSetSessionCwd = async () => {
-    try {
-      setError(null)
-      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/cwd`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd: directoryPath }),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to update session cwd')
-      }
-      onSessionsChanged?.()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
       <div className="border-b border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
@@ -132,33 +111,38 @@ export default function FileEditorView({ sessionId, session, nodeId, filePath, o
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">File</h2>
               <div className="truncate font-mono text-xs text-gray-500 dark:text-gray-400" title={filePath}>{filePath}</div>
               <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                node {nodeId} · directory {directoryPath} · session {session?.displayName || sessionId}
+                node {nodeId} · directory {directoryPath}
               </div>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {onOpenFileTab && (
+              <button
+                onClick={() => onOpenFileTab(nodeId, filePath)}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                title="Open file tab"
+              >
+                <FileText className="h-4 w-4" />
+                <span className="hidden md:inline">Open file tab</span>
+              </button>
+            )}
             <button
               onClick={() => onOpenTerminal?.(directoryPath)}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              title="Open terminal"
             >
               <SquareTerminal className="h-4 w-4" />
-              <span>Open terminal here</span>
-            </button>
-            <button
-              onClick={handleSetSessionCwd}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-            >
-              <CornerDownRight className="h-4 w-4" />
-              <span>Set as session cwd</span>
+              <span className="hidden md:inline">Open terminal</span>
             </button>
             <button
               onClick={handleSave}
               disabled={saving || !dirty}
               className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Save file"
             >
               <Save className="h-4 w-4" />
-              <span>{saving ? 'Saving...' : 'Save file'}</span>
+              <span className="hidden md:inline">{saving ? 'Saving...' : 'Save file'}</span>
             </button>
           </div>
         </div>

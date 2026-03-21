@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, RefreshCw, SquareTerminal, X } from 'lucide-react'
+import { ArrowLeft, FolderOpen, SquareTerminal, X } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -31,9 +31,10 @@ interface TerminalViewProps {
   onSessionsChanged?: () => void
   onTerminalReady?: (terminal: TerminalInfo) => void
   onTerminalClosed?: (terminalId: string) => void
+  onOpenWorkspace?: (cwd?: string) => void
 }
 
-export default function TerminalView({ sessionId, session, initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
+export default function TerminalView({ sessionId, session, initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed, onOpenWorkspace }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -49,7 +50,6 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
   const [error, setError] = useState<string | null>(null)
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
   const [isClosing, setIsClosing] = useState(false)
-  const [reloadNonce, setReloadNonce] = useState(0)
   const [startMode, setStartMode] = useState<'new' | 'reuse'>(createMode)
 
   const requestedCwd = useMemo(() => {
@@ -290,29 +290,7 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [sessionId, requestedCwd, initialTerminalId, startMode, reloadNonce])
-
-  const handleRestart = async () => {
-    const currentTerminalId = terminalIdRef.current
-    suppressCloseCallbackRef.current = true
-    setError(null)
-    setStatus('connecting')
-    setTerminalInfo(null)
-    setStartMode('new')
-
-    try {
-      if (currentTerminalId) {
-        await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(currentTerminalId)}`, { method: 'DELETE' })
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      wsRef.current?.close()
-      wsRef.current = null
-      terminalIdRef.current = null
-      setReloadNonce((value) => value + 1)
-    }
-  }
+  }, [sessionId, requestedCwd, initialTerminalId, startMode])
 
   const handleClose = async () => {
     if (!terminalIdRef.current) return
@@ -353,7 +331,7 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Terminal</h2>
               </div>
               <div className="text-sm text-gray-500 dark:text-gray-400">
-                Session {session?.displayName || sessionId}
+                Context {session?.displayName || sessionId}
                 <span className="ml-2 font-mono text-[12px]">cwd {terminalInfo?.cwd || requestedCwd || '—'}</span>
                 <span className="ml-2">status {status}</span>
               </div>
@@ -367,19 +345,21 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
 
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={handleRestart}
+              onClick={() => onOpenWorkspace?.(terminalInfo?.cwd || requestedCwd)}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              title="Open workspace"
             >
-              <RefreshCw className="h-4 w-4" />
-              <span>Restart terminal</span>
+              <FolderOpen className="h-4 w-4" />
+              <span className="hidden md:inline">Open workspace</span>
             </button>
             <button
               onClick={handleClose}
               disabled={!terminalIdRef.current || isClosing}
               className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-800/80 dark:text-red-200 dark:hover:bg-red-900/20"
+              title="Close terminal"
             >
               <X className="h-4 w-4" />
-              <span>{isClosing ? 'Closing...' : 'Close terminal'}</span>
+              <span className="hidden md:inline">{isClosing ? 'Closing...' : 'Close terminal'}</span>
             </button>
           </div>
         </div>
