@@ -569,9 +569,9 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         let argStr = '';
         if (call.name === 'exec') {
             argStr = call.args.command;
-        } else if (call.name === 'edit' || call.name === 'write') {
+        } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
             argStr = call.args.filePath;
-        } else if (call.name === 'read') {
+        } else if (call.name === 'read' || call.name === 'read_memory') {
             const { filePath, startLine, endLine } = call.args;
             argStr = filePath + (startLine ? ` (lines ${startLine}-${endLine})` : '');
         } else if (call.args) {
@@ -616,6 +616,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const masterOnlyTools = [
             'remote_node', 'list_nodes', 'node_tools',
             'search_memory', 'get_memory_context',
+            'read_memory', 'write_memory', 'edit_memory', 'delete_memory',
             'list_files', 'delete_file',
             'copy_between_nodes',
             'create_child_session', 'send_to_session', 'send_to_channel', 'send_file',
