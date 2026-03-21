@@ -1,5 +1,5 @@
 import path from 'path';
-import { getAgentDir } from './config';
+import { getAgentDir, getAgentMemoryDir } from './config';
 
 export type PermissionAction = 'accept' | 'reject';
 
@@ -11,6 +11,7 @@ export type PermissionArgMatcher =
       equals?: unknown;
       oneOf?: unknown[];
       pathWithinAgent?: boolean;
+      pathWithinAgentMemory?: boolean;
     };
 
 export interface PermissionRule {
@@ -35,13 +36,17 @@ function matchesScalar(expected: string | undefined, actual: string): boolean {
   return expected === undefined || expected === '*' || expected === actual;
 }
 
-function resolveRequestedPath(value: unknown, agentName: string): string | null {
+function resolveRequestedPath(value: unknown, agentName: string, mode: 'agent' | 'memory' = 'agent'): string | null {
   if (typeof value !== 'string' || !value.trim()) {
     return null;
   }
 
-  const agentDir = getAgentDir(agentName);
-  const rawPath = value.trim();
+  const agentDir = mode === 'memory' ? getAgentMemoryDir(agentName) : getAgentDir(agentName);
+  let rawPath = value.trim();
+  if (mode === 'memory') {
+    rawPath = rawPath.replace(/^[\\/]+/, '');
+    rawPath = rawPath.replace(/^memory[\\/]+/, '');
+  }
   return path.normalize(path.isAbsolute(rawPath) ? rawPath : path.resolve(agentDir, rawPath));
 }
 
@@ -70,7 +75,26 @@ function matchesArgMatcher(matcher: PermissionArgMatcher, actual: unknown, agent
     }
   }
 
+  if (matcher.pathWithinAgentMemory) {
+    const resolvedPath = resolveRequestedPath(actual, agentName, 'memory');
+    const memoryDir = path.normalize(getAgentMemoryDir(agentName));
+    if (!resolvedPath || !(resolvedPath === memoryDir || resolvedPath.startsWith(memoryDir + path.sep))) {
+      return false;
+    }
+  }
+
   return true;
+}
+
+function buildScopedPathToolRule(agentName: string, sessionId: string, toolName: string, targetNode: string, argName = 'filePath', matcher: PermissionArgMatcher = { pathWithinAgent: true }): PermissionRule {
+  return {
+    agent: agentName,
+    session: sessionId,
+    target_node: targetNode,
+    tool_name: toolName,
+    tool_args: { [argName]: matcher },
+    action: 'accept',
+  };
 }
 
 function matchesToolArgs(rule: PermissionRule, request: PermissionRequest): boolean {
@@ -109,25 +133,20 @@ export function evaluatePermission(rules: PermissionRule[], request: PermissionR
 }
 
 export function buildIsolatedToolRules(agentName: string, sessionId: string, boundNode: string): PermissionRule[] {
-  const pathToolRule = (toolName: string, targetNode: string): PermissionRule => ({
-    agent: agentName,
-    session: sessionId,
-    target_node: targetNode,
-    tool_name: toolName,
-    tool_args: { filePath: { pathWithinAgent: true } },
-    action: 'accept',
-  });
-
   return [
-    pathToolRule('read', 'master'),
-    pathToolRule('write', 'master'),
-    pathToolRule('edit', 'master'),
-    pathToolRule('apply_patch', 'master'),
-    pathToolRule('send_file', 'master'),
-    pathToolRule('read', boundNode),
-    pathToolRule('write', boundNode),
-    pathToolRule('edit', boundNode),
-    pathToolRule('apply_patch', boundNode),
+    buildScopedPathToolRule(agentName, sessionId, 'read', 'master'),
+    buildScopedPathToolRule(agentName, sessionId, 'write', 'master'),
+    buildScopedPathToolRule(agentName, sessionId, 'edit', 'master'),
+    buildScopedPathToolRule(agentName, sessionId, 'apply_patch', 'master'),
+    buildScopedPathToolRule(agentName, sessionId, 'send_file', 'master'),
+    buildScopedPathToolRule(agentName, sessionId, 'read_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
+    buildScopedPathToolRule(agentName, sessionId, 'write_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
+    buildScopedPathToolRule(agentName, sessionId, 'edit_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
+    buildScopedPathToolRule(agentName, sessionId, 'delete_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
+    buildScopedPathToolRule(agentName, sessionId, 'read', boundNode),
+    buildScopedPathToolRule(agentName, sessionId, 'write', boundNode),
+    buildScopedPathToolRule(agentName, sessionId, 'edit', boundNode),
+    buildScopedPathToolRule(agentName, sessionId, 'apply_patch', boundNode),
     {
       agent: agentName,
       session: sessionId,

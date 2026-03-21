@@ -3,7 +3,7 @@ import path from 'path';
 import * as vector from './vector';
 import * as sessionManager from './sessionManager';
 import { estimateTokenCount } from './tokenCount';
-import { WORKSPACE_DIR, getAgentDir } from './config';
+import { WORKSPACE_DIR, getAgentDir, getAgentMemoryDir } from './config';
 import { checkPathAccess } from './isolatedCheck';
 import * as mcpClient from './mcpClient';
 import { browserManager } from './browser';
@@ -87,6 +87,98 @@ function resolveAgentPath(filePath: string, agentName: string = 'main'): string 
     return resolved;
 }
 
+function normalizeMemoryRelativePath(filePath: string): string {
+    if (typeof filePath !== 'string' || filePath.trim().length === 0) {
+        throw new Error('filePath is required');
+    }
+
+    let normalized = filePath.trim().replace(/^[\\/]+/, '');
+    normalized = normalized.replace(/^memory[\\/]+/, '');
+    if (!normalized || normalized === '.' || normalized === 'memory') {
+        throw new Error('filePath must point to a file inside the current agent memory directory.');
+    }
+    return normalized;
+}
+
+function resolveAgentMemoryPath(filePath: string, agentName: string = 'main'): string {
+    if (path.isAbsolute(filePath)) {
+        throw new Error('Memory tools require a path relative to the current agent memory/ directory.');
+    }
+
+    const memoryDir = getAgentMemoryDir(agentName);
+    const relativePath = normalizeMemoryRelativePath(filePath);
+    const resolved = path.resolve(memoryDir, relativePath);
+
+    if (!(resolved === memoryDir || resolved.startsWith(memoryDir + path.sep))) {
+        throw new Error('Path traversal detected: cannot access files outside the current agent memory directory');
+    }
+
+    return resolved;
+}
+
+async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number) {
+    const ext = path.extname(fullPath).toLowerCase();
+    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+
+    if (imageExts.includes(ext)) {
+        const buffer = await fs.readFile(fullPath);
+        const base64 = buffer.toString('base64');
+        const mimeType = ext === '.png' ? 'image/png' :
+                        ext === '.gif' ? 'image/gif' :
+                        ext === '.webp' ? 'image/webp' :
+                        ext === '.bmp' ? 'image/bmp' : 'image/jpeg';
+
+        return {
+            output: `[Image loaded: ${displayPath}]`,
+            mimeType,
+            sizeBytes: buffer.length,
+            inlineData: { data: base64, mimeType }
+        };
+    }
+
+    let content = await fs.readFile(fullPath, 'utf8');
+
+    if (startLine !== undefined || endLine !== undefined) {
+        const lines = content.split('\n');
+        const start = startLine !== undefined ? Math.max(0, startLine - 1) : 0;
+        const end = endLine !== undefined ? Math.min(lines.length, endLine) : lines.length;
+        content = lines.slice(start, end).join('\n');
+    }
+
+    const tokens = estimateTokenCount(content);
+    return tokens > 10000 ? `[TOO LONG (~${tokens} tokens), TRUNCATED. showing first 10000 chars only.]\n${content.slice(0, 10000)}` : content;
+}
+
+async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string) {
+    const exists = await fs.pathExists(fullPath);
+    if (exists && !overwrite) {
+        throw new Error(existsMessage);
+    }
+
+    await fs.ensureDir(path.dirname(fullPath));
+    await fs.writeFile(fullPath, content);
+}
+
+async function editResolvedPath(fullPath: string, oldText: string, newText: string) {
+    const content = await fs.readFile(fullPath, 'utf8');
+
+    if (typeof oldText !== 'string' || typeof newText !== 'string') {
+        throw new Error('Edit tool requires oldText and newText. Use apply_patch for patch-style edits.');
+    }
+
+    const updatedContent = applyExactReplacement(content, oldText, newText, 'oldText');
+    await fs.writeFile(fullPath, updatedContent);
+}
+
+async function deleteResolvedPath(fullPath: string, displayPath: string) {
+    const stats = await fs.lstat(fullPath);
+    if (stats.isDirectory()) {
+        throw new Error(`Cannot delete directory: ${displayPath}`);
+    }
+
+    await fs.remove(fullPath);
+}
+
 function resolveExecCwd(cwdValue: unknown, ctx: ToolContext, agentName: string): string | undefined {
     if (typeof cwdValue !== 'string' || cwdValue.trim().length === 0) {
         return undefined;
@@ -130,56 +222,14 @@ async function tool_read(args: ToolArgs, ctx: ToolContext) {
     const { filePath, startLine, endLine } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName);
-    
-    // Check if it's an image file
-    const ext = path.extname(fullPath).toLowerCase();
-    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
-    
-    if (imageExts.includes(ext)) {
-        // Read image as base64
-        const buffer = await fs.readFile(fullPath);
-        const base64 = buffer.toString('base64');
-        const mimeType = ext === '.png' ? 'image/png' : 
-                        ext === '.gif' ? 'image/gif' :
-                        ext === '.webp' ? 'image/webp' :
-                        ext === '.bmp' ? 'image/bmp' : 'image/jpeg';
-        
-        return {
-            output: `[Image loaded: ${filePath}]`,
-            mimeType,
-            sizeBytes: buffer.length,
-            inlineData: { data: base64, mimeType }
-        };
-    }
-    
-    let content = await fs.readFile(fullPath, 'utf8');
-    
-    if (startLine !== undefined || endLine !== undefined) {
-        // Split into lines and extract range
-        const lines = content.split('\n');
-        const start = startLine !== undefined ? Math.max(0, startLine - 1) : 0; // Convert to 0-indexed
-        const end = endLine !== undefined ? Math.min(lines.length, endLine) : lines.length;
-        
-        content = lines.slice(start, end).join('\n');
-    }
-
-    const tokens = estimateTokenCount(content);
-    return tokens > 10000 ? `[TOO LONG (~${tokens} tokens), TRUNCATED. showing first 10000 chars only.]\n${content.slice(0, 10000)}` : content;
+    return readResolvedPath(fullPath, filePath, startLine, endLine);
 }
 
 async function tool_write(args: ToolArgs, ctx: ToolContext) {
     const { filePath, content, overwrite } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName);
-    
-    // Check if file exists
-    const exists = await fs.pathExists(fullPath);
-    if (exists && !overwrite) {
-        throw new Error(`File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`);
-    }
-    
-    await fs.ensureDir(path.dirname(fullPath));
-    await fs.writeFile(fullPath, content);
+    await writeResolvedPath(fullPath, content, overwrite === true, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`);
     return 'File written successfully';
 }
 
@@ -205,15 +255,43 @@ async function tool_edit(args: ToolArgs, ctx: ToolContext) {
     const { filePath, oldText, newText } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName);
-    const content = await fs.readFile(fullPath, 'utf8');
-
-    if (typeof oldText !== 'string' || typeof newText !== 'string') {
-        throw new Error('Edit tool requires oldText and newText. Use apply_patch for patch-style edits.');
-    }
-
-    const updatedContent = applyExactReplacement(content, oldText, newText, 'oldText');
-    await fs.writeFile(fullPath, updatedContent);
+    await editResolvedPath(fullPath, oldText, newText);
     return 'File edited successfully';
+}
+
+async function tool_read_memory(args: ToolArgs, ctx: ToolContext) {
+    const { filePath, startLine, endLine } = args;
+    const agentName = ctx.session?.agent || 'main';
+    const relativePath = normalizeMemoryRelativePath(filePath);
+    const fullPath = resolveAgentMemoryPath(relativePath, agentName);
+    return readResolvedPath(fullPath, relativePath, startLine, endLine);
+}
+
+async function tool_write_memory(args: ToolArgs, ctx: ToolContext) {
+    const { filePath, content } = args;
+    const agentName = ctx.session?.agent || 'main';
+    const relativePath = normalizeMemoryRelativePath(filePath);
+    const fullPath = resolveAgentMemoryPath(relativePath, agentName);
+    await writeResolvedPath(fullPath, content, false, `Memory file already exists: ${relativePath}. write_memory only creates new files; use edit_memory to modify an existing memory file.`);
+    return `Memory file created: ${relativePath}`;
+}
+
+async function tool_edit_memory(args: ToolArgs, ctx: ToolContext) {
+    const { filePath, oldText, newText } = args;
+    const agentName = ctx.session?.agent || 'main';
+    const relativePath = normalizeMemoryRelativePath(filePath);
+    const fullPath = resolveAgentMemoryPath(relativePath, agentName);
+    await editResolvedPath(fullPath, oldText, newText);
+    return `Memory file edited: ${relativePath}`;
+}
+
+async function tool_delete_memory(args: ToolArgs, ctx: ToolContext) {
+    const { filePath } = args;
+    const agentName = ctx.session?.agent || 'main';
+    const relativePath = normalizeMemoryRelativePath(filePath);
+    const fullPath = resolveAgentMemoryPath(relativePath, agentName);
+    await deleteResolvedPath(fullPath, relativePath);
+    return `Deleted memory file \`${relativePath}\``;
 }
 
 async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
@@ -350,12 +428,7 @@ async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
         checkPathAccess(fullPath, agentName);
     }
 
-    const stats = await fs.lstat(fullPath);
-    if (stats.isDirectory()) {
-        throw new Error('delete_file only supports files or symlinks, not directories.');
-    }
-
-    await fs.remove(fullPath);
+    await deleteResolvedPath(fullPath, filePath);
     return `Deleted file \`${filePath}\``;
 }
 
@@ -771,6 +844,10 @@ async function tool_search_mcp_tools(args: ToolArgs) {
 export const read = tool_read;
 export const write = tool_write;
 export const edit = tool_edit;
+export const read_memory = tool_read_memory;
+export const write_memory = tool_write_memory;
+export const edit_memory = tool_edit_memory;
+export const delete_memory = tool_delete_memory;
 export const apply_patch = tool_apply_patch;
 export const list_files = tool_list_files;
 export const delete_file = tool_delete_file;
@@ -911,6 +988,55 @@ export const definitions = [
                     node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
                 },
                 required: ['input']
+            }
+        },
+        {
+            name: 'read_memory',
+            description: 'Read a file from the current agent\'s memory/ directory. Pass a path relative to memory/ (for example `MEMORY.md` or `notes/foo.md`). This always targets your own memory files on master; do not prefix with `memory/` or pass node=master.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
+                    startLine: { type: 'number', description: 'Starting line number (1-indexed, optional)' },
+                    endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional)' }
+                },
+                required: ['filePath']
+            }
+        },
+        {
+            name: 'write_memory',
+            description: 'Create a new file under the current agent\'s memory/ directory. Pass a path relative to memory/. This tool never overwrites existing files; use edit_memory to modify an existing memory file.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
+                    content: { type: 'string', description: 'File contents to create.' }
+                },
+                required: ['filePath', 'content']
+            }
+        },
+        {
+            name: 'edit_memory',
+            description: 'Edit an existing file under the current agent\'s memory/ directory using an exact oldText/newText replacement. Pass a path relative to memory/.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
+                    oldText: { type: 'string', description: 'The exact text to find' },
+                    newText: { type: 'string', description: 'The text to replace it with' }
+                },
+                required: ['filePath', 'oldText', 'newText']
+            }
+        },
+        {
+            name: 'delete_memory',
+            description: 'Delete a single file inside the current agent\'s memory/ directory. Pass a path relative to memory/.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' }
+                },
+                required: ['filePath']
             }
         },
         {
