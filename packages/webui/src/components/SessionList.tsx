@@ -1,14 +1,15 @@
-import { FolderOpen, Plus, Workflow } from 'lucide-react'
+import { FolderOpen, Plus, SquareTerminal, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 
 interface SessionListProps {
   sessions: Session[]
   currentSession?: string
-  currentView: 'chat' | 'architecture' | 'workspace'
+  currentView: 'chat' | 'architecture' | 'workspace' | 'terminal'
   onSelectSession: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectWorkspace: (sessionId?: string) => void
+  onSelectTerminal: (sessionId?: string) => void
   onCreateSession: () => void
 }
 
@@ -19,6 +20,7 @@ export default function SessionList({
   onSelectSession,
   onSelectArchitecture,
   onSelectWorkspace,
+  onSelectTerminal,
   onCreateSession,
 }: SessionListProps) {
   return (
@@ -58,6 +60,17 @@ export default function SessionList({
         >
           <FolderOpen className="w-4 h-4" />
           <span>Workspace</span>
+        </button>
+        <button
+          onClick={() => onSelectTerminal(currentSession)}
+          className={`mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition-colors ${
+            currentView === 'terminal'
+              ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700'
+          }`}
+        >
+          <SquareTerminal className="w-4 h-4" />
+          <span>Terminal</span>
         </button>
       </div>
       

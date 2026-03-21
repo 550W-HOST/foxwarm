@@ -15,3 +15,11 @@ const getBasePath = () => {
 }
 
 export const API_BASE_PATH = getBasePath()
+
+export const makeApiUrl = (relativePath: string) => new URL(`${API_BASE_PATH}${relativePath}`, window.location.origin)
+
+export const makeWebSocketUrl = (relativePath: string) => {
+  const url = makeApiUrl(relativePath)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  return url
+}

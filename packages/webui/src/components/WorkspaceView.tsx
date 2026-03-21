@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { ArrowLeft, ChevronDown, ChevronRight, Folder, FolderOpen, FileText, Plus, Save, RefreshCw, Crosshair, CornerDownRight } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ChevronRight, Folder, FolderOpen, FileText, Plus, Save, RefreshCw, Crosshair, CornerDownRight, SquareTerminal } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { API_BASE_PATH } from '../config'
 
@@ -22,6 +22,7 @@ interface WorkspaceViewProps {
   session?: Session
   onBack?: () => void
   onSessionsChanged?: () => void
+  onOpenTerminal?: (cwd?: string) => void
 }
 
 const ROOTS_STORAGE_KEY = 'foxwarm_workspace_roots_v1'
@@ -135,7 +136,7 @@ function WorkspaceTreeNode({
   )
 }
 
-export default function WorkspaceView({ sessionId, session, onBack, onSessionsChanged }: WorkspaceViewProps) {
+export default function WorkspaceView({ sessionId, session, onBack, onSessionsChanged, onOpenTerminal }: WorkspaceViewProps) {
   const [roots, setRoots] = useState<WorkspaceRoot[]>(() => loadStoredRoots())
   const [selectedRootId, setSelectedRootId] = useState<string | null>(null)
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
@@ -355,6 +356,11 @@ export default function WorkspaceView({ sessionId, session, onBack, onSessionsCh
     }
   }
 
+  const handleOpenTerminalHere = () => {
+    const nextCwd = selectedIsDirectory ? selectedPath : selectedDirectoryPath
+    onOpenTerminal?.(nextCwd || session?.cwd || undefined)
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
       <div className="border-b border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
@@ -379,6 +385,13 @@ export default function WorkspaceView({ sessionId, session, onBack, onSessionsCh
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleOpenTerminalHere}
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+            >
+              <SquareTerminal className="h-4 w-4" />
+              <span>Open terminal here</span>
+            </button>
             <button
               onClick={handleOpenSessionCwd}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
