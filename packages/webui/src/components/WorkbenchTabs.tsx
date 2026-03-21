@@ -22,8 +22,8 @@ function TabIcon({ type }: { type: WorkbenchTab['type'] }) {
 
 export default function WorkbenchTabs({ tabs, activeTabId, onSelectTab, onCloseTab }: WorkbenchTabsProps) {
   return (
-    <div className="border-b border-gray-200 bg-gray-100 px-3 pt-2 dark:border-gray-700 dark:bg-gray-900">
-      <div className="flex items-end gap-1 overflow-x-auto">
+    <div className="overflow-hidden border-b border-gray-200 bg-gray-100 px-3 pt-2 dark:border-gray-700 dark:bg-gray-900">
+      <div className="flex min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain pb-px">
         {tabs.map((tab) => {
           const active = tab.id === activeTabId
           return (
@@ -49,7 +49,7 @@ export default function WorkbenchTabs({ tabs, activeTabId, onSelectTab, onCloseT
                   onSelectTab(tab.id)
                 }
               }}
-              className={`group relative -mb-px flex min-w-0 max-w-[24rem] cursor-pointer items-center gap-2 rounded-t-lg border border-b-0 px-3 py-2 text-sm transition-colors ${active ? 'border-gray-200 bg-white text-blue-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-blue-200' : 'border-transparent bg-gray-200/70 text-gray-700 hover:bg-white/70 dark:bg-gray-800/70 dark:text-gray-300 dark:hover:bg-gray-800'}`}
+              className={`group relative -mb-px flex min-w-[120px] max-w-[24rem] shrink-0 cursor-pointer items-center gap-2 rounded-t-lg border border-b-0 px-3 py-2 text-sm transition-colors ${active ? 'border-gray-200 bg-white text-blue-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-blue-200' : 'border-transparent bg-gray-200/70 text-gray-700 hover:bg-white/70 dark:bg-gray-800/70 dark:text-gray-300 dark:hover:bg-gray-800'}`}
               title={tab.title}
             >
               <TabIcon type={tab.type} />

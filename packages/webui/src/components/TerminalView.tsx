@@ -3,7 +3,6 @@ import { ArrowLeft, FolderOpen, SquareTerminal, X } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import type { Session } from './SessionListCore'
 import { API_BASE_PATH, makeWebSocketUrl } from '../config'
 
 type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
@@ -23,7 +22,6 @@ type TerminalInfo = {
 
 interface TerminalViewProps {
   sessionId: string
-  session?: Session
   initialCwd?: string
   initialTerminalId?: string
   createMode?: 'new' | 'reuse'
@@ -34,7 +32,7 @@ interface TerminalViewProps {
   onOpenWorkspace?: (cwd?: string) => void
 }
 
-export default function TerminalView({ sessionId, session, initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed, onOpenWorkspace }: TerminalViewProps) {
+export default function TerminalView({ sessionId, initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed, onOpenWorkspace }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -56,11 +54,8 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
     if (typeof initialCwd === 'string' && initialCwd.trim().length > 0) {
       return initialCwd.trim()
     }
-    if (typeof session?.cwd === 'string' && session.cwd.trim().length > 0) {
-      return session.cwd.trim()
-    }
     return undefined
-  }, [initialCwd, session?.cwd])
+  }, [initialCwd])
 
   useEffect(() => {
     onSessionsChangedRef.current = onSessionsChanged
@@ -330,16 +325,17 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
                 <SquareTerminal className="h-5 w-5 text-gray-500 dark:text-gray-300" />
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Terminal</h2>
               </div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                Context {session?.displayName || sessionId}
-                <span className="ml-2 font-mono text-[12px]">cwd {terminalInfo?.cwd || requestedCwd || '—'}</span>
+              <div className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                <span className="font-mono text-[12px]">cwd {terminalInfo?.cwd || requestedCwd || '—'}</span>
                 <span className="ml-2">status {status}</span>
+                {terminalInfo && (
+                  <>
+                    <span className="ml-2">shell {terminalInfo.shell}</span>
+                    <span className="ml-2">pid {terminalInfo.pid}</span>
+                    <span className="ml-2">node {terminalInfo.nodeId}</span>
+                  </>
+                )}
               </div>
-              {terminalInfo && (
-                <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                  shell {terminalInfo.shell} · pid {terminalInfo.pid} · node {terminalInfo.nodeId}
-                </div>
-              )}
             </div>
           </div>
 
