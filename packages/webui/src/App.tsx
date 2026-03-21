@@ -15,7 +15,7 @@ type AppView = 'session' | 'architecture'
 
 type RouteState =
   | { view: 'architecture' }
-  | { view: 'session'; sessionId: string; tabId: string | null }
+  | { view: 'tab'; tabId: string | null }
 
 type TerminalRegistryRecord = {
   id: string
@@ -30,9 +30,10 @@ type TerminalRegistryRecord = {
 const LIGHT_THEME_COLOR = '#f3f4f6'
 const DARK_THEME_COLOR = '#111827'
 const ARCHITECTURE_HASH = 'architecture'
-const SESSION_HASH_PREFIX = 'session/'
-const WORKBENCH_TABS_STORAGE_KEY = 'foxwarm_workbench_tabs_v2'
+const TAB_HASH_PREFIX = 'tab/'
+const WORKBENCH_TABS_STORAGE_KEY = 'foxwarm_workbench_tabs_v3'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
+const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 
 function loadStoredLastVisitedSession(): string {
   try {
@@ -42,49 +43,63 @@ function loadStoredLastVisitedSession(): string {
   }
 }
 
+function loadStoredLastActiveTabId(): string | null {
+  try {
+    return localStorage.getItem(LAST_ACTIVE_TAB_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
 function getHashState(): RouteState {
-  const fallbackSessionId = loadStoredLastVisitedSession()
   const hash = decodeURIComponent(window.location.hash.slice(1))
+  const fallbackTabId = loadStoredLastActiveTabId()
 
   if (!hash || hash.startsWith('token=')) {
-    return { view: 'session', sessionId: fallbackSessionId, tabId: null }
+    return { view: 'tab', tabId: fallbackTabId }
   }
 
   if (hash === ARCHITECTURE_HASH || hash === '__architecture__') {
     return { view: 'architecture' }
   }
 
-  if (hash.startsWith(SESSION_HASH_PREFIX)) {
-    const remainder = hash.slice(SESSION_HASH_PREFIX.length)
+  if (hash.startsWith(TAB_HASH_PREFIX)) {
+    return { view: 'tab', tabId: hash.slice(TAB_HASH_PREFIX.length) || fallbackTabId }
+  }
+
+  if (hash.startsWith('session/')) {
+    const remainder = hash.slice('session/'.length)
     const [sessionIdPart, queryPart = ''] = remainder.split('?')
     const params = new URLSearchParams(queryPart)
-    return {
-      view: 'session',
-      sessionId: sessionIdPart || fallbackSessionId,
-      tabId: params.get('tab') || null,
+    const explicitTabId = params.get('tab')
+    if (explicitTabId) {
+      return { view: 'tab', tabId: explicitTabId }
     }
+    const sessionId = sessionIdPart || loadStoredLastVisitedSession()
+    return { view: 'tab', tabId: `chat:${sessionId}` }
   }
 
   if (hash.startsWith('__workspace__:')) {
-    return { view: 'session', sessionId: hash.slice('__workspace__:'.length) || fallbackSessionId, tabId: null }
+    const sessionId = hash.slice('__workspace__:'.length) || loadStoredLastVisitedSession()
+    return { view: 'tab', tabId: `chat:${sessionId}` }
   }
 
   if (hash.startsWith('__terminal__:')) {
     const remainder = hash.slice('__terminal__:'.length)
     const [sessionIdPart] = remainder.split('?')
-    return { view: 'session', sessionId: sessionIdPart || fallbackSessionId, tabId: null }
+    const sessionId = sessionIdPart || loadStoredLastVisitedSession()
+    return { view: 'tab', tabId: `chat:${sessionId}` }
   }
 
-  return { view: 'session', sessionId: hash, tabId: null }
+  return { view: 'tab', tabId: `chat:${hash}` }
 }
 
-function setSessionHash(sessionId: string, tabId?: string | null) {
-  const params = new URLSearchParams()
-  if (tabId) {
-    params.set('tab', tabId)
+function setTabHash(tabId?: string | null) {
+  if (!tabId) {
+    window.location.hash = ''
+    return
   }
-  const suffix = params.toString() ? `?${params.toString()}` : ''
-  window.location.hash = `${SESSION_HASH_PREFIX}${encodeURIComponent(sessionId)}${suffix}`
+  window.location.hash = `${TAB_HASH_PREFIX}${encodeURIComponent(tabId)}`
 }
 
 function loadStoredWorkbenchTabs(): WorkbenchTab[] {
@@ -95,10 +110,10 @@ function loadStoredWorkbenchTabs(): WorkbenchTab[] {
     if (!Array.isArray(parsed)) return []
 
     return parsed.filter((item): item is WorkbenchTab => {
-      if (!item || typeof item !== 'object' || typeof item.id !== 'string' || typeof item.type !== 'string' || typeof item.title !== 'string' || typeof item.sessionId !== 'string') {
+      if (!item || typeof item !== 'object' || typeof item.id !== 'string' || typeof item.type !== 'string' || typeof item.title !== 'string') {
         return false
       }
-      if (item.type === 'chat') return true
+      if (item.type === 'chat') return typeof item.sessionId === 'string'
       if (item.type === 'workspace' || item.type === 'file') return typeof item.nodeId === 'string' && typeof item.path === 'string'
       if (item.type === 'terminal') return true
       return false
@@ -114,33 +129,33 @@ function makeChatTab(sessionId: string, title: string): WorkbenchTab {
 
 function makeWorkspaceTab(sessionId: string, nodeId: string, path: string): WorkbenchTab {
   return {
-    id: `workspace:${sessionId}:${nodeId}:${path}`,
+    id: `workspace:${nodeId}:${path}`,
     type: 'workspace',
-    sessionId,
     nodeId,
     path,
+    contextSessionId: sessionId,
     title: `Workspace · ${path}`,
   }
 }
 
 function makeFileTab(sessionId: string, nodeId: string, path: string): WorkbenchTab {
   return {
-    id: `file:${sessionId}:${nodeId}:${path}`,
+    id: `file:${nodeId}:${path}`,
     type: 'file',
-    sessionId,
     nodeId,
     path,
+    contextSessionId: sessionId,
     title: path.split('/').pop() || path,
   }
 }
 
 function makeTerminalDraftTab(sessionId: string, nodeId: string, cwd: string): WorkbenchTab {
   return {
-    id: `terminal-draft:${sessionId}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+    id: `terminal-draft:${Date.now()}:${Math.random().toString(16).slice(2)}`,
     type: 'terminal',
-    sessionId,
     nodeId,
     cwd,
+    contextSessionId: sessionId,
     createMode: 'new',
     title: `Terminal · ${cwd}`,
   }
@@ -150,10 +165,10 @@ function makeTerminalTabFromRecord(record: TerminalRegistryRecord): WorkbenchTab
   return {
     id: `terminal:${record.id}`,
     type: 'terminal',
-    sessionId: record.sessionId,
     terminalId: record.id,
     nodeId: record.nodeId,
     cwd: record.cwd,
+    contextSessionId: record.sessionId,
     title: `Terminal · ${record.cwd}`,
   }
 }
@@ -182,10 +197,10 @@ function mergeTerminalTabsWithRegistry(localTabs: WorkbenchTab[], terminals: Ter
     merged.push({
       ...tab,
       id: `terminal:${terminal.id}`,
-      sessionId: terminal.sessionId,
       terminalId: terminal.id,
       nodeId: terminal.nodeId,
       cwd: terminal.cwd,
+      contextSessionId: terminal.sessionId,
       title: `Terminal · ${terminal.cwd}`,
       createMode: undefined,
     })
@@ -362,49 +377,68 @@ function App() {
     )))
   }, [sessions])
 
-  const currentContextSessionId = route.view === 'session' ? route.sessionId : loadStoredLastVisitedSession()
-  const currentContextSessionRecord = sessions.find(session => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
-
-  useEffect(() => {
-    if (route.view !== 'session') {
-      return
-    }
-
-    localStorage.setItem(LAST_VISITED_SESSION_STORAGE_KEY, route.sessionId)
-
-    const matchingRouteTab = route.tabId
-      ? workbenchTabs.find((tab) => tab.id === route.tabId && tab.sessionId === route.sessionId)
-      : null
-
-    if (matchingRouteTab) {
-      return
-    }
-
-    const firstSessionTab = workbenchTabs.find((tab) => tab.sessionId === route.sessionId)
-    if (firstSessionTab) {
-      if (route.tabId !== firstSessionTab.id) {
-        setSessionHash(route.sessionId, firstSessionTab.id)
-      }
-      return
-    }
-
-    const chatTab = makeChatTab(route.sessionId, sessionTitle(route.sessionId))
-    setWorkbenchTabs((previous) => [...previous, chatTab])
-    setSessionHash(route.sessionId, chatTab.id)
-  }, [route, workbenchTabs, sessions])
-
   const activeTab = useMemo(() => {
-    if (route.view !== 'session' || !route.tabId) {
+    if (route.view !== 'tab' || !route.tabId) {
       return null
     }
-    return workbenchTabs.find((tab) => tab.id === route.tabId && tab.sessionId === route.sessionId) || null
+    return workbenchTabs.find((tab) => tab.id === route.tabId) || null
   }, [route, workbenchTabs])
 
-  const currentView: AppView = route.view
+  const currentContextSessionId = activeTab?.type === 'chat'
+    ? activeTab.sessionId
+    : activeTab?.contextSessionId || loadStoredLastVisitedSession()
+  const currentContextSessionRecord = sessions.find(session => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
+  const currentView: AppView = route.view === 'architecture' ? 'architecture' : 'session'
 
-  const navigateToSession = (sessionId: string, tabId?: string | null) => {
-    setRoute({ view: 'session', sessionId, tabId: tabId || null })
-    setSessionHash(sessionId, tabId || null)
+  useEffect(() => {
+    const nextActiveTabId = route.view === 'tab' ? route.tabId : null
+    if (nextActiveTabId) {
+      localStorage.setItem(LAST_ACTIVE_TAB_STORAGE_KEY, nextActiveTabId)
+    }
+  }, [route])
+
+  useEffect(() => {
+    const sessionId = activeTab?.type === 'chat' ? activeTab.sessionId : activeTab?.contextSessionId
+    if (sessionId) {
+      localStorage.setItem(LAST_VISITED_SESSION_STORAGE_KEY, sessionId)
+    }
+  }, [activeTab])
+
+  useEffect(() => {
+    if (route.view !== 'tab') {
+      return
+    }
+
+    if (route.tabId && workbenchTabs.some((tab) => tab.id === route.tabId)) {
+      return
+    }
+
+    if (workbenchTabs.length > 0) {
+      setTabHash(workbenchTabs[0].id)
+      return
+    }
+
+    const fallbackSessionId = loadStoredLastVisitedSession()
+    const chatTab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId))
+    setWorkbenchTabs([chatTab])
+    setTabHash(chatTab.id)
+  }, [route, workbenchTabs, sessions])
+
+  const upsertTab = (tab: WorkbenchTab) => {
+    setWorkbenchTabs((previous) => {
+      const index = previous.findIndex((item) => item.id === tab.id)
+      if (index >= 0) {
+        const next = [...previous]
+        next[index] = { ...next[index], ...tab }
+        return next
+      }
+      return [...previous, tab]
+    })
+  }
+
+  const navigateToTab = (tabId: string) => {
+    setRoute({ view: 'tab', tabId })
+    setTabHash(tabId)
     if (isMobile) {
       setShowSessionList(false)
     }
@@ -412,16 +446,8 @@ function App() {
 
   const openChatTab = (sessionId: string) => {
     const tab = makeChatTab(sessionId, sessionTitle(sessionId))
-    setWorkbenchTabs((previous) => {
-      const index = previous.findIndex((item) => item.id === tab.id)
-      if (index >= 0) {
-        const next = [...previous]
-        next[index] = tab
-        return next
-      }
-      return [...previous, tab]
-    })
-    navigateToSession(sessionId, tab.id)
+    upsertTab(tab)
+    navigateToTab(tab.id)
   }
 
   const openWorkspaceTab = (sessionId: string, options?: { nodeId?: string; path?: string }) => {
@@ -429,26 +455,14 @@ function App() {
     const nodeId = options?.nodeId || sessionRecord?.currentNode || 'master'
     const path = options?.path || sessionRecord?.cwd || '/'
     const tab = makeWorkspaceTab(sessionId, nodeId, path)
-    setWorkbenchTabs((previous) => {
-      const existingIndex = previous.findIndex((item) => item.id === tab.id)
-      if (existingIndex >= 0) {
-        return previous
-      }
-      return [...previous, tab]
-    })
-    navigateToSession(sessionId, tab.id)
+    upsertTab(tab)
+    navigateToTab(tab.id)
   }
 
   const openFileTab = (sessionId: string, nodeId: string, path: string) => {
     const tab = makeFileTab(sessionId, nodeId, path)
-    setWorkbenchTabs((previous) => {
-      const existingIndex = previous.findIndex((item) => item.id === tab.id)
-      if (existingIndex >= 0) {
-        return previous
-      }
-      return [...previous, tab]
-    })
-    navigateToSession(sessionId, tab.id)
+    upsertTab(tab)
+    navigateToTab(tab.id)
   }
 
   const openTerminalTab = (sessionId: string, options?: { nodeId?: string; path?: string; terminalId?: string }) => {
@@ -460,7 +474,7 @@ function App() {
         if (!existing) {
           setWorkbenchTabs((previous) => [...previous, tab])
         }
-        navigateToSession(tab.sessionId, tab.id)
+        navigateToTab(tab.id)
       }
       return
     }
@@ -470,7 +484,7 @@ function App() {
     const path = options?.path || sessionRecord?.cwd || '/'
     const tab = makeTerminalDraftTab(sessionId, nodeId, path)
     setWorkbenchTabs((previous) => [...previous, tab])
-    navigateToSession(sessionId, tab.id)
+    navigateToTab(tab.id)
   }
 
   const closeWorkbenchTab = async (tabId: string) => {
@@ -484,15 +498,19 @@ function App() {
       await fetchActiveTerminals()
     }
 
+    const index = workbenchTabs.findIndex((tab) => tab.id === tabId)
     const remainingTabs = workbenchTabs.filter((tab) => tab.id !== tabId)
     setWorkbenchTabs(remainingTabs)
 
-    if (route.view === 'session' && route.tabId === tabId) {
-      const nextTab = remainingTabs.find((tab) => tab.sessionId === route.sessionId) || remainingTabs[0] || null
-      if (nextTab) {
-        navigateToSession(nextTab.sessionId, nextTab.id)
+    if (route.view === 'tab' && route.tabId === tabId) {
+      const fallbackTab = remainingTabs[Math.max(0, index - 1)] || remainingTabs[index] || remainingTabs[0] || null
+      if (fallbackTab) {
+        navigateToTab(fallbackTab.id)
       } else {
-        openChatTab(route.sessionId)
+        const fallbackSessionId = loadStoredLastVisitedSession()
+        const chatTab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId))
+        setWorkbenchTabs([chatTab])
+        navigateToTab(chatTab.id)
       }
     }
   }
@@ -504,16 +522,16 @@ function App() {
       return {
         id: nextId,
         type: 'terminal',
-        sessionId: terminal.sessionId,
         terminalId: terminal.id,
         nodeId: terminal.nodeId || 'master',
         cwd: terminal.cwd,
+        contextSessionId: terminal.sessionId,
         title: `Terminal · ${terminal.cwd}`,
       }
     }))
 
-    if (route.view === 'session' && route.tabId === draftTabId) {
-      navigateToSession(terminal.sessionId, nextId)
+    if (route.view === 'tab' && route.tabId === draftTabId) {
+      navigateToTab(nextId)
     }
     void fetchActiveTerminals()
   }
@@ -552,8 +570,9 @@ function App() {
   useEffect(() => {
     const helper = {
       sendMessage: (message: string) => {
-        if (route.view !== 'session') return
-        void fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(route.sessionId)}/message`, {
+        const sessionId = activeTab?.type === 'chat' ? activeTab.sessionId : activeTab?.contextSessionId
+        if (!sessionId) return
+        void fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: message }),
@@ -566,9 +585,9 @@ function App() {
 
     ;(window as any).foxwarmTest = helper
     ;(window as any).alphabotTest = helper
-  }, [route, sessions])
+  }, [activeTab, sessions])
 
-  const renderSessionContent = (onBack?: () => void) => {
+  const renderTabContent = (onBack?: () => void) => {
     if (!activeTab) {
       return (
         <div className="flex h-full items-center justify-center text-sm text-gray-500 dark:text-gray-400">
@@ -592,41 +611,44 @@ function App() {
     }
 
     if (activeTab.type === 'workspace') {
-      const sessionRecord = sessions.find((session) => session.id === activeTab.sessionId || session.aliases?.includes(activeTab.sessionId))
+      const sessionId = activeTab.contextSessionId || currentContextSessionId
+      const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
       return (
         <WorkspaceView
-          sessionId={activeTab.sessionId}
+          sessionId={sessionId}
           session={sessionRecord}
           initialNodeId={activeTab.nodeId}
           initialPath={activeTab.path}
           onBack={onBack}
           onSessionsChanged={() => { void fetchSessions() }}
-          onOpenTerminal={(cwd) => openTerminalTab(activeTab.sessionId, { nodeId: activeTab.nodeId, path: cwd || activeTab.path })}
-          onOpenFile={(nodeId, path) => openFileTab(activeTab.sessionId, nodeId, path)}
+          onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: activeTab.nodeId, path: cwd || activeTab.path })}
+          onOpenFile={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
         />
       )
     }
 
     if (activeTab.type === 'file') {
-      const sessionRecord = sessions.find((session) => session.id === activeTab.sessionId || session.aliases?.includes(activeTab.sessionId))
+      const sessionId = activeTab.contextSessionId || currentContextSessionId
+      const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
       return (
         <FileEditorView
-          sessionId={activeTab.sessionId}
+          sessionId={sessionId}
           session={sessionRecord}
           nodeId={activeTab.nodeId}
           filePath={activeTab.path}
           onBack={onBack}
           onSessionsChanged={() => { void fetchSessions() }}
-          onOpenTerminal={(cwd) => openTerminalTab(activeTab.sessionId, { nodeId: activeTab.nodeId, path: cwd || activeTab.path.split('/').slice(0, -1).join('/') || '/' })}
+          onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: activeTab.nodeId, path: cwd || activeTab.path.split('/').slice(0, -1).join('/') || '/' })}
         />
       )
     }
 
-    const sessionRecord = sessions.find((session) => session.id === activeTab.sessionId || session.aliases?.includes(activeTab.sessionId))
+    const sessionId = activeTab.contextSessionId || currentContextSessionId
+    const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
     return (
       <TerminalView
         key={activeTab.id}
-        sessionId={activeTab.sessionId}
+        sessionId={sessionId}
         session={sessionRecord}
         initialCwd={activeTab.cwd}
         initialTerminalId={activeTab.terminalId}
@@ -638,6 +660,15 @@ function App() {
       />
     )
   }
+
+  const tabsBar = (
+    <WorkbenchTabs
+      tabs={workbenchTabs}
+      activeTabId={route.view === 'tab' ? route.tabId : null}
+      onSelectTab={(tabId) => navigateToTab(tabId)}
+      onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
+    />
+  )
 
   if (isMobile) {
     if (showSessionList) {
@@ -671,17 +702,9 @@ function App() {
     return (
       <div className="fixed inset-0 bg-gray-100 dark:bg-gray-900 overflow-hidden">
         <div className="flex h-full min-h-0 flex-col">
-          <WorkbenchTabs
-            tabs={workbenchTabs.filter((tab) => tab.sessionId === route.sessionId)}
-            activeTabId={route.tabId}
-            onSelectTab={(tabId) => {
-              const tab = workbenchTabs.find((item) => item.id === tabId)
-              if (tab) navigateToSession(tab.sessionId, tab.id)
-            }}
-            onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
-          />
+          {tabsBar}
           <div className="min-h-0 flex-1 overflow-hidden border-x border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-            {renderSessionContent(handleBackToList)}
+            {renderTabContent(handleBackToList)}
           </div>
         </div>
       </div>
@@ -709,17 +732,9 @@ function App() {
           <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} />
         ) : (
           <div className="flex h-full min-h-0 flex-col">
-            <WorkbenchTabs
-              tabs={workbenchTabs.filter((tab) => tab.sessionId === route.sessionId)}
-              activeTabId={route.tabId}
-              onSelectTab={(tabId) => {
-                const tab = workbenchTabs.find((item) => item.id === tabId)
-                if (tab) navigateToSession(tab.sessionId, tab.id)
-              }}
-              onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
-            />
+            {tabsBar}
             <div className="min-h-0 flex-1 overflow-hidden border-x border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-              {renderSessionContent()}
+              {renderTabContent()}
             </div>
           </div>
         )}
