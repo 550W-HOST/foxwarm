@@ -2,9 +2,9 @@ import { FileText, FolderOpen, MessageSquareText, SquareTerminal, X } from 'luci
 
 export type WorkbenchTab =
   | { id: string; type: 'chat'; title: string; sessionId: string }
-  | { id: string; type: 'workspace'; title: string; sessionId: string; nodeId: string; path: string }
-  | { id: string; type: 'file'; title: string; sessionId: string; nodeId: string; path: string }
-  | { id: string; type: 'terminal'; title: string; sessionId: string; terminalId?: string; nodeId?: string; cwd?: string; createMode?: 'new' | 'reuse' }
+  | { id: string; type: 'workspace'; title: string; nodeId: string; path: string; contextSessionId?: string }
+  | { id: string; type: 'file'; title: string; nodeId: string; path: string; contextSessionId?: string }
+  | { id: string; type: 'terminal'; title: string; terminalId?: string; nodeId?: string; cwd?: string; contextSessionId?: string; createMode?: 'new' | 'reuse' }
 
 interface WorkbenchTabsProps {
   tabs: WorkbenchTab[]
