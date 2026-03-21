@@ -43,12 +43,14 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
   const onSessionsChangedRef = useRef(onSessionsChanged)
   const onTerminalReadyRef = useRef(onTerminalReady)
   const onTerminalClosedRef = useRef(onTerminalClosed)
+  const suppressCloseCallbackRef = useRef(false)
 
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
   const [isClosing, setIsClosing] = useState(false)
   const [reloadNonce, setReloadNonce] = useState(0)
+  const [startMode, setStartMode] = useState<'new' | 'reuse'>(createMode)
 
   const requestedCwd = useMemo(() => {
     if (typeof initialCwd === 'string' && initialCwd.trim().length > 0) {
@@ -71,6 +73,10 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
   useEffect(() => {
     onTerminalClosedRef.current = onTerminalClosed
   }, [onTerminalClosed])
+
+  useEffect(() => {
+    setStartMode(createMode)
+  }, [createMode])
 
   useEffect(() => {
     const term = new Terminal({
@@ -155,7 +161,7 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
           }
         }
 
-        if (!terminalId && createMode !== 'new') {
+        if (!terminalId && startMode !== 'new') {
           const listRes = await fetch(`${API_BASE_PATH}/terminals?sessionId=${encodeURIComponent(sessionId)}`)
           const listData = await listRes.json().catch(() => ({}))
           if (!listRes.ok) {
@@ -225,6 +231,8 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
               if (typeof payload.backlog === 'string' && payload.backlog.length > 0) {
                 term.write(payload.backlog)
               }
+              suppressCloseCallbackRef.current = false
+              setStartMode('reuse')
               setTerminalInfo(payload.terminal)
               setStatus('ready')
               onTerminalReadyRef.current?.(payload.terminal)
@@ -241,7 +249,7 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
               setTerminalInfo((current) => current ? { ...current, cwd: payload.cwd || current.cwd } : current)
               term.writeln('')
               term.writeln(`[terminal exited: code=${payload.exitCode ?? 'unknown'}]`)
-              if (terminalIdRef.current) {
+              if (terminalIdRef.current && !suppressCloseCallbackRef.current) {
                 onTerminalClosedRef.current?.(terminalIdRef.current)
               }
               onSessionsChangedRef.current?.()
@@ -282,12 +290,35 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [sessionId, requestedCwd, initialTerminalId, createMode, reloadNonce])
+  }, [sessionId, requestedCwd, initialTerminalId, startMode, reloadNonce])
+
+  const handleRestart = async () => {
+    const currentTerminalId = terminalIdRef.current
+    suppressCloseCallbackRef.current = true
+    setError(null)
+    setStatus('connecting')
+    setTerminalInfo(null)
+    setStartMode('new')
+
+    try {
+      if (currentTerminalId) {
+        await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(currentTerminalId)}`, { method: 'DELETE' })
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      wsRef.current?.close()
+      wsRef.current = null
+      terminalIdRef.current = null
+      setReloadNonce((value) => value + 1)
+    }
+  }
 
   const handleClose = async () => {
     if (!terminalIdRef.current) return
     setIsClosing(true)
     try {
+      suppressCloseCallbackRef.current = true
       await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(terminalIdRef.current)}`, { method: 'DELETE' })
       wsRef.current?.close()
       wsRef.current = null
@@ -336,7 +367,7 @@ export default function TerminalView({ sessionId, session, initialCwd, initialTe
 
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => setReloadNonce((value) => value + 1)}
+              onClick={handleRestart}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
             >
               <RefreshCw className="h-4 w-4" />

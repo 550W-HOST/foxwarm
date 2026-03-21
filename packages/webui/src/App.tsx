@@ -400,7 +400,6 @@ function App() {
     return workbenchTabs.find((tab) => tab.id === route.tabId && tab.sessionId === route.sessionId) || null
   }, [route, workbenchTabs])
 
-  const activeWorkbenchTabType = activeTab?.type || null
   const currentView: AppView = route.view
 
   const navigateToSession = (sessionId: string, tabId?: string | null) => {
@@ -647,7 +646,6 @@ function App() {
           sessions={sessions}
           currentSession={currentContextSessionId}
           currentView={currentView}
-          activeWorkbenchTabType={activeWorkbenchTabType}
           currentSessionRecord={currentContextSessionRecord}
           onSelectSession={openChatTab}
           onSelectArchitecture={() => {
@@ -682,7 +680,7 @@ function App() {
             }}
             onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
           />
-          <div className="min-h-0 flex-1 overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-hidden border-x border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
             {renderSessionContent(handleBackToList)}
           </div>
         </div>
@@ -696,7 +694,6 @@ function App() {
         sessions={sessions}
         currentSession={currentContextSessionId}
         currentView={currentView}
-        activeWorkbenchTabType={activeWorkbenchTabType}
         currentSessionRecord={currentContextSessionRecord}
         onSelectSession={openChatTab}
         onSelectArchitecture={() => {
@@ -721,7 +718,7 @@ function App() {
               }}
               onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
             />
-            <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-hidden border-x border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
               {renderSessionContent()}
             </div>
           </div>
