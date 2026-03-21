@@ -20,6 +20,8 @@ interface WorkspaceEntry {
 interface WorkspaceViewProps {
   sessionId: string
   session?: Session
+  initialNodeId?: string
+  initialPath?: string
   onBack?: () => void
   onSessionsChanged?: () => void
   onOpenTerminal?: (cwd?: string) => void
@@ -137,7 +139,7 @@ function WorkspaceTreeNode({
   )
 }
 
-export default function WorkspaceView({ sessionId, session, onBack, onSessionsChanged, onOpenTerminal, onOpenFile }: WorkspaceViewProps) {
+export default function WorkspaceView({ sessionId, session, initialNodeId, initialPath, onBack, onSessionsChanged, onOpenTerminal, onOpenFile }: WorkspaceViewProps) {
   const [roots, setRoots] = useState<WorkspaceRoot[]>(() => loadStoredRoots())
   const [selectedRootId, setSelectedRootId] = useState<string | null>(null)
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
@@ -165,6 +167,14 @@ export default function WorkspaceView({ sessionId, session, onBack, onSessionsCh
       setSelectedRootId(roots[0].id)
     }
   }, [roots, selectedRootId])
+
+  useEffect(() => {
+    if (!initialPath) return
+
+    void addRoot(initialNodeId || session?.currentNode || 'master', initialPath)
+    setNewRootNodeId(initialNodeId || session?.currentNode || 'master')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialNodeId, initialPath])
 
   const selectedDirectoryPath = selectedIsDirectory
     ? selectedPath

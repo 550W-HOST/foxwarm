@@ -1,16 +1,18 @@
-import { FolderOpen, Plus, SquareTerminal, Workflow } from 'lucide-react'
+import { Plus, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
+import CreateTabButton from './CreateTabButton'
 
 interface SidebarProps {
   sessions: Session[]
   currentSession: string
-  currentView: 'workbench' | 'architecture' | 'workspace'
-  activeWorkbenchTabType?: 'chat' | 'file' | 'terminal' | null
+  currentView: 'session' | 'architecture'
+  activeWorkbenchTabType?: 'chat' | 'workspace' | 'file' | 'terminal' | null
+  currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onSelectArchitecture: () => void
-  onSelectWorkspace: (sessionId?: string) => void
-  onSelectTerminal: (sessionId?: string) => void
+  onCreateWorkspaceTab: (options?: { nodeId?: string; path?: string }) => void
+  onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateSession: () => void
 }
 
@@ -19,12 +21,17 @@ export default function Sidebar({
   currentSession,
   currentView,
   activeWorkbenchTabType,
+  currentSessionRecord,
   onSelectSession,
   onSelectArchitecture,
-  onSelectWorkspace,
-  onSelectTerminal,
+  onCreateWorkspaceTab,
+  onCreateTerminalTab,
   onCreateSession,
 }: SidebarProps) {
+  const defaultNodeId = currentSessionRecord?.currentNode || 'master'
+  const defaultPath = currentSessionRecord?.cwd || '/'
+  const sessionLabel = currentSessionRecord?.displayName || currentSession || 'main'
+
   return (
     <div className="w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 space-y-3">
@@ -52,30 +59,22 @@ export default function Sidebar({
             <Workflow className="w-4 h-4" />
             <span>Architecture</span>
           </button>
-          <button
-            onClick={() => onSelectWorkspace(currentSession)}
-            className={`inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              currentView === 'workspace' || activeWorkbenchTabType === 'file'
-                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
-            }`}
-            title="Open workspace"
-          >
-            <FolderOpen className="w-4 h-4" />
-            <span>Workspace</span>
-          </button>
-          <button
-            onClick={() => onSelectTerminal(currentSession)}
-            className={`inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              currentView === 'workbench' && activeWorkbenchTabType === 'terminal'
-                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
-            }`}
-            title="Open terminal"
-          >
-            <SquareTerminal className="w-4 h-4" />
-            <span>Terminal</span>
-          </button>
+          <CreateTabButton
+            kind="workspace"
+            defaultNodeId={defaultNodeId}
+            defaultPath={defaultPath}
+            sessionLabel={sessionLabel}
+            accent={activeWorkbenchTabType === 'workspace' || activeWorkbenchTabType === 'file'}
+            onCreate={(options) => onCreateWorkspaceTab(options)}
+          />
+          <CreateTabButton
+            kind="terminal"
+            defaultNodeId={defaultNodeId}
+            defaultPath={defaultPath}
+            sessionLabel={sessionLabel}
+            accent={activeWorkbenchTabType === 'terminal'}
+            onCreate={(options) => onCreateTerminalTab(options)}
+          />
         </div>
       </div>
 
