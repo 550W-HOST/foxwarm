@@ -623,8 +623,45 @@ export async function resolveMemorySearchOptions(
 export function formatMemorySearchResults(results: any): string {
     if (!results || !Array.isArray(results) || results.length === 0) return 'No relevant memories found.';
 
+    const now = Date.now();
+
+    function formatAgeLabel(ts: number | null): string {
+        if (!ts || !Number.isFinite(ts)) return 'age: unknown';
+        const deltaMs = Math.max(0, now - ts);
+        const minutes = Math.floor(deltaMs / 60000);
+        if (minutes < 1) return 'RECENT · just now';
+        if (minutes < 60) return `RECENT · ${minutes}m ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 48) return `RECENT · ${hours}h ago`;
+        const days = Math.floor(hours / 24);
+        if (days < 14) return `RECENT · ${days}d ago`;
+        if (days < 60) return `AGING · ${days}d ago`;
+        return `OLD · ${days}d ago`;
+    }
+
+    function buildPreview(text: string, maxChars: number = 420): string {
+        const normalized = String(text || '').trim().replace(/\n{3,}/g, '\n\n');
+        if (normalized.length <= maxChars) return normalized;
+
+        const clipped = normalized.slice(0, maxChars);
+        const lastBoundary = Math.max(
+            clipped.lastIndexOf('\n'),
+            clipped.lastIndexOf('. '),
+            clipped.lastIndexOf('。'),
+            clipped.lastIndexOf('! '),
+            clipped.lastIndexOf('? '),
+        );
+
+        if (lastBoundary >= Math.floor(maxChars * 0.55)) {
+            return `${clipped.slice(0, lastBoundary).trim()}…`;
+        }
+
+        return `${clipped.trim()}…`;
+    }
+
     return results.map(r => {
-        const ts = r.timestamp != null && !isNaN(Number(r.timestamp)) ? Number(r.timestamp) : null;
+        const tsSource = r.end_timestamp ?? r.start_timestamp ?? r.timestamp;
+        const ts = tsSource != null && !isNaN(Number(tsSource)) ? Number(tsSource) : null;
         const date = ts ? new Date(ts) : null;
         const dateStr = (date && !isNaN(date.getTime())) ? date.toISOString() : 'unknown';
         const idStr = (r.id && typeof r.id === 'string') ? `${r.id.substring(0, 8)}...` : 'N/A';
@@ -637,13 +674,16 @@ export function formatMemorySearchResults(results: any): string {
         const chunkLabel = r.chunk_count > 1
             ? `[chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]`
             : '';
+        const ageLabel = `[${formatAgeLabel(ts)}]`;
+        const preview = buildPreview(r.text || r.chunk_text || '');
 
         return [
             `[${dateStr}] [session: ${r.session_id}] [seq: ${seqLabel}]`,
+            ageLabel,
             messageLabel,
             chunkLabel,
             `[ID: ${idStr}]`,
-        ].filter(Boolean).join(' ') + `\n${r.text}`;
+        ].filter(Boolean).join(' ') + `\n${preview}`;
     }).join('\n\n---\n\n');
 }
 

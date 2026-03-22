@@ -894,15 +894,85 @@ function formatSeqLabel(startSeq: number, endSeq: number): string {
     return startSeq === endSeq ? `${startSeq}` : `${startSeq}-${endSeq}`;
 }
 
+function getMemorySearchCandidateCount(limit: number): number {
+    return Math.max(limit * 4, 20);
+}
+
+function reciprocalRank(rank: number, k: number = 60): number {
+    return 1 / (k + rank + 1);
+}
+
+function rerankSearchResultsByRecency(results: any[], limit: number): any[] {
+    if (results.length <= 1) {
+        return results.slice(0, limit);
+    }
+
+    const semanticRank = new Map<string, number>();
+    const recencyRank = new Map<string, number>();
+
+    [...results]
+        .sort((a, b) => {
+            const ad = Number.isFinite(Number(a._distance)) ? Number(a._distance) : Number.POSITIVE_INFINITY;
+            const bd = Number.isFinite(Number(b._distance)) ? Number(b._distance) : Number.POSITIVE_INFINITY;
+            return ad - bd;
+        })
+        .forEach((row, index) => semanticRank.set(String(row.id), index));
+
+    [...results]
+        .sort((a, b) => Number(b.end_timestamp ?? b.start_timestamp ?? b.timestamp ?? 0) - Number(a.end_timestamp ?? a.start_timestamp ?? a.timestamp ?? 0))
+        .forEach((row, index) => recencyRank.set(String(row.id), index));
+
+    return [...results]
+        .map((row) => {
+            const id = String(row.id);
+            const semantic = reciprocalRank(semanticRank.get(id) ?? results.length);
+            const recency = reciprocalRank(recencyRank.get(id) ?? results.length);
+            return {
+                ...row,
+                _rerankScore: semantic + (recency * 0.75),
+            };
+        })
+        .sort((a, b) => {
+            if (b._rerankScore !== a._rerankScore) {
+                return b._rerankScore - a._rerankScore;
+            }
+            return (Number(a._distance) || 0) - (Number(b._distance) || 0);
+        })
+        .slice(0, limit);
+}
+
+function buildMemoryPreview(text: string, maxChars: number = 420): string {
+    const normalized = String(text || '').trim().replace(/\n{3,}/g, '\n\n');
+    if (normalized.length <= maxChars) {
+        return normalized;
+    }
+
+    const clipped = normalized.slice(0, maxChars);
+    const lastBoundary = Math.max(
+        clipped.lastIndexOf('\n'),
+        clipped.lastIndexOf('. '),
+        clipped.lastIndexOf('。'),
+        clipped.lastIndexOf('! '),
+        clipped.lastIndexOf('? '),
+    );
+
+    if (lastBoundary >= Math.floor(maxChars * 0.55)) {
+        return `${clipped.slice(0, lastBoundary).trim()}…`;
+    }
+
+    return `${clipped.trim()}…`;
+}
+
 async function search(query: string, limit = 5, format = true, options?: SearchOptions) {
     const vector = await getEmbedding(query);
     const results: any[] = [];
+    const candidateLimit = getMemorySearchCandidateCount(limit);
     let searchQuery = table.search(vector);
     const predicate = buildFilterPredicate(options);
     if (predicate) {
         searchQuery = searchQuery.where(predicate);
     }
-    const iterator = await searchQuery.limit(limit).execute();
+    const iterator = await searchQuery.limit(candidateLimit).execute();
 
     for await (const row of iterator) {
         const records = row.toArray();
@@ -930,15 +1000,17 @@ async function search(query: string, limit = 5, format = true, options?: SearchO
         }
     }
 
-    if (!format) return results;
-    if (results.length === 0) return '';
+    const reranked = rerankSearchResultsByRecency(results, limit);
 
-    return results.map(r => {
+    if (!format) return reranked;
+    if (reranked.length === 0) return '';
+
+    return reranked.map(r => {
         const ts = r.start_timestamp != null && !isNaN(Number(r.start_timestamp)) ? Number(r.start_timestamp) : null;
         const date = ts ? new Date(ts) : null;
         const dateStr = (date && !isNaN(date.getTime())) ? date.toISOString() : 'unknown';
         const seqLabel = formatSeqLabel(Number(r.start_seq), Number(r.end_seq));
-        return `[${dateStr}] [session: ${r.session_id}] [seq: ${seqLabel}] [messages: ${r.message_count}] [chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]\n${r.text}`;
+        return `[${dateStr}] [session: ${r.session_id}] [seq: ${seqLabel}] [messages: ${r.message_count}] [chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]\n${buildMemoryPreview(r.text)}`;
     }).join('\n\n---\n\n');
 }
 
