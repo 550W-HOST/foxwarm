@@ -549,7 +549,7 @@ async function readArchiveLines(sessionId: string): Promise<ArchiveMessageLine[]
     return parsed.sort((a, b) => a.seq - b.seq);
 }
 
-async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: number, archiveLines: ArchiveMessageLine[]): Promise<{ lastIndexedSeq: number; tailStartSeq: number; rowCount: number; segmentCount: number; }> {
+async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: number, archiveLines: ArchiveMessageLine[]): Promise<{ lastIndexedSeq: number; tailStartSeq: number; rowCount: number; segmentCount: number; rebuiltMessageCount: number; rebuiltStartSeq: number; rebuiltEndSeq: number; }> {
     const targetLines = archiveLines.filter(line => line.seq >= rewindStartSeq);
     if (targetLines.length === 0) {
         return {
@@ -557,6 +557,9 @@ async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: numb
             tailStartSeq: getSessionArchiveCheckpoint(sessionId).tailStartSeq,
             rowCount: 0,
             segmentCount: 0,
+            rebuiltMessageCount: 0,
+            rebuiltStartSeq: 0,
+            rebuiltEndSeq: 0,
         };
     }
 
@@ -580,6 +583,9 @@ async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: numb
         tailStartSeq: segments[segments.length - 1]?.startSeq || targetLines[targetLines.length - 1].seq,
         rowCount: hydratedRows.length,
         segmentCount: segments.length,
+        rebuiltMessageCount: targetLines.length,
+        rebuiltStartSeq: targetLines[0].seq,
+        rebuiltEndSeq: targetLines[targetLines.length - 1].seq,
     };
 }
 
@@ -605,12 +611,20 @@ async function indexSessionArchiveInternal(sessionId: string, latestSeqHint?: nu
         ? rewindStartSeqCandidate
         : archiveLines[0].seq;
 
+    const rebuildLines = archiveLines.filter(line => line.seq >= rewindStartSeq);
+    const startTime = Date.now();
+
     logger.info({
         sessionId,
-        pendingCount: Math.max(0, latestArchivedSeq - lastIndexedSeq),
+        latestSeqHint,
         lastIndexedSeq,
+        latestArchivedSeq,
         rewindStartSeq,
-    }, 'Rebuilding session archive vector tail from JSONL');
+        pendingMessageCount: Math.max(0, latestArchivedSeq - lastIndexedSeq),
+        rebuildMessageCount: rebuildLines.length,
+        rebuildStartSeq: rebuildLines[0]?.seq,
+        rebuildEndSeq: rebuildLines[rebuildLines.length - 1]?.seq,
+    }, 'Starting session archive vector index rebuild');
 
     const result = await replaceIndexedArchiveTail(sessionId, rewindStartSeq, archiveLines);
     await setSessionArchiveCheckpoint(sessionId, {
@@ -620,12 +634,19 @@ async function indexSessionArchiveInternal(sessionId: string, latestSeqHint?: nu
 
     logger.info({
         sessionId,
+        latestSeqHint,
+        previousLastIndexedSeq: lastIndexedSeq,
         rewindStartSeq,
         lastIndexedSeq: result.lastIndexedSeq,
         tailStartSeq: result.tailStartSeq,
+        advancedBy: Math.max(0, result.lastIndexedSeq - lastIndexedSeq),
+        rebuiltMessageCount: result.rebuiltMessageCount,
+        rebuiltStartSeq: result.rebuiltStartSeq || undefined,
+        rebuiltEndSeq: result.rebuiltEndSeq || undefined,
         rowCount: result.rowCount,
         segmentCount: result.segmentCount,
-    }, 'Completed session archive vector tail rebuild');
+        durationMs: Date.now() - startTime,
+    }, 'Completed session archive vector index rebuild');
 
     return result.lastIndexedSeq;
 }
@@ -672,7 +693,7 @@ function planSessionArchiveIndex(sessionId: string): Promise<number> {
         const targetLatestSeqHint = state.latestSeqHint;
         state.pendingEstimatedTokens = 0;
 
-        logger.info({
+        logger.debug({
             sessionId,
             pendingCount: decision.pendingCount,
             pendingEstimatedTokens: decision.pendingEstimatedTokens,
