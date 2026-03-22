@@ -20,6 +20,23 @@ interface ToolContext {
 
 type ToolArgs = Record<string, any>;
 
+function getSubconsciousPrimarySessionId(ctx?: ToolContext): string | undefined {
+  return sessionManager.getSubconsciousPrimarySessionId(ctx?.session);
+}
+
+function assertAllowedSubconsciousTarget(ctx: ToolContext | undefined, targetSessionId: string | undefined, toolName: string): void {
+  const primarySessionId = getSubconsciousPrimarySessionId(ctx);
+  if (!primarySessionId) {
+    return;
+  }
+
+  const resolvedTargetSessionId = targetSessionId || ctx?.sessionId;
+  const selfSessionId = ctx?.sessionId;
+  if (!resolvedTargetSessionId || (resolvedTargetSessionId !== primarySessionId && resolvedTargetSessionId !== selfSessionId)) {
+    throw new Error(`Subconscious side sessions may only use ${toolName} with their primary session or themselves.`);
+  }
+}
+
 const MIME_TYPE_BY_EXT: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -212,7 +229,19 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
   const { sessionId, message, noFurtherAssistantReply } = args;
   const fromSessionId = ctx?.sessionId;
 
+  if (!sessionId || typeof sessionId !== 'string') {
+    throw new Error('sessionId is required');
+  }
+
+  const subconsciousPrimarySessionId = getSubconsciousPrimarySessionId(ctx);
+  if (subconsciousPrimarySessionId && sessionId !== subconsciousPrimarySessionId) {
+    throw new Error('Subconscious side sessions may only send hints to their primary session.');
+  }
+
   await sessionManager.sendToSession(sessionId, message, fromSessionId);
+  if (subconsciousPrimarySessionId && fromSessionId) {
+    await sessionManager.noteSubconsciousHintDelivered(fromSessionId, sessionId);
+  }
   const output = `Message sent to session \`${sessionId}\``;
   return noFurtherAssistantReply
     ? { output, __toolLoopControl: { stopCurrentTurn: true } }
@@ -485,6 +514,8 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
   await requireNotIsolated(ctx, 'get_session_messages');
   const { sessionId, start, count, previewLength = 100 } = args;
 
+  assertAllowedSubconsciousTarget(ctx, sessionId, 'get_session_messages');
+
   const session = await sessionManager.getExistingSession(sessionId);
   if (!session) {
     return `Session \`${sessionId}\` not found.`;
@@ -521,7 +552,8 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
 
 export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'get_archived_messages');
-  const targetSessionId = args.sessionId || ctx?.sessionId;
+  const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
+  assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_archived_messages');
   const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
 
   if (!targetSessionId) {
@@ -550,7 +582,8 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
 
 export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'get_archived_blocks');
-  const targetSessionId = args.sessionId || ctx?.sessionId;
+  const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
+  assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_archived_blocks');
   const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
 
   if (!targetSessionId) {
