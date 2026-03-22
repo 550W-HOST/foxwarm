@@ -40,6 +40,8 @@ interface ContextMenuState {
 
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
 const LEGACY_TOKEN_KEY = 'alphabot_token'
+const DEFAULT_VISIBLE_CHILDREN = 5
+const MORE_VISIBLE_CHILDREN_STEP = 10
 
 const getStoredAuthToken = () => {
   const foxwarmToken = localStorage.getItem(FOXWARM_TOKEN_KEY)
@@ -88,7 +90,7 @@ const isFullyVisibleInContainer = (element: HTMLElement, container: HTMLElement)
 
 export default function SessionListCore({ sessions, currentSession, onSelectSession }: SessionListCoreProps) {
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
-  const [showMoreChildren, setShowMoreChildren] = useState<Set<string>>(new Set())
+  const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
@@ -251,13 +253,19 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }
 
   const toggleShowMore = (sessionId: string) => {
-    const newShowMore = new Set(showMoreChildren)
-    if (newShowMore.has(sessionId)) {
-      newShowMore.delete(sessionId)
-    } else {
-      newShowMore.add(sessionId)
-    }
-    setShowMoreChildren(newShowMore)
+    setVisibleChildCounts(prev => {
+      const next = new Map(prev)
+      const currentCount = next.get(sessionId) ?? DEFAULT_VISIBLE_CHILDREN
+      const totalChildren = childrenMap.get(sessionId)?.length ?? 0
+
+      if (currentCount >= totalChildren) {
+        next.delete(sessionId)
+      } else {
+        next.set(sessionId, currentCount + MORE_VISIBLE_CHILDREN_STEP)
+      }
+
+      return next
+    })
   }
 
   // Get display ID for a session, removing parent prefix if applicable
@@ -442,9 +450,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const children = childrenMap.get(session.id) || []
     const hasChildren = children.length > 0
     const isExpanded = expandedSessions.has(session.id)
-    const showMore = showMoreChildren.has(session.id)
-
-    const visibleChildren = showMore ? children : children.slice(0, 10)
+    const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
+    const visibleChildren = children.slice(0, visibleCount)
     const hiddenCount = children.length - visibleChildren.length
 
     // Get display ID (with parent prefix removed if applicable)
@@ -551,7 +558,16 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
                 style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
               >
-                {showMore ? '▲ Show less' : `▼ Show ${hiddenCount} more...`}
+                {`▼ Show ${Math.min(hiddenCount, MORE_VISIBLE_CHILDREN_STEP)} more...`}
+              </button>
+            )}
+            {hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && (
+              <button
+                onClick={() => toggleShowMore(session.id)}
+                className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
+              >
+                ▲ Show less
               </button>
             )}
           </div>

@@ -389,6 +389,12 @@ function App() {
     : activeTab?.contextSessionId || loadStoredLastVisitedSession()
   const currentContextSessionRecord = sessions.find(session => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
   const currentView: AppView = route.view === 'architecture' ? 'architecture' : 'session'
+  const busyCount = useMemo(() => sessions.filter(session => session.busy).length, [sessions])
+
+  useEffect(() => {
+    const baseTitle = '🦊 Foxwarm'
+    document.title = busyCount > 0 ? `[${busyCount} busy] ${baseTitle}` : baseTitle
+  }, [busyCount])
 
   useEffect(() => {
     const nextActiveTabId = route.view === 'tab' ? route.tabId : null
