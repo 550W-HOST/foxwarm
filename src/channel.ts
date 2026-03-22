@@ -7,20 +7,24 @@ import { MessagePart } from './types';
 
 export interface ChannelMessage {
   parts: MessagePart[];
-  channelUserId: string; // Platform-specific user ID
+  channelUserId: string; // Legacy field: channel-side conversation/chat/room target id
+  conversationId?: string; // Preferred name for channel-side conversation/chat/room target id
   username?: string;
 }
 
 export interface ChannelContext {
-  channelUserId: string;
+  channelUserId: string; // Legacy field: channel-side conversation/chat/room target id
+  conversationId?: string; // Preferred name for channel-side conversation/chat/room target id
+  channelId?: string; // Configured channel instance id, e.g. mainbot / secondbot / weixin
+  channelType?: string; // Adapter/platform type, e.g. telegram / weixin / webui
   username?: string;
   reply: (text: string, options?: any) => Promise<void>;
   sendTyping: () => Promise<void>;
-  platform: string; // 'telegram' | 'matrix'
-  senderId?: string; // 发送者用户ID（用于权限检查，在某些平台如 wecom 中与 channelUserId 不同）
+  platform: string; // Legacy alias of channelType
+  senderId?: string; // Actual sender/user identity, used for allowlist checks when available
   preferDirectReply?: boolean; // Prefer the source reply path instead of session broadcast for this turn
   // `sessionId` is set in handleMessage internal only for tools that need it.
-  // If you want to specify the session, should use `attachChannel(platform, channelUserId, targetSession)`.
+  // If you want to specify the session, should use `attachChannel(channelId, conversationId, targetSession)`.
 }
 
 /**
@@ -28,8 +32,12 @@ export interface ChannelContext {
  */
 export interface MessageSource {
   platform: string;
+  channelId?: string;
+  channelType?: string;
   channelUserId: string;
+  conversationId?: string;
   username: string;
+  senderId?: string;
 }
 
 export interface ChannelFile {
@@ -48,7 +56,7 @@ export interface ChannelSendFileOptions {
 
 export interface Channel {
   readonly name: string;
-  readonly platform: string;
+  readonly platform: string; // Adapter/platform type
 
   /**
    * Start the channel (connect, listen for messages)
@@ -93,24 +101,37 @@ const channelInstances = new Map<string, Channel>();
 /**
  * Register a channel instance for broadcast
  */
-export function registerChannel(platform: string, channel: Channel): void {
-  channelInstances.set(platform, channel);
+export function registerChannel(channelId: string, channel: Channel): void {
+  channelInstances.set(channelId, channel);
 }
 
-export function unregisterChannel(platform: string): void {
-  channelInstances.delete(platform);
+export function unregisterChannel(channelId: string): void {
+  channelInstances.delete(channelId);
 }
 
 /**
  * Get a registered channel instance
  */
-export function getChannelInstance(platform: string): Channel | undefined {
-  return channelInstances.get(platform);
+export function getChannelInstance(channelId: string): Channel | undefined {
+  return channelInstances.get(channelId);
 }
 
-export function listRegisteredChannels(): Array<{ platform: string; name: string }> {
-  return Array.from(channelInstances.entries()).map(([platform, channel]) => ({
-    platform,
+export function listRegisteredChannels(): Array<{ channelId: string; type: string; name: string }> {
+  return Array.from(channelInstances.entries()).map(([channelId, channel]) => ({
+    channelId,
+    type: channel.platform,
     name: channel.name,
   }));
+}
+
+export function getChannelId(ctx: Pick<ChannelContext, 'channelId' | 'platform'>): string {
+  return ctx.channelId || ctx.platform;
+}
+
+export function getChannelType(ctx: Pick<ChannelContext, 'channelType' | 'platform'>): string {
+  return ctx.channelType || ctx.platform;
+}
+
+export function getConversationId(ctx: Pick<ChannelContext, 'conversationId' | 'channelUserId'>): string {
+  return ctx.conversationId || ctx.channelUserId;
 }

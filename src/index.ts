@@ -22,6 +22,8 @@ import {
     ENABLE_TRIGGER,
     ENABLE_WEBUI,
     HTTP_PORT,
+    getDefaultChannelConfigByType,
+    getNormalizedChannelConfigs,
     LOGS_DIR,
     MATRIX_CONFIG,
     MAIN_AGENT_MEMORY_DIR,
@@ -33,6 +35,7 @@ import {
     WEIXIN_CONFIG,
     WEWORK_CONFIG,
 } from './config';
+import type { TelegramConfig } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
 import { registerNodeWebSocket } from './nodes/websocket';
 import { registerNodeHttpRoutes } from './nodes/httpRoutes';
@@ -217,44 +220,33 @@ async function start() {
     // Create message router with authorized users
     const authorizedUsers: Array<{ platform: string; userId: string }> = [];
     
-    const telegramAllowedUsers = TELEGRAM_CONFIG.allowedUsers || [];
-    const matrixAllowedUsers = MATRIX_CONFIG.allowedUsers || [];
-    const weworkAllowedUsers = WEWORK_CONFIG.allowedUsers || [];
-    const weixinAllowedUsers = WEIXIN_CONFIG.allowedUsers || [];
+    for (const entry of getNormalizedChannelConfigs()) {
+        const config: any = entry.config || {};
+        const allowedUsers: string[] = Array.isArray(config.allowedUsers) ? config.allowedUsers : [];
+        const allowAllUsers = config.allowAllUsers === true;
 
-    for (const userId of telegramAllowedUsers) {
-        authorizedUsers.push({ platform: 'telegram', userId });
-    }
-    
-    if (MATRIX_CONFIG.botUserId) {
-        authorizedUsers.push({ platform: 'matrix', userId: MATRIX_CONFIG.botUserId });
+        if (entry.type === 'telegram' && config.mainAttachUser) {
+            authorizedUsers.push({ platform: entry.id, userId: config.mainAttachUser });
+        }
+
+        if (entry.type === 'matrix' && config.botUserId) {
+            authorizedUsers.push({ platform: entry.id, userId: config.botUserId });
+        }
+
+        if (allowAllUsers) {
+            authorizedUsers.push({ platform: entry.id, userId: '*' });
+            logger.info({ channelId: entry.id, type: entry.type }, 'Channel configured to allow all users');
+        }
+
+        for (const user of allowedUsers) {
+            authorizedUsers.push({ platform: entry.id, userId: user });
+            logger.info({ channelId: entry.id, type: entry.type, user }, 'Added channel user to whitelist');
+        }
     }
     
     // Always allow WebUI and TUI
     authorizedUsers.push({ platform: 'webui', userId: 'webui' });
     authorizedUsers.push({ platform: 'tui', userId: 'tui' });
-    
-    // Add additional Matrix users from env
-    for (const user of matrixAllowedUsers) {
-        authorizedUsers.push({ platform: 'matrix', userId: user });
-        logger.info({ user }, 'Added Matrix user to whitelist');
-    }
-    
-    // Add WeWork users from env
-    for (const user of weworkAllowedUsers) {
-        authorizedUsers.push({ platform: 'wework', userId: user });
-        logger.info({ user }, 'Added WeWork user to whitelist');
-    }
-
-    if (WEIXIN_CONFIG.allowAllUsers) {
-        authorizedUsers.push({ platform: 'weixin', userId: '*' });
-        logger.info('Weixin channel configured to allow all users');
-    } else {
-        for (const user of weixinAllowedUsers) {
-            authorizedUsers.push({ platform: 'weixin', userId: user });
-            logger.info({ user }, 'Added Weixin user to whitelist');
-        }
-    }
     
     const router = new MessageRouter(authorizedUsers);
     const commandHandler = new CommandHandler(router);
@@ -323,66 +315,89 @@ async function start() {
         logger.info('HTTP server disabled (both WebUI and Trigger are disabled)');
     }
 
-    const telegramChannelPromise: Promise<TelegramChannel | null> = (TELEGRAM_CONFIG.enabled !== false && TELEGRAM_CONFIG.botToken)
-        ? startWithRetry('telegram', async () => {
-            const channel = new TelegramChannel(TELEGRAM_CONFIG.botToken!);
+    const defaultTelegramEntry = getDefaultChannelConfigByType<TelegramConfig>('telegram');
+    const telegramChannelPromise: Promise<TelegramChannel | null> = (defaultTelegramEntry?.config?.enabled !== false && defaultTelegramEntry?.config?.botToken)
+        ? startWithRetry(`telegram:${defaultTelegramEntry.id}`, async () => {
+            const channel = new TelegramChannel(defaultTelegramEntry.config.botToken!, defaultTelegramEntry.id);
             channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
             channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
             await channel.start();
-            registerChannel('telegram', channel);
-            logger.info('Telegram channel initialized');
+            registerChannel(defaultTelegramEntry.id, channel);
+            logger.info({ channelId: defaultTelegramEntry.id }, 'Telegram channel initialized');
 
-            if (TELEGRAM_CONFIG.mainAttachUser) {
-                sessionManager.attachChannel('telegram', TELEGRAM_CONFIG.mainAttachUser, 'main');
+            if (defaultTelegramEntry.config.mainAttachUser) {
+                sessionManager.attachChannel(defaultTelegramEntry.id, defaultTelegramEntry.config.mainAttachUser, 'main');
             }
 
             return channel;
         }, { retries: 3, delayMs: 5000 })
         : Promise.resolve(null);
 
-    if (MATRIX_CONFIG.enabled !== false && MATRIX_CONFIG.homeserver && MATRIX_CONFIG.accessToken && MATRIX_CONFIG.botUserId) {
-        void startWithRetry('matrix', async () => {
-            const matrixChannel = new MatrixChannel(
-                MATRIX_CONFIG.homeserver!,
-                MATRIX_CONFIG.accessToken!,
-                MATRIX_CONFIG.botUserId!
-            );
-            matrixChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-            await matrixChannel.start();
-            registerChannel('matrix', matrixChannel);
-            logger.info('Matrix channel initialized');
+    for (const entry of getNormalizedChannelConfigs()) {
+        const config: any = entry.config || {};
+        if (entry.type === 'telegram') {
+            if (defaultTelegramEntry?.id === entry.id) continue;
+            if (config.enabled === false || !config.botToken) continue;
+            void startWithRetry(`telegram:${entry.id}`, async () => {
+                const channel = new TelegramChannel(config.botToken, entry.id);
+                channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
+                channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
+                await channel.start();
+                registerChannel(entry.id, channel);
+                logger.info({ channelId: entry.id }, 'Telegram channel initialized');
+                if (config.mainAttachUser) {
+                    sessionManager.attachChannel(entry.id, config.mainAttachUser, 'main');
+                }
+                return channel;
+            }, { retries: 3, delayMs: 5000 });
+            continue;
+        }
 
-            sessionManager.attachChannel('matrix', MATRIX_CONFIG.botUserId!, 'main');
-            return matrixChannel;
-        }, { retries: 1, delayMs: 3000 });
-    }
-
-    if (WEWORK_CONFIG.enabled !== false && WEWORK_CONFIG.webhookUrl) {
-        void startWithRetry('wework', async () => {
-            const weworkChannel = new WeWorkWebhookChannel({
-                webhookUrl: WEWORK_CONFIG.webhookUrl!,
-                token: WEWORK_CONFIG.token,
-                encodingAESKey: WEWORK_CONFIG.encodingAESKey,
-                listenPort: WEWORK_CONFIG.listenPort,
-                listenPath: WEWORK_CONFIG.listenPath
-            });
-            weworkChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-            await weworkChannel.start();
-            registerChannel('wework', weworkChannel);
-            logger.info('WeWork Webhook channel initialized');
-            return weworkChannel;
-        }, { retries: 1, delayMs: 3000 });
-    }
-
-    if (WEIXIN_CONFIG.enabled !== false) {
-        if (WEIXIN_CONFIG.token?.trim()) {
-            void startWithRetry('weixin', async () => {
-                const result = await startManagedChannel('weixin');
-                logger.info('Weixin channel initialized');
-                return result.status;
+        if (entry.type === 'matrix') {
+            if (config.enabled === false || !config.homeserver || !config.accessToken || !config.botUserId) continue;
+            void startWithRetry(`matrix:${entry.id}`, async () => {
+                const matrixChannel = new MatrixChannel(config.homeserver, config.accessToken, config.botUserId, entry.id);
+                matrixChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
+                await matrixChannel.start();
+                registerChannel(entry.id, matrixChannel);
+                logger.info({ channelId: entry.id }, 'Matrix channel initialized');
+                sessionManager.attachChannel(entry.id, config.botUserId, 'main');
+                return matrixChannel;
             }, { retries: 1, delayMs: 3000 });
-        } else if (WEIXIN_CONFIG.baseUrl || WEIXIN_CONFIG.enabled) {
-            logger.info('Weixin channel configured without token; use /weixin login and foxwarm will start it dynamically once config is ready');
+            continue;
+        }
+
+        if (entry.type === 'wework') {
+            if (config.enabled === false || !config.webhookUrl) continue;
+            void startWithRetry(`wework:${entry.id}`, async () => {
+                const weworkChannel = new WeWorkWebhookChannel({
+                    name: entry.id,
+                    webhookUrl: config.webhookUrl,
+                    token: config.token,
+                    encodingAESKey: config.encodingAESKey,
+                    listenPort: config.listenPort,
+                    listenPath: config.listenPath
+                });
+                weworkChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
+                await weworkChannel.start();
+                registerChannel(entry.id, weworkChannel);
+                logger.info({ channelId: entry.id }, 'WeWork Webhook channel initialized');
+                return weworkChannel;
+            }, { retries: 1, delayMs: 3000 });
+            continue;
+        }
+
+        if (entry.type === 'weixin') {
+            if (config.enabled === false) continue;
+            if (config.token?.trim()) {
+                void startWithRetry(`weixin:${entry.id}`, async () => {
+                    const result = await startManagedChannel(entry.id);
+                    logger.info({ channelId: entry.id }, 'Weixin channel initialized');
+                    return result.status;
+                }, { retries: 1, delayMs: 3000 });
+            } else if (config.baseUrl || config.enabled) {
+                logger.info({ channelId: entry.id }, 'Weixin channel configured without token; use /weixin login and foxwarm will start it dynamically once config is ready');
+            }
         }
     }
 

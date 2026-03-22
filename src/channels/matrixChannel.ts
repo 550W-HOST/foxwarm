@@ -11,6 +11,7 @@ import { logger } from '../common';
 export class MatrixChannel implements Channel {
   readonly name: string;
   readonly platform = 'matrix';
+  private readonly channelId: string;
   private client: any;
   private messageHandler?: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>;
   private homeserverUrl: string;
@@ -21,6 +22,7 @@ export class MatrixChannel implements Channel {
 
   constructor(homeserverUrl: string, accessToken: string, userId: string, name: string = 'matrix') {
     this.name = name;
+    this.channelId = name;
     this.homeserverUrl = homeserverUrl;
     this.accessToken = accessToken;
     this.userId = userId;
@@ -68,7 +70,8 @@ export class MatrixChannel implements Channel {
         
         const message: ChannelMessage = {
           parts: [{ text: content.body }],
-          channelUserId: sender,
+          channelUserId: roomId,
+          conversationId: roomId,
           username: sender
         };
 
@@ -100,7 +103,8 @@ export class MatrixChannel implements Channel {
           const channelCtx = this.makeChannelContext(roomId, sender);
           const message: ChannelMessage = {
             parts,
-            channelUserId: sender,
+            channelUserId: roomId,
+            conversationId: roomId,
             username: sender
           };
 
@@ -128,7 +132,8 @@ export class MatrixChannel implements Channel {
           const channelCtx = this.makeChannelContext(roomId, sender);
           const message: ChannelMessage = {
             parts: [{ text: buildSavedFileText(saved, 'file') }],
-            channelUserId: sender,
+            channelUserId: roomId,
+            conversationId: roomId,
             username: sender
           };
 
@@ -164,9 +169,13 @@ export class MatrixChannel implements Channel {
 
   private makeChannelContext(roomId: string, sender: string): ChannelContext {
     return {
-      channelUserId: sender,
+      channelId: this.channelId,
+      channelType: this.platform,
+      channelUserId: roomId,
+      conversationId: roomId,
       username: sender,
       platform: this.platform,
+      senderId: sender,
       reply: async (text: string, options?: any) => {
         const content: any = {
           msgtype: 'm.text',

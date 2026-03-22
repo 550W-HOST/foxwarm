@@ -37,12 +37,14 @@ async function tgRetry<T>(fn: () => Promise<T>): Promise<T> {
 export class TelegramChannel implements Channel {
   readonly name: string;
   readonly platform = 'telegram';
+  private readonly channelId: string;
   private bot: Telegraf;
   private messageHandler?: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>;
   private commandHandler?: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>;
 
   constructor(token: string, name: string = 'telegram') {
     this.name = name;
+    this.channelId = name;
     this.bot = new Telegraf(token);
     this.setupHandlers();
   }
@@ -174,7 +176,10 @@ export class TelegramChannel implements Channel {
 
   private makeChannelContext(ctx: any): ChannelContext {
     return {
+      channelId: this.channelId,
+      channelType: this.platform,
       channelUserId: ctx.chat.id.toString(),
+      conversationId: ctx.chat.id.toString(),
       username: ctx.from.username,
       platform: this.platform,
       senderId: ctx.from.id.toString(),

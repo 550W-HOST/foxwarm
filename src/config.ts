@@ -42,6 +42,20 @@ export type WeixinConfig = {
   loginBotType?: string;
 };
 
+export type GenericChannelConfig = Record<string, any> & {
+  type?: string;
+  enabled?: boolean;
+  allowedUsers?: string[];
+};
+
+export type AnyChannelConfig = TelegramConfig | MatrixConfig | WeWorkConfig | WeixinConfig | GenericChannelConfig;
+
+export type NormalizedChannelConfig<T extends AnyChannelConfig = AnyChannelConfig> = {
+  id: string;
+  type: string;
+  config: T;
+};
+
 export type AsrServiceConfig = {
   enabled?: boolean;
   url?: string;
@@ -73,12 +87,7 @@ export type AppConfig = {
     modelsConfigPath?: string;
     mcpConfigPath?: string;
   };
-  channels?: {
-    telegram?: TelegramConfig;
-    matrix?: MatrixConfig;
-    wework?: WeWorkConfig;
-    weixin?: WeixinConfig;
-  };
+  channels?: Record<string, AnyChannelConfig>;
   asrService?: AsrServiceConfig;
 };
 
@@ -296,6 +305,42 @@ export function writeAppConfigFile(config: AppConfig): void {
   );
 }
 
+export function getNormalizedChannelConfigs(config: AppConfig = APP_CONFIG): NormalizedChannelConfig[] {
+  const entries = Object.entries(config.channels || {});
+  return entries.flatMap(([id, rawValue]) => {
+    if (!rawValue || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
+      return [];
+    }
+
+    const rawType = typeof (rawValue as GenericChannelConfig).type === 'string'
+      ? (rawValue as GenericChannelConfig).type!.trim()
+      : '';
+    const type = rawType || id;
+    return [{
+      id,
+      type,
+      config: rawValue as AnyChannelConfig,
+    }];
+  });
+}
+
+export function getChannelConfigById(channelId: string, config: AppConfig = APP_CONFIG): NormalizedChannelConfig | undefined {
+  return getNormalizedChannelConfigs(config).find(entry => entry.id === channelId);
+}
+
+export function getChannelConfigsByType(type: string, config: AppConfig = APP_CONFIG): NormalizedChannelConfig[] {
+  return getNormalizedChannelConfigs(config).filter(entry => entry.type === type);
+}
+
+export function getDefaultChannelConfigByType<T extends AnyChannelConfig = AnyChannelConfig>(type: string, config: AppConfig = APP_CONFIG): NormalizedChannelConfig<T> | undefined {
+  const entries = getChannelConfigsByType(type, config) as NormalizedChannelConfig<T>[];
+  return entries.find(entry => entry.id === type) || entries[0];
+}
+
+export function getDefaultChannelIdByType(type: string, config: AppConfig = APP_CONFIG): string {
+  return getDefaultChannelConfigByType(type, config)?.id || type;
+}
+
 function resolvePathValue(value: string | undefined, fallback: string): string {
   if (!value) return fallback;
   return resolveBaseRelativePath(value);
@@ -304,10 +349,10 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 export const APP_CONFIG = loadAppConfig();
 export const BOT_NAME = APP_CONFIG.bot?.name || 'foxwarm';
 export const ENABLE_TUI = APP_CONFIG.bot?.enableTUI === true || process.argv.includes('--tui');
-export const TELEGRAM_CONFIG: TelegramConfig = APP_CONFIG.channels?.telegram || {};
-export const MATRIX_CONFIG: MatrixConfig = APP_CONFIG.channels?.matrix || {};
-export const WEWORK_CONFIG: WeWorkConfig = APP_CONFIG.channels?.wework || {};
-export const WEIXIN_CONFIG: WeixinConfig = APP_CONFIG.channels?.weixin || {};
+export const TELEGRAM_CONFIG: TelegramConfig = (getDefaultChannelConfigByType<TelegramConfig>('telegram', APP_CONFIG)?.config || {}) as TelegramConfig;
+export const MATRIX_CONFIG: MatrixConfig = (getDefaultChannelConfigByType<MatrixConfig>('matrix', APP_CONFIG)?.config || {}) as MatrixConfig;
+export const WEWORK_CONFIG: WeWorkConfig = (getDefaultChannelConfigByType<WeWorkConfig>('wework', APP_CONFIG)?.config || {}) as WeWorkConfig;
+export const WEIXIN_CONFIG: WeixinConfig = (getDefaultChannelConfigByType<WeixinConfig>('weixin', APP_CONFIG)?.config || {}) as WeixinConfig;
 export const ASR_SERVICE_CONFIG: AsrServiceConfig = APP_CONFIG.asrService || {};
 export const OLLAMA_BASE_URL = APP_CONFIG.llm?.ollamaBaseUrl || 'http://localhost:11434';
 

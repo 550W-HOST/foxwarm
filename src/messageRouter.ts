@@ -3,13 +3,14 @@
  */
 
 import { logger } from './common';
-import { ChannelContext, ChannelMessage } from './channel';
+import { ChannelContext, ChannelMessage, getChannelId, getChannelType, getConversationId } from './channel';
 import { formatAuthorizationInspection, inspectChannelAuthorizationFromContext } from './channelAuth';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
 import { maybeBuildTodoEndTurnReminderMessage } from './session/todo';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
+import { formatMessageText, formatPrefixedMultilineText } from './utils/messageFormat';
 
 function formatCurrentTimeForPrompt(date: Date): string {
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -53,18 +54,20 @@ export class MessageRouter {
     }
 
     const systemParts: MessagePart[] = [];
-    const channelId = `${source.platform}:${source.channelUserId}`;
+    const channelId = source.channelId || source.platform;
+    const channelType = source.channelType || source.platform;
+    const conversationId = source.conversationId || source.channelUserId;
     const senderInfo = source.username ? `; sender: \`${source.username}\`` : '';
-    systemParts.push({ system: `The following message is a direct user message via channel; channel_id: \`${channelId}\`; channel_type: \`${source.platform}\`${senderInfo}` });
+    systemParts.push({ system: `The following message is a direct user message via channel; channel_id: \`${channelId}\`; channel_type: \`${channelType}\`; conversation_id: \`${conversationId}\`${senderInfo}` });
 
     // Push-only channel notice
-    if (source.channelUserId) {
-      const channelConfig = sessionManager.getChannelConfig(source.platform, source.channelUserId);
-      logger.debug({ platform: source.platform, channelUserId: source.channelUserId, channelConfig }, 'Channel config check for push-only');
+    if (conversationId) {
+      const channelConfig = sessionManager.getChannelConfig(channelId, conversationId);
+      logger.debug({ channelId, channelType, conversationId, channelConfig }, 'Channel config check for push-only');
       if (channelConfig?.mode === 'push-only') {
-        const channelId = `${source.platform}:${source.channelUserId}`;
-        systemParts.push({ system: `Channel is in push-only mode. If you need to reply, call send_to_channel({channelId: "${channelId}", message: "..."}).` });
-        logger.info({ channelId }, 'Push-only system part added');
+        const replyTargetId = `${channelId}:${conversationId}`;
+        systemParts.push({ system: `Channel is in push-only mode. If you need to reply, call send_to_channel({channelId: "${replyTargetId}", message: "..."}).` });
+        logger.info({ channelId, conversationId }, 'Push-only system part added');
       }
     }
 
@@ -73,8 +76,11 @@ export class MessageRouter {
 
   private snapshotSource(ctx: ChannelContext): QueueSource {
     return {
-      platform: ctx.platform,
-      channelUserId: ctx.channelUserId,
+      platform: getChannelType(ctx),
+      channelId: getChannelId(ctx),
+      channelType: getChannelType(ctx),
+      channelUserId: getConversationId(ctx),
+      conversationId: getConversationId(ctx),
       username: ctx.username,
       senderId: ctx.senderId,
     };
@@ -305,6 +311,118 @@ export class MessageRouter {
     });
   }
 
+  private isDirectUserMessageForSubconscious(message: any): boolean {
+    return !!message?.parts?.some((part: MessagePart) => typeof part.system === 'string'
+      && part.system.startsWith('The following message is a direct user message via channel;'));
+  }
+
+  private isIntersessionMessageForSubconscious(message: any): boolean {
+    return !!message?.parts?.some((part: MessagePart) => typeof part.text === 'string'
+      && part.text.startsWith('[SYSTEM: The following message is an inter-agent message from another session'));
+  }
+
+  private formatSubconsciousRecentContext(session: Session): string {
+    const sideSessionId = sessionManager.getSubconsciousStatus(session).sideSessionId;
+    const recent = session.history.slice(-12);
+    const lines = recent.map((message: any) => {
+      const seqLabel = typeof message?.__meta?.seq === 'number' ? `[#${message.__meta.seq}] ` : '';
+      const preserveFull = this.isDirectUserMessageForSubconscious(message)
+        || this.isIntersessionMessageForSubconscious(message);
+
+      const formatted = formatMessageText(message, {
+        includeRolePrefix: false,
+        skipThinking: true,
+        skipRagMemorySnippets: true,
+        toolCharLimit: preserveFull ? 4000 : 240,
+      }).trim();
+
+      const text = preserveFull
+        ? formatted
+        : (formatted.length > 320 ? `${formatted.slice(0, 317)}...` : formatted);
+
+      if (!text) {
+        return `${seqLabel}[${message.role}] [empty]`;
+      }
+
+      return formatPrefixedMultilineText(`${seqLabel}[${message.role}] `, text);
+    });
+
+    if (sideSessionId) {
+      return [
+        `Primary session: \`${session.id}\``,
+        `Bound subconscious side session: \`${sideSessionId}\``,
+        '',
+        'Recent primary-session context (recent real user inputs and inter-session task messages are kept in full; other messages may be truncated):',
+        ...lines,
+      ].join('\n');
+    }
+
+    return [
+      `Primary session: \`${session.id}\``,
+      '',
+      'Recent primary-session context (recent real user inputs and inter-session task messages are kept in full; other messages may be truncated):',
+      ...lines,
+    ].join('\n');
+  }
+
+  private shouldCountSubconsciousTrigger(session: Session, incomingParts: MessagePart[], sourceCtx?: ChannelContext, source?: QueueSource): boolean {
+    const settings = sessionManager.getSubconsciousTriggerSettings(session);
+    if (!settings.enabled || !settings.sideSessionId) {
+      return false;
+    }
+
+    if (sourceCtx || source) {
+      return true;
+    }
+
+    const hasRelevantIntersession = incomingParts.some(part => typeof part.text === 'string'
+      && part.text.startsWith('[SYSTEM: The following message is an inter-agent message from another session')
+      && !sessionManager.shouldIgnoreSubconsciousTriggerText(part.text, settings.sideSessionId!));
+
+    return hasRelevantIntersession;
+  }
+
+  private async maybeTriggerSubconscious(session: Session, incomingParts: MessagePart[], sourceCtx?: ChannelContext, source?: QueueSource): Promise<void> {
+    if (sessionManager.isSubconsciousSession(session)) {
+      return;
+    }
+
+    const settings = sessionManager.getSubconsciousTriggerSettings(session);
+    if (!settings.enabled || !settings.sideSessionId) {
+      return;
+    }
+
+    if (!this.shouldCountSubconsciousTrigger(session, incomingParts, sourceCtx, source)) {
+      return;
+    }
+
+    const updated = await sessionManager.incrementSubconsciousPending(session.id);
+    if (!updated.enabled || !updated.sideSessionId || updated.pendingMessageCount < updated.triggerEveryMessages) {
+      return;
+    }
+
+    const now = Date.now();
+    if (typeof updated.lastTriggeredAt === 'number' && now - updated.lastTriggeredAt < updated.triggerCooldownMs) {
+      return;
+    }
+
+    const sideSession = await sessionManager.getExistingSession(updated.sideSessionId);
+    if (!sideSession || sideSession.busy || sideSession.queue.length > 0) {
+      return;
+    }
+
+    await sessionManager.queueSessionStructuredEvent(updated.sideSessionId, [
+      {
+        system: `Subconscious trigger for primary session \`${session.id}\`. Review the recent context, optionally use your limited history/search tools, and only send a single short high-value hint back to the primary session if you find a meaningful recall, contradiction, or reminder. If there is nothing important, end with [NO_ACTION]. If you send a hint, use send_to_session({sessionId: \`${session.id}\`, message: \"[Subconscious] ...\", noFurtherAssistantReply: true}).`,
+      },
+      {
+        text: this.formatSubconsciousRecentContext(session),
+      },
+    ], 'background');
+
+    await sessionManager.markSubconsciousTriggered(session.id);
+  }
+
   private async maybeQueueChildReminder(session: Session): Promise<void> {
     if (!session.parentSessionId || session.history.length === 0) {
       return;
@@ -357,8 +475,8 @@ export class MessageRouter {
     // When allow-all-group-members is enabled, keep command access for directly
     // authorized users only. Other group members may chat normally but cannot use
     // slash commands.
-    if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(ctx.platform, ctx.channelUserId)
-      && !this.isDirectlyAuthorized(ctx.platform, ctx.channelUserId, ctx.senderId)) {
+    if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(getChannelId(ctx), getConversationId(ctx))
+      && !this.isDirectlyAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
       return false;
     }
 
@@ -383,9 +501,9 @@ export class MessageRouter {
   }
 
   private async resolveSessionForIncomingMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session }> {
-    let sessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId);
+    let sessionId = sessionManager.getSessionByChannel(getChannelId(ctx), getConversationId(ctx));
     if (!sessionId) {
-      sessionId = sessionManager.attachChannel(ctx.platform, ctx.channelUserId);
+      sessionId = sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx));
     }
 
     const session = await sessionManager.getSession(sessionId);
@@ -410,7 +528,7 @@ export class MessageRouter {
 
     const broadcast = session.broadcast;
 
-    logger.info({ sessionId, source: options.sourceCtx ? `${options.sourceCtx.platform}:${options.sourceCtx.channelUserId}` : (options.source ? `${options.source.platform}:${options.source.channelUserId}` : 'session-event'), partCount: options.parts.length }, 'Session turn processing');
+    logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.parts.length }, 'Session turn processing');
 
     try {
       if (options.sendTyping && options.sourceCtx) {
@@ -549,6 +667,7 @@ export class MessageRouter {
       await this.maybeQueueChildReminder(session);
       await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted);
       await this.maybeAppendTodoEndTurnReminder(session);
+      await this.maybeTriggerSubconscious(session, options.parts, options.sourceCtx, options.source);
       await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
     } catch (e: any) {
       logger.error(e, 'Error handling message');
@@ -557,6 +676,7 @@ export class MessageRouter {
       await this.maybeQueueChildReminder(session);
       await this.sendSessionError(session, options.sourceCtx, e);
       await this.maybeAppendTodoEndTurnReminder(session);
+      await this.maybeTriggerSubconscious(session, options.parts, options.sourceCtx, options.source);
     } finally {
       if (await this.continueWithQueuedWork(session)) {
         return;
@@ -572,10 +692,13 @@ export class MessageRouter {
     this.commandHandler = handler;
   }
 
-  private isDirectlyAuthorized(platform: string, channelUserId: string, senderId?: string): boolean {
+  private isDirectlyAuthorized(channelId: string, channelType: string, conversationId: string, senderId?: string): boolean {
     const inspection = inspectChannelAuthorizationFromContext({
-      platform,
-      channelUserId,
+      channelId,
+      channelType,
+      platform: channelType,
+      channelUserId: conversationId,
+      conversationId,
       senderId,
       reply: async () => {},
       sendTyping: async () => {},
@@ -583,11 +706,11 @@ export class MessageRouter {
     return inspection.platformAlwaysAuthorized || inspection.wildcardAuthorized || inspection.directAuthorized;
   }
 
-  isAuthorized(platform: string, channelUserId: string, senderId?: string): boolean {
-    if (this.isDirectlyAuthorized(platform, channelUserId, senderId)) return true;
+  isAuthorized(channelId: string, channelType: string, conversationId: string, senderId?: string): boolean {
+    if (this.isDirectlyAuthorized(channelId, channelType, conversationId, senderId)) return true;
     
     // Check if channel allows all group members
-    if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(platform, channelUserId)) {
+    if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(channelId, conversationId)) {
       return true;
     }
 
@@ -600,7 +723,7 @@ export class MessageRouter {
   }
 
   async handleMessage(ctx: ChannelContext, message: ChannelMessage): Promise<void> {
-    if (!this.isAuthorized(ctx.platform, ctx.channelUserId, ctx.senderId)) {
+    if (!this.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
       await ctx.reply(this.buildUnauthorizedMessage(ctx));
       return;
     }
@@ -612,15 +735,17 @@ export class MessageRouter {
 
     const { sessionId, session } = await this.resolveSessionForIncomingMessage(ctx);
 
-    if (ctx.platform !== 'internal') {
+    if (getChannelType(ctx) !== 'internal') {
       session.meta.lastChannel = {
-        platform: ctx.platform,
-        channelUserId: ctx.channelUserId,
+        channelId: getChannelId(ctx),
+        channelType: getChannelType(ctx),
+        channelUserId: getConversationId(ctx),
+        conversationId: getConversationId(ctx),
       };
     }
 
     if (session.busy) {
-      logger.info({ platform: ctx.platform, user: ctx.username }, 'Session busy, queueing message');
+      logger.info({ channelId: getChannelId(ctx), channelType: getChannelType(ctx), user: ctx.username }, 'Session busy, queueing message');
       await sessionManager.enqueueSessionItem(sessionId, {
         type: 'user',
         source: this.snapshotSource(ctx),

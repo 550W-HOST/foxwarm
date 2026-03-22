@@ -1,13 +1,13 @@
-import { ChannelContext } from './channel';
-import { readAppConfigFile } from './config';
+import { ChannelContext, getChannelId, getChannelType, getConversationId } from './channel';
+import { getChannelConfigById, readAppConfigFile } from './config';
 import * as sessionManager from './sessionManager';
 
 export type ChannelAuthorizationInspection = {
-  platform: string;
-  channelUserId: string;
+  channelId: string;
+  channelType: string;
+  conversationId: string;
   senderId?: string;
   username?: string;
-  channelId: string;
   effectiveAuthId: string;
   authorized: boolean;
   directAuthorized: boolean;
@@ -24,75 +24,75 @@ function dedupe(values: Array<string | undefined>): string[] {
   return Array.from(new Set(values.map(value => value?.trim()).filter((value): value is string => Boolean(value))));
 }
 
-function getPlatformAllowlist(platform: string): { allowedUsers: string[]; allowAllUsers: boolean; source: string } {
+function getChannelAllowlist(channelId: string, channelType: string): { allowedUsers: string[]; allowAllUsers: boolean; source: string } {
   const appConfig = readAppConfigFile();
-  switch (platform) {
-    case 'telegram': {
-      const config = appConfig.channels?.telegram;
+  const entry = getChannelConfigById(channelId, appConfig);
+  const config = (entry?.config || {}) as Record<string, any>;
+
+  switch (channelType) {
+    case 'telegram':
       return {
-        allowedUsers: dedupe([config?.mainAttachUser, ...(config?.allowedUsers || [])]),
+        allowedUsers: dedupe([config.mainAttachUser, ...(config.allowedUsers || [])]),
         allowAllUsers: false,
-        source: 'channels.telegram.allowedUsers',
+        source: `channels.${channelId}.allowedUsers`,
       };
-    }
-    case 'matrix': {
-      const config = appConfig.channels?.matrix;
+    case 'matrix':
       return {
-        allowedUsers: dedupe([config?.botUserId, ...(config?.allowedUsers || [])]),
+        allowedUsers: dedupe([config.botUserId, ...(config.allowedUsers || [])]),
         allowAllUsers: false,
-        source: 'channels.matrix.allowedUsers',
+        source: `channels.${channelId}.allowedUsers`,
       };
-    }
-    case 'wework': {
-      const config = appConfig.channels?.wework;
+    case 'wework':
       return {
-        allowedUsers: dedupe(config?.allowedUsers || []),
+        allowedUsers: dedupe(config.allowedUsers || []),
         allowAllUsers: false,
-        source: 'channels.wework.allowedUsers',
+        source: `channels.${channelId}.allowedUsers`,
       };
-    }
-    case 'weixin': {
-      const config = appConfig.channels?.weixin;
+    case 'weixin':
       return {
-        allowedUsers: dedupe(config?.allowedUsers || []),
-        allowAllUsers: Boolean(config?.allowAllUsers),
-        source: 'channels.weixin.allowedUsers',
+        allowedUsers: dedupe(config.allowedUsers || []),
+        allowAllUsers: Boolean(config.allowAllUsers),
+        source: `channels.${channelId}.allowedUsers`,
       };
-    }
     default:
       return {
-        allowedUsers: [],
-        allowAllUsers: false,
-        source: 'not-configurable',
+        allowedUsers: dedupe(config.allowedUsers || []),
+        allowAllUsers: Boolean(config.allowAllUsers),
+        source: entry ? `channels.${channelId}.allowedUsers` : 'not-configurable',
       };
   }
 }
 
 export function inspectChannelAuthorization(params: {
   platform: string;
+  channelId?: string;
+  channelType?: string;
   channelUserId: string;
+  conversationId?: string;
   senderId?: string;
   username?: string;
   startupAuthorizedUsers?: Iterable<string>;
 }): ChannelAuthorizationInspection {
-  const { platform, channelUserId, senderId, username, startupAuthorizedUsers } = params;
-  const channelId = `${platform}:${channelUserId}`;
-  const effectiveAuthId = (senderId || channelUserId || '').trim();
+  const channelType = params.channelType || params.platform;
+  const channelId = params.channelId || params.platform;
+  const conversationId = params.conversationId || params.channelUserId;
+  const { senderId, username, startupAuthorizedUsers } = params;
+  const effectiveAuthId = (senderId || conversationId || '').trim();
   const startupSet = startupAuthorizedUsers ? new Set(startupAuthorizedUsers) : new Set<string>();
-  const { allowedUsers, allowAllUsers, source } = getPlatformAllowlist(platform);
-  const dangerouslyAllowAllGroupMembers = sessionManager.getChannelDangerouslyAllowAllGroupMembers(platform, channelUserId);
-  const platformAlwaysAuthorized = platform === 'internal' || platform === 'webui' || platform === 'tui';
-  const wildcardAuthorized = startupSet.has(`${platform}:*`) || allowAllUsers;
-  const directAuthorized = startupSet.has(`${platform}:${effectiveAuthId}`) || allowedUsers.includes(effectiveAuthId);
+  const { allowedUsers, allowAllUsers, source } = getChannelAllowlist(channelId, channelType);
+  const dangerouslyAllowAllGroupMembers = sessionManager.getChannelDangerouslyAllowAllGroupMembers(channelId, conversationId);
+  const platformAlwaysAuthorized = channelType === 'internal' || channelType === 'webui' || channelType === 'tui';
+  const wildcardAuthorized = startupSet.has(`${channelId}:*`) || startupSet.has(`${channelType}:*`) || allowAllUsers;
+  const directAuthorized = startupSet.has(`${channelId}:${effectiveAuthId}`) || startupSet.has(`${channelType}:${effectiveAuthId}`) || allowedUsers.includes(effectiveAuthId);
   const channelOverrideAuthorized = dangerouslyAllowAllGroupMembers;
   const authorized = platformAlwaysAuthorized || wildcardAuthorized || directAuthorized || channelOverrideAuthorized;
 
   return {
-    platform,
-    channelUserId,
+    channelId,
+    channelType,
+    conversationId,
     senderId,
     username,
-    channelId,
     effectiveAuthId,
     authorized,
     directAuthorized,
@@ -111,9 +111,23 @@ function toYamlSnippet(platform: string, authId: string): string {
   return [
     'channels:',
     `  ${platform}:`,
+    platform !== 'telegram' && platform !== 'matrix' && platform !== 'wework' && platform !== 'weixin' ? undefined : undefined,
     '    allowedUsers:',
     `      - "${escaped}"`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
+}
+
+function toChannelYamlSnippet(channelId: string, channelType: string, authId: string): string {
+  const escapedChannelId = channelId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const escapedType = channelType.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const escapedAuth = authId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return [
+    'channels:',
+    `  ${escapedChannelId}:`,
+    channelId !== channelType ? `    type: ${escapedType}` : undefined,
+    '    allowedUsers:',
+    `      - "${escapedAuth}"`,
+  ].filter(Boolean).join('\n');
 }
 
 export function formatAuthorizationInspection(
@@ -126,14 +140,15 @@ export function formatAuthorizationInspection(
     : (inspection.allowedUsers.length > 0 ? inspection.allowedUsers.map(value => `\`${value}\``).join(', ') : 'none');
 
   if (options.unauthorized) {
-    const userLabel = inspection.senderId && inspection.senderId !== inspection.channelUserId
+    const userLabel = inspection.senderId && inspection.senderId !== inspection.conversationId
       ? `senderId: \`${inspection.senderId}\`\n- userId: \`${inspection.effectiveAuthId}\``
-      : `userId: \`${inspection.effectiveAuthId || inspection.channelUserId || '(empty)'}\``;
+      : `userId: \`${inspection.effectiveAuthId || inspection.conversationId || '(empty)'}\``;
 
     const lines = [
       title,
       '',
       `- channelId: \`${inspection.channelId}\``,
+      `- channelType: \`${inspection.channelType}\``,
       `- ${userLabel}`,
     ];
 
@@ -147,14 +162,14 @@ export function formatAuthorizationInspection(
         '',
         'Authorize this user by adding it to config.yaml:',
         '```yaml',
-        toYamlSnippet(inspection.platform, inspection.effectiveAuthId),
+        toChannelYamlSnippet(inspection.channelId, inspection.channelType, inspection.effectiveAuthId),
         '```'
       );
     } else {
       lines.push('', 'Authorize this sender by adding the current user id to the platform allowlist in config.yaml.');
     }
 
-    if (inspection.senderId && inspection.senderId !== inspection.channelUserId) {
+    if (inspection.senderId && inspection.senderId !== inspection.conversationId) {
       lines.push('', 'Tip: for this platform, use the sender/user id above for allowlist matching, not the channel id.');
     }
 
@@ -164,9 +179,9 @@ export function formatAuthorizationInspection(
   const lines = [
     title,
     '',
-    `- platform: \`${inspection.platform}\``,
     `- channelId: \`${inspection.channelId}\``,
-    `- channelUserId: \`${inspection.channelUserId || '(empty)'}\``,
+    `- channelType: \`${inspection.channelType}\``,
+    `- conversationId: \`${inspection.conversationId || '(empty)'}\``,
     `- senderId: \`${inspection.senderId || '(none)'}\``,
     `- effectiveAuthId: \`${inspection.effectiveAuthId || '(empty)'}\``,
   ];
@@ -195,11 +210,11 @@ export function formatAuthorizationInspection(
   }
 
   if (!inspection.platformAlwaysAuthorized && inspection.effectiveAuthId) {
-    lines.push('', 'Add this sender to config.yaml:', '```yaml', toYamlSnippet(inspection.platform, inspection.effectiveAuthId), '```');
+    lines.push('', 'Add this sender to config.yaml:', '```yaml', toChannelYamlSnippet(inspection.channelId, inspection.channelType, inspection.effectiveAuthId), '```');
   }
 
-  if (inspection.senderId && inspection.senderId !== inspection.channelUserId) {
-    lines.push('', 'Note: this message is authorized by `senderId` first; `channelUserId` is only used when `senderId` is absent.');
+  if (inspection.senderId && inspection.senderId !== inspection.conversationId) {
+    lines.push('', 'Note: this message is authorized by `senderId` first; `conversationId` is only used when `senderId` is absent.');
   }
 
   return lines.join('\n');
@@ -210,8 +225,11 @@ export function inspectChannelAuthorizationFromContext(
   startupAuthorizedUsers?: Iterable<string>
 ): ChannelAuthorizationInspection {
   return inspectChannelAuthorization({
-    platform: ctx.platform,
-    channelUserId: ctx.channelUserId,
+    platform: getChannelType(ctx),
+    channelId: getChannelId(ctx),
+    channelType: getChannelType(ctx),
+    channelUserId: getConversationId(ctx),
+    conversationId: getConversationId(ctx),
     senderId: ctx.senderId,
     username: ctx.username,
     startupAuthorizedUsers,
