@@ -97,9 +97,20 @@ export function registerChannel(platform: string, channel: Channel): void {
   channelInstances.set(platform, channel);
 }
 
+export function unregisterChannel(platform: string): void {
+  channelInstances.delete(platform);
+}
+
 /**
  * Get a registered channel instance
  */
 export function getChannelInstance(platform: string): Channel | undefined {
   return channelInstances.get(platform);
+}
+
+export function listRegisteredChannels(): Array<{ platform: string; name: string }> {
+  return Array.from(channelInstances.entries()).map(([platform, channel]) => ({
+    platform,
+    name: channel.name,
+  }));
 }

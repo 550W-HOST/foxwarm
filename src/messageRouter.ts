@@ -4,6 +4,7 @@
 
 import { logger } from './common';
 import { ChannelContext, ChannelMessage } from './channel';
+import { formatAuthorizationInspection, inspectChannelAuthorizationFromContext } from './channelAuth';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
 import { maybeBuildTodoEndTurnReminderMessage } from './session/todo';
 import * as sessionManager from './sessionManager';
@@ -572,11 +573,14 @@ export class MessageRouter {
   }
 
   private isDirectlyAuthorized(platform: string, channelUserId: string, senderId?: string): boolean {
-    if (platform === 'internal') return true;
-    if (platform === 'webui') return true;
-
-    const checkId = senderId || channelUserId;
-    return this.authorizedUsers.has(`${platform}:${checkId}`);
+    const inspection = inspectChannelAuthorizationFromContext({
+      platform,
+      channelUserId,
+      senderId,
+      reply: async () => {},
+      sendTyping: async () => {},
+    }, this.authorizedUsers.keys());
+    return inspection.platformAlwaysAuthorized || inspection.wildcardAuthorized || inspection.directAuthorized;
   }
 
   isAuthorized(platform: string, channelUserId: string, senderId?: string): boolean {
@@ -590,9 +594,14 @@ export class MessageRouter {
     return false;
   }
 
+  buildUnauthorizedMessage(ctx: ChannelContext): string {
+    const inspection = inspectChannelAuthorizationFromContext(ctx, this.authorizedUsers.keys());
+    return formatAuthorizationInspection(inspection, { unauthorized: true });
+  }
+
   async handleMessage(ctx: ChannelContext, message: ChannelMessage): Promise<void> {
     if (!this.isAuthorized(ctx.platform, ctx.channelUserId, ctx.senderId)) {
-      await ctx.reply('Unauthorized');
+      await ctx.reply(this.buildUnauthorizedMessage(ctx));
       return;
     }
 

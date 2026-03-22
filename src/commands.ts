@@ -2,6 +2,8 @@ import fs from 'fs-extra'
 import path from 'path'
 import crypto from 'crypto'
 import { ChannelContext } from './channel'
+import { inspectChannelAuthorizationFromContext, formatAuthorizationInspection } from './channelAuth'
+import { getManagedChannelPlatforms, getChannelRuntimeStatus, listChannelRuntimeStatuses, restartManagedChannel, startManagedChannel, stopManagedChannel } from './channelRuntime'
 import { nodesManager } from './nodes/manager'
 import { approvePendingPairing, listApprovedNodes, listPendingPairings, rejectPendingPairing } from './nodes/registry'
 import { Session } from './types'
@@ -9,9 +11,10 @@ import * as sessionManager from './sessionManager'
 import * as skills from './skills'
 import * as tools from './tools'
 import { estimateSessionTokens } from './tokenCount'
-import { AGENTS_DIR, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, HTTP_PORT, NODE_TOKEN_FILE, resolveModelConfig } from './config'
+import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, HTTP_PORT, NODE_TOKEN_FILE, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
+import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api'
 
 export type CommandDef = {
   description: string
@@ -312,6 +315,20 @@ const VERBOSE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 ]
 
 const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('info', 'Show current channel identifiers and attachment state'),
+  literalNode('auth', 'Show current channel authorization diagnostics'),
+  literalNode('status', 'Show runtime channel status', {
+    children: [placeholderNode('[platform]', 'Optional platform, e.g. weixin')],
+  }),
+  literalNode('start', 'Start a managed channel without restarting foxwarm', {
+    children: [placeholderNode('<platform>', 'Managed platform, e.g. weixin')],
+  }),
+  literalNode('stop', 'Stop a managed channel', {
+    children: [placeholderNode('<platform>', 'Managed platform, e.g. weixin')],
+  }),
+  literalNode('restart', 'Restart a managed channel', {
+    children: [placeholderNode('<platform>', 'Managed platform, e.g. weixin')],
+  }),
   literalNode('mode', 'Set channel mode', {
     children: [
       literalNode('push-only', 'Only accept direct/push-style messages'),
@@ -325,6 +342,45 @@ const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
     ],
   }),
 ]
+
+function formatChannelInfo(ctx: ChannelContext): string {
+  const sessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId)
+  const channelConfig = sessionManager.getChannelConfig(ctx.platform, ctx.channelUserId)
+  const runtimeStatus = getChannelRuntimeStatus(ctx.platform)
+  return [
+    '*Channel info*',
+    `- platform: \`${ctx.platform}\``,
+    `- channelId: \`${ctx.platform}:${ctx.channelUserId}\``,
+    `- channelUserId: \`${ctx.channelUserId}\``,
+    `- senderId: \`${ctx.senderId || '(none)'}\``,
+    ctx.username ? `- username: \`${ctx.username}\`` : undefined,
+    `- attachedSession: \`${sessionId || '(none)'}\``,
+    `- mode: \`${channelConfig?.mode || 'normal'}\``,
+    `- dangerouslyAllowAllGroupMembers: \`${channelConfig?.dangerouslyAllowAllGroupMembers ? 'yes' : 'no'}\``,
+    runtimeStatus ? `- runtime: \`${runtimeStatus.running ? 'running' : 'stopped'}\`` : undefined,
+  ].filter(Boolean).join('\n')
+}
+
+function formatChannelRuntimeStatus(platform?: string): string {
+  const statuses = platform ? [getChannelRuntimeStatus(platform)].filter(Boolean) : listChannelRuntimeStatuses()
+  if (statuses.length === 0) {
+    return 'No known channel runtime status found.'
+  }
+
+  return [
+    '*Channel runtime status*',
+    ...statuses.map(status => {
+      const detailSuffix = status.details.length > 0 ? `; ${status.details.join('; ')}` : ''
+      const errorSuffix = status.lastError ? `; lastError=${status.lastError}` : ''
+      return `- \`${status.platform}\`: running=\`${status.running ? 'yes' : 'no'}\`, managed=\`${status.managed ? 'yes' : 'no'}\`, configured=\`${status.configured ? 'yes' : 'no'}\`, enabled=\`${status.enabled ? 'yes' : 'no'}\`${detailSuffix}${errorSuffix}`
+    }),
+  ].join('\n')
+}
+
+function getManagedPlatformHelp(): string {
+  const platforms = getManagedChannelPlatforms()
+  return platforms.length > 0 ? platforms.join(', ') : '(none)'
+}
 
 const SEARCH_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('--session', 'Restrict search to one session in your allowed scope', {
@@ -2010,17 +2066,196 @@ export const COMMANDS: Record<string, CommandDef> = {
       }
     }
   },
+  '/weixin': {
+    description: 'Manage foxwarm-native Weixin channel MVP. `args: status|login|wait <sessionKey>`',
+    requiresSession: false,
+    handler: async (ctx, args) => {
+      const subcommand = args[0]?.toLowerCase() || 'status'
+      const weixinConfig = readAppConfigFile().channels?.weixin || WEIXIN_CONFIG || {}
+      const baseUrl = (weixinConfig.baseUrl || DEFAULT_WEIXIN_BASE_URL).trim()
+      const routeTag = weixinConfig.routeTag?.trim() || undefined
+      const loginBotType = weixinConfig.loginBotType?.trim() || DEFAULT_WEIXIN_LOGIN_BOT_TYPE
+
+      if (subcommand === 'status') {
+        const tokenState = weixinConfig.token?.trim() ? 'configured' : 'missing'
+        const allowMode = weixinConfig.allowAllUsers ? 'all users' : ((weixinConfig.allowedUsers || []).length > 0 ? (weixinConfig.allowedUsers || []).join(', ') : 'none')
+        const runtimeStatus = getChannelRuntimeStatus('weixin')
+        ctx.reply(
+          [
+            '*Weixin channel MVP status*',
+            `- config: \`${APP_CONFIG_PATH}\``,
+            `- enabled: \`${weixinConfig.enabled === false ? 'false' : 'true/auto'}\``,
+            `- baseUrl: \`${baseUrl}\``,
+            `- token: \`${tokenState}\``,
+            `- routeTag: \`${routeTag || 'unset'}\``,
+            `- allow: \`${allowMode}\``,
+            runtimeStatus ? `- runtime: \`${runtimeStatus.running ? 'running' : 'stopped'}\`` : undefined,
+            '',
+            'Usage:',
+            '- `/weixin login`',
+            '- `/weixin wait <sessionKey>`',
+            '- `/channel start weixin`',
+          ].filter(Boolean).join('\n')
+        )
+        return
+      }
+
+      if (subcommand === 'login') {
+        try {
+          const result = await startWeixinQrLogin({
+            baseUrl,
+            botType: loginBotType,
+            routeTag,
+          })
+          ctx.reply(
+            [
+              '✅ Weixin QR login started.',
+              `- sessionKey: \`${result.sessionKey}\``,
+              result.qrcodeUrl ? `- qrcodeUrl: ${result.qrcodeUrl}` : '- qrcodeUrl: (none)',
+              '',
+              'After scanning, run:',
+              `\`/weixin wait ${result.sessionKey}\``,
+            ].join('\n')
+          )
+        } catch (e: any) {
+          const cause = e?.cause
+          const causeText = cause?.message ? ` (${cause.message}${cause?.code ? `; code=${cause.code}` : ''})` : ''
+          ctx.reply(`❌ Failed to start Weixin login: ${e.message}${causeText}`)
+        }
+        return
+      }
+
+      if (subcommand === 'wait') {
+        const sessionKey = args[1]?.trim()
+        if (!sessionKey) {
+          ctx.reply('Usage: /weixin wait <sessionKey>')
+          return
+        }
+
+        try {
+          const result = await waitForWeixinQrLogin({
+            sessionKey,
+            baseUrl,
+            routeTag,
+            timeoutMs: 60_000,
+          })
+
+          if (!result.connected || !result.botToken) {
+            ctx.reply(`⏳ ${result.message}`)
+            return
+          }
+
+          const current = readAppConfigFile()
+          const next = {
+            ...current,
+            channels: {
+              ...(current.channels || {}),
+              weixin: {
+                ...(current.channels?.weixin || {}),
+                enabled: true,
+                baseUrl: result.baseUrl || baseUrl,
+                token: result.botToken,
+                routeTag,
+              },
+            },
+          }
+          writeAppConfigFile(next)
+
+          let runtimeNote = 'Weixin channel config updated; channel start not attempted.'
+          try {
+            const runtimeResult = await restartManagedChannel('weixin')
+            runtimeNote = runtimeResult.status.running
+              ? 'Weixin channel started immediately; no foxwarm restart needed.'
+              : 'Weixin channel config updated, but runtime status is still stopped.'
+          } catch (runtimeError: any) {
+            runtimeNote = `Weixin config updated, but runtime start failed: ${runtimeError?.message || String(runtimeError)}`
+          }
+
+          ctx.reply(
+            [
+              '✅ Weixin login completed and config file updated.',
+              `- config: \`${APP_CONFIG_PATH}\``,
+              `- baseUrl: \`${result.baseUrl || baseUrl}\``,
+              result.userId ? `- ownerUserId: \`${result.userId}\`` : undefined,
+              `- runtime: ${runtimeNote}`,
+              '',
+              'You can also inspect runtime state with `/channel status weixin`.',
+            ].filter(Boolean).join('\n')
+          )
+        } catch (e: any) {
+          ctx.reply(`❌ Failed while waiting for Weixin login: ${e.message}`)
+        }
+        return
+      }
+
+      ctx.reply('Usage: /weixin status\n       /weixin login\n       /weixin wait <sessionKey>')
+    }
+  },
   '/channel': {
-    description: 'Manage channel settings. `args: mode <push-only|normal>`',
+    description: 'Manage channel settings and channel runtime. `args: info|auth|status|start|stop|restart|mode ...`',
     requiresSession: false,
     autocomplete: { children: CHANNEL_AUTOCOMPLETE },
     handler: async (ctx, args) => {
       if (args.length === 0) {
-        ctx.reply('Usage: /channel mode <push-only|normal>\n       /channel dangerously-allow-all-group-members <yes|no>')
+        ctx.reply([
+          'Usage: /channel info',
+          '       /channel auth',
+          '       /channel status [platform]',
+          '       /channel start <platform>',
+          '       /channel stop <platform>',
+          '       /channel restart <platform>',
+          '       /channel mode <push-only|normal>',
+          '       /channel dangerously-allow-all-group-members <yes|no>',
+        ].join('\n'))
         return
       }
 
       const subcommand = args[0].toLowerCase()
+
+      if (subcommand === 'info') {
+        ctx.reply(formatChannelInfo(ctx))
+        return
+      }
+
+      if (subcommand === 'auth') {
+        const inspection = inspectChannelAuthorizationFromContext(ctx)
+        ctx.reply(formatAuthorizationInspection(inspection, { title: '*Channel authorization diagnostics*' }))
+        return
+      }
+
+      if (subcommand === 'status') {
+        const platform = args[1]?.trim() || undefined
+        ctx.reply(formatChannelRuntimeStatus(platform))
+        return
+      }
+
+      if (subcommand === 'start' || subcommand === 'stop' || subcommand === 'restart') {
+        const platform = args[1]?.trim()
+        if (!platform) {
+          ctx.reply(`Usage: /channel ${subcommand} <platform>\nManaged platforms: ${getManagedPlatformHelp()}`)
+          return
+        }
+
+        try {
+          if (subcommand === 'start') {
+            const result = await startManagedChannel(platform)
+            ctx.reply(`✅ Channel \`${platform}\` ${result.started ? 'started' : 'was already running'}.\n${formatChannelRuntimeStatus(platform)}`)
+            return
+          }
+
+          if (subcommand === 'stop') {
+            const result = await stopManagedChannel(platform)
+            ctx.reply(`✅ Channel \`${platform}\` ${result.stopped ? 'stopped' : 'was already stopped'}.\n${formatChannelRuntimeStatus(platform)}`)
+            return
+          }
+
+          const result = await restartManagedChannel(platform)
+          ctx.reply(`✅ Channel \`${platform}\` restarted.\n${formatChannelRuntimeStatus(platform)}`)
+        } catch (e: any) {
+          ctx.reply(`❌ Failed to ${subcommand} channel: ${e.message}`)
+        }
+        return
+      }
       
       if (subcommand === 'mode') {
         if (args.length < 2) {
@@ -2064,7 +2299,17 @@ export const COMMANDS: Record<string, CommandDef> = {
           ctx.reply(`❌ Failed to set dangerouslyAllowAllGroupMembers: ${e.message}`)
         }
       } else {
-        ctx.reply('Unknown subcommand. Usage: /channel mode <push-only|normal>\n       /channel dangerously-allow-all-group-members <yes|no>')
+        ctx.reply([
+          'Unknown subcommand. Usage:',
+          '/channel info',
+          '/channel auth',
+          '/channel status [platform]',
+          '/channel start <platform>',
+          '/channel stop <platform>',
+          '/channel restart <platform>',
+          '/channel mode <push-only|normal>',
+          '/channel dangerously-allow-all-group-members <yes|no>',
+        ].join('\n'))
       }
     }
   }
