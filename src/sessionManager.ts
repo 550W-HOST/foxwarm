@@ -27,7 +27,7 @@ function systemPart(system: string): MessagePart {
 }
 
 const SUBCONSCIOUS_SESSION_KIND = 'subconscious';
-const SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES = 6;
+const SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES = 4;
 const SUBCONSCIOUS_TRIGGER_COOLDOWN_MS = 5 * 60 * 1000;
 const SUBCONSCIOUS_RECENT_WINDOW_MESSAGES = 12;
 const SUBCONSCIOUS_MIN_COMPACT_THRESHOLD_TOKENS = 4000;
@@ -827,10 +827,10 @@ export async function markSubconsciousTriggered(primarySessionId: string): Promi
   await saveSession(primarySessionId);
 }
 
-export async function incrementSubconsciousPending(primarySessionId: string): Promise<{ pendingMessageCount: number; sideSessionId?: string; triggerEveryMessages: number; triggerCooldownMs: number; lastTriggeredAt?: number; enabled: boolean; }> {
+export async function incrementSubconsciousPending(primarySessionId: string, amount: number = 1): Promise<{ pendingMessageCount: number; sideSessionId?: string; triggerEveryMessages: number; triggerCooldownMs: number; lastTriggeredAt?: number; enabled: boolean; }> {
   const primarySession = await getSession(primarySessionId);
   const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  meta.pendingMessageCount = (meta.pendingMessageCount || 0) + 1;
+  meta.pendingMessageCount = Math.max(0, (meta.pendingMessageCount || 0) + amount);
   meta.triggerEveryMessages = meta.triggerEveryMessages || SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES;
   meta.triggerCooldownMs = meta.triggerCooldownMs || SUBCONSCIOUS_TRIGGER_COOLDOWN_MS;
   await saveSession(primarySessionId);
