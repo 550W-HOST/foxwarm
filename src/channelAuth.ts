@@ -125,6 +125,42 @@ export function formatAuthorizationInspection(
     ? 'all users'
     : (inspection.allowedUsers.length > 0 ? inspection.allowedUsers.map(value => `\`${value}\``).join(', ') : 'none');
 
+  if (options.unauthorized) {
+    const userLabel = inspection.senderId && inspection.senderId !== inspection.channelUserId
+      ? `senderId: \`${inspection.senderId}\`\n- userId: \`${inspection.effectiveAuthId}\``
+      : `userId: \`${inspection.effectiveAuthId || inspection.channelUserId || '(empty)'}\``;
+
+    const lines = [
+      title,
+      '',
+      `- channelId: \`${inspection.channelId}\``,
+      `- ${userLabel}`,
+    ];
+
+    if (inspection.platformAlwaysAuthorized) {
+      lines.push('', 'This platform is normally trusted internally, so if you still saw this message please check the current request path/session state.');
+      return lines.join('\n');
+    }
+
+    if (inspection.effectiveAuthId) {
+      lines.push(
+        '',
+        'Authorize this user by adding it to config.yaml:',
+        '```yaml',
+        toYamlSnippet(inspection.platform, inspection.effectiveAuthId),
+        '```'
+      );
+    } else {
+      lines.push('', 'Authorize this sender by adding the current user id to the platform allowlist in config.yaml.');
+    }
+
+    if (inspection.senderId && inspection.senderId !== inspection.channelUserId) {
+      lines.push('', 'Tip: for this platform, use the sender/user id above for allowlist matching, not the channel id.');
+    }
+
+    return lines.join('\n');
+  }
+
   const lines = [
     title,
     '',
