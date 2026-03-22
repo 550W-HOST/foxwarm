@@ -31,6 +31,17 @@ export type WeWorkConfig = {
   allowedUsers?: string[];
 };
 
+export type WeixinConfig = {
+  enabled?: boolean;
+  baseUrl?: string;
+  token?: string;
+  routeTag?: string;
+  allowedUsers?: string[];
+  allowAllUsers?: boolean;
+  longPollTimeoutMs?: number;
+  loginBotType?: string;
+};
+
 export type AsrServiceConfig = {
   enabled?: boolean;
   url?: string;
@@ -66,6 +77,7 @@ export type AppConfig = {
     telegram?: TelegramConfig;
     matrix?: MatrixConfig;
     wework?: WeWorkConfig;
+    weixin?: WeixinConfig;
   };
   asrService?: AsrServiceConfig;
 };
@@ -162,6 +174,7 @@ function buildConfigFromLegacyEnv(source: Record<string, string | undefined>): A
   const telegramAllowed = parseList(source.TELEGRAM_ALLOWED_USERS) || (source.ALLOWED_USER_ID ? [source.ALLOWED_USER_ID] : undefined);
   const matrixAllowed = parseList(source.MATRIX_ALLOWED_USERS);
   const weworkAllowed = parseList(source.WEWORK_ALLOWED_USERS);
+  const weixinAllowed = parseList(source.WEIXIN_ALLOWED_USERS);
 
   const config: AppConfig = {
     bot: {
@@ -211,6 +224,16 @@ function buildConfigFromLegacyEnv(source: Record<string, string | undefined>): A
         listenPath: source.WEWORK_LISTEN_PATH,
         allowedUsers: weworkAllowed,
       },
+      weixin: {
+        enabled: source.WEIXIN_TOKEN ? true : undefined,
+        baseUrl: source.WEIXIN_BASE_URL,
+        token: source.WEIXIN_TOKEN,
+        routeTag: source.WEIXIN_ROUTE_TAG,
+        allowedUsers: weixinAllowed,
+        allowAllUsers: parseBoolean(source.WEIXIN_ALLOW_ALL_USERS),
+        longPollTimeoutMs: parseNumber(source.WEIXIN_LONG_POLL_TIMEOUT_MS),
+        loginBotType: source.WEIXIN_LOGIN_BOT_TYPE,
+      },
     },
     asrService: {
       enabled: parseBoolean(source.ENABLE_ASR_SERVICE),
@@ -249,7 +272,7 @@ function migrateLegacyEnvIfNeeded(): void {
   fs.writeFileSync(APP_CONFIG_PATH, yaml.dump(migrated, { noRefs: true, lineWidth: 120 }), 'utf8');
 }
 
-function loadAppConfig(): AppConfig {
+export function readAppConfigFile(): AppConfig {
   migrateLegacyEnvIfNeeded();
 
   if (!fs.existsSync(APP_CONFIG_PATH)) {
@@ -258,6 +281,19 @@ function loadAppConfig(): AppConfig {
 
   const parsed = yaml.load(fs.readFileSync(APP_CONFIG_PATH, 'utf8')) as AppConfig | undefined;
   return parsed || {};
+}
+
+function loadAppConfig(): AppConfig {
+  return readAppConfigFile();
+}
+
+export function writeAppConfigFile(config: AppConfig): void {
+  fs.ensureDirSync(path.dirname(APP_CONFIG_PATH));
+  fs.writeFileSync(
+    APP_CONFIG_PATH,
+    yaml.dump(cleanupUndefinedDeep(config), { noRefs: true, lineWidth: 120 }),
+    'utf8'
+  );
 }
 
 function resolvePathValue(value: string | undefined, fallback: string): string {
@@ -271,6 +307,7 @@ export const ENABLE_TUI = APP_CONFIG.bot?.enableTUI === true || process.argv.inc
 export const TELEGRAM_CONFIG: TelegramConfig = APP_CONFIG.channels?.telegram || {};
 export const MATRIX_CONFIG: MatrixConfig = APP_CONFIG.channels?.matrix || {};
 export const WEWORK_CONFIG: WeWorkConfig = APP_CONFIG.channels?.wework || {};
+export const WEIXIN_CONFIG: WeixinConfig = APP_CONFIG.channels?.weixin || {};
 export const ASR_SERVICE_CONFIG: AsrServiceConfig = APP_CONFIG.asrService || {};
 export const OLLAMA_BASE_URL = APP_CONFIG.llm?.ollamaBaseUrl || 'http://localhost:11434';
 

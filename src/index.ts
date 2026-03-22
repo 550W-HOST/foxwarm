@@ -4,6 +4,7 @@ import { MatrixChannel } from './channels/matrixChannel';
 import { WebUIChannel } from './channels/webuiChannel';
 import { TUIChannel } from './channels/tuiChannel';
 import { WeWorkWebhookChannel } from './channels/weworkChannel';
+import { initializeChannelRuntime, startManagedChannel } from './channelRuntime';
 import { MessageRouter } from './messageRouter';
 import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
@@ -29,6 +30,7 @@ import {
     PERSISTENT_MEMORY_DIR,
     TELEGRAM_CONFIG,
     TOKEN_FILE,
+    WEIXIN_CONFIG,
     WEWORK_CONFIG,
 } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
@@ -218,6 +220,7 @@ async function start() {
     const telegramAllowedUsers = TELEGRAM_CONFIG.allowedUsers || [];
     const matrixAllowedUsers = MATRIX_CONFIG.allowedUsers || [];
     const weworkAllowedUsers = WEWORK_CONFIG.allowedUsers || [];
+    const weixinAllowedUsers = WEIXIN_CONFIG.allowedUsers || [];
 
     for (const userId of telegramAllowedUsers) {
         authorizedUsers.push({ platform: 'telegram', userId });
@@ -242,9 +245,20 @@ async function start() {
         authorizedUsers.push({ platform: 'wework', userId: user });
         logger.info({ user }, 'Added WeWork user to whitelist');
     }
+
+    if (WEIXIN_CONFIG.allowAllUsers) {
+        authorizedUsers.push({ platform: 'weixin', userId: '*' });
+        logger.info('Weixin channel configured to allow all users');
+    } else {
+        for (const user of weixinAllowedUsers) {
+            authorizedUsers.push({ platform: 'weixin', userId: user });
+            logger.info({ user }, 'Added Weixin user to whitelist');
+        }
+    }
     
     const router = new MessageRouter(authorizedUsers);
     const commandHandler = new CommandHandler(router);
+    initializeChannelRuntime((ctx, message) => router.handleMessage(ctx, message));
     
     // Set command handler in router and give commandHandler access to router
     router.setCommandHandler((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
@@ -358,6 +372,18 @@ async function start() {
             logger.info('WeWork Webhook channel initialized');
             return weworkChannel;
         }, { retries: 1, delayMs: 3000 });
+    }
+
+    if (WEIXIN_CONFIG.enabled !== false) {
+        if (WEIXIN_CONFIG.token?.trim()) {
+            void startWithRetry('weixin', async () => {
+                const result = await startManagedChannel('weixin');
+                logger.info('Weixin channel initialized');
+                return result.status;
+            }, { retries: 1, delayMs: 3000 });
+        } else if (WEIXIN_CONFIG.baseUrl || WEIXIN_CONFIG.enabled) {
+            logger.info('Weixin channel configured without token; use /weixin login and foxwarm will start it dynamically once config is ready');
+        }
     }
 
     logger.info('Foxwarm started successfully');

@@ -18,7 +18,7 @@ export class CommandHandler {
   async handleCommand(ctx: ChannelContext, command: string, args: string[]): Promise<boolean> {
     // Check authorization
     if (!this.isAuthorized(ctx)) {
-      ctx.reply('Unauthorized');
+      ctx.reply(this.router.buildUnauthorizedMessage(ctx));
       return true;
     }
 
