@@ -1080,7 +1080,7 @@ export const COMMANDS: Record<string, CommandDef> = {
               `Side session: ${status.sideSessionId ? `\`${status.sideSessionId}\`` : 'not created'}`,
               `Pending counted messages: ${status.pendingMessageCount}`,
               `Trigger every: ${status.triggerEveryMessages} counted message(s)`,
-              `Cooldown: ${Math.round(status.triggerCooldownMs / 1000)}s`,
+              'Cooldown: message-based via counted-message reset (no wall-clock cooldown)',
             ]
             if (typeof status.lastTriggeredAt === 'number') {
               lines.push(`Last triggered: ${new Date(status.lastTriggeredAt).toISOString()}`)

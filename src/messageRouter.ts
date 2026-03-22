@@ -451,12 +451,6 @@ export class MessageRouter {
       return false;
     }
 
-    const now = Date.now();
-    if (typeof settings.lastTriggeredAt === 'number' && now - settings.lastTriggeredAt < settings.triggerCooldownMs) {
-      this.scheduleSubconsciousRetry(primarySessionId, settings.triggerCooldownMs - (now - settings.lastTriggeredAt));
-      return false;
-    }
-
     const sideSession = await sessionManager.getExistingSession(settings.sideSessionId);
     if (!sideSession || sideSession.busy || sideSession.queue.length > 0) {
       this.scheduleSubconsciousRetry(primarySessionId, SUBCONSCIOUS_RETRY_BUSY_MS);
