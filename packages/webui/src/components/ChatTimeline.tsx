@@ -358,6 +358,12 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
   return `${text.slice(0, maxLength)}...`
 }
 
+const isLegacyDiffToolName = (name: string): boolean => name === 'edit' || name === 'edit_memory'
+
+const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
+  typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
+)
+
 const renderToolCallPreview = (call: FunctionCall): ReactNode => {
   if (call.name === 'read') {
     const extra = (call.args.startLine || call.args.endLine)
@@ -370,8 +376,8 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
     return <span title={call.args.filePath}>{call.args.filePath}</span>
   }
 
-  if (call.name === 'edit') {
-    const hasLegacyDiff = typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
+  if (isLegacyDiffToolName(call.name)) {
+    const hasLegacyDiff = hasLegacyDiffPayload(call)
     const oldLines = hasLegacyDiff ? call.args.oldText.split('\n').length - (call.args.oldText.endsWith('\n') ? 1 : 0) : 0
     const newLines = hasLegacyDiff ? call.args.newText.split('\n').length - (call.args.newText.endsWith('\n') ? 1 : 0) : 0
     return (
@@ -444,8 +450,8 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     )
   }
 
-  if (call.name === 'edit') {
-    const hasLegacyDiff = typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
+  if (isLegacyDiffToolName(call.name)) {
+    const hasLegacyDiff = hasLegacyDiffPayload(call)
     return hasLegacyDiff ? (
       <div className="space-y-2">
         <div className="text-xs text-gray-600 dark:text-gray-300">{call.args.filePath}</div>
@@ -757,8 +763,8 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
       )
     }
 
-    if (call.name === 'edit') {
-      const hasLegacyDiff = typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
+    if (isLegacyDiffToolName(call.name)) {
+      const hasLegacyDiff = hasLegacyDiffPayload(call)
       const oldLines = hasLegacyDiff ? call.args.oldText.split('\n').length - (call.args.oldText.endsWith('\n') ? 1 : 0) : 0
       const newLines = hasLegacyDiff ? call.args.newText.split('\n').length - (call.args.newText.endsWith('\n') ? 1 : 0) : 0
       return (
@@ -905,7 +911,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
   return (
     <div className={`text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${roundedClass} p-2 ${borderClass} relative group`}>
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        {call.name === 'edit' || call.name === 'apply_patch' ? (
+        {isLegacyDiffToolName(call.name) || call.name === 'apply_patch' ? (
           <>
             <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={viewMode !== 'json' && diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
             <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={viewMode !== 'json' && diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
@@ -1071,8 +1077,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
             </div>
 
             <div className="mt-2 cursor-default" onClick={(e) => e.stopPropagation()}>
-              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(call.name === 'edit' || call.name === 'apply_patch') ? 'relative pr-24' : ''}`}>
-                {(call.name === 'edit' || call.name === 'apply_patch') && (
+              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(isLegacyDiffToolName(call.name) || call.name === 'apply_patch') ? 'relative pr-24' : ''}`}>
+                {(isLegacyDiffToolName(call.name) || call.name === 'apply_patch') && (
                   <div className="absolute top-1 right-0 flex gap-1" onClick={(e) => e.stopPropagation()}>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
