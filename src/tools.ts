@@ -549,6 +549,32 @@ export async function resolveMemorySearchOptions(
     const session = await sessionManager.getSession(ctx.sessionId);
     const agentName = session.agent || 'main';
     const effectiveIsolated = sessionManager.isSessionEffectivelyIsolated(session);
+    const subconsciousPrimarySessionId = sessionManager.getSubconsciousPrimarySessionId(session);
+
+    if (subconsciousPrimarySessionId) {
+        if (request.targetAgentName && request.targetAgentName !== agentName) {
+            throw new Error('Subconscious side session can only search itself or its primary session.');
+        }
+
+        const allowedSessionIds = [subconsciousPrimarySessionId, session.id, ...(session.aliases || [])];
+        if (request.targetSessionId) {
+            if (!allowedSessionIds.includes(request.targetSessionId)) {
+                throw new Error('Subconscious side session can only search itself or its primary session.');
+            }
+
+            if (request.targetSessionId === session.id || (session.aliases || []).includes(request.targetSessionId)) {
+                return {
+                    searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+                    effectiveScope: 'current-session',
+                };
+            }
+        }
+
+        return {
+            searchOptions: { sessionIds: [subconsciousPrimarySessionId] },
+            effectiveScope: 'current-session',
+        };
+    }
 
     if (effectiveIsolated) {
         if (request.targetAgentName && request.targetAgentName !== agentName) {

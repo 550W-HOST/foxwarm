@@ -21,6 +21,7 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'nextMessageSeq',
   'nextBlockId',
   'todoState',
+  'compactThresholdTokens',
 ] as const;
 
 const SESSION_METADATA_FIELDS = [
@@ -46,6 +47,7 @@ const SESSION_METADATA_FIELDS = [
   'nextBlockId',
   'parentSessionId',
   'todoState',
+  'compactThresholdTokens',
 ] as const;
 
 function pickDefinedFields<T extends readonly string[]>(source: Record<string, any>, fields: T): Record<T[number], any> {

@@ -243,6 +243,17 @@ function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string
     return trimmed;
 }
 
+const SUBCONSCIOUS_ALLOWED_TOOL_NAMES = new Set([
+    'search_memory',
+    'get_archived_messages',
+    'get_archived_blocks',
+    'send_to_session',
+]);
+
+function isSubconsciousSession(session?: Session): boolean {
+    return session?.meta?.subconscious?.kind === 'subconscious';
+}
+
 async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited'): Promise<string> {
     const agentMemoryDir = getAgentMemoryDir(agentName);
     if (!await fs.pathExists(agentMemoryDir)) {
@@ -596,6 +607,9 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         }
 
         let result;
+        if (isSubconsciousSession(session) && !SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(call.name)) {
+            result = { error: `Subconscious side sessions cannot use ${call.name}.` };
+        }
         
         // Check if tool has node parameter
         const nodeParam = call.args?.node;
@@ -635,7 +649,9 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
 
         // Check isolated session tool permission (includes path access check for master)
         try {
-            await checkToolPermission(call.name, sessionId, executionNode, toolArgs);
+            if (!result?.error) {
+                await checkToolPermission(call.name, sessionId, executionNode, toolArgs);
+            }
         } catch (e: any) {
             result = { error: e.message || String(e) };
         }
@@ -779,7 +795,10 @@ export async function chat(
     const useOpenAIResponsesApi = shouldUseOpenAIResponsesApi(providerType, modelName);
     const useOpenAIChatStream = providerType === 'openai';
     const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatStream;
-    const availableToolDefinitions = options?.toolDefinitions ?? tools.definitions;
+    const availableToolDefinitions = options?.toolDefinitions
+        ?? (isSubconsciousSession(session)
+            ? tools.definitions.filter(def => SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(def.name))
+            : tools.definitions);
 
     const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh' :
                          THINKING_BUDGET >= 4000 ? 'high' :
