@@ -1078,8 +1078,8 @@ export const COMMANDS: Record<string, CommandDef> = {
             const lines = [
               `🧠 Subconscious side session: ${status.enabled ? 'enabled' : 'disabled'}`,
               `Side session: ${status.sideSessionId ? `\`${status.sideSessionId}\`` : 'not created'}`,
-              `Pending trigger count: ${status.pendingMessageCount}`,
-              `Trigger every: ${status.triggerEveryMessages} counted turn(s)`,
+              `Pending counted messages: ${status.pendingMessageCount}`,
+              `Trigger every: ${status.triggerEveryMessages} counted message(s)`,
               `Cooldown: ${Math.round(status.triggerCooldownMs / 1000)}s`,
             ]
             if (typeof status.lastTriggeredAt === 'number') {
