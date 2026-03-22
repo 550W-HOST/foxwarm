@@ -25,8 +25,8 @@ type SessionChannelDeps = {
 
 const channelAttachments = new Map<string, ChannelConfig>();
 
-function makeChannelKey(platform: string, channelUserId: string): string {
-  return `${platform}:${channelUserId}`;
+function makeChannelKey(channelId: string, conversationId: string): string {
+  return `${channelId}:${conversationId}`;
 }
 
 async function persistChannels(): Promise<void> {
@@ -76,24 +76,24 @@ export async function importLegacyChannelAttachments(attachments: Record<string,
   await persistChannels();
 }
 
-export function attachChannel(platform: string, channelUserId: string, sessionId: string): string {
-  const channelKey = makeChannelKey(platform, channelUserId);
+export function attachChannel(channelId: string, conversationId: string, sessionId: string): string {
+  const channelKey = makeChannelKey(channelId, conversationId);
   channelAttachments.set(channelKey, { sessionId });
   void persistChannels();
-  logger.info({ platform, channelUserId, sessionId }, 'Channel attached to session');
+  logger.info({ channelId, conversationId, sessionId }, 'Channel attached to session');
   return sessionId;
 }
 
-export function getSessionByChannel(platform: string, channelUserId: string): string | undefined {
-  return channelAttachments.get(makeChannelKey(platform, channelUserId))?.sessionId;
+export function getSessionByChannel(channelId: string, conversationId: string): string | undefined {
+  return channelAttachments.get(makeChannelKey(channelId, conversationId))?.sessionId;
 }
 
-export function getChannelConfig(platform: string, channelUserId: string): ChannelConfig | undefined {
-  return channelAttachments.get(makeChannelKey(platform, channelUserId));
+export function getChannelConfig(channelId: string, conversationId: string): ChannelConfig | undefined {
+  return channelAttachments.get(makeChannelKey(channelId, conversationId));
 }
 
-export function setChannelMode(platform: string, channelUserId: string, mode: ChannelMode | undefined): void {
-  const channelKey = makeChannelKey(platform, channelUserId);
+export function setChannelMode(channelId: string, conversationId: string, mode: ChannelMode | undefined): void {
+  const channelKey = makeChannelKey(channelId, conversationId);
   const existing = channelAttachments.get(channelKey);
   if (!existing) {
     throw new Error(`Channel ${channelKey} not attached`);
@@ -102,12 +102,12 @@ export function setChannelMode(platform: string, channelUserId: string, mode: Ch
   void persistChannels();
 }
 
-export function getChannelDangerouslyAllowAllGroupMembers(platform: string, channelUserId: string): boolean {
-  return channelAttachments.get(makeChannelKey(platform, channelUserId))?.dangerouslyAllowAllGroupMembers ?? false;
+export function getChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string): boolean {
+  return channelAttachments.get(makeChannelKey(channelId, conversationId))?.dangerouslyAllowAllGroupMembers ?? false;
 }
 
-export function setChannelDangerouslyAllowAllGroupMembers(platform: string, channelUserId: string, value: boolean): void {
-  const channelKey = makeChannelKey(platform, channelUserId);
+export function setChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string, value: boolean): void {
+  const channelKey = makeChannelKey(channelId, conversationId);
   const existing = channelAttachments.get(channelKey);
   if (!existing) {
     throw new Error(`Channel ${channelKey} not attached`);
@@ -116,41 +116,41 @@ export function setChannelDangerouslyAllowAllGroupMembers(platform: string, chan
   void persistChannels();
 }
 
-export function detachChannel(platform: string, channelUserId: string): void {
-  channelAttachments.delete(makeChannelKey(platform, channelUserId));
+export function detachChannel(channelId: string, conversationId: string): void {
+  channelAttachments.delete(makeChannelKey(channelId, conversationId));
   void persistChannels();
-  logger.info({ platform, channelUserId }, 'Channel detached from session');
+  logger.info({ channelId, conversationId }, 'Channel detached from session');
 }
 
 export async function sendToChannelById(channelId: string, message: string): Promise<void> {
-  const [platform, ...rest] = channelId.split(':');
-  const channelUserId = rest.join(':');
-  if (!platform || !channelUserId) {
-    throw new Error('Invalid channelId format. Use platform:userId');
+  const [instanceId, ...rest] = channelId.split(':');
+  const conversationId = rest.join(':');
+  if (!instanceId || !conversationId) {
+    throw new Error('Invalid channelId format. Use <channel-instance-id>:<conversation-id>');
   }
-  const channel = getChannelInstance(platform);
+  const channel = getChannelInstance(instanceId);
   if (!channel) {
-    throw new Error(`Channel platform "${platform}" not found`);
+    throw new Error(`Channel \`${instanceId}\` not found`);
   }
-  await channel.sendMessage(channelUserId, message);
+  await channel.sendMessage(conversationId, message);
 }
 
 export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
-  const [platform, ...rest] = channelId.split(':');
-  const channelUserId = rest.join(':');
-  if (!platform || !channelUserId) {
-    throw new Error('Invalid channelId format. Use platform:userId');
+  const [instanceId, ...rest] = channelId.split(':');
+  const conversationId = rest.join(':');
+  if (!instanceId || !conversationId) {
+    throw new Error('Invalid channelId format. Use <channel-instance-id>:<conversation-id>');
   }
 
-  const channel = getChannelInstance(platform);
+  const channel = getChannelInstance(instanceId);
   if (!channel) {
-    throw new Error(`Channel platform "${platform}" not found`);
+    throw new Error(`Channel \`${instanceId}\` not found`);
   }
   if (!channel.sendFile) {
-    throw new Error(`Channel platform "${platform}" does not support file sending yet`);
+    throw new Error(`Channel \`${instanceId}\` does not support file sending yet`);
   }
 
-  await channel.sendFile(channelUserId, file, options);
+  await channel.sendFile(conversationId, file, options);
 }
 
 export async function sendFileToSession(
@@ -176,62 +176,63 @@ export async function sendFileToSession(
   };
 
   for (const channelInfo of channels) {
-    const channelId = `${channelInfo.platform}:${channelInfo.channelUserId}`;
-    const channelConfig = getChannelConfig(channelInfo.platform, channelInfo.channelUserId);
+    const targetId = `${channelInfo.channelId}:${channelInfo.conversationId}`;
+    const channelConfig = getChannelConfig(channelInfo.channelId, channelInfo.conversationId);
     if (channelConfig?.mode === 'push-only') {
-      result.skippedChannels.push({ channelId, reason: 'push-only' });
+      result.skippedChannels.push({ channelId: targetId, reason: 'push-only' });
       continue;
     }
 
-    const channel = getChannelInstance(channelInfo.platform);
+    const channel = getChannelInstance(channelInfo.channelId);
     if (!channel) {
-      result.failedChannels.push({ channelId, error: `Channel platform "${channelInfo.platform}" not found` });
+      result.failedChannels.push({ channelId: targetId, error: `Channel \`${channelInfo.channelId}\` not found` });
       continue;
     }
 
     if (!channel.sendFile) {
-      result.skippedChannels.push({ channelId, reason: 'channel does not support file sending yet' });
+      result.skippedChannels.push({ channelId: targetId, reason: 'channel does not support file sending yet' });
       continue;
     }
 
     try {
-      await channel.sendFile(channelInfo.channelUserId, file, options);
-      result.deliveredChannels.push(channelId);
+      await channel.sendFile(channelInfo.conversationId, file, options);
+      result.deliveredChannels.push(targetId);
     } catch (err: any) {
-      result.failedChannels.push({ channelId, error: err instanceof Error ? err.message : String(err) });
+      result.failedChannels.push({ channelId: targetId, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
   return result;
 }
 
-export function getChannelsBySession(sessionId: string): Array<{ platform: string; channelUserId: string }> {
-  const channels: { platform: string; channelUserId: string }[] = [];
+export function getChannelsBySession(sessionId: string): Array<{ channelId: string; conversationId: string }> {
+  const channels: { channelId: string; conversationId: string }[] = [];
   for (const [channelKey, info] of channelAttachments.entries()) {
     if (info.sessionId === sessionId) {
       const separatorIndex = channelKey.indexOf(':');
       if (separatorIndex === -1) continue;
 
-      const platform = channelKey.slice(0, separatorIndex);
-      const channelUserId = channelKey.slice(separatorIndex + 1);
-      channels.push({ platform, channelUserId });
+      const channelId = channelKey.slice(0, separatorIndex);
+      const conversationId = channelKey.slice(separatorIndex + 1);
+      channels.push({ channelId, conversationId });
     }
   }
   return channels;
 }
 
 function findAttachedChannel(
-  channels: Array<{ platform: string; channelUserId: string }>,
-  target?: { platform: string; channelUserId: string }
-): { platform: string; channelUserId: string } | undefined {
+  channels: Array<{ channelId: string; conversationId: string }>,
+  target?: { channelId: string; channelUserId: string; conversationId?: string }
+): { channelId: string; conversationId: string } | undefined {
   if (!target) return undefined;
+  const targetConversationId = target.conversationId || target.channelUserId;
   return channels.find(channel => (
-    channel.platform === target.platform &&
-    channel.channelUserId === target.channelUserId
+    channel.channelId === target.channelId &&
+    channel.conversationId === targetConversationId
   ));
 }
 
-function parseSourceSystemPart(system?: string): { platform: string; channelUserId: string } | undefined {
+function parseSourceSystemPart(system?: string): { channelId: string; channelUserId: string; conversationId: string } | undefined {
   if (!system) return undefined;
 
   if (system.startsWith('FROM: ')) {
@@ -239,7 +240,7 @@ function parseSourceSystemPart(system?: string): { platform: string; channelUser
     const firstColon = raw.indexOf(':');
     if (firstColon === -1) return undefined;
 
-    const platform = raw.slice(0, firstColon);
+    const channelId = raw.slice(0, firstColon);
     let channelUserId = raw.slice(firstColon + 1);
 
     const userInfoMatch = channelUserId.match(/^(.*)\s\([^)]*\)$/);
@@ -247,24 +248,32 @@ function parseSourceSystemPart(system?: string): { platform: string; channelUser
       channelUserId = userInfoMatch[1];
     }
 
-    if (!platform || !channelUserId) return undefined;
-    return { platform, channelUserId };
+    if (!channelId || !channelUserId) return undefined;
+    return { channelId, channelUserId, conversationId: channelUserId };
   }
 
-  const channelIdMatch = system.match(/channel_id:\s*`([^`]+)`/);
-  if (!channelIdMatch) return undefined;
+  const directChannelIdMatch = system.match(/channel_id:\s*`([^`]+)`/);
+  const conversationIdMatch = system.match(/conversation_id:\s*`([^`]+)`/);
+  if (directChannelIdMatch && conversationIdMatch) {
+    const channelId = directChannelIdMatch[1];
+    const conversationId = conversationIdMatch[1];
+    if (!channelId || !conversationId) return undefined;
+    return { channelId, channelUserId: conversationId, conversationId };
+  }
 
-  const rawChannelId = channelIdMatch[1];
+  if (!directChannelIdMatch) return undefined;
+
+  const rawChannelId = directChannelIdMatch[1];
   const firstColon = rawChannelId.indexOf(':');
   if (firstColon === -1) return undefined;
 
-  const platform = rawChannelId.slice(0, firstColon);
+  const channelId = rawChannelId.slice(0, firstColon);
   const channelUserId = rawChannelId.slice(firstColon + 1);
-  if (!platform || !channelUserId) return undefined;
-  return { platform, channelUserId };
+  if (!channelId || !channelUserId) return undefined;
+  return { channelId, channelUserId, conversationId: channelUserId };
 }
 
-export function getChannelBySession(sessionId: string, session?: Session): { platform: string; channelUserId: string } | undefined {
+export function getChannelBySession(sessionId: string, session?: Session): { channelId: string; conversationId: string } | undefined {
   const channels = getChannelsBySession(sessionId);
 
   if (channels.length === 0) return undefined;
@@ -301,25 +310,25 @@ export function createSessionBroadcast(sessionId: string): SessionReply {
     logger.debug({ sessionId, channelCount: channels.length, excludePlatforms, textPreview: text.substring(0, 50) }, 'Broadcasting message');
 
     for (const channelInfo of channels) {
-      if (excludePlatforms.includes(channelInfo.platform)) {
-        logger.debug({ platform: channelInfo.platform, channelUserId: channelInfo.channelUserId }, 'Skipping excluded platform');
+      if (excludePlatforms.includes(channelInfo.channelId)) {
+        logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Skipping excluded channel');
         continue;
       }
 
-      const channelConfig = getChannelConfig(channelInfo.platform, channelInfo.channelUserId);
+      const channelConfig = getChannelConfig(channelInfo.channelId, channelInfo.conversationId);
       if (channelConfig?.mode === 'push-only') {
-        logger.debug({ platform: channelInfo.platform, channelUserId: channelInfo.channelUserId, sessionId }, 'Skipping push-only channel during broadcast');
+        logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId, sessionId }, 'Skipping push-only channel during broadcast');
         continue;
       }
 
-      const channel = getChannelInstance(channelInfo.platform);
+      const channel = getChannelInstance(channelInfo.channelId);
       if (channel) {
-        logger.debug({ platform: channelInfo.platform, channelUserId: channelInfo.channelUserId }, 'Calling channel.sendMessage');
-        channel.sendMessage(channelInfo.channelUserId, text, options)?.catch((e: any) => {
-          logger.error({ err: e, platform: channelInfo.platform, channelUserId: channelInfo.channelUserId }, 'Failed to broadcast message');
+        logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Calling channel.sendMessage');
+        channel.sendMessage(channelInfo.conversationId, text, options)?.catch((e: any) => {
+          logger.error({ err: e, channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Failed to broadcast message');
         });
       } else {
-        logger.debug({ platform: channelInfo.platform }, 'Channel instance not found');
+        logger.debug({ channelId: channelInfo.channelId }, 'Channel instance not found');
       }
     }
   };

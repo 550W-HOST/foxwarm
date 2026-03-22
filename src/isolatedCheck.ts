@@ -120,7 +120,7 @@ export async function checkChannelPermission(sessionIdOrCtx: string | { sessionI
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   const attachedChannels = sessionManager.getChannelsBySession(sessionId);
-  const attachedChannelIds = attachedChannels.map(ch => `${ch.platform}:${ch.channelUserId}`);
+  const attachedChannelIds = attachedChannels.map(ch => `${ch.channelId}:${ch.conversationId}`);
   
   if (!attachedChannelIds.includes(channelId)) {
     throw new Error('Isolated session can only send messages to its own attached channel.');

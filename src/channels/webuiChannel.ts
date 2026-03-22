@@ -630,7 +630,7 @@ export class WebUIChannel implements Channel {
             
             const blockingChannels = sessionManager
               .getChannelsBySession(sessionId)
-              .filter(channel => channel.platform !== 'webui');
+              .filter(channel => channel.channelId !== 'webui');
 
             if (blockingChannels.length > 0) {
               return res.status(400).json({ error: 'Cannot delete active session. Detach channels first.' });
@@ -1040,7 +1040,10 @@ export class WebUIChannel implements Channel {
             let finalParts = parts || (text ? [{ text }] : []);
             
             const ctx: ChannelContext = {
+              channelId: 'webui',
+              channelType: 'webui',
               channelUserId: sessionId, // Use sessionId as channelUserId (matches attachChannel)
+              conversationId: sessionId,
               username: 'webui',
               platform: 'webui',
               reply: async (replyText: string) => {
@@ -1075,6 +1078,7 @@ export class WebUIChannel implements Channel {
             const message: ChannelMessage = {
               parts: finalParts,
               channelUserId: sessionId, // Use sessionId as channelUserId
+              conversationId: sessionId,
               username: 'webui'
             };
             

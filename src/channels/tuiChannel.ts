@@ -381,7 +381,10 @@ export class TUIChannel implements Channel {
     }
 
     const ctx: ChannelContext = {
+      channelId: 'tui',
+      channelType: 'tui',
       channelUserId: 'tui',
+      conversationId: 'tui',
       username: 'tui-user',
       platform: 'tui',
       reply: async (replyText: string) => {
@@ -408,6 +411,7 @@ export class TUIChannel implements Channel {
     const message: ChannelMessage = {
       parts: [{ text }],
       channelUserId: 'tui',
+      conversationId: 'tui',
       username: 'tui-user'
     };
 

@@ -88,15 +88,20 @@ export interface SessionMeta {
   lastMessageTime: number;
   messageCount?: number; // Cached message count for quick access
   lastChannel?: {
-    platform: string;
+    channelId: string;
+    channelType?: string;
     channelUserId: string;
+    conversationId?: string;
   };
   [key: string]: any;
 }
 
 export interface QueueSource {
   platform: string;
+  channelId?: string;
+  channelType?: string;
   channelUserId: string;
+  conversationId?: string;
   username?: string;
   senderId?: string;
 }

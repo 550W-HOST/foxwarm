@@ -1,9 +1,9 @@
 import fs from 'fs-extra'
 import path from 'path'
 import crypto from 'crypto'
-import { ChannelContext } from './channel'
+import { ChannelContext, getChannelId, getChannelType, getConversationId } from './channel'
 import { inspectChannelAuthorizationFromContext, formatAuthorizationInspection } from './channelAuth'
-import { getManagedChannelPlatforms, getChannelRuntimeStatus, listChannelRuntimeStatuses, restartManagedChannel, startManagedChannel, stopManagedChannel } from './channelRuntime'
+import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses, restartManagedChannel, startManagedChannel, stopManagedChannel } from './channelRuntime'
 import { nodesManager } from './nodes/manager'
 import { approvePendingPairing, listApprovedNodes, listPendingPairings, rejectPendingPairing } from './nodes/registry'
 import { Session } from './types'
@@ -11,7 +11,7 @@ import * as sessionManager from './sessionManager'
 import * as skills from './skills'
 import * as tools from './tools'
 import { estimateSessionTokens } from './tokenCount'
-import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, HTTP_PORT, NODE_TOKEN_FILE, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
+import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, getDefaultChannelIdByType, HTTP_PORT, NODE_TOKEN_FILE, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api'
@@ -318,16 +318,16 @@ const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('info', 'Show current channel identifiers and attachment state'),
   literalNode('auth', 'Show current channel authorization diagnostics'),
   literalNode('status', 'Show runtime channel status', {
-    children: [placeholderNode('[platform]', 'Optional platform, e.g. weixin')],
+    children: [placeholderNode('[channel-id-or-type]', 'Optional channel id (preferred) or type, e.g. weixin')],
   }),
   literalNode('start', 'Start a managed channel without restarting foxwarm', {
-    children: [placeholderNode('<platform>', 'Managed platform, e.g. weixin')],
+    children: [placeholderNode('<channel-id>', 'Managed channel id, e.g. weixin or mainbot')],
   }),
   literalNode('stop', 'Stop a managed channel', {
-    children: [placeholderNode('<platform>', 'Managed platform, e.g. weixin')],
+    children: [placeholderNode('<channel-id>', 'Managed channel id, e.g. weixin or mainbot')],
   }),
   literalNode('restart', 'Restart a managed channel', {
-    children: [placeholderNode('<platform>', 'Managed platform, e.g. weixin')],
+    children: [placeholderNode('<channel-id>', 'Managed channel id, e.g. weixin or mainbot')],
   }),
   literalNode('mode', 'Set channel mode', {
     children: [
@@ -344,14 +344,17 @@ const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 ]
 
 function formatChannelInfo(ctx: ChannelContext): string {
-  const sessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId)
-  const channelConfig = sessionManager.getChannelConfig(ctx.platform, ctx.channelUserId)
-  const runtimeStatus = getChannelRuntimeStatus(ctx.platform)
+  const channelId = getChannelId(ctx)
+  const channelType = getChannelType(ctx)
+  const conversationId = getConversationId(ctx)
+  const sessionId = sessionManager.getSessionByChannel(channelId, conversationId)
+  const channelConfig = sessionManager.getChannelConfig(channelId, conversationId)
+  const runtimeStatus = getChannelRuntimeStatus(channelId)
   return [
     '*Channel info*',
-    `- platform: \`${ctx.platform}\``,
-    `- channelId: \`${ctx.platform}:${ctx.channelUserId}\``,
-    `- channelUserId: \`${ctx.channelUserId}\``,
+    `- channelId: \`${channelId}\``,
+    `- channelType: \`${channelType}\``,
+    `- conversationId: \`${conversationId}\``,
     `- senderId: \`${ctx.senderId || '(none)'}\``,
     ctx.username ? `- username: \`${ctx.username}\`` : undefined,
     `- attachedSession: \`${sessionId || '(none)'}\``,
@@ -361,8 +364,10 @@ function formatChannelInfo(ctx: ChannelContext): string {
   ].filter(Boolean).join('\n')
 }
 
-function formatChannelRuntimeStatus(platform?: string): string {
-  const statuses = platform ? [getChannelRuntimeStatus(platform)].filter(Boolean) : listChannelRuntimeStatuses()
+function formatChannelRuntimeStatus(channelId?: string, typeFilter?: string): string {
+  const statuses = channelId
+    ? [getChannelRuntimeStatus(channelId)].filter(Boolean)
+    : listChannelRuntimeStatuses(typeFilter ? { type: typeFilter } : undefined)
   if (statuses.length === 0) {
     return 'No known channel runtime status found.'
   }
@@ -372,13 +377,13 @@ function formatChannelRuntimeStatus(platform?: string): string {
     ...statuses.map(status => {
       const detailSuffix = status.details.length > 0 ? `; ${status.details.join('; ')}` : ''
       const errorSuffix = status.lastError ? `; lastError=${status.lastError}` : ''
-      return `- \`${status.platform}\`: running=\`${status.running ? 'yes' : 'no'}\`, managed=\`${status.managed ? 'yes' : 'no'}\`, configured=\`${status.configured ? 'yes' : 'no'}\`, enabled=\`${status.enabled ? 'yes' : 'no'}\`${detailSuffix}${errorSuffix}`
+      return `- \`${status.channelId}\` (type=\`${status.type}\`): running=\`${status.running ? 'yes' : 'no'}\`, managed=\`${status.managed ? 'yes' : 'no'}\`, configured=\`${status.configured ? 'yes' : 'no'}\`, enabled=\`${status.enabled ? 'yes' : 'no'}\`${detailSuffix}${errorSuffix}`
     }),
   ].join('\n')
 }
 
 function getManagedPlatformHelp(): string {
-  const platforms = getManagedChannelPlatforms()
+  const platforms = getManagedChannelIds()
   return platforms.length > 0 ? platforms.join(', ') : '(none)'
 }
 
@@ -765,7 +770,7 @@ export const COMMANDS: Record<string, CommandDef> = {
 
       let resp = `📊 *Foxwarm Status*\n`
       resp += `\n*Session:* \`${sessionId}\``
-      resp += `\n*Channel:* ${ctx.platform}:${ctx.channelUserId}`
+      resp += `\n*Channel:* ${getChannelId(ctx)}:${getConversationId(ctx)} (type=${getChannelType(ctx)})`
       resp += `\n- Messages: ${historyLen}`
       const { currentKey, contextLimit } = resolveModelConfig(session.model)
 
@@ -786,7 +791,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     handler: async (ctx, args, sessionId, session) => {
       // Manually get session for subcommands that need it
       if (!sessionId) {
-        sessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId);
+        sessionId = sessionManager.getSessionByChannel(getChannelId(ctx), getConversationId(ctx));
       }
       if (!session && sessionId) {
         session = await sessionManager.getSession(sessionId);
@@ -805,6 +810,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         resp += '`/session rename <name>` - Rename session\n'
         resp += '`/session update-snapshot [session-id]` - Refresh session prompt snapshot\n'
         resp += '`/session compact-threshold [tokens|Nk|clear|unset]` - Get/set auto-compact threshold override for current session\n'
+        resp += '`/session subconscious <on|off|status>` - Manage the reflective subconscious side session for current session\n'
         resp += '`/session index` - Index messages to vector database\n'
         resp += '`/session move <new-session-id>|<existing-agent>/<new-session-id>` - Move/rename session\n'
         resp += '`/session parent <parent-session-id> [child-session-id]` - Set parent session\n'
@@ -871,8 +877,8 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         case 'new': {
-          sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
-          const newSessionId = sessionManager.attachChannel(ctx.platform, ctx.channelUserId)
+          sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
+          const newSessionId = sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx))
           ctx.reply(`✅ Created and attached to new session \`${newSessionId}\``)
           break
         }
@@ -894,8 +900,8 @@ export const COMMANDS: Record<string, CommandDef> = {
               model: session?.model,
             })
 
-            sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
-            sessionManager.attachChannel(ctx.platform, ctx.channelUserId, result.sessionId)
+            sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
+            sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), result.sessionId)
             ctx.reply(`✅ Created session \`${result.sessionId}\` under agent \`${agentName}\` and attached current channel.`)
           } catch (e: any) {
             ctx.reply(`❌ Session create failed: ${e.message}`)
@@ -909,8 +915,8 @@ export const COMMANDS: Record<string, CommandDef> = {
             return
           }
           const forkedSessionId = await sessionManager.forkSession(sessionId)
-          sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
-          sessionManager.attachChannel(ctx.platform, ctx.channelUserId, forkedSessionId)
+          sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
+          sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), forkedSessionId)
           ctx.reply(`✅ Forked session \`${sessionId}\` → \`${forkedSessionId}\`\nMessages: ${session.history.length}`)
           break
         }
@@ -1054,6 +1060,64 @@ export const COMMANDS: Record<string, CommandDef> = {
             ctx.reply(`❌ Compact threshold update failed: ${e.message}`)
           }
           break
+        }
+
+        case 'subconscious': {
+          if (!sessionId || !session) {
+            ctx.reply('❌ No active session.')
+            return
+          }
+          if (sessionManager.isSubconsciousSession(session)) {
+            ctx.reply(`🧠 This session is itself a subconscious side session for \`${sessionManager.getSubconsciousPrimarySessionId(session) || 'unknown'}\`.`)
+            return
+          }
+
+          const action = (subArgs[0] || 'status').toLowerCase()
+          if (action === 'status') {
+            const status = sessionManager.getSubconsciousStatus(session)
+            const lines = [
+              `🧠 Subconscious side session: ${status.enabled ? 'enabled' : 'disabled'}`,
+              `Side session: ${status.sideSessionId ? `\`${status.sideSessionId}\`` : 'not created'}`,
+              `Pending trigger count: ${status.pendingMessageCount}`,
+              `Trigger every: ${status.triggerEveryMessages} counted turn(s)`,
+              `Cooldown: ${Math.round(status.triggerCooldownMs / 1000)}s`,
+            ]
+            if (typeof status.lastTriggeredAt === 'number') {
+              lines.push(`Last triggered: ${new Date(status.lastTriggeredAt).toISOString()}`)
+            }
+            if (typeof status.lastHintAt === 'number') {
+              lines.push(`Last hint sent: ${new Date(status.lastHintAt).toISOString()}`)
+            }
+
+            if (status.sideSessionId) {
+              const sideSession = await sessionManager.getExistingSession(status.sideSessionId)
+              if (sideSession) {
+                lines.push(`Side compact threshold: ${sideSession.compactThresholdTokens || sessionManager.getEffectiveCompactThresholdTokens(sideSession)} tokens`)
+              }
+            }
+
+            ctx.reply(lines.join('\n'))
+            return
+          }
+
+          if (action === 'on' || action === 'enable') {
+            const result = await sessionManager.setSubconsciousEnabled(sessionId, true)
+            ctx.reply([
+              `✅ Subconscious side session enabled.`,
+              `Side session: \`${result.sideSessionId}\`${result.created ? ' (created)' : ''}`,
+              `Side compact threshold: ${result.compactThresholdTokens} tokens`,
+            ].join('\n'))
+            return
+          }
+
+          if (action === 'off' || action === 'disable') {
+            const result = await sessionManager.setSubconsciousEnabled(sessionId, false)
+            ctx.reply(`✅ Subconscious side session disabled. Side session remains stored as \`${result.sideSessionId}\`.`)
+            return
+          }
+
+          ctx.reply('Usage: /session subconscious <on|off|status>')
+          return
         }
 
         case 'isolated': {
@@ -1245,7 +1309,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       children: [placeholderNode('<sessionId>', 'Existing session id')],
     },
     handler: async (ctx, args) => {
-      const currentSessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId)
+      const currentSessionId = sessionManager.getSessionByChannel(getChannelId(ctx), getConversationId(ctx))
       if (args.length === 0) {
         ctx.reply('Usage: /attach <sessionId>\nUse /sessions to see available sessions.')
         return
@@ -1259,8 +1323,8 @@ export const COMMANDS: Record<string, CommandDef> = {
         return
       }
 
-      sessionManager.detachChannel(ctx.platform, ctx.channelUserId)
-      sessionManager.attachChannel(ctx.platform, ctx.channelUserId, targetSessionId)
+      sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
+      sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), targetSessionId)
 
       ctx.reply(`✅ Attached to session \`${targetSessionId}\``)
     }
@@ -1270,7 +1334,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: false,
     autocomplete: { children: AGENT_AUTOCOMPLETE },
     handler: async (ctx, args) => {
-      const currentSessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId)
+      const currentSessionId = sessionManager.getSessionByChannel(getChannelId(ctx), getConversationId(ctx))
       const subcommand = args[0]
       const subArgs = args.slice(1)
 
@@ -2071,7 +2135,9 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: false,
     handler: async (ctx, args) => {
       const subcommand = args[0]?.toLowerCase() || 'status'
-      const weixinConfig = readAppConfigFile().channels?.weixin || WEIXIN_CONFIG || {}
+      const currentConfig = readAppConfigFile()
+      const weixinChannelId = getDefaultChannelIdByType('weixin', currentConfig)
+      const weixinConfig = (currentConfig.channels?.[weixinChannelId] || WEIXIN_CONFIG || {}) as any
       const baseUrl = (weixinConfig.baseUrl || DEFAULT_WEIXIN_BASE_URL).trim()
       const routeTag = weixinConfig.routeTag?.trim() || undefined
       const loginBotType = weixinConfig.loginBotType?.trim() || DEFAULT_WEIXIN_LOGIN_BOT_TYPE
@@ -2079,10 +2145,11 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (subcommand === 'status') {
         const tokenState = weixinConfig.token?.trim() ? 'configured' : 'missing'
         const allowMode = weixinConfig.allowAllUsers ? 'all users' : ((weixinConfig.allowedUsers || []).length > 0 ? (weixinConfig.allowedUsers || []).join(', ') : 'none')
-        const runtimeStatus = getChannelRuntimeStatus('weixin')
+        const runtimeStatus = getChannelRuntimeStatus(weixinChannelId)
         ctx.reply(
           [
             '*Weixin channel MVP status*',
+            `- channelId: \`${weixinChannelId}\``,
             `- config: \`${APP_CONFIG_PATH}\``,
             `- enabled: \`${weixinConfig.enabled === false ? 'false' : 'true/auto'}\``,
             `- baseUrl: \`${baseUrl}\``,
@@ -2094,7 +2161,7 @@ export const COMMANDS: Record<string, CommandDef> = {
             'Usage:',
             '- `/weixin login`',
             '- `/weixin wait <sessionKey>`',
-            '- `/channel start weixin`',
+            `- \`/channel start ${weixinChannelId}\``,
           ].filter(Boolean).join('\n')
         )
         return
@@ -2150,9 +2217,10 @@ export const COMMANDS: Record<string, CommandDef> = {
             ...current,
             channels: {
               ...(current.channels || {}),
-              weixin: {
-                ...(current.channels?.weixin || {}),
+              [weixinChannelId]: {
+                ...(((current.channels || {}) as any)[weixinChannelId] || {}),
                 enabled: true,
+                type: (((current.channels || {}) as any)[weixinChannelId]?.type || (weixinChannelId === 'weixin' ? undefined : 'weixin')),
                 baseUrl: result.baseUrl || baseUrl,
                 token: result.botToken,
                 routeTag,
@@ -2163,7 +2231,7 @@ export const COMMANDS: Record<string, CommandDef> = {
 
           let runtimeNote = 'Weixin channel config updated; channel start not attempted.'
           try {
-            const runtimeResult = await restartManagedChannel('weixin')
+            const runtimeResult = await restartManagedChannel(weixinChannelId)
             runtimeNote = runtimeResult.status.running
               ? 'Weixin channel started immediately; no foxwarm restart needed.'
               : 'Weixin channel config updated, but runtime status is still stopped.'
@@ -2175,11 +2243,12 @@ export const COMMANDS: Record<string, CommandDef> = {
             [
               '✅ Weixin login completed and config file updated.',
               `- config: \`${APP_CONFIG_PATH}\``,
+              `- channelId: \`${weixinChannelId}\``,
               `- baseUrl: \`${result.baseUrl || baseUrl}\``,
               result.userId ? `- ownerUserId: \`${result.userId}\`` : undefined,
               `- runtime: ${runtimeNote}`,
               '',
-              'You can also inspect runtime state with `/channel status weixin`.',
+              `You can also inspect runtime state with \`/channel status ${weixinChannelId}\`.`,
             ].filter(Boolean).join('\n')
           )
         } catch (e: any) {
@@ -2200,10 +2269,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         ctx.reply([
           'Usage: /channel info',
           '       /channel auth',
-          '       /channel status [platform]',
-          '       /channel start <platform>',
-          '       /channel stop <platform>',
-          '       /channel restart <platform>',
+          '       /channel status [channel-id-or-type]',
+          '       /channel start <channel-id>',
+          '       /channel stop <channel-id>',
+          '       /channel restart <channel-id>',
           '       /channel mode <push-only|normal>',
           '       /channel dangerously-allow-all-group-members <yes|no>',
         ].join('\n'))
@@ -2224,33 +2293,36 @@ export const COMMANDS: Record<string, CommandDef> = {
       }
 
       if (subcommand === 'status') {
-        const platform = args[1]?.trim() || undefined
-        ctx.reply(formatChannelRuntimeStatus(platform))
+        const channelIdOrType = args[1]?.trim() || undefined
+        const statusText = channelIdOrType && !getChannelRuntimeStatus(channelIdOrType)
+          ? formatChannelRuntimeStatus(undefined, channelIdOrType)
+          : formatChannelRuntimeStatus(channelIdOrType)
+        ctx.reply(statusText)
         return
       }
 
       if (subcommand === 'start' || subcommand === 'stop' || subcommand === 'restart') {
-        const platform = args[1]?.trim()
-        if (!platform) {
-          ctx.reply(`Usage: /channel ${subcommand} <platform>\nManaged platforms: ${getManagedPlatformHelp()}`)
+        const channelId = args[1]?.trim()
+        if (!channelId) {
+          ctx.reply(`Usage: /channel ${subcommand} <channel-id>\nManaged channel ids: ${getManagedPlatformHelp()}`)
           return
         }
 
         try {
           if (subcommand === 'start') {
-            const result = await startManagedChannel(platform)
-            ctx.reply(`✅ Channel \`${platform}\` ${result.started ? 'started' : 'was already running'}.\n${formatChannelRuntimeStatus(platform)}`)
+            const result = await startManagedChannel(channelId)
+            ctx.reply(`✅ Channel \`${channelId}\` ${result.started ? 'started' : 'was already running'}.\n${formatChannelRuntimeStatus(channelId)}`)
             return
           }
 
           if (subcommand === 'stop') {
-            const result = await stopManagedChannel(platform)
-            ctx.reply(`✅ Channel \`${platform}\` ${result.stopped ? 'stopped' : 'was already stopped'}.\n${formatChannelRuntimeStatus(platform)}`)
+            const result = await stopManagedChannel(channelId)
+            ctx.reply(`✅ Channel \`${channelId}\` ${result.stopped ? 'stopped' : 'was already stopped'}.\n${formatChannelRuntimeStatus(channelId)}`)
             return
           }
 
-          const result = await restartManagedChannel(platform)
-          ctx.reply(`✅ Channel \`${platform}\` restarted.\n${formatChannelRuntimeStatus(platform)}`)
+          const result = await restartManagedChannel(channelId)
+          ctx.reply(`✅ Channel \`${channelId}\` restarted.\n${formatChannelRuntimeStatus(channelId)}`)
         } catch (e: any) {
           ctx.reply(`❌ Failed to ${subcommand} channel: ${e.message}`)
         }
@@ -2260,7 +2332,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (subcommand === 'mode') {
         if (args.length < 2) {
           // Show current mode
-          const config = sessionManager.getChannelConfig(ctx.platform, ctx.channelUserId)
+          const config = sessionManager.getChannelConfig(getChannelId(ctx), getConversationId(ctx))
           const currentMode = config?.mode || 'normal'
           ctx.reply(`Current channel mode: *${currentMode}*\nUsage: /channel mode <push-only|normal>`)
           return
@@ -2273,7 +2345,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         try {
-          sessionManager.setChannelMode(ctx.platform, ctx.channelUserId, mode === 'push-only' ? 'push-only' : undefined)
+          sessionManager.setChannelMode(getChannelId(ctx), getConversationId(ctx), mode === 'push-only' ? 'push-only' : undefined)
           ctx.reply(`✅ Channel mode set to *${mode}*`)
         } catch (e: any) {
           ctx.reply(`❌ Failed to set channel mode: ${e.message}`)
@@ -2281,7 +2353,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       } else if (subcommand === 'dangerously-allow-all-group-members') {
         if (args.length < 2) {
           // Show current setting
-          const currentValue = sessionManager.getChannelDangerouslyAllowAllGroupMembers(ctx.platform, ctx.channelUserId)
+          const currentValue = sessionManager.getChannelDangerouslyAllowAllGroupMembers(getChannelId(ctx), getConversationId(ctx))
           ctx.reply(`Current dangerouslyAllowAllGroupMembers: *${currentValue ? 'yes' : 'no'}*\nUsage: /channel dangerously-allow-all-group-members <yes|no>`)
           return
         }
@@ -2293,7 +2365,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         try {
-          sessionManager.setChannelDangerouslyAllowAllGroupMembers(ctx.platform, ctx.channelUserId, value === 'yes')
+          sessionManager.setChannelDangerouslyAllowAllGroupMembers(getChannelId(ctx), getConversationId(ctx), value === 'yes')
           ctx.reply(`✅ dangerouslyAllowAllGroupMembers set to *${value}*`)
         } catch (e: any) {
           ctx.reply(`❌ Failed to set dangerouslyAllowAllGroupMembers: ${e.message}`)
@@ -2303,10 +2375,10 @@ export const COMMANDS: Record<string, CommandDef> = {
           'Unknown subcommand. Usage:',
           '/channel info',
           '/channel auth',
-          '/channel status [platform]',
-          '/channel start <platform>',
-          '/channel stop <platform>',
-          '/channel restart <platform>',
+          '/channel status [channel-id-or-type]',
+          '/channel start <channel-id>',
+          '/channel stop <channel-id>',
+          '/channel restart <channel-id>',
           '/channel mode <push-only|normal>',
           '/channel dangerously-allow-all-group-members <yes|no>',
         ].join('\n'))

@@ -19,6 +19,7 @@ export interface WeWorkWebhookConfig {
   encodingAESKey?: string; // 企业微信应用的 EncodingAESKey
   listenPort?: number; // 监听端口，用于接收消息（如果企业微信支持回调）
   listenPath?: string; // 监听路径
+  name?: string;
 }
 
 class WeWorkCrypto {
@@ -71,8 +72,9 @@ class WeWorkCrypto {
 }
 
 export class WeWorkWebhookChannel implements Channel {
-  readonly name = 'wework';
+  readonly name: string;
   readonly platform = 'wework';
+  private readonly channelId: string;
   
   private webhookUrl: string;
   private token?: string;
@@ -83,6 +85,8 @@ export class WeWorkWebhookChannel implements Channel {
   private server?: any;
 
   constructor(config: WeWorkWebhookConfig) {
+    this.name = config.name || 'wework';
+    this.channelId = this.name;
     this.webhookUrl = config.webhookUrl || '';
     this.token = config.token;
     this.encodingAESKey = config.encodingAESKey;
@@ -193,7 +197,10 @@ export class WeWorkWebhookChannel implements Channel {
           
           if (this.messageHandler) {
             const ctx: ChannelContext = {
+              channelId: this.channelId,
+              channelType: this.platform,
               channelUserId: channelUserId,
+              conversationId: channelUserId,
               username: userName,
               platform: 'wework',
               senderId: userId, // 发送者用户ID，用于权限检查
@@ -219,6 +226,7 @@ export class WeWorkWebhookChannel implements Channel {
             const message: ChannelMessage = {
               parts: parts && parts.length ? parts : [{ text: content }],
               channelUserId: channelUserId,
+              conversationId: channelUserId,
               username: userName
             };
 

@@ -2,7 +2,7 @@
  * Command Handler - handles bot commands
  */
 
-import { ChannelContext } from './channel';
+import { ChannelContext, getChannelId, getChannelType, getConversationId } from './channel';
 import { COMMANDS } from './commands';
 import * as sessionManager from './sessionManager';
 import { MessageRouter } from './messageRouter';
@@ -12,7 +12,7 @@ export class CommandHandler {
   }
 
   isAuthorized(ctx: ChannelContext): boolean {
-    return this.router.isAuthorized(ctx.platform, ctx.channelUserId, ctx.senderId);
+    return this.router.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId);
   }
 
   async handleCommand(ctx: ChannelContext, command: string, args: string[]): Promise<boolean> {
@@ -29,7 +29,7 @@ export class CommandHandler {
     let session: any;
 
     if (def.requiresSession !== false) {
-      sessionId = sessionManager.getSessionByChannel(ctx.platform, ctx.channelUserId);
+      sessionId = sessionManager.getSessionByChannel(getChannelId(ctx), getConversationId(ctx));
       if (!sessionId) {
         ctx.reply('No active session found.');
         return true;

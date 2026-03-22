@@ -22,6 +22,7 @@ function generateClientId(): string {
 export class WeixinChannel implements Channel {
   readonly name: string;
   readonly platform = 'weixin';
+  private readonly channelId: string;
 
   private readonly baseUrl: string;
   private readonly token: string;
@@ -36,6 +37,7 @@ export class WeixinChannel implements Channel {
 
   constructor(options: WeixinChannelOptions, name = 'weixin') {
     this.name = name;
+    this.channelId = name;
     this.baseUrl = options.baseUrl;
     this.token = options.token;
     this.routeTag = options.routeTag;
@@ -132,7 +134,10 @@ export class WeixinChannel implements Channel {
 
     const parts = buildWeixinMessageParts(message);
     const ctx: ChannelContext = {
+      channelId: this.channelId,
+      channelType: this.platform,
       channelUserId,
+      conversationId: channelUserId,
       username: channelUserId,
       senderId: channelUserId,
       platform: this.platform,
@@ -147,6 +152,7 @@ export class WeixinChannel implements Channel {
     const channelMessage: ChannelMessage = {
       parts,
       channelUserId,
+      conversationId: channelUserId,
       username: channelUserId,
     };
 
