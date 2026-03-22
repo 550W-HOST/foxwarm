@@ -28,7 +28,6 @@ function systemPart(system: string): MessagePart {
 
 const SUBCONSCIOUS_SESSION_KIND = 'subconscious';
 const SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES = 4;
-const SUBCONSCIOUS_TRIGGER_COOLDOWN_MS = 5 * 60 * 1000;
 const SUBCONSCIOUS_RECENT_WINDOW_MESSAGES = 12;
 const SUBCONSCIOUS_MIN_COMPACT_THRESHOLD_TOKENS = 4000;
 const SUBCONSCIOUS_COMPACT_THRESHOLD_FRACTION = 0.35;
@@ -40,7 +39,6 @@ type SubconsciousPrimaryMeta = {
   lastTriggeredAt?: number;
   lastHintAt?: number;
   triggerEveryMessages?: number;
-  triggerCooldownMs?: number;
 };
 
 type SubconsciousSideMeta = {
@@ -680,7 +678,6 @@ export function getSubconsciousStatus(session?: Session | null): {
   lastTriggeredAt?: number;
   lastHintAt?: number;
   triggerEveryMessages: number;
-  triggerCooldownMs: number;
 } {
   const meta = getPrimarySubconsciousMeta(session || undefined);
   return {
@@ -690,7 +687,6 @@ export function getSubconsciousStatus(session?: Session | null): {
     lastTriggeredAt: meta?.lastTriggeredAt,
     lastHintAt: meta?.lastHintAt,
     triggerEveryMessages: meta?.triggerEveryMessages || SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES,
-    triggerCooldownMs: meta?.triggerCooldownMs || SUBCONSCIOUS_TRIGGER_COOLDOWN_MS,
   };
 }
 
@@ -789,7 +785,6 @@ export async function setSubconsciousEnabled(primarySessionId: string, enabled: 
   const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
   meta.enabled = enabled;
   meta.triggerEveryMessages = meta.triggerEveryMessages || SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES;
-  meta.triggerCooldownMs = meta.triggerCooldownMs || SUBCONSCIOUS_TRIGGER_COOLDOWN_MS;
   if (!enabled) {
     meta.pendingMessageCount = 0;
   }
@@ -807,13 +802,12 @@ export function shouldIgnoreSubconsciousTriggerText(text: string | undefined, si
   return text.includes(`source_session_id: \`${sideSessionId}\``) || text.includes('[Subconscious]');
 }
 
-export function getSubconsciousTriggerSettings(session: Session): { enabled: boolean; sideSessionId?: string; triggerEveryMessages: number; triggerCooldownMs: number; pendingMessageCount: number; lastTriggeredAt?: number; } {
+export function getSubconsciousTriggerSettings(session: Session): { enabled: boolean; sideSessionId?: string; triggerEveryMessages: number; pendingMessageCount: number; lastTriggeredAt?: number; } {
   const status = getSubconsciousStatus(session);
   return {
     enabled: status.enabled,
     sideSessionId: status.sideSessionId,
     triggerEveryMessages: status.triggerEveryMessages,
-    triggerCooldownMs: status.triggerCooldownMs,
     pendingMessageCount: status.pendingMessageCount,
     lastTriggeredAt: status.lastTriggeredAt,
   };
@@ -827,18 +821,16 @@ export async function markSubconsciousTriggered(primarySessionId: string): Promi
   await saveSession(primarySessionId);
 }
 
-export async function incrementSubconsciousPending(primarySessionId: string, amount: number = 1): Promise<{ pendingMessageCount: number; sideSessionId?: string; triggerEveryMessages: number; triggerCooldownMs: number; lastTriggeredAt?: number; enabled: boolean; }> {
+export async function incrementSubconsciousPending(primarySessionId: string, amount: number = 1): Promise<{ pendingMessageCount: number; sideSessionId?: string; triggerEveryMessages: number; lastTriggeredAt?: number; enabled: boolean; }> {
   const primarySession = await getSession(primarySessionId);
   const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
   meta.pendingMessageCount = Math.max(0, (meta.pendingMessageCount || 0) + amount);
   meta.triggerEveryMessages = meta.triggerEveryMessages || SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES;
-  meta.triggerCooldownMs = meta.triggerCooldownMs || SUBCONSCIOUS_TRIGGER_COOLDOWN_MS;
   await saveSession(primarySessionId);
   return {
     pendingMessageCount: meta.pendingMessageCount,
     sideSessionId: meta.sideSessionId,
     triggerEveryMessages: meta.triggerEveryMessages,
-    triggerCooldownMs: meta.triggerCooldownMs,
     lastTriggeredAt: meta.lastTriggeredAt,
     enabled: meta.enabled === true,
   };
