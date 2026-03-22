@@ -1048,7 +1048,7 @@ export class WebUIChannel implements Channel {
                 const messageText = (text || finalParts.map((p: any) => p.text || '').join('\n')).trim();
                 const isCommand = messageText.startsWith('/');
                 
-                logger.info({ sessionId, isCommand, replyLength: replyText.length }, 'WebUI reply called');
+                logger.debug({ sessionId, isCommand, replyLength: replyText.length }, 'WebUI reply called');
                 
                 if (isCommand) {
                   // Broadcast temporary command response (not saved to history)
@@ -1064,7 +1064,7 @@ export class WebUIChannel implements Channel {
                       isCommandResponse: true // Mark as command response to skip timestamp check
                     }
                   });
-                  logger.info({ sessionId }, 'Command response broadcasted');
+                  logger.debug({ sessionId }, 'Command response broadcasted');
                 }
                 
                 // Don't call res.json() here - response already sent
@@ -1222,7 +1222,7 @@ export class WebUIChannel implements Channel {
   // Broadcast new message to SSE clients
   broadcastMessage(sessionId: string, message: any) {
     const clients = this.sseClients.get(sessionId);
-    logger.info({ sessionId, clientCount: clients?.length || 0, messageRole: message.role }, 'Broadcasting message to SSE clients');
+    logger.debug({ sessionId, clientCount: clients?.length || 0, messageRole: message.role }, 'Broadcasting message to SSE clients');
     if (clients && clients.length > 0) {
       const data = JSON.stringify({ type: 'message', message });
       clients.forEach(client => {

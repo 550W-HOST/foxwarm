@@ -136,7 +136,7 @@ export class HttpServer {
     
     this.app[route.method.toLowerCase() as 'get'](route.path, ...middlewares, handler);
     
-    logger.info({ method: route.method, path: route.path }, 'Route added');
+    logger.debug({ method: route.method, path: route.path }, 'Route added');
   }
 
   private authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -148,7 +148,7 @@ export class HttpServer {
 
   addWebSocket(path: string, handler: (ws: WebSocket, req: http.IncomingMessage) => Promise<void>): void {
     this.webSocketHandlers.push({ path, handler });
-    logger.info({ path }, 'WebSocket handler added');
+    logger.debug({ path }, 'WebSocket handler added');
   }
 
   private setupWebSocketHandlers() {

@@ -275,7 +275,7 @@ export async function getSession(sessionId: string): Promise<Session> {
           // Check if indexing was interrupted
           await resumeIndexingIfNeeded(sessionId, session);
         }
-        logger.info({ sessionId: realId, messageCount: session.history.length }, 'Session history loaded from file');
+        logger.debug({ sessionId: realId, messageCount: session.history.length }, 'Session history loaded from file');
       } catch (e) {
         logger.error({ err: e, sessionId }, 'Failed to load session history');
       }
