@@ -506,7 +506,7 @@ export class MessageRouter {
   }
 
   private async maybeQueueChildReminder(session: Session): Promise<void> {
-    if (!session.parentSessionId || session.history.length === 0) {
+    if (sessionManager.isSubconsciousSession(session) || !session.parentSessionId || session.history.length === 0) {
       return;
     }
 

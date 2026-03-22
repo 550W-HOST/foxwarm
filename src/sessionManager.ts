@@ -707,6 +707,7 @@ export async function ensureSubconsciousSession(primarySessionId: string): Promi
 
   if (existing) {
     existing.compactThresholdTokens = compactThresholdTokens;
+    existing.parentSessionId = primarySessionId;
     existing.meta.subconscious = {
       kind: SUBCONSCIOUS_SESSION_KIND,
       primarySessionId,
@@ -733,6 +734,7 @@ export async function ensureSubconsciousSession(primarySessionId: string): Promi
     },
     busy: false,
     queue: [],
+    parentSessionId: primarySessionId,
     meta: {
       lastMessageTime: Date.now(),
       subconscious: {
