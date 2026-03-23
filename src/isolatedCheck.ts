@@ -107,6 +107,33 @@ export async function requireNotIsolated(sessionIdOrCtx: string | { sessionId?: 
 }
 
 /**
+ * Allow selected archive-inspection tools for isolated sessions, but only when
+ * they target sessions under the same agent. This keeps the permission narrow:
+ * read-only archived history on master without opening broader cross-agent
+ * master-side session introspection.
+ */
+export async function checkArchivedReadPermission(
+  sessionIdOrCtx: string | { sessionId?: string },
+  targetSessionId: string | undefined,
+  operation: 'get_archived_messages' | 'get_archived_blocks',
+): Promise<void> {
+  const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
+  if (!sessionId) return;
+
+  const session = await sessionManager.getExistingSession(sessionId);
+  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
+
+  const callerAgent = session?.agent || 'main';
+  const requested = targetSessionId || sessionId;
+  const targetSession = await sessionManager.getExistingSession(requested);
+  const targetAgent = targetSession?.agent || requested.split('/')[0] || callerAgent;
+
+  if (targetAgent !== callerAgent) {
+    throw new Error(`Isolated session can only use ${operation} for sessions under its own agent (${callerAgent}).`);
+  }
+}
+
+/**
  * Check if isolated session can send to a specific channel
  * @param sessionIdOrCtx Session ID or ToolContext
  * @param channelId Target channel ID (platform:userId)
