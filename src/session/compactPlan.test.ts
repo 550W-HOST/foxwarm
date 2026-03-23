@@ -11,10 +11,10 @@ import {
 } from './compactPlan';
 
 const messageCandidates = [
-  buildMessageCandidateItem(1, 'first request'),
-  buildMessageCandidateItem(2, 'first answer'),
-  buildMessageCandidateItem(3, 'second request'),
-  buildMessageCandidateItem(4, 'second answer'),
+  buildMessageCandidateItem(1, 1, 'first request'),
+  buildMessageCandidateItem(2, 2, 'first answer'),
+  buildMessageCandidateItem(3, 3, 'second request'),
+  buildMessageCandidateItem(4, 4, 'second answer'),
 ];
 
 test('message and block candidates render stable compact keys', () => {
@@ -78,9 +78,9 @@ test('validateCompactPlanArgs accepts layered message and block range creation',
 
 test('validateCompactPlanArgs accepts sparse raw seq ranges when ignored lifecycle messages were filtered out of candidates', () => {
   const sparseMessageCandidates = [
-    buildMessageCandidateItem(1, 'first real message'),
-    buildMessageCandidateItem(3, 'second real message after ignored lifecycle seq #2'),
-    buildMessageCandidateItem(4, 'third real message'),
+    buildMessageCandidateItem(1, 1, 'first real message'),
+    buildMessageCandidateItem(3, 3, 'second real message after ignored lifecycle seq #2'),
+    buildMessageCandidateItem(4, 4, 'third real message'),
   ];
 
   const plan = validateCompactPlanArgs({
@@ -96,6 +96,35 @@ test('validateCompactPlanArgs accepts sparse raw seq ranges when ignored lifecyc
   assert.equal(plan.createBlocks.length, 1);
   assert.equal(plan.createBlocks[0].sourceStart, 1);
   assert.equal(plan.createBlocks[0].sourceEnd, 4);
+});
+
+test('validateCompactPlanArgs treats grouped tool call/response candidates as atomic message ranges', () => {
+  const groupedCandidates = [
+    buildMessageCandidateItem(10, 11, 'tool call with paired response'),
+    buildMessageCandidateItem(12, 12, 'follow-up user message'),
+  ];
+
+  const okPlan = validateCompactPlanArgs({
+    createBlocks: [{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 10,
+      sourceEnd: 11,
+      summary: 'summarize atomic tool exchange',
+    }],
+  }, groupedCandidates);
+
+  assert.equal(okPlan.createBlocks.length, 1);
+
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocks: [{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 10,
+      sourceEnd: 10,
+      summary: 'invalid partial tool exchange',
+    }],
+  }, groupedCandidates), /continuous message range/i);
 });
 
 test('validateCompactPlanArgs rejects non-continuous or overlapping ranges', () => {

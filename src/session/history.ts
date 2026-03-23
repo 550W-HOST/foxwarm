@@ -387,12 +387,19 @@ type LayeredCompactCandidateEntry = {
   frontierEndIndex: number;
 };
 
-function resolveCompactionSplitIndex(history: Message[], keepPercent: number): number {
+export function resolveCompactionSplitIndex(history: Message[], keepPercent: number): number {
   let splitIndex = Math.floor(history.length * (1 - keepPercent));
 
   if (keepPercent > 0) {
-    while (splitIndex < history.length && history[splitIndex].role === 'tool') {
-      splitIndex++;
+    if (splitIndex < history.length && history[splitIndex].role === 'tool') {
+      let cursor = splitIndex;
+      while (cursor > 0 && history[cursor].role === 'tool') {
+        cursor -= 1;
+      }
+
+      if (history[cursor]?.role === 'model' && history[cursor].parts?.some(part => !!part.functionCall)) {
+        splitIndex = cursor;
+      }
     }
   } else {
     splitIndex = history.length;
@@ -419,34 +426,71 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
   const messageMap = new Map(messageRecords.map(record => [record.seq, record]));
   const blockMap = new Map(blockRecords.map(record => [record.id, record]));
 
-  return olderFrontier.flatMap((item, frontierIndex) => {
-    if (item.kind === 'message') {
-      const record = messageMap.get(item.seq);
-      if (!record || shouldIgnoreMessageInCompactCandidates(record.message)) {
-        return [];
+  const entries: LayeredCompactCandidateEntry[] = [];
+
+  for (let frontierIndex = 0; frontierIndex < olderFrontier.length; frontierIndex += 1) {
+    const item = olderFrontier[frontierIndex];
+
+    if (item.kind === 'block') {
+      const record = blockMap.get(item.id);
+      if (!record) {
+        continue;
       }
-      return [{
-        item: buildMessageCandidateItem(item.seq, formatMessagePreviewText(record.message, 60, {
-          skipEphemeralSystem: true,
-          skipRagMemorySnippets: true,
-          skipThinking: true,
-        }).trim() || '[empty message]'),
+
+      entries.push({
+        item: buildBlockCandidateItem(record.id, record.level, record.rawStartSeq, record.rawEndSeq, record.summary),
         frontierStartIndex: frontierIndex,
         frontierEndIndex: frontierIndex,
-      }];
+      });
+      continue;
     }
 
-    const record = blockMap.get(item.id);
-    if (!record) {
-      return [];
+    const record = messageMap.get(item.seq);
+    if (!record || shouldIgnoreMessageInCompactCandidates(record.message)) {
+      continue;
     }
 
-    return [{
-      item: buildBlockCandidateItem(record.id, record.level, record.rawStartSeq, record.rawEndSeq, record.summary),
+    let groupedEndFrontierIndex = frontierIndex;
+    const groupedRecords = [record];
+    const startsToolExchange = record.message.role === 'model'
+      && record.message.parts?.some(part => !!part.functionCall);
+
+    if (startsToolExchange) {
+      for (let nextIndex = frontierIndex + 1; nextIndex < olderFrontier.length; nextIndex += 1) {
+        const nextItem = olderFrontier[nextIndex];
+        if (nextItem.kind !== 'message') {
+          break;
+        }
+
+        const nextRecord = messageMap.get(nextItem.seq);
+        if (!nextRecord || nextRecord.message.role !== 'tool') {
+          break;
+        }
+
+        groupedRecords.push(nextRecord);
+        groupedEndFrontierIndex = nextIndex;
+      }
+    }
+
+    const preview = groupedRecords
+      .map(groupRecord => formatMessagePreviewText(groupRecord.message, 40, {
+        skipEphemeralSystem: true,
+        skipRagMemorySnippets: true,
+        skipThinking: true,
+      }).trim())
+      .filter(Boolean)
+      .join(' | ') || '[empty message]';
+
+    entries.push({
+      item: buildMessageCandidateItem(item.seq, groupedRecords[groupedRecords.length - 1].seq, preview),
       frontierStartIndex: frontierIndex,
-      frontierEndIndex: frontierIndex,
-    }];
-  });
+      frontierEndIndex: groupedEndFrontierIndex,
+    });
+
+    frontierIndex = groupedEndFrontierIndex;
+  }
+
+  return entries;
 }
 
 function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> {
@@ -461,7 +505,7 @@ function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCo
     if (block.sourceKind === 'message') {
       for (let index = 0; index < candidateItems.length; index += 1) {
         const item = candidateItems[index];
-        if (item.kind === 'message' && item.seq === block.sourceStart) {
+        if (item.kind === 'message' && item.startSeq === block.sourceStart) {
           startIndex = index;
           break;
         }
@@ -475,11 +519,11 @@ function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCo
           break;
         }
         endIndex = index;
-        if (item.seq === block.sourceEnd) {
+        if (item.endSeq === block.sourceEnd) {
           break;
         }
       }
-      if (endIndex < startIndex || candidateItems[endIndex]?.kind !== 'message' || (candidateItems[endIndex] as Extract<CompactCandidateItem, { kind: 'message' }>).seq !== block.sourceEnd) {
+      if (endIndex < startIndex || candidateItems[endIndex]?.kind !== 'message' || (candidateItems[endIndex] as Extract<CompactCandidateItem, { kind: 'message' }>).endSeq !== block.sourceEnd) {
         throw new Error(`Unable to resolve layered compact message range ${block.sourceStart}-${block.sourceEnd}.`);
       }
       const startEntry = candidateEntries[startIndex];

@@ -7,7 +7,8 @@ export type CompactCandidateItem =
   | {
       kind: 'message';
       key: string;
-      seq: number;
+      startSeq: number;
+      endSeq: number;
       preview: string;
     }
   | {
@@ -87,11 +88,12 @@ function trimPreview(text: string, limit: number = DEFAULT_PREVIEW_CHAR_LIMIT): 
   return `${normalized.slice(0, limit - 1)}…`;
 }
 
-export function buildMessageCandidateItem(seq: number, preview: string): CompactCandidateItem {
+export function buildMessageCandidateItem(startSeq: number, endSeq: number, preview: string): CompactCandidateItem {
   return {
     kind: 'message',
-    key: `M#${seq}`,
-    seq,
+    key: startSeq === endSeq ? `M#${startSeq}` : `M#${startSeq}-#${endSeq}`,
+    startSeq,
+    endSeq,
     preview: trimPreview(preview),
   };
 }
@@ -200,7 +202,7 @@ function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPla
 }
 
 function findMessageRange(candidateItems: CompactCandidateItem[], sourceStart: number, sourceEnd: number): [number, number] | null {
-  const startIndex = candidateItems.findIndex(item => item.kind === 'message' && item.seq === sourceStart);
+  const startIndex = candidateItems.findIndex(item => item.kind === 'message' && item.startSeq === sourceStart);
   if (startIndex < 0) return null;
 
   let endIndex = startIndex - 1;
@@ -210,7 +212,7 @@ function findMessageRange(candidateItems: CompactCandidateItem[], sourceStart: n
       break;
     }
     endIndex = index;
-    if (item.seq === sourceEnd) {
+    if (item.endSeq === sourceEnd) {
       return [startIndex, endIndex];
     }
   }
