@@ -475,9 +475,28 @@ export class NodesManager {
     logger.warn({ transferId, nodeId: transfer.nodeId, error }, 'File transfer error received');
   }
 
-  async handleSessionEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+  private async assertNodeOwnsSessionForEvent(nodeId: string, sessionId: string): Promise<void> {
+    const session = await sessionManager.getExistingSession(sessionId);
+    if (!session) {
+      throw new Error(`Target session "${sessionId}" not found.`);
+    }
+
+    if (session.currentNode === nodeId) {
+      return;
+    }
+
+    const agentName = session.agent || 'main';
+    if (sessionManager.isAgentIsolated(agentName) && sessionManager.getAgentIsolationNode(agentName) === nodeId) {
+      return;
+    }
+
+    throw new Error(`Node "${nodeId}" cannot send session events to "${sessionId}" because the session is not assigned to that node or its isolated agent.`);
+  }
+
+  async handleSessionEvent(nodeId: string, sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+    await this.assertNodeOwnsSessionForEvent(nodeId, sessionId);
     await sessionManager.queueSessionSystemEvent(sessionId, message, type);
-    logger.info({ sessionId, type }, 'Session event received from remote node');
+    logger.info({ nodeId, sessionId, type }, 'Session event received from remote node');
   }
 
   /**

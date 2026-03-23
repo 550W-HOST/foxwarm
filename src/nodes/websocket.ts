@@ -161,6 +161,7 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
             break;
           }
           await nodesManager.handleSessionEvent(
+            nodeId || authenticatedNodeId || 'unknown-node',
             String(data.sessionId),
             data.message,
             data.eventType === 'trigger' || data.eventType === 'onboot' ? data.eventType : 'background'

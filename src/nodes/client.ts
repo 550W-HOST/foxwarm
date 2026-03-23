@@ -3,7 +3,9 @@
  * Usage: npm run node -- --host http://master:3001/ --id my-node --token <pairing-token>
  */
 
+import crypto from 'crypto';
 import fs from 'fs-extra';
+import http from 'http';
 import path from 'path';
 import WebSocket from 'ws';
 import { logger } from '../common';
@@ -17,6 +19,8 @@ interface NodeClientOptions {
   token?: string;
   authToken?: string;
   credentialsFile?: string;
+  localTrigger?: boolean;
+  localTriggerPort?: number;
 }
 
 type StoredNodeCredentials = {
@@ -170,7 +174,70 @@ const NODE_CAPABILITIES = {
   ]
 };
 
-class NodeClient {
+const DEFAULT_LOCAL_TRIGGER_HOST = '127.0.0.1';
+
+type LocalTriggerRuntime = {
+  host: string;
+  port: number;
+  token: string;
+  tokenFile: string;
+  metaFile: string;
+  scriptFile: string;
+};
+
+function resolveNodeStateDir(credentialsFile?: string): string {
+  return credentialsFile
+    ? path.dirname(path.resolve(credentialsFile))
+    : path.resolve(process.cwd(), 'state');
+}
+
+function buildLocalTriggerPaths(stateDir: string) {
+  return {
+    tokenFile: path.join(stateDir, 'node_local_trigger_token'),
+    metaFile: path.join(stateDir, 'node_local_trigger.json'),
+    scriptFile: path.join(stateDir, 'trigger-session-event.sh'),
+  };
+}
+
+function buildLocalTriggerScript(metaFile: string, tokenFile: string): string {
+  return `#!/bin/sh
+set -eu
+META_FILE="${metaFile}"
+TOKEN_FILE="${tokenFile}"
+if [ "$#" -lt 2 ]; then
+  echo "Usage: $0 <session-id> <message> [event-type]" >&2
+  exit 1
+fi
+SESSION_ID="$1"
+MESSAGE="$2"
+EVENT_TYPE="\${3:-trigger}"
+python3 - "$META_FILE" "$TOKEN_FILE" "$SESSION_ID" "$MESSAGE" "$EVENT_TYPE" <<'PY'
+import json, sys, urllib.request
+meta_path, token_path, session_id, message, event_type = sys.argv[1:]
+with open(meta_path, 'r', encoding='utf-8') as f:
+    meta = json.load(f)
+with open(token_path, 'r', encoding='utf-8') as f:
+    token = f.read().strip()
+req = urllib.request.Request(
+    f"http://{meta['host']}:{meta['port']}/trigger" ,
+    data=json.dumps({
+        'sessionId': session_id,
+        'message': message,
+        'eventType': event_type,
+    }).encode('utf-8'),
+    headers={
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {token}',
+    },
+    method='POST',
+)
+with urllib.request.urlopen(req) as resp:
+    sys.stdout.write(resp.read().decode('utf-8'))
+PY
+`;
+}
+
+export class NodeClient {
   private ws: WebSocket | null = null;
   private host: string;
   private requestedName: string;
@@ -182,6 +249,10 @@ class NodeClient {
   private reconnectDelay = 5000; // 5 seconds
   private forceImmediateReconnect = false;
   private pairingRejected = false;
+  private localTriggerEnabled = true;
+  private localTriggerPort = 0;
+  private localTriggerServer: http.Server | null = null;
+  private localTriggerRuntime: LocalTriggerRuntime | null = null;
 
   constructor(options: NodeClientOptions) {
     this.host = options.host;
@@ -190,6 +261,10 @@ class NodeClient {
     this.credentialsFile = options.credentialsFile;
     this.connectedNodeId = options.authToken && options.nodeId ? options.nodeId : null;
     this.authToken = options.authToken;
+    this.localTriggerEnabled = options.localTrigger !== false;
+    this.localTriggerPort = typeof options.localTriggerPort === 'number' && Number.isFinite(options.localTriggerPort)
+      ? options.localTriggerPort
+      : 0;
   }
 
   private get isAuthenticatedMode(): boolean {
@@ -227,6 +302,125 @@ class NodeClient {
     if (this.credentialsFile && await fs.pathExists(this.credentialsFile)) {
       await fs.remove(this.credentialsFile);
     }
+  }
+
+  private async ensureLocalTriggerRuntime(): Promise<LocalTriggerRuntime> {
+    if (this.localTriggerRuntime) {
+      return this.localTriggerRuntime;
+    }
+
+    const stateDir = resolveNodeStateDir(this.credentialsFile);
+    const { tokenFile, metaFile, scriptFile } = buildLocalTriggerPaths(stateDir);
+    await fs.ensureDir(stateDir);
+
+    let token: string;
+    if (await fs.pathExists(tokenFile)) {
+      token = String(await fs.readFile(tokenFile, 'utf8')).trim();
+    } else {
+      token = crypto.randomBytes(32).toString('hex');
+      await fs.writeFile(tokenFile, `${token}\n`, { mode: 0o600 });
+    }
+
+    this.localTriggerRuntime = {
+      host: DEFAULT_LOCAL_TRIGGER_HOST,
+      port: this.localTriggerPort,
+      token,
+      tokenFile,
+      metaFile,
+      scriptFile,
+    };
+    return this.localTriggerRuntime;
+  }
+
+  private async writeLocalTriggerArtifacts(runtime: LocalTriggerRuntime): Promise<void> {
+    await fs.writeJson(runtime.metaFile, {
+      host: runtime.host,
+      port: runtime.port,
+      tokenFile: runtime.tokenFile,
+      scriptFile: runtime.scriptFile,
+      nodeId: this.connectedNodeId,
+    }, { spaces: 2 });
+    await fs.writeFile(runtime.scriptFile, buildLocalTriggerScript(runtime.metaFile, runtime.tokenFile), { mode: 0o700 });
+  }
+
+  async startLocalTriggerServer(): Promise<void> {
+    if (!this.localTriggerEnabled || this.localTriggerServer) {
+      return;
+    }
+
+    const runtime = await this.ensureLocalTriggerRuntime();
+    this.localTriggerServer = http.createServer(async (req, res) => {
+      try {
+        const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+        if (url.pathname !== '/trigger') {
+          res.statusCode = 404;
+          res.end('Not found');
+          return;
+        }
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end('Method not allowed');
+          return;
+        }
+
+        const authHeader = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+        const bearer = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+        const headerToken = Array.isArray(req.headers['x-node-trigger-token']) ? req.headers['x-node-trigger-token'][0] : req.headers['x-node-trigger-token'];
+        const providedToken = bearer || headerToken;
+        if (providedToken !== runtime.token) {
+          res.statusCode = 401;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+        }
+        const body = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
+        const sessionId = typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : '';
+        const message = typeof body.message === 'string' && body.message.trim() ? body.message : '';
+        const eventType = body.eventType === 'background' || body.eventType === 'onboot' ? body.eventType : 'trigger';
+
+        if (!sessionId || !message) {
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: 'sessionId and message are required' }));
+          return;
+        }
+
+        await this.sendSessionEvent(sessionId, message, eventType);
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: true }));
+      } catch (err: any) {
+        logger.warn({ err }, 'Local node trigger request failed');
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: err?.message || String(err) }));
+      }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      this.localTriggerServer!.once('error', reject);
+      this.localTriggerServer!.listen(runtime.port, runtime.host, () => resolve());
+    });
+    const address = this.localTriggerServer.address();
+    if (address && typeof address === 'object') {
+      runtime.port = address.port;
+    }
+    await this.writeLocalTriggerArtifacts(runtime);
+    logger.info({ host: runtime.host, port: runtime.port, tokenFile: runtime.tokenFile, scriptFile: runtime.scriptFile }, 'Node local trigger endpoint ready');
+  }
+
+  private async stopLocalTriggerServer(): Promise<void> {
+    if (!this.localTriggerServer) {
+      return;
+    }
+    const server = this.localTriggerServer;
+    this.localTriggerServer = null;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
   async connect(): Promise<void> {
@@ -318,6 +512,9 @@ class NodeClient {
       case 'registered':
         logger.info({ nodeId: message.nodeId }, 'Node registered');
         this.connectedNodeId = message.nodeId;
+        if (this.localTriggerRuntime) {
+          await this.writeLocalTriggerArtifacts(this.localTriggerRuntime);
+        }
         break;
       case 'pair_pending':
         logger.info({ pendingId: message.pendingId, pairCode: message.pairCode, requestedName: message.requestedName }, 'Node pairing pending approval');
@@ -327,6 +524,9 @@ class NodeClient {
         await this.saveStoredCredentials(String(message.nodeId), String(message.authToken));
         this.connectedNodeId = String(message.nodeId);
         this.authToken = String(message.authToken);
+        if (this.localTriggerRuntime) {
+          await this.writeLocalTriggerArtifacts(this.localTriggerRuntime);
+        }
         this.forceImmediateReconnect = true;
         this.ws?.close(1000, 'Reconnect with node credentials');
         break;
@@ -507,6 +707,7 @@ class NodeClient {
       this.ws.close();
       this.ws = null;
     }
+    await this.stopLocalTriggerServer();
   }
 }
 
@@ -527,12 +728,16 @@ function parseArgs(): NodeClientOptions {
       options.authToken = args[++i];
     } else if (arg === '--credentials-file' && i + 1 < args.length) {
       options.credentialsFile = args[++i];
+    } else if (arg === '--local-trigger-port' && i + 1 < args.length) {
+      options.localTriggerPort = Number(args[++i]);
+    } else if (arg === '--no-local-trigger') {
+      options.localTrigger = false;
     }
   }
 
   if (!options.host) {
     console.error('Error: --host is required');
-    console.error('Usage: npm run node -- --host http://master:3001/ --id requested-name --token <pairing-token> [--credentials-file path]');
+    console.error('Usage: npm run node -- --host http://master:3001/ --id requested-name --token <pairing-token> [--credentials-file path] [--local-trigger-port <port>] [--no-local-trigger]');
     process.exit(1);
   }
 
@@ -557,6 +762,7 @@ async function main() {
     }
   });
 
+  await client.startLocalTriggerServer();
   await client.connect();
 
   process.on('SIGINT', async () => {
@@ -572,7 +778,9 @@ async function main() {
   });
 }
 
-main().catch(err => {
-  logger.error({ err }, 'Node client failed');
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    logger.error({ err }, 'Node client failed');
+    process.exit(1);
+  });
+}
