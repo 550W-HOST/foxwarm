@@ -53,7 +53,7 @@ test('validateCompactPlanArgs accepts layered message and block range creation',
   ];
 
   const plan = validateCompactPlanArgs({
-    createBlocks: [
+    createBlocksJson: JSON.stringify([
       {
         level: 1,
         sourceKind: 'message',
@@ -68,7 +68,7 @@ test('validateCompactPlanArgs accepts layered message and block range creation',
         sourceEnd: 11,
         summary: 'summary for existing level 1 blocks',
       },
-    ],
+    ]),
   }, candidates);
 
   assert.equal(plan.createBlocks.length, 2);
@@ -84,13 +84,13 @@ test('validateCompactPlanArgs accepts sparse raw seq ranges when ignored lifecyc
   ];
 
   const plan = validateCompactPlanArgs({
-    createBlocks: [{
+    createBlocksJson: JSON.stringify([{
       level: 1,
       sourceKind: 'message',
       sourceStart: 1,
       sourceEnd: 4,
       summary: 'summary across visible messages while skipping ignored lifecycle seqs',
-    }],
+    }]),
   }, sparseMessageCandidates);
 
   assert.equal(plan.createBlocks.length, 1);
@@ -105,41 +105,41 @@ test('validateCompactPlanArgs treats grouped tool call/response candidates as at
   ];
 
   const okPlan = validateCompactPlanArgs({
-    createBlocks: [{
+    createBlocksJson: JSON.stringify([{
       level: 1,
       sourceKind: 'message',
       sourceStart: 10,
       sourceEnd: 11,
       summary: 'summarize atomic tool exchange',
-    }],
+    }]),
   }, groupedCandidates);
 
   assert.equal(okPlan.createBlocks.length, 1);
 
   assert.throws(() => validateCompactPlanArgs({
-    createBlocks: [{
+    createBlocksJson: JSON.stringify([{
       level: 1,
       sourceKind: 'message',
       sourceStart: 10,
       sourceEnd: 10,
       summary: 'invalid partial tool exchange',
-    }],
+    }]),
   }, groupedCandidates), /continuous message range/i);
 });
 
 test('validateCompactPlanArgs rejects non-continuous or overlapping ranges', () => {
   assert.throws(() => validateCompactPlanArgs({
-    createBlocks: [{
+    createBlocksJson: JSON.stringify([{
       level: 1,
       sourceKind: 'message',
       sourceStart: 1,
       sourceEnd: 5,
       summary: 'invalid range',
-    }],
+    }]),
   }, messageCandidates), /continuous message range/i);
 
   assert.throws(() => validateCompactPlanArgs({
-    createBlocks: [
+    createBlocksJson: JSON.stringify([
       {
         level: 1,
         sourceKind: 'message',
@@ -154,8 +154,22 @@ test('validateCompactPlanArgs rejects non-continuous or overlapping ranges', () 
         sourceEnd: 3,
         summary: 'overlap',
       },
-    ],
+    ]),
   }, messageCandidates), /overlaps another createBlocks range/i);
+});
+
+test('validateCompactPlanArgs still accepts legacy createBlocks arrays internally', () => {
+  const plan = validateCompactPlanArgs({
+    createBlocks: [{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 2,
+      summary: 'legacy compatibility',
+    }],
+  }, messageCandidates);
+
+  assert.equal(plan.createBlocks.length, 1);
 });
 
 test('buildCompactPlanValidationFeedback explains invalid layered compact plans', () => {
