@@ -357,14 +357,37 @@ async function moveInteractionLogsToErrorDir(logFiles: LlmInteractionLogFiles | 
 }
 
 /**
- * Check and fix unpaired tool calls (missing responses)
- * This can happen after agent restart
- * 
- * Also fix user/system inserted messages between tool calls, insert a dummy message.
- * This fix some kv cache problem.
+ * Repair broken tool-call / tool-response adjacency after restart, manual edits,
+ * or history compaction. We currently do three small repairs:
+ * - insert placeholder tool responses when a model tool-call lost its tool message
+ * - drop stray tool-response messages that no longer have a matching request nearby
+ * - insert an interruption marker when a user/system turn arrives right after a tool message
  */
 export function fixToolCalls(contents: Message[]): Message[] {
     const fixed = [];
+
+    const isSkippableSystemInterruption = (message: Message | null | undefined): boolean => {
+        if (!message || message.role !== 'user' || !message.parts?.length) return false;
+        return message.parts.every((part: MessagePart) => {
+            if (part.functionCall || part.functionResponse || part.inlineData || part.thinking) return false;
+            if (part.system) return true;
+            return typeof part.text === 'string' && part.text.startsWith('[SYSTEM:');
+        });
+    };
+
+    const hasNearbyToolCallRequest = (index: number): boolean => {
+        for (let j = index - 1; j >= 0; j--) {
+            const prev = contents[j];
+            if (isSkippableSystemInterruption(prev)) {
+                continue;
+            }
+            if (prev.role === 'model') {
+                return !!prev.parts?.some((p: MessagePart) => p.functionCall);
+            }
+            return false;
+        }
+        return false;
+    };
     
     for (let i = 0; i < contents.length; i++) {
         const msg = contents[i];
@@ -397,6 +420,18 @@ export function fixToolCalls(contents: Message[]): Message[] {
                         __meta: { timestamp: Date.now() }
                     });
                 }
+            }
+        }
+
+        // Drop tool-result messages that no longer have a matching tool-call request.
+        // Allow pure system interruption messages in between, but do not keep a late
+        // tool result after a real user/model turn boundary.
+        if (msg.role === 'tool' && msg.parts) {
+            const toolResponses = msg.parts.filter((p: MessagePart) => p.functionResponse);
+            if (toolResponses.length > 0 && !hasNearbyToolCallRequest(i)) {
+                logger.warn({ messageIndex: i, seq: msg.__meta?.seq }, 'Found unpaired tool responses, deleting');
+                fixed.pop();
+                continue;
             }
         }
 
