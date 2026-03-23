@@ -705,7 +705,7 @@ function App() {
       <div className="fixed inset-0 bg-gray-100 dark:bg-gray-900 overflow-hidden">
         <div className="flex h-full min-h-0 flex-col">
           {tabsBar}
-          <div className="min-h-0 flex-1 overflow-hidden border-x border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+          <div className="min-h-0 flex-1 overflow-hidden border-x border-b border-gray-200 bg-gray-100 dark:border-gray-700 dark:bg-gray-900">
             {renderTabContent(handleBackToList)}
           </div>
         </div>
@@ -735,7 +735,7 @@ function App() {
         ) : (
           <div className="flex h-full min-h-0 flex-col">
             {tabsBar}
-            <div className="min-h-0 flex-1 overflow-hidden border-x border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+            <div className="min-h-0 flex-1 overflow-hidden border-x border-b border-gray-200 bg-gray-100 dark:border-gray-700 dark:bg-gray-900">
               {renderTabContent()}
             </div>
           </div>
