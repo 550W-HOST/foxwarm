@@ -53,23 +53,12 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   parameters: {
     type: 'object',
     properties: {
-      createBlocks: {
-        type: 'array',
-        description: 'Each block replaces one continuous range of older candidate items with a lightweight summary block. Level 1 blocks summarize raw messages; higher levels summarize blocks from the immediately lower level.',
-        items: {
-          type: 'object',
-          properties: {
-            level: { type: 'number', description: 'Target block level. Use 1 for raw messages, 2 for level-1 blocks, and so on.' },
-            sourceKind: { type: 'string', enum: ['message', 'block'], description: 'Whether this block summarizes raw messages or existing lower-level blocks.' },
-            sourceStart: { type: 'number', description: 'For sourceKind=message, starting raw seq. For sourceKind=block, starting block id.' },
-            sourceEnd: { type: 'number', description: 'For sourceKind=message, ending raw seq. For sourceKind=block, ending block id.' },
-            summary: { type: 'string', description: 'Concise summary text for this block.' },
-          },
-          required: ['level', 'sourceKind', 'sourceStart', 'sourceEnd', 'summary'],
-        },
+      createBlocksJson: {
+        type: 'string',
+        description: 'JSON array string for createBlocks. Each item should be an object like {"level":1,"sourceKind":"message","sourceStart":10,"sourceEnd":12,"summary":"..."}.',
       },
     },
-    required: ['createBlocks'],
+    required: ['createBlocksJson'],
   },
 };
 
@@ -123,7 +112,8 @@ export function buildCompactPromptText(options: {
     `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. Do not replace them.`,
     `Review the older candidate items below and respond by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
     'Rules:',
-    '- createBlocks may include one or more new blocks.',
+    '- Pass the plan via createBlocksJson as a JSON array string.',
+    '- createBlocksJson may include one or more new blocks.',
     '- A block must summarize a continuous range of same-kind candidate items only.',
     '- Level 1 blocks summarize raw messages (sourceKind=message).',
     '- Higher-level blocks summarize existing blocks from the immediately lower level (sourceKind=block and level = child level + 1).',
@@ -155,12 +145,23 @@ function buildCompactPlanValidationSummary(details: CompactPlanValidationDetails
 }
 
 function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPlanValidationDetails): LayeredCreateBlockPlan[] {
-  if (!Array.isArray(rawArgs.createBlocks)) {
-    details.createBlockErrors.push('createBlocks must be an array.');
+  let rawCreateBlocks = rawArgs.createBlocks;
+
+  if (typeof rawArgs.createBlocksJson === 'string' && rawArgs.createBlocksJson.trim()) {
+    try {
+      rawCreateBlocks = JSON.parse(rawArgs.createBlocksJson);
+    } catch (e: any) {
+      details.createBlockErrors.push(`createBlocksJson must be valid JSON: ${e.message}`);
+      return [];
+    }
+  }
+
+  if (!Array.isArray(rawCreateBlocks)) {
+    details.createBlockErrors.push('createBlocksJson must decode to an array (legacy createBlocks array is still accepted internally).');
     return [];
   }
 
-  return rawArgs.createBlocks.flatMap((entry, index) => {
+  return rawCreateBlocks.flatMap((entry, index) => {
     if (!entry || typeof entry !== 'object') {
       details.createBlockErrors.push(`createBlocks[${index}] must be an object.`);
       return [];
