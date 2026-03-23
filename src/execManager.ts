@@ -70,6 +70,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+
+function buildStatusWriterInvocationPosix(): string {
+  return `"$FOXWARM_EXEC_NODE_PATH" -e 'const fs = require("fs"); const statusPath = process.argv[1]; const rawExitCode = process.argv[2]; const exitCode = rawExitCode === "null" ? null : Number(rawExitCode); fs.writeFileSync(statusPath, JSON.stringify({ exitCode, finishedAt: new Date().toISOString() }) + "\\n");'`;
+}
+
+function buildStatusWriterInvocationWindows(): string {
+  return `powershell -NoProfile -ExecutionPolicy Bypass -Command "$status = @{ exitCode = if ($env:FOXWARM_EXEC_EXIT_CODE -eq 'null') { $null } else { [int]$env:FOXWARM_EXEC_EXIT_CODE }; finishedAt = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json -Compress; Set-Content -LiteralPath $env:FOXWARM_EXEC_STATUS_TMP -Value $status"`;
+}
+
 function escapeInlineCode(text: string): string {
   return text.replace(/`/g, '\\`');
 }
@@ -168,17 +177,34 @@ async function updateRunningExec(id: string, updates: Partial<RunningExecEntry>)
 }
 
 function buildManagedExecScript(command: string): string {
+  if (process.platform === 'win32') {
+    return [
+      '@echo off',
+      'setlocal EnableExtensions',
+      command,
+      'set "EXIT_CODE=%ERRORLEVEL%"',
+      'set "CWD_TMP=%FOXWARM_EXEC_CWD_PATH%.tmp.%RANDOM%%RANDOM%"',
+      'set "STATUS_TMP=%FOXWARM_EXEC_STATUS_PATH%.tmp.%RANDOM%%RANDOM%"',
+      'set "FOXWARM_EXEC_EXIT_CODE=%EXIT_CODE%"',
+      'set "FOXWARM_EXEC_STATUS_TMP=%STATUS_TMP%"',
+      'cd > "%CWD_TMP%"',
+      'move /Y "%CWD_TMP%" "%FOXWARM_EXEC_CWD_PATH%" >nul',
+      buildStatusWriterInvocationWindows(),
+      'move /Y "%STATUS_TMP%" "%FOXWARM_EXEC_STATUS_PATH%" >nul',
+      'exit /b %EXIT_CODE%',
+    ].join('\r\n');
+  }
+
   return [
     '#!/usr/bin/env bash',
     'set +e',
     'foxwarm_exec_finalize() {',
     '  exit_code=$?',
-    '  finished_at="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")"',
     '  cwd_tmp="${FOXWARM_EXEC_CWD_PATH}.tmp.$$"',
     '  status_tmp="${FOXWARM_EXEC_STATUS_PATH}.tmp.$$"',
     '  pwd > "$cwd_tmp"',
     '  mv "$cwd_tmp" "$FOXWARM_EXEC_CWD_PATH"',
-    '  printf "{\\"exitCode\\":%s,\\"finishedAt\\":\\"%s\\"}\\n" "$exit_code" "$finished_at" > "$status_tmp"',
+    `  ${buildStatusWriterInvocationPosix()} "$status_tmp" "$exit_code"`,
     '  mv "$status_tmp" "$FOXWARM_EXEC_STATUS_PATH"',
     '}',
     'trap foxwarm_exec_finalize EXIT',
@@ -201,6 +227,10 @@ async function readExecCwd(cwdPath: string): Promise<string | null> {
 }
 
 async function readProcessCwd(pid: number): Promise<string | null> {
+  if (process.platform !== 'linux') {
+    return null;
+  }
+
   try {
     const raw = await fsp.readlink(`/proc/${pid}/cwd`);
     const cwd = raw.trim();
@@ -441,21 +471,36 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
   const logFileName = `${execId}_${formatTime()}.log`;
   const logPath = await getDatedLogPath(tempDir, logFileName);
   const statusPath = `${logPath}.exit.json`;
-  const scriptPath = `${logPath}.command.sh`;
+  const scriptPath = `${logPath}.command${process.platform === 'win32' ? '.cmd' : '.sh'}`;
   const cwdPath = `${logPath}.cwd.txt`;
   const logHandle = await fsp.open(logPath, 'a');
 
-  await fs.writeFile(scriptPath, `${buildManagedExecScript(command)}${command.endsWith('\n') ? '' : '\n'}`, { mode: 0o700 });
+  await fs.writeFile(
+    scriptPath,
+    `${buildManagedExecScript(command)}${command.endsWith('\n') ? '' : '\n'}`,
+    process.platform === 'win32' ? undefined : { mode: 0o700 },
+  );
 
   let child: ChildProcess;
   try {
-    child = spawn('bash', [scriptPath], {
+    const launcher = process.platform === 'win32'
+      ? {
+          command: process.env.ComSpec || 'cmd.exe',
+          args: ['/d', '/s', '/c', scriptPath],
+        }
+      : {
+          command: 'bash',
+          args: [scriptPath],
+        };
+
+    child = spawn(launcher.command, launcher.args, {
       cwd: initialCwd,
       env: {
         ...process.env,
         TERM: 'xterm-256color',
         FOXWARM_EXEC_STATUS_PATH: statusPath,
         FOXWARM_EXEC_CWD_PATH: cwdPath,
+        FOXWARM_EXEC_NODE_PATH: process.execPath,
       },
       stdio: ['ignore', logHandle.fd, logHandle.fd],
       detached: true,
