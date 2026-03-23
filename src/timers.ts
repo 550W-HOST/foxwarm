@@ -127,7 +127,8 @@ async function fireTimer(timerId: string): Promise<void> {
 
   try {
     if (timer.newSession) {
-      const agentName = timer.agentName || 'main';
+      const ownerSession = await sessionManager.getExistingSession(timer.sessionId);
+      const agentName = timer.agentName || ownerSession?.agent || 'main';
       if (!await fs.pathExists(getAgentDir(agentName))) {
         throw new Error(`Target agent "${agentName}" not found.`);
       }
