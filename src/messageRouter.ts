@@ -329,6 +329,34 @@ export class MessageRouter {
       && part.text.startsWith('[SYSTEM: The following message is an inter-agent message from another session'));
   }
 
+  private getReasoningPreviewForSubconscious(message: any): string | null {
+    if (message?.role !== 'model' || !Array.isArray(message?.parts)) {
+      return null;
+    }
+
+    for (const part of message.parts as MessagePart[]) {
+      const summaries = Array.isArray((part as any)?.providerMeta?.thinkingSummaries)
+        ? (part as any).providerMeta.thinkingSummaries.filter((entry: any) => typeof entry === 'string' && entry.trim().length > 0)
+        : [];
+      const rawThinking = typeof part.thinking === 'string' && part.thinking.trim().length > 0
+        ? part.thinking.trim()
+        : '';
+      const sourceText = summaries[0] || rawThinking;
+      if (!sourceText) {
+        continue;
+      }
+
+      const normalized = sourceText.replace(/\s+/g, ' ').trim();
+      if (!normalized) {
+        continue;
+      }
+
+      return normalized.length > 160 ? `${normalized.slice(0, 157)}…` : normalized;
+    }
+
+    return null;
+  }
+
   private formatSubconsciousRecentContext(session: Session): string {
     const sideSessionId = sessionManager.getSubconsciousStatus(session).sideSessionId;
     const recent = session.history.slice(-12);
@@ -347,12 +375,16 @@ export class MessageRouter {
       const text = preserveFull
         ? formatted
         : (formatted.length > 320 ? `${formatted.slice(0, 317)}...` : formatted);
+      const reasoningPreview = this.getReasoningPreviewForSubconscious(message);
+      const decoratedText = reasoningPreview && !preserveFull
+        ? `${text}\n(reasoning preview: ${reasoningPreview})`
+        : text;
 
-      if (!text) {
+      if (!decoratedText) {
         return `${seqLabel}[${message.role}] [empty]`;
       }
 
-      return formatPrefixedMultilineText(`${seqLabel}[${message.role}] `, text);
+      return formatPrefixedMultilineText(`${seqLabel}[${message.role}] `, decoratedText);
     });
 
     if (sideSessionId) {
