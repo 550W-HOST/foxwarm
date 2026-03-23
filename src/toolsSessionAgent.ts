@@ -10,7 +10,7 @@ import { AGENTS_DIR, COMPACT_PERCENT } from './config';
 import { clearSessionTodo, normalizeRemindEvery, normalizeTodoText, setSessionTodo } from './session/todo';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
-import { requireNotIsolated, checkChannelPermission, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
+import { requireNotIsolated, checkArchivedReadPermission, checkChannelPermission, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
 
 interface ToolContext {
   sessionId?: string;
@@ -551,8 +551,8 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
 }
 
 export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolContext) {
-  await requireNotIsolated(ctx, 'get_archived_messages');
   const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
+  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
   assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_archived_messages');
   const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
 
@@ -581,8 +581,8 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
 
 
 export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext) {
-  await requireNotIsolated(ctx, 'get_archived_blocks');
   const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
+  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
   assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_archived_blocks');
   const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
 
