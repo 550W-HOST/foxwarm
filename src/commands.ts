@@ -804,7 +804,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         resp += '`/session list` - List all sessions\n'
         resp += '`/session new` - Create new ad-hoc session\n'
         resp += '`/session create <agent> <session>` - Create session under an existing agent\n'
-        resp += '`/session fork` - Fork current session\n'
+        resp += '`/session fork [suffix]` - Fork current session as a child session (default suffix: `fork`)\n'
         resp += '`/session delete <sessionId>` - Delete session\n'
         resp += '`/session clear` - Clear current session history\n'
         resp += '`/session rename <name>` - Rename session\n'
@@ -914,10 +914,11 @@ export const COMMANDS: Record<string, CommandDef> = {
             ctx.reply('❌ No active session to fork.')
             return
           }
-          const forkedSessionId = await sessionManager.forkSession(sessionId)
+          const suffix = subArgs[0]
+          const forkedSessionId = await sessionManager.forkSession(sessionId, suffix)
           sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
           sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), forkedSessionId)
-          ctx.reply(`✅ Forked session \`${sessionId}\` → \`${forkedSessionId}\`\nMessages: ${session.history.length}`)
+          ctx.reply(`✅ Forked child session \`${sessionId}\` → \`${forkedSessionId}\`\nMessages: ${session.history.length}`)
           break
         }
 

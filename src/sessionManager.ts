@@ -78,6 +78,24 @@ function buildSubconsciousSessionId(primarySessionId: string): string {
   return `${primarySessionId}__subconscious`;
 }
 
+async function allocateForkSessionId(sourceSessionId: string, suffix?: string): Promise<string> {
+  const requestedSuffix = (suffix || 'fork').trim() || 'fork';
+  const baseId = `${sourceSessionId}_${requestedSuffix}`;
+
+  if (!await getExistingSession(baseId)) {
+    return baseId;
+  }
+
+  let counter = 2;
+  while (true) {
+    const candidate = `${baseId}_${counter}`;
+    if (!await getExistingSession(candidate)) {
+      return candidate;
+    }
+    counter += 1;
+  }
+}
+
 
 // Session storage: sessionId -> Session
 const sessions = new Map<string, Session>();
@@ -867,9 +885,7 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  */
 export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string }): Promise<string> {
   const sourceSession = await getSession(sourceSessionId);
-  const newSessionId = suffix 
-    ? `${sourceSessionId}_${suffix}`
-    : generateSessionId();
+  const newSessionId = await allocateForkSessionId(sourceSessionId, suffix);
 
   const forkedSession: Session = {
     id: newSessionId,
@@ -888,7 +904,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     nextMessageSeq: sourceSession.nextMessageSeq,
     nextBlockId: sourceSession.nextBlockId,
     contextFrontier: sourceSession.contextFrontier ? structuredClone(sourceSession.contextFrontier) : undefined,
-    parentSessionId: isChildSession ? sourceSessionId : null,
+    parentSessionId: sourceSessionId,
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
     verbose: sourceSession.verbose,
