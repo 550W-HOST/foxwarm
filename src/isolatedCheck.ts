@@ -181,8 +181,9 @@ export async function checkSendFilePermission(
 
 /**
  * Check whether an isolated session may manage a timer.
- * Isolated sessions may only manage timers for the current session and may not
- * use timer options that create or target new sessions/agents.
+ * Isolated sessions may only manage timers for their own current session.
+ * They may create timer-fired new sessions, but only inside the same agent so
+ * the new session naturally inherits the agent-level isolation binding.
  */
 export async function checkTimerPermission(
   sessionIdOrCtx: string | { sessionId?: string },
@@ -199,14 +200,28 @@ export async function checkTimerPermission(
   const session = await sessionManager.getExistingSession(sessionId);
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
+  const callerAgent = session?.agent || 'main';
   const targetSessionId = options.targetSessionId || sessionId;
   if (targetSessionId !== sessionId) {
     throw new Error('Isolated session can only manage timers for its own current session.');
   }
 
-  const hasAgentName = typeof options.agentName === 'string' && options.agentName.trim().length > 0;
-  const hasSessionPrefix = typeof options.sessionPrefix === 'string' && options.sessionPrefix.trim().length > 0;
-  if (options.newSession === true || hasAgentName || hasSessionPrefix) {
-    throw new Error('Isolated session timers can only target the current session; new-session/agent/prefix options are not allowed.');
+  const requestedAgent = typeof options.agentName === 'string' && options.agentName.trim().length > 0
+    ? options.agentName.trim()
+    : undefined;
+
+  if (options.newSession === true) {
+    if (requestedAgent && requestedAgent !== callerAgent) {
+      throw new Error(`Isolated session timers may only create new sessions inside their own agent (${callerAgent}).`);
+    }
+    return;
+  }
+
+  if (requestedAgent) {
+    throw new Error('Isolated session timers may only specify agentName together with newSession=true.');
+  }
+
+  if (typeof options.sessionPrefix === 'string' && options.sessionPrefix.trim().length > 0) {
+    throw new Error('Isolated session timers may only specify sessionPrefix together with newSession=true.');
   }
 }
