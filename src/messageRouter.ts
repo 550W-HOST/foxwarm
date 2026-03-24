@@ -491,7 +491,7 @@ export class MessageRouter {
 
     await sessionManager.queueSessionStructuredEvent(settings.sideSessionId, [
       {
-        system: `Subconscious trigger for primary session \`${session.id}\`. Review the recent context, optionally use your limited history/search tools, and only send a single short high-value hint back to the primary session if you find a meaningful recall, contradiction, or reminder. If there is nothing important, end with [NO_ACTION]. If you send a hint, use send_to_session({sessionId: \`${session.id}\`, message: \"[Subconscious] ...\", noFurtherAssistantReply: true}).`,
+        system: `Subconscious trigger for primary session \`${session.id}\`. Review the recent context, optionally use your limited history/search tools, and only send a single short high-value hint back to the primary session if you find a meaningful recall, contradiction, or reminder. If there is nothing important, end with [NO_ACTION]. If you send a hint, use send_to_session({sessionId: \`${session.id}\`, message: \"[Subconscious] ...\"}) and then call end_turn({}) in the same response.`,
       },
       {
         text: this.formatSubconsciousRecentContext(session),

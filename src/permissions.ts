@@ -248,6 +248,13 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
     {
       agent: agentName,
       session: sessionId,
+      target_node: 'master',
+      tool_name: 'end_turn',
+      action: 'accept',
+    },
+    {
+      agent: agentName,
+      session: sessionId,
       target_node: '*',
       tool_name: '*',
       action: 'reject',

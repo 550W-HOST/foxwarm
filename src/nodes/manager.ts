@@ -87,6 +87,7 @@ export class NodesManager {
       'create_session',
       'set_agent_inherit',
       'send_to_session',
+      'end_turn',
       'list_sessions',
       'list_skills',
       'attach_agent_skill',
