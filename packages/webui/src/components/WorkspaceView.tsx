@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, Save, SquareTerminal, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ChevronDown, ChevronRight, Copy, Download, FileText, Folder, FolderOpen, Save, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
+import ContextMenu, { type ContextMenuEntry } from './ContextMenu'
+import { MAX_INLINE_FILE_BYTES, buildWorkspaceDownloadUrl, formatSize, formatTimestamp, triggerBrowserDownload } from './workspaceShared'
 
 interface WorkspaceEntry {
   name: string
@@ -17,6 +19,18 @@ interface WorkspaceTabState {
   selectedPath: string | null
 }
 
+interface ContextMenuState {
+  entry: WorkspaceEntry
+  x: number
+  y: number
+}
+
+interface BlockedFileState {
+  path: string
+  size: number
+  maxSize: number
+}
+
 interface WorkspaceViewProps {
   initialNodeId?: string
   initialPath?: string
@@ -28,17 +42,6 @@ interface WorkspaceViewProps {
 const WORKSPACE_STATE_PREFIX = 'foxwarm_workspace_tab_state_v1:'
 
 const makeNodeKey = (nodeId: string, entryPath: string) => `${nodeId}:${entryPath}`
-
-function formatTimestamp(value: number) {
-  if (!value) return '—'
-  return new Date(value).toLocaleString()
-}
-
-function formatSize(size: number) {
-  if (!Number.isFinite(size) || size < 1024) return `${size || 0} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`
-}
 
 function getWorkspaceStorageKey(nodeId: string, rootPath: string) {
   return `${WORKSPACE_STATE_PREFIX}${nodeId}:${rootPath}`
@@ -89,6 +92,7 @@ function WorkspaceTreeNode({
   selectedPath,
   onToggle,
   onSelect,
+  onContextMenu,
 }: {
   nodeId: string
   entry: WorkspaceEntry
@@ -99,6 +103,7 @@ function WorkspaceTreeNode({
   selectedPath: string | null
   onToggle: (entry: WorkspaceEntry) => void
   onSelect: (entry: WorkspaceEntry) => void
+  onContextMenu: (event: React.MouseEvent, entry: WorkspaceEntry) => void
 }) {
   const nodeKey = makeNodeKey(nodeId, entry.path)
   const expanded = expandedKeys.has(nodeKey)
@@ -110,6 +115,7 @@ function WorkspaceTreeNode({
     <div>
       <div
         onClick={() => onSelect(entry)}
+        onContextMenu={(event) => onContextMenu(event, entry)}
         className={`flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-sm ${isSelected ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'}`}
         style={{ paddingLeft: `${8 + depth * 14}px` }}
       >
@@ -156,6 +162,7 @@ function WorkspaceTreeNode({
               selectedPath={selectedPath}
               onToggle={onToggle}
               onSelect={onSelect}
+              onContextMenu={onContextMenu}
             />
           ))}
         </div>
@@ -181,8 +188,11 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
   const [savedContent, setSavedContent] = useState<string>('')
   const [fileMeta, setFileMeta] = useState<{ size: number; modifiedAt: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [isFileLoading, setIsFileLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [blockedFile, setBlockedFile] = useState<BlockedFileState | null>(null)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
 
   const selectedDirectoryPath = selectedIsDirectory
     ? selectedPath
@@ -201,6 +211,8 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
     setSavedContent('')
     setFileMeta(null)
     setError(null)
+    setNotice(null)
+    setBlockedFile(null)
   }, [rootNodeId, rootPath])
 
   useEffect(() => {
@@ -255,13 +267,19 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
     let cancelled = false
     setIsFileLoading(true)
     setError(null)
+    setNotice(null)
 
     const load = async () => {
       try {
         const res = await fetch(`${API_BASE_PATH}/fs/read?nodeId=${encodeURIComponent(rootNodeId)}&path=${encodeURIComponent(activeFilePath)}`)
         const data = await res.json().catch(() => ({}))
         if (!res.ok) {
-          throw new Error(data.error || 'Failed to read file')
+          const nextError = new Error(data.error || 'Failed to read file') as Error & { code?: string; size?: number; maxSize?: number; path?: string }
+          nextError.code = data.code
+          nextError.size = data.size
+          nextError.maxSize = data.maxSize
+          nextError.path = data.path
+          throw nextError
         }
         if (!cancelled) {
           setEditorContent(data.content || '')
@@ -269,10 +287,26 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
           setFileMeta({ size: data.size || 0, modifiedAt: data.modifiedAt || 0 })
           setSelectedPath(activeFilePath)
           setSelectedIsDirectory(false)
+          setBlockedFile(null)
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err))
+          const detailed = err as Error & { code?: string; size?: number; maxSize?: number; path?: string }
+          if (detailed.code === 'FILE_TOO_LARGE') {
+            setBlockedFile({
+              path: detailed.path || activeFilePath,
+              size: detailed.size || 0,
+              maxSize: detailed.maxSize || MAX_INLINE_FILE_BYTES,
+            })
+            setActiveFilePath(null)
+            setEditorContent('')
+            setSavedContent('')
+            setFileMeta(detailed.size ? { size: detailed.size, modifiedAt: 0 } : null)
+            setError(null)
+          } else {
+            setError(err instanceof Error ? err.message : String(err))
+            setBlockedFile(null)
+          }
         }
       } finally {
         if (!cancelled) {
@@ -289,22 +323,34 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
 
   const openDirectory = async (dirPath: string) => {
     setError(null)
+    setNotice(null)
+    setBlockedFile(null)
     setSelectedPath(dirPath)
     setSelectedIsDirectory(true)
     setExpandedKeys((prev) => new Set(prev).add(makeNodeKey(rootNodeId, dirPath)))
     await ensureDirectoryLoaded(dirPath)
   }
 
-  const openFileInWorkspace = async (filePath: string) => {
-    if (isDirty && activeFilePath && activeFilePath !== filePath && !window.confirm('You have unsaved changes. Discard them and open another file?')) {
+  const openFileInWorkspace = async (entry: WorkspaceEntry) => {
+    if (isDirty && activeFilePath && activeFilePath !== entry.path && !window.confirm('You have unsaved changes. Discard them and open another file?')) {
       return
     }
 
-    setOpenedFiles((prev) => prev.includes(filePath) ? prev : [...prev, filePath])
-    setActiveFilePath(filePath)
-    setSelectedPath(filePath)
+    setSelectedPath(entry.path)
     setSelectedIsDirectory(false)
-    await ensureDirectoryLoaded(getParentPath(filePath))
+    setError(null)
+    setNotice(null)
+
+    if (entry.size > MAX_INLINE_FILE_BYTES) {
+      setBlockedFile({ path: entry.path, size: entry.size, maxSize: MAX_INLINE_FILE_BYTES })
+      setActiveFilePath(null)
+      return
+    }
+
+    setBlockedFile(null)
+    setOpenedFiles((prev) => prev.includes(entry.path) ? prev : [...prev, entry.path])
+    setActiveFilePath(entry.path)
+    await ensureDirectoryLoaded(getParentPath(entry.path))
   }
 
   const handleToggleDirectory = async (entry: WorkspaceEntry) => {
@@ -325,10 +371,32 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
       if (entry.isDirectory) {
         await openDirectory(entry.path)
       } else {
-        await openFileInWorkspace(entry.path)
+        await openFileInWorkspace(entry)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const handleTreeContextMenu = (event: React.MouseEvent, entry: WorkspaceEntry) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setContextMenu({ entry, x: event.clientX, y: event.clientY })
+  }
+
+  const handleDownloadEntry = (entry: WorkspaceEntry) => {
+    triggerBrowserDownload(buildWorkspaceDownloadUrl(entry.path, entry.isDirectory))
+    setNotice(entry.isDirectory ? `Downloading ${entry.name || entry.path} as tar.gz…` : `Downloading ${entry.name || entry.path}…`)
+    setError(null)
+  }
+
+  const handleCopyPath = async (entry: WorkspaceEntry) => {
+    try {
+      await navigator.clipboard.writeText(entry.path)
+      setNotice(`Copied path: ${entry.path}`)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to copy path')
     }
   }
 
@@ -382,6 +450,31 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
     modifiedAt: 0,
   }
 
+  const downloadableSelectedFile = selectedPath && !selectedIsDirectory
+    ? {
+        name: selectedPath.split('/').pop() || selectedPath,
+        path: selectedPath,
+        isDirectory: false,
+        size: blockedFile?.path === selectedPath ? blockedFile.size : (fileMeta?.size || 0),
+        modifiedAt: fileMeta?.modifiedAt || 0,
+      }
+    : null
+
+  const contextMenuEntries: ContextMenuEntry[] = contextMenu ? [
+    {
+      key: contextMenu.entry.isDirectory ? 'download-folder' : 'download-file',
+      icon: <Download className="h-4 w-4" />,
+      label: contextMenu.entry.isDirectory ? 'Download folder (.tar.gz)' : 'Download file',
+      onSelect: () => handleDownloadEntry(contextMenu.entry),
+    },
+    {
+      key: 'copy-path',
+      icon: <Copy className="h-4 w-4" />,
+      label: 'Copy path',
+      onSelect: () => { void handleCopyPath(contextMenu.entry) },
+    },
+  ] : []
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
       <div className="border-b border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
@@ -423,6 +516,16 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
               <SquareTerminal className="h-4 w-4" />
               <span className="hidden md:inline">Open terminal</span>
             </button>
+            {downloadableSelectedFile && (
+              <button
+                onClick={() => handleDownloadEntry(downloadableSelectedFile)}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                title="Download file"
+              >
+                <Download className="h-4 w-4" />
+                <span className="hidden md:inline">Download file</span>
+              </button>
+            )}
             <button
               onClick={handleSave}
               disabled={!isDirty || isSaving || !activeFilePath}
@@ -434,6 +537,18 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
             </button>
           </div>
         </div>
+
+        {error && (
+          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
+            {error}
+          </div>
+        )}
+
+        {notice && !error && (
+          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200">
+            {notice}
+          </div>
+        )}
 
       </div>
 
@@ -458,6 +573,8 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
                         setActiveFilePath(filePath)
                         setSelectedPath(filePath)
                         setSelectedIsDirectory(false)
+                        setBlockedFile(null)
+                        setError(null)
                       }}
                       className={`mb-1 flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${active ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700/60'}`}
                     >
@@ -501,6 +618,7 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
                   selectedPath={selectedPath}
                   onToggle={handleToggleDirectory}
                   onSelect={handleSelectEntry}
+                  onContextMenu={handleTreeContextMenu}
                 />
               </div>
             </div>
@@ -525,6 +643,38 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
               <div className="flex h-full items-center justify-center rounded-xl border border-red-200 bg-red-50 px-6 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
                 {error}
               </div>
+            ) : blockedFile ? (
+              <div className="flex h-full items-center justify-center p-4">
+                <div className="w-full max-w-xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-100">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                    <div className="space-y-3">
+                      <div>
+                        <div className="font-semibold">File too large to open in the editor</div>
+                        <div className="mt-1 text-sm opacity-90">
+                          <span className="font-mono">{blockedFile.path}</span> is {formatSize(blockedFile.size)}, which exceeds the {formatSize(blockedFile.maxSize)} inline viewing limit. Please download it to inspect locally.
+                        </div>
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadEntry({
+                            name: blockedFile.path.split('/').pop() || blockedFile.path,
+                            path: blockedFile.path,
+                            isDirectory: false,
+                            size: blockedFile.size,
+                            modifiedAt: 0,
+                          })}
+                          className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-400"
+                        >
+                          <Download className="h-4 w-4" />
+                          <span>Download file</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             ) : isFileLoading ? (
               <div className="flex h-full items-center justify-center text-sm text-gray-500 dark:text-gray-400">Loading file…</div>
             ) : activeFilePath ? (
@@ -542,6 +692,14 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
           </div>
         </div>
       </div>
+
+      <ContextMenu
+        open={!!contextMenu}
+        entries={contextMenuEntries}
+        point={contextMenu ? { x: contextMenu.x, y: contextMenu.y } : null}
+        preferredPlacement="point"
+        onClose={() => setContextMenu(null)}
+      />
     </div>
   )
 }

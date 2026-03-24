@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { API_BASE_PATH } from '../config'
 import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2 } from 'lucide-react'
+import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 
 export interface Session {
   id: string
@@ -35,7 +36,8 @@ interface ContextMenuState {
   sessionId: string
   x: number
   y: number
-  isRightClick?: boolean // Track if it's from right-click or button click
+  anchorRect?: ContextMenuAnchorRect
+  preferredPlacement?: 'point' | 'bottom-start' | 'bottom-end'
 }
 
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
@@ -96,7 +98,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renameSubmitting, setRenameSubmitting] = useState(false)
-  const contextMenuRef = useRef<HTMLDivElement>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const sessionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const [pendingFocusSessionId, setPendingFocusSessionId] = useState<string | null>(null)
@@ -169,20 +170,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   )
 
   const resolvedCurrentSessionId = currentSession ? resolveSessionId(currentSession) || currentSession : undefined
-
-  // Close context menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-        setContextMenu(null)
-      }
-    }
-    
-    if (contextMenu) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [contextMenu])
 
   useEffect(() => {
     if (!resolvedCurrentSessionId) return
@@ -285,7 +272,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       sessionId,
       x: e.clientX,
       y: e.clientY,
-      isRightClick: true // Mark as right-click for positioning
+      preferredPlacement: 'point',
     })
   }
 
@@ -297,9 +284,17 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     // Position menu below button, right-aligned to prevent overflow on mobile
     setContextMenu({
       sessionId,
-      x: rect.right, // Use right edge of button
-      y: rect.bottom + 4,
-      isRightClick: false // Mark as button click for right-aligned positioning
+      x: rect.left,
+      y: rect.bottom,
+      anchorRect: {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      },
+      preferredPlacement: 'bottom-end',
     })
   }
 
@@ -576,71 +571,52 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     )
   }
 
+  const contextMenuEntries: ContextMenuEntry[] = contextMenu ? (() => {
+    const session = sessionMap.get(contextMenu.sessionId)
+    const isArchived = session?.archived || false
+
+    return [
+      {
+        key: 'rename',
+        icon: <Pencil size={14} />,
+        label: 'Rename',
+        onSelect: () => openRenameDialog(contextMenu.sessionId),
+      },
+      {
+        key: 'archive',
+        icon: isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />,
+        label: isArchived ? 'Unarchive' : 'Archive',
+        onSelect: () => { void toggleArchive(contextMenu.sessionId, !isArchived) },
+      },
+      {
+        key: 'fork',
+        icon: <GitFork size={14} />,
+        label: 'Fork',
+        onSelect: () => { void forkSession(contextMenu.sessionId) },
+      },
+      { key: 'divider-1', type: 'separator' },
+      {
+        key: 'delete',
+        icon: <Trash2 size={14} />,
+        label: 'Delete',
+        danger: true,
+        onSelect: () => setDeleteConfirm(contextMenu.sessionId),
+      },
+    ]
+  })() : []
+
   return (
     <>
       {rootSessions.map(session => renderSession(session))}
-      
-      {/* Context Menu */}
-      {contextMenu && (
-        <div
-          ref={contextMenuRef}
-          className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg py-1 z-50"
-          style={
-            contextMenu.isRightClick
-              ? {
-                  // Right-click: left-align at cursor
-                  left: `${contextMenu.x}px`,
-                  top: `${contextMenu.y}px`
-                }
-              : {
-                  // Button click: right-align from button
-                  right: `${window.innerWidth - contextMenu.x}px`,
-                  top: `${contextMenu.y}px`
-                }
-          }
-        >
-          {(() => {
-            const session = sessionMap.get(contextMenu.sessionId)
-            const isArchived = session?.archived || false
-            
-            return (
-              <>
-                <button
-                  onClick={() => openRenameDialog(contextMenu.sessionId)}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 inline-flex items-center gap-2"
-                >
-                  <Pencil size={14} />
-                  <span>Rename</span>
-                </button>
-                <button
-                  onClick={() => toggleArchive(contextMenu.sessionId, !isArchived)}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 inline-flex items-center gap-2"
-                >
-                  {isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-                  <span>{isArchived ? 'Unarchive' : 'Archive'}</span>
-                </button>
-                <button
-                  onClick={() => forkSession(contextMenu.sessionId)}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 inline-flex items-center gap-2"
-                >
-                  <GitFork size={14} />
-                  <span>Fork</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setDeleteConfirm(contextMenu.sessionId)
-                    setContextMenu(null)
-                  }}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 inline-flex items-center gap-2"
-                >
-                  <Trash2 size={14} />
-                  <span>Delete</span>
-                </button>
-              </>
-            )
-          })()}
-        </div>
-      )}
+
+      <ContextMenu
+        open={!!contextMenu}
+        entries={contextMenuEntries}
+        point={contextMenu ? { x: contextMenu.x, y: contextMenu.y } : null}
+        anchorRect={contextMenu?.anchorRect || null}
+        preferredPlacement={contextMenu?.preferredPlacement || 'point'}
+        onClose={() => setContextMenu(null)}
+      />
 
       {/* Rename Dialog */}
       {renameSessionId && (
