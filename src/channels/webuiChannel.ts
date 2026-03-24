@@ -6,6 +6,7 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs-extra';
+import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelMessage } from '../channel';
 import { MessageRouter } from '../messageRouter';
@@ -24,6 +25,22 @@ type WorkspaceNodeEntry = {
   size: number;
   modifiedAt: number;
 };
+
+const MAX_INLINE_FILE_BYTES = 1024 * 1024;
+
+function createWorkspaceFileTooLargeError(filePath: string, size: number, maxSize: number): Error & { code: string; path: string; size: number; maxSize: number } {
+  const error = new Error(`File too large to open in WebUI editor (${size} bytes > ${maxSize} bytes). Please download it instead.`) as Error & {
+    code: string;
+    path: string;
+    size: number;
+    maxSize: number;
+  };
+  error.code = 'FILE_TOO_LARGE';
+  error.path = filePath;
+  error.size = size;
+  error.maxSize = maxSize;
+  return error;
+}
 
 // Extend Express Request to include cookies
 declare global {
@@ -125,6 +142,10 @@ export class WebUIChannel implements Channel {
       throw new Error(`Path is not a file: ${resolvedPath}`);
     }
 
+    if (stat.size > MAX_INLINE_FILE_BYTES) {
+      throw createWorkspaceFileTooLargeError(resolvedPath, stat.size, MAX_INLINE_FILE_BYTES);
+    }
+
     const content = await fs.readFile(resolvedPath, 'utf8');
     return {
       nodeId,
@@ -153,6 +174,78 @@ export class WebUIChannel implements Channel {
       size: stat.size,
       modifiedAt: stat.mtimeMs,
     };
+  }
+
+  private async streamWorkspaceDownload(resolvedPath: string, res: express.Response, archiveFormat?: string): Promise<void> {
+    const stat = await fs.stat(resolvedPath);
+
+    if (stat.isFile()) {
+      await new Promise<void>((resolve, reject) => {
+        const fileName = path.basename(resolvedPath);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`);
+
+        const stream = fs.createReadStream(resolvedPath);
+        stream.on('error', (err) => reject(err));
+        res.on('close', () => {
+          if (!res.writableEnded) {
+            stream.destroy();
+          }
+        });
+        res.on('finish', () => resolve());
+        stream.pipe(res);
+      });
+      return;
+    }
+
+    if (!stat.isDirectory()) {
+      throw new Error('Path is neither a file nor a directory');
+    }
+
+    if (archiveFormat && archiveFormat !== 'tgz' && archiveFormat !== 'tar.gz') {
+      throw new Error('Directory downloads currently support only archive=tgz');
+    }
+
+    const rawBaseName = path.basename(resolvedPath);
+    const parentDir = rawBaseName ? path.dirname(resolvedPath) : resolvedPath;
+    const archiveBaseName = rawBaseName || 'workspace';
+    const archiveName = `${archiveBaseName}.tar.gz`;
+    const tarArgs = rawBaseName
+      ? ['-czf', '-', '-C', parentDir, rawBaseName]
+      : ['-czf', '-', '-C', resolvedPath, '.'];
+
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="${archiveName.replace(/"/g, '')}"`);
+
+    await new Promise<void>((resolve, reject) => {
+      const tarProcess = spawn('tar', tarArgs, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stderr = '';
+      tarProcess.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      tarProcess.on('error', (err) => {
+        reject(err);
+      });
+
+      res.on('close', () => {
+        if (!res.writableEnded && !tarProcess.killed) {
+          tarProcess.kill('SIGTERM');
+        }
+      });
+
+      tarProcess.stdout.pipe(res);
+      tarProcess.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(stderr.trim() || `tar exited with code ${code}`));
+      });
+    });
   }
 
   constructor(options: WebUIChannelOptions) {
@@ -380,6 +473,10 @@ export class WebUIChannel implements Channel {
             res.json(data);
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to read workspace file');
+            if (e?.code === 'FILE_TOO_LARGE') {
+              res.status(413).json({ error: e.message, code: e.code, path: e.path, size: e.size, maxSize: e.maxSize });
+              return;
+            }
             res.status(400).json({ error: e.message });
           }
         },
@@ -1202,23 +1299,16 @@ export class WebUIChannel implements Channel {
           return;
         }
 
-        // Check if it's a file (not directory)
-        const stats = fs.statSync(filePath);
-        if (!stats.isFile()) {
-          res.status(400).json({ error: 'Path is not a file' });
-          return;
-        }
+        const archiveFormat = typeof req.query.archive === 'string' ? req.query.archive.trim() : undefined;
 
-        // Send file
-        const fileName = path.basename(filePath);
-        res.download(filePath, fileName, (err) => {
-          if (err) {
-            logger.error({ err, filePath }, 'Failed to send file');
-            if (!res.headersSent) {
-              res.status(500).json({ error: 'Failed to send file' });
-            }
+        try {
+          await this.streamWorkspaceDownload(filePath, res, archiveFormat);
+        } catch (err) {
+          logger.error({ err, filePath, archiveFormat }, 'Failed to send workspace download');
+          if (!res.headersSent) {
+            res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to send download' });
           }
-        });
+        }
       }
     });
   }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, FileText, Save, SquareTerminal } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Download, FileText, Save, SquareTerminal } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
+import { MAX_INLINE_FILE_BYTES, buildWorkspaceDownloadUrl, formatSize, formatTimestamp, triggerBrowserDownload } from './workspaceShared'
 
 interface FileEditorViewProps {
   nodeId: string
@@ -10,15 +11,10 @@ interface FileEditorViewProps {
   onOpenFileTab?: (nodeId: string, path: string) => void
 }
 
-function formatTimestamp(value: number) {
-  if (!value) return '—'
-  return new Date(value).toLocaleString()
-}
-
-function formatSize(size: number) {
-  if (!Number.isFinite(size) || size < 1024) return `${size || 0} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+interface BlockedFileState {
+  path: string
+  size: number
+  maxSize: number
 }
 
 export default function FileEditorView({ nodeId, filePath, onBack, onOpenTerminal, onOpenFileTab }: FileEditorViewProps) {
@@ -28,6 +24,7 @@ export default function FileEditorView({ nodeId, filePath, onBack, onOpenTermina
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [meta, setMeta] = useState<{ size: number; modifiedAt: number } | null>(null)
+  const [blockedFile, setBlockedFile] = useState<BlockedFileState | null>(null)
 
   const directoryPath = useMemo(() => {
     const parts = filePath.split('/')
@@ -41,22 +38,41 @@ export default function FileEditorView({ nodeId, filePath, onBack, onOpenTermina
     let cancelled = false
     setLoading(true)
     setError(null)
+    setBlockedFile(null)
 
     const load = async () => {
       try {
         const res = await fetch(`${API_BASE_PATH}/fs/read?nodeId=${encodeURIComponent(nodeId)}&path=${encodeURIComponent(filePath)}`)
         const data = await res.json().catch(() => ({}))
         if (!res.ok) {
-          throw new Error(data.error || 'Failed to read file')
+          const nextError = new Error(data.error || 'Failed to read file') as Error & { code?: string; size?: number; maxSize?: number; path?: string }
+          nextError.code = data.code
+          nextError.size = data.size
+          nextError.maxSize = data.maxSize
+          nextError.path = data.path
+          throw nextError
         }
         if (!cancelled) {
           setContent(data.content || '')
           setSavedContent(data.content || '')
           setMeta({ size: data.size || 0, modifiedAt: data.modifiedAt || 0 })
+          setBlockedFile(null)
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err))
+          const detailed = err as Error & { code?: string; size?: number; maxSize?: number; path?: string }
+          if (detailed.code === 'FILE_TOO_LARGE') {
+            setBlockedFile({
+              path: detailed.path || filePath,
+              size: detailed.size || 0,
+              maxSize: detailed.maxSize || MAX_INLINE_FILE_BYTES,
+            })
+            setError(null)
+            setMeta(detailed.size ? { size: detailed.size, modifiedAt: 0 } : null)
+          } else {
+            setError(err instanceof Error ? err.message : String(err))
+            setBlockedFile(null)
+          }
         }
       } finally {
         if (!cancelled) {
@@ -136,6 +152,14 @@ export default function FileEditorView({ nodeId, filePath, onBack, onOpenTermina
               <span className="hidden md:inline">Open terminal</span>
             </button>
             <button
+              onClick={() => triggerBrowserDownload(buildWorkspaceDownloadUrl(filePath))}
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              title="Download file"
+            >
+              <Download className="h-4 w-4" />
+              <span className="hidden md:inline">Download file</span>
+            </button>
+            <button
               onClick={handleSave}
               disabled={saving || !dirty}
               className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -165,6 +189,32 @@ export default function FileEditorView({ nodeId, filePath, onBack, onOpenTermina
         {loading ? (
           <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white text-sm text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">
             Loading file…
+          </div>
+        ) : blockedFile ? (
+          <div className="flex h-full items-center justify-center p-4">
+            <div className="w-full max-w-xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-100">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                <div className="space-y-3">
+                  <div>
+                    <div className="font-semibold">File too large to open in the editor</div>
+                    <div className="mt-1 text-sm opacity-90">
+                      <span className="font-mono">{blockedFile.path}</span> is {formatSize(blockedFile.size)}, which exceeds the {formatSize(blockedFile.maxSize)} inline viewing limit. Please download it to inspect locally.
+                    </div>
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => triggerBrowserDownload(buildWorkspaceDownloadUrl(blockedFile.path))}
+                      className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-400"
+                    >
+                      <Download className="h-4 w-4" />
+                      <span>Download file</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         ) : (
           <textarea
