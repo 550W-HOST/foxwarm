@@ -19,9 +19,9 @@ export function isModelNoActionSignal(message?: Pick<Message, 'role' | 'parts'> 
 }
 
 export function buildChildCompletionInstruction(parentSessionId: string): string {
-  return `When you finish, explicitly call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}). If that handoff message is your final step, prefer send_to_session({sessionId: \`${parentSessionId}\`, message: "...", noFurtherAssistantReply: true}) so the turn stops right after the handoff. If no parent reply is needed and you are not sending a handoff message, end your final message with \`${NO_ACTION_MARKER}\`.`;
+  return `When you finish, explicitly call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}). If that handoff is your final step, call end_turn({}) immediately afterward in the same response so the turn stops after the handoff. If no parent reply is needed and you are not sending a handoff message, end your final message with \`${NO_ACTION_MARKER}\`.`;
 }
 
 export function buildChildReminder(parentSessionId: string): string {
-  return `message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}). If that handoff is your final step, prefer send_to_session({sessionId: \`${parentSessionId}\`, message: "...", noFurtherAssistantReply: true}) so the turn stops immediately after the handoff. If no parent reply is needed and you are not sending a handoff message, end your final message with \`${NO_ACTION_MARKER}\`.`;
+  return `message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}). If that handoff is your final step, call end_turn({}) immediately afterward in the same response. If no parent reply is needed and you are not sending a handoff message, end your final message with \`${NO_ACTION_MARKER}\`.`;
 }

@@ -248,6 +248,7 @@ const SUBCONSCIOUS_ALLOWED_TOOL_NAMES = new Set([
     'get_archived_messages',
     'get_archived_blocks',
     'send_to_session',
+    'end_turn',
 ]);
 
 function isSubconsciousSession(session?: Session): boolean {
@@ -668,7 +669,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             'read_memory', 'write_memory', 'edit_memory', 'delete_memory',
             'list_files', 'delete_file',
             'copy_between_nodes',
-            'create_child_session', 'send_to_session', 'send_to_channel', 'send_file',
+            'create_child_session', 'send_to_session', 'end_turn', 'send_to_channel', 'send_file',
             'list_sessions', 'list_agents', 'list_skills',
             'attach_agent_skill', 'detach_agent_skill', 'load_skill',
             'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'delete_session',

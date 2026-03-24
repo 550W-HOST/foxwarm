@@ -230,7 +230,7 @@ async function main(): Promise<void> {
       assert(parent && child);
     });
 
-    await test('send_to_session with noFurtherAssistantReply stops the current turn without an extra LLM round', async () => {
+    await test('send_to_session plus end_turn stops the current turn without an extra LLM round', async () => {
       const parentId = makeSessionId('selftest_parent_endturn');
       const childId = makeSessionId('selftest_child_endturn');
       createdSessionIds.push(parentId, childId);
@@ -245,13 +245,18 @@ async function main(): Promise<void> {
         if (activeSession.id === childId) {
           childCallCount += 1;
           if (childCallCount === 1) {
-            const toolCall = {
+            const sendToolCall = {
               id: 'child-report-endturn',
               name: 'send_to_session',
-              args: { sessionId: parentId, message: 'child-endturn-ok', noFurtherAssistantReply: true },
+              args: { sessionId: parentId, message: 'child-endturn-ok' },
             };
-            await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
-            return { text: '', toolCalls: [toolCall] };
+            const endTurnCall = {
+              id: 'child-end-turn',
+              name: 'end_turn',
+              args: {},
+            };
+            await appendStubModelMessage(activeSession, [{ functionCall: sendToolCall }, { functionCall: endTurnCall }]);
+            return { text: '', toolCalls: [sendToolCall, endTurnCall] };
           }
 
           throw new Error(`child session should not receive a second LLM call, got ${childCallCount}`);
@@ -277,6 +282,7 @@ async function main(): Promise<void> {
       assert.strictEqual(parentAfterChildRun.queue.length, 1);
       assert.strictEqual(childAfter.history[childAfter.history.length - 1]?.role, 'tool');
       assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'send_to_session')));
+      assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'end_turn')));
 
       await router.processSessionQueue(parentId);
 
@@ -285,6 +291,49 @@ async function main(): Promise<void> {
       assert.strictEqual(parentAfter.queue.length, 0);
       assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes('child-endturn-ok'))));
       assertLastModelText(parentAfter, 'parent received end-turn handoff');
+    });
+
+    await test('send_to_session keeps backward compatibility for hidden noFurtherAssistantReply', async () => {
+      const parentId = makeSessionId('selftest_parent_endturn_compat');
+      const childId = makeSessionId('selftest_child_endturn_compat');
+      createdSessionIds.push(parentId, childId);
+      await ensureSession(parentId);
+      await ensureSession(childId, parentId);
+
+      let childCallCount = 0;
+      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+        await appendStubUserMessage(activeSession, parts);
+
+        if (activeSession.id === childId) {
+          childCallCount += 1;
+          if (childCallCount === 1) {
+            const toolCall = {
+              id: 'child-report-endturn-compat',
+              name: 'send_to_session',
+              args: { sessionId: parentId, message: 'child-endturn-compat-ok', noFurtherAssistantReply: true },
+            };
+            await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
+            return { text: '', toolCalls: [toolCall] };
+          }
+
+          throw new Error(`child session should not receive a second LLM call, got ${childCallCount}`);
+        }
+
+        if (activeSession.id === parentId) {
+          await appendStubModelMessage(activeSession, [{ text: 'parent received compat handoff' }]);
+          return { text: 'parent received compat handoff' };
+        }
+
+        throw new Error(`unexpected session in end-turn compatibility selftest: ${activeSession.id}`);
+      };
+
+      await (router as any).runSessionTurn(childId, {
+        parts: [{ text: 'child task with compat immediate handoff' }],
+      });
+
+      const childAfter = await sessionManager.getSession(childId);
+      assert.strictEqual(childCallCount, 1);
+      assert.strictEqual(childAfter.busy, false);
     });
 
     await test('compact_session retries invalid compact plans and then resumes with compacted history', async () => {

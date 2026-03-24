@@ -17,7 +17,7 @@ Foxwarm 把 **agent**、**session**、**child session** 明确区分开来，这
 ### Child Session
 - 一种有父会话关系的 session
 - 用于并行分析、测试、审阅、任务拆分
-- 完成任务后会自动通知父会话
+- 完成任务后应显式用 `send_to_session(...)` 向父会话回报
 
 > 注意：`agent.inherit` 是 memory 继承链，不是 child session 的汇报关系。
 
@@ -86,6 +86,22 @@ send_to_session({
 
 用于跨 session 协作、测试交接、结果回报等。
 
+如果这次 handoff 就是你当前回合的最后一步，推荐在同一条 assistant 工具调用里紧跟一个：
+
+```ts
+end_turn({})
+```
+
+这样可以在发送 handoff 后直接结束当前回合，避免模型再补一段多余文本。
+
+### `end_turn`
+
+```ts
+{}
+```
+
+用于在当前这一批工具调用完成后，立即结束当前 assistant turn。常见用法是和 `send_to_session(...)` / `create_child_session(...)` 搭配。
+
 ## 常用命令
 
 ```bash
@@ -117,5 +133,5 @@ send_to_session({
 1. child session 是 session，不是独立 agent
 2. `agent.inherit` 只影响 memory 组合，不影响消息汇报关系
 3. isolated session 会限制跨 session / 跨 node 操作
-4. child session 会自动通知父会话，但父会话仍应做最终协调
+4. child session 通常应显式调用 `send_to_session(...)` 回报，父会话仍应做最终协调
 5. attached skills 会进入 prompt，但不会沿 `agent.inherit` 自动传播

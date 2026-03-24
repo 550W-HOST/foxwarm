@@ -23,6 +23,7 @@ import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from '.
 import {
     tool_create_child_session,
     tool_send_to_session,
+    tool_end_turn,
     tool_send_to_channel,
     tool_send_file,
     tool_list_sessions,
@@ -929,6 +930,7 @@ export const set_agent_inherit = tool_set_agent_inherit;
 export const set_agent_isolated = tool_set_agent_isolated;
 export const move_session = tool_move_session;
 export const send_to_session = tool_send_to_session;
+export const end_turn = tool_end_turn;
 export const send_to_channel = tool_send_to_channel;
 export const send_file = tool_send_file;
 export const list_sessions = tool_list_sessions;
@@ -1198,14 +1200,13 @@ export const definitions = [
         },
         {
             name: 'create_child_session',
-            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. Set noFurtherAssistantReply=true when creating/delegating to the child is your final step for this turn and you do not want another reply in the current session.',
+            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. If handing off to the child is your final step for this turn, call end_turn afterward in the same response.',
             parameters: {
                 type: 'object',
                 properties: {
                     suffix: { type: 'string', description: 'Suffix to append to session ID for identification (e.g., "task1", "research")' },
                     fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: true', default: true },
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
-                    noFurtherAssistantReply: { type: 'boolean', description: 'If true, stop the current assistant turn immediately after creating the child (and after sending the optional initial message). Use when the handoff itself is the whole reply and no extra reply is needed here.' },
                     node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' }
                 },
                 required: ['suffix']
@@ -1213,15 +1214,24 @@ export const definitions = [
         },
         {
             name: 'send_to_session',
-            description: 'Send a message to a specific session (including child sessions). The message will be queued and processed by that session. Isolated sessions can only communicate with parent/child sessions. Set noFurtherAssistantReply=true when this handoff message is your final step and the current session should stop without another reply.',
+            description: 'Send a message to a specific session (including child sessions). The message will be queued and processed by that session. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call end_turn afterward in the same response.',
             parameters: {
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID' },
-                    message: { type: 'string', description: 'Message to send' },
-                    noFurtherAssistantReply: { type: 'boolean', description: 'If true, send this handoff message and stop the current assistant turn immediately. Use when no extra reply is needed in the current session after the handoff.' }
+                    message: { type: 'string', description: 'Message to send' }
                 },
                 required: ['sessionId', 'message']
+            }
+        },
+        {
+            name: 'end_turn',
+            description: 'Stop the current assistant turn after the current batch of tool calls finishes. Use this after handoff tools like send_to_session or create_child_session when you do not want to add any further assistant reply in the current session.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    reason: { type: 'string', description: 'Optional short note for logs/debugging.' }
+                }
             }
         },
         {

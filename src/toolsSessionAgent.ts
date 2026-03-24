@@ -20,6 +20,14 @@ interface ToolContext {
 
 type ToolArgs = Record<string, any>;
 
+function buildEndTurnResult(reason?: string) {
+  const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
+  const output = trimmedReason
+    ? `Current turn ended. Reason: ${trimmedReason}`
+    : 'Current turn ended.';
+  return { output, __toolLoopControl: { stopCurrentTurn: true } };
+}
+
 function getSubconsciousPrimarySessionId(ctx?: ToolContext): string | undefined {
   return sessionManager.getSubconsciousPrimarySessionId(ctx?.session);
 }
@@ -215,13 +223,13 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
     });
     const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Initial message sent.`;
     return noFurtherAssistantReply
-      ? { output, __toolLoopControl: { stopCurrentTurn: true } }
+      ? { ...buildEndTurnResult(), output }
       : output;
   }
 
   const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'})`;
   return noFurtherAssistantReply
-    ? { output, __toolLoopControl: { stopCurrentTurn: true } }
+    ? { ...buildEndTurnResult(), output }
     : output;
 }
 
@@ -244,8 +252,13 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
   }
   const output = `Message sent to session \`${sessionId}\``;
   return noFurtherAssistantReply
-    ? { output, __toolLoopControl: { stopCurrentTurn: true } }
+    ? { ...buildEndTurnResult(), output }
     : output;
+}
+
+export async function tool_end_turn(args: ToolArgs) {
+  const { reason } = args || {};
+  return buildEndTurnResult(typeof reason === 'string' ? reason : undefined);
 }
 
 export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
