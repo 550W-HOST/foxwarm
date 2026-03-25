@@ -9,7 +9,6 @@ import {
   buildCompactPlanValidationFeedback,
   buildCompactPromptText,
   buildMessageCandidateItem,
-  COMPACT_PLAN_TOOL_DEFINITION,
   COMPACT_PLAN_TOOL_NAME,
   CompactCandidateItem,
   CompactPlan,
@@ -156,7 +155,6 @@ type CompactJobState = {
 const compactJobStates = new Map<string, CompactJobState>();
 const compactPreviewLastTimestamp = new Map<string, number>();
 
-const ASYNC_COMPACT_START_NOTICE = '🗜️ Background compaction started. I’m compacting older context in parallel, and this chat can continue normally.';
 const ASYNC_COMPACT_DONE_NOTICE = '🗜️ Background compaction finished and has been applied. This chat stayed available while it was running.';
 
 function nextCompactPreviewTimestamp(sessionId: string): number {
@@ -667,7 +665,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
 
   for (let attempt = 1; attempt <= maxCompactAttempts; attempt += 1) {
     const result = await llm.chat(nextPromptParts, transientSession, attempt - 1, {
-      toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION],
       appendMessage: async (message) => {
         await appendTransientSessionMessage(transientSession, message);
         mirrorTemporaryCompactMessage(deps, sessionId, message);
@@ -915,7 +912,6 @@ async function runCompactionWithMode(deps: SessionHistoryDeps, sessionId: string
   if (shouldBackground) {
     return startBackgroundCompaction(deps, sessionId, {
       ...options,
-      startBroadcastMessage: options.startBroadcastMessage || ASYNC_COMPACT_START_NOTICE,
       completionBroadcastMessage: options.completionBroadcastMessage || ASYNC_COMPACT_DONE_NOTICE,
     });
   }

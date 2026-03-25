@@ -538,7 +538,7 @@ async function handleCompactCommand(ctx: ChannelContext, args: string[], session
   }
 
   if (result.startedImmediately) {
-    ctx.reply('🗜️ Background compaction started. It runs in parallel, so this chat can continue normally.')
+    ctx.reply('🗜️ Compaction requested. It runs in parallel, so this chat can continue normally.')
     return
   }
 

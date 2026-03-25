@@ -617,6 +617,7 @@ export class NodeClient {
           id: sessionId,
           agent: agentName,
           currentNode: this.connectedNodeId || this.requestedName,
+          cwd: typeof message.sessionCwd === 'string' ? message.sessionCwd : undefined,
         },
         runtimeNodeId: this.connectedNodeId || this.requestedName,
         broadcast: async (text: string) => {

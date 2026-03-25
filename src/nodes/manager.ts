@@ -88,6 +88,7 @@ export class NodesManager {
       'set_agent_inherit',
       'send_to_session',
       'end_turn',
+      'submit_compact_plan',
       'list_sessions',
       'list_skills',
       'attach_agent_skill',
@@ -318,7 +319,8 @@ export class NodesManager {
         tool: toolName,
         args: args,
         sessionId,
-        agentName: session.agent || 'main'
+        agentName: session.agent || 'main',
+        sessionCwd: typeof session.cwd === 'string' ? session.cwd : undefined
       }));
       
       // Set timeout (30 seconds default)

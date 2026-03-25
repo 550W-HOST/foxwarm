@@ -11,6 +11,7 @@ import { clearSessionTodo, normalizeRemindEvery, normalizeTodoText, setSessionTo
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
 import { requireNotIsolated, checkArchivedReadPermission, checkChannelPermission, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
+import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
 
 interface ToolContext {
   sessionId?: string;
@@ -259,6 +260,10 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
 export async function tool_end_turn(args: ToolArgs) {
   const { reason } = args || {};
   return buildEndTurnResult(typeof reason === 'string' ? reason : undefined);
+}
+
+export async function tool_submit_compact_plan() {
+  return `${COMPACT_PLAN_TOOL_NAME} is only valid inside the dedicated compact planning flow. Request compaction with compact_session/compress_session and only submit a plan when the system compact prompt explicitly asks for it.`;
 }
 
 export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
