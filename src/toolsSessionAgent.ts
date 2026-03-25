@@ -21,12 +21,8 @@ interface ToolContext {
 
 type ToolArgs = Record<string, any>;
 
-function buildEndTurnResult(reason?: string) {
-  const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
-  const output = trimmedReason
-    ? `Current turn ended. Reason: ${trimmedReason}`
-    : 'Current turn ended.';
-  return { output, __toolLoopControl: { stopCurrentTurn: true } };
+function buildEndTurnResult(_reason?: string) {
+  return { output: 'Turn ended.', __toolLoopControl: { stopCurrentTurn: true } };
 }
 
 function getSubconsciousPrimarySessionId(ctx?: ToolContext): string | undefined {
@@ -702,8 +698,8 @@ export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
     const cleared = clearSessionTodo(session);
     await sessionManager.saveSession(session.id);
     return cleared
-      ? `Cleared todo reminder for session \`${session.id}\`.`
-      : `Session \`${session.id}\` has no todo reminder to clear.`;
+      ? 'Todo reminder cleared.'
+      : 'No todo reminder is set.';
   }
 
   const todo = normalizeTodoText(args.todo);
@@ -711,20 +707,15 @@ export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
     const cleared = clearSessionTodo(session);
     await sessionManager.saveSession(session.id);
     return cleared
-      ? `Cleared todo reminder for session \`${session.id}\` via empty todo.`
-      : `Ignored empty todo because session \`${session.id}\` has no todo reminder configured.`;
+      ? 'Todo reminder cleared.'
+      : 'Ignored empty todo because no todo reminder is set.';
   }
 
   const remindEvery = normalizeRemindEvery(args.remindEvery);
   setSessionTodo(session, todo, remindEvery);
   await sessionManager.saveSession(session.id);
 
-  return [
-    `Todo reminder updated for session \`${session.id}\`.`,
-    `remindEvery: ${remindEvery}`,
-    'todo:',
-    todo,
-  ].join('\n');
+  return 'Todo reminder updated.';
 }
 
 export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: ToolContext) {
