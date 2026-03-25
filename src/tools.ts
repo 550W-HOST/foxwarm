@@ -20,10 +20,12 @@ import {
     waitForExecCompletion,
 } from './execManager';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from './applyPatch';
+import { COMPACT_PLAN_TOOL_DEFINITION } from './session/compactPlan';
 import {
     tool_create_child_session,
     tool_send_to_session,
     tool_end_turn,
+    tool_submit_compact_plan,
     tool_send_to_channel,
     tool_send_file,
     tool_list_sessions,
@@ -71,14 +73,16 @@ fs.ensureDirSync(getAgentDir('main'));
 const OPTIONAL_NODE_DESCRIPTION = 'Optional. Empty = current node; avoid `current`.';
 
 // Helper function to resolve file path for agent
-function resolveAgentPath(filePath: string, agentName: string = 'main'): string {
+function resolveAgentPath(filePath: string, agentName: string = 'main', sessionCwd?: string): string {
     if (path.isAbsolute(filePath)) {
         return filePath;
     }
 
-    // Relative path - resolve to agent folder
     const agentDir = getAgentDir(agentName);
-    const resolved = path.resolve(agentDir, filePath);
+    const baseDir = (typeof sessionCwd === 'string' && sessionCwd.trim().length > 0)
+        ? sessionCwd.trim()
+        : agentDir;
+    const resolved = path.resolve(baseDir, filePath);
 
     // Path traversal protection
     if (!(resolved === agentDir || resolved.startsWith(agentDir + path.sep))) {
@@ -222,14 +226,14 @@ async function maybeSyncSessionCwdFromExec(ctx: ToolContext, entry: { initialCwd
 async function tool_read(args: ToolArgs, ctx: ToolContext) {
     const { filePath, startLine, endLine } = args;
     const agentName = ctx.session?.agent || 'main';
-    const fullPath = resolveAgentPath(filePath, agentName);
+    const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     return readResolvedPath(fullPath, filePath, startLine, endLine);
 }
 
 async function tool_write(args: ToolArgs, ctx: ToolContext) {
     const { filePath, content, overwrite } = args;
     const agentName = ctx.session?.agent || 'main';
-    const fullPath = resolveAgentPath(filePath, agentName);
+    const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     await writeResolvedPath(fullPath, content, overwrite === true, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`);
     return 'File written successfully';
 }
@@ -255,7 +259,7 @@ function applyExactReplacement(content: string, searchText: string, replaceText:
 async function tool_edit(args: ToolArgs, ctx: ToolContext) {
     const { filePath, oldText, newText } = args;
     const agentName = ctx.session?.agent || 'main';
-    const fullPath = resolveAgentPath(filePath, agentName);
+    const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     await editResolvedPath(fullPath, oldText, newText);
     return 'File edited successfully';
 }
@@ -307,7 +311,7 @@ async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
     const summaries: string[] = [];
 
     for (const operation of operations) {
-        const fullPath = resolveAgentPath(operation.filePath, agentName);
+        const fullPath = resolveAgentPath(operation.filePath, agentName, ctx.session?.cwd);
 
         if (operation.action === 'update') {
             if (!await fs.pathExists(fullPath)) {
@@ -387,7 +391,7 @@ async function collectFileEntries(baseDir: string, relativeDir: string, options:
 async function tool_list_files(args: ToolArgs, ctx: ToolContext) {
     const { dirPath = '.', recursive = false, includeHidden = false, limit = 200 } = args;
     const agentName = ctx.session?.agent || 'main';
-    const fullPath = resolveAgentPath(dirPath, agentName);
+    const fullPath = resolveAgentPath(dirPath, agentName, ctx.session?.cwd);
 
     if (sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
         checkPathAccess(fullPath, agentName);
@@ -423,7 +427,7 @@ async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
     }
 
     const agentName = ctx.session?.agent || 'main';
-    const fullPath = resolveAgentPath(filePath, agentName);
+    const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
 
     if (sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
         checkPathAccess(fullPath, agentName);
@@ -931,6 +935,7 @@ export const set_agent_isolated = tool_set_agent_isolated;
 export const move_session = tool_move_session;
 export const send_to_session = tool_send_to_session;
 export const end_turn = tool_end_turn;
+export const submit_compact_plan = tool_submit_compact_plan;
 export const send_to_channel = tool_send_to_channel;
 export const send_file = tool_send_file;
 export const list_sessions = tool_list_sessions;
@@ -1437,6 +1442,7 @@ export const definitions = [
                 required: ['sessionId']
             }
         },
+        COMPACT_PLAN_TOOL_DEFINITION,
         {
             name: 'compact_session',
             description: 'Request a compaction flow for the current session or another idle session. This does not return compact candidates directly. Instead, the target session enters a dedicated compaction planning flow where the model must call submit_compact_plan. Use summary only as optional extra guidance for the compaction prompt, not as the final compacted summary.',
