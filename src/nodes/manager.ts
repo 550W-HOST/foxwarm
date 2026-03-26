@@ -364,9 +364,10 @@ export class NodesManager {
   async readFileFromNode(nodeId: string, filePath: string, sessionId: string): Promise<NodeTransferFilePayload> {
     const session = await sessionManager.getSession(sessionId);
     const agentName = session.agent || 'main';
+    const restrictToAgentDir = sessionManager.isSessionEffectivelyIsolated(session) && nodeId === 'master';
 
     if (nodeId === 'master') {
-      return await readNodeTransferFile(filePath, agentName);
+      return await readNodeTransferFile(filePath, agentName, restrictToAgentDir);
     }
 
     const node = this.nodes.get(nodeId);
@@ -391,6 +392,7 @@ export class NodesManager {
         filePath,
         sessionId,
         agentName,
+        restrictToAgentDir,
       }));
 
       setTimeout(() => {
@@ -405,9 +407,10 @@ export class NodesManager {
   async writeFileToNode(nodeId: string, filePath: string, dataBase64: string, overwrite: boolean, sessionId: string): Promise<NodeTransferWriteResult> {
     const session = await sessionManager.getSession(sessionId);
     const agentName = session.agent || 'main';
+    const restrictToAgentDir = sessionManager.isSessionEffectivelyIsolated(session) && nodeId === 'master';
 
     if (nodeId === 'master') {
-      return await writeNodeTransferFile(filePath, agentName, dataBase64, overwrite);
+      return await writeNodeTransferFile(filePath, agentName, dataBase64, overwrite, restrictToAgentDir);
     }
 
     const node = this.nodes.get(nodeId);
@@ -434,6 +437,7 @@ export class NodesManager {
         overwrite,
         sessionId,
         agentName,
+        restrictToAgentDir,
       }));
 
       setTimeout(() => {

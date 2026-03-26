@@ -1,4 +1,5 @@
 import fs from 'fs-extra';
+import os from 'os';
 import path from 'path';
 import * as sessionManager from './sessionManager';
 import * as skills from './skills';
@@ -6,17 +7,19 @@ import * as timers from './timers';
 import type { ChannelFile } from './channel';
 import { getAgentDir } from './config';
 import { logger } from './common';
+import { nodesManager } from './nodes/manager';
 import { AGENTS_DIR, COMPACT_PERCENT } from './config';
 import { clearSessionTodo, normalizeRemindEvery, normalizeTodoText, setSessionTodo } from './session/todo';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
-import { requireNotIsolated, checkArchivedReadPermission, checkChannelPermission, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
+import { requireNotIsolated, checkArchivedReadPermission, checkChannelPermission, checkPathAccess, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
 
 interface ToolContext {
   sessionId?: string;
   session?: any;
   broadcast?: (text: string, options?: any) => Promise<void>;
+  runtimeNodeId?: string;
 }
 
 type ToolArgs = Record<string, any>;
@@ -76,18 +79,28 @@ function formatTimerSummary(timer: timers.TimerView): string {
   return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}\nMessage: ${timer.message}`;
 }
 
-function resolveAgentPath(filePath: string, agentName: string = 'main'): string {
-  if (path.isAbsolute(filePath)) {
-    return filePath;
+function expandHomePath(filePath: string): string {
+  if (filePath === '~') {
+    return os.homedir();
+  }
+  if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
+    return path.join(os.homedir(), filePath.slice(2));
+  }
+  return filePath;
+}
+
+function resolveAgentPath(filePath: string, agentName: string = 'main', sessionCwd?: string): string {
+  const expandedPath = expandHomePath(filePath);
+  if (path.isAbsolute(expandedPath)) {
+    return path.resolve(expandedPath);
   }
 
   const agentDir = getAgentDir(agentName);
-  const resolved = path.resolve(agentDir, filePath);
-  if (!(resolved === agentDir || resolved.startsWith(agentDir + path.sep))) {
-    throw new Error('Path traversal detected: cannot access files outside agent folder');
-  }
+  const baseDir = (typeof sessionCwd === 'string' && sessionCwd.trim().length > 0)
+    ? expandHomePath(sessionCwd.trim())
+    : agentDir;
 
-  return resolved;
+  return path.resolve(baseDir, expandedPath);
 }
 
 function detectMimeType(filePath: string): string {
@@ -164,9 +177,42 @@ function formatArchivedBlockPreview(
   return result;
 }
 
+
+function shouldEnforceIsolatedMasterPathAccess(ctx?: ToolContext): boolean {
+  return sessionManager.isSessionEffectivelyIsolated(ctx?.session) && (ctx?.runtimeNodeId || ctx?.session?.currentNode || 'master') === 'master';
+}
+
+async function prepareRemoteChannelFile(filePath: string, nodeId: string, ctx?: ToolContext): Promise<ChannelFile> {
+  if (!ctx?.sessionId) {
+    throw new Error('send_file requires an active session context when reading a file from a remote node.');
+  }
+  const payload = await nodesManager.readFileFromNode(nodeId, filePath, ctx.sessionId);
+  const agentName = ctx?.session?.agent || 'main';
+  const tempDir = path.join(getAgentDir(agentName), '.temp', 'send-file-cache');
+  await fs.ensureDir(tempDir);
+  const ext = path.extname(payload.name || filePath);
+  const tempPath = path.join(tempDir, `${Date.now()}_${Math.random().toString(36).slice(2, 10)}${ext}`);
+  await fs.writeFile(tempPath, Buffer.from(payload.dataBase64, 'base64'));
+  return {
+    path: tempPath,
+    name: payload.name || path.basename(filePath),
+    mimeType: payload.mimeType,
+    sizeBytes: payload.sizeBytes,
+    isImage: payload.isImage,
+  };
+}
+
 async function prepareChannelFile(filePath: string, ctx?: ToolContext): Promise<ChannelFile> {
   const agentName = ctx?.session?.agent || 'main';
-  const fullPath = resolveAgentPath(filePath, agentName);
+  const fileNodeId = ctx?.runtimeNodeId || ctx?.session?.currentNode || 'master';
+  if (fileNodeId !== 'master') {
+    return prepareRemoteChannelFile(filePath, fileNodeId, ctx);
+  }
+
+  const fullPath = resolveAgentPath(filePath, agentName, ctx?.session?.cwd);
+  if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
+    checkPathAccess(fullPath, agentName);
+  }
   const stats = await fs.stat(fullPath);
   if (!stats.isFile()) {
     throw new Error(`Not a file: ${filePath}`);

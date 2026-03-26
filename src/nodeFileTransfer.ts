@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
+import os from 'os';
 import path from 'path';
 import { getAgentDir } from './config';
 
@@ -41,18 +42,28 @@ const GENERIC_MIME: Record<string, string> = {
   '.sh': 'text/plain',
 };
 
-export function resolveNodeTransferPath(filePath: string, agentName: string): string {
+function expandHomePath(filePath: string): string {
+  if (filePath === '~') {
+    return os.homedir();
+  }
+  if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
+    return path.join(os.homedir(), filePath.slice(2));
+  }
+  return filePath;
+}
+
+export function resolveNodeTransferPath(filePath: string, agentName: string, restrictToAgentDir = true): string {
   if (!filePath || typeof filePath !== 'string') {
     throw new Error('filePath is required');
   }
 
-  if (path.isAbsolute(filePath)) {
-    throw new Error('Only relative file paths are allowed for node file transfer.');
-  }
-
   const agentDir = getAgentDir(agentName);
-  const resolved = path.resolve(agentDir, filePath);
-  if (!(resolved === agentDir || resolved.startsWith(agentDir + path.sep))) {
+  const expandedPath = expandHomePath(filePath);
+  const resolved = path.isAbsolute(expandedPath)
+    ? path.resolve(expandedPath)
+    : path.resolve(agentDir, expandedPath);
+
+  if (restrictToAgentDir && !(resolved === agentDir || resolved.startsWith(agentDir + path.sep))) {
     throw new Error('Path traversal detected: cannot access files outside agent folder');
   }
 
@@ -67,8 +78,8 @@ export function detectTransferMimeType(filePath: string): { mimeType: string; is
   return { mimeType: GENERIC_MIME[ext] || 'application/octet-stream', isImage: false };
 }
 
-export async function readNodeTransferFile(filePath: string, agentName: string): Promise<NodeTransferFilePayload> {
-  const fullPath = resolveNodeTransferPath(filePath, agentName);
+export async function readNodeTransferFile(filePath: string, agentName: string, restrictToAgentDir = true): Promise<NodeTransferFilePayload> {
+  const fullPath = resolveNodeTransferPath(filePath, agentName, restrictToAgentDir);
   const stats = await fs.stat(fullPath);
   if (!stats.isFile()) {
     throw new Error(`Not a file: ${filePath}`);
@@ -87,12 +98,12 @@ export async function readNodeTransferFile(filePath: string, agentName: string):
   };
 }
 
-export async function writeNodeTransferFile(filePath: string, agentName: string, dataBase64: string, overwrite = false): Promise<NodeTransferWriteResult> {
+export async function writeNodeTransferFile(filePath: string, agentName: string, dataBase64: string, overwrite = false, restrictToAgentDir = true): Promise<NodeTransferWriteResult> {
   if (typeof dataBase64 !== 'string') {
     throw new Error('dataBase64 is required');
   }
 
-  const fullPath = resolveNodeTransferPath(filePath, agentName);
+  const fullPath = resolveNodeTransferPath(filePath, agentName, restrictToAgentDir);
   const exists = await fs.pathExists(fullPath);
   if (exists && !overwrite) {
     throw new Error(`File already exists: ${filePath}. Use overwrite=true to replace it.`);

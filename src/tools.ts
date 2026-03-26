@@ -1,4 +1,5 @@
 import fs from 'fs-extra';
+import os from 'os';
 import path from 'path';
 import * as vector from './vector';
 import * as sessionManager from './sessionManager';
@@ -73,23 +74,33 @@ fs.ensureDirSync(getAgentDir('main'));
 const OPTIONAL_NODE_DESCRIPTION = 'Optional. Empty = current node; avoid `current`.';
 
 // Helper function to resolve file path for agent
+function expandHomePath(filePath: string): string {
+    if (filePath === '~') {
+        return os.homedir();
+    }
+    if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
+        return path.join(os.homedir(), filePath.slice(2));
+    }
+    return filePath;
+}
+
 function resolveAgentPath(filePath: string, agentName: string = 'main', sessionCwd?: string): string {
-    if (path.isAbsolute(filePath)) {
-        return filePath;
+    const expandedPath = expandHomePath(filePath);
+    if (path.isAbsolute(expandedPath)) {
+        return path.resolve(expandedPath);
     }
 
     const agentDir = getAgentDir(agentName);
     const baseDir = (typeof sessionCwd === 'string' && sessionCwd.trim().length > 0)
-        ? sessionCwd.trim()
+        ? expandHomePath(sessionCwd.trim())
         : agentDir;
-    const resolved = path.resolve(baseDir, filePath);
 
-    // Path traversal protection
-    if (!(resolved === agentDir || resolved.startsWith(agentDir + path.sep))) {
-        throw new Error('Path traversal detected: cannot access files outside agent folder');
-    }
+    return path.resolve(baseDir, expandedPath);
+}
 
-    return resolved;
+
+function shouldEnforceIsolatedMasterPathAccess(ctx: ToolContext | undefined): boolean {
+    return sessionManager.isSessionEffectivelyIsolated(ctx?.session) && (ctx?.runtimeNodeId || 'master') === 'master';
 }
 
 function normalizeMemoryRelativePath(filePath: string): string {
@@ -227,6 +238,9 @@ async function tool_read(args: ToolArgs, ctx: ToolContext) {
     const { filePath, startLine, endLine } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
+    if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
+        checkPathAccess(fullPath, agentName);
+    }
     return readResolvedPath(fullPath, filePath, startLine, endLine);
 }
 
@@ -234,6 +248,9 @@ async function tool_write(args: ToolArgs, ctx: ToolContext) {
     const { filePath, content, overwrite } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
+    if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
+        checkPathAccess(fullPath, agentName);
+    }
     await writeResolvedPath(fullPath, content, overwrite === true, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`);
     return 'File written successfully';
 }
@@ -260,6 +277,9 @@ async function tool_edit(args: ToolArgs, ctx: ToolContext) {
     const { filePath, oldText, newText } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
+    if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
+        checkPathAccess(fullPath, agentName);
+    }
     await editResolvedPath(fullPath, oldText, newText);
     return 'File edited successfully';
 }
@@ -312,6 +332,9 @@ async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
 
     for (const operation of operations) {
         const fullPath = resolveAgentPath(operation.filePath, agentName, ctx.session?.cwd);
+        if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
+            checkPathAccess(fullPath, agentName);
+        }
 
         if (operation.action === 'update') {
             if (!await fs.pathExists(fullPath)) {
@@ -393,7 +416,7 @@ async function tool_list_files(args: ToolArgs, ctx: ToolContext) {
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(dirPath, agentName, ctx.session?.cwd);
 
-    if (sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
+    if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
         checkPathAccess(fullPath, agentName);
     }
 
@@ -429,7 +452,7 @@ async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
 
-    if (sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
+    if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
         checkPathAccess(fullPath, agentName);
     }
 
@@ -513,6 +536,9 @@ async function tool_change_directory(args: ToolArgs, ctx: ToolContext) {
 
     const nodeId = ctx.runtimeNodeId || ctx.session.currentNode || 'master';
     if (nodeId === 'master') {
+        if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
+            checkPathAccess(resolvedPath, agentName);
+        }
         let stat: fs.Stats | null = null;
         try {
             stat = await fs.stat(resolvedPath);
@@ -790,18 +816,27 @@ async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
     const session = ctx.sessionId ? await sessionManager.getExistingSession(ctx.sessionId) : undefined;
     
     // Isolated sessions can only call tools on their bound node
+    const isolatedAllowedRemoteNodes = sessionManager.isSessionEffectivelyIsolated(session)
+        ? Array.from(new Set([
+            sessionManager.getAgentIsolationNode(session?.agent || 'main') || session?.currentNode || 'master',
+            session?.currentNode,
+        ].filter((value): value is string => typeof value === 'string' && value.length > 0)))
+        : [];
+
     if (sessionManager.isSessionEffectivelyIsolated(session) && action === 'call') {
-        const currentNode = sessionManager.getAgentIsolationNode(session?.agent || 'main') || session?.currentNode || 'master';
-        if (nodeId !== currentNode) {
-            throw new Error('Isolated session can only call tools on its bound node.');
+        if (!isolatedAllowedRemoteNodes.includes(String(nodeId || ''))) {
+            throw new Error(`Isolated session can only call tools on its bound/current node (${isolatedAllowedRemoteNodes.join(', ')}).`);
         }
     }
     
     if (action === 'list') {
         // List all nodes and their tools
         const nodes = nodesManager.listNodesWithTools();
+        const visibleNodes = sessionManager.isSessionEffectivelyIsolated(session)
+            ? nodes.filter((n: any) => isolatedAllowedRemoteNodes.includes(n.id))
+            : nodes;
         return {
-            nodes: nodes.map((n: any) => ({
+            nodes: visibleNodes.map((n: any) => ({
                 id: n.id,
                 type: n.type,
                 tools: n.tools.map((t: any) => ({
@@ -1259,7 +1294,8 @@ export const definitions = [
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID whose attached channels should receive the file' },
                     channelId: { type: 'string', description: 'Target channel ID in format platform:userId' },
-                    filePath: { type: 'string', description: 'Local file path. Relative paths are resolved under the current agent folder; absolute paths are also accepted.' },
+                    filePath: { type: 'string', description: 'File path on the selected node. Relative paths are resolved under the current agent folder on that node; absolute paths and ~/... are also accepted when allowed.' },
+                    node: { type: 'string', description: 'Optional. Node where the file lives. Defaults to the current node; send_file still delivers through master-side channel/session routing.' },
                     caption: { type: 'string', description: 'Optional caption/text sent with the file where supported' },
                     text: { type: 'string', description: 'Alias of caption for convenience' }
                 },

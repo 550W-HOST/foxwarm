@@ -97,6 +97,16 @@ function buildScopedPathToolRule(agentName: string, sessionId: string, toolName:
   };
 }
 
+function buildNodeToolRule(agentName: string, sessionId: string, toolName: string, targetNode: string): PermissionRule {
+  return {
+    agent: agentName,
+    session: sessionId,
+    target_node: targetNode,
+    tool_name: toolName,
+    action: 'accept',
+  };
+}
+
 function matchesToolArgs(rule: PermissionRule, request: PermissionRequest): boolean {
   if (!rule.tool_args) {
     return true;
@@ -132,56 +142,36 @@ export function evaluatePermission(rules: PermissionRule[], request: PermissionR
   };
 }
 
-export function buildIsolatedToolRules(agentName: string, sessionId: string, boundNode: string): PermissionRule[] {
+export function buildIsolatedToolRules(agentName: string, sessionId: string, boundNode: string, extraRuntimeNodes: string[] = []): PermissionRule[] {
+  const allowedRuntimeNodes = Array.from(new Set([boundNode, ...extraRuntimeNodes].filter((value): value is string => typeof value === 'string' && value.length > 0)));
+  const allowedCopyNodes = Array.from(new Set(['master', ...allowedRuntimeNodes]));
   return [
     buildScopedPathToolRule(agentName, sessionId, 'read', 'master'),
     buildScopedPathToolRule(agentName, sessionId, 'write', 'master'),
     buildScopedPathToolRule(agentName, sessionId, 'edit', 'master'),
     buildScopedPathToolRule(agentName, sessionId, 'apply_patch', 'master'),
+    buildScopedPathToolRule(agentName, sessionId, 'change_directory', 'master', 'path'),
     buildScopedPathToolRule(agentName, sessionId, 'send_file', 'master'),
     buildScopedPathToolRule(agentName, sessionId, 'read_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
     buildScopedPathToolRule(agentName, sessionId, 'write_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
     buildScopedPathToolRule(agentName, sessionId, 'edit_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
     buildScopedPathToolRule(agentName, sessionId, 'delete_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
-    buildScopedPathToolRule(agentName, sessionId, 'read', boundNode),
-    buildScopedPathToolRule(agentName, sessionId, 'write', boundNode),
-    buildScopedPathToolRule(agentName, sessionId, 'edit', boundNode),
-    buildScopedPathToolRule(agentName, sessionId, 'apply_patch', boundNode),
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: boundNode,
-      tool_name: 'browse_open',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: boundNode,
-      tool_name: 'browse_list',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: boundNode,
-      tool_name: 'browse_get',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: boundNode,
-      tool_name: 'browse_close',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: boundNode,
-      tool_name: 'browse_interact',
-      action: 'accept',
-    },
+    ...allowedRuntimeNodes.flatMap(targetNode => [
+      buildNodeToolRule(agentName, sessionId, 'read', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'write', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'edit', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'apply_patch', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'change_directory', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'list_files', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'delete_file', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'browse_open', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'browse_list', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'browse_get', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'browse_close', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'browse_interact', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'exec', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'send_file', targetNode),
+    ]),
     {
       agent: agentName,
       session: sessionId,
@@ -203,18 +193,9 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
       target_node: 'master',
       tool_name: 'copy_between_nodes',
       tool_args: {
-        sourceNode: { oneOf: ['master', boundNode] },
-        sourcePath: { pathWithinAgent: true },
-        targetNode: { oneOf: ['master', boundNode] },
-        targetPath: { pathWithinAgent: true },
+        sourceNode: { oneOf: allowedCopyNodes },
+        targetNode: { oneOf: allowedCopyNodes },
       },
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: boundNode,
-      tool_name: 'exec',
       action: 'accept',
     },
     {
@@ -262,10 +243,17 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
     {
       agent: agentName,
       session: sessionId,
+      target_node: 'master',
+      tool_name: 'remote_node',
+      action: 'accept',
+    },
+    {
+      agent: agentName,
+      session: sessionId,
       target_node: '*',
       tool_name: '*',
       action: 'reject',
-      reason: `Isolated agent sessions are restricted to agent-level allowed tools on master or their bound node (${boundNode}).`,
+      reason: `Isolated agent sessions are restricted to agent-level allowed tools on master or their bound/current node (${allowedRuntimeNodes.join(', ') || boundNode}).`,
     },
   ];
 }

@@ -6,6 +6,7 @@
 import * as sessionManager from './sessionManager';
 import { AGENTS_DIR, getAgentDir } from './config';
 import * as path from 'path';
+import os from 'os';
 import { buildIsolatedToolRules, evaluatePermission } from './permissions';
 
 /**
@@ -26,6 +27,14 @@ export async function checkToolPermission(
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
   const agentName = session?.agent || 'main';
   const boundNode = sessionManager.getAgentIsolationNode(agentName) || session?.currentNode || 'master';
+  const extraRuntimeNodes = session?.currentNode && session.currentNode !== boundNode
+    ? [session.currentNode]
+    : [];
+
+  if (toolName === 'copy_between_nodes') {
+    checkCopyBetweenNodesPermission(agentName, boundNode, session?.currentNode, toolArgs);
+    return;
+  }
 
   const timerTools = ['create_timer', 'list_timers', 'delete_timer'];
   if (timerTools.includes(toolName)) {
@@ -40,7 +49,7 @@ export async function checkToolPermission(
 
   const effectiveNode = executionNode || 'master';
   const { action, rule } = evaluatePermission(
-    buildIsolatedToolRules(agentName, session.id, boundNode),
+    buildIsolatedToolRules(agentName, session.id, boundNode, extraRuntimeNodes),
     {
       agent: agentName,
       session: session.id,
@@ -55,6 +64,49 @@ export async function checkToolPermission(
       throw new Error('Isolated agent sessions cannot run exec on master node. Use the bound node instead.');
     }
     throw new Error(rule?.reason || `Isolated agent sessions cannot use ${toolName} on node "${effectiveNode}".`);
+  }
+}
+
+
+function resolvePermissionPath(filePath: unknown, agentName: string): string | null {
+  if (typeof filePath !== 'string' || filePath.trim().length === 0) {
+    return null;
+  }
+  const rawPath = filePath.trim();
+  const expandedPath = rawPath === '~'
+    ? os.homedir()
+    : (rawPath.startsWith('~/') || rawPath.startsWith('~\\') ? path.join(os.homedir(), rawPath.slice(2)) : rawPath);
+  const agentDir = getAgentDir(agentName);
+  return path.normalize(path.isAbsolute(expandedPath) ? path.resolve(expandedPath) : path.resolve(agentDir, expandedPath));
+}
+
+function isPathWithinAgentDir(filePath: unknown, agentName: string): boolean {
+  const resolvedPath = resolvePermissionPath(filePath, agentName);
+  if (!resolvedPath) {
+    return false;
+  }
+  const agentDir = path.normalize(getAgentDir(agentName));
+  return resolvedPath === agentDir || resolvedPath.startsWith(agentDir + path.sep);
+}
+
+function checkCopyBetweenNodesPermission(agentName: string, boundNode: string, currentNode: string | undefined, toolArgs?: Record<string, any>): void {
+  const sourceNode = typeof toolArgs?.sourceNode === 'string' ? toolArgs.sourceNode : '';
+  const targetNode = typeof toolArgs?.targetNode === 'string' ? toolArgs.targetNode : '';
+  const allowedNodes = new Set(['master', boundNode]);
+  if (typeof currentNode === 'string' && currentNode.length > 0) {
+    allowedNodes.add(currentNode);
+  }
+
+  if (!allowedNodes.has(sourceNode) || !allowedNodes.has(targetNode)) {
+    throw new Error(`Isolated agent sessions can only use copy_between_nodes between master and their bound/current node (${Array.from(allowedNodes).join(', ')}).`);
+  }
+
+  if (sourceNode === 'master' && !isPathWithinAgentDir(toolArgs?.sourcePath, agentName)) {
+    throw new Error(`Isolated agent session can only read from agents/${agentName}/ on master during copy_between_nodes.`);
+  }
+
+  if (targetNode === 'master' && !isPathWithinAgentDir(toolArgs?.targetPath, agentName)) {
+    throw new Error(`Isolated agent session can only write to agents/${agentName}/ on master during copy_between_nodes.`);
   }
 }
 
