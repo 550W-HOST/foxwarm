@@ -6,6 +6,7 @@ import ChatTimeline from './ChatTimeline'
 import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
 import type { Message, MessagePart, SendKeyMode, SessionStreamEvent } from './chatShared'
+import { buildWorkspaceDownloadUrl } from './workspaceShared'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
@@ -119,7 +120,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
 
   for (const candidate of candidates) {
     try {
-      const res = await fetch(`/download?path=${encodeURIComponent(candidate)}`)
+      const res = await fetch(buildWorkspaceDownloadUrl(candidate))
       if (!res.ok) continue
 
       const text = await res.text()

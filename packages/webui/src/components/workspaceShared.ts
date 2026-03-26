@@ -16,7 +16,7 @@ export function buildWorkspaceDownloadUrl(filePath: string, isDirectory: boolean
   if (isDirectory) {
     params.set('archive', 'tgz')
   }
-  return `/download?${params.toString()}`
+  return `download?${params.toString()}`
 }
 
 export function triggerBrowserDownload(url: string) {
