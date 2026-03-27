@@ -342,8 +342,9 @@ async function main(): Promise<void> {
       await ensureSession(sessionId);
 
       let llmCallCount = 0;
+      let compactMessageRange: { sourceStart: number; sourceEnd: number } | null = null;
 
-      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration?: number, options?: { toolDefinitions?: Array<{ name: string }> }) => {
         const isCompactJob = Boolean((activeSession as any).__compactJob);
         if (parts?.length) {
           if (isCompactJob) {
@@ -372,6 +373,13 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
           assert.match(systemText, /M#1/);
+          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), ['submit_compact_plan']);
+          const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
+          assert(firstMessageCandidate, 'expected at least one message candidate in compact prompt');
+          compactMessageRange = {
+            sourceStart: Number(firstMessageCandidate[1]),
+            sourceEnd: Number(firstMessageCandidate[2] || firstMessageCandidate[1]),
+          };
           const toolCall = {
             id: 'compact-plan-invalid',
             name: 'submit_compact_plan',
@@ -387,6 +395,8 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
           assert.match(systemText, /createBlocks must contain at least one block/);
+          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), ['submit_compact_plan']);
+          assert(compactMessageRange, 'expected compact message range to be captured from initial prompt');
           const toolCall = {
             id: 'compact-plan',
             name: 'submit_compact_plan',
@@ -394,8 +404,8 @@ async function main(): Promise<void> {
               createBlocks: [{
                 level: 1,
                 sourceKind: 'message',
-                sourceStart: 1,
-                sourceEnd: 3,
+                sourceStart: compactMessageRange.sourceStart,
+                sourceEnd: compactMessageRange.sourceEnd,
                 summary: 'layered compact summary',
               }],
             },
@@ -566,8 +576,9 @@ async function main(): Promise<void> {
 
       let mainTurnCallCount = 0;
       let compactJobCallCount = 0;
+      let autoCompactMessageRange: { sourceStart: number; sourceEnd: number } | null = null;
 
-      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration?: number, options?: { toolDefinitions?: Array<{ name: string }> }) => {
         assert.strictEqual(activeSession.id, sessionId);
         const isCompactJob = Boolean((activeSession as any).__compactJob);
         if (parts?.length) {
@@ -582,6 +593,13 @@ async function main(): Promise<void> {
           compactJobCallCount += 1;
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
+          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), ['submit_compact_plan']);
+          const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
+          assert(firstMessageCandidate, 'expected at least one message candidate in auto compact prompt');
+          autoCompactMessageRange = {
+            sourceStart: Number(firstMessageCandidate[1]),
+            sourceEnd: Number(firstMessageCandidate[2] || firstMessageCandidate[1]),
+          };
           const toolCall = {
             id: 'auto-compact-plan',
             name: 'submit_compact_plan',
@@ -589,8 +607,8 @@ async function main(): Promise<void> {
               createBlocks: [{
                 level: 1,
                 sourceKind: 'message',
-                sourceStart: 1,
-                sourceEnd: 3,
+                sourceStart: autoCompactMessageRange.sourceStart,
+                sourceEnd: autoCompactMessageRange.sourceEnd,
                 summary: 'auto compact summary',
               }],
             },
