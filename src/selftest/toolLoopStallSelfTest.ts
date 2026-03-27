@@ -373,7 +373,7 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
           assert.match(systemText, /M#1/);
-          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), ['submit_compact_plan']);
+          assert.strictEqual(options?.toolDefinitions, undefined);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in compact prompt');
           compactMessageRange = {
@@ -395,7 +395,7 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
           assert.match(systemText, /createBlocks must contain at least one block/);
-          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), ['submit_compact_plan']);
+          assert.strictEqual(options?.toolDefinitions, undefined);
           assert(compactMessageRange, 'expected compact message range to be captured from initial prompt');
           const toolCall = {
             id: 'compact-plan',
@@ -593,7 +593,7 @@ async function main(): Promise<void> {
           compactJobCallCount += 1;
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
-          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), ['submit_compact_plan']);
+          assert.strictEqual(options?.toolDefinitions, undefined);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in auto compact prompt');
           autoCompactMessageRange = {
