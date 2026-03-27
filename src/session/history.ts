@@ -5,7 +5,6 @@ import { estimateSessionTokens, estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
 import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange } from './archive';
 import {
-  COMPACT_PLAN_TOOL_DEFINITION,
   buildBlockCandidateItem,
   buildCompactPlanValidationFeedback,
   buildCompactPromptText,
@@ -666,7 +665,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
 
   for (let attempt = 1; attempt <= maxCompactAttempts; attempt += 1) {
     const result = await llm.chat(nextPromptParts, transientSession, attempt - 1, {
-      toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION],
       appendMessage: async (message) => {
         await appendTransientSessionMessage(transientSession, message);
         mirrorTemporaryCompactMessage(deps, sessionId, message);

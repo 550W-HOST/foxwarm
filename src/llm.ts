@@ -247,6 +247,7 @@ const SUBCONSCIOUS_ALLOWED_TOOL_NAMES = new Set([
     'search_memory',
     'get_archived_messages',
     'get_archived_blocks',
+    'submit_compact_plan',
     'send_to_session',
     'end_turn',
 ]);
