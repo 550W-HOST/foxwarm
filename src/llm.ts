@@ -668,7 +668,6 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             'remote_node', 'list_nodes', 'node_tools',
             'search_memory', 'get_memory_context',
             'read_memory', 'write_memory', 'edit_memory', 'delete_memory',
-            'list_files', 'delete_file',
             'copy_between_nodes',
             'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
             'list_sessions', 'list_agents', 'list_skills',
@@ -683,11 +682,12 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         ];
         const forceMaster = masterOnlyTools.includes(call.name);
         const executionNode = forceMaster ? 'master' : targetNode;
+        const permissionNode = call.name === 'send_file' ? targetNode : executionNode;
 
         // Check isolated session tool permission (includes path access check for master)
         try {
             if (!result?.error) {
-                await checkToolPermission(call.name, sessionId, executionNode, toolArgs);
+                await checkToolPermission(call.name, sessionId, permissionNode, toolArgs);
             }
         } catch (e: any) {
             result = { error: e.message || String(e) };
@@ -706,8 +706,11 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             }
         } else if (toolFn) {
             // Execute locally on master
+            const localToolContext = call.name === 'send_file'
+                ? { ...toolContext, runtimeNodeId: targetNode }
+                : toolContext;
             try {
-                result = normalizeToolResult(await toolFn(toolArgs, toolContext));
+                result = normalizeToolResult(await toolFn(toolArgs, localToolContext));
             } catch (e: any) {
                 result = { error: e?.message || String(e) };
             }

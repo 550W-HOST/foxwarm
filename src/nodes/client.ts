@@ -556,7 +556,7 @@ export class NodeClient {
       : 'main';
 
     try {
-      const file = await readNodeTransferFile(filePath, agentName);
+      const file = await readNodeTransferFile(filePath, agentName, message.restrictToAgentDir === true);
       this.send({
         type: 'file_read_response',
         transferId,
@@ -579,7 +579,7 @@ export class NodeClient {
       : 'main';
 
     try {
-      const result = await writeNodeTransferFile(filePath, agentName, String(message.dataBase64 || ''), message.overwrite === true);
+      const result = await writeNodeTransferFile(filePath, agentName, String(message.dataBase64 || ''), message.overwrite === true, message.restrictToAgentDir === true);
       this.send({
         type: 'file_write_response',
         transferId,
