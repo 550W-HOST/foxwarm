@@ -15,3 +15,7 @@
 /test/.env
 /test/state
 /test/workspace
+/test/agents
+/test/node-client-state
+/test/sandbox-workspace-node
+/test/.temp
