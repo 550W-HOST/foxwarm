@@ -470,7 +470,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
           {operations.map((operation, operationIdx) => {
             if (operation.action === 'update') {
               return (
-                <div key={operationIdx} className="space-y-2">
+                <div key={operationIdx} className="">
                   <div className="text-xs font-semibold text-gray-600 dark:text-gray-300">Update {operation.filePath}</div>
                   <div>
                     {operation.hunks.map((hunk, hunkIdx) => {
@@ -817,7 +817,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
                 {operations.map((operation, operationIdx) => {
                   if (operation.action === 'update') {
                     return (
-                      <div key={operationIdx} className="space-y-2">
+                      <div key={operationIdx} className="">
                         <div className="text-xs font-semibold text-gray-600 dark:text-gray-300">Update {operation.filePath}</div>
                         <div>
                           {operation.hunks.map((hunk, hunkIdx) => {
