@@ -9,7 +9,7 @@ import { buildChildReminder, isModelNoActionSignal } from './session/childSessio
 import { maybeBuildTodoEndTurnReminderMessage } from './session/todo';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
-import { MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
+import { Message, MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
 import { formatMessageText, formatPrefixedMultilineText } from './utils/messageFormat';
 
 const SUBCONSCIOUS_RETRY_BUSY_MS = 1500;
@@ -160,9 +160,10 @@ export class MessageRouter {
     return true;
   }
 
-  private getQueuedTurnOptions(session: Session, item: { type: string; parts?: MessagePart[]; source?: QueueSource }) {
+  private getQueuedTurnOptions(session: Session, item: { type: string; parts?: MessagePart[]; source?: QueueSource; message?: Message }) {
     return {
-      parts: item.parts || [],
+      parts: item.parts || null,
+      message: item.message,
       source: item.type === 'user' ? item.source : undefined,
       session,
       preclaimed: true,
@@ -177,6 +178,16 @@ export class MessageRouter {
     await sessionManager.saveSession(session.id);
 
     if (session.queue[0]?.type === 'compact' || session.queue[0]?.type === 'compact-commit') {
+      const nextItem = session.queue.shift();
+      if (!nextItem) {
+        return false;
+      }
+
+      await this.processQueuedItem(session.id, session, nextItem);
+      return true;
+    }
+
+    if (session.queue[0]?.message) {
       const nextItem = session.queue.shift();
       if (!nextItem) {
         return false;
@@ -570,7 +581,7 @@ export class MessageRouter {
       return;
     }
 
-    await sessionManager.appendSessionMessage(session, reminder);
+    await sessionManager.queueSessionMessageEvent(session.id, reminder, 'background');
   }
 
   private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean): Promise<void> {
@@ -627,7 +638,8 @@ export class MessageRouter {
   private async runSessionTurn(
     sessionId: string,
     options: {
-      parts: MessagePart[];
+      parts: MessagePart[] | null;
+      message?: Message;
       sourceCtx?: ChannelContext;
       source?: QueueSource;
       sendTyping?: boolean;
@@ -641,22 +653,27 @@ export class MessageRouter {
     }
 
     const broadcast = session.broadcast;
-    const subconsciousIncomingParts: MessagePart[] = [...options.parts];
+    const subconsciousIncomingParts: MessagePart[] = options.parts ? [...options.parts] : [];
     let subconsciousAwardedMessages = 0;
     let subconsciousToolRoundCount = 0;
 
-    logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.parts.length }, 'Session turn processing');
+    logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.message?.parts?.length ?? options.parts?.length ?? 0 }, 'Session turn processing');
 
     try {
       if (options.sendTyping && options.sourceCtx) {
         await options.sourceCtx.sendTyping();
       }
-      let parts = this.prepareTurnParts(
-        session,
-        sessionId,
-        options.parts,
-        options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined)
-      );
+      let parts = options.message
+        ? null
+        : this.prepareTurnParts(
+          session,
+          sessionId,
+          options.parts || [],
+          options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined)
+        );
+      if (options.message) {
+        await sessionManager.appendSessionMessage(session, options.message);
+      }
       let iteration = 0;
       let finalResponse = '';
       let finalUsage = null;

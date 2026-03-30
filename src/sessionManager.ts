@@ -1338,6 +1338,13 @@ export async function queueSessionStructuredEvent(sessionId: string, parts: Mess
   });
 }
 
+export async function queueSessionMessageEvent(sessionId: string, message: Message, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+  await enqueueSessionItem(sessionId, {
+    type,
+    message: structuredClone(message),
+  });
+}
+
 export async function queueSessionSystemEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
   await queueSessionStructuredEvent(sessionId, [{ system: message }], type);
 }
@@ -1373,19 +1380,17 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
   }
   appendMessagesToContextFrontier(session, messages);
 
-  const todoReminderMessage = maybeBuildTodoReminderMessage(session);
   const messagesToNotify = [...messages];
-  if (todoReminderMessage) {
-    await appendMessagesToArchive(session, [todoReminderMessage]);
-    session.history.push(todoReminderMessage);
-    appendMessagesToContextFrontier(session, [todoReminderMessage]);
-    messagesToNotify.push(todoReminderMessage);
-  }
+  const todoReminderMessage = maybeBuildTodoReminderMessage(session);
 
   await saveSession(session.id);
 
   for (const message of messagesToNotify) {
     notifyHistoryUpdate(session.id, message);
+  }
+
+  if (todoReminderMessage) {
+    await queueSessionMessageEvent(session.id, todoReminderMessage, 'background');
   }
 }
 

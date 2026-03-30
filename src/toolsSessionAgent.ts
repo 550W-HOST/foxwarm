@@ -177,6 +177,10 @@ function formatArchivedBlockPreview(
   return result;
 }
 
+function formatCombinedArchivedContextPreview(parts: Array<string | null | undefined>): string {
+  return parts.filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('\n\n');
+}
+
 
 function shouldEnforceIsolatedMasterPathAccess(ctx?: ToolContext): boolean {
   return sessionManager.isSessionEffectivelyIsolated(ctx?.session) && (ctx?.runtimeNodeId || ctx?.session?.currentNode || 'master') === 'master';
@@ -660,6 +664,67 @@ export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext
     startId: result.requestedRange.startId,
     endId: result.requestedRange.endId,
   }, previewLength);
+}
+
+export async function tool_get_context_archive(args: ToolArgs, ctx?: ToolContext) {
+  const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
+  if (!targetSessionId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
+  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
+  assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_context_archive');
+
+  const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
+  const hasMessageRange = typeof args.startSeq === 'number' || typeof args.endSeq === 'number';
+  const hasBlockRange = typeof args.startId === 'number' || typeof args.endId === 'number';
+  const includeMessages = typeof args.includeMessages === 'boolean'
+    ? args.includeMessages
+    : (!hasBlockRange || hasMessageRange);
+  const includeBlocks = typeof args.includeBlocks === 'boolean'
+    ? args.includeBlocks
+    : (!hasMessageRange || hasBlockRange);
+
+  const sections: string[] = [];
+
+  if (includeMessages) {
+    const messageResult = await sessionManager.getArchivedMessages(targetSessionId, {
+      startSeq: typeof args.startSeq === 'number' ? args.startSeq : undefined,
+      endSeq: typeof args.endSeq === 'number' ? args.endSeq : undefined,
+    });
+    const messageRecords = (!hasMessageRange && !hasBlockRange)
+      ? messageResult.records.slice(-10)
+      : messageResult.records;
+
+    sections.push(formatArchivedMessagePreview(targetSessionId, messageRecords, {
+      totalMatched: messageResult.totalMatched,
+      startSeq: messageResult.requestedRange.startSeq,
+      endSeq: messageResult.requestedRange.endSeq,
+    }, previewLength));
+  }
+
+  if (includeBlocks) {
+    const blockResult = await sessionManager.getArchivedBlocks(targetSessionId, {
+      startId: typeof args.startId === 'number' ? args.startId : undefined,
+      endId: typeof args.endId === 'number' ? args.endId : undefined,
+    });
+    const blockRecords = (!hasMessageRange && !hasBlockRange)
+      ? blockResult.records.slice(-10)
+      : blockResult.records;
+
+    sections.push(formatArchivedBlockPreview(targetSessionId, blockRecords, {
+      totalMatched: blockResult.totalMatched,
+      startId: blockResult.requestedRange.startId,
+      endId: blockResult.requestedRange.endId,
+    }, previewLength));
+  }
+
+  if (sections.length === 0) {
+    throw new Error('get_context_archive requires includeMessages and/or includeBlocks to be true.');
+  }
+
+  return formatCombinedArchivedContextPreview(sections);
 }
 
 export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {

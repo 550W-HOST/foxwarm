@@ -38,6 +38,7 @@ import {
     tool_get_session_messages,
     tool_get_archived_messages,
     tool_get_archived_blocks,
+    tool_get_context_archive,
     tool_delete_session,
     tool_update_session_name,
     tool_set_todo,
@@ -982,6 +983,7 @@ export const load_skill = tool_load_skill;
 export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
 export const get_archived_blocks = tool_get_archived_blocks;
+export const get_context_archive = tool_get_context_archive;
 export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
 export const set_todo = tool_set_todo;
@@ -1046,7 +1048,7 @@ export const change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
 export const definitions = [
         {
             name: 'read',
-            description: 'Read a file from agent-folder.',
+            description: 'Read a file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
             parameters: {
                 type: 'object',
                 properties: { 
@@ -1411,6 +1413,23 @@ export const definitions = [
             }
         },
         {
+            name: 'get_context_archive',
+            description: 'Unified archived-context inspection helper. Use this when you want archived raw messages, layered blocks, or both without deciding between separate tools first.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
+                    startSeq: { type: 'number', description: 'Optional inclusive starting raw message seq' },
+                    endSeq: { type: 'number', description: 'Optional inclusive ending raw message seq' },
+                    startId: { type: 'number', description: 'Optional inclusive starting block id' },
+                    endId: { type: 'number', description: 'Optional inclusive ending block id' },
+                    includeMessages: { type: 'boolean', description: 'Include archived raw messages (default: auto)' },
+                    includeBlocks: { type: 'boolean', description: 'Include archived layered blocks (default: auto)' },
+                    previewLength: { type: 'number', description: 'Maximum preview length per returned item (default: 1000)' }
+                }
+            }
+        },
+        {
             name: 'delete_session',
             description: 'Delete a session permanently. Cannot delete current session.',
             parameters: {
@@ -1435,7 +1454,7 @@ export const definitions = [
         },
         {
             name: 'set_todo',
-            description: 'Set or clear a todo reminder for the current session. Reminders are injected as system messages after enough later session messages have passed, including tool-loop progress.',
+            description: 'Set or clear a todo reminder for the current session. Recommended workflow: briefly plan first, store only the active checklist here, update it as milestones complete, and clear it when done. Reminders are injected as system messages after enough later session messages have passed, including tool-loop progress.',
             parameters: {
                 type: 'object',
                 properties: {

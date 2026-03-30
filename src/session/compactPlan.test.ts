@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildBlockCandidateItem,
   buildCompactPlanValidationFeedback,
+  buildCompactFlowToolDefinitions,
   buildCompactPromptText,
   buildMessageCandidateItem,
   COMPACT_PLAN_TOOL_NAME,
@@ -43,6 +44,24 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /M#1/);
   assert.match(prompt, /B#9 L1 raw#3-#9/);
   assert.match(prompt, /resolved discussion/);
+  assert.match(prompt, /Preserve decisions/i);
+  assert.match(prompt, /get_context_archive/);
+  assert.match(prompt, /read_memory/);
+});
+
+test('buildCompactFlowToolDefinitions exposes only compact-safe helper tools plus plan submission', () => {
+  const defs = buildCompactFlowToolDefinitions();
+  const names = defs.map(def => def.name);
+  assert.deepStrictEqual(names, [
+    'read_memory',
+    'write_memory',
+    'edit_memory',
+    'delete_memory',
+    'get_archived_messages',
+    'get_archived_blocks',
+    'get_context_archive',
+    COMPACT_PLAN_TOOL_NAME,
+  ]);
 });
 
 test('validateCompactPlanArgs accepts layered message and block range creation', () => {

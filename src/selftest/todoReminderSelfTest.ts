@@ -95,7 +95,7 @@ async function main(): Promise<void> {
       const session = await ensureSession(sessionId);
 
       const result = await tool_set_todo({ todo: '- [ ] write docs', remindEvery: 3 }, { sessionId, session });
-      assert.match(String(result), /Todo reminder updated/);
+      assert.strictEqual(String(result), 'ok');
       assert.strictEqual(session.todoState?.todo, '- [ ] write docs');
       assert.strictEqual(session.todoState?.remindEvery, 3);
 
@@ -104,7 +104,7 @@ async function main(): Promise<void> {
       assert.strictEqual(historyPayload.todoState?.remindEvery, 3);
 
       const cleared = await tool_set_todo({ clear: true }, { sessionId, session });
-      assert.match(String(cleared), /Cleared todo reminder/);
+      assert.strictEqual(String(cleared), 'ok');
       assert.strictEqual(session.todoState, undefined);
     });
 
@@ -112,6 +112,13 @@ async function main(): Promise<void> {
       const sessionId = makeSessionId('selftest_todo_loop');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
+
+      (llm as any).chat = async (parts: Message['parts'] | null, activeSession: Session) => {
+        assert.strictEqual(activeSession.id, sessionId);
+        await appendStubUserMessage(activeSession, parts);
+        await appendStubModelMessage(activeSession, '[NO_ACTION]');
+        return { text: '[NO_ACTION]' };
+      };
 
       await append(session, {
         role: 'model',
@@ -132,43 +139,56 @@ async function main(): Promise<void> {
         role: 'model',
         parts: [{ text: 'Working on it.' }],
       });
-      assert.strictEqual(countTodoReminders(session), 1);
+      assert.strictEqual(countTodoReminders(session), 0);
+      assert.strictEqual(session.queue.length, 1);
       assert.strictEqual(session.todoState?.anchorSeq, 3);
 
       await append(session, {
         role: 'tool',
         parts: [{ functionResponse: { tool_use_id: 'other-1', name: 'read', response: { output: 'done' } } }],
       });
-      assert.strictEqual(countTodoReminders(session), 1);
-      const firstReminder = session.history.find(message => message.__meta?.todoReminder === true)!;
-      assert.strictEqual(firstReminder.__meta?.todoReminder, true);
-      assert.match(firstReminder.parts[0].system || '', /TODO reminder for this session/);
-      assert.match(firstReminder.parts[0].system || '', /- \[ \] ship feature/);
+      assert.strictEqual(countTodoReminders(session), 0);
 
       await append(session, {
         role: 'model',
         parts: [{ functionCall: { id: 'other-2', name: 'exec', args: { command: 'echo hi' } } }],
       });
-      assert.strictEqual(countTodoReminders(session), 2);
-      assert.strictEqual(session.todoState?.anchorSeq, 6);
+      assert.strictEqual(countTodoReminders(session), 0);
+      assert.strictEqual(session.queue.length, 2);
+      assert.strictEqual(session.todoState?.anchorSeq, 5);
 
       await append(session, {
         role: 'tool',
         parts: [{ functionResponse: { tool_use_id: 'other-2', name: 'exec', response: { output: 'hi' } } }],
       });
-      assert.strictEqual(countTodoReminders(session), 2);
-      const reminderSeqs = session.history
-        .filter(message => message.__meta?.todoReminder === true)
-        .map(message => message.__meta?.todoAnchorSeq);
-      assert.deepStrictEqual(reminderSeqs, [3, 6]);
+      assert.strictEqual(countTodoReminders(session), 0);
 
       session.busy = false;
       await sessionManager.saveSession(sessionId);
+
+      await router.processSessionQueue(sessionId);
+      if (session.queue.length > 0) {
+        await router.processSessionQueue(sessionId);
+      }
+
+      assert.strictEqual(countTodoReminders(session), 2);
+      const firstReminder = session.history.find(message => message.__meta?.todoReminder === true)!;
+      assert.strictEqual(firstReminder.__meta?.todoReminder, true);
+      assert.match(firstReminder.parts[0].system || '', /TODO reminder for this session/);
+      assert.match(firstReminder.parts[0].system || '', /- \[ \] ship feature/);
+      const reminderSeqs = session.history
+        .filter(message => message.__meta?.todoReminder === true)
+        .map(message => message.__meta?.todoAnchorSeq);
+      assert.deepStrictEqual(reminderSeqs, [3, 5]);
 
       await append(session, {
         role: 'user',
         parts: [{ text: 'next turn message' }],
       });
+      assert.strictEqual(countTodoReminders(session), 2);
+      assert.strictEqual(session.queue.length, 1);
+
+      await router.processSessionQueue(sessionId);
       assert.strictEqual(countTodoReminders(session), 3);
     });
 
@@ -280,6 +300,48 @@ async function main(): Promise<void> {
       assert.strictEqual(reminderMessages.length, 1);
       assert.strictEqual(reminderMessages[0].__meta?.todoReminderKind, 'end-turn');
       assert.strictEqual(refreshedSession.queue.length, 0);
+    });
+
+    await test('interval todo reminder independently triggers a queued follow-up turn', async () => {
+      const sessionId = makeSessionId('selftest_todo_queue_turn');
+      createdSessionIds.push(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await tool_set_todo({ todo: '- [ ] wake queued reminder turn', remindEvery: 1 }, { sessionId, session });
+
+      let reminderTurns = 0;
+      (llm as any).chat = async (parts: Message['parts'] | null, activeSession: Session) => {
+        assert.strictEqual(activeSession.id, sessionId);
+        await appendStubUserMessage(activeSession, parts);
+
+        const latestUser = activeSession.history.slice().reverse().find(message => message.role === 'user');
+        const latestSystem = latestUser?.parts.find(part => typeof part.system === 'string')?.system || '';
+        if (latestSystem.includes('TODO reminder for this session')) {
+          reminderTurns += 1;
+          await appendStubModelMessage(activeSession, 'Reminder processed');
+          return { text: 'Reminder processed' };
+        }
+
+        await appendStubModelMessage(activeSession, 'Normal reply');
+        return { text: 'Normal reply' };
+      };
+
+      await append(session, {
+        role: 'model',
+        parts: [{ text: 'Progress update' }],
+      });
+
+      assert.strictEqual(session.queue.length, 1);
+      assert.strictEqual(countTodoReminders(session), 0);
+
+      await router.processSessionQueue(sessionId);
+
+      const refreshedSession = await sessionManager.getSession(sessionId);
+      assert.strictEqual(reminderTurns, 1);
+      assert.strictEqual(refreshedSession.queue.length, 0);
+      assert.strictEqual(countTodoReminders(refreshedSession), 1);
+      const latestModel = refreshedSession.history.slice().reverse().find(message => message.role === 'model');
+      assert.match(latestModel?.parts.find(part => typeof part.text === 'string')?.text || '', /Reminder processed/);
     });
 
     console.log('todo reminder selftest passed');

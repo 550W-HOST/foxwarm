@@ -247,6 +247,7 @@ const SUBCONSCIOUS_ALLOWED_TOOL_NAMES = new Set([
     'search_memory',
     'get_archived_messages',
     'get_archived_blocks',
+    'get_context_archive',
     'submit_compact_plan',
     'send_to_session',
     'end_turn',
@@ -319,7 +320,8 @@ export async function getPersistentMemory(agentName: string = 'main') {
         combined += await appendSkillFilesForAgent(agentName);
 
         const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_memory: ' + agentMemoryDir + '\n- agent_folder: ' + getAgentDir(agentName) + '\n';
-        return combined.trim() + dirInfo;
+        const archiveInfo = '\n\n--- COMPACTED HISTORY ACCESS ---\n- To inspect compacted raw messages, use `get_archived_messages(...)`.\n- To inspect archived layered-context blocks, use `get_archived_blocks(...)`.\n- If you are not sure which archive view you need, use `get_context_archive(...)`.\n';
+        return combined.trim() + dirInfo + archiveInfo;
     } catch (e) {
         logger.error({ err: e, agentName }, 'Error reading persistent memory');
         return '';
@@ -672,7 +674,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
             'list_sessions', 'list_agents', 'list_skills',
             'attach_agent_skill', 'detach_agent_skill', 'load_skill',
-            'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'delete_session',
+            'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
             'update_session_name', 'set_todo', 'update_session_snapshot', 'stop_session',
             'compact_session', 'compress_session',
             'create_timer', 'list_timers', 'delete_timer',

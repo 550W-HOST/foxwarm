@@ -223,6 +223,13 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
       agent: agentName,
       session: sessionId,
       target_node: 'master',
+      tool_name: 'get_context_archive',
+      action: 'accept',
+    },
+    {
+      agent: agentName,
+      session: sessionId,
+      target_node: 'master',
       tool_name: 'send_to_session',
       action: 'accept',
     },
