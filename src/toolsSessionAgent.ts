@@ -25,7 +25,7 @@ interface ToolContext {
 type ToolArgs = Record<string, any>;
 
 function buildEndTurnResult(_reason?: string) {
-  return { output: 'Turn ended.', __toolLoopControl: { stopCurrentTurn: true } };
+  return { output: 'ok', __toolLoopControl: { stopCurrentTurn: true } };
 }
 
 function getSubconsciousPrimarySessionId(ctx?: ToolContext): string | undefined {
@@ -744,8 +744,8 @@ export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
     const cleared = clearSessionTodo(session);
     await sessionManager.saveSession(session.id);
     return cleared
-      ? 'Todo reminder cleared.'
-      : 'No todo reminder is set.';
+      ? 'ok'
+      : 'ok';
   }
 
   const todo = normalizeTodoText(args.todo);
@@ -753,15 +753,15 @@ export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
     const cleared = clearSessionTodo(session);
     await sessionManager.saveSession(session.id);
     return cleared
-      ? 'Todo reminder cleared.'
-      : 'Ignored empty todo because no todo reminder is set.';
+      ? 'ok'
+      : 'ok';
   }
 
   const remindEvery = normalizeRemindEvery(args.remindEvery);
   setSessionTodo(session, todo, remindEvery);
   await sessionManager.saveSession(session.id);
 
-  return 'Todo reminder updated.';
+  return 'ok';
 }
 
 export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: ToolContext) {
