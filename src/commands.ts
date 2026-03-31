@@ -10,7 +10,7 @@ import { Session } from './types'
 import * as sessionManager from './sessionManager'
 import * as skills from './skills'
 import * as tools from './tools'
-import { estimateSessionTokens } from './tokenCount'
+import { estimateSessionSummary } from './tokenCount'
 import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, getDefaultChannelIdByType, HTTP_PORT, NODE_TOKEN_FILE, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
@@ -817,7 +817,9 @@ export const COMMANDS: Record<string, CommandDef> = {
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
       const historyLen = session.history.length
-      const tokenCount = estimateSessionTokens(session)
+      const sessionSummary = estimateSessionSummary(session)
+      const tokenCount = sessionSummary.tokens
+      const imageCount = sessionSummary.imageCount
       const usage = session.stats.lastUsage
 
       let resp = `📊 *Foxwarm Status*\n`
@@ -832,6 +834,9 @@ export const COMMANDS: Record<string, CommandDef> = {
         resp += `\n- Child default model: ${spawnedModelKey} (override: ${session.childModelDefault.trim()})`
       }
       resp += `\n- Size: ~${(tokenCount / 1000).toFixed(1)}K tokens / ${(contextLimit / 1000).toFixed(1)}K tokens`
+      if (imageCount > 0) {
+        resp += `\n- Images: ${imageCount}`
+      }
       if (usage) {
         resp += `\n*Last Turn Usage: - Cached: ${usage.cachedTokens || 0} / Input: ${usage.inputTokens} / Output: ${usage.outputTokens}`
       }
