@@ -3,6 +3,7 @@ import { partsContainNoActionSignal } from './childSessionReminder';
 
 const TODO_REMINDER_META_KEY = 'todoReminder';
 const TODO_REMINDER_SYSTEM_PREFIX = 'TODO reminder for this session:';
+const TODO_REMINDER_GUIDANCE = 'Update it: mark done items [x], reorder/edit remaining work, and clear it if finished.';
 const CHECKLIST_ITEM_REGEX = /(?:^|\n)\s*-\s*\[\s\]\s+\S/;
 
 type TodoReminderKind = 'interval' | 'end-turn';
@@ -85,6 +86,17 @@ function getLatestNonReminderMessage(session: Session): Message | null {
   return null;
 }
 
+function getLatestUserMessage(session: Session): Message | null {
+  for (let i = session.history.length - 1; i >= 0; i--) {
+    const message = session.history[i];
+    if (message.role === 'user') {
+      return message;
+    }
+  }
+
+  return null;
+}
+
 function latestMessageSuppressesTodoReminder(session: Session): boolean {
   const latestMessage = getLatestNonReminderMessage(session);
   return latestMessage?.role === 'model' && partsContainNoActionSignal(latestMessage.parts);
@@ -108,7 +120,7 @@ function hasTodoReminderForAnchorSeq(session: Session, anchorSeq: number): boole
 function buildTodoReminderMessage(state: SessionTodoState, anchorSeq: number, kind: TodoReminderKind): Message {
   return {
     role: 'user',
-    parts: [{ system: `${TODO_REMINDER_SYSTEM_PREFIX}\n${state.todo}` }],
+    parts: [{ system: `${TODO_REMINDER_SYSTEM_PREFIX}\n${TODO_REMINDER_GUIDANCE}\n${state.todo}` }],
     __meta: {
       timestamp: Date.now(),
       [TODO_REMINDER_META_KEY]: true,
@@ -171,6 +183,11 @@ export function maybeBuildTodoReminderMessage(session: Session): Message | null 
     return null;
   }
 
+  const latestUserMessage = getLatestUserMessage(session);
+  if (latestUserMessage && isTodoReminderMessage(latestUserMessage)) {
+    return null;
+  }
+
   const countedMessagesSinceAnchor = countNonReminderMessagesAfterSeq(session, state.anchorSeq);
   if (countedMessagesSinceAnchor < state.remindEvery) {
     return null;
@@ -193,6 +210,11 @@ export function maybeBuildTodoEndTurnReminderMessage(session: Session): Message 
   }
 
   if (latestMessageSuppressesTodoReminder(session)) {
+    return null;
+  }
+
+  const latestUserMessage = getLatestUserMessage(session);
+  if (latestUserMessage && isTodoReminderMessage(latestUserMessage)) {
     return null;
   }
 
