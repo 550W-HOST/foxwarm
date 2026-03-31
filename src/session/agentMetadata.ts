@@ -182,10 +182,6 @@ export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string
       throw new Error('Agent cannot inherit from itself.');
     }
 
-    if (isAgentIsolated(agentName)) {
-      throw new Error(`Agent "${agentName}" is isolated and cannot inherit shared memory from other agents.`);
-    }
-
     if (isAgentIsolated(inheritAgentName)) {
       throw new Error(`Agent "${inheritAgentName}" is isolated and cannot be used as an inherit source.`);
     }
@@ -245,7 +241,6 @@ export async function setAgentIsolation(
     }
     nextMeta.isolated = true;
     nextMeta.isolatedNode = normalizedNode;
-    delete nextMeta.inherit;
   } else {
     nextMeta.isolated = false;
     delete nextMeta.isolatedNode;

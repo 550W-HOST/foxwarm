@@ -336,7 +336,7 @@ const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
       literalNode('normal', 'Normal interactive mode'),
     ],
   }),
-  literalNode('dangerously-allow-all-group-members', 'Allow all group members to use commands', {
+  literalNode('dangerously-allow-all-users', 'Allow all users in this attached conversation to send normal messages', {
     children: [
       literalNode('yes', 'Enable allow-all mode'),
       literalNode('no', 'Disable allow-all mode'),
@@ -360,7 +360,7 @@ function formatChannelInfo(ctx: ChannelContext): string {
     ctx.username ? `- username: \`${ctx.username}\`` : undefined,
     `- attachedSession: \`${sessionId || '(none)'}\``,
     `- mode: \`${channelConfig?.mode || 'normal'}\``,
-    `- dangerouslyAllowAllGroupMembers: \`${channelConfig?.dangerouslyAllowAllGroupMembers ? 'yes' : 'no'}\``,
+    `- dangerouslyAllowAllUsers: \`${sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId) ? 'yes' : 'no'}\``,
     runtimeStatus ? `- runtime: \`${runtimeStatus.running ? 'running' : 'stopped'}\`` : undefined,
   ].filter(Boolean).join('\n')
 }
@@ -2281,7 +2281,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           '       /channel stop <channel-id>',
           '       /channel restart <channel-id>',
           '       /channel mode <push-only|normal>',
-          '       /channel dangerously-allow-all-group-members <yes|no>',
+          '       /channel dangerously-allow-all-users <yes|no>',
         ].join('\n'))
         return
       }
@@ -2357,11 +2357,11 @@ export const COMMANDS: Record<string, CommandDef> = {
         } catch (e: any) {
           ctx.reply(`❌ Failed to set channel mode: ${e.message}`)
         }
-      } else if (subcommand === 'dangerously-allow-all-group-members') {
+      } else if (subcommand === 'dangerously-allow-all-users' || subcommand === 'dangerously-allow-all-group-members') {
         if (args.length < 2) {
           // Show current setting
-          const currentValue = sessionManager.getChannelDangerouslyAllowAllGroupMembers(getChannelId(ctx), getConversationId(ctx))
-          ctx.reply(`Current dangerouslyAllowAllGroupMembers: *${currentValue ? 'yes' : 'no'}*\nUsage: /channel dangerously-allow-all-group-members <yes|no>`)
+          const currentValue = sessionManager.getChannelDangerouslyAllowAllUsers(getChannelId(ctx), getConversationId(ctx))
+          ctx.reply(`Current dangerouslyAllowAllUsers: *${currentValue ? 'yes' : 'no'}*\nUsage: /channel dangerously-allow-all-users <yes|no>`)
           return
         }
 
@@ -2372,10 +2372,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         try {
-          sessionManager.setChannelDangerouslyAllowAllGroupMembers(getChannelId(ctx), getConversationId(ctx), value === 'yes')
-          ctx.reply(`✅ dangerouslyAllowAllGroupMembers set to *${value}*`)
+          sessionManager.setChannelDangerouslyAllowAllUsers(getChannelId(ctx), getConversationId(ctx), value === 'yes')
+          ctx.reply(`✅ dangerouslyAllowAllUsers set to *${value}*`)
         } catch (e: any) {
-          ctx.reply(`❌ Failed to set dangerouslyAllowAllGroupMembers: ${e.message}`)
+          ctx.reply(`❌ Failed to set dangerouslyAllowAllUsers: ${e.message}`)
         }
       } else {
         ctx.reply([
@@ -2387,7 +2387,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           '/channel stop <channel-id>',
           '/channel restart <channel-id>',
           '/channel mode <push-only|normal>',
-          '/channel dangerously-allow-all-group-members <yes|no>',
+          '/channel dangerously-allow-all-users <yes|no>',
         ].join('\n'))
       }
     }

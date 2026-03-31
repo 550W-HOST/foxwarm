@@ -559,9 +559,6 @@ export async function createAgentWithMainSession(options: {
   const normalizedIsolatedNode = isolatedNode && String(isolatedNode).trim() ? String(isolatedNode).trim() : undefined;
 
   if (normalizedInherit !== undefined) {
-    if (normalizedIsolatedNode) {
-      throw new Error('Isolated agent cannot also inherit shared memory.');
-    }
     validateAgentName(normalizedInherit);
     if (!await fs.pathExists(getAgentDir(normalizedInherit))) {
       throw new Error(`Inherited agent "${normalizedInherit}" does not exist.`);
@@ -613,12 +610,12 @@ export async function moveSessionToTarget(options: {
  * @param sessionId Optional session ID. If not provided, creates a new session
  * @returns The session ID
  */
-export function attachChannel(channelId: string, conversationId: string, sessionId?: string): string {
+export function attachChannel(channelId: string, conversationId: string, sessionId?: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): string {
   if (!sessionId) {
     sessionId = generateSessionId();
   }
 
-  return sessionChannels.attachChannel(channelId, conversationId, sessionId);
+  return sessionChannels.attachChannel(channelId, conversationId, sessionId, configUpdates);
 }
 
 export function getSessionByChannel(channelId: string, conversationId: string): string | undefined {
@@ -633,12 +630,21 @@ export function setChannelMode(channelId: string, conversationId: string, mode: 
   sessionChannels.setChannelMode(channelId, conversationId, mode);
 }
 
+export function getChannelDangerouslyAllowAllUsers(channelId: string, conversationId: string): boolean {
+  return sessionChannels.getChannelDangerouslyAllowAllUsers(channelId, conversationId);
+}
+
+export function setChannelDangerouslyAllowAllUsers(channelId: string, conversationId: string, value: boolean) {
+  sessionChannels.setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
+}
+
+// Legacy compatibility aliases
 export function getChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string): boolean {
-  return sessionChannels.getChannelDangerouslyAllowAllGroupMembers(channelId, conversationId);
+  return getChannelDangerouslyAllowAllUsers(channelId, conversationId);
 }
 
 export function setChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string, value: boolean) {
-  sessionChannels.setChannelDangerouslyAllowAllGroupMembers(channelId, conversationId, value);
+  setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
 }
 
 export function detachChannel(channelId: string, conversationId: string): void {
