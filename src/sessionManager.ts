@@ -559,9 +559,6 @@ export async function createAgentWithMainSession(options: {
   const normalizedIsolatedNode = isolatedNode && String(isolatedNode).trim() ? String(isolatedNode).trim() : undefined;
 
   if (normalizedInherit !== undefined) {
-    if (normalizedIsolatedNode) {
-      throw new Error('Isolated agent cannot also inherit shared memory.');
-    }
     validateAgentName(normalizedInherit);
     if (!await fs.pathExists(getAgentDir(normalizedInherit))) {
       throw new Error(`Inherited agent "${normalizedInherit}" does not exist.`);
@@ -613,12 +610,12 @@ export async function moveSessionToTarget(options: {
  * @param sessionId Optional session ID. If not provided, creates a new session
  * @returns The session ID
  */
-export function attachChannel(channelId: string, conversationId: string, sessionId?: string): string {
+export function attachChannel(channelId: string, conversationId: string, sessionId?: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): string {
   if (!sessionId) {
     sessionId = generateSessionId();
   }
 
-  return sessionChannels.attachChannel(channelId, conversationId, sessionId);
+  return sessionChannels.attachChannel(channelId, conversationId, sessionId, configUpdates);
 }
 
 export function getSessionByChannel(channelId: string, conversationId: string): string | undefined {
@@ -633,12 +630,21 @@ export function setChannelMode(channelId: string, conversationId: string, mode: 
   sessionChannels.setChannelMode(channelId, conversationId, mode);
 }
 
+export function getChannelDangerouslyAllowAllUsers(channelId: string, conversationId: string): boolean {
+  return sessionChannels.getChannelDangerouslyAllowAllUsers(channelId, conversationId);
+}
+
+export function setChannelDangerouslyAllowAllUsers(channelId: string, conversationId: string, value: boolean) {
+  sessionChannels.setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
+}
+
+// Legacy compatibility aliases
 export function getChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string): boolean {
-  return sessionChannels.getChannelDangerouslyAllowAllGroupMembers(channelId, conversationId);
+  return getChannelDangerouslyAllowAllUsers(channelId, conversationId);
 }
 
 export function setChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string, value: boolean) {
-  sessionChannels.setChannelDangerouslyAllowAllGroupMembers(channelId, conversationId, value);
+  setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
 }
 
 export function detachChannel(channelId: string, conversationId: string): void {
@@ -883,7 +889,7 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
   const sourceSession = await getSession(sourceSessionId);
   const newSessionId = await allocateForkSessionId(sourceSessionId, suffix);
 
@@ -908,7 +914,8 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
     verbose: sourceSession.verbose,
-    model: sourceSession.model
+    model: resolveSpawnedSessionModel(sourceSession, options?.model),
+    childModelDefault: sourceSession.childModelDefault,
   };
 
   const appendedForkMessages: Message[] = [];
@@ -1007,7 +1014,30 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
  * @param fork Whether to fork (inherit context) or create new
  * @returns New child session ID
  */
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = true, options?: { node?: string }): Promise<string> {
+export function resolveSpawnedSessionModel(
+  session?: Pick<Session, 'model' | 'childModelDefault'>,
+  explicitModel?: string,
+): string | undefined {
+  const normalizedExplicit = typeof explicitModel === 'string' && explicitModel.trim()
+    ? explicitModel.trim()
+    : undefined;
+  if (normalizedExplicit !== undefined) {
+    return normalizedExplicit;
+  }
+
+  const childDefault = typeof session?.childModelDefault === 'string' && session.childModelDefault.trim()
+    ? session.childModelDefault.trim()
+    : undefined;
+  if (childDefault !== undefined) {
+    return childDefault;
+  }
+
+  return typeof session?.model === 'string' && session.model.trim()
+    ? session.model.trim()
+    : undefined;
+}
+
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = true, options?: { node?: string; model?: string }): Promise<string> {
   if (fork) {
     // Fork from parent (inherit context)
     return await forkSession(parentSessionId, suffix, true, options);
@@ -1036,7 +1066,8 @@ export async function createChildSession(parentSessionId: string, suffix: string
       nextMessageSeq: 1,
       parentSessionId: parentSessionId,
       currentNode: options?.node || parentSession.currentNode || 'master',
-      model: parentSession.model
+      model: resolveSpawnedSessionModel(parentSession, options?.model),
+      childModelDefault: parentSession.childModelDefault,
     };
 
     const initialMessage: Message = {
@@ -1499,6 +1530,37 @@ export function getDefaultCompactThresholdTokens(session: Pick<Session, 'model'>
 
 export function getEffectiveCompactThresholdTokens(session: Pick<Session, 'model' | 'compactThresholdTokens'>): number {
   return sessionHistory.getEffectiveCompactThresholdTokens(session);
+}
+
+export async function setSessionChildModelDefault(sessionId: string, childModelDefault?: string): Promise<{
+  sessionId: string;
+  childModelDefault?: string;
+  inherited: boolean;
+  effectiveModel?: string;
+}> {
+  const session = await getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
+
+  const normalized = typeof childModelDefault === 'string' && childModelDefault.trim()
+    ? childModelDefault.trim()
+    : undefined;
+
+  if (normalized !== undefined) {
+    session.childModelDefault = normalized;
+  } else {
+    delete session.childModelDefault;
+  }
+
+  await saveSession(session.id);
+
+  return {
+    sessionId: session.id,
+    childModelDefault: session.childModelDefault,
+    inherited: typeof session.childModelDefault !== 'string',
+    effectiveModel: resolveSpawnedSessionModel(session),
+  };
 }
 
 export async function setSessionCompactThreshold(sessionId: string, thresholdTokens?: number): Promise<{

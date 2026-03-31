@@ -176,6 +176,10 @@ const NODE_CAPABILITIES = {
 
 const DEFAULT_LOCAL_TRIGGER_HOST = '127.0.0.1';
 
+
+const NODE_CLIENT_HEARTBEAT_INTERVAL_MS = 30_000;
+const NODE_CLIENT_HEARTBEAT_TIMEOUT_MS = 10_000;
+
 type LocalTriggerRuntime = {
   host: string;
   port: number;
@@ -248,6 +252,9 @@ export class NodeClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectDelay = 5000; // 5 seconds
   private forceImmediateReconnect = false;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private heartbeatAwaitingPong = false;
+  private heartbeatLastPingAt = 0;
   private pairingRejected = false;
   private localTriggerEnabled = true;
   private localTriggerPort = 0;
@@ -414,6 +421,45 @@ export class NodeClient {
     logger.info({ host: runtime.host, port: runtime.port, tokenFile: runtime.tokenFile, scriptFile: runtime.scriptFile }, 'Node local trigger endpoint ready');
   }
 
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    this.heartbeatAwaitingPong = false;
+    this.heartbeatLastPingAt = 0;
+  }
+
+  private markHeartbeatAlive(): void {
+    this.heartbeatAwaitingPong = false;
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatInterval = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (this.heartbeatAwaitingPong && Date.now() - this.heartbeatLastPingAt >= NODE_CLIENT_HEARTBEAT_TIMEOUT_MS) {
+        logger.warn({ nodeId: this.connectedNodeId || this.requestedName }, 'Master heartbeat timed out; terminating stale node client socket');
+        try {
+          this.ws.terminate();
+        } catch (err) {
+          logger.warn({ err, nodeId: this.connectedNodeId || this.requestedName }, 'Failed to terminate stale node client socket');
+        }
+        return;
+      }
+      try {
+        this.heartbeatAwaitingPong = true;
+        this.heartbeatLastPingAt = Date.now();
+        this.ws.ping();
+      } catch (err) {
+        logger.warn({ err, nodeId: this.connectedNodeId || this.requestedName }, 'Failed to send node client heartbeat ping');
+      }
+    }, NODE_CLIENT_HEARTBEAT_INTERVAL_MS);
+    this.heartbeatInterval.unref?.();
+  }
+
   private async stopLocalTriggerServer(): Promise<void> {
     if (!this.localTriggerServer) {
       return;
@@ -446,6 +492,8 @@ export class NodeClient {
         this.reconnectTimer = null;
       }
 
+      this.startHeartbeat();
+
       if (this.isAuthenticatedMode) {
         this.send({
           type: 'node_register',
@@ -463,6 +511,7 @@ export class NodeClient {
     });
 
     this.ws.on('message', async (data: Buffer) => {
+      this.markHeartbeatAlive();
       try {
         const message = JSON.parse(data.toString());
         await this.handleMessage(message);
@@ -471,7 +520,12 @@ export class NodeClient {
       }
     });
 
+    this.ws.on('pong', () => {
+      this.markHeartbeatAlive();
+    });
+
     this.ws.on('close', async (code: number, reason: Buffer) => {
+      this.stopHeartbeat();
       const reasonText = reason.toString();
       logger.warn({ code, reason: reasonText }, 'Disconnected from master');
       if (this.pairingRejected) {
@@ -486,6 +540,7 @@ export class NodeClient {
     });
 
     this.ws.on('error', (err: Error) => {
+      this.stopHeartbeat();
       logger.error({ err }, 'WebSocket error');
     });
   }
@@ -703,6 +758,7 @@ export class NodeClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopHeartbeat();
 
     if (this.ws) {
       this.ws.close();

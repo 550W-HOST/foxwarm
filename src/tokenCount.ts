@@ -1,4 +1,57 @@
-import { MessagePart, Message } from './types';
+import { MessagePart, Message, InlineData } from './types';
+
+export interface TokenEstimateSummary {
+    tokens: number;
+    imageCount: number;
+}
+
+function isImageMimeType(mimeType?: string): boolean {
+    return typeof mimeType === 'string' && mimeType.startsWith('image/');
+}
+
+function isImageInlineData(value: unknown): value is InlineData {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as InlineData;
+    return typeof candidate.data === 'string' && isImageMimeType(candidate.mimeType || candidate.mime_type);
+}
+
+function sanitizeValueForTokenEstimate(value: unknown): { sanitized: unknown; imageCount: number } {
+    if (Array.isArray(value)) {
+        let imageCount = 0;
+        const sanitized = value.map((entry) => {
+            const result = sanitizeValueForTokenEstimate(entry);
+            imageCount += result.imageCount;
+            return result.sanitized;
+        });
+        return { sanitized, imageCount };
+    }
+
+    if (isImageInlineData(value)) {
+        return {
+            sanitized: {
+                mimeType: value.mimeType || value.mime_type,
+                data: '[image omitted]',
+            },
+            imageCount: 1,
+        };
+    }
+
+    if (!value || typeof value !== 'object') {
+        return { sanitized: value, imageCount: 0 };
+    }
+
+    let imageCount = 0;
+    const sanitizedEntries = Object.entries(value as Record<string, unknown>).map(([key, entry]) => {
+        const result = sanitizeValueForTokenEstimate(entry);
+        imageCount += result.imageCount;
+        return [key, result.sanitized];
+    });
+
+    return {
+        sanitized: Object.fromEntries(sanitizedEntries),
+        imageCount,
+    };
+}
 
 /**
  * Estimate token count based on codepoint values
@@ -23,10 +76,13 @@ export function estimateTokenCount(text: string): number {
 }
 
 /**
- * Estimate token count for a complete message part including all content types
+ * Estimate token count for a complete message part including all content types.
+ * Image payload bytes/base64 are not counted as tokens; callers should track
+ * the returned imageCount separately for status/debug display.
  */
-export function estimateMessagePartTokens(part: MessagePart): number {
+export function estimateMessagePartSummary(part: MessagePart): TokenEstimateSummary {
     let tokens = 0;
+    let imageCount = 0;
     
     // Text content
     tokens += estimateTokenCount(part.text || '');
@@ -37,46 +93,73 @@ export function estimateMessagePartTokens(part: MessagePart): number {
     // Function calls
     if (part.functionCall) {
         tokens += estimateTokenCount(part.functionCall.name || '');
-        tokens += estimateTokenCount(JSON.stringify(part.functionCall.args || {}));
+        const rawArgsText = typeof (part.functionCall as any).rawArgsText === 'string' ? String((part.functionCall as any).rawArgsText) : JSON.stringify(part.functionCall.args || {});
+        tokens += estimateTokenCount(rawArgsText);
     }
     
     // Function responses
     if (part.functionResponse) {
         tokens += estimateTokenCount(part.functionResponse.name || '');
-        tokens += estimateTokenCount(JSON.stringify(part.functionResponse.response || {}));
+        const sanitized = sanitizeValueForTokenEstimate(part.functionResponse.response || {});
+        imageCount += sanitized.imageCount;
+        tokens += estimateTokenCount(JSON.stringify(sanitized.sanitized || {}));
     }
     
     // Inline data (images, etc.)
     if (part.inlineData) {
-        if (part.inlineData.data && part.inlineData.mimeType?.startsWith('image/')) {
-            // For images, estimate based on base64 length (rough approximation)
-            // Base64 encoding increases size by ~33%, each token ~4 characters
-            tokens += Math.ceil(part.inlineData.data.length * 0.75 / 4);
+        if (isImageInlineData(part.inlineData)) {
+            imageCount += 1;
         } else {
-            // For other inline data, use JSON string length
-            tokens += estimateTokenCount(JSON.stringify(part.inlineData));
+            const sanitized = sanitizeValueForTokenEstimate(part.inlineData);
+            imageCount += sanitized.imageCount;
+            tokens += estimateTokenCount(JSON.stringify(sanitized.sanitized));
         }
     }
     
-    return tokens;
+    return { tokens, imageCount };
+}
+
+export function estimateMessagePartTokens(part: MessagePart): number {
+    return estimateMessagePartSummary(part).tokens;
+}
+
+export function estimateMessageSummary(message: Message): TokenEstimateSummary {
+    const total: TokenEstimateSummary = { tokens: 0, imageCount: 0 };
+    for (const part of message.parts) {
+        const partSummary = estimateMessagePartSummary(part);
+        total.tokens += partSummary.tokens;
+        total.imageCount += partSummary.imageCount;
+    }
+    return total;
 }
 
 /**
  * Estimate token count for a complete message including all parts
  */
 export function estimateMessageTokens(message: Message): number {
-    return message.parts.reduce((total, part) => total + estimateMessagePartTokens(part), 0);
+    return estimateMessageSummary(message).tokens;
+}
+
+export function estimateSessionSummary(session: { history: Message[], persistentMemorySnapshot?: string }): TokenEstimateSummary {
+    const total: TokenEstimateSummary = { tokens: 0, imageCount: 0 };
+    for (const message of session.history) {
+        const messageSummary = estimateMessageSummary(message);
+        total.tokens += messageSummary.tokens;
+        total.imageCount += messageSummary.imageCount;
+    }
+
+    if (session.persistentMemorySnapshot) {
+        total.tokens += estimateTokenCount(session.persistentMemorySnapshot);
+    }
+
+    return total;
 }
 
 /**
  * Estimate token count for an entire session (all messages + snapshot)
  */
 export function estimateSessionTokens(session: { history: Message[], persistentMemorySnapshot?: string }): number {
-    let total = session.history.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
-    if (session.persistentMemorySnapshot) {
-        total += estimateTokenCount(session.persistentMemorySnapshot);
-    }
-    return total;
+    return estimateSessionSummary(session).tokens;
 }
 
 /**

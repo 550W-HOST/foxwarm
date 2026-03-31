@@ -42,6 +42,7 @@ import {
     tool_delete_session,
     tool_update_session_name,
     tool_set_todo,
+    tool_set_session_child_model,
     tool_set_session_compact_threshold,
     tool_update_session_snapshot,
     tool_stop_session,
@@ -987,6 +988,7 @@ export const get_context_archive = tool_get_context_archive;
 export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
 export const set_todo = tool_set_todo;
+export const set_session_child_model = tool_set_session_child_model;
 export const set_session_compact_threshold = tool_set_session_compact_threshold;
 export const update_session_snapshot = tool_update_session_snapshot;
 export const stop_session = tool_stop_session;
@@ -1465,6 +1467,18 @@ export const definitions = [
             }
         },
         {
+            name: 'set_session_child_model',
+            description: 'Set, clear, or inspect the per-session default model used when this session creates child or related new sessions. When unset, spawned sessions follow the current session model behavior.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
+                    model: { type: 'string', description: 'Model key to use by default for child/new sessions spawned from this session.' },
+                    clear: { type: 'boolean', description: 'If true, clear the override and fall back to following the current session model.' }
+                }
+            }
+        },
+        {
             name: 'set_session_compact_threshold',
             description: 'Set, clear, or inspect the per-session auto-compact threshold override in tokens. When unset, the session inherits the default threshold derived from the active model context window.',
             parameters: {
@@ -1762,7 +1776,8 @@ export const definitions = [
                     agentName: { type: 'string', description: 'Existing agent name that will own the session.' },
                     sessionName: { type: 'string', description: 'Session name without agent prefix (cannot contain /).' },
                     displayName: { type: 'string', description: 'Optional display name for the new session.' },
-                    parentSessionId: { type: 'string', description: 'Optional parent session ID.' }
+                    parentSessionId: { type: 'string', description: 'Optional parent session ID.' },
+                    model: { type: 'string', description: 'Optional explicit model key for the new session. When omitted, the current session child-default model behavior is used.' }
                 },
                 required: ['agentName', 'sessionName']
             }

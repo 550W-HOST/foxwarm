@@ -28,6 +28,59 @@ function rawDataToString(message: RawData): string {
   return Buffer.from(message).toString();
 }
 
+const NODE_HEARTBEAT_INTERVAL_MS = 30_000;
+const NODE_HEARTBEAT_TIMEOUT_MS = 10_000;
+
+
+function setupNodeHeartbeat(ws: WebSocket, params: {
+  getRegisteredNodeId: () => string | null;
+  getAuthenticatedNodeId: () => string | null;
+  getPendingPairingId: () => string | null;
+}): () => void {
+  let awaitingPong = false;
+  let lastPingAt = 0;
+
+  const markAlive = () => {
+    awaitingPong = false;
+    const registeredNodeId = params.getRegisteredNodeId();
+    if (registeredNodeId) {
+      nodesManager.updateNodeActivity(registeredNodeId);
+    }
+    const authenticatedNodeId = params.getAuthenticatedNodeId();
+    if (authenticatedNodeId) {
+      void touchApprovedNode(authenticatedNodeId, { lastSeenAt: Date.now() }).catch((err) => {
+        logger.warn({ err, nodeId: authenticatedNodeId }, 'Failed to record node heartbeat activity');
+      });
+    }
+  };
+
+  ws.on('pong', markAlive);
+
+  const timer = setInterval(() => {
+    if (ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (awaitingPong && Date.now() - lastPingAt >= NODE_HEARTBEAT_TIMEOUT_MS) {
+      logger.warn({
+        nodeId: params.getRegisteredNodeId() || params.getAuthenticatedNodeId(),
+        pendingPairingId: params.getPendingPairingId(),
+      }, 'Node heartbeat timed out; terminating stale WebSocket');
+      ws.terminate();
+      return;
+    }
+    awaitingPong = true;
+    lastPingAt = Date.now();
+    try {
+      ws.ping();
+    } catch (err) {
+      logger.warn({ err, nodeId: params.getRegisteredNodeId() || params.getAuthenticatedNodeId() }, 'Failed to send node heartbeat ping');
+    }
+  }, NODE_HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+
+  return () => clearInterval(timer);
+}
+
 export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string): void {
   httpServer.addWebSocket('/node_ws', async (ws: WebSocket, req: http.IncomingMessage) => {
     const url = new URL(req.url || '', `http://${req.headers.host}`);
@@ -56,6 +109,11 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
     let authenticatedNodeId: string | null = null;
     let readyForMessages = false;
     const pendingMessages: string[] = [];
+    const stopHeartbeat = setupNodeHeartbeat(ws, {
+      getRegisteredNodeId: () => nodeId,
+      getAuthenticatedNodeId: () => authenticatedNodeId,
+      getPendingPairingId: () => pendingPairingId,
+    });
 
     const processNodeMessage = async (messageText: string) => {
       const data = JSON.parse(messageText);
@@ -188,6 +246,15 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
 
     ws.on('message', async (message: RawData) => {
       const messageText = rawDataToString(message);
+      const activeNodeId = nodeId || authenticatedNodeId;
+      if (activeNodeId) {
+        nodesManager.updateNodeActivity(activeNodeId);
+      }
+      if (authenticatedNodeId) {
+        void touchApprovedNode(authenticatedNodeId, { lastSeenAt: Date.now() }).catch((err) => {
+          logger.warn({ err, nodeId: authenticatedNodeId }, 'Failed to update node activity from message');
+        });
+      }
       if (!readyForMessages) {
         pendingMessages.push(messageText);
         return;
@@ -222,6 +289,7 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
     }
 
     ws.on('close', () => {
+      stopHeartbeat();
       if (pendingPairingId) {
         detachPendingPairingSocket(pendingPairingId);
       }
@@ -232,6 +300,7 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
     });
 
     ws.on('error', (err: Error) => {
+      stopHeartbeat();
       if (pendingPairingId) {
         detachPendingPairingSocket(pendingPairingId);
       }

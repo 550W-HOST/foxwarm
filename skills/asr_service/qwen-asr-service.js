@@ -12,8 +12,8 @@ const { WebSocketServer, WebSocket } = require('ws');
 const PORT = Number(process.env.QWEN_ASR_SERVICE_PORT || process.env.PORT || 8091);
 const HOST = process.env.QWEN_ASR_SERVICE_HOST || '127.0.0.1';
 const ASR_SERVICE_KEY = String(process.env.QWEN_ASR_SERVICE_KEY || process.env.ASR_SERVICE_KEY || '').trim();
-const QWEN_ASR_BIN = process.env.QWEN_ASR_BIN || '/home/ldmbot/experiments/qwen-asr/qwen_asr';
-const QWEN_ASR_MODEL_DIR = process.env.QWEN_ASR_MODEL_DIR || '/home/ldmbot/experiments/qwen-asr/qwen3-asr-0.6b';
+const QWEN_ASR_BIN = String(process.env.QWEN_ASR_BIN || '').trim();
+const QWEN_ASR_MODEL_DIR = String(process.env.QWEN_ASR_MODEL_DIR || '').trim();
 const QWEN_ASR_THREADS = String(process.env.QWEN_ASR_THREADS || '4');
 const QWEN_ASR_SEGMENT_SECONDS = String(process.env.QWEN_ASR_SEGMENT_SECONDS || '20');
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
@@ -125,13 +125,15 @@ async function prepareInputAudio(filePath, file) {
 
 async function buildHealth() {
   const ffmpegAvailable = await commandExists(FFMPEG_BIN);
+  const configured = Boolean(QWEN_ASR_BIN && QWEN_ASR_MODEL_DIR);
   return {
-    ok: true,
+    ok: configured,
+    configured,
     protected: Boolean(ASR_SERVICE_KEY),
     qwenAsrBin: QWEN_ASR_BIN,
-    qwenAsrBinExists: await fs.pathExists(QWEN_ASR_BIN),
+    qwenAsrBinExists: QWEN_ASR_BIN ? await fs.pathExists(QWEN_ASR_BIN) : false,
     modelDir: QWEN_ASR_MODEL_DIR,
-    modelDirExists: await fs.pathExists(QWEN_ASR_MODEL_DIR),
+    modelDirExists: QWEN_ASR_MODEL_DIR ? await fs.pathExists(QWEN_ASR_MODEL_DIR) : false,
     ffmpegBin: FFMPEG_BIN,
     ffmpegAvailable,
     defaultThreads: Number(QWEN_ASR_THREADS),
@@ -152,8 +154,16 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
       return res.status(400).json({ error: 'Missing audio file field: audio' });
     }
 
+    if (!QWEN_ASR_BIN) {
+      return res.status(500).json({ error: 'QWEN_ASR_BIN is not configured' });
+    }
+
     if (!(await fs.pathExists(QWEN_ASR_BIN))) {
       return res.status(500).json({ error: `Qwen ASR binary not found: ${QWEN_ASR_BIN}` });
+    }
+
+    if (!QWEN_ASR_MODEL_DIR) {
+      return res.status(500).json({ error: 'QWEN_ASR_MODEL_DIR is not configured' });
     }
 
     if (!(await fs.pathExists(QWEN_ASR_MODEL_DIR))) {
@@ -272,8 +282,18 @@ function createStreamSession(ws) {
           return;
         }
 
+        if (!QWEN_ASR_BIN) {
+          fail('QWEN_ASR_BIN is not configured');
+          return;
+        }
+
         if (!(await fs.pathExists(QWEN_ASR_BIN))) {
           fail(`Qwen ASR binary not found: ${QWEN_ASR_BIN}`);
+          return;
+        }
+
+        if (!QWEN_ASR_MODEL_DIR) {
+          fail('QWEN_ASR_MODEL_DIR is not configured');
           return;
         }
 

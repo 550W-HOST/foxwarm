@@ -2,9 +2,11 @@
  * Message Router - routes messages from channels to sessions
  */
 
+import fs from 'fs-extra';
 import { logger } from './common';
 import { ChannelContext, ChannelMessage, getChannelId, getChannelType, getConversationId } from './channel';
 import { formatAuthorizationInspection, inspectChannelAuthorizationFromContext } from './channelAuth';
+import { getAgentDir, getChannelConfigById, readAppConfigFile } from './config';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
 import { maybeBuildTodoEndTurnReminderMessage } from './session/todo';
 import * as sessionManager from './sessionManager';
@@ -33,6 +35,46 @@ function formatCurrentTimeForPrompt(date: Date): string {
   const parts = formatter.formatToParts(date);
   const get = (type: string) => parts.find(p => p.type === type)?.value || '';
   return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')} (Asia/Shanghai)`;
+}
+
+
+type NormalizedGuestAgentConfig = {
+  agentId: string;
+  mode: 'single' | 'inherited';
+  isolated: boolean;
+  node?: string;
+};
+
+function normalizeGuestAgentConfig(raw: unknown): NormalizedGuestAgentConfig | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+
+  const agentId = typeof (raw as any).agentId === 'string' ? (raw as any).agentId.trim() : '';
+  if (!agentId) {
+    return null;
+  }
+
+  const mode = (raw as any).mode === 'inherited' ? 'inherited' : 'single';
+  const isolated = (raw as any).isolated !== false;
+  const node = typeof (raw as any).node === 'string' && (raw as any).node.trim()
+    ? (raw as any).node.trim()
+    : undefined;
+
+  return { agentId, mode, isolated, node };
+}
+
+async function generateGuestAgentName(baseAgentId: string): Promise<string> {
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const candidate = `${baseAgentId}_${suffix}`;
+    if (await fs.pathExists(getAgentDir(candidate))) {
+      continue;
+    }
+    return candidate;
+  }
+
+  throw new Error(`Unable to allocate a unique guest agent name for "${baseAgentId}".`);
 }
 
 export function shouldBroadcastChannelText(text: string | undefined | null): boolean {
@@ -648,13 +690,77 @@ export class MessageRouter {
     await this.sendSessionReply(session, sourceCtx, `Error: ${error?.message || 'Unknown error'}`);
   }
 
+  private async maybeCreateGuestSessionForUnauthorizedMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session } | null> {
+    const channelId = getChannelId(ctx);
+    const conversationId = getConversationId(ctx);
+
+    if (sessionManager.getSessionByChannel(channelId, conversationId)) {
+      return null;
+    }
+
+    const channelEntry = getChannelConfigById(channelId, readAppConfigFile());
+    const guestAgent = normalizeGuestAgentConfig((channelEntry?.config as Record<string, any> | undefined)?.guestAgent);
+    if (!guestAgent) {
+      return null;
+    }
+
+    const sessionId = await this.createGuestSession(channelId, conversationId, guestAgent);
+    const session = await sessionManager.getSession(sessionId);
+    return { sessionId, session };
+  }
+
+  private async createGuestSession(channelId: string, conversationId: string, guestAgent: NormalizedGuestAgentConfig): Promise<string> {
+    if (!await fs.pathExists(getAgentDir(guestAgent.agentId))) {
+      throw new Error(`Guest agent source "${guestAgent.agentId}" does not exist.`);
+    }
+
+    if (guestAgent.mode === 'single') {
+      if (guestAgent.isolated) {
+        if (!guestAgent.node) {
+          throw new Error(`Guest agent "${guestAgent.agentId}" requires a node when isolated=true.`);
+        }
+        if (!sessionManager.isAgentIsolated(guestAgent.agentId) || sessionManager.getAgentIsolationNode(guestAgent.agentId) !== guestAgent.node) {
+          throw new Error(`Guest single-mode agent "${guestAgent.agentId}" must already be isolated on node "${guestAgent.node}".`);
+        }
+      } else if (sessionManager.isAgentIsolated(guestAgent.agentId)) {
+        throw new Error(`Guest single-mode agent "${guestAgent.agentId}" is isolated; set guestAgent.isolated=true with the matching node or use inherited mode.`);
+      }
+
+      const result = await sessionManager.createSessionInAgent({
+        agentName: guestAgent.agentId,
+        sessionName: sessionManager.generateSessionId(),
+      });
+      sessionManager.attachChannel(channelId, conversationId, result.sessionId, { dangerouslyAllowAllUsers: true });
+      return result.sessionId;
+    }
+
+    const newAgentName = await generateGuestAgentName(guestAgent.agentId);
+    const isolatedNode = guestAgent.isolated
+      ? (() => {
+          if (!guestAgent.node) {
+            throw new Error(`Guest inherited-mode agent "${guestAgent.agentId}" requires a node when isolated=true.`);
+          }
+          return guestAgent.node;
+        })()
+      : undefined;
+
+    const result = await sessionManager.createAgentWithMainSession({
+      agentName: newAgentName,
+      createMainSession: true,
+      inherit: guestAgent.agentId,
+      isolatedNode,
+    });
+    sessionManager.attachChannel(channelId, conversationId, result.mainSessionId, { dangerouslyAllowAllUsers: true });
+    return result.mainSessionId;
+  }
+
   private async handleCommandIfNeeded(ctx: ChannelContext, messageText: string): Promise<boolean> {
     if (!this.commandHandler) return false;
 
-    // When allow-all-group-members is enabled, keep command access for directly
-    // authorized users only. Other group members may chat normally but cannot use
-    // slash commands.
-    if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(getChannelId(ctx), getConversationId(ctx))
+    // When channel-level allow-all-users is enabled, keep command access for
+    // directly authorized users only. Other users may chat normally but cannot
+    // use slash commands.
+    if (sessionManager.getChannelDangerouslyAllowAllUsers(getChannelId(ctx), getConversationId(ctx))
       && !this.isDirectlyAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
       return false;
     }
@@ -916,9 +1022,8 @@ export class MessageRouter {
 
   isAuthorized(channelId: string, channelType: string, conversationId: string, senderId?: string): boolean {
     if (this.isDirectlyAuthorized(channelId, channelType, conversationId, senderId)) return true;
-    
-    // Check if channel allows all group members
-    if (sessionManager.getChannelDangerouslyAllowAllGroupMembers(channelId, conversationId)) {
+
+    if (sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId)) {
       return true;
     }
 
@@ -931,9 +1036,19 @@ export class MessageRouter {
   }
 
   async handleMessage(ctx: ChannelContext, message: ChannelMessage): Promise<void> {
+    let resolvedSession: { sessionId: string; session: Session } | null = null;
+
     if (!this.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
-      await ctx.reply(this.buildUnauthorizedMessage(ctx));
-      return;
+      try {
+        resolvedSession = await this.maybeCreateGuestSessionForUnauthorizedMessage(ctx);
+      } catch (e: any) {
+        logger.error({ err: e, channelId: getChannelId(ctx), conversationId: getConversationId(ctx), senderId: ctx.senderId }, 'Failed to provision guest session for unauthorized user');
+      }
+
+      if (!resolvedSession && !this.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
+        await ctx.reply(this.buildUnauthorizedMessage(ctx));
+        return;
+      }
     }
 
     const messageText = message.parts.map(p => p.text || '').join('\n');
@@ -941,7 +1056,7 @@ export class MessageRouter {
       return;
     }
 
-    const { sessionId, session } = await this.resolveSessionForIncomingMessage(ctx);
+    const { sessionId, session } = resolvedSession || await this.resolveSessionForIncomingMessage(ctx);
 
     if (getChannelType(ctx) !== 'internal') {
       session.meta.lastChannel = {

@@ -10,7 +10,8 @@ export type ChannelMode = 'push-only' | undefined;
 export interface ChannelConfig {
   sessionId: string;
   mode?: ChannelMode;
-  dangerouslyAllowAllGroupMembers?: boolean;
+  dangerouslyAllowAllUsers?: boolean;
+  dangerouslyAllowAllGroupMembers?: boolean; // legacy compatibility on load/read only
 }
 
 export interface FileDeliveryResult {
@@ -29,12 +30,29 @@ function makeChannelKey(channelId: string, conversationId: string): string {
   return `${channelId}:${conversationId}`;
 }
 
+function normalizeChannelConfig(config: ChannelConfig): ChannelConfig {
+  const normalized: ChannelConfig = {
+    sessionId: config.sessionId,
+  };
+
+  if (config.mode) {
+    normalized.mode = config.mode;
+  }
+
+  const dangerouslyAllowAllUsers = config.dangerouslyAllowAllUsers ?? config.dangerouslyAllowAllGroupMembers;
+  if (dangerouslyAllowAllUsers !== undefined) {
+    normalized.dangerouslyAllowAllUsers = Boolean(dangerouslyAllowAllUsers);
+  }
+
+  return normalized;
+}
+
 async function persistChannels(): Promise<void> {
   try {
     await fs.ensureDir(path.dirname(CHANNELS_FILE));
     const data: any = { channels: {} };
     for (const [channelKey, config] of channelAttachments.entries()) {
-      data.channels[channelKey] = config;
+      data.channels[channelKey] = normalizeChannelConfig(config);
     }
     await fs.writeJson(CHANNELS_FILE, data, { spaces: 2 });
   } catch (e) {
@@ -50,7 +68,7 @@ export async function loadChannels(): Promise<void> {
       const data = await fs.readJson(CHANNELS_FILE);
       if (data.channels) {
         for (const [channelKey, config] of Object.entries(data.channels)) {
-          channelAttachments.set(channelKey, config as ChannelConfig);
+          channelAttachments.set(channelKey, normalizeChannelConfig(config as ChannelConfig));
         }
       }
       logger.info({ attachmentCount: channelAttachments.size }, 'Channels loaded');
@@ -69,18 +87,18 @@ export async function importLegacyChannelAttachments(attachments: Record<string,
     if (typeof value === 'string') {
       channelAttachments.set(channelKey, { sessionId: value });
     } else if (value && typeof value === 'object' && typeof value.sessionId === 'string') {
-      channelAttachments.set(channelKey, value);
+      channelAttachments.set(channelKey, normalizeChannelConfig(value));
     }
   }
 
   await persistChannels();
 }
 
-export function attachChannel(channelId: string, conversationId: string, sessionId: string): string {
+export function attachChannel(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<ChannelConfig>): string {
   const channelKey = makeChannelKey(channelId, conversationId);
-  channelAttachments.set(channelKey, { sessionId });
+  channelAttachments.set(channelKey, normalizeChannelConfig({ sessionId, ...(configUpdates || {}) } as ChannelConfig));
   void persistChannels();
-  logger.info({ channelId, conversationId, sessionId }, 'Channel attached to session');
+  logger.info({ channelId, conversationId, sessionId, configUpdates }, 'Channel attached to session');
   return sessionId;
 }
 
@@ -89,7 +107,8 @@ export function getSessionByChannel(channelId: string, conversationId: string): 
 }
 
 export function getChannelConfig(channelId: string, conversationId: string): ChannelConfig | undefined {
-  return channelAttachments.get(makeChannelKey(channelId, conversationId));
+  const config = channelAttachments.get(makeChannelKey(channelId, conversationId));
+  return config ? normalizeChannelConfig(config) : undefined;
 }
 
 export function setChannelMode(channelId: string, conversationId: string, mode: ChannelMode | undefined): void {
@@ -98,22 +117,32 @@ export function setChannelMode(channelId: string, conversationId: string, mode: 
   if (!existing) {
     throw new Error(`Channel ${channelKey} not attached`);
   }
-  channelAttachments.set(channelKey, { ...existing, mode });
+  channelAttachments.set(channelKey, normalizeChannelConfig({ ...existing, mode }));
   void persistChannels();
 }
 
-export function getChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string): boolean {
-  return channelAttachments.get(makeChannelKey(channelId, conversationId))?.dangerouslyAllowAllGroupMembers ?? false;
+export function getChannelDangerouslyAllowAllUsers(channelId: string, conversationId: string): boolean {
+  const config = channelAttachments.get(makeChannelKey(channelId, conversationId));
+  return Boolean(config?.dangerouslyAllowAllUsers ?? config?.dangerouslyAllowAllGroupMembers);
 }
 
-export function setChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string, value: boolean): void {
+export function setChannelDangerouslyAllowAllUsers(channelId: string, conversationId: string, value: boolean): void {
   const channelKey = makeChannelKey(channelId, conversationId);
   const existing = channelAttachments.get(channelKey);
   if (!existing) {
     throw new Error(`Channel ${channelKey} not attached`);
   }
-  channelAttachments.set(channelKey, { ...existing, dangerouslyAllowAllGroupMembers: value });
+  channelAttachments.set(channelKey, normalizeChannelConfig({ ...existing, dangerouslyAllowAllUsers: value }));
   void persistChannels();
+}
+
+// Legacy compatibility wrappers
+export function getChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string): boolean {
+  return getChannelDangerouslyAllowAllUsers(channelId, conversationId);
+}
+
+export function setChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string, value: boolean): void {
+  setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
 }
 
 export function detachChannel(channelId: string, conversationId: string): void {

@@ -6,7 +6,6 @@ import ChatTimeline from './ChatTimeline'
 import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
 import type { Message, MessagePart, SendKeyMode, SessionStreamEvent } from './chatShared'
-import { buildWorkspaceDownloadUrl } from './workspaceShared'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
@@ -103,35 +102,21 @@ type SessionFilePayload = {
   [key: string]: any
 }
 
-const SESSION_JSON_BASE_PATH_CANDIDATES = [
-  '/home/ldmbot/git/foxwarm/test/state/sessions',
-  '/home/ldmbot/git/foxwarm/state/sessions',
-  '/home/ldmbot/betabot/state/sessions',
-  '/app/test/state/sessions',
-  '/app/state/sessions',
-]
-
-function buildSessionJsonPathCandidates(sessionId: string): string[] {
-  return SESSION_JSON_BASE_PATH_CANDIDATES.map((basePath) => `${basePath}/${sessionId}.json`)
-}
-
 async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPath: string | null; payload: SessionFilePayload | null }> {
-  const candidates = buildSessionJsonPathCandidates(sessionId)
-
-  for (const candidate of candidates) {
-    try {
-      const res = await fetch(buildWorkspaceDownloadUrl(candidate))
-      if (!res.ok) continue
-
-      const text = await res.text()
-      const payload = JSON.parse(text) as SessionFilePayload
-      return { resolvedPath: candidate, payload }
-    } catch {
-      // Try the next likely runtime path.
+  try {
+    const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/debug-file`)
+    if (!res.ok) {
+      return { resolvedPath: null, payload: null }
     }
-  }
 
-  return { resolvedPath: null, payload: null }
+    const data = await res.json()
+    return {
+      resolvedPath: typeof data?.resolvedPath === 'string' ? data.resolvedPath : null,
+      payload: data?.payload && typeof data.payload === 'object' ? data.payload as SessionFilePayload : null,
+    }
+  } catch {
+    return { resolvedPath: null, payload: null }
+  }
 }
 
 const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange, onOpenWorkspace, onOpenTerminal }: ChatProps) {

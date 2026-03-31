@@ -139,6 +139,7 @@ export interface Session {
   currentNode?: string; // Current node ID for tool execution (default: 'master')
   cwd?: string; // Default working directory for exec/terminal-style operations on currentNode
   model?: string; // Model key for this session (default: global)
+  childModelDefault?: string; // Default model override for child/new sessions spawned from this session; undefined => follow session.model
   verbose?: boolean; // Whether to broadcast tool call info (default: false)
   vectorIndexPosition?: number; // Track last indexed message position
   indexingState?: IndexingState; // Track ongoing indexing operation

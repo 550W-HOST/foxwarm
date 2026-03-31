@@ -100,6 +100,7 @@ export class NodesManager {
       'get_context_archive',
       'delete_session',
       'update_session_name',
+      'set_session_child_model',
       'set_session_compact_threshold',
       'stop_session',
       'compact_session',

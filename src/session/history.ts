@@ -1205,9 +1205,16 @@ export async function checkAndCompactIfNeeded(deps: SessionHistoryDeps, sessionI
   const session = deps.getSessionById(sessionId);
   if (!session) return;
 
-  const currentSize = finalUsage
-    ? getUsageTotalTokens(finalUsage)
-    : estimateSessionTokens(session);
+  if (!finalUsage) {
+    logger.debug?.({ sessionId }, 'Skipping auto compact because request usage is unavailable');
+    return;
+  }
+
+  const currentSize = getUsageTotalTokens(finalUsage);
+  if (currentSize <= 0) {
+    logger.debug?.({ sessionId, finalUsage }, 'Skipping auto compact because request usage total is unavailable or zero');
+    return;
+  }
 
   const compactThreshold = getEffectiveCompactThresholdTokens(session);
 

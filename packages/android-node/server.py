@@ -30,6 +30,9 @@ from node_auth import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+ANDROID_NODE_PING_INTERVAL = 30
+ANDROID_NODE_PING_TIMEOUT = 10
+
 
 # Tool definitions for dynamic registration
 TOOL_DEFINITIONS = [
@@ -619,7 +622,11 @@ async def connect_to_foxwarm(node: AndroidNode):
         )
 
         try:
-            async with websockets.connect(ws_url) as websocket:
+            async with websockets.connect(
+                ws_url,
+                ping_interval=ANDROID_NODE_PING_INTERVAL,
+                ping_timeout=ANDROID_NODE_PING_TIMEOUT,
+            ) as websocket:
                 if mode == "authenticated":
                     logger.info("Sending node registration...")
                     await websocket.send(json.dumps(build_registration_payload(node)))

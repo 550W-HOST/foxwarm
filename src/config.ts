@@ -11,6 +11,7 @@ export type TelegramConfig = {
   botToken?: string;
   allowedUsers?: string[];
   mainAttachUser?: string;
+  guestAgent?: GuestAgentConfig;
 };
 
 export type MatrixConfig = {
@@ -19,6 +20,7 @@ export type MatrixConfig = {
   accessToken?: string;
   botUserId?: string;
   allowedUsers?: string[];
+  guestAgent?: GuestAgentConfig;
 };
 
 export type WeWorkConfig = {
@@ -29,6 +31,7 @@ export type WeWorkConfig = {
   listenPort?: number;
   listenPath?: string;
   allowedUsers?: string[];
+  guestAgent?: GuestAgentConfig;
 };
 
 export type WeixinConfig = {
@@ -40,12 +43,22 @@ export type WeixinConfig = {
   allowAllUsers?: boolean;
   longPollTimeoutMs?: number;
   loginBotType?: string;
+  guestAgent?: GuestAgentConfig;
+};
+
+
+export type GuestAgentConfig = {
+  agentId: string;
+  mode?: 'single' | 'inherited';
+  isolated?: boolean;
+  node?: string;
 };
 
 export type GenericChannelConfig = Record<string, any> & {
   type?: string;
   enabled?: boolean;
   allowedUsers?: string[];
+  guestAgent?: GuestAgentConfig;
 };
 
 export type AnyChannelConfig = TelegramConfig | MatrixConfig | WeWorkConfig | WeixinConfig | GenericChannelConfig;

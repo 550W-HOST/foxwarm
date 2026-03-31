@@ -10,7 +10,7 @@ import { Session } from './types'
 import * as sessionManager from './sessionManager'
 import * as skills from './skills'
 import * as tools from './tools'
-import { estimateSessionTokens } from './tokenCount'
+import { estimateSessionSummary } from './tokenCount'
 import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, getDefaultChannelIdByType, HTTP_PORT, NODE_TOKEN_FILE, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
@@ -84,11 +84,26 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   }),
   literalNode('new', 'Create a new ad-hoc session'),
   literalNode('create', 'Create a session under an existing agent', {
-    usage: '/session create <agent> <session>',
+    usage: '/session create <agent> <session> [--model <model>]',
     children: [
       placeholderNode('<agent>', 'Existing agent name', {
-        children: [placeholderNode('<session>', 'New session name')],
+        children: [placeholderNode('<session>', 'New session name', {
+          children: [
+            literalNode('--model', 'Explicit model for the new session', {
+              children: [placeholderNode('<model>', 'Model key or partial model name')],
+            }),
+          ],
+        })],
       }),
+    ],
+  }),
+  literalNode('child-model', 'Get/set the current session child default model', {
+    usage: '/session child-model [model|default|clear|unset]',
+    children: [
+      literalNode('default', 'Follow the current session model again'),
+      literalNode('clear', 'Alias of default'),
+      literalNode('unset', 'Alias of default'),
+      placeholderNode('[model]', 'Model key or partial model name'),
     ],
   }),
   literalNode('fork', 'Fork the current session'),
@@ -306,6 +321,37 @@ const MODEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   placeholderNode('<name>', 'Model name or partial model name'),
 ]
 
+function getDisplayModelKeys(currentModel?: string): string[] {
+  const { modelsConfig } = resolveModelConfig(currentModel)
+  return modelsConfig.displayModels || Object.keys(modelsConfig.models || {})
+}
+
+function resolveCommandModelSelection(input: string, currentModel?: string): { key?: string; error?: string } {
+  const target = input.trim()
+  const { modelsConfig } = resolveModelConfig(currentModel)
+  const modelKeys = getDisplayModelKeys(currentModel)
+
+  if (modelsConfig.models[target]) {
+    return { key: target }
+  }
+
+  const normalizedInput = target.toLowerCase()
+  const matches = modelKeys.filter(k => k.toLowerCase().includes(normalizedInput))
+
+  if (matches.length === 0) {
+    return { error: `❌ No models matching \`${target}\`. Use /model to list available models.` }
+  }
+
+  if (matches.length === 1) {
+    return { key: matches[0] }
+  }
+
+  let resp = `❌ Multiple models match \`${target}\`:\n\n`
+  resp += matches.map(k => `- \`${k}\``).join('\n')
+  resp += `\n\nPlease be more specific.`
+  return { error: resp }
+}
+
 const DELETE_MESSAGES_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   placeholderNode('<num>', 'Positive = oldest, negative = newest'),
 ]
@@ -336,7 +382,7 @@ const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
       literalNode('normal', 'Normal interactive mode'),
     ],
   }),
-  literalNode('dangerously-allow-all-group-members', 'Allow all group members to use commands', {
+  literalNode('dangerously-allow-all-users', 'Allow all users in this attached conversation to send normal messages', {
     children: [
       literalNode('yes', 'Enable allow-all mode'),
       literalNode('no', 'Disable allow-all mode'),
@@ -360,7 +406,7 @@ function formatChannelInfo(ctx: ChannelContext): string {
     ctx.username ? `- username: \`${ctx.username}\`` : undefined,
     `- attachedSession: \`${sessionId || '(none)'}\``,
     `- mode: \`${channelConfig?.mode || 'normal'}\``,
-    `- dangerouslyAllowAllGroupMembers: \`${channelConfig?.dangerouslyAllowAllGroupMembers ? 'yes' : 'no'}\``,
+    `- dangerouslyAllowAllUsers: \`${sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId) ? 'yes' : 'no'}\``,
     runtimeStatus ? `- runtime: \`${runtimeStatus.running ? 'running' : 'stopped'}\`` : undefined,
   ].filter(Boolean).join('\n')
 }
@@ -771,7 +817,9 @@ export const COMMANDS: Record<string, CommandDef> = {
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
       const historyLen = session.history.length
-      const tokenCount = estimateSessionTokens(session)
+      const sessionSummary = estimateSessionSummary(session)
+      const tokenCount = sessionSummary.tokens
+      const imageCount = sessionSummary.imageCount
       const usage = session.stats.lastUsage
 
       let resp = `📊 *Foxwarm Status*\n`
@@ -779,9 +827,16 @@ export const COMMANDS: Record<string, CommandDef> = {
       resp += `\n*Channel:* ${getChannelId(ctx)}:${getConversationId(ctx)} (type=${getChannelType(ctx)})`
       resp += `\n- Messages: ${historyLen}`
       const { currentKey, contextLimit } = resolveModelConfig(session.model)
+      const { currentKey: spawnedModelKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session))
 
       resp += `\n- Model: ${currentKey}`
+      if (session.childModelDefault?.trim()) {
+        resp += `\n- Child default model: ${spawnedModelKey} (override: ${session.childModelDefault.trim()})`
+      }
       resp += `\n- Size: ~${(tokenCount / 1000).toFixed(1)}K tokens / ${(contextLimit / 1000).toFixed(1)}K tokens`
+      if (imageCount > 0) {
+        resp += `\n- Images: ${imageCount}`
+      }
       if (usage) {
         resp += `\n*Last Turn Usage: - Cached: ${usage.cachedTokens || 0} / Input: ${usage.inputTokens} / Output: ${usage.outputTokens}`
       }
@@ -809,7 +864,8 @@ export const COMMANDS: Record<string, CommandDef> = {
         let resp = '📋 *Session Commands*\n\n'
         resp += '`/session list` - List all sessions\n'
         resp += '`/session new` - Create new ad-hoc session\n'
-        resp += '`/session create <agent> <session>` - Create session under an existing agent\n'
+        resp += '`/session create <agent> <session> [--model <model>]` - Create session under an existing agent\n'
+        resp += '`/session child-model [model|default|clear|unset]` - Get/set child default model for spawned sessions\n'
         resp += '`/session fork [suffix]` - Fork current session as a child session (default suffix: `fork`)\n'
         resp += '`/session delete <sessionId>` - Delete session\n'
         resp += '`/session clear` - Clear current session history\n'
@@ -891,28 +947,91 @@ export const COMMANDS: Record<string, CommandDef> = {
 
         case 'create': {
           if (subArgs.length < 2) {
-            ctx.reply('Usage: /session create <agent> <session>')
+            ctx.reply('Usage: /session create <agent> <session> [--model <model>]')
             return
           }
 
           const agentName = subArgs[0]
           const newSessionName = subArgs[1]
+          const modelFlagIndex = subArgs.indexOf('--model')
+          let resolvedModel: string | undefined
+
+          if (modelFlagIndex >= 0) {
+            const requestedModel = subArgs[modelFlagIndex + 1]
+            if (!requestedModel) {
+              ctx.reply('Usage: /session create <agent> <session> [--model <model>]')
+              return
+            }
+
+            const selection = resolveCommandModelSelection(requestedModel, session?.model)
+            if (selection.error) {
+              ctx.reply(selection.error)
+              return
+            }
+
+            resolvedModel = selection.key
+          }
 
           try {
             const result = await sessionManager.createSessionInAgent({
               agentName,
               sessionName: newSessionName,
               currentNode: session?.currentNode,
-              model: session?.model,
+              model: sessionManager.resolveSpawnedSessionModel(session, resolvedModel),
             })
 
             sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
             sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), result.sessionId)
-            ctx.reply(`✅ Created session \`${result.sessionId}\` under agent \`${agentName}\` and attached current channel.`)
+            const createdSession = await sessionManager.getSession(result.sessionId)
+            const { currentKey } = resolveModelConfig(createdSession.model)
+            ctx.reply(`✅ Created session \`${result.sessionId}\` under agent \`${agentName}\` and attached current channel.\nModel: \`${currentKey}\``)
           } catch (e: any) {
             ctx.reply(`❌ Session create failed: ${e.message}`)
           }
           break
+        }
+
+        case 'child-model': {
+          if (!sessionId || !session) {
+            ctx.reply('❌ No active session.')
+            return
+          }
+
+          if (subArgs.length === 0) {
+            const override = session.childModelDefault?.trim()
+              ? `\`${session.childModelDefault.trim()}\``
+              : 'follow current session model'
+            const { currentKey: currentSessionModel } = resolveModelConfig(session.model)
+            const { currentKey: effectiveSpawnModel } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session))
+            ctx.reply([
+              '🧒 *Child default model*',
+              '',
+              `- override: ${override}`,
+              `- current session model: \`${currentSessionModel}\``,
+              `- effective spawned-session model: \`${effectiveSpawnModel}\``,
+            ].join('\n'))
+            return
+          }
+
+          const target = subArgs[0].toLowerCase()
+          if (target === 'default' || target === 'clear' || target === 'unset') {
+            await sessionManager.setSessionChildModelDefault(sessionId)
+            delete session.childModelDefault
+            const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session))
+            ctx.reply(`✅ Child default model cleared. New child sessions will follow the current session model path (effective: \`${currentKey}\`).`)
+            return
+          }
+
+          const selection = resolveCommandModelSelection(subArgs[0], session.model)
+          if (selection.error) {
+            ctx.reply(selection.error)
+            return
+          }
+
+          await sessionManager.setSessionChildModelDefault(sessionId, selection.key)
+          session.childModelDefault = selection.key
+          ctx.reply(`✅ Child default model set to \`${selection.key}\`.`)
+          return
         }
 
         case 'fork': {
@@ -2032,8 +2151,8 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: MODEL_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
-      const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(session.model)
-      const modelKeys = modelsConfig.displayModels || Object.keys(modelsConfig.models || {})
+      const { defaultKey, currentKey } = resolveModelConfig(session.model)
+      const modelKeys = getDisplayModelKeys(session.model)
 
       if (args.length === 0) {
         let resp = `🤖 *Models*\n\n`
@@ -2056,35 +2175,15 @@ export const COMMANDS: Record<string, CommandDef> = {
         return
       }
 
-      // Try exact match first
-      if (modelsConfig.models[target]) {
-        session.model = target
-        await sessionManager.saveSession(sessionId)
-        ctx.reply(`✅ Model switched to \`${target}\`.`)
+      const resolved = resolveCommandModelSelection(target, session.model)
+      if (resolved.error) {
+        ctx.reply(resolved.error)
         return
       }
 
-      // Try partial match
-      const normalizedInput = target.toLowerCase()
-      const matches = modelKeys.filter(k => k.toLowerCase().includes(normalizedInput))
-
-      if (matches.length === 0) {
-        ctx.reply(`❌ No models matching \`${target}\`. Use /model to list available models.`)
-        return
-      }
-
-      if (matches.length === 1) {
-        session.model = matches[0]
-        await sessionManager.saveSession(sessionId)
-        ctx.reply(`✅ Model switched to \`${matches[0]}\`.`)
-        return
-      }
-
-      // Multiple matches
-      let resp = `❌ Multiple models match \`${target}\`:\n\n`
-      resp += matches.map(k => `- \`${k}\``).join('\n')
-      resp += `\n\nPlease be more specific.`
-      ctx.reply(resp)
+      session.model = resolved.key
+      await sessionManager.saveSession(sessionId)
+      ctx.reply(`✅ Model switched to \`${resolved.key}\`.`)
     }
   },
   '/delete-messages': {
@@ -2281,7 +2380,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           '       /channel stop <channel-id>',
           '       /channel restart <channel-id>',
           '       /channel mode <push-only|normal>',
-          '       /channel dangerously-allow-all-group-members <yes|no>',
+          '       /channel dangerously-allow-all-users <yes|no>',
         ].join('\n'))
         return
       }
@@ -2357,11 +2456,11 @@ export const COMMANDS: Record<string, CommandDef> = {
         } catch (e: any) {
           ctx.reply(`❌ Failed to set channel mode: ${e.message}`)
         }
-      } else if (subcommand === 'dangerously-allow-all-group-members') {
+      } else if (subcommand === 'dangerously-allow-all-users' || subcommand === 'dangerously-allow-all-group-members') {
         if (args.length < 2) {
           // Show current setting
-          const currentValue = sessionManager.getChannelDangerouslyAllowAllGroupMembers(getChannelId(ctx), getConversationId(ctx))
-          ctx.reply(`Current dangerouslyAllowAllGroupMembers: *${currentValue ? 'yes' : 'no'}*\nUsage: /channel dangerously-allow-all-group-members <yes|no>`)
+          const currentValue = sessionManager.getChannelDangerouslyAllowAllUsers(getChannelId(ctx), getConversationId(ctx))
+          ctx.reply(`Current dangerouslyAllowAllUsers: *${currentValue ? 'yes' : 'no'}*\nUsage: /channel dangerously-allow-all-users <yes|no>`)
           return
         }
 
@@ -2372,10 +2471,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         try {
-          sessionManager.setChannelDangerouslyAllowAllGroupMembers(getChannelId(ctx), getConversationId(ctx), value === 'yes')
-          ctx.reply(`✅ dangerouslyAllowAllGroupMembers set to *${value}*`)
+          sessionManager.setChannelDangerouslyAllowAllUsers(getChannelId(ctx), getConversationId(ctx), value === 'yes')
+          ctx.reply(`✅ dangerouslyAllowAllUsers set to *${value}*`)
         } catch (e: any) {
-          ctx.reply(`❌ Failed to set dangerouslyAllowAllGroupMembers: ${e.message}`)
+          ctx.reply(`❌ Failed to set dangerouslyAllowAllUsers: ${e.message}`)
         }
       } else {
         ctx.reply([
@@ -2387,7 +2486,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           '/channel stop <channel-id>',
           '/channel restart <channel-id>',
           '/channel mode <push-only|normal>',
-          '/channel dangerously-allow-all-group-members <yes|no>',
+          '/channel dangerously-allow-all-users <yes|no>',
         ].join('\n'))
       }
     }

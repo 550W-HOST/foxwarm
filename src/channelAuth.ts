@@ -17,7 +17,7 @@ export type ChannelAuthorizationInspection = {
   allowedUsers: string[];
   allowAllUsers: boolean;
   allowlistSource: string;
-  dangerouslyAllowAllGroupMembers: boolean;
+  dangerouslyAllowAllUsers: boolean;
 };
 
 function dedupe(values: Array<string | undefined>): string[] {
@@ -80,11 +80,11 @@ export function inspectChannelAuthorization(params: {
   const effectiveAuthId = (senderId || conversationId || '').trim();
   const startupSet = startupAuthorizedUsers ? new Set(startupAuthorizedUsers) : new Set<string>();
   const { allowedUsers, allowAllUsers, source } = getChannelAllowlist(channelId, channelType);
-  const dangerouslyAllowAllGroupMembers = sessionManager.getChannelDangerouslyAllowAllGroupMembers(channelId, conversationId);
+  const dangerouslyAllowAllUsers = sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId);
   const platformAlwaysAuthorized = channelType === 'internal' || channelType === 'webui' || channelType === 'tui';
   const wildcardAuthorized = startupSet.has(`${channelId}:*`) || startupSet.has(`${channelType}:*`) || allowAllUsers;
   const directAuthorized = startupSet.has(`${channelId}:${effectiveAuthId}`) || startupSet.has(`${channelType}:${effectiveAuthId}`) || allowedUsers.includes(effectiveAuthId);
-  const channelOverrideAuthorized = dangerouslyAllowAllGroupMembers;
+  const channelOverrideAuthorized = dangerouslyAllowAllUsers;
   const authorized = platformAlwaysAuthorized || wildcardAuthorized || directAuthorized || channelOverrideAuthorized;
 
   return {
@@ -102,19 +102,8 @@ export function inspectChannelAuthorization(params: {
     allowedUsers,
     allowAllUsers,
     allowlistSource: source,
-    dangerouslyAllowAllGroupMembers,
+    dangerouslyAllowAllUsers,
   };
-}
-
-function toYamlSnippet(platform: string, authId: string): string {
-  const escaped = authId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return [
-    'channels:',
-    `  ${platform}:`,
-    platform !== 'telegram' && platform !== 'matrix' && platform !== 'wework' && platform !== 'weixin' ? undefined : undefined,
-    '    allowedUsers:',
-    `      - "${escaped}"`,
-  ].filter(Boolean).join('\n');
 }
 
 function toChannelYamlSnippet(channelId: string, channelType: string, authId: string): string {
@@ -194,7 +183,7 @@ export function formatAuthorizationInspection(
     `- authorized: \`${inspection.authorized ? 'yes' : 'no'}\``,
     `- directAllowlistMatch: \`${inspection.directAuthorized ? 'yes' : 'no'}\``,
     `- allowAllUsers: \`${inspection.allowAllUsers ? 'yes' : 'no'}\``,
-    `- dangerouslyAllowAllGroupMembers: \`${inspection.dangerouslyAllowAllGroupMembers ? 'yes' : 'no'}\``,
+    `- dangerouslyAllowAllUsers: \`${inspection.dangerouslyAllowAllUsers ? 'yes' : 'no'}\``,
     `- allowlistSource: \`${inspection.allowlistSource}\``,
     `- configuredAllowlist: ${allowlistPreview}`,
   );
@@ -204,7 +193,7 @@ export function formatAuthorizationInspection(
   } else if (inspection.wildcardAuthorized) {
     lines.push('- authorizationReason: allow-all / wildcard platform authorization');
   } else if (inspection.channelOverrideAuthorized) {
-    lines.push('- authorizationReason: channel-level dangerouslyAllowAllGroupMembers override');
+    lines.push('- authorizationReason: channel-level dangerouslyAllowAllUsers override');
   } else if (inspection.directAuthorized) {
     lines.push('- authorizationReason: direct allowlist match');
   }
