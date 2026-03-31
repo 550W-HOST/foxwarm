@@ -1,11 +1,7 @@
 const assert = require('assert');
 const path = require('path');
-const {
-  convertToOpenAIResponsesFormat,
-  convertToOpenAIFormat,
-  fixToolCalls,
-  executeTools,
-} = require('../lib/llm.js');
+const { convertToOpenAIResponsesFormat, convertToOpenAIFormat } = require('../lib/llmProviders/openai.js');
+const { fixToolCalls, executeTools } = require('../lib/llm.js');
 
 async function run() {
   const history = [

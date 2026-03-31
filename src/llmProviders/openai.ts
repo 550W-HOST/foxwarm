@@ -1,6 +1,7 @@
 import { StringDecoder } from 'string_decoder';
 import { logger } from '../common';
 import { Message, MessagePart, OpenAIResponsesContent } from '../types';
+import { stringifyFunctionCallArgs } from '../toolCallArgs';
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };
@@ -214,7 +215,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
                     type: 'function',
                     function: {
                         name: part.functionCall.name,
-                        arguments: JSON.stringify(part.functionCall.args || {})
+                        arguments: stringifyFunctionCallArgs(part.functionCall)
                     }
                 });
             }
@@ -401,7 +402,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                     type: 'function_call',
                     call_id: part.functionCall.id || `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                     name: part.functionCall.name,
-                    arguments: JSON.stringify(part.functionCall.args || {})
+                    arguments: stringifyFunctionCallArgs(part.functionCall)
                 });
             }
         }

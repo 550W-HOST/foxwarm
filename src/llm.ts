@@ -18,6 +18,7 @@ import {
     convertToOpenAIFormat as convertToOpenAIFormatProvider,
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
+import { parseFunctionCallArgs } from './toolCallArgs';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -220,6 +221,16 @@ function extractToolResponseOutput(response: any): unknown {
     }
 
     return response;
+}
+
+function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string; message: string; rawArgsText?: string } } {
+    return {
+        error: {
+            type: 'invalid_tool_arguments',
+            message: call.argsParseError || 'Invalid tool arguments JSON',
+            ...(typeof call.rawArgsText === 'string' ? { rawArgsText: call.rawArgsText } : {}),
+        }
+    };
 }
 
 function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string {
@@ -617,7 +628,9 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         
         // Log what's being executed
         let argStr = '';
-        if (call.name === 'exec') {
+        if (call.argsParseError && typeof call.rawArgsText === 'string') {
+            argStr = call.rawArgsText;
+        } else if (call.name === 'exec') {
             argStr = call.args.command;
         } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
             argStr = call.args.filePath;
@@ -646,7 +659,9 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         }
 
         let result;
-        if (isSubconsciousSession(session) && !SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(call.name)) {
+        if (call.argsParseError) {
+            result = buildInvalidToolArgsResult(call);
+        } else if (isSubconsciousSession(session) && !SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(call.name)) {
             result = { error: `Subconscious side sessions cannot use ${call.name}.` };
         }
         
@@ -1127,13 +1142,16 @@ export async function chat(
             }
 
             if (item.type === 'function_call') {
-                const args = JSON.parse(item.arguments || '{}');
+                const parsedArgs = parseFunctionCallArgs(item.arguments);
                 const callId = item.call_id || item.id;
+                if (parsedArgs.argsParseError) {
+                    logger.warn({ providerType, callId, toolName: item.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI Responses tool arguments; converting to structured tool error');
+                }
                 allParts.push({
                     functionCall: {
                         id: callId,
                         name: item.name,
-                        args
+                        ...parsedArgs,
                     }
                 });
             }
@@ -1160,12 +1178,15 @@ export async function chat(
         if (message.tool_calls) {
             for (const toolCall of message.tool_calls) {
                 if (toolCall.type === 'function') {
-                    const args = JSON.parse(toolCall.function.arguments || '{}');
+                    const parsedArgs = parseFunctionCallArgs(toolCall.function.arguments);
+                    if (parsedArgs.argsParseError) {
+                        logger.warn({ providerType, callId: toolCall.id, toolName: toolCall.function.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI chat tool arguments; converting to structured tool error');
+                    }
                     allParts.push({ 
                         functionCall: { 
                             id: toolCall.id, 
                             name: toolCall.function.name, 
-                            args: args 
+                            ...parsedArgs,
                         } 
                     });
                 }

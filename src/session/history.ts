@@ -19,6 +19,7 @@ import {
   validateCompactPlanArgs,
 } from './compactPlan';
 import { Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
+import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 
@@ -232,7 +233,7 @@ function getFunctionCallTokenCount(part: Message['parts'][number]): number {
   }
 
   return estimateTokenCount(part.functionCall.name || '')
-    + estimateTokenCount(JSON.stringify(part.functionCall.args || {}));
+    + estimateTokenCount(stringifyFunctionCallArgs(part.functionCall));
 }
 
 function getFunctionResponseTokenCount(part: Message['parts'][number]): number {
@@ -1127,9 +1128,12 @@ export async function compactToolMessages(
           kind: 'function_call',
           estimatedTokens: functionCallTokens,
         });
+        const compactedArgs = buildCompactedFunctionCallArgs(placeholder);
         nextPart.functionCall = {
           ...nextPart.functionCall,
-          args: buildCompactedFunctionCallArgs(placeholder),
+          args: compactedArgs,
+          rawArgsText: JSON.stringify(compactedArgs),
+          argsParseError: undefined,
         };
         replacedFunctionCalls += 1;
         touched = true;

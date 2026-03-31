@@ -18,6 +18,8 @@ export interface FunctionCall {
   id: string;
   name: string;
   args: Record<string, any>;
+  rawArgsText?: string;
+  argsParseError?: string;
 }
 
 export interface FunctionResponse {
