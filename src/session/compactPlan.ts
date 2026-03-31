@@ -2,6 +2,100 @@ import { ToolDefinition } from '../types';
 
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
 const DEFAULT_PREVIEW_CHAR_LIMIT = 80;
+const COMPACT_FLOW_MEMORY_TOOL_DEFINITIONS: ToolDefinition[] = [
+  {
+    name: 'read_memory',
+    description: 'Read a file from the current agent memory/ directory while compacting. Use this to check durable memory before deciding whether to update it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
+        startLine: { type: 'number', description: 'Starting line number (1-indexed, optional)' },
+        endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional)' },
+      },
+      required: ['filePath'],
+    },
+  },
+  {
+    name: 'write_memory',
+    description: 'Create a new file under the current agent memory/ directory while compacting. Use only for durable memory worth preserving beyond this session.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
+        content: { type: 'string', description: 'File contents to create.' },
+      },
+      required: ['filePath', 'content'],
+    },
+  },
+  {
+    name: 'edit_memory',
+    description: 'Edit an existing file under the current agent memory/ directory while compacting. Use this only to preserve durable workflow/project/user facts.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
+        oldText: { type: 'string', description: 'The exact text to find' },
+        newText: { type: 'string', description: 'The text to replace it with' },
+      },
+      required: ['filePath', 'oldText', 'newText'],
+    },
+  },
+  {
+    name: 'delete_memory',
+    description: 'Delete a memory file while compacting if it is clearly obsolete durable memory.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
+      },
+      required: ['filePath'],
+    },
+  },
+  {
+    name: 'get_archived_messages',
+    description: 'Inspect archived raw messages while compacting if you need details from compacted history.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
+        startSeq: { type: 'number', description: 'Optional inclusive starting seq number' },
+        endSeq: { type: 'number', description: 'Optional inclusive ending seq number' },
+        previewLength: { type: 'number', description: 'Maximum preview length per archived message (default: 1000)' },
+      },
+    },
+  },
+  {
+    name: 'get_archived_blocks',
+    description: 'Inspect archived layered-context blocks while compacting if you need earlier block summaries.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
+        startId: { type: 'number', description: 'Optional inclusive starting block id' },
+        endId: { type: 'number', description: 'Optional inclusive ending block id' },
+        previewLength: { type: 'number', description: 'Maximum preview length per block summary (default: 1000)' },
+      },
+    },
+  },
+  {
+    name: 'get_context_archive',
+    description: 'Unified archived-context inspection helper. Use this during compaction when you are not sure whether you need raw messages, layered blocks, or both.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
+        startSeq: { type: 'number', description: 'Optional inclusive starting raw message seq' },
+        endSeq: { type: 'number', description: 'Optional inclusive ending raw message seq' },
+        startId: { type: 'number', description: 'Optional inclusive starting block id' },
+        endId: { type: 'number', description: 'Optional inclusive ending block id' },
+        includeMessages: { type: 'boolean', description: 'Include archived raw messages (default: auto)' },
+        includeBlocks: { type: 'boolean', description: 'Include archived layered blocks (default: auto)' },
+        previewLength: { type: 'number', description: 'Maximum preview length per returned item (default: 1000)' },
+      },
+    },
+  },
+];
 
 export type CompactCandidateItem =
   | {
@@ -62,6 +156,13 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   },
 };
 
+export function buildCompactFlowToolDefinitions(): ToolDefinition[] {
+  return [
+    ...COMPACT_FLOW_MEMORY_TOOL_DEFINITIONS,
+    COMPACT_PLAN_TOOL_DEFINITION,
+  ];
+}
+
 export function formatSeqRange(startSeq?: number, endSeq?: number): string {
   if (typeof startSeq === 'number' && typeof endSeq === 'number') {
     return startSeq === endSeq ? `#${startSeq}` : `#${startSeq}-#${endSeq}`;
@@ -110,7 +211,7 @@ export function buildCompactPromptText(options: {
   const lines: string[] = [
     'COMPACTION STARTED: stop any previous task and focus only on layered-context compaction.',
     `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. Do not replace them.`,
-    `Review the older candidate items below and respond by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
+    `Review the older candidate items below and finish by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
     'Rules:',
     '- Pass the plan via createBlocksJson as a JSON array string.',
     '- createBlocksJson may include one or more new blocks.',
@@ -119,7 +220,14 @@ export function buildCompactPromptText(options: {
     '- Higher-level blocks summarize existing blocks from the immediately lower level (sourceKind=block and level = child level + 1).',
     '- Items not covered by createBlocks stay verbatim in working history.',
     '- Do not overlap source ranges across createBlocks.',
-    '- Keep each summary compact and factual.',
+    '- Keep each summary compact, factual, and continuation-oriented.',
+    '- Preserve decisions, rationale that still matters, constraints, active tasks, blockers, unresolved questions, and concrete identifiers (paths, commits, branches, nodes, URLs, session IDs, config names).',
+    '- Prefer current state plus what remains over conversational narration.',
+    '- Mention when an earlier plan or decision was superseded by a later one if that matters for future work.',
+    '- Drop filler, repetition, resolved low-value process chatter, and tool-internal mechanics unless they matter to continue safely.',
+    '- If durable project/user/workflow facts should outlive this session, you may use read_memory/write_memory/edit_memory/delete_memory before submitting the final plan.',
+    '- If you need more detail from compacted history, use get_context_archive, get_archived_messages, or get_archived_blocks.',
+    `- You may use only these helper tools during compaction: read_memory, write_memory, edit_memory, delete_memory, get_context_archive, get_archived_messages, get_archived_blocks, and ${COMPACT_PLAN_TOOL_NAME}.`,
     '',
     ...(guidance ? ['Additional requester guidance:', guidance, ''] : []),
     'Older compaction candidates:',
@@ -301,7 +409,7 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
     'COMPACT PLAN INVALID.',
     error.message,
     `Attempts remaining after this feedback: ${attemptsRemaining}.`,
-    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. Do not switch back to normal conversation and do not call any other tool.`,
+    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory/write_memory/edit_memory/delete_memory/get_context_archive/get_archived_messages/get_archived_blocks if you truly need them.`,
   ].join(' ');
 }
 

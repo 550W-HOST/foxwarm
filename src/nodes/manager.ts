@@ -96,6 +96,8 @@ export class NodesManager {
       'load_skill',
       'get_session_messages',
       'get_archived_messages',
+      'get_archived_blocks',
+      'get_context_archive',
       'delete_session',
       'update_session_name',
       'set_session_compact_threshold',

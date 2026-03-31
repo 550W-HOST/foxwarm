@@ -7,6 +7,7 @@ import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqR
 import {
   buildBlockCandidateItem,
   buildCompactPlanValidationFeedback,
+  buildCompactFlowToolDefinitions,
   buildCompactPromptText,
   buildMessageCandidateItem,
   COMPACT_PLAN_TOOL_NAME,
@@ -17,7 +18,7 @@ import {
   formatSeqRange,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { Message, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
+import { Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 
@@ -208,7 +209,7 @@ function buildArchiveLookupInstruction(sessionId: string, startSeq?: number, end
     seqArgs.push(`endSeq: ${endSeq}`);
   }
 
-  return `Use get_archived_messages({sessionId: '${sessionId}'${seqArgs.length ? `, ${seqArgs.join(', ')}` : ''}}) to inspect the archived originals if needed.`;
+  return `Use get_context_archive({sessionId: '${sessionId}'${seqArgs.length ? `, ${seqArgs.join(', ')}` : ''}}) or get_archived_messages({sessionId: '${sessionId}'${seqArgs.length ? `, ${seqArgs.join(', ')}` : ''}}) to inspect the archived originals if needed.`;
 }
 
 function buildDroppedRangePlaceholder(sessionId: string, startSeq?: number, endSeq?: number, messageCount?: number): Message {
@@ -660,11 +661,24 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   };
 
   const maxCompactAttempts = 3;
-  let nextPromptParts = [summaryPrompt];
+  let nextPromptParts: MessagePart[] | null = [summaryPrompt];
   let compactPlan: CompactPlan | null = null;
+  let compactHelperRounds = 0;
+  const compactToolDefinitions = buildCompactFlowToolDefinitions();
+  const compactHelperToolNames = new Set([
+    'read_memory',
+    'write_memory',
+    'edit_memory',
+    'delete_memory',
+    'get_archived_messages',
+    'get_archived_blocks',
+    'get_context_archive',
+  ]);
+  const maxCompactHelperRounds = 6;
 
   for (let attempt = 1; attempt <= maxCompactAttempts; attempt += 1) {
     const result = await llm.chat(nextPromptParts, transientSession, attempt - 1, {
+      toolDefinitions: compactToolDefinitions,
       appendMessage: async (message) => {
         await appendTransientSessionMessage(transientSession, message);
         mirrorTemporaryCompactMessage(deps, sessionId, message);
@@ -676,8 +690,33 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     if (!result.toolCalls?.length) {
       throw new Error(`Compaction failed because the model did not call ${COMPACT_PLAN_TOOL_NAME}.`);
     }
-    if (result.toolCalls.length !== 1 || result.toolCalls[0].name !== COMPACT_PLAN_TOOL_NAME) {
-      throw new Error(`Compaction failed because the model returned an unexpected tool plan instead of a single ${COMPACT_PLAN_TOOL_NAME} call.`);
+
+    const onlyPlanCall = result.toolCalls.length === 1 && result.toolCalls[0].name === COMPACT_PLAN_TOOL_NAME;
+    if (!onlyPlanCall) {
+      const invalidToolName = result.toolCalls.find(call => !compactHelperToolNames.has(call.name))?.name;
+      if (invalidToolName) {
+        throw new Error(`Compaction failed because the model called unexpected tool \`${invalidToolName}\` instead of finishing with ${COMPACT_PLAN_TOOL_NAME}.`);
+      }
+      if (compactHelperRounds >= maxCompactHelperRounds) {
+        throw new Error(`Compaction failed because helper tool usage exceeded ${maxCompactHelperRounds} round(s) without producing ${COMPACT_PLAN_TOOL_NAME}.`);
+      }
+
+      const toolResultMessage = await llm.executeTools(result.toolCalls, {
+        sessionId,
+        session: transientSession,
+      }, transientSession);
+      await appendTransientSessionMessage(transientSession, {
+        role: 'tool',
+        parts: toolResultMessage.parts,
+      });
+      mirrorTemporaryCompactMessage(deps, sessionId, {
+        role: 'tool',
+        parts: toolResultMessage.parts,
+      });
+      nextPromptParts = null;
+      compactHelperRounds += 1;
+      attempt -= 1;
+      continue;
     }
 
     try {

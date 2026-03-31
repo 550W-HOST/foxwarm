@@ -110,6 +110,7 @@ export interface QueueItem {
   type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact' | 'compact-commit';
   source?: QueueSource;
   parts?: MessagePart[];
+  message?: Message;
   keepPercent?: number;
   compactGuidance?: string;
   completionMarker?: string;

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import path from 'path';
 import { getAgentDir } from './config';
+import * as sessionManager from './sessionManager';
 import { read, write, edit, apply_patch, definitions, submit_compact_plan } from './tools';
 
 test('submit_compact_plan is present in regular tool definitions and guarded outside compact flow', async () => {
@@ -47,5 +48,34 @@ test('file tools resolve relative paths from session cwd', async () => {
     assert.equal(await fs.readFile(path.join(nestedDir, 'note.txt'), 'utf8'), 'patched');
   } finally {
     await fs.remove(baseDir);
+  }
+});
+
+test('non-isolated read accepts absolute paths outside the agent directory', async () => {
+  const outsidePath = path.join('/tmp', `foxwarm-read-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+
+  try {
+    await fs.writeFile(outsidePath, 'outside');
+    const result = await read({ filePath: outsidePath }, { session: { agent: 'main' } } as any);
+    assert.equal(result, 'outside');
+  } finally {
+    await fs.remove(outsidePath);
+  }
+});
+
+test('isolated read remains restricted to the current agent directory on master', async () => {
+  const agentName = `isolated_read_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const outsidePath = path.join('/tmp', `foxwarm-isolated-read-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+
+  try {
+    await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'sandbox-docker' } as any);
+    await fs.writeFile(outsidePath, 'outside');
+    await assert.rejects(
+      () => read({ filePath: outsidePath }, { session: { agent: agentName }, runtimeNodeId: 'master' } as any),
+      new RegExp(`Isolated agent session can only access agents/${agentName}/`),
+    );
+  } finally {
+    await sessionManager.setAgentMetadata(agentName, { isolated: false } as any);
+    await fs.remove(outsidePath);
   }
 });
