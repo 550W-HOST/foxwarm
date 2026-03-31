@@ -17,6 +17,7 @@ import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
+import { getSessionHistoryFilePath } from '../session/metadataStore';
 
 type WorkspaceNodeEntry = {
   name: string;
@@ -616,6 +617,26 @@ export class WebUIChannel implements Channel {
       });
 
       // Get session history (must be before DELETE /:sessionId)
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/debug-file',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const resolvedPath = getSessionHistoryFilePath(sessionId);
+            if (!await fs.pathExists(resolvedPath)) {
+              return res.status(404).json({ error: 'Session file not found' });
+            }
+            const payload = await fs.readJson(resolvedPath);
+            res.json({ resolvedPath, payload });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to read session debug file');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/history',
         method: 'GET',
