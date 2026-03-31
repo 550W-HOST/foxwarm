@@ -136,7 +136,10 @@ export class MessageRouter {
   private drainLeadingQueuedMessageParts(session: Session): MessagePart[] {
     const queuedParts: MessagePart[] = [];
 
-    while (session.queue[0] && session.queue[0].type !== 'compact' && session.queue[0].type !== 'compact-commit') {
+    while (session.queue[0]
+      && session.queue[0].type !== 'compact'
+      && session.queue[0].type !== 'compact-commit'
+      && !session.queue[0].message) {
       const item = session.queue.shift();
       if (!item?.parts) continue;
 
@@ -581,7 +584,10 @@ export class MessageRouter {
       return;
     }
 
-    await sessionManager.queueSessionMessageEvent(session.id, reminder, 'background');
+    // End-turn reminders should become visible in history immediately without
+    // spawning another follow-up reminder turn. Interval reminders are the ones
+    // that independently re-trigger the agent loop.
+    await sessionManager.appendSessionMessage(session, reminder);
   }
 
   private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean): Promise<void> {

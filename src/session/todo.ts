@@ -85,6 +85,17 @@ function getLatestNonReminderMessage(session: Session): Message | null {
   return null;
 }
 
+function getLatestUserMessage(session: Session): Message | null {
+  for (let i = session.history.length - 1; i >= 0; i--) {
+    const message = session.history[i];
+    if (message.role === 'user') {
+      return message;
+    }
+  }
+
+  return null;
+}
+
 function latestMessageSuppressesTodoReminder(session: Session): boolean {
   const latestMessage = getLatestNonReminderMessage(session);
   return latestMessage?.role === 'model' && partsContainNoActionSignal(latestMessage.parts);
@@ -171,6 +182,11 @@ export function maybeBuildTodoReminderMessage(session: Session): Message | null 
     return null;
   }
 
+  const latestUserMessage = getLatestUserMessage(session);
+  if (latestUserMessage && isTodoReminderMessage(latestUserMessage)) {
+    return null;
+  }
+
   const countedMessagesSinceAnchor = countNonReminderMessagesAfterSeq(session, state.anchorSeq);
   if (countedMessagesSinceAnchor < state.remindEvery) {
     return null;
@@ -193,6 +209,11 @@ export function maybeBuildTodoEndTurnReminderMessage(session: Session): Message 
   }
 
   if (latestMessageSuppressesTodoReminder(session)) {
+    return null;
+  }
+
+  const latestUserMessage = getLatestUserMessage(session);
+  if (latestUserMessage && isTodoReminderMessage(latestUserMessage)) {
     return null;
   }
 
