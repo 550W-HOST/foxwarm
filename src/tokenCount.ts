@@ -93,7 +93,7 @@ export function estimateMessagePartSummary(part: MessagePart): TokenEstimateSumm
     // Function calls
     if (part.functionCall) {
         tokens += estimateTokenCount(part.functionCall.name || '');
-        const rawArgsText = typeof part.functionCall.rawArgsText === 'string' ? part.functionCall.rawArgsText : JSON.stringify(part.functionCall.args || {});
+        const rawArgsText = typeof (part.functionCall as any).rawArgsText === 'string' ? String((part.functionCall as any).rawArgsText) : JSON.stringify(part.functionCall.args || {});
         tokens += estimateTokenCount(rawArgsText);
     }
     
