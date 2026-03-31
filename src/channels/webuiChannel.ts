@@ -383,6 +383,7 @@ export class WebUIChannel implements Channel {
                 archived: session.archived || false,
                 currentNode: session.currentNode || 'master',
                 cwd: session.cwd || null,
+                childModelDefault: session.childModelDefault || null,
                 isolated: sessionManager.isSessionEffectivelyIsolated(session),
                 tokenUsage: {
                   cachedTokens: session.stats?.totalCachedTokens || 0,

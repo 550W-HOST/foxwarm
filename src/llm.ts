@@ -675,7 +675,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             'list_sessions', 'list_agents', 'list_skills',
             'attach_agent_skill', 'detach_agent_skill', 'load_skill',
             'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
-            'update_session_name', 'set_todo', 'update_session_snapshot', 'stop_session',
+            'update_session_name', 'set_todo', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
             'compact_session', 'compress_session',
             'create_timer', 'list_timers', 'delete_timer',
             'mcp_config', 'call_mcp', 'search_mcp_tools',

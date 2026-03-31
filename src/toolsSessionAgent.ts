@@ -5,7 +5,7 @@ import * as sessionManager from './sessionManager';
 import * as skills from './skills';
 import * as timers from './timers';
 import type { ChannelFile } from './channel';
-import { getAgentDir } from './config';
+import { getAgentDir, resolveModelConfig } from './config';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
 import { AGENTS_DIR, COMPACT_PERCENT } from './config';
@@ -110,6 +110,20 @@ function detectMimeType(filePath: string): string {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeToolModelKey(value: unknown): string | undefined {
+  if (!isNonEmptyString(value)) {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  const { modelsConfig } = resolveModelConfig(undefined);
+  if (!modelsConfig.models[normalized]) {
+    throw new Error(`Unknown model \`${normalized}\`. Use /model to list available models.`);
+  }
+
+  return normalized;
 }
 
 function formatArchivedMessagePreview(
@@ -868,6 +882,51 @@ export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: To
   ].join('\n');
 }
 
+export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolContext) {
+  const targetId = args.sessionId || ctx?.sessionId;
+  if (!targetId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  const clear = args.clear === true;
+  if (clear) {
+    const result = await sessionManager.setSessionChildModelDefault(targetId);
+    const { currentKey } = resolveModelConfig(result.effectiveModel);
+    return [
+      `Session \`${result.sessionId}\` child default model cleared.`,
+      `Now inheriting the current session model path (effective spawn model: \`${currentKey}\`).`,
+    ].join('\n');
+  }
+
+  const normalizedModel = normalizeToolModelKey(args.model);
+  if (!normalizedModel) {
+    const session = await sessionManager.getExistingSession(targetId);
+    if (!session) {
+      throw new Error(`Session \`${targetId}\` not found.`);
+    }
+
+    const override = typeof session.childModelDefault === 'string' && session.childModelDefault.trim()
+      ? `\`${session.childModelDefault.trim()}\``
+      : 'inherit current session model';
+    const { currentKey: currentSessionModel } = resolveModelConfig(session.model);
+    const { currentKey: effectiveSpawnModel } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session));
+    return [
+      `Session \`${session.id}\` child default model status:`,
+      `override: ${override}`,
+      `current session model: \`${currentSessionModel}\``,
+      `effective spawned-session model: \`${effectiveSpawnModel}\``,
+    ].join('\n');
+  }
+
+  const result = await sessionManager.setSessionChildModelDefault(targetId, normalizedModel);
+  const { currentKey } = resolveModelConfig(result.effectiveModel);
+  return [
+    `Session \`${result.sessionId}\` child default model updated.`,
+    `override: \`${normalizedModel}\``,
+    `effective spawned-session model: \`${currentKey}\``,
+  ].join('\n');
+}
+
 export async function tool_stop_session(args: ToolArgs) {
   const { sessionId } = args;
 
@@ -1096,6 +1155,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
 export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_session');
   const { agentName, sessionName, displayName, parentSessionId } = args;
+  const requestedModel = normalizeToolModelKey(args.model);
 
   if (!agentName || typeof agentName !== 'string') {
     throw new Error('agentName is required');
@@ -1110,7 +1170,7 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     displayName,
     parentSessionId,
     currentNode: ctx.session?.currentNode,
-    model: ctx.session?.model,
+    model: sessionManager.resolveSpawnedSessionModel(ctx.session, requestedModel),
   });
 
   let message = `Session "${result.sessionId}" created under agent "${agentName}".`;
@@ -1120,6 +1180,9 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   if (parentSessionId) {
     message += `\nParent session: ${parentSessionId}`;
   }
+  const createdSession = await sessionManager.getSession(result.sessionId);
+  const { currentKey } = resolveModelConfig(createdSession.model);
+  message += `\nModel: ${currentKey}`;
   return message;
 }
 
