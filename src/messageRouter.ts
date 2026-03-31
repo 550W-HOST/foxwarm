@@ -154,6 +154,54 @@ export class MessageRouter {
     return queuedParts;
   }
 
+  private async consumeLeadingQueuedTurnInputs(
+    session: Session,
+    pendingParts: MessagePart[] | null,
+    subconsciousIncomingParts: MessagePart[],
+  ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
+    let mergedParts = pendingParts;
+    let consumedInput = false;
+
+    while (session.queue[0]
+      && session.queue[0].type !== 'compact'
+      && session.queue[0].type !== 'compact-commit') {
+      const item = session.queue.shift();
+      if (!item) {
+        continue;
+      }
+
+      if (item.message) {
+        consumedInput = true;
+        if (mergedParts?.length) {
+          await this.appendUserMessage(session, mergedParts);
+          mergedParts = null;
+        }
+
+        await sessionManager.appendSessionMessage(session, item.message);
+        continue;
+      }
+
+      if (!item.parts?.length) {
+        continue;
+      }
+
+      consumedInput = true;
+      const preparedParts = item.source
+        ? this.prepareUserParts(item.parts, item.source)
+        : [...item.parts];
+
+      subconsciousIncomingParts.push(...preparedParts);
+      mergedParts = mergedParts?.length
+        ? [...mergedParts, ...preparedParts]
+        : preparedParts;
+    }
+
+    return {
+      parts: mergedParts,
+      consumedInput,
+    };
+  }
+
   private tryClaimSession(session: Session): boolean {
     if (session.busy) {
       return false;
@@ -690,19 +738,11 @@ export class MessageRouter {
           break;
         }
         if (pendingCompaction === 'continued') {
-          parts = null;
           continue;
         }
 
-        const queuedParts = this.drainLeadingQueuedMessageParts(session);
-        if (queuedParts.length > 0) {
-          subconsciousIncomingParts.push(...queuedParts);
-          if (parts) {
-            parts = [...parts, ...queuedParts];
-          } else {
-            await this.appendUserMessage(session, queuedParts);
-          }
-        }
+        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, subconsciousIncomingParts);
+        parts = queuedBeforeLlm.parts;
 
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
@@ -778,16 +818,12 @@ export class MessageRouter {
           break;
         }
         if (compactionAfterTools === 'continued') {
-          parts = null;
           iteration++;
           continue;
         }
 
-        const queuedAfterTools = this.drainLeadingQueuedMessageParts(session);
-        if (queuedAfterTools.length > 0) {
-          subconsciousIncomingParts.push(...queuedAfterTools);
-          await this.appendUserMessage(session, queuedAfterTools);
-        }
+        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, subconsciousIncomingParts);
+        parts = queuedAfterTools.parts;
 
         if (result.usage) {
           const currentSize = sessionManager.getUsageTotalTokens(result.usage);
@@ -801,7 +837,6 @@ export class MessageRouter {
           }
         }
 
-        parts = null;
         iteration++;
       }
 
