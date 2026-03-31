@@ -448,6 +448,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
     const visibleChildren = children.slice(0, visibleCount)
     const hiddenCount = children.length - visibleChildren.length
+    const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
     const displayId = getDisplayId(session, parentSession)
@@ -470,25 +471,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           onClick={() => onSelectSession(session.id)}
           onContextMenu={(e) => handleContextMenu(e, session.id)}
         >
-          {hasChildren && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                toggleExpand(session.id)
-              }}
-              className="self-stretch flex items-center px-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-              style={{ marginLeft: `${level * 16}px` }}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                {isExpanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </button>
-          )}
-          <div className="flex-1 min-w-0 py-3 pr-2" style={{ paddingLeft: hasChildren ? '0' : `${12 + level * 16}px` }}>
+          <div className="flex-1 min-w-0 py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
             <div className="font-medium truncate text-gray-900 dark:text-white text-sm">
               {session.displayName || displayId}
               {session.archived && (
@@ -501,6 +484,25 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </div>
             )}
             <div className="text-xs text-gray-500 dark:text-gray-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+              {hasChildren && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    toggleExpand(session.id)
+                  }}
+                  className="inline-flex items-center rounded p-0.5 -ml-1 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  title={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+                  aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    {isExpanded ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    )}
+                  </svg>
+                </button>
+              )}
               {session.busy && (
                 <>
                   <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-300">
