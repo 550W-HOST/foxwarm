@@ -154,6 +154,54 @@ export class MessageRouter {
     return queuedParts;
   }
 
+  private async consumeLeadingQueuedTurnInputs(
+    session: Session,
+    pendingParts: MessagePart[] | null,
+    subconsciousIncomingParts: MessagePart[],
+  ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
+    let mergedParts = pendingParts;
+    let consumedInput = false;
+
+    while (session.queue[0]
+      && session.queue[0].type !== 'compact'
+      && session.queue[0].type !== 'compact-commit') {
+      const item = session.queue.shift();
+      if (!item) {
+        continue;
+      }
+
+      if (item.message) {
+        consumedInput = true;
+        if (mergedParts?.length) {
+          await this.appendUserMessage(session, mergedParts);
+          mergedParts = null;
+        }
+
+        await sessionManager.appendSessionMessage(session, item.message);
+        continue;
+      }
+
+      if (!item.parts?.length) {
+        continue;
+      }
+
+      consumedInput = true;
+      const preparedParts = item.source
+        ? this.prepareUserParts(item.parts, item.source)
+        : [...item.parts];
+
+      subconsciousIncomingParts.push(...preparedParts);
+      mergedParts = mergedParts?.length
+        ? [...mergedParts, ...preparedParts]
+        : preparedParts;
+    }
+
+    return {
+      parts: mergedParts,
+      consumedInput,
+    };
+  }
+
   private tryClaimSession(session: Session): boolean {
     if (session.busy) {
       return false;
@@ -681,26 +729,23 @@ export class MessageRouter {
         await sessionManager.appendSessionMessage(session, options.message);
       }
       let iteration = 0;
+      let awaitingResponse = Boolean(options.message);
       let finalResponse = '';
       let finalUsage = null;
       let lastTextBroadcasted = false;
       while (iteration < 500) {
-        const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
-        if (pendingCompaction === 'stop') {
-          break;
-        }
-        if (pendingCompaction === 'continued') {
-          parts = null;
-          continue;
-        }
+        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, subconsciousIncomingParts);
+        parts = queuedBeforeLlm.parts;
+        awaitingResponse = awaitingResponse || queuedBeforeLlm.consumedInput || Boolean(parts?.length);
 
-        const queuedParts = this.drainLeadingQueuedMessageParts(session);
-        if (queuedParts.length > 0) {
-          subconsciousIncomingParts.push(...queuedParts);
-          if (parts) {
-            parts = [...parts, ...queuedParts];
-          } else {
-            await this.appendUserMessage(session, queuedParts);
+        if (!awaitingResponse) {
+          const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
+          if (pendingCompaction === 'stop') {
+            break;
+          }
+          if (pendingCompaction === 'continued') {
+            parts = null;
+            continue;
           }
         }
 
@@ -734,6 +779,7 @@ export class MessageRouter {
 
         finalResponse = result.text;
         finalUsage = result.usage;
+        awaitingResponse = false;
 
         if (result.usage) {
           session.stats.lastUsage = result.usage;
@@ -773,20 +819,20 @@ export class MessageRouter {
           break;
         }
 
-        const compactionAfterTools = await this.runPendingCompactionIfNeeded(sessionId, session);
-        if (compactionAfterTools === 'stop') {
-          break;
-        }
-        if (compactionAfterTools === 'continued') {
-          parts = null;
-          iteration++;
-          continue;
-        }
+        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, subconsciousIncomingParts);
+        parts = queuedAfterTools.parts;
+        awaitingResponse = queuedAfterTools.consumedInput || Boolean(parts?.length);
 
-        const queuedAfterTools = this.drainLeadingQueuedMessageParts(session);
-        if (queuedAfterTools.length > 0) {
-          subconsciousIncomingParts.push(...queuedAfterTools);
-          await this.appendUserMessage(session, queuedAfterTools);
+        if (!awaitingResponse) {
+          const compactionAfterTools = await this.runPendingCompactionIfNeeded(sessionId, session);
+          if (compactionAfterTools === 'stop') {
+            break;
+          }
+          if (compactionAfterTools === 'continued') {
+            parts = null;
+            iteration++;
+            continue;
+          }
         }
 
         if (result.usage) {
@@ -801,7 +847,6 @@ export class MessageRouter {
           }
         }
 
-        parts = null;
         iteration++;
       }
 
