@@ -729,25 +729,20 @@ export class MessageRouter {
         await sessionManager.appendSessionMessage(session, options.message);
       }
       let iteration = 0;
-      let awaitingResponse = Boolean(options.message);
       let finalResponse = '';
       let finalUsage = null;
       let lastTextBroadcasted = false;
       while (iteration < 500) {
+        const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
+        if (pendingCompaction === 'stop') {
+          break;
+        }
+        if (pendingCompaction === 'continued') {
+          continue;
+        }
+
         const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, subconsciousIncomingParts);
         parts = queuedBeforeLlm.parts;
-        awaitingResponse = awaitingResponse || queuedBeforeLlm.consumedInput || Boolean(parts?.length);
-
-        if (!awaitingResponse) {
-          const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
-          if (pendingCompaction === 'stop') {
-            break;
-          }
-          if (pendingCompaction === 'continued') {
-            parts = null;
-            continue;
-          }
-        }
 
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
@@ -779,7 +774,6 @@ export class MessageRouter {
 
         finalResponse = result.text;
         finalUsage = result.usage;
-        awaitingResponse = false;
 
         if (result.usage) {
           session.stats.lastUsage = result.usage;
@@ -819,21 +813,17 @@ export class MessageRouter {
           break;
         }
 
+        const compactionAfterTools = await this.runPendingCompactionIfNeeded(sessionId, session);
+        if (compactionAfterTools === 'stop') {
+          break;
+        }
+        if (compactionAfterTools === 'continued') {
+          iteration++;
+          continue;
+        }
+
         const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, subconsciousIncomingParts);
         parts = queuedAfterTools.parts;
-        awaitingResponse = queuedAfterTools.consumedInput || Boolean(parts?.length);
-
-        if (!awaitingResponse) {
-          const compactionAfterTools = await this.runPendingCompactionIfNeeded(sessionId, session);
-          if (compactionAfterTools === 'stop') {
-            break;
-          }
-          if (compactionAfterTools === 'continued') {
-            parts = null;
-            iteration++;
-            continue;
-          }
-        }
 
         if (result.usage) {
           const currentSize = sessionManager.getUsageTotalTokens(result.usage);

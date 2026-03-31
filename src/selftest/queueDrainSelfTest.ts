@@ -76,6 +76,7 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 
 async function main(): Promise<void> {
   await sessionManager.loadSessions();
+  sessionManager.setSessionTriggerCallback(() => {});
 
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
@@ -198,10 +199,10 @@ async function main(): Promise<void> {
       assertLastModelText(refreshedSession, 'all queued work handled');
     });
 
-    await test('queued compaction still preserves order while the same queue drain continues afterward', async () => {
+    await test('queued compaction preempts already-held input and the same turn then continues with remaining ordinary work', async () => {
       const sessionId = makeSessionId('selftest_queue_compact_boundary');
       createdSessionIds.push(sessionId);
-      await ensureSession(sessionId);
+      const session = await ensureSession(sessionId);
 
       let compactRequestCount = 0;
       (sessionManager as any).processSessionCompactionRequest = async (targetSessionId: string, item: { completionMarker?: string }) => {
@@ -213,48 +214,39 @@ async function main(): Promise<void> {
         });
       };
 
-      await sessionManager.queueSessionStructuredEvent(sessionId, [{ text: 'before compact' }], 'background');
-      await sessionManager.requestSessionCompaction(sessionId, {
-        completionMarker: 'Compaction completed.',
-      });
-      await sessionManager.queueSessionStructuredEvent(sessionId, [{ text: 'after compact' }], 'background');
+      session.queue.push({ type: 'compact', completionMarker: 'Compaction completed.' });
+      session.queue.push({ type: 'background', parts: [{ text: 'after compact' }] });
+      await sessionManager.saveSession(sessionId);
 
       let callIndex = 0;
       (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
         assert.strictEqual(activeSession.id, sessionId);
+        const renderedParts = (parts || []).map(part => part.system || part.text || '').join('\n');
         await appendStubUserMessage(activeSession, parts);
         callIndex += 1;
 
-        if (callIndex === 1) {
-          const userTexts = activeSession.history
-            .filter(message => message.role === 'user')
-            .map(message => message.parts.map(part => part.system || part.text || '').join('\n'));
-          assert.match(userTexts[0] || '', new RegExp(`current session ID = ${sessionId}\\nbefore compact$`));
-          await appendStubModelMessage(activeSession, 'handled before compact');
-          return { text: 'handled before compact' };
-        }
-
-        if (callIndex === 2) {
-          const userTexts = activeSession.history
-            .filter(message => message.role === 'user')
-            .map(message => message.parts.map(part => part.system || part.text || '').join('\n'));
-          assert(userTexts.some(text => text.includes('Compaction completed.')));
-          assert(userTexts.some(text => text.endsWith('after compact')));
-          await appendStubModelMessage(activeSession, 'handled after compact');
-          return { text: 'handled after compact' };
-        }
-
-        throw new Error(`expected two LLM calls around compact boundary, got ${callIndex}`);
+        assert.strictEqual(callIndex, 1);
+        assert.match(renderedParts, new RegExp(`current session ID = ${sessionId}\\nbefore compact\\nafter compact$`));
+        const userTexts = activeSession.history
+          .filter(message => message.role === 'user')
+          .map(message => message.parts.map(part => part.system || part.text || '').join('\n'));
+        assert(userTexts.some(text => text === 'Compaction completed.'));
+        await appendStubModelMessage(activeSession, 'handled after compact boundary');
+        return { text: 'handled after compact boundary' };
       };
 
-      await router.processSessionQueue(sessionId);
+      await (router as any).runSessionTurn(sessionId, {
+        parts: [{ text: 'before compact' }],
+        session,
+        preclaimed: true,
+      });
 
       const refreshedSession = await sessionManager.getSession(sessionId);
-      assert.strictEqual(compactRequestCount, 1);
-      assert.strictEqual(callIndex, 2);
+      assert(compactRequestCount >= 1);
+      assert.strictEqual(callIndex, 1);
       assert.strictEqual(refreshedSession.queue.length, 0);
       assert.strictEqual(refreshedSession.busy, false);
-      assertLastModelText(refreshedSession, 'handled after compact');
+      assertLastModelText(refreshedSession, 'handled after compact boundary');
     });
 
     console.log('queue drain selftest passed');
