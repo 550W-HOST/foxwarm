@@ -3,6 +3,7 @@ import { partsContainNoActionSignal } from './childSessionReminder';
 
 const TODO_REMINDER_META_KEY = 'todoReminder';
 const TODO_REMINDER_SYSTEM_PREFIX = 'TODO reminder for this session:';
+const TODO_REMINDER_GUIDANCE = 'Update it: mark done items [x], reorder/edit remaining work, and clear it if finished.';
 const CHECKLIST_ITEM_REGEX = /(?:^|\n)\s*-\s*\[\s\]\s+\S/;
 
 type TodoReminderKind = 'interval' | 'end-turn';
@@ -119,7 +120,7 @@ function hasTodoReminderForAnchorSeq(session: Session, anchorSeq: number): boole
 function buildTodoReminderMessage(state: SessionTodoState, anchorSeq: number, kind: TodoReminderKind): Message {
   return {
     role: 'user',
-    parts: [{ system: `${TODO_REMINDER_SYSTEM_PREFIX}\n${state.todo}` }],
+    parts: [{ system: `${TODO_REMINDER_SYSTEM_PREFIX}\n${TODO_REMINDER_GUIDANCE}\n${state.todo}` }],
     __meta: {
       timestamp: Date.now(),
       [TODO_REMINDER_META_KEY]: true,
