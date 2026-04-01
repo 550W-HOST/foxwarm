@@ -114,7 +114,7 @@ end_turn({})
 /agent list
 /agent create <name> [--no-main]
 /agent inherit <agent> <parent-agent|none>
-/skill attach <agent> <skill>
+/skill show <skill>
 ```
 
 ## 推荐模式
@@ -134,4 +134,4 @@ end_turn({})
 2. `agent.inherit` 只影响 memory 组合，不影响消息汇报关系
 3. isolated session 会限制跨 session / 跨 node 操作
 4. child session 通常应显式调用 `send_to_session(...)` 回报，父会话仍应做最终协调
-5. attached skills 会进入 prompt，但不会沿 `agent.inherit` 自动传播
+5. snapshot 中会注入当前 agent 可见的 skills catalog；完整 skill 文档需按需 `load_skill`

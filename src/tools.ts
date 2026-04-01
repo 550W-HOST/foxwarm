@@ -32,8 +32,6 @@ import {
     tool_list_sessions,
     tool_list_agents,
     tool_list_skills,
-    tool_attach_agent_skill,
-    tool_detach_agent_skill,
     tool_load_skill,
     tool_get_session_messages,
     tool_get_archived_messages,
@@ -978,8 +976,6 @@ export const send_file = tool_send_file;
 export const list_sessions = tool_list_sessions;
 export const list_agents = tool_list_agents;
 export const list_skills = tool_list_skills;
-export const attach_agent_skill = tool_attach_agent_skill;
-export const detach_agent_skill = tool_detach_agent_skill;
 export const load_skill = tool_load_skill;
 export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
@@ -1339,30 +1335,6 @@ export const definitions = [
             }
         },
         {
-            name: 'attach_agent_skill',
-            description: 'Attach a skill to an agent. This updates the agent metadata and refreshes session prompt snapshots for that agent.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    agentName: { type: 'string', description: 'Target agent name' },
-                    skillName: { type: 'string', description: 'Skill name to attach' }
-                },
-                required: ['agentName', 'skillName']
-            }
-        },
-        {
-            name: 'detach_agent_skill',
-            description: 'Detach a skill from an agent. This updates the agent metadata and refreshes session prompt snapshots for that agent.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    agentName: { type: 'string', description: 'Target agent name' },
-                    skillName: { type: 'string', description: 'Skill name to detach' }
-                },
-                required: ['agentName', 'skillName']
-            }
-        },
-        {
             name: 'load_skill',
             description: 'Load skill documentation content using the current session agent skill resolution (or an optionally specified agent). This only returns skill documents and metadata; it does not dynamically add tools.',
             parameters: {
@@ -1492,7 +1464,7 @@ export const definitions = [
         },
         {
             name: 'update_session_snapshot',
-            description: 'Refresh a session prompt snapshot from the latest agent memory, inheritance, and attached skills. Defaults to the current session.',
+            description: 'Refresh a session prompt snapshot from the latest session-configured memory sources, inheritance, and visible skills catalog. Defaults to the current session.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1778,7 +1750,11 @@ export const definitions = [
                     displayName: { type: 'string', description: 'Optional display name for the new session.' },
                     parentSessionId: { type: 'string', description: 'Optional parent session ID.' },
                     model: { type: 'string', description: 'Optional explicit model key for the new session. When omitted, the current session child-default model behavior is used.' },
-                    systemPromptFiles: { type: 'string', description: 'Optional memory-relative file list for composing the new session snapshot. When set, the snapshot is built only from these listed files instead of the default agent memory/inherit/skills chain.' }
+                    systemPromptFiles: {
+                        type: 'array',
+                        description: 'Optional file list for composing the memory-file portion of the new session snapshot. When set, only these files are used as memory sources, while other system injections remain.',
+                        items: { type: 'string', description: 'A file path. Relative paths resolve from the agent memory directory; absolute and ~/ paths are also accepted.' }
+                    }
                 },
                 required: ['agentName', 'sessionName']
             }

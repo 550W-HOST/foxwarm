@@ -155,7 +155,7 @@ export async function createSessionInAgent(options: {
   currentNode?: string;
   model?: string;
   parentSessionId?: string;
-  systemPromptFiles?: string;
+  systemPromptFiles?: string[];
 }, deps: SessionAgentOpsDeps): Promise<{ sessionId: string }> {
   const {
     agentName,
@@ -190,7 +190,7 @@ export async function createSessionInAgent(options: {
     agent: agentName,
     displayName,
     history: [],
-    systemPromptFiles,
+    systemPromptFiles: systemPromptFiles ? [...systemPromptFiles] : undefined,
     persistentMemorySnapshot: snapshot,
     stats: {
       totalCachedTokens: 0,

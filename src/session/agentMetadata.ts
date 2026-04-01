@@ -2,10 +2,9 @@ import fs from 'fs-extra';
 import * as llm from '../llm';
 import { logger } from '../common';
 import { AGENTS_FILE, getAgentDir } from '../config';
-import { getSkillInfo, validateSkillName } from '../skills';
 import { Session } from '../types';
 
-function getSessionSystemPromptOptions(session: Session): { agentName: string; systemPromptFiles?: string } {
+function getSessionSystemPromptOptions(session: Session): { agentName: string; systemPromptFiles?: string[] } {
   return {
     agentName: session.agent || 'main',
     systemPromptFiles: session.systemPromptFiles,
@@ -16,7 +15,6 @@ export interface AgentMetadata {
   isolated?: boolean;
   isolatedNode?: string;
   inherit?: string;
-  skills?: string[];
   [key: string]: any;
 }
 
@@ -30,42 +28,12 @@ type AgentMetadataDeps = {
 
 const agentMetadata = new Map<string, AgentMetadata>();
 
-function normalizeAgentSkills(skills: unknown): string[] | undefined {
-  if (!Array.isArray(skills)) {
-    return undefined;
-  }
-
-  const normalized: string[] = [];
-  const seen = new Set<string>();
-
-  for (const rawSkill of skills) {
-    if (typeof rawSkill !== 'string') continue;
-    const skillName = rawSkill.trim();
-    if (!skillName) continue;
-
-    try {
-      validateSkillName(skillName);
-    } catch (e) {
-      logger.warn({ err: e, skillName }, 'Skipping invalid skill in agent metadata');
-      continue;
-    }
-
-    if (seen.has(skillName)) continue;
-    seen.add(skillName);
-    normalized.push(skillName);
-  }
-
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function normalizeAgentMetadata(meta: AgentMetadata): AgentMetadata {
   const nextMeta = { ...meta };
-  const normalizedSkills = normalizeAgentSkills(meta.skills);
   const isolatedNode = typeof meta.isolatedNode === 'string' && meta.isolatedNode.trim()
     ? meta.isolatedNode.trim()
     : undefined;
-  if (normalizedSkills) nextMeta.skills = normalizedSkills;
-  else delete nextMeta.skills;
+  delete nextMeta.skills;
   if (nextMeta.isolated) {
     if (isolatedNode) nextMeta.isolatedNode = isolatedNode;
   } else {
@@ -137,10 +105,6 @@ export function isSessionEffectivelyIsolated(session?: Session | null): boolean 
 export async function setAgentMetadata(agentName: string, meta: AgentMetadata): Promise<void> {
   agentMetadata.set(agentName, normalizeAgentMetadata(meta));
   await saveAgentMetadata();
-}
-
-export function getAgentSkills(agentName: string): string[] {
-  return [...(getAgentMetadata(agentName).skills || [])];
 }
 
 export async function refreshSessionSnapshot(deps: AgentMetadataDeps, sessionId: string): Promise<{ sessionId: string; agentName: string }> {
@@ -264,56 +228,10 @@ export async function setAgentIsolation(
     if (normalizedNode) {
       session.currentNode = normalizedNode;
     }
+    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
     await deps.saveSession(session.id);
     affectedSessions.push(session.id);
   }
 
   return { affectedSessions, isolated: !!normalizedNode, node: normalizedNode };
-}
-
-export async function attachAgentSkill(deps: AgentMetadataDeps, agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
-  deps.validateAgentName(agentName);
-  validateSkillName(skillName);
-
-  const agentDir = getAgentDir(agentName);
-  if (!await fs.pathExists(agentDir)) {
-    throw new Error(`Agent "${agentName}" does not exist.`);
-  }
-
-  await getSkillInfo(skillName, { agentName });
-
-  const currentMeta = getAgentMetadata(agentName);
-  const currentSkills = getAgentSkills(agentName);
-  if (currentSkills.includes(skillName)) {
-    return { skills: currentSkills, affectedSessions: [], changed: false };
-  }
-
-  const nextSkills = [...currentSkills, skillName];
-  await setAgentMetadata(agentName, { ...currentMeta, skills: nextSkills });
-  const affectedSessions = await refreshDirectAgentSessions(deps, agentName);
-
-  return { skills: nextSkills, affectedSessions, changed: true };
-}
-
-export async function detachAgentSkill(deps: AgentMetadataDeps, agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
-  deps.validateAgentName(agentName);
-  validateSkillName(skillName);
-
-  const agentDir = getAgentDir(agentName);
-  if (!await fs.pathExists(agentDir)) {
-    throw new Error(`Agent "${agentName}" does not exist.`);
-  }
-
-  const currentMeta = getAgentMetadata(agentName);
-  const currentSkills = getAgentSkills(agentName);
-  const nextSkills = currentSkills.filter(existingSkill => existingSkill !== skillName);
-
-  if (nextSkills.length === currentSkills.length) {
-    return { skills: currentSkills, affectedSessions: [], changed: false };
-  }
-
-  await setAgentMetadata(agentName, { ...currentMeta, skills: nextSkills });
-  const affectedSessions = await refreshDirectAgentSessions(deps, agentName);
-
-  return { skills: nextSkills, affectedSessions, changed: true };
 }

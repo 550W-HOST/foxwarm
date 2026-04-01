@@ -1,6 +1,7 @@
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import * as skills from './skills';
 import * as timers from './timers';
@@ -433,7 +434,7 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   const entries = await fs.readdir(agentsDir, { withFileTypes: true });
-  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, skills?: string[], isolated?: boolean, isolatedNode?: string}> = [];
+  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, isolated?: boolean, isolatedNode?: string}> = [];
 
   for (const entry of entries) {
     if (entry.isDirectory()) {
@@ -446,7 +447,6 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
         hasSessions: sessions.length > 0,
         sessionCount: sessions.length,
         inherit: sessionManager.getAgentMetadata(agentName).inherit,
-        skills: sessionManager.getAgentSkills(agentName),
         isolated: sessionManager.getAgentMetadata(agentName).isolated,
         isolatedNode: sessionManager.getAgentIsolationNode(agentName),
       });
@@ -468,9 +468,6 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
     }
     if (agent.isolated) {
       result += ` [isolated${agent.isolatedNode ? `:${agent.isolatedNode}` : ''}]`;
-    }
-    if (agent.skills && agent.skills.length > 0) {
-      result += ` [skills: ${agent.skills.join(', ')}]`;
     }
     result += '\n';
   }
@@ -502,58 +499,6 @@ export async function tool_list_skills(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   return result;
-}
-
-export async function tool_attach_agent_skill(args: ToolArgs, ctx?: ToolContext) {
-  await requireNotIsolated(ctx, 'attach_agent_skill');
-  const { agentName, skillName } = args;
-
-  if (!agentName || typeof agentName !== 'string') {
-    throw new Error('agentName is required');
-  }
-  if (!skillName || typeof skillName !== 'string') {
-    throw new Error('skillName is required');
-  }
-
-  const result = await sessionManager.attachAgentSkill(agentName, skillName);
-  if (!result.changed) {
-    return `Agent "${agentName}" already has skill "${skillName}" attached.`;
-  }
-
-  let message = `Skill "${skillName}" attached to agent "${agentName}".`;
-  if (result.skills.length > 0) {
-    message += `\nCurrent skills: ${result.skills.join(', ')}`;
-  }
-  if (result.affectedSessions.length > 0) {
-    message += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`;
-  }
-  return message;
-}
-
-export async function tool_detach_agent_skill(args: ToolArgs, ctx?: ToolContext) {
-  await requireNotIsolated(ctx, 'detach_agent_skill');
-  const { agentName, skillName } = args;
-
-  if (!agentName || typeof agentName !== 'string') {
-    throw new Error('agentName is required');
-  }
-  if (!skillName || typeof skillName !== 'string') {
-    throw new Error('skillName is required');
-  }
-
-  const result = await sessionManager.detachAgentSkill(agentName, skillName);
-  if (!result.changed) {
-    return `Agent "${agentName}" does not have skill "${skillName}" attached.`;
-  }
-
-  let message = `Skill "${skillName}" detached from agent "${agentName}".`;
-  message += result.skills.length > 0
-    ? `\nCurrent skills: ${result.skills.join(', ')}`
-    : '\nCurrent skills: (none)';
-  if (result.affectedSessions.length > 0) {
-    message += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`;
-  }
-  return message;
 }
 
 export async function tool_load_skill(args: ToolArgs, ctx?: ToolContext) {
@@ -1156,9 +1101,13 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_session');
   const { agentName, sessionName, displayName, parentSessionId } = args;
   const requestedModel = normalizeToolModelKey(args.model);
-  const systemPromptFiles = typeof args.systemPromptFiles === 'string' && args.systemPromptFiles.trim()
-    ? args.systemPromptFiles.trim()
-    : undefined;
+  const systemPromptFiles = args.systemPromptFiles === undefined
+    ? undefined
+    : llm.normalizeSystemPromptFiles(args.systemPromptFiles);
+
+  if (args.systemPromptFiles !== undefined && !Array.isArray(args.systemPromptFiles)) {
+    throw new Error('systemPromptFiles must be an array of strings');
+  }
 
   if (!agentName || typeof agentName !== 'string') {
     throw new Error('agentName is required');
@@ -1185,7 +1134,7 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     message += `\nParent session: ${parentSessionId}`;
   }
   if (systemPromptFiles) {
-    message += `\nSystem prompt files: ${systemPromptFiles}`;
+    message += `\nSystem prompt files: ${systemPromptFiles.length > 0 ? systemPromptFiles.join(', ') : '(none)'}`;
   }
   const createdSession = await sessionManager.getSession(result.sessionId);
   const { currentKey } = resolveModelConfig(createdSession.model);

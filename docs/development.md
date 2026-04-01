@@ -114,7 +114,7 @@ skills/
       METHOD.md
 ```
 
-然后通过 `/skill attach <agent> <skill>` 或对应 tool 附加到 agent。
+skill 会自动出现在可见 skills catalog 中；需要完整说明时，使用 `/skill show <skill>` 或 `load_skill` 按需加载。
 
 ## 调试
 

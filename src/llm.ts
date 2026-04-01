@@ -11,7 +11,7 @@ import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BU
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
-import { loadSkillDocuments } from './skills';
+import { listSkills } from './skills';
 import { checkToolPermission, checkPathAccess } from './isolatedCheck';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -185,51 +185,139 @@ function formatMemoryBlock(filePath: string, agentName: string, kind: 'self' | '
     return `\nFILE: ${filePath}\n[MEMORY: agent=${agentName}; ownership=${kind}]\n${content}\n`;
 }
 
-function formatSkillBlock(filePath: string, skillName: string, content: string): string {
-    return `\nFILE: ${filePath}\n[SKILL: ${skillName}]\n${content}\n`;
+function escapeXmlText(value: string): string {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
 }
 
-function parseSystemPromptFiles(systemPromptFiles?: string): string[] {
-    if (typeof systemPromptFiles !== 'string') {
-        return [];
+export function normalizeSystemPromptFiles(value: unknown): string[] | undefined {
+    if (Array.isArray(value)) {
+        const normalized = value
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map(entry => entry.trim())
+            .filter(entry => entry.length > 0);
+        return normalized;
     }
 
-    return systemPromptFiles
-        .split(/[,\n]/)
-        .map(entry => entry.trim())
-        .filter(entry => entry.length > 0 && !entry.startsWith('#'));
+    if (typeof value === 'string') {
+        const normalized = value
+            .split(/[,\n]/)
+            .map(entry => entry.trim())
+            .filter(entry => entry.length > 0 && !entry.startsWith('#'));
+        return normalized;
+    }
+
+    return undefined;
+}
+
+function expandHomePath(filePath: string): string {
+    if (filePath === '~') {
+        return process.env.HOME || filePath;
+    }
+    if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
+        return path.join(process.env.HOME || '~', filePath.slice(2));
+    }
+
+    return filePath;
 }
 
 function resolveSystemPromptFilePath(agentName: string, fileReference: string): string {
-    const agentMemoryDir = getAgentMemoryDir(agentName);
-    const resolvedPath = path.resolve(agentMemoryDir, fileReference);
-    const relativePath = path.relative(agentMemoryDir, resolvedPath);
-
-    if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-        throw new Error(`systemPromptFiles entry \`${fileReference}\` must stay within agent memory/ for agent \`${agentName}\`.`);
+    const expandedPath = expandHomePath(fileReference);
+    if (path.isAbsolute(expandedPath)) {
+        return path.resolve(expandedPath);
     }
 
-    return resolvedPath;
+    return path.resolve(getAgentMemoryDir(agentName), expandedPath);
 }
 
-async function buildConfiguredSystemPrompt(agentName: string, systemPromptFiles: string): Promise<string> {
-    const configuredFiles = parseSystemPromptFiles(systemPromptFiles);
-    if (configuredFiles.length === 0) {
-        throw new Error('systemPromptFiles must list at least one memory file.');
-    }
-
+async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[]): Promise<string> {
     let combined = '';
-    for (const fileReference of configuredFiles) {
+    const restrictToAgentDir = sessionManager.isAgentIsolated(agentName);
+
+    for (const fileReference of systemPromptFiles) {
         const filePath = resolveSystemPromptFilePath(agentName, fileReference);
+        if (restrictToAgentDir) {
+            checkPathAccess(filePath, agentName);
+        }
         if (!await fs.pathExists(filePath)) {
             throw new Error(`systemPromptFiles entry \`${fileReference}\` not found for agent \`${agentName}\`.`);
+        }
+
+        const stats = await fs.stat(filePath);
+        if (!stats.isFile()) {
+            throw new Error(`systemPromptFiles entry \`${fileReference}\` is not a file.`);
         }
 
         const content = await fs.readFile(filePath, 'utf8');
         combined += formatMemoryBlock(filePath, agentName, 'self', content);
     }
 
-    return combined.trim();
+    return combined;
+}
+
+async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
+    const visibleSkills = await listSkills({ agentName });
+    if (visibleSkills.length === 0) {
+        return '';
+    }
+
+    let combined = '';
+    combined += 'The following skills provide specialized instructions for specific tasks.\n';
+    combined += 'When a task matches a skill\'s description, call the load_skill tool\n';
+    combined += 'with the skill\'s name to load its full instructions:\n';
+    combined += '<available_skills>\n';
+
+    for (const skill of visibleSkills) {
+        combined += '  <skill>\n';
+        combined += `    <name>${escapeXmlText(skill.name)}</name>\n`;
+        combined += `    <description>${escapeXmlText(skill.description || '')}</description>\n`;
+        combined += '  </skill>\n';
+    }
+
+    combined += '</available_skills>\n';
+    return combined;
+}
+
+async function appendDefaultMemoryFiles(agentName: string): Promise<string> {
+    const mainMemoryDir = MAIN_AGENT_MEMORY_DIR;
+    let combined = '';
+
+    const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
+    if (await fs.pathExists(mainSystemPath)) {
+        const content = await fs.readFile(mainSystemPath, 'utf8');
+        const kind = agentName === 'main' ? 'self' : 'inherited';
+        combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
+    }
+
+    const inheritChain = sessionManager.getAgentInheritanceChain(agentName);
+    for (const inheritedAgentName of inheritChain) {
+        const kind = inheritedAgentName === agentName ? 'self' : 'inherited';
+        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind);
+    }
+
+    return combined;
+}
+
+export async function buildSessionSystemPromptSnapshot(options: {
+    agentName?: string;
+    systemPromptFiles?: string[] | string;
+} = {}): Promise<string> {
+    const agentName = options.agentName || 'main';
+    const normalizedSystemPromptFiles = normalizeSystemPromptFiles(options.systemPromptFiles);
+    const hasCustomMemorySources = options.systemPromptFiles !== undefined;
+
+    const memoryBlocks = hasCustomMemorySources
+        ? await appendConfiguredMemoryFiles(agentName, normalizedSystemPromptFiles || [])
+        : await appendDefaultMemoryFiles(agentName);
+    const skillCatalog = await appendSkillCatalogForAgent(agentName);
+    const agentMemoryDir = getAgentMemoryDir(agentName);
+    const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_memory: ' + agentMemoryDir + '\n- agent_folder: ' + getAgentDir(agentName) + '\n';
+    const archiveInfo = '\n\n--- COMPACTED HISTORY ACCESS ---\n- To inspect compacted raw messages, use `get_archived_messages(...)`.\n- To inspect archived layered-context blocks, use `get_archived_blocks(...)`.\n- If you are not sure which archive view you need, use `get_context_archive(...)`.\n';
+    return [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
+        .filter(Boolean)
+        .join('\n\n');
 }
 
 function stringifyToolOutput(output: unknown): string {
@@ -333,60 +421,6 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
     return combined;
 }
 
-async function appendSkillFilesForAgent(agentName: string): Promise<string> {
-    const skills = sessionManager.getAgentSkills(agentName);
-    if (skills.length === 0) {
-        return '';
-    }
-
-    let combined = '';
-    for (const skillName of skills) {
-        try {
-            const { documents } = await loadSkillDocuments(skillName, { agentName });
-            for (const document of documents) {
-                combined += formatSkillBlock(document.filePath, skillName, document.content);
-            }
-        } catch (e) {
-            logger.warn({ err: e, agentName, skillName }, 'Failed to load skill documents for prompt injection');
-        }
-    }
-
-    return combined;
-}
-
-export async function buildSessionSystemPromptSnapshot(options: {
-    agentName?: string;
-    systemPromptFiles?: string;
-} = {}): Promise<string> {
-    const agentName = options.agentName || 'main';
-
-    if (typeof options.systemPromptFiles === 'string' && options.systemPromptFiles.trim()) {
-        return buildConfiguredSystemPrompt(agentName, options.systemPromptFiles);
-    }
-
-    const agentMemoryDir = getAgentMemoryDir(agentName);
-    const mainMemoryDir = MAIN_AGENT_MEMORY_DIR;
-    let combined = '';
-
-    const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
-    if (await fs.pathExists(mainSystemPath)) {
-        const content = await fs.readFile(mainSystemPath, 'utf8');
-        const kind = agentName === 'main' ? 'self' : 'inherited';
-        combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
-    }
-
-    const inheritChain = sessionManager.getAgentInheritanceChain(agentName);
-    for (const inheritedAgentName of inheritChain) {
-        const kind = inheritedAgentName === agentName ? 'self' : 'inherited';
-        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind);
-    }
-
-    combined += await appendSkillFilesForAgent(agentName);
-
-    const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_memory: ' + agentMemoryDir + '\n- agent_folder: ' + getAgentDir(agentName) + '\n';
-    const archiveInfo = '\n\n--- COMPACTED HISTORY ACCESS ---\n- To inspect compacted raw messages, use `get_archived_messages(...)`.\n- To inspect archived layered-context blocks, use `get_archived_blocks(...)`.\n- If you are not sure which archive view you need, use `get_context_archive(...)`.\n';
-    return combined.trim() + dirInfo + archiveInfo;
-}
 
 export async function getPersistentMemory(agentName: string = 'main') {
     try {
@@ -745,8 +779,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             'read_memory', 'write_memory', 'edit_memory', 'delete_memory',
             'copy_between_nodes',
             'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
-            'list_sessions', 'list_agents', 'list_skills',
-            'attach_agent_skill', 'detach_agent_skill', 'load_skill',
+            'list_sessions', 'list_agents', 'list_skills', 'load_skill',
             'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
             'update_session_name', 'set_todo', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
             'compact_session', 'compress_session',

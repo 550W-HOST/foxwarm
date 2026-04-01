@@ -91,8 +91,6 @@ export class NodesManager {
       'submit_compact_plan',
       'list_sessions',
       'list_skills',
-      'attach_agent_skill',
-      'detach_agent_skill',
       'load_skill',
       'get_session_messages',
       'get_archived_messages',

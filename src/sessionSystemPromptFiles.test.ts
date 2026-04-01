@@ -10,7 +10,21 @@ function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-test('systemPromptFiles overrides default snapshot composition and persists on create_session', async () => {
+async function ensureParentSession(sessionId: string) {
+  const parent = await sessionManager.getSession(sessionId);
+  parent.agent = 'main';
+  parent.history = [];
+  parent.persistentMemorySnapshot = '';
+  parent.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  parent.busy = false;
+  parent.queue = [];
+  parent.meta = { lastMessageTime: Date.now() };
+  parent.currentNode = 'master';
+  await sessionManager.saveSession(sessionId);
+  return parent;
+}
+
+test('systemPromptFiles uses string[] and only overrides memory-file sources while retaining other system injections', async () => {
   await sessionManager.loadSessions();
 
   const agentName = makeId('agent_system_prompt_files');
@@ -21,66 +35,115 @@ test('systemPromptFiles overrides default snapshot composition and persists on c
   const customSessionId = `${agentName}/${customSessionName}`;
   const agentDir = getAgentDir(agentName);
   const memoryDir = getAgentMemoryDir(agentName);
-  const fileA = 'MEMORY.md';
-  const fileB = 'SOUL.md';
-  const fileC = 'EXTRA.md';
+  const skillName = 'catalog-test-skill';
+  const externalFile = path.join('/tmp', `${makeId('system_prompt_external')}.md`);
 
   await fs.ensureDir(memoryDir);
-  await fs.writeFile(path.join(memoryDir, fileA), '# Memory A\nAlpha\n', 'utf8');
-  await fs.writeFile(path.join(memoryDir, fileB), '# Memory B\nBeta\n', 'utf8');
-  await fs.writeFile(path.join(memoryDir, fileC), '# Extra\nGamma\n', 'utf8');
+  await fs.writeFile(path.join(memoryDir, 'MEMORY.md'), '# Memory A\nAlpha\n', 'utf8');
+  await fs.writeFile(path.join(memoryDir, 'SOUL.md'), '# Memory B\nBeta\n', 'utf8');
+  await fs.writeFile(path.join(memoryDir, 'EXTRA.md'), '# Extra\nGamma\n', 'utf8');
+  await fs.writeFile(externalFile, '# External\nOutside\n', 'utf8');
 
-  const parent = await sessionManager.getSession(parentSessionId);
-  parent.agent = 'main';
-  parent.history = [];
-  parent.persistentMemorySnapshot = '';
-  parent.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
-  parent.busy = false;
-  parent.queue = [];
-  parent.meta = { lastMessageTime: Date.now() };
-  parent.currentNode = 'master';
-  await sessionManager.saveSession(parentSessionId);
+  const skillDir = path.join(agentDir, 'skills', skillName);
+  await fs.ensureDir(skillDir);
+  await fs.writeFile(path.join(skillDir, 'SKILL.md'), `---\nname: ${skillName}\ndescription: Catalog test description\n---\n# ${skillName}\n\nFULL SKILL INSTRUCTIONS UNIQUE\n`, 'utf8');
+
+  const parent = await ensureParentSession(parentSessionId);
 
   try {
     await tool_create_session({ agentName, sessionName: defaultSessionName }, { sessionId: parentSessionId, session: parent });
     await tool_create_session({
       agentName,
       sessionName: customSessionName,
-      systemPromptFiles: `${fileA}\n${fileB}`,
+      systemPromptFiles: ['MEMORY.md', externalFile],
     }, { sessionId: parentSessionId, session: parent });
 
     const defaultSession = await sessionManager.getSession(defaultSessionId);
     const customSession = await sessionManager.getSession(customSessionId);
 
     assert.equal(defaultSession.systemPromptFiles, undefined);
-    assert.equal(customSession.systemPromptFiles, `${fileA}\n${fileB}`);
+    assert.deepEqual(customSession.systemPromptFiles, ['MEMORY.md', externalFile]);
 
     assert.match(defaultSession.persistentMemorySnapshot, /Alpha/);
     assert.match(defaultSession.persistentMemorySnapshot, /Beta/);
     assert.match(defaultSession.persistentMemorySnapshot, /Gamma/);
 
     assert.match(customSession.persistentMemorySnapshot, /Alpha/);
-    assert.match(customSession.persistentMemorySnapshot, /Beta/);
+    assert.match(customSession.persistentMemorySnapshot, /Outside/);
+    assert.doesNotMatch(customSession.persistentMemorySnapshot, /Beta/);
     assert.doesNotMatch(customSession.persistentMemorySnapshot, /Gamma/);
-    assert.doesNotMatch(customSession.persistentMemorySnapshot, /--- DIRECTORIES ---/);
+    assert.match(customSession.persistentMemorySnapshot, /<available_skills>/);
+    assert.match(customSession.persistentMemorySnapshot, new RegExp(`<name>${skillName}</name>`));
+    assert.match(customSession.persistentMemorySnapshot, /Catalog test description/);
+    assert.doesNotMatch(customSession.persistentMemorySnapshot, /FULL SKILL INSTRUCTIONS UNIQUE/);
+    assert.match(customSession.persistentMemorySnapshot, /--- DIRECTORIES ---/);
 
     const sessionsIndex = await fs.readJson(SESSIONS_FILE);
-    assert.equal(sessionsIndex.sessions?.[customSessionId]?.systemPromptFiles, `${fileA}\n${fileB}`);
+    assert.deepEqual(sessionsIndex.sessions?.[customSessionId]?.systemPromptFiles, ['MEMORY.md', externalFile]);
 
     const customHistoryFile = path.join(path.dirname(SESSIONS_FILE), 'sessions', `${customSessionId}.json`);
     const customHistoryPayload = await fs.readJson(customHistoryFile);
-    assert.equal(customHistoryPayload.systemPromptFiles, `${fileA}\n${fileB}`);
+    assert.deepEqual(customHistoryPayload.systemPromptFiles, ['MEMORY.md', externalFile]);
 
-    await fs.writeFile(path.join(memoryDir, fileA), '# Memory A\nAlpha updated\n', 'utf8');
+    await fs.writeFile(externalFile, '# External\nOutside updated\n', 'utf8');
     await sessionManager.refreshSessionSnapshot(customSessionId);
     const refreshedCustomSession = await sessionManager.getSession(customSessionId);
-    assert.match(refreshedCustomSession.persistentMemorySnapshot, /Alpha updated/);
-    assert.doesNotMatch(refreshedCustomSession.persistentMemorySnapshot, /Gamma/);
+    assert.match(refreshedCustomSession.persistentMemorySnapshot, /Outside updated/);
+    assert.match(refreshedCustomSession.persistentMemorySnapshot, /<available_skills>/);
   } finally {
     for (const sessionId of [defaultSessionId, customSessionId, parentSessionId]) {
       await sessionManager.deleteSession(sessionId).catch(() => {});
     }
 
+    await fs.remove(externalFile).catch(() => {});
+    await fs.remove(agentDir).catch(() => {});
+  }
+});
+
+test('isolated agent sessions reject out-of-agent custom systemPromptFiles but allow in-agent files', async () => {
+  await sessionManager.loadSessions();
+
+  const agentName = makeId('isolated_system_prompt_agent');
+  const parentSessionId = makeId('isolated_system_prompt_parent');
+  const blockedSessionName = makeId('blocked_session');
+  const allowedSessionName = makeId('allowed_session');
+  const allowedSessionId = `${agentName}/${allowedSessionName}`;
+  const agentDir = getAgentDir(agentName);
+  const memoryDir = getAgentMemoryDir(agentName);
+  const outsideFile = path.join('/tmp', `${makeId('isolated_outside')}.md`);
+
+  await fs.ensureDir(memoryDir);
+  await fs.writeFile(path.join(memoryDir, 'MEMORY.md'), '# Isolated\nInside allowed\n', 'utf8');
+  await fs.writeFile(outsideFile, '# Outside\nForbidden\n', 'utf8');
+  await sessionManager.setAgentIsolation(agentName, 'sandbox-node');
+
+  const parent = await ensureParentSession(parentSessionId);
+
+  try {
+    await assert.rejects(
+      tool_create_session({
+        agentName,
+        sessionName: blockedSessionName,
+        systemPromptFiles: [outsideFile],
+      }, { sessionId: parentSessionId, session: parent }),
+      /can only access agents\//,
+    );
+
+    await tool_create_session({
+      agentName,
+      sessionName: allowedSessionName,
+      systemPromptFiles: ['MEMORY.md'],
+    }, { sessionId: parentSessionId, session: parent });
+
+    const allowedSession = await sessionManager.getSession(allowedSessionId);
+    assert.deepEqual(allowedSession.systemPromptFiles, ['MEMORY.md']);
+    assert.match(allowedSession.persistentMemorySnapshot, /Inside allowed/);
+    assert.doesNotMatch(allowedSession.persistentMemorySnapshot, /Forbidden/);
+  } finally {
+    await sessionManager.deleteSession(allowedSessionId).catch(() => {});
+    await sessionManager.deleteSession(parentSessionId).catch(() => {});
+    await sessionManager.setAgentIsolation(agentName, undefined).catch(() => {});
+    await fs.remove(outsideFile).catch(() => {});
     await fs.remove(agentDir).catch(() => {});
   }
 });

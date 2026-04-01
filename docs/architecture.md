@@ -63,7 +63,7 @@ Foxwarm 会为每个 session 生成 `persistentMemorySnapshot`。当前 prompt �
 
 1. inherited agent memory（按继承链从根到当前 agent）
 2. 当前 agent 自身 memory
-3. attached skills 的 memory
+3. visible skills catalog（技能名 + 描述；完整文档按需通过 `load_skill` 加载）
 
 生成后的 snapshot 会缓存到 session，并在相关变更时刷新。
 

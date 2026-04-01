@@ -65,7 +65,7 @@ interface Session {
   agent?: string;
   aliases?: string[];
   history: Message[];
-  systemPromptFiles?: string;
+  systemPromptFiles?: string[];
   persistentMemorySnapshot: string;
   stats: SessionStats;
   busy: boolean;
@@ -87,7 +87,7 @@ interface Session {
 - `agent`：当前 session 绑定的 agent
 - `aliases`：旧 ID / 别名，便于 move/rename 后兼容解析
 - `persistentMemorySnapshot`：当前 prompt snapshot
-- `systemPromptFiles`：可选的 memory 相对文件列表；设置后，该 session 的 snapshot 只由这些文件组成
+- `systemPromptFiles`：可选文件列表；设置后，仅替换 snapshot 中的 memory 文件来源，其他系统注入（如 skills catalog）仍保留
 - `currentNode`：当前工具执行 node，默认 `master`
 - `isolated`：是否限制为当前 node / 相关会话树使用
 - `model`：session 层覆盖的模型 key
@@ -100,9 +100,9 @@ Foxwarm 会把当前 session 可见的长期记忆预组装成 `persistentMemory
 
 1. inherited agent memory
 2. 当前 agent 自身 memory
-3. attached skills memory
+3. visible skills catalog（技能目录摘要，不是完整技能文档）
 
-如果 session 设置了 `systemPromptFiles`，则会改为仅按该字段列出的 memory 相对文件生成 snapshot，不再自动拼接默认 memory / inherit / skills 链路。
+如果 session 设置了 `systemPromptFiles`，则只替换 memory 文件来源为该数组列出的文件；skills catalog、目录信息、压缩历史提示等非-memory 注入仍保留。
 
 当 agent memory / inherit / skills 变化时，相关 session snapshot 会刷新。
 

@@ -25,7 +25,7 @@ You are running in a custom Node.js framework.
 - **skill** = reusable memory/capability pack attached explicitly to an agent
 - An agent may exist without any session
 - `agent.inherit` is for shared memory inheritance, **not** reporting hierarchy
-- Prompt snapshots are composed from inherited agent memory -> agent memory -> attached skills
+- Prompt snapshots are composed from inherited agent memory -> agent memory -> visible skills catalog (full skill docs load on demand via `load_skill`)
 - Reuse knowledge with agents / `agent.inherit`; create a new **session** when you need a new thread without duplicating the agent
 
 --- BOT MANAGEMENT ---

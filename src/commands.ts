@@ -84,7 +84,7 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   }),
   literalNode('new', 'Create a new ad-hoc session'),
   literalNode('create', 'Create a session under an existing agent', {
-    usage: '/session create <agent> <session> [--model <model>] [--system-prompt-files <file1,file2>]',
+    usage: '/session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...',
     children: [
       placeholderNode('<agent>', 'Existing agent name', {
         children: [placeholderNode('<session>', 'New session name', {
@@ -92,8 +92,8 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
             literalNode('--model', 'Explicit model for the new session', {
               children: [placeholderNode('<model>', 'Model key or partial model name')],
             }),
-            literalNode('--system-prompt-files', 'Comma-separated memory-relative file list for the new session snapshot', {
-              children: [placeholderNode('<file1,file2>', 'Memory-relative files such as MEMORY.md,SOUL.md')],
+            literalNode('--system-prompt-file', 'Add one file to the new session memory-source list', {
+              children: [placeholderNode('<path>', 'Memory-relative, absolute, or ~/ file path')],
             }),
           ],
         })],
@@ -201,22 +201,6 @@ const AGENT_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 
 const SKILL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('list', 'List available skills'),
-  literalNode('attach', 'Attach a skill to an agent', {
-    usage: '/skill attach <agent> <skill>',
-    children: [
-      placeholderNode('<agent>', 'Target agent', {
-        children: [placeholderNode('<skill>', 'Skill name')],
-      }),
-    ],
-  }),
-  literalNode('detach', 'Detach a skill from an agent', {
-    usage: '/skill detach <agent> <skill>',
-    children: [
-      placeholderNode('<agent>', 'Target agent', {
-        children: [placeholderNode('<skill>', 'Skill name')],
-      }),
-    ],
-  }),
   literalNode('show', 'Show skill documents', {
     usage: '/skill show <skill>',
     children: [placeholderNode('<skill>', 'Skill name')],
@@ -867,7 +851,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         let resp = '📋 *Session Commands*\n\n'
         resp += '`/session list` - List all sessions\n'
         resp += '`/session new` - Create new ad-hoc session\n'
-        resp += '`/session create <agent> <session> [--model <model>] [--system-prompt-files <file1,file2>]` - Create session under an existing agent\n'
+        resp += '`/session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...` - Create session under an existing agent\n'
         resp += '`/session child-model [model|default|clear|unset]` - Get/set child default model for spawned sessions\n'
         resp += '`/session fork [suffix]` - Fork current session as a child session (default suffix: `fork`)\n'
         resp += '`/session delete <sessionId>` - Delete session\n'
@@ -950,21 +934,20 @@ export const COMMANDS: Record<string, CommandDef> = {
 
         case 'create': {
           if (subArgs.length < 2) {
-            ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-files <file1,file2>]')
+            ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...')
             return
           }
 
           const agentName = subArgs[0]
           const newSessionName = subArgs[1]
           const modelFlagIndex = subArgs.indexOf('--model')
-          const systemPromptFilesFlagIndex = subArgs.indexOf('--system-prompt-files')
           let resolvedModel: string | undefined
-          let systemPromptFiles: string | undefined
+          const systemPromptFiles: string[] = []
 
           if (modelFlagIndex >= 0) {
             const requestedModel = subArgs[modelFlagIndex + 1]
             if (!requestedModel) {
-              ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-files <file1,file2>]')
+              ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...')
               return
             }
 
@@ -977,14 +960,16 @@ export const COMMANDS: Record<string, CommandDef> = {
             resolvedModel = selection.key
           }
 
-          if (systemPromptFilesFlagIndex >= 0) {
-            const configuredFiles = subArgs[systemPromptFilesFlagIndex + 1]
-            if (!configuredFiles) {
-              ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-files <file1,file2>]')
+          for (let index = 2; index < subArgs.length; index += 1) {
+            if (subArgs[index] !== '--system-prompt-file') continue
+            const configuredFile = subArgs[index + 1]
+            if (!configuredFile) {
+              ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...')
               return
             }
 
-            systemPromptFiles = configuredFiles
+            systemPromptFiles.push(configuredFile)
+            index += 1
           }
 
           try {
@@ -992,7 +977,7 @@ export const COMMANDS: Record<string, CommandDef> = {
               agentName,
               sessionName: newSessionName,
               currentNode: session?.currentNode,
-              systemPromptFiles,
+              systemPromptFiles: systemPromptFiles.length > 0 ? systemPromptFiles : undefined,
               model: sessionManager.resolveSpawnedSessionModel(session, resolvedModel),
             })
 
@@ -1501,7 +1486,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           }
           
           const entries = await fs.readdir(agentsDir, { withFileTypes: true })
-          const agents: Array<{name: string, sessionCount: number, inherit?: string, skills?: string[], isolated?: boolean, isolatedNode?: string}> = []
+          const agents: Array<{name: string, sessionCount: number, inherit?: string, isolated?: boolean, isolatedNode?: string}> = []
           
           for (const entry of entries) {
             if (entry.isDirectory()) {
@@ -1513,7 +1498,6 @@ export const COMMANDS: Record<string, CommandDef> = {
                 name: agentName,
                 sessionCount: sessions.length,
                 inherit: sessionManager.getAgentMetadata(agentName).inherit,
-                skills: sessionManager.getAgentSkills(agentName),
                 isolated: sessionManager.getAgentMetadata(agentName).isolated,
                 isolatedNode: sessionManager.getAgentIsolationNode(agentName),
               })
@@ -1536,9 +1520,6 @@ export const COMMANDS: Record<string, CommandDef> = {
             }
             if (agent.isolated) {
               resp += ` - isolated${agent.isolatedNode ? ` on \`${agent.isolatedNode}\`` : ''}`
-            }
-            if (agent.skills && agent.skills.length > 0) {
-              resp += ` - skills: ${agent.skills.map(skill => `\`${skill}\``).join(', ')}`
             }
             resp += '\n'
           }
@@ -1693,7 +1674,7 @@ export const COMMANDS: Record<string, CommandDef> = {
   },
 
   '/skill': {
-    description: 'Manage skills: list, attach, detach, show',
+    description: 'Manage skills: list visible skills or show full skill documents',
     requiresSession: false,
     autocomplete: { children: SKILL_AUTOCOMPLETE },
     handler: async (ctx, args, _sessionId, session) => {
@@ -1704,8 +1685,6 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (!subcommand) {
         let resp = '🧩 *Skill Commands*\n\n'
         resp += '`/skill list` - List available skills\n'
-        resp += '`/skill attach <agent> <skill>` - Attach a skill to an agent\n'
-        resp += '`/skill detach <agent> <skill>` - Detach a skill from an agent\n'
         resp += '`/skill show <skill>` - Show skill documents\n'
         ctx.reply(resp)
         return
@@ -1735,57 +1714,9 @@ export const COMMANDS: Record<string, CommandDef> = {
           break
         }
 
-        case 'attach': {
-          if (subArgs.length < 2) {
-            ctx.reply('Usage: /skill attach <agent> <skill>')
-            return
-          }
-
-          const agentName = subArgs[0]
-          const skillName = subArgs[1]
-
-          try {
-            const result = await sessionManager.attachAgentSkill(agentName, skillName)
-            let resp = result.changed
-              ? `✅ Skill \`${skillName}\` attached to agent \`${agentName}\`.`
-              : `ℹ️ Agent \`${agentName}\` already has skill \`${skillName}\`.`
-            resp += result.skills.length > 0
-              ? `\nSkills: ${result.skills.map(skill => `\`${skill}\``).join(', ')}`
-              : '\nSkills: (none)'
-            if (result.affectedSessions.length > 0) {
-              resp += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`
-            }
-            ctx.reply(resp)
-          } catch (e: any) {
-            ctx.reply(`❌ Skill attach failed: ${e.message}`)
-          }
-          break
-        }
-
+        case 'attach':
         case 'detach': {
-          if (subArgs.length < 2) {
-            ctx.reply('Usage: /skill detach <agent> <skill>')
-            return
-          }
-
-          const agentName = subArgs[0]
-          const skillName = subArgs[1]
-
-          try {
-            const result = await sessionManager.detachAgentSkill(agentName, skillName)
-            let resp = result.changed
-              ? `✅ Skill \`${skillName}\` detached from agent \`${agentName}\`.`
-              : `ℹ️ Agent \`${agentName}\` does not have skill \`${skillName}\`.`
-            resp += result.skills.length > 0
-              ? `\nSkills: ${result.skills.map(skill => `\`${skill}\``).join(', ')}`
-              : '\nSkills: (none)'
-            if (result.affectedSessions.length > 0) {
-              resp += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`
-            }
-            ctx.reply(resp)
-          } catch (e: any) {
-            ctx.reply(`❌ Skill detach failed: ${e.message}`)
-          }
+          ctx.reply('❌ Skill attach/detach is no longer supported. Visible skills are cataloged automatically in session snapshots; use `/skill show <skill>` or the `load_skill` tool to load full instructions on demand.')
           break
         }
 

@@ -363,6 +363,7 @@ export async function getSession(sessionId: string): Promise<Session> {
       session.agent = 'main';
     }
   }
+  session.systemPromptFiles = llm.normalizeSystemPromptFiles(session.systemPromptFiles);
   if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
     agentName: session.agent,
     systemPromptFiles: session.systemPromptFiles,
@@ -509,10 +510,6 @@ export async function setAgentMetadata(agentName: string, meta: sessionAgentMeta
   await sessionAgentMetadata.setAgentMetadata(agentName, meta);
 }
 
-export function getAgentSkills(agentName: string): string[] {
-  return sessionAgentMetadata.getAgentSkills(agentName);
-}
-
 export async function refreshSessionSnapshot(sessionId: string): Promise<{ sessionId: string; agentName: string }> {
   return sessionAgentMetadata.refreshSessionSnapshot(getAgentMetadataDeps(), sessionId);
 }
@@ -527,14 +524,6 @@ export async function setAgentInherit(agentName: string, inheritAgentName?: stri
 
 export async function setAgentIsolation(agentName: string, isolatedNode?: string): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
   return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, isolatedNode);
-}
-
-export async function attachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
-  return sessionAgentMetadata.attachAgentSkill(getAgentMetadataDeps(), agentName, skillName);
-}
-
-export async function detachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
-  return sessionAgentMetadata.detachAgentSkill(getAgentMetadataDeps(), agentName, skillName);
 }
 
 export async function createAgentWithMainSession(options: {
@@ -585,7 +574,7 @@ export async function createSessionInAgent(options: {
   currentNode?: string;
   model?: string;
   parentSessionId?: string;
-  systemPromptFiles?: string;
+  systemPromptFiles?: string[];
 }): Promise<{ sessionId: string }> {
   return sessionAgentOps.createSessionInAgent(options, getSessionAgentOpsDeps());
 }
@@ -756,7 +745,7 @@ export async function ensureSubconsciousSession(primarySessionId: string): Promi
     id: requestedSessionId,
     agent: agentName,
     history: [],
-    systemPromptFiles: primarySession.systemPromptFiles,
+    systemPromptFiles: primarySession.systemPromptFiles ? [...primarySession.systemPromptFiles] : undefined,
     persistentMemorySnapshot: snapshot,
     stats: {
       totalCachedTokens: 0,
@@ -904,7 +893,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   const forkedSession: Session = {
     id: newSessionId,
     history: structuredClone(sourceSession.history),
-    systemPromptFiles: sourceSession.systemPromptFiles,
+    systemPromptFiles: sourceSession.systemPromptFiles ? [...sourceSession.systemPromptFiles] : undefined,
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
     stats: {
       totalCachedTokens: 0,
@@ -1064,7 +1053,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
       id: childSessionId,
       agent: agentName,
       history: [],
-      systemPromptFiles: parentSession.systemPromptFiles,
+      systemPromptFiles: parentSession.systemPromptFiles ? [...parentSession.systemPromptFiles] : undefined,
       persistentMemorySnapshot: snapshot,
       stats: {
         totalCachedTokens: 0,
@@ -1235,6 +1224,7 @@ export async function loadSessions(): Promise<void> {
         busy: false,
         meta: { lastMessageTime: Date.now() },
         ...metadata,
+        systemPromptFiles: llm.normalizeSystemPromptFiles((metadata as any).systemPromptFiles),
         history: [], // Empty, will be loaded when getSession is called
         queue: metadata.queue || [],
       };
