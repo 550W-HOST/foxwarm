@@ -1,4 +1,5 @@
 import axios, { AxiosResponse } from 'axios';
+import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { StringDecoder } from 'string_decoder';
@@ -82,7 +83,8 @@ export function isAbortError(error: any): boolean {
 }
 
 function getPromptCacheKey(session: Session): string {
-    return `${session.id || 'default'}`;
+    const sessionId = session.id || 'default';
+    return crypto.createHash('md5').update(`session_${sessionId}`).digest('hex');
 }
 
 function isOpenAIReasoningModel(modelName: string): boolean {
