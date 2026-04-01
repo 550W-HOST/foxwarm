@@ -229,7 +229,7 @@ function resolveSystemPromptFilePath(agentName: string, fileReference: string): 
         return path.resolve(expandedPath);
     }
 
-    return path.resolve(getAgentMemoryDir(agentName), expandedPath);
+    return path.resolve(getAgentDir(agentName), expandedPath);
 }
 
 async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[]): Promise<string> {

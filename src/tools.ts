@@ -1753,7 +1753,7 @@ export const definitions = [
                     systemPromptFiles: {
                         type: 'array',
                         description: 'Optional file list for composing the memory-file portion of the new session snapshot. When set, only these files are used as memory sources, while other system injections remain.',
-                        items: { type: 'string', description: 'A file path. Relative paths resolve from the agent memory directory; absolute and ~/ paths are also accepted.' }
+                        items: { type: 'string', description: 'A file path. Relative paths resolve from the agent directory; absolute and ~/ paths are also accepted.' }
                     }
                 },
                 required: ['agentName', 'sessionName']

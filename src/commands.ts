@@ -93,7 +93,7 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
               children: [placeholderNode('<model>', 'Model key or partial model name')],
             }),
             literalNode('--system-prompt-file', 'Add one file to the new session memory-source list', {
-              children: [placeholderNode('<path>', 'Memory-relative, absolute, or ~/ file path')],
+              children: [placeholderNode('<path>', 'Agent-relative, absolute, or ~/ file path')],
             }),
           ],
         })],

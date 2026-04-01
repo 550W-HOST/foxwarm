@@ -37,12 +37,17 @@ test('systemPromptFiles uses string[] and only overrides memory-file sources whi
   const memoryDir = getAgentMemoryDir(agentName);
   const skillName = 'catalog-test-skill';
   const externalFile = path.join('/tmp', `${makeId('system_prompt_external')}.md`);
+  const relativePromptDir = path.join(agentDir, 'skill-prompts');
+  const relativePromptFile = path.join(relativePromptDir, 'custom-prompt.md');
+  const relativePromptRef = path.join('skill-prompts', 'custom-prompt.md');
 
   await fs.ensureDir(memoryDir);
+  await fs.ensureDir(relativePromptDir);
   await fs.writeFile(path.join(memoryDir, 'MEMORY.md'), '# Memory A\nAlpha\n', 'utf8');
   await fs.writeFile(path.join(memoryDir, 'SOUL.md'), '# Memory B\nBeta\n', 'utf8');
   await fs.writeFile(path.join(memoryDir, 'EXTRA.md'), '# Extra\nGamma\n', 'utf8');
   await fs.writeFile(externalFile, '# External\nOutside\n', 'utf8');
+  await fs.writeFile(relativePromptFile, '# Relative Prompt\nRelative agent-dir file\n', 'utf8');
 
   const skillDir = path.join(agentDir, 'skills', skillName);
   await fs.ensureDir(skillDir);
@@ -55,21 +60,22 @@ test('systemPromptFiles uses string[] and only overrides memory-file sources whi
     await tool_create_session({
       agentName,
       sessionName: customSessionName,
-      systemPromptFiles: ['MEMORY.md', externalFile],
+      systemPromptFiles: [relativePromptRef, externalFile],
     }, { sessionId: parentSessionId, session: parent });
 
     const defaultSession = await sessionManager.getSession(defaultSessionId);
     const customSession = await sessionManager.getSession(customSessionId);
 
     assert.equal(defaultSession.systemPromptFiles, undefined);
-    assert.deepEqual(customSession.systemPromptFiles, ['MEMORY.md', externalFile]);
+    assert.deepEqual(customSession.systemPromptFiles, [relativePromptRef, externalFile]);
 
     assert.match(defaultSession.persistentMemorySnapshot, /Alpha/);
     assert.match(defaultSession.persistentMemorySnapshot, /Beta/);
     assert.match(defaultSession.persistentMemorySnapshot, /Gamma/);
 
-    assert.match(customSession.persistentMemorySnapshot, /Alpha/);
+    assert.match(customSession.persistentMemorySnapshot, /Relative agent-dir file/);
     assert.match(customSession.persistentMemorySnapshot, /Outside/);
+    assert.doesNotMatch(customSession.persistentMemorySnapshot, /Alpha/);
     assert.doesNotMatch(customSession.persistentMemorySnapshot, /Beta/);
     assert.doesNotMatch(customSession.persistentMemorySnapshot, /Gamma/);
     assert.match(customSession.persistentMemorySnapshot, /<available_skills>/);
@@ -79,16 +85,16 @@ test('systemPromptFiles uses string[] and only overrides memory-file sources whi
     assert.match(customSession.persistentMemorySnapshot, /--- DIRECTORIES ---/);
 
     const sessionsIndex = await fs.readJson(SESSIONS_FILE);
-    assert.deepEqual(sessionsIndex.sessions?.[customSessionId]?.systemPromptFiles, ['MEMORY.md', externalFile]);
+    assert.deepEqual(sessionsIndex.sessions?.[customSessionId]?.systemPromptFiles, [relativePromptRef, externalFile]);
 
     const customHistoryFile = path.join(path.dirname(SESSIONS_FILE), 'sessions', `${customSessionId}.json`);
     const customHistoryPayload = await fs.readJson(customHistoryFile);
-    assert.deepEqual(customHistoryPayload.systemPromptFiles, ['MEMORY.md', externalFile]);
+    assert.deepEqual(customHistoryPayload.systemPromptFiles, [relativePromptRef, externalFile]);
 
-    await fs.writeFile(externalFile, '# External\nOutside updated\n', 'utf8');
+    await fs.writeFile(relativePromptFile, '# Relative Prompt\nRelative agent-dir file updated\n', 'utf8');
     await sessionManager.refreshSessionSnapshot(customSessionId);
     const refreshedCustomSession = await sessionManager.getSession(customSessionId);
-    assert.match(refreshedCustomSession.persistentMemorySnapshot, /Outside updated/);
+    assert.match(refreshedCustomSession.persistentMemorySnapshot, /Relative agent-dir file updated/);
     assert.match(refreshedCustomSession.persistentMemorySnapshot, /<available_skills>/);
   } finally {
     for (const sessionId of [defaultSessionId, customSessionId, parentSessionId]) {
@@ -111,9 +117,14 @@ test('isolated agent sessions reject out-of-agent custom systemPromptFiles but a
   const agentDir = getAgentDir(agentName);
   const memoryDir = getAgentMemoryDir(agentName);
   const outsideFile = path.join('/tmp', `${makeId('isolated_outside')}.md`);
+  const insideRelativeDir = path.join(agentDir, 'skill-prompts');
+  const insideRelativeFile = path.join(insideRelativeDir, 'inside.md');
+  const insideRelativeRef = path.join('skill-prompts', 'inside.md');
 
   await fs.ensureDir(memoryDir);
+  await fs.ensureDir(insideRelativeDir);
   await fs.writeFile(path.join(memoryDir, 'MEMORY.md'), '# Isolated\nInside allowed\n', 'utf8');
+  await fs.writeFile(insideRelativeFile, '# In Agent Dir\nInside relative allowed\n', 'utf8');
   await fs.writeFile(outsideFile, '# Outside\nForbidden\n', 'utf8');
   await sessionManager.setAgentIsolation(agentName, 'sandbox-node');
 
@@ -132,12 +143,12 @@ test('isolated agent sessions reject out-of-agent custom systemPromptFiles but a
     await tool_create_session({
       agentName,
       sessionName: allowedSessionName,
-      systemPromptFiles: ['MEMORY.md'],
+      systemPromptFiles: [insideRelativeRef],
     }, { sessionId: parentSessionId, session: parent });
 
     const allowedSession = await sessionManager.getSession(allowedSessionId);
-    assert.deepEqual(allowedSession.systemPromptFiles, ['MEMORY.md']);
-    assert.match(allowedSession.persistentMemorySnapshot, /Inside allowed/);
+    assert.deepEqual(allowedSession.systemPromptFiles, [insideRelativeRef]);
+    assert.match(allowedSession.persistentMemorySnapshot, /Inside relative allowed/);
     assert.doesNotMatch(allowedSession.persistentMemorySnapshot, /Forbidden/);
   } finally {
     await sessionManager.deleteSession(allowedSessionId).catch(() => {});
