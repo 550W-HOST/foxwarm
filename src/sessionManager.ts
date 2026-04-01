@@ -363,7 +363,10 @@ export async function getSession(sessionId: string): Promise<Session> {
       session.agent = 'main';
     }
   }
-  if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent);
+  if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
+    agentName: session.agent,
+    systemPromptFiles: session.systemPromptFiles,
+  });
   if (!session.stats) session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
   if (session.stats.totalCachedTokens === null) session.stats.totalCachedTokens = 0;
   if (!session.queue) session.queue = [];
@@ -582,6 +585,7 @@ export async function createSessionInAgent(options: {
   currentNode?: string;
   model?: string;
   parentSessionId?: string;
+  systemPromptFiles?: string;
 }): Promise<{ sessionId: string }> {
   return sessionAgentOps.createSessionInAgent(options, getSessionAgentOpsDeps());
 }
@@ -744,11 +748,15 @@ export async function ensureSubconsciousSession(primarySessionId: string): Promi
   }
 
   const agentName = primarySession.agent || 'main';
-  const snapshot = await llm.getPersistentMemory(agentName);
+  const snapshot = await llm.buildSessionSystemPromptSnapshot({
+    agentName,
+    systemPromptFiles: primarySession.systemPromptFiles,
+  });
   const sideSession: Session = {
     id: requestedSessionId,
     agent: agentName,
     history: [],
+    systemPromptFiles: primarySession.systemPromptFiles,
     persistentMemorySnapshot: snapshot,
     stats: {
       totalCachedTokens: 0,
@@ -896,6 +904,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   const forkedSession: Session = {
     id: newSessionId,
     history: structuredClone(sourceSession.history),
+    systemPromptFiles: sourceSession.systemPromptFiles,
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
     stats: {
       totalCachedTokens: 0,
@@ -1047,11 +1056,15 @@ export async function createChildSession(parentSessionId: string, suffix: string
     const childSessionId = `${parentSessionId}_${suffix}`;
 
     const agentName = parentSession.agent || 'main';
-    const snapshot = await llm.getPersistentMemory(agentName);
+    const snapshot = await llm.buildSessionSystemPromptSnapshot({
+      agentName,
+      systemPromptFiles: parentSession.systemPromptFiles,
+    });
     const newSession: Session = {
       id: childSessionId,
       agent: agentName,
       history: [],
+      systemPromptFiles: parentSession.systemPromptFiles,
       persistentMemorySnapshot: snapshot,
       stats: {
         totalCachedTokens: 0,

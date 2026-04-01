@@ -129,6 +129,7 @@ export interface Session {
   agent?: string; // Agent name (default: 'main')
   aliases?: string[]; // Alternative session IDs that resolve to this session
   history: Message[];
+  systemPromptFiles?: string; // Optional memory-relative file list overriding the default snapshot composition
   persistentMemorySnapshot: string;
   stats: SessionStats;
   busy: boolean;

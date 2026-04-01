@@ -593,7 +593,10 @@ async function finalizeCompaction(
   replacedItemCount: number,
 ): Promise<void> {
   session.contextFrontier = newFrontier;
-  session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
+  session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
+    agentName: session.agent || 'main',
+    systemPromptFiles: session.systemPromptFiles,
+  });
   session.history = await renderHistoryFromFrontier(session, newFrontier);
 
   const completionMessage: Message = {

@@ -84,13 +84,16 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   }),
   literalNode('new', 'Create a new ad-hoc session'),
   literalNode('create', 'Create a session under an existing agent', {
-    usage: '/session create <agent> <session> [--model <model>]',
+    usage: '/session create <agent> <session> [--model <model>] [--system-prompt-files <file1,file2>]',
     children: [
       placeholderNode('<agent>', 'Existing agent name', {
         children: [placeholderNode('<session>', 'New session name', {
           children: [
             literalNode('--model', 'Explicit model for the new session', {
               children: [placeholderNode('<model>', 'Model key or partial model name')],
+            }),
+            literalNode('--system-prompt-files', 'Comma-separated memory-relative file list for the new session snapshot', {
+              children: [placeholderNode('<file1,file2>', 'Memory-relative files such as MEMORY.md,SOUL.md')],
             }),
           ],
         })],
@@ -864,7 +867,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         let resp = '📋 *Session Commands*\n\n'
         resp += '`/session list` - List all sessions\n'
         resp += '`/session new` - Create new ad-hoc session\n'
-        resp += '`/session create <agent> <session> [--model <model>]` - Create session under an existing agent\n'
+        resp += '`/session create <agent> <session> [--model <model>] [--system-prompt-files <file1,file2>]` - Create session under an existing agent\n'
         resp += '`/session child-model [model|default|clear|unset]` - Get/set child default model for spawned sessions\n'
         resp += '`/session fork [suffix]` - Fork current session as a child session (default suffix: `fork`)\n'
         resp += '`/session delete <sessionId>` - Delete session\n'
@@ -947,19 +950,21 @@ export const COMMANDS: Record<string, CommandDef> = {
 
         case 'create': {
           if (subArgs.length < 2) {
-            ctx.reply('Usage: /session create <agent> <session> [--model <model>]')
+            ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-files <file1,file2>]')
             return
           }
 
           const agentName = subArgs[0]
           const newSessionName = subArgs[1]
           const modelFlagIndex = subArgs.indexOf('--model')
+          const systemPromptFilesFlagIndex = subArgs.indexOf('--system-prompt-files')
           let resolvedModel: string | undefined
+          let systemPromptFiles: string | undefined
 
           if (modelFlagIndex >= 0) {
             const requestedModel = subArgs[modelFlagIndex + 1]
             if (!requestedModel) {
-              ctx.reply('Usage: /session create <agent> <session> [--model <model>]')
+              ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-files <file1,file2>]')
               return
             }
 
@@ -972,11 +977,22 @@ export const COMMANDS: Record<string, CommandDef> = {
             resolvedModel = selection.key
           }
 
+          if (systemPromptFilesFlagIndex >= 0) {
+            const configuredFiles = subArgs[systemPromptFilesFlagIndex + 1]
+            if (!configuredFiles) {
+              ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-files <file1,file2>]')
+              return
+            }
+
+            systemPromptFiles = configuredFiles
+          }
+
           try {
             const result = await sessionManager.createSessionInAgent({
               agentName,
               sessionName: newSessionName,
               currentNode: session?.currentNode,
+              systemPromptFiles,
               model: sessionManager.resolveSpawnedSessionModel(session, resolvedModel),
             })
 

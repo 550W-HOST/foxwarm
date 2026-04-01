@@ -5,6 +5,13 @@ import { AGENTS_FILE, getAgentDir } from '../config';
 import { getSkillInfo, validateSkillName } from '../skills';
 import { Session } from '../types';
 
+function getSessionSystemPromptOptions(session: Session): { agentName: string; systemPromptFiles?: string } {
+  return {
+    agentName: session.agent || 'main',
+    systemPromptFiles: session.systemPromptFiles,
+  };
+}
+
 export interface AgentMetadata {
   isolated?: boolean;
   isolatedNode?: string;
@@ -83,7 +90,7 @@ async function refreshDirectAgentSessions(deps: AgentMetadataDeps, agentName: st
     if (sessionAgent !== agentName) continue;
 
     const session = await deps.getSession(sessionId);
-    session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
+    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
     await deps.saveSession(sessionId);
     affectedSessions.push(sessionId);
   }
@@ -143,7 +150,7 @@ export async function refreshSessionSnapshot(deps: AgentMetadataDeps, sessionId:
   }
 
   const agentName = session.agent || 'main';
-  session.persistentMemorySnapshot = await llm.getPersistentMemory(agentName);
+  session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
   await deps.saveSession(session.id);
 
   return { sessionId: session.id, agentName };
@@ -209,7 +216,7 @@ export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string
     if (!getAgentInheritanceChain(sessionAgent).includes(agentName)) continue;
 
     const session = await deps.getSession(sessionId);
-    session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
+    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
     await deps.saveSession(sessionId);
     affectedSessions.push(sessionId);
   }

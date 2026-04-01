@@ -155,6 +155,7 @@ export async function createSessionInAgent(options: {
   currentNode?: string;
   model?: string;
   parentSessionId?: string;
+  systemPromptFiles?: string;
 }, deps: SessionAgentOpsDeps): Promise<{ sessionId: string }> {
   const {
     agentName,
@@ -163,6 +164,7 @@ export async function createSessionInAgent(options: {
     currentNode,
     model,
     parentSessionId,
+    systemPromptFiles,
   } = options;
 
   validateAgentName(agentName);
@@ -182,12 +184,13 @@ export async function createSessionInAgent(options: {
     ? agentMeta.isolatedNode.trim()
     : undefined;
 
-  const snapshot = await llm.getPersistentMemory(agentName);
+  const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, systemPromptFiles });
   await deps.createSession(sessionId, {
     id: sessionId,
     agent: agentName,
     displayName,
     history: [],
+    systemPromptFiles,
     persistentMemorySnapshot: snapshot,
     stats: {
       totalCachedTokens: 0,
@@ -295,7 +298,7 @@ export async function createAgentWithMainSession(options: {
     };
   }
 
-  const snapshot = await llm.getPersistentMemory(agentName);
+  const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName });
   await deps.createSession(mainSessionId, {
     id: mainSessionId,
     agent: agentName,

@@ -1777,7 +1777,8 @@ export const definitions = [
                     sessionName: { type: 'string', description: 'Session name without agent prefix (cannot contain /).' },
                     displayName: { type: 'string', description: 'Optional display name for the new session.' },
                     parentSessionId: { type: 'string', description: 'Optional parent session ID.' },
-                    model: { type: 'string', description: 'Optional explicit model key for the new session. When omitted, the current session child-default model behavior is used.' }
+                    model: { type: 'string', description: 'Optional explicit model key for the new session. When omitted, the current session child-default model behavior is used.' },
+                    systemPromptFiles: { type: 'string', description: 'Optional memory-relative file list for composing the new session snapshot. When set, the snapshot is built only from these listed files instead of the default agent memory/inherit/skills chain.' }
                 },
                 required: ['agentName', 'sessionName']
             }

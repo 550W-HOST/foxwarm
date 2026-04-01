@@ -7,6 +7,7 @@ import { SESSIONS_DIR, SESSIONS_FILE } from '../config';
 const SESSION_HISTORY_STATE_FIELDS = [
   'queue',
   'parentSessionId',
+  'systemPromptFiles',
   'indexingState',
   'historyVersion',
   'displayName',
@@ -29,6 +30,7 @@ const SESSION_METADATA_FIELDS = [
   'id',
   'agent',
   'aliases',
+  'systemPromptFiles',
   'stats',
   'busy',
   'busyStartedAt',

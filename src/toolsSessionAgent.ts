@@ -1156,6 +1156,9 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_session');
   const { agentName, sessionName, displayName, parentSessionId } = args;
   const requestedModel = normalizeToolModelKey(args.model);
+  const systemPromptFiles = typeof args.systemPromptFiles === 'string' && args.systemPromptFiles.trim()
+    ? args.systemPromptFiles.trim()
+    : undefined;
 
   if (!agentName || typeof agentName !== 'string') {
     throw new Error('agentName is required');
@@ -1169,6 +1172,7 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     sessionName,
     displayName,
     parentSessionId,
+    systemPromptFiles,
     currentNode: ctx.session?.currentNode,
     model: sessionManager.resolveSpawnedSessionModel(ctx.session, requestedModel),
   });
@@ -1179,6 +1183,9 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   }
   if (parentSessionId) {
     message += `\nParent session: ${parentSessionId}`;
+  }
+  if (systemPromptFiles) {
+    message += `\nSystem prompt files: ${systemPromptFiles}`;
   }
   const createdSession = await sessionManager.getSession(result.sessionId);
   const { currentKey } = resolveModelConfig(createdSession.model);
