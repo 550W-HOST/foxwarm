@@ -1,6 +1,7 @@
 import { ToolDefinition } from '../types';
 
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
+export const COMPACT_FLOW_MAX_ROUNDS = 10;
 const DEFAULT_PREVIEW_CHAR_LIMIT = 80;
 const COMPACT_FLOW_MEMORY_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -50,6 +51,17 @@ const COMPACT_FLOW_MEMORY_TOOL_DEFINITIONS: ToolDefinition[] = [
         filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
       },
       required: ['filePath'],
+    },
+  },
+  {
+    name: 'apply_patch_memory',
+    description: 'Apply an apply_patch-style patch only within the current agent memory/ directory while compacting. Use memory-relative paths in patch headers.',
+    parameters: {
+      type: 'object',
+      properties: {
+        input: { type: 'string', description: 'The apply_patch command text to execute against files under the current agent memory/ directory.' },
+      },
+      required: ['input'],
     },
   },
   {
@@ -225,9 +237,10 @@ export function buildCompactPromptText(options: {
     '- Prefer current state plus what remains over conversational narration.',
     '- Mention when an earlier plan or decision was superseded by a later one if that matters for future work.',
     '- Drop filler, repetition, resolved low-value process chatter, and tool-internal mechanics unless they matter to continue safely.',
-    '- If durable project/user/workflow facts should outlive this session, you may use read_memory/write_memory/edit_memory/delete_memory before submitting the final plan.',
+    `- You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including helper-tool rounds and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,
+    '- If durable project/user/workflow facts should outlive this session, you may use read_memory/write_memory/edit_memory/delete_memory/apply_patch_memory before submitting the final plan.',
     '- If you need more detail from compacted history, use get_context_archive, get_archived_messages, or get_archived_blocks.',
-    `- You may use only these helper tools during compaction: read_memory, write_memory, edit_memory, delete_memory, get_context_archive, get_archived_messages, get_archived_blocks, and ${COMPACT_PLAN_TOOL_NAME}.`,
+    `- You may use only these helper tools during compaction: read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, get_context_archive, get_archived_messages, get_archived_blocks, and ${COMPACT_PLAN_TOOL_NAME}.`,
     '',
     ...(guidance ? ['Additional requester guidance:', guidance, ''] : []),
     'Older compaction candidates:',
@@ -409,7 +422,7 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
     'COMPACT PLAN INVALID.',
     error.message,
     `Attempts remaining after this feedback: ${attemptsRemaining}.`,
-    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory/write_memory/edit_memory/delete_memory/get_context_archive/get_archived_messages/get_archived_blocks if you truly need them.`,
+    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, get_context_archive, get_archived_messages, and get_archived_blocks if you truly need them.`,
   ].join(' ');
 }
 

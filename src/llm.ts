@@ -726,6 +726,8 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             argStr = call.args.command;
         } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
             argStr = call.args.filePath;
+        } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
+            argStr = typeof call.args.input === 'string' ? call.args.input : '';
         } else if (call.name === 'read' || call.name === 'read_memory') {
             const { filePath, startLine, endLine } = call.args;
             argStr = filePath + (startLine ? ` (lines ${startLine}-${endLine})` : '');
@@ -776,7 +778,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const masterOnlyTools = [
             'remote_node', 'list_nodes', 'node_tools',
             'search_memory', 'get_memory_context',
-            'read_memory', 'write_memory', 'edit_memory', 'delete_memory',
+            'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
             'copy_between_nodes',
             'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
             'list_sessions', 'list_agents', 'list_skills', 'load_skill',

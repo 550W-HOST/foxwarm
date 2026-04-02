@@ -10,6 +10,7 @@ import {
   buildCompactFlowToolDefinitions,
   buildCompactPromptText,
   buildMessageCandidateItem,
+  COMPACT_FLOW_MAX_ROUNDS,
   COMPACT_PLAN_TOOL_NAME,
   CompactCandidateItem,
   CompactPlan,
@@ -667,21 +668,27 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   const maxCompactAttempts = 3;
   let nextPromptParts: MessagePart[] | null = [summaryPrompt];
   let compactPlan: CompactPlan | null = null;
-  let compactHelperRounds = 0;
+  let compactRoundsUsed = 0;
+  let invalidCompactPlanAttempts = 0;
   const compactToolDefinitions = buildCompactFlowToolDefinitions();
   const compactHelperToolNames = new Set([
     'read_memory',
     'write_memory',
     'edit_memory',
     'delete_memory',
+    'apply_patch_memory',
     'get_archived_messages',
     'get_archived_blocks',
     'get_context_archive',
   ]);
-  const maxCompactHelperRounds = 6;
 
-  for (let attempt = 1; attempt <= maxCompactAttempts; attempt += 1) {
-    const result = await llm.chat(nextPromptParts, transientSession, attempt - 1, {
+  while (invalidCompactPlanAttempts < maxCompactAttempts) {
+    if (compactRoundsUsed >= COMPACT_FLOW_MAX_ROUNDS) {
+      throw new Error(`Compaction failed because it exceeded ${COMPACT_FLOW_MAX_ROUNDS} compact-phase round(s) without producing a valid ${COMPACT_PLAN_TOOL_NAME}.`);
+    }
+
+    compactRoundsUsed += 1;
+    const result = await llm.chat(nextPromptParts, transientSession, invalidCompactPlanAttempts, {
       toolDefinitions: compactToolDefinitions,
       appendMessage: async (message) => {
         await appendTransientSessionMessage(transientSession, message);
@@ -701,9 +708,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       if (invalidToolName) {
         throw new Error(`Compaction failed because the model called unexpected tool \`${invalidToolName}\` instead of finishing with ${COMPACT_PLAN_TOOL_NAME}.`);
       }
-      if (compactHelperRounds >= maxCompactHelperRounds) {
-        throw new Error(`Compaction failed because helper tool usage exceeded ${maxCompactHelperRounds} round(s) without producing ${COMPACT_PLAN_TOOL_NAME}.`);
-      }
 
       const toolResultMessage = await llm.executeTools(result.toolCalls, {
         sessionId,
@@ -718,8 +722,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
         parts: toolResultMessage.parts,
       });
       nextPromptParts = null;
-      compactHelperRounds += 1;
-      attempt -= 1;
       continue;
     }
 
@@ -731,12 +733,13 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
         throw e;
       }
 
-      const attemptsRemaining = maxCompactAttempts - attempt;
+      invalidCompactPlanAttempts += 1;
+      const attemptsRemaining = maxCompactAttempts - invalidCompactPlanAttempts;
       if (attemptsRemaining <= 0) {
         throw new Error(`Compaction failed after ${maxCompactAttempts} invalid ${COMPACT_PLAN_TOOL_NAME} submissions: ${e.message}`);
       }
 
-      logger.warn({ sessionId, attempt, attemptsRemaining, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
+      logger.warn({ sessionId, invalidCompactPlanAttempts, attemptsRemaining, compactRoundsUsed, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
       nextPromptParts = [{
         system: buildCompactPlanValidationFeedback(e, attemptsRemaining),
       }];

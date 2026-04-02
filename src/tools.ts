@@ -319,6 +319,47 @@ async function tool_delete_memory(args: ToolArgs, ctx: ToolContext) {
     return `Deleted memory file \`${relativePath}\``;
 }
 
+async function applyPatchOperations(input: string, resolveOperationPath: (filePath: string) => {
+    fullPath: string;
+    displayPath: string;
+}): Promise<string> {
+    const operations = parseApplyPatchInput(input);
+    const summaries: string[] = [];
+
+    for (const operation of operations) {
+        const { fullPath, displayPath } = resolveOperationPath(operation.filePath);
+
+        if (operation.action === 'update') {
+            if (!await fs.pathExists(fullPath)) {
+                throw new Error(`Cannot update missing file: ${displayPath}`);
+            }
+            const content = await fs.readFile(fullPath, 'utf8');
+            const updatedContent = applyUpdatePatch(content, operation.lines, displayPath);
+            await fs.writeFile(fullPath, updatedContent);
+            summaries.push(`Updated ${displayPath}`);
+            continue;
+        }
+
+        if (operation.action === 'add') {
+            if (await fs.pathExists(fullPath)) {
+                throw new Error(`Cannot add file that already exists: ${displayPath}`);
+            }
+            await fs.ensureDir(path.dirname(fullPath));
+            await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
+            summaries.push(`Added ${displayPath}`);
+            continue;
+        }
+
+        if (!await fs.pathExists(fullPath)) {
+            throw new Error(`Cannot delete missing file: ${displayPath}`);
+        }
+        await fs.remove(fullPath);
+        summaries.push(`Deleted ${displayPath}`);
+    }
+
+    return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;
+}
+
 async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
     const { input } = args;
 
@@ -327,44 +368,30 @@ async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
     }
 
     const agentName = ctx.session?.agent || 'main';
-    const operations = parseApplyPatchInput(input);
-    const summaries: string[] = [];
-
-    for (const operation of operations) {
-        const fullPath = resolveAgentPath(operation.filePath, agentName, ctx.session?.cwd);
+    return applyPatchOperations(input, (filePath) => {
+        const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
         if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
             checkPathAccess(fullPath, agentName);
         }
+        return {
+            fullPath,
+            displayPath: filePath,
+        };
+    });
+}
 
-        if (operation.action === 'update') {
-            if (!await fs.pathExists(fullPath)) {
-                throw new Error(`Cannot update missing file: ${operation.filePath}`);
-            }
-            const content = await fs.readFile(fullPath, 'utf8');
-            const updatedContent = applyUpdatePatch(content, operation.lines, operation.filePath);
-            await fs.writeFile(fullPath, updatedContent);
-            summaries.push(`Updated ${operation.filePath}`);
-            continue;
-        }
+async function tool_apply_patch_memory(args: ToolArgs, ctx: ToolContext) {
+    const { input } = args;
 
-        if (operation.action === 'add') {
-            if (await fs.pathExists(fullPath)) {
-                throw new Error(`Cannot add file that already exists: ${operation.filePath}`);
-            }
-            await fs.ensureDir(path.dirname(fullPath));
-            await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
-            summaries.push(`Added ${operation.filePath}`);
-            continue;
-        }
-
-        if (!await fs.pathExists(fullPath)) {
-            throw new Error(`Cannot delete missing file: ${operation.filePath}`);
-        }
-        await fs.remove(fullPath);
-        summaries.push(`Deleted ${operation.filePath}`);
+    if (!input || typeof input !== 'string') {
+        throw new Error('apply_patch_memory requires input string.');
     }
 
-    return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;
+    const agentName = ctx.session?.agent || 'main';
+    return applyPatchOperations(input, (filePath) => ({
+        fullPath: resolveAgentMemoryPath(filePath, agentName),
+        displayPath: normalizeMemoryRelativePath(filePath),
+    }));
 }
 
 type ListFilesEntry = {
@@ -954,6 +981,7 @@ export const read_memory = tool_read_memory;
 export const write_memory = tool_write_memory;
 export const edit_memory = tool_edit_memory;
 export const delete_memory = tool_delete_memory;
+export const apply_patch_memory = tool_apply_patch_memory;
 export const apply_patch = tool_apply_patch;
 export const list_files = tool_list_files;
 export const delete_file = tool_delete_file;
@@ -1145,6 +1173,17 @@ export const definitions = [
                     filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' }
                 },
                 required: ['filePath']
+            }
+        },
+        {
+            name: 'apply_patch_memory',
+            description: 'Apply an apply_patch-style patch only within the current agent\'s memory/ directory. Pass memory-relative paths in the patch file headers; `memory/` prefixes are accepted but optional. Supports the same patch envelope and bare-patch compatibility as apply_patch.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    input: { type: 'string', description: 'The apply_patch command text to execute against files under the current agent memory/ directory.' }
+                },
+                required: ['input']
             }
         },
         {

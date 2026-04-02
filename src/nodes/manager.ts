@@ -76,6 +76,7 @@ export class NodesManager {
       'write_memory',
       'edit_memory',
       'delete_memory',
+      'apply_patch_memory',
       'apply_patch',
       'list_files',
       'delete_file',

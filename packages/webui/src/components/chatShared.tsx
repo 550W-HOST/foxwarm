@@ -455,6 +455,7 @@ const toolIcons: Record<string, LucideIcon> = {
   write: Pencil,
   edit: Pencil,
   apply_patch: Wrench,
+  apply_patch_memory: Wrench,
   exec: Terminal,
 }
 

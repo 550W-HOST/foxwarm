@@ -7,6 +7,7 @@ import { MessageRouter } from '../messageRouter';
 import * as sessionManager from '../sessionManager';
 import * as llm from '../llm';
 import * as vector from '../vector';
+import { buildCompactFlowToolDefinitions } from '../session/compactPlan';
 import { MessagePart, Session } from '../types';
 import { tool_get_archived_messages } from '../toolsSessionAgent';
 
@@ -100,6 +101,7 @@ async function main(): Promise<void> {
 
   const router = new MessageRouter();
   const createdSessionIds: string[] = [];
+  const compactToolNames = buildCompactFlowToolDefinitions().map(def => def.name);
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-tool-loop-selftest-'));
 
   try {
@@ -372,8 +374,9 @@ async function main(): Promise<void> {
         if (llmCallCount === 2) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
+          assert.match(systemText, /10 total rounds/i);
           assert.match(systemText, /M#1/);
-          assert.strictEqual(options?.toolDefinitions, undefined);
+          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), compactToolNames);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in compact prompt');
           compactMessageRange = {
@@ -395,7 +398,7 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
           assert.match(systemText, /createBlocks must contain at least one block/);
-          assert.strictEqual(options?.toolDefinitions, undefined);
+          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), compactToolNames);
           assert(compactMessageRange, 'expected compact message range to be captured from initial prompt');
           const toolCall = {
             id: 'compact-plan',
@@ -415,7 +418,8 @@ async function main(): Promise<void> {
         }
 
         if (llmCallCount === 4) {
-          assert.strictEqual(parts, null);
+          assert(Array.isArray(parts));
+          assert(parts.some(part => part.text === 'compact this session now'));
           assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
           await appendStubModelMessage(activeSession, [{ text: 'continued after compact' }]);
           return { text: 'continued after compact' };
@@ -593,7 +597,8 @@ async function main(): Promise<void> {
           compactJobCallCount += 1;
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
-          assert.strictEqual(options?.toolDefinitions, undefined);
+          assert.match(systemText, /10 total rounds/i);
+          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), compactToolNames);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in auto compact prompt');
           autoCompactMessageRange = {
@@ -629,7 +634,10 @@ async function main(): Promise<void> {
         }
 
         if (mainTurnCallCount === 2) {
-          assert.strictEqual(parts, null);
+          if (parts !== null) {
+            assert(Array.isArray(parts));
+            assert(parts.some(part => part.text === 'trigger auto compact now'));
+          }
           assert(!activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
           await appendStubModelMessage(activeSession, [{ text: 'continued before async compact commit' }]);
           return { text: 'continued before async compact commit' };

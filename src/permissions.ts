@@ -156,6 +156,7 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
     buildScopedPathToolRule(agentName, sessionId, 'write_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
     buildScopedPathToolRule(agentName, sessionId, 'edit_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
     buildScopedPathToolRule(agentName, sessionId, 'delete_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
+    buildNodeToolRule(agentName, sessionId, 'apply_patch_memory', 'master'),
     ...allowedRuntimeNodes.flatMap(targetNode => [
       buildNodeToolRule(agentName, sessionId, 'read', targetNode),
       buildNodeToolRule(agentName, sessionId, 'write', targetNode),

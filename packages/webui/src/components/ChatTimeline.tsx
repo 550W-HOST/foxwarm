@@ -359,6 +359,7 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
 }
 
 const isLegacyDiffToolName = (name: string): boolean => name === 'edit' || name === 'edit_memory'
+const isPatchToolName = (name: string): boolean => name === 'apply_patch' || name === 'apply_patch_memory'
 
 const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
@@ -392,7 +393,7 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
     )
   }
 
-  if (call.name === 'apply_patch') {
+  if (isPatchToolName(call.name)) {
     try {
       const operations = parseApplyPatchPreview(call.args.input)
       const totalHunks = operations.reduce((sum, operation) => sum + (operation.action === 'update' ? operation.hunks.length : 0), 0)
@@ -462,7 +463,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     )
   }
 
-  if (call.name === 'apply_patch') {
+  if (isPatchToolName(call.name)) {
     try {
       const operations = parseApplyPatchPreview(call.args.input)
       return (
@@ -798,7 +799,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
       )
     }
 
-    if (call.name === 'apply_patch') {
+    if (isPatchToolName(call.name)) {
       try {
         const operations = parseApplyPatchPreview(call.args.input)
         const totalHunks = operations.reduce((sum, operation) => sum + (operation.action === 'update' ? operation.hunks.length : 0), 0)
@@ -915,7 +916,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
   return (
     <div className={`text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${roundedClass} p-2 ${borderClass} relative group`}>
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        {isLegacyDiffToolName(call.name) || call.name === 'apply_patch' ? (
+        {isLegacyDiffToolName(call.name) || isPatchToolName(call.name) ? (
           <>
             <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={viewMode !== 'json' && diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
             <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={viewMode !== 'json' && diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
@@ -1081,8 +1082,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
             </div>
 
             <div className="mt-2 cursor-default" onClick={(e) => e.stopPropagation()}>
-              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(isLegacyDiffToolName(call.name) || call.name === 'apply_patch') ? 'relative' : ''}`}>
-                {(isLegacyDiffToolName(call.name) || call.name === 'apply_patch') && (
+              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) ? 'relative' : ''}`}>
+                {(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) && (
                   <div className="absolute top-1 right-0 flex gap-1" onClick={(e) => e.stopPropagation()}>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
