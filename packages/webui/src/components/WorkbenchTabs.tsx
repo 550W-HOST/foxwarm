@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { FileText, FolderOpen, MessageSquareText, SquareTerminal, X } from 'lucide-react'
 
 export type WorkbenchTab =
@@ -20,15 +21,86 @@ function TabIcon({ type }: { type: WorkbenchTab['type'] }) {
   return <SquareTerminal className="h-4 w-4 shrink-0" />
 }
 
+function isHorizontallyFullyVisible(element: HTMLElement, container: HTMLElement) {
+  const elementRect = element.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+
+  return elementRect.left >= containerRect.left && elementRect.right <= containerRect.right
+}
+
+function getNormalizedWheelDelta(event: React.WheelEvent<HTMLDivElement>, container: HTMLDivElement) {
+  if (event.deltaMode === 1) {
+    return event.deltaY * 16
+  }
+
+  if (event.deltaMode === 2) {
+    return event.deltaY * container.clientWidth
+  }
+
+  return event.deltaY
+}
+
 export default function WorkbenchTabs({ tabs, activeTabId, onSelectTab, onCloseTab }: WorkbenchTabsProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const tabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
+
+  useEffect(() => {
+    if (!activeTabId) return
+
+    const container = containerRef.current
+    const activeTabElement = tabRefs.current.get(activeTabId)
+
+    if (!container || !activeTabElement) return
+
+    const frame = window.requestAnimationFrame(() => {
+      if (!isHorizontallyFullyVisible(activeTabElement, container)) {
+        activeTabElement.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      }
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeTabId, tabs])
+
+  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const container = containerRef.current
+
+    if (!container || Math.abs(event.deltaY) <= Math.abs(event.deltaX) || event.deltaY === 0) {
+      return
+    }
+
+    const maxScrollLeft = Math.max(0, container.scrollWidth - container.clientWidth)
+    if (maxScrollLeft === 0) {
+      return
+    }
+
+    const delta = getNormalizedWheelDelta(event, container)
+    const nextScrollLeft = Math.min(maxScrollLeft, Math.max(0, container.scrollLeft + delta))
+
+    if (nextScrollLeft !== container.scrollLeft) {
+      event.preventDefault()
+      container.scrollLeft = nextScrollLeft
+    }
+  }
+
   return (
     <div className="overflow-hidden border-b border-gray-200 bg-gray-100 px-3 pt-2 dark:border-gray-700 dark:bg-gray-900">
-      <div className="flex min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain pb-px">
+      <div
+        ref={containerRef}
+        onWheel={handleWheel}
+        className="flex min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain pb-px"
+      >
         {tabs.map((tab) => {
           const active = tab.id === activeTabId
           return (
             <div
               key={tab.id}
+              ref={(node) => {
+                if (node) {
+                  tabRefs.current.set(tab.id, node)
+                } else {
+                  tabRefs.current.delete(tab.id)
+                }
+              }}
               role="button"
               tabIndex={0}
               onClick={() => onSelectTab(tab.id)}
