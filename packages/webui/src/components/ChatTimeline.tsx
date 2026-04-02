@@ -12,6 +12,7 @@ import {
   buildPatchHunkSnippets,
   clampContentStyle,
   copyTextToClipboard,
+  formatToolLabel,
   formatObject,
   formatStructuredSystemText,
   getCollapsedReasoningPreview,
@@ -300,12 +301,14 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
   )
 })
 
-const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassName = 'text-gray-700 dark:text-gray-200') => (
+const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassName = 'text-gray-700 dark:text-gray-200', label = name) => (
   <div className="flex items-center gap-2 min-w-0">
-    <ToolLabel name={name} />
+    <ToolLabel name={name} label={label} />
     <div className={`min-w-0 flex-1 ${summaryClassName}`}>{summary}</div>
   </div>
 )
+
+const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
 
 const formatToolResponseText = (resp: FunctionResponse): string => {
   if (resp.response?.error !== undefined && resp.response?.error !== null) {
@@ -774,7 +777,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         <div>
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-2 flex-wrap">
-              <ToolLabel name={call.name} />
+              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
               {hasLegacyDiff ? (
                 <span className="text-xs"><span className="text-orange-600 dark:text-orange-400">-{oldLines}</span><span className="mx-1 text-gray-500">/</span><span className="text-blue-600 dark:text-blue-400">+{newLines}</span></span>
               ) : (
@@ -808,7 +811,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
           <div>
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 flex-wrap">
-                <ToolLabel name={call.name} />
+                <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
                 <span className="ml-2 text-xs text-gray-500">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
                 <span className="ml-2 text-gray-600 dark:text-gray-400">{fileSummary}</span>
               </span>
@@ -858,7 +861,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         return (
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <ToolLabel name={call.name} />
+              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
               <span className="text-xs text-red-500">invalid patch</span>
             </div>
             {expanded && (
@@ -875,7 +878,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         <div className="space-y-1">
           {expanded ? (
             <>
-              <ToolLabel name={call.name} />
+              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
               <div className="break-all">{call.args.command}</div>
             </>
           ) : renderInlineToolSummary(call.name, <div className="truncate font-mono" title={call.args.command}>{preview}</div>)}
@@ -905,10 +908,10 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
       <div className="space-y-1">
         {expanded ? (
           <>
-            <ToolLabel name={call.name} />
+            <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
             <div className="whitespace-pre-wrap break-all">{argsFormatted}</div>
           </>
-        ) : renderInlineToolSummary(call.name, <div className="truncate break-all">{preview}</div>)}
+        ) : renderInlineToolSummary(call.name, <div className="truncate break-all">{preview}</div>, 'text-gray-700 dark:text-gray-200', getToolDisplayLabel(call))}
       </div>
     )
   }, [call, callIdx, diffViewMode, expanded, viewMode])
@@ -1060,7 +1063,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       {viewMode === 'json' ? (
         <div className={`${baseTextClass} ${expanded ? '' : 'pr-10'}`}>
           <div className="flex items-center gap-2 min-w-0">
-            <ToolTag name={call.name} tone={tagTone} />
+            <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
           </div>
           <pre className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : clampContentStyle(6)}>{jsonText}</pre>
         </div>
@@ -1068,7 +1071,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={`${baseTextClass} pr-10`}>
             <div className="space-y-1">
             <div className="flex items-center gap-2 min-w-0">
-              <ToolTag name={call.name} tone={tagTone} />
+              <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
               <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>
             </div>
             <div className="text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>
@@ -1078,7 +1081,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           <div>
             <div className="flex items-center gap-2 min-w-0">
-              <ToolTag name={call.name} tone={tagTone} />
+              <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
             </div>
 
             <div className="mt-2 cursor-default" onClick={(e) => e.stopPropagation()}>
@@ -1450,6 +1453,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
             const status = p.functionCall.id ? toolStatusById.get(p.functionCall.id) : undefined
             items.push({
               name: p.functionCall.name,
+              label: formatToolLabel(p.functionCall.name, p.functionCall.args),
               tone: status === 'error' ? 'error' : status === 'success' ? 'success' : 'neutral',
             })
           }
