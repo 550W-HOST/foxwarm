@@ -34,6 +34,76 @@ const TAB_HASH_PREFIX = 'tab/'
 const WORKBENCH_TABS_STORAGE_KEY = 'foxwarm_workbench_tabs_v3'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
+const PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
+
+function isChatTab(tab: WorkbenchTab): tab is Extract<WorkbenchTab, { type: 'chat' }> {
+  return tab.type === 'chat'
+}
+
+function isPreviewChatTab(tab: WorkbenchTab): tab is Extract<WorkbenchTab, { type: 'chat' }> {
+  return tab.type === 'chat' && !!tab.preview
+}
+
+function getPersistentChatTabId(sessionId: string) {
+  return `chat:${sessionId}`
+}
+
+function normalizeWorkbenchTabs(tabs: WorkbenchTab[]): WorkbenchTab[] {
+  const normalizedTabs: WorkbenchTab[] = []
+  const seenIds = new Set<string>()
+  let previewChatSeen = false
+
+  for (const tab of tabs) {
+    if (isChatTab(tab)) {
+      const normalizedTab: WorkbenchTab = tab.preview
+        ? {
+            ...tab,
+            id: PREVIEW_CHAT_TAB_ID,
+            preview: true,
+            pinned: false,
+          }
+        : {
+            ...tab,
+            id: getPersistentChatTabId(tab.sessionId),
+            preview: false,
+          }
+
+      if (normalizedTab.preview) {
+        if (previewChatSeen) {
+          continue
+        }
+        previewChatSeen = true
+      }
+
+      if (seenIds.has(normalizedTab.id)) {
+        continue
+      }
+
+      seenIds.add(normalizedTab.id)
+      normalizedTabs.push(normalizedTab)
+      continue
+    }
+
+    if (seenIds.has(tab.id)) {
+      continue
+    }
+
+    seenIds.add(tab.id)
+    normalizedTabs.push(tab)
+  }
+
+  return normalizedTabs
+}
+
+function findPreferredChatTab(tabs: WorkbenchTab[], sessionId: string): WorkbenchTab | null {
+  return tabs.find((tab) => isChatTab(tab) && !tab.preview && tab.pinned && tab.sessionId === sessionId)
+    || tabs.find((tab) => isChatTab(tab) && !tab.preview && tab.sessionId === sessionId)
+    || null
+}
+
+function getRenderedWorkbenchTabs(tabs: WorkbenchTab[]): WorkbenchTab[] {
+  return [...tabs.filter((tab) => tab.pinned), ...tabs.filter((tab) => !tab.pinned)]
+}
 
 function loadStoredLastVisitedSession(): string {
   try {
@@ -109,7 +179,7 @@ function loadStoredWorkbenchTabs(): WorkbenchTab[] {
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
 
-    return parsed.filter((item): item is WorkbenchTab => {
+    return normalizeWorkbenchTabs(parsed.filter((item): item is WorkbenchTab => {
       if (!item || typeof item !== 'object' || typeof item.id !== 'string' || typeof item.type !== 'string' || typeof item.title !== 'string') {
         return false
       }
@@ -117,14 +187,21 @@ function loadStoredWorkbenchTabs(): WorkbenchTab[] {
       if (item.type === 'workspace' || item.type === 'file') return typeof item.nodeId === 'string' && typeof item.path === 'string'
       if (item.type === 'terminal') return true
       return false
-    })
+    }))
   } catch {
     return []
   }
 }
 
-function makeChatTab(sessionId: string, title: string): WorkbenchTab {
-  return { id: `chat:${sessionId}`, type: 'chat', sessionId, title }
+function makeChatTab(sessionId: string, title: string, options?: { preview?: boolean; pinned?: boolean }): WorkbenchTab {
+  return {
+    id: options?.preview ? PREVIEW_CHAT_TAB_ID : getPersistentChatTabId(sessionId),
+    type: 'chat',
+    sessionId,
+    title,
+    preview: !!options?.preview,
+    pinned: options?.preview ? false : options?.pinned,
+  }
 }
 
 function makeWorkspaceTab(sessionId: string, nodeId: string, path: string): WorkbenchTab {
@@ -213,7 +290,7 @@ function mergeTerminalTabsWithRegistry(localTabs: WorkbenchTab[], terminals: Ter
     }
   }
 
-  return merged
+  return normalizeWorkbenchTabs(merged)
 }
 
 function App() {
@@ -370,11 +447,11 @@ function App() {
   }, [activeTerminals])
 
   useEffect(() => {
-    setWorkbenchTabs((previous) => previous.map((tab) => (
+    setWorkbenchTabs((previous) => normalizeWorkbenchTabs(previous.map((tab) => (
       tab.type === 'chat'
         ? { ...tab, title: sessionTitle(tab.sessionId) }
         : tab
-    )))
+    ))))
   }, [sessions])
 
   const activeTab = useMemo(() => {
@@ -420,12 +497,12 @@ function App() {
     }
 
     if (workbenchTabs.length > 0) {
-      setTabHash(workbenchTabs[0].id)
+      setTabHash(getRenderedWorkbenchTabs(workbenchTabs)[0]?.id || null)
       return
     }
 
     const fallbackSessionId = loadStoredLastVisitedSession()
-    const chatTab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId))
+    const chatTab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId), { preview: true })
     setWorkbenchTabs([chatTab])
     setTabHash(chatTab.id)
   }, [route, workbenchTabs, sessions])
@@ -436,9 +513,9 @@ function App() {
       if (index >= 0) {
         const next = [...previous]
         next[index] = { ...next[index], ...tab }
-        return next
+        return normalizeWorkbenchTabs(next)
       }
-      return [...previous, tab]
+      return normalizeWorkbenchTabs([...previous, tab])
     })
   }
 
@@ -451,8 +528,30 @@ function App() {
   }
 
   const openChatTab = (sessionId: string) => {
-    const tab = makeChatTab(sessionId, sessionTitle(sessionId))
-    upsertTab(tab)
+    const title = sessionTitle(sessionId)
+    const existingTab = findPreferredChatTab(workbenchTabs, sessionId)
+
+    if (existingTab) {
+      upsertTab({ ...existingTab, title })
+      navigateToTab(existingTab.id)
+      return
+    }
+
+    const previewTab = workbenchTabs.find(isPreviewChatTab)
+    if (previewTab) {
+      upsertTab({
+        ...previewTab,
+        sessionId,
+        title,
+        preview: true,
+        pinned: false,
+      })
+      navigateToTab(previewTab.id)
+      return
+    }
+
+    const tab = makeChatTab(sessionId, title, { preview: true })
+    setWorkbenchTabs((previous) => normalizeWorkbenchTabs([...previous, tab]))
     navigateToTab(tab.id)
   }
 
@@ -478,7 +577,7 @@ function App() {
       const tab = existing || (terminal ? makeTerminalTabFromRecord(terminal) : null)
       if (tab) {
         if (!existing) {
-          setWorkbenchTabs((previous) => [...previous, tab])
+          setWorkbenchTabs((previous) => normalizeWorkbenchTabs([...previous, tab]))
         }
         navigateToTab(tab.id)
       }
@@ -489,7 +588,7 @@ function App() {
     const nodeId = options?.nodeId || sessionRecord?.currentNode || 'master'
     const path = options?.path || sessionRecord?.cwd || '/'
     const tab = makeTerminalDraftTab(sessionId, nodeId, path)
-    setWorkbenchTabs((previous) => [...previous, tab])
+    setWorkbenchTabs((previous) => normalizeWorkbenchTabs([...previous, tab]))
     navigateToTab(tab.id)
   }
 
@@ -504,26 +603,112 @@ function App() {
       await fetchActiveTerminals()
     }
 
-    const index = workbenchTabs.findIndex((tab) => tab.id === tabId)
+    const renderedTabs = getRenderedWorkbenchTabs(workbenchTabs)
+    const index = renderedTabs.findIndex((tab) => tab.id === tabId)
     const remainingTabs = workbenchTabs.filter((tab) => tab.id !== tabId)
-    setWorkbenchTabs(remainingTabs)
+    setWorkbenchTabs(normalizeWorkbenchTabs(remainingTabs))
 
     if (route.view === 'tab' && route.tabId === tabId) {
-      const fallbackTab = remainingTabs[Math.max(0, index - 1)] || remainingTabs[index] || remainingTabs[0] || null
+      const renderedRemainingTabs = getRenderedWorkbenchTabs(remainingTabs)
+      const fallbackTab = renderedRemainingTabs[Math.max(0, index - 1)] || renderedRemainingTabs[index] || renderedRemainingTabs[0] || null
       if (fallbackTab) {
         navigateToTab(fallbackTab.id)
       } else {
         const fallbackSessionId = loadStoredLastVisitedSession()
-        const chatTab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId))
+        const chatTab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId), { preview: true })
         setWorkbenchTabs([chatTab])
         navigateToTab(chatTab.id)
       }
     }
   }
 
+  const keepWorkbenchTab = (tabId: string) => {
+    const targetTab = workbenchTabs.find((tab) => tab.id === tabId)
+    if (!targetTab || !isPreviewChatTab(targetTab)) {
+      return
+    }
+
+    const persistentId = getPersistentChatTabId(targetTab.sessionId)
+    const existingTab = workbenchTabs.find((tab) => tab.id === persistentId)
+    const shouldRetainActive = route.view === 'tab' && route.tabId === tabId
+
+    if (existingTab) {
+      const nextTabs = normalizeWorkbenchTabs(
+        workbenchTabs
+          .filter((tab) => tab.id !== tabId)
+          .map((tab) => tab.id === persistentId ? { ...tab, title: sessionTitle(targetTab.sessionId) } : tab),
+      )
+      setWorkbenchTabs(nextTabs)
+      if (shouldRetainActive) {
+        navigateToTab(persistentId)
+      }
+      return
+    }
+
+    const previewIndex = workbenchTabs.findIndex((tab) => tab.id === tabId)
+    const persistentTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId))
+    const nextTabs = [...workbenchTabs]
+    nextTabs.splice(previewIndex, 1, persistentTab)
+    setWorkbenchTabs(normalizeWorkbenchTabs(nextTabs))
+
+    if (shouldRetainActive) {
+      navigateToTab(persistentTab.id)
+    }
+  }
+
+  const pinWorkbenchTab = (tabId: string) => {
+    const targetTab = workbenchTabs.find((tab) => tab.id === tabId)
+    if (!targetTab) {
+      return
+    }
+
+    if (isPreviewChatTab(targetTab)) {
+      const persistentId = getPersistentChatTabId(targetTab.sessionId)
+      const existingTab = workbenchTabs.find((tab) => tab.id === persistentId)
+      const shouldRetainActive = route.view === 'tab' && route.tabId === tabId
+
+      if (existingTab) {
+        const nextTabs = normalizeWorkbenchTabs(
+          workbenchTabs
+            .filter((tab) => tab.id !== tabId)
+            .map((tab) => tab.id === persistentId ? { ...tab, pinned: true, title: sessionTitle(targetTab.sessionId) } : tab),
+        )
+        setWorkbenchTabs(nextTabs)
+        if (shouldRetainActive) {
+          navigateToTab(persistentId)
+        }
+        return
+      }
+
+      const previewIndex = workbenchTabs.findIndex((tab) => tab.id === tabId)
+      const pinnedTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId), { pinned: true })
+      const nextTabs = [...workbenchTabs]
+      nextTabs.splice(previewIndex, 1, pinnedTab)
+      setWorkbenchTabs(normalizeWorkbenchTabs(nextTabs))
+
+      if (shouldRetainActive) {
+        navigateToTab(pinnedTab.id)
+      }
+      return
+    }
+
+    setWorkbenchTabs((previous) => normalizeWorkbenchTabs(previous.map((tab) => tab.id === tabId ? { ...tab, pinned: true } : tab)))
+  }
+
+  const unpinWorkbenchTab = (tabId: string) => {
+    setWorkbenchTabs((previous) => normalizeWorkbenchTabs(previous.map((tab) => tab.id === tabId ? { ...tab, pinned: false } : tab)))
+  }
+
+  const handleChatDraftEdited = (tabId: string) => {
+    const targetTab = workbenchTabs.find((tab) => tab.id === tabId)
+    if (targetTab && isPreviewChatTab(targetTab)) {
+      keepWorkbenchTab(tabId)
+    }
+  }
+
   const handleTerminalReady = (draftTabId: string, terminal: { id: string; sessionId: string; cwd: string; nodeId?: string }) => {
     const nextId = `terminal:${terminal.id}`
-    setWorkbenchTabs((previous) => previous.map((tab) => {
+    setWorkbenchTabs((previous) => normalizeWorkbenchTabs(previous.map((tab) => {
       if (tab.id !== draftTabId) return tab
       return {
         id: nextId,
@@ -533,8 +718,9 @@ function App() {
         cwd: terminal.cwd,
         contextSessionId: terminal.sessionId,
         title: `Terminal · ${terminal.cwd}`,
+        pinned: tab.pinned,
       }
-    }))
+    })))
 
     if (route.view === 'tab' && route.tabId === draftTabId) {
       navigateToTab(nextId)
@@ -606,7 +792,7 @@ function App() {
       const sessionRecord = sessions.find((session) => session.id === activeTab.sessionId || session.aliases?.includes(activeTab.sessionId))
       return (
         <Chat
-          key={activeTab.id}
+          key={`chat:${activeTab.sessionId}`}
           sessionId={activeTab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
@@ -614,6 +800,7 @@ function App() {
           onThemeChange={setThemeMode}
           onOpenWorkspace={() => openWorkspaceTab(activeTab.sessionId)}
           onOpenTerminal={() => openTerminalTab(activeTab.sessionId)}
+          onDraftEdited={() => handleChatDraftEdited(activeTab.id)}
         />
       )
     }
@@ -669,6 +856,9 @@ function App() {
       activeTabId={route.view === 'tab' ? route.tabId : null}
       onSelectTab={(tabId) => navigateToTab(tabId)}
       onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
+      onKeepTab={keepWorkbenchTab}
+      onPinTab={pinWorkbenchTab}
+      onUnpinTab={unpinWorkbenchTab}
     />
   )
 
