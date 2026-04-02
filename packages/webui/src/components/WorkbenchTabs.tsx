@@ -22,6 +22,8 @@ interface WorkbenchTabsProps {
   onKeepTab: (tabId: string) => void
   onPinTab: (tabId: string) => void
   onUnpinTab: (tabId: string) => void
+  onCloseAllTabs: () => void
+  onCloseAllPinnedTabs: () => void
 }
 
 interface TabContextMenuState {
@@ -95,6 +97,7 @@ function TabStripRow({
   activeTabId,
   onSelectTab,
   onCloseTab,
+  onKeepTab,
   onOpenContextMenu,
   isPinnedRow,
 }: {
@@ -102,6 +105,7 @@ function TabStripRow({
   activeTabId: string | null
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
+  onKeepTab: (tabId: string) => void
   onOpenContextMenu: (tabId: string, event: React.MouseEvent<HTMLDivElement>) => void
   isPinnedRow: boolean
 }) {
@@ -169,6 +173,7 @@ function TabStripRow({
               role="button"
               tabIndex={0}
               onClick={() => onSelectTab(tab.id)}
+              onDoubleClick={() => onKeepTab(tab.id)}
               onContextMenu={(event) => onOpenContextMenu(tab.id, event)}
               onMouseUp={(event) => {
                 if (event.button === 1) {
@@ -218,6 +223,8 @@ export default function WorkbenchTabs({
   onKeepTab,
   onPinTab,
   onUnpinTab,
+  onCloseAllTabs,
+  onCloseAllPinnedTabs,
 }: WorkbenchTabsProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
 
@@ -279,6 +286,24 @@ export default function WorkbenchTabs({
       })
     }
 
+    entries.push({ key: 'separator-actions', type: 'separator' })
+
+    entries.push({
+      key: 'close-all',
+      label: 'Close all',
+      icon: <X className="h-4 w-4" />,
+      onSelect: onCloseAllTabs,
+    })
+
+    if (contextMenuTab.pinned) {
+      entries.push({
+        key: 'close-all-pinned',
+        label: 'Close all pinned',
+        icon: <X className="h-4 w-4" />,
+        onSelect: onCloseAllPinnedTabs,
+      })
+    }
+
     entries.push({ key: 'separator-close', type: 'separator' })
     entries.push({
       key: 'close',
@@ -289,7 +314,7 @@ export default function WorkbenchTabs({
     })
 
     return entries
-  }, [contextMenuTab, onCloseTab, onKeepTab, onPinTab, onUnpinTab])
+  }, [contextMenuTab, onCloseAllPinnedTabs, onCloseAllTabs, onCloseTab, onKeepTab, onPinTab, onUnpinTab])
 
   const openContextMenu = (tabId: string, event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -311,6 +336,7 @@ export default function WorkbenchTabs({
             activeTabId={activeTabId}
             onSelectTab={onSelectTab}
             onCloseTab={onCloseTab}
+            onKeepTab={onKeepTab}
             onOpenContextMenu={openContextMenu}
             isPinnedRow
           />
@@ -320,6 +346,7 @@ export default function WorkbenchTabs({
           activeTabId={activeTabId}
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
+          onKeepTab={onKeepTab}
           onOpenContextMenu={openContextMenu}
           isPinnedRow={false}
         />

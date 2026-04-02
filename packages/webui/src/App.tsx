@@ -555,6 +555,27 @@ function App() {
     navigateToTab(tab.id)
   }
 
+  const openKeptChatTab = (sessionId: string) => {
+    const title = sessionTitle(sessionId)
+    const existingTab = findPreferredChatTab(workbenchTabs, sessionId)
+
+    if (existingTab) {
+      upsertTab({ ...existingTab, title })
+      navigateToTab(existingTab.id)
+      return
+    }
+
+    const previewTab = workbenchTabs.find((tab) => isPreviewChatTab(tab) && tab.sessionId === sessionId)
+    if (previewTab) {
+      keepWorkbenchTab(previewTab.id)
+      return
+    }
+
+    const tab = makeChatTab(sessionId, title)
+    upsertTab(tab)
+    navigateToTab(tab.id)
+  }
+
   const openWorkspaceTab = (sessionId: string, options?: { nodeId?: string; path?: string }) => {
     const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
     const nodeId = options?.nodeId || sessionRecord?.currentNode || 'master'
@@ -697,6 +718,53 @@ function App() {
 
   const unpinWorkbenchTab = (tabId: string) => {
     setWorkbenchTabs((previous) => normalizeWorkbenchTabs(previous.map((tab) => tab.id === tabId ? { ...tab, pinned: false } : tab)))
+  }
+
+  const closeWorkbenchTabsByPredicate = async (predicate: (tab: WorkbenchTab) => boolean) => {
+    const tabsSnapshot = workbenchTabs
+    const tabsToClose = tabsSnapshot.filter(predicate)
+    if (tabsToClose.length === 0) {
+      return
+    }
+
+    const tabIdsToClose = new Set(tabsToClose.map((tab) => tab.id))
+    const terminalIdsToClose = tabsToClose
+      .filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal' && !!tab.terminalId)
+      .map((tab) => tab.terminalId!)
+
+    const remainingTabs = normalizeWorkbenchTabs(tabsSnapshot.filter((tab) => !tabIdsToClose.has(tab.id)))
+    setWorkbenchTabs(remainingTabs)
+
+    if (route.view === 'tab' && route.tabId && tabIdsToClose.has(route.tabId)) {
+      const fallbackTab = getRenderedWorkbenchTabs(remainingTabs)[0] || null
+      if (fallbackTab) {
+        navigateToTab(fallbackTab.id)
+      } else {
+        const fallbackSessionId = loadStoredLastVisitedSession()
+        const chatTab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId), { preview: true })
+        setWorkbenchTabs([chatTab])
+        navigateToTab(chatTab.id)
+      }
+    }
+
+    if (terminalIdsToClose.length > 0) {
+      await Promise.allSettled(terminalIdsToClose.map(async (terminalId) => {
+        try {
+          await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(terminalId)}`, { method: 'DELETE' })
+        } catch (error) {
+          console.error('Failed to close terminal:', error)
+        }
+      }))
+      void fetchActiveTerminals()
+    }
+  }
+
+  const closeAllUnpinnedWorkbenchTabs = async () => {
+    await closeWorkbenchTabsByPredicate((tab) => !tab.pinned)
+  }
+
+  const closeAllPinnedWorkbenchTabs = async () => {
+    await closeWorkbenchTabsByPredicate((tab) => !!tab.pinned)
   }
 
   const handleChatDraftEdited = (tabId: string) => {
@@ -859,6 +927,8 @@ function App() {
       onKeepTab={keepWorkbenchTab}
       onPinTab={pinWorkbenchTab}
       onUnpinTab={unpinWorkbenchTab}
+      onCloseAllTabs={() => { void closeAllUnpinnedWorkbenchTabs() }}
+      onCloseAllPinnedTabs={() => { void closeAllPinnedWorkbenchTabs() }}
     />
   )
 
@@ -871,6 +941,7 @@ function App() {
           currentView={currentView}
           currentSessionRecord={currentContextSessionRecord}
           onSelectSession={openChatTab}
+          onKeepSession={openKeptChatTab}
           onSelectArchitecture={() => {
             setRoute({ view: 'architecture' })
             window.location.hash = ARCHITECTURE_HASH
@@ -911,6 +982,7 @@ function App() {
         currentView={currentView}
         currentSessionRecord={currentContextSessionRecord}
         onSelectSession={openChatTab}
+        onKeepSession={openKeptChatTab}
         onSelectArchitecture={() => {
           setRoute({ view: 'architecture' })
           window.location.hash = ARCHITECTURE_HASH

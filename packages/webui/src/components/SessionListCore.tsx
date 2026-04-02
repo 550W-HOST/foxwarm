@@ -30,6 +30,7 @@ interface SessionListCoreProps {
   sessions: Session[]
   currentSession?: string  // Optional, for highlighting in sidebar
   onSelectSession: (sessionId: string) => void
+  onKeepSession?: (sessionId: string) => void
 }
 
 interface ContextMenuState {
@@ -90,7 +91,7 @@ const isFullyVisibleInContainer = (element: HTMLElement, container: HTMLElement)
   return elementRect.top >= containerRect.top && elementRect.bottom <= containerRect.bottom
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession }: SessionListCoreProps) {
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -469,6 +470,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               : 'hover:bg-gray-100 dark:hover:bg-gray-700'
           } ${session.archived ? 'opacity-70' : ''}`}
           onClick={() => onSelectSession(session.id)}
+          onDoubleClick={() => onKeepSession?.(session.id)}
           onContextMenu={(e) => handleContextMenu(e, session.id)}
         >
           <div className="flex-1 min-w-0 py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>

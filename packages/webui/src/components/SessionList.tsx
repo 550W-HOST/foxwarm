@@ -9,6 +9,7 @@ interface SessionListProps {
   currentView: 'session' | 'architecture'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
+  onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onCreateWorkspaceTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
@@ -21,6 +22,7 @@ export default function SessionList({
   currentView,
   currentSessionRecord,
   onSelectSession,
+  onKeepSession,
   onSelectArchitecture,
   onCreateWorkspaceTab,
   onCreateTerminalTab,
@@ -83,6 +85,7 @@ export default function SessionList({
             sessions={sessions} 
             currentSession={currentSession}
             onSelectSession={onSelectSession}
+            onKeepSession={onKeepSession}
           />
         </div>
       </div>
