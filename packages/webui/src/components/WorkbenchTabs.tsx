@@ -286,24 +286,6 @@ export default function WorkbenchTabs({
       })
     }
 
-    entries.push({ key: 'separator-actions', type: 'separator' })
-
-    entries.push({
-      key: 'close-all',
-      label: 'Close all',
-      icon: <X className="h-4 w-4" />,
-      onSelect: onCloseAllTabs,
-    })
-
-    if (contextMenuTab.pinned) {
-      entries.push({
-        key: 'close-all-pinned',
-        label: 'Close all pinned',
-        icon: <X className="h-4 w-4" />,
-        onSelect: onCloseAllPinnedTabs,
-      })
-    }
-
     entries.push({ key: 'separator-close', type: 'separator' })
     entries.push({
       key: 'close',
@@ -312,6 +294,24 @@ export default function WorkbenchTabs({
       danger: true,
       onSelect: () => onCloseTab(contextMenuTab.id),
     })
+
+    if (contextMenuTab.pinned) {
+      entries.push({ key: 'separator-bulk-close', type: 'separator' })
+      entries.push({
+        key: 'close-all-pinned',
+        label: 'Close all pinned',
+        icon: <X className="h-4 w-4" />,
+        onSelect: onCloseAllPinnedTabs,
+      })
+    } else {
+      entries.push({ key: 'separator-bulk-close', type: 'separator' })
+      entries.push({
+        key: 'close-all',
+        label: 'Close all',
+        icon: <X className="h-4 w-4" />,
+        onSelect: onCloseAllTabs,
+      })
+    }
 
     return entries
   }, [contextMenuTab, onCloseAllPinnedTabs, onCloseAllTabs, onCloseTab, onKeepTab, onPinTab, onUnpinTab])
