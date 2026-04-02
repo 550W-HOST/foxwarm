@@ -349,7 +349,7 @@ function extractToolResponseOutput(response: any): unknown {
         return response.output;
     }
 
-    if (Object.prototype.hasOwnProperty.call(response, 'error')) {
+    if (Object.prototype.hasOwnProperty.call(response, 'error') && response.error) {
         return response.error;
     }
 
