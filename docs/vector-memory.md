@@ -37,7 +37,7 @@ state/db/
 ### 搜索记忆
 
 ```ts
-search_memory({
+search_vector({
   query: 'project progress',
   limit: 5,
 })

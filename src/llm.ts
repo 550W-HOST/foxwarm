@@ -388,6 +388,7 @@ function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string
 }
 
 const SUBCONSCIOUS_ALLOWED_TOOL_NAMES = new Set([
+    'search_vector',
     'search_memory',
     'get_archived_messages',
     'get_archived_blocks',
@@ -777,7 +778,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         // session/channel/agent/vector/MCP state rather than remote node files.
         const masterOnlyTools = [
             'remote_node', 'list_nodes', 'node_tools',
-            'search_memory', 'get_memory_context',
+            'search_vector', 'search_memory', 'get_memory_context',
             'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
             'copy_between_nodes',
             'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',

@@ -203,6 +203,13 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
       agent: agentName,
       session: sessionId,
       target_node: 'master',
+      tool_name: 'search_vector',
+      action: 'accept',
+    },
+    {
+      agent: agentName,
+      session: sessionId,
+      target_node: 'master',
       tool_name: 'search_memory',
       action: 'accept',
     },

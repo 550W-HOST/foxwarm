@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { getAgentDir, getAgentMemoryDir } from './config';
 import * as sessionManager from './sessionManager';
-import { read, write, edit, apply_patch, apply_patch_memory, definitions, submit_compact_plan } from './tools';
+import { read, write, edit, apply_patch, apply_patch_memory, definitions, submit_compact_plan, search_memory, search_vector } from './tools';
 
 test('submit_compact_plan is present in regular tool definitions and guarded outside compact flow', async () => {
   assert.ok(definitions.some(def => def.name === 'submit_compact_plan'));
@@ -14,6 +14,12 @@ test('submit_compact_plan is present in regular tool definitions and guarded out
 
 test('apply_patch_memory is present in regular tool definitions', () => {
   assert.ok(definitions.some(def => def.name === 'apply_patch_memory'));
+});
+
+test('search_vector is the public vector-memory tool name while search_memory remains a runtime alias', () => {
+  assert.ok(definitions.some(def => def.name === 'search_vector'));
+  assert.equal(definitions.some(def => def.name === 'search_memory'), false);
+  assert.equal(search_vector, search_memory);
 });
 
 test('file tools resolve relative paths from session cwd', async () => {

@@ -601,7 +601,7 @@ export async function resolveMemorySearchOptions(
     ctx?: ToolContext,
 ): Promise<{ searchOptions: { sessionIds?: string[]; agent?: string }; effectiveScope: 'current-session' | 'current-agent' }> {
     if (!ctx?.sessionId) {
-        throw new Error('search_memory requires an active session context.');
+        throw new Error('search_vector requires an active session context.');
     }
 
     const session = await sessionManager.getSession(ctx.sessionId);
@@ -648,7 +648,7 @@ export async function resolveMemorySearchOptions(
     }
 
     if (request.targetAgentName && request.targetAgentName !== agentName) {
-        throw new Error('search_memory cannot access memories outside the current agent.');
+        throw new Error('search_vector cannot access memories outside the current agent.');
     }
 
     if (request.targetSessionId) {
@@ -657,7 +657,7 @@ export async function resolveMemorySearchOptions(
             throw new Error(`Session \`${request.targetSessionId}\` not found.`);
         }
         if ((targetSession.agent || 'main') !== agentName) {
-            throw new Error('search_memory cannot access memories outside the current agent.');
+            throw new Error('search_vector cannot access memories outside the current agent.');
         }
         return {
             searchOptions: { sessionIds: [targetSession.id, ...(targetSession.aliases || [])] },
@@ -745,7 +745,7 @@ export function formatMemorySearchResults(results: any): string {
     }).join('\n\n---\n\n');
 }
 
-async function tool_search_memory({ query, limit = 5, scope = 'all', sessionId, agentName }: { query: string; limit?: number; scope?: 'all' | 'current-session' | 'current-agent'; sessionId?: string; agentName?: string }, ctx?: ToolContext) {
+async function tool_search_vector({ query, limit = 5, scope = 'all', sessionId, agentName }: { query: string; limit?: number; scope?: 'all' | 'current-session' | 'current-agent'; sessionId?: string; agentName?: string }, ctx?: ToolContext) {
     const { searchOptions } = await resolveMemorySearchOptions({
         scope,
         targetSessionId: sessionId,
@@ -1005,7 +1005,8 @@ export const delete_file = tool_delete_file;
 export const copy_between_nodes = tool_copy_between_nodes;
 export const exec = tool_exec;
 export const change_directory = tool_change_directory;
-export const search_memory = tool_search_memory;
+export const search_vector = tool_search_vector;
+export const search_memory = tool_search_vector;
 export const get_memory_context = tool_get_memory_context;
 export const create_child_session = tool_create_child_session;
 export const create_agent = tool_create_agent;
@@ -1269,7 +1270,7 @@ export const definitions = [
             }
         },
         {
-            name: 'search_memory',
+            name: 'search_vector',
             description: 'Search for relevant past conversations in vector memory within the caller\'s allowed scope. Non-isolated sessions are limited to the current agent; isolated sessions are limited to the current session.',
             parameters: {
                 type: 'object',

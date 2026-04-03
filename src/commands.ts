@@ -2019,7 +2019,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       }
 
       try {
-        const result = await tools.search_memory({
+        const result = await tools.search_vector({
           query,
           limit,
           sessionId: targetSessionId,

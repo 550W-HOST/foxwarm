@@ -81,6 +81,7 @@ export class NodesManager {
       'list_files',
       'delete_file',
       'exec',
+      'search_vector',
       'search_memory',
       'get_memory_context',
       'create_child_session',
@@ -527,7 +528,8 @@ export class NodesManager {
     const toolsModule = require('./tools');
     const definitions = toolsModule.definitions;
     
-    return definitions.find((d: any) => d.name === toolName);
+    return definitions.find((d: any) => d.name === toolName)
+      || (toolName === 'search_memory' ? definitions.find((d: any) => d.name === 'search_vector') : undefined);
   }
 
   /**
