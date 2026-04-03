@@ -937,7 +937,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 
       // Add tool responses for all tool calls
       appendedForkMessages.push({
-        role: 'user',
+        role: 'tool',
         parts: toolCalls.map((part, index) => ({
           functionResponse: {
             tool_use_id: part.functionCall!.id,
