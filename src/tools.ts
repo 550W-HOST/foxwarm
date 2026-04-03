@@ -974,6 +974,23 @@ async function tool_search_mcp_tools(args: ToolArgs) {
     return `MCP tools (${limited.length}${filtered.length > limited.length ? ` of ${filtered.length}` : ''}):\n` + limited.join('\n');
 }
 
+async function tool_list_mcp_servers(_args: ToolArgs) {
+    const servers = await mcpClient.listServers();
+
+    if (!servers.length) {
+        return {
+            count: 0,
+            servers: [] as mcpClient.McpServerSummary[],
+            message: 'No MCP servers configured.',
+        };
+    }
+
+    return {
+        count: servers.length,
+        servers,
+    };
+}
+
 export const read = tool_read;
 export const write = tool_write;
 export const edit = tool_edit;
@@ -1031,6 +1048,7 @@ export const node_tools = tool_remote_node;
 export const mcp_config = tool_mcp_config;
 export const call_mcp = tool_call_mcp;
 export const search_mcp_tools = tool_search_mcp_tools;
+export const list_mcp_servers = tool_list_mcp_servers;
 
 // New tools for nodes
 export const list_nodes = async (args: ToolArgs) => {
@@ -1740,6 +1758,14 @@ export const definitions = [
                     server: { type: 'string', description: 'Server name (default: default)' },
                     query: { type: 'string', description: 'Search query (optional)' }
                 }
+            }
+        },
+        {
+            name: 'list_mcp_servers',
+            description: 'List configured MCP servers with safe config summaries. Returns disabled servers too.',
+            parameters: {
+                type: 'object',
+                properties: {}
             }
         },
         {

@@ -786,7 +786,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             'update_session_name', 'set_todo', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
             'compact_session', 'compress_session',
             'create_timer', 'list_timers', 'delete_timer',
-            'mcp_config', 'call_mcp', 'search_mcp_tools',
+            'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
             'change_current_node',
             'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
         ];
