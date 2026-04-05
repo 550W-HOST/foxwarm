@@ -29,11 +29,13 @@ const EMBEDDING_MODEL = 'qwen3-embedding:0.6b';
 
 // Keep a conservative margin under the embedding model's real 4096-token limit
 // because estimateTokenCount() can undercount slightly on some inputs.
-const CHUNK_SIZE = 3000;
-const EMBEDDING_MAX_LENGTH = 3000;
-const SEGMENT_TARGET_TOKENS = 2400;
-const SEGMENT_OVERLAP_TOKENS = 500;
-const SEGMENT_OVERLAP_MAX_MESSAGE_TOKENS = 500;
+// Raw archive indexing now targets a noticeably finer 1500-token chunk ceiling,
+// while still aggregating adjacent messages into moderately sized segments.
+const CHUNK_SIZE = 1500;
+const EMBEDDING_MAX_LENGTH = 1500;
+const SEGMENT_TARGET_TOKENS = 1200;
+const SEGMENT_OVERLAP_TOKENS = 400;
+const SEGMENT_OVERLAP_MAX_MESSAGE_TOKENS = 400;
 const ARCHIVE_INDEX_MIN_PENDING_MESSAGES = 50;
 const ARCHIVE_INDEX_MIN_PENDING_TOKENS = 8000;
 
@@ -392,20 +394,24 @@ function createRowsFromSegment(segment: ArchiveSegment): Omit<VectorRow, 'vector
 }
 
 async function createRowsFromBlockRecord(record: ArchiveBlockRecord): Promise<Omit<VectorRow, 'vector'>[]> {
+    const row = await createRowFromBlockRecord(record);
+    return row ? [row] : [];
+}
+
+async function createRowFromBlockRecord(record: ArchiveBlockRecord): Promise<Omit<VectorRow, 'vector'> | null> {
     const text = String(record.summary || '').trim();
     if (!text) {
-        return [];
+        return null;
     }
 
-    const chunks = splitTextIntoChunks(text);
     const messageRecords = await readLocalArchiveMessagesBySeqRange(record.sessionId, record.rawStartSeq, record.rawEndSeq);
     const startTimestamp = Number(messageRecords[0]?.timestamp) || Number(record.createdAt) || Date.now();
     const endTimestamp = Number(messageRecords[messageRecords.length - 1]?.timestamp) || startTimestamp;
     const messageId = `${record.sessionId}:block:${record.id}`;
     const estimatedMessageCount = Math.max(1, record.rawEndSeq - record.rawStartSeq + 1);
 
-    return chunks.map((chunkText, index) => ({
-        id: `${messageId}:${index}`,
+    return {
+        id: `${messageId}:0`,
         message_id: messageId,
         session_id: record.sessionId,
         agent: record.agent || 'main',
@@ -420,16 +426,16 @@ async function createRowsFromBlockRecord(record: ArchiveBlockRecord): Promise<Om
         timestamp: startTimestamp,
         start_timestamp: startTimestamp,
         end_timestamp: endTimestamp,
-        chunk_index: index,
-        chunk_count: chunks.length,
+        chunk_index: 0,
+        chunk_count: 1,
         text,
-        chunk_text: truncateToTokenLimit(chunkText, EMBEDDING_MAX_LENGTH),
+        chunk_text: truncateToTokenLimit(text, EMBEDDING_MAX_LENGTH),
         block_id: record.id,
         block_level: record.level,
         source_kind: record.sourceKind,
         source_start: record.sourceStart,
         source_end: record.sourceEnd,
-    }));
+    };
 }
 
 async function getEmbedding(text: string) {
@@ -1394,6 +1400,7 @@ export {
     calculateNextSegmentStartIndex,
     copySessionArchiveIndexCheckpoint,
     createRowsFromSegment,
+    createRowFromBlockRecord,
     estimateArchiveMessageTokenCount,
     getArchiveIndexBatchDecision,
     getArchiveIndexStatus,
