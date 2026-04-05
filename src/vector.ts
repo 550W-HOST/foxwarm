@@ -487,6 +487,22 @@ async function loadCheckpoints() {
     }
 }
 
+async function migrateLegacyCheckpointsToDb(): Promise<void> {
+    const sessionEntries = Object.entries(legacyCheckpoints.sessions || {});
+    for (const [sessionId, checkpoint] of sessionEntries) {
+        const current = getVectorCheckpointSync(sessionId);
+        if (current.updatedAt > 0 || current.rawLastIndexedSeq > 0 || current.rawTailStartSeq > 0 || current.lastIndexedBlockId > 0) {
+            continue;
+        }
+
+        setVectorCheckpointSync(sessionId, {
+            rawLastIndexedSeq: checkpoint.lastIndexedSeq,
+            rawTailStartSeq: checkpoint.tailStartSeq,
+            lastIndexedBlockId: 0,
+        });
+    }
+}
+
 function getSessionArchiveCheckpoint(sessionId: string): SessionArchiveCheckpoint {
     const dbCheckpoint = getVectorCheckpointSync(sessionId);
     if (dbCheckpoint.updatedAt > 0 || dbCheckpoint.rawLastIndexedSeq > 0 || dbCheckpoint.lastIndexedBlockId > 0 || dbCheckpoint.rawTailStartSeq > 0) {
@@ -1355,6 +1371,7 @@ async function init() {
     }
 
     await loadCheckpoints();
+    await migrateLegacyCheckpointsToDb();
 }
 
 // Compatibility wrapper during migration away from history-based indexing.

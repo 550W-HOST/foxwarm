@@ -4,7 +4,42 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 
-test('vector search mixes raw and block rows while child current-session scope respects lineage cutoffs', async () => {
+function makeMessageRecord(sessionId: string, seq: number, role: 'user' | 'model' | 'tool', text: string, timestamp: number) {
+  return {
+    v: 1,
+    kind: 'message' as const,
+    sessionId,
+    agent: 'test-agent',
+    seq,
+    timestamp,
+    role,
+    message: {
+      role,
+      parts: [{ text }],
+      __meta: { seq, timestamp },
+    },
+  };
+}
+
+function makeBlockRecord(sessionId: string, id: number, rawStartSeq: number, rawEndSeq: number, summary: string, createdAt: number) {
+  return {
+    v: 1,
+    kind: 'block' as const,
+    sessionId,
+    agent: 'test-agent',
+    id,
+    level: 1,
+    sourceKind: 'message' as const,
+    sourceStart: rawStartSeq,
+    sourceEnd: rawEndSeq,
+    rawStartSeq,
+    rawEndSeq,
+    summary,
+    createdAt,
+  };
+}
+
+test('mixed vector search works after bootstrapping legacy archive data into sqlite store', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-vector-lineage-'));
   process.env.FOXWARM_DATA_DIR = tempRoot;
 
@@ -29,60 +64,41 @@ test('vector search mixes raw and block rows while child current-session scope r
   }) as typeof fetch;
 
   try {
-    const archive = await import('./session/archive');
-    const layeredContext = await import('./session/layeredContext');
+    const config = await import('./config');
     const archiveStore = await import('./session/archiveStore');
     const vector = await import('./vector');
 
-    const parent: any = {
-      id: 'parent',
-      agent: 'test-agent',
-      history: [],
-      nextMessageSeq: 1,
-      nextBlockId: 1,
-      contextFrontier: [],
-    };
+    const parentMessages = [
+      makeMessageRecord('parent', 1, 'user', 'alpha parent raw', 1000),
+      makeMessageRecord('parent', 2, 'model', 'beta parent raw', 2000),
+      makeMessageRecord('parent', 3, 'user', 'alpha forbidden future', 3000),
+    ];
+    const childMessages = [
+      makeMessageRecord('parent', 1, 'user', 'alpha parent raw', 1000),
+      makeMessageRecord('parent', 2, 'model', 'beta parent raw', 2000),
+      makeMessageRecord('child', 4, 'user', 'gamma child local', 4000),
+    ];
 
-    await archive.appendMessagesToArchive(parent, [
-      { role: 'user', parts: [{ text: 'alpha parent raw' }], __meta: { timestamp: 1000 } },
-      { role: 'model', parts: [{ text: 'beta parent raw' }], __meta: { timestamp: 2000 } },
-    ]);
-    await layeredContext.appendBlocksToArchive(parent, [{
-      level: 1,
-      sourceKind: 'message',
-      sourceStart: 1,
-      sourceEnd: 2,
-      rawStartSeq: 1,
-      rawEndSeq: 2,
-      summary: 'alpha summary block',
-    }]);
+    const parentBlocks = [
+      makeBlockRecord('parent', 1, 1, 2, 'alpha summary block', 2500),
+    ];
+    const childBlocks = [...parentBlocks];
 
-    await archiveStore.ensureSessionBranch('child', {
-      parentSessionId: 'parent',
-      forkMessageSeq: parent.nextMessageSeq - 1,
-      forkBlockId: parent.nextBlockId - 1,
-    });
+    await fs.outputFile(config.getSessionArchiveLogPath('parent'), `${parentMessages.map(record => JSON.stringify(record)).join('\n')}\n`);
+    await fs.outputFile(config.getSessionArchiveLogPath('child'), `${childMessages.map(record => JSON.stringify(record)).join('\n')}\n`);
+    await fs.outputFile(config.getSessionBlockArchiveLogPath('parent'), `${parentBlocks.map(record => JSON.stringify(record)).join('\n')}\n`);
+    await fs.outputFile(config.getSessionBlockArchiveLogPath('child'), `${childBlocks.map(record => JSON.stringify(record)).join('\n')}\n`);
+    await fs.outputJson(config.SESSIONS_FILE, {
+      sessions: {
+        parent: { id: 'parent', agent: 'test-agent', meta: { lastMessageTime: 3000 } },
+        child: { id: 'child', agent: 'test-agent', parentSessionId: 'parent', meta: { lastMessageTime: 4000 } },
+      },
+    }, { spaces: 2 });
 
-    await archive.appendMessagesToArchive(parent, [
-      { role: 'user', parts: [{ text: 'alpha forbidden future' }], __meta: { timestamp: 3000 } },
-    ]);
-
-    const child: any = {
-      id: 'child',
-      agent: 'test-agent',
-      history: [],
-      nextMessageSeq: parent.nextMessageSeq,
-      nextBlockId: parent.nextBlockId,
-      contextFrontier: [],
-    };
-
-    await archive.appendMessagesToArchive(child, [
-      { role: 'user', parts: [{ text: 'gamma child local' }], __meta: { timestamp: 4000 } },
-    ]);
-
+    await archiveStore.initArchiveStore();
     await vector.init();
-    await vector.indexSessionArchive('parent', parent.nextMessageSeq - 1, parent.nextBlockId - 1);
-    await vector.indexSessionArchive('child', child.nextMessageSeq - 1, child.nextBlockId - 1);
+    await vector.indexSessionArchive('parent', 3, 1);
+    await vector.indexSessionArchive('child', 4, 1);
 
     const lineage = await archiveStore.getVectorSearchLineage('child');
     const lineageSessions = lineage.map(entry => ({
@@ -93,15 +109,15 @@ test('vector search mixes raw and block rows while child current-session scope r
 
     const alphaResults = await vector.search('alpha', 10, false, { lineageSessions }) as any[];
     assert(alphaResults.some(result => result.kind === 'raw' && result.text.includes('alpha parent raw')),
-      'expected inherited raw row from parent to be searchable');
+      'expected inherited raw row from imported parent archive to be searchable');
     assert(alphaResults.some(result => result.kind === 'block' && result.text.includes('alpha summary block')),
-      'expected inherited block row from parent to be searchable');
+      'expected inherited block row from imported parent archive to be searchable');
     assert(alphaResults.every(result => !String(result.text || '').includes('alpha forbidden future')),
-      'child current-session lineage search must not leak parent post-fork rows');
+      'child current-session lineage search must not leak parent post-fork rows after bootstrap import');
 
     const status = vector.getArchiveIndexStatus('child');
-    assert.equal(status.lastIndexedBlockId, 1, 'child should inherit parent block checkpoint without re-indexing duplicate block rows');
-    assert.equal(status.lastIndexedSeq, child.nextMessageSeq - 1, 'child checkpoint should advance on local messages');
+    assert.equal(status.lastIndexedBlockId, 1, 'child should inherit imported parent block checkpoint');
+    assert.equal(status.lastIndexedSeq, 4, 'child checkpoint should advance on imported local child messages');
   } finally {
     global.fetch = originalFetch;
   }

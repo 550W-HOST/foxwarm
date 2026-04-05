@@ -1,11 +1,12 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import { ARCHIVE_DB_PATH, getSessionArchiveLogPath, getSessionBlockArchiveLogPath } from '../config';
+import { ARCHIVE_DB_PATH, SESSION_LOGS_DIR, getSessionArchiveLogPath, getSessionBlockArchiveLogPath } from '../config';
 import { logger } from '../common';
 import type { Message } from '../types';
 import type { ArchiveMessageRecord } from './archive';
 import type { ArchiveBlockRecord } from './layeredContext';
+import { loadSessionsMetadataSnapshot } from './metadataStore';
 
 export type ArchiveBranchRecord = {
   sessionId: string;
@@ -42,6 +43,7 @@ type LineageEntry = {
 
 let db: DatabaseSync | null = null;
 const importedSessions = new Set<string>();
+let bootstrapPromise: Promise<void> | null = null;
 
 function getDb(): DatabaseSync {
   if (!db) {
@@ -170,6 +172,163 @@ function parseBlockRecord(line: string): ArchiveBlockRecord | null {
     logger.warn({ err: e }, 'Skipping malformed archive-store block import line');
   }
   return null;
+}
+
+type BootstrapSessionCandidate = {
+  sessionId: string;
+  parentSessionId?: string;
+};
+
+async function collectBootstrapSessionCandidates(): Promise<BootstrapSessionCandidate[]> {
+  const candidates = new Map<string, BootstrapSessionCandidate>();
+
+  try {
+    const { data } = await loadSessionsMetadataSnapshot();
+    const sessionsData = data?.sessions && typeof data.sessions === 'object' ? data.sessions : data;
+    if (sessionsData && typeof sessionsData === 'object') {
+      for (const [sessionId, sessionMeta] of Object.entries(sessionsData)) {
+        if (typeof sessionId !== 'string' || !sessionId.trim()) {
+          continue;
+        }
+        const meta = (sessionMeta && typeof sessionMeta === 'object') ? sessionMeta as Record<string, any> : {};
+        candidates.set(sessionId, {
+          sessionId,
+          parentSessionId: typeof meta.parentSessionId === 'string' && meta.parentSessionId.trim().length > 0
+            ? meta.parentSessionId.trim()
+            : undefined,
+        });
+      }
+    }
+  } catch (e) {
+    logger.warn({ err: e }, 'Failed to load session metadata while bootstrapping archive store');
+  }
+
+  if (await fs.pathExists(SESSION_LOGS_DIR)) {
+    const walk = async (dir: string): Promise<void> => {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+          continue;
+        }
+
+        if (!entry.isFile()) {
+          continue;
+        }
+
+        let sessionId: string | null = null;
+        const relativePath = path.relative(SESSION_LOGS_DIR, fullPath);
+        if (entry.name.endsWith('.blocks.jsonl')) {
+          sessionId = relativePath.slice(0, -'.blocks.jsonl'.length).split(path.sep).join('/');
+        } else if (entry.name.endsWith('.jsonl')) {
+          sessionId = relativePath.slice(0, -'.jsonl'.length).split(path.sep).join('/');
+        }
+
+        if (!sessionId) {
+          continue;
+        }
+
+        if (!candidates.has(sessionId)) {
+          candidates.set(sessionId, { sessionId });
+        }
+      }
+    };
+
+    await walk(SESSION_LOGS_DIR);
+  }
+
+  return [...candidates.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+}
+
+async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: string): Promise<number> {
+  const archivePath = getSessionArchiveLogPath(sessionId);
+  if (!await fs.pathExists(archivePath)) {
+    return 0;
+  }
+
+  const raw = await fs.readFile(archivePath, 'utf8');
+  let maxSeq = 0;
+  let minLocalSeq = Number.POSITIVE_INFINITY;
+  for (const line of raw.split('\n').map(line => line.trim()).filter(Boolean)) {
+    const record = parseMessageRecord(line);
+    if (record?.sessionId === parentSessionId && record.seq > maxSeq) {
+      maxSeq = record.seq;
+    }
+    if (record?.sessionId === sessionId && record.seq < minLocalSeq) {
+      minLocalSeq = record.seq;
+    }
+  }
+
+  if (maxSeq <= 0 && Number.isFinite(minLocalSeq)) {
+    return Math.max(0, minLocalSeq - 1);
+  }
+
+  return maxSeq;
+}
+
+async function inferLegacyForkBlockId(sessionId: string, parentSessionId: string): Promise<number> {
+  const archivePath = getSessionBlockArchiveLogPath(sessionId);
+  if (!await fs.pathExists(archivePath)) {
+    return 0;
+  }
+
+  const raw = await fs.readFile(archivePath, 'utf8');
+  let maxId = 0;
+  let minLocalId = Number.POSITIVE_INFINITY;
+  for (const line of raw.split('\n').map(line => line.trim()).filter(Boolean)) {
+    const record = parseBlockRecord(line);
+    if (record?.sessionId === parentSessionId && record.id > maxId) {
+      maxId = record.id;
+    }
+    if (record?.sessionId === sessionId && record.id < minLocalId) {
+      minLocalId = record.id;
+    }
+  }
+
+  if (maxId <= 0 && Number.isFinite(minLocalId)) {
+    return Math.max(0, minLocalId - 1);
+  }
+
+  return maxId;
+}
+
+async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
+  const candidates = await collectBootstrapSessionCandidates();
+  if (candidates.length === 0) {
+    return;
+  }
+
+  for (const candidate of candidates) {
+    if (candidate.parentSessionId) {
+      const forkMessageSeq = await inferLegacyForkMessageSeq(candidate.sessionId, candidate.parentSessionId);
+      const forkBlockId = await inferLegacyForkBlockId(candidate.sessionId, candidate.parentSessionId);
+      await ensureSessionBranch(candidate.sessionId, {
+        parentSessionId: candidate.parentSessionId,
+        forkMessageSeq,
+        forkBlockId,
+      });
+    } else {
+      await ensureSessionBranch(candidate.sessionId);
+    }
+  }
+
+  for (const candidate of candidates) {
+    await importSessionMessagesFromJsonl(candidate.sessionId);
+    await importSessionBlocksFromJsonl(candidate.sessionId);
+    importedSessions.add(candidate.sessionId);
+  }
+}
+
+async function ensureBootstrapped(): Promise<void> {
+  if (!bootstrapPromise) {
+    bootstrapPromise = bootstrapArchiveStoreFromLegacy().catch((err) => {
+      bootstrapPromise = null;
+      throw err;
+    });
+  }
+
+  await bootstrapPromise;
 }
 
 async function importSessionMessagesFromJsonl(sessionId: string): Promise<void> {
@@ -311,6 +470,7 @@ function buildLineage(sessionId: string): LineageEntry[] {
 
 export async function initArchiveStore(): Promise<void> {
   openArchiveStore();
+  await ensureBootstrapped();
 }
 
 export function initArchiveStoreSync(): void {
@@ -326,7 +486,7 @@ export async function ensureSessionBranch(
     createdAt?: number;
   } = {},
 ): Promise<ArchiveBranchRecord> {
-  await initArchiveStore();
+  openArchiveStore();
   const now = options.createdAt || Date.now();
   getDb().prepare(`
     INSERT OR IGNORE INTO archive_branches (
