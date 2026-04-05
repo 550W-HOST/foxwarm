@@ -39,6 +39,7 @@ const SEGMENT_OVERLAP_TOKENS = 400;
 const SEGMENT_OVERLAP_MAX_MESSAGE_TOKENS = 400;
 const ARCHIVE_INDEX_MIN_PENDING_MESSAGES = 50;
 const ARCHIVE_INDEX_MIN_PENDING_TOKENS = 8000;
+const RAW_REBUILD_BATCH_SEGMENT_LIMIT = Math.max(1, Number(process.env.FOXWARM_VECTOR_RAW_REBUILD_BATCH_SEGMENTS || 16));
 
 let table: any;
 let legacyCheckpoints: VectorIndexCheckpointFile = { version: 2, sessions: {} };
@@ -126,6 +127,25 @@ type SessionArchiveBatchState = {
     promise?: Promise<number>;
     resolve?: (value: number) => void;
     reject?: (reason?: unknown) => void;
+};
+
+type RawRebuildProgress = {
+    lastIndexedSeq: number;
+    tailStartSeq: number;
+    processedSegments: number;
+    totalSegments: number;
+    processedRows: number;
+    totalRows: number;
+    processedMessageCount: number;
+    totalMessageCount: number;
+    batchRowCount: number;
+    batchSegmentCount: number;
+    batchStartSeq: number;
+    batchEndSeq: number;
+    batchNumber: number;
+    batchCount: number;
+    elapsedMs: number;
+    batchDurationMs: number;
 };
 
 type ArchiveIndexBatchDecision = {
@@ -556,6 +576,20 @@ async function setSessionArchiveCheckpoint(sessionId: string, checkpoint: { last
     });
 }
 
+function startStartupArchiveVectorBackfill(): Promise<void> {
+    if (!startupBackfillPromise) {
+        startupBackfillPromise = runStartupArchiveVectorBackfill().finally(() => {
+            startupBackfillPromise = null;
+        });
+    }
+
+    return startupBackfillPromise;
+}
+
+async function waitForStartupArchiveVectorBackfill(): Promise<void> {
+    await startStartupArchiveVectorBackfill();
+}
+
 function getOrCreateBatchState(sessionId: string): SessionArchiveBatchState {
     let state = archiveIndexBatchStates.get(sessionId);
     if (!state) {
@@ -684,22 +718,78 @@ async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: numb
     await table.delete(`session_id = '${escapeFilterValue(sessionId)}' AND memory_kind = 'raw' AND start_seq >= ${rewindStartSeq}`);
 
     const segments = buildArchiveSegments(targetLines);
-    const rows = segments.flatMap(createRowsFromSegment);
-    const hydratedRows: VectorRow[] = [];
+    const segmentRows = segments.map(segment => ({
+        segment,
+        rows: createRowsFromSegment(segment),
+    }));
+    const totalRowCount = segmentRows.reduce((sum, entry) => sum + entry.rows.length, 0);
+    const totalMessageCount = targetLines.length;
+    const batchCount = Math.max(1, Math.ceil(segmentRows.length / RAW_REBUILD_BATCH_SEGMENT_LIMIT));
+    const rebuildStartTime = Date.now();
 
-    for (const row of rows) {
-        const vector = await getEmbedding(row.chunk_text);
-        hydratedRows.push({ ...row, vector });
-    }
+    let processedSegments = 0;
+    let processedRows = 0;
+    let finalLastIndexedSeq = targetLines[targetLines.length - 1].seq;
+    let finalTailStartSeq = segments[segments.length - 1]?.startSeq || finalLastIndexedSeq;
 
-    if (hydratedRows.length > 0) {
-        await table.add(hydratedRows);
+    for (let batchStartIndex = 0; batchStartIndex < segmentRows.length; batchStartIndex += RAW_REBUILD_BATCH_SEGMENT_LIMIT) {
+        const batchStartTime = Date.now();
+        const batchEntries = segmentRows.slice(batchStartIndex, batchStartIndex + RAW_REBUILD_BATCH_SEGMENT_LIMIT);
+        const hydratedRows: VectorRow[] = [];
+
+        for (const entry of batchEntries) {
+            for (const row of entry.rows) {
+                const vector = await getEmbedding(row.chunk_text);
+                hydratedRows.push({ ...row, vector });
+            }
+        }
+
+        if (hydratedRows.length > 0) {
+            await table.add(hydratedRows);
+        }
+
+        processedSegments += batchEntries.length;
+        processedRows += hydratedRows.length;
+
+        const lastBatchSegment = batchEntries[batchEntries.length - 1].segment;
+        finalLastIndexedSeq = lastBatchSegment.endSeq;
+        finalTailStartSeq = lastBatchSegment.startSeq;
+
+        await setSessionArchiveCheckpoint(sessionId, {
+            lastIndexedSeq: finalLastIndexedSeq,
+            tailStartSeq: finalTailStartSeq,
+        });
+
+        const progress: RawRebuildProgress = {
+            lastIndexedSeq: finalLastIndexedSeq,
+            tailStartSeq: finalTailStartSeq,
+            processedSegments,
+            totalSegments: segmentRows.length,
+            processedRows,
+            totalRows: totalRowCount,
+            processedMessageCount: Math.max(0, finalLastIndexedSeq - targetLines[0].seq + 1),
+            totalMessageCount,
+            batchRowCount: hydratedRows.length,
+            batchSegmentCount: batchEntries.length,
+            batchStartSeq: batchEntries[0].segment.startSeq,
+            batchEndSeq: finalLastIndexedSeq,
+            batchNumber: Math.floor(batchStartIndex / RAW_REBUILD_BATCH_SEGMENT_LIMIT) + 1,
+            batchCount,
+            elapsedMs: Date.now() - rebuildStartTime,
+            batchDurationMs: Date.now() - batchStartTime,
+        };
+
+        logger.info({
+            sessionId,
+            rewindStartSeq,
+            ...progress,
+        }, 'Committed session archive vector raw rebuild batch');
     }
 
     return {
-        lastIndexedSeq: targetLines[targetLines.length - 1].seq,
-        tailStartSeq: segments[segments.length - 1]?.startSeq || targetLines[targetLines.length - 1].seq,
-        rowCount: hydratedRows.length,
+        lastIndexedSeq: finalLastIndexedSeq,
+        tailStartSeq: finalTailStartSeq,
+        rowCount: totalRowCount,
         segmentCount: segments.length,
         rebuiltMessageCount: targetLines.length,
         rebuiltStartSeq: targetLines[0].seq,
@@ -1108,16 +1198,6 @@ async function runStartupArchiveVectorBackfill(): Promise<void> {
     }, 'Completed startup archive vector backfill for imported/pending sessions');
 }
 
-async function ensureStartupArchiveVectorBackfill(): Promise<void> {
-    if (!startupBackfillPromise) {
-        startupBackfillPromise = runStartupArchiveVectorBackfill().finally(() => {
-            startupBackfillPromise = null;
-        });
-    }
-
-    await startupBackfillPromise;
-}
-
 async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: string): Promise<void> {
     const oldCheckpoint = getSessionArchiveCheckpoint(oldSessionId);
     const newCheckpoint = getSessionArchiveCheckpoint(newSessionId);
@@ -1422,7 +1502,9 @@ async function init() {
 
     await loadCheckpoints();
     await migrateLegacyCheckpointsToDb();
-    await ensureStartupArchiveVectorBackfill();
+    void startStartupArchiveVectorBackfill().catch((err) => {
+        logger.error({ err }, 'Startup archive vector backfill failed');
+    });
 }
 
 // Compatibility wrapper during migration away from history-based indexing.
@@ -1457,4 +1539,5 @@ export {
     scheduleSessionArchiveIndex,
     search,
     getContextAround,
+    waitForStartupArchiveVectorBackfill,
 };

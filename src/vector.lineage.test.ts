@@ -99,6 +99,7 @@ test('mixed vector search works after bootstrapping legacy archive data into sql
 
     await archiveStore.initArchiveStore();
     await vector.init();
+    await vector.waitForStartupArchiveVectorBackfill();
 
     assert.ok(embeddingRequestCount > 0, 'startup bootstrap import should automatically backfill vector rows');
 
