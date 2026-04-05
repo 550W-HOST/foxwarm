@@ -129,7 +129,7 @@ function normalizeToolModelKey(value: unknown): string | undefined {
 
 function formatArchivedMessagePreview(
   sessionId: string,
-  records: Array<{ seq: number; message: any }>,
+  records: Array<{ seq: number; message: any; inherited?: boolean; sourceSessionId?: string }>,
   meta: { totalMatched: number; startSeq?: number; endSeq?: number },
   previewLength: number,
 ): string {
@@ -157,7 +157,10 @@ function formatArchivedMessagePreview(
       skipRagMemorySnippets: true,
       skipThinking: true,
     });
-    result += `${formatPrefixedMultilineText(`[#${record.seq}] ${roleEmoji} ${record.message.role}: `, preview)}\n`;
+    const originLabel = record.inherited
+      ? `[inherited from ${record.sourceSessionId || 'unknown'}] `
+      : '[local] ';
+    result += `${formatPrefixedMultilineText(`[#${record.seq}] ${originLabel}${roleEmoji} ${record.message.role}: `, preview)}\n`;
   }
   return result;
 }
@@ -165,7 +168,7 @@ function formatArchivedMessagePreview(
 
 function formatArchivedBlockPreview(
   sessionId: string,
-  records: Array<{ id: number; level: number; rawStartSeq: number; rawEndSeq: number; summary: string; sourceKind: string; sourceStart: number; sourceEnd: number; }>,
+  records: Array<{ id: number; level: number; rawStartSeq: number; rawEndSeq: number; summary: string; sourceKind: string; sourceStart: number; sourceEnd: number; inherited?: boolean; sourceSessionId?: string; }>,
   meta: { totalMatched: number; startId?: number; endId?: number },
   previewLength: number,
 ): string {
@@ -185,7 +188,8 @@ function formatArchivedBlockPreview(
 
 `;
   for (const record of records) {
-    const prefix = `[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
+    const locality = record.inherited ? `[inherited from ${record.sourceSessionId || 'unknown'}] ` : '[local] ';
+    const prefix = `${locality}[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
     result += `${formatPrefixedMultilineText(prefix, (record.summary || '').slice(0, previewLength) || '[empty summary]')}
 `;
   }

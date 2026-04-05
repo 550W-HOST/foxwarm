@@ -3,6 +3,7 @@ import path from 'path';
 import * as llm from '../llm';
 import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, getSessionBlockArchiveLogPath, getSessionFrontierPath, SESSIONS_DIR } from '../config';
 import { Session } from '../types';
+import { renameSessionArchiveStore } from './archiveStore';
 
 interface SessionAgentOpsDeps {
   getSession: (sessionId: string) => Promise<Session>;
@@ -139,6 +140,7 @@ async function renameSessionIdentity(options: {
   }
 
   const updatedChildren = await deps.updateChildSessionParentIds(oldRealId, targetSessionId);
+  await renameSessionArchiveStore(oldRealId, targetSessionId);
   await deps.moveSessionArchiveIndex(oldRealId, targetSessionId);
 
   await deps.saveSession(targetSessionId);

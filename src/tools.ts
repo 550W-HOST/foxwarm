@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import * as vector from './vector';
 import * as sessionManager from './sessionManager';
+import { getVectorSearchLineage } from './session/archiveStore';
 import { estimateTokenCount } from './tokenCount';
 import { WORKSPACE_DIR, getAgentDir, getAgentMemoryDir } from './config';
 import { checkPathAccess } from './isolatedCheck';
@@ -599,7 +600,7 @@ export async function resolveMemorySearchOptions(
         targetAgentName?: string;
     },
     ctx?: ToolContext,
-): Promise<{ searchOptions: { sessionIds?: string[]; agent?: string }; effectiveScope: 'current-session' | 'current-agent' }> {
+): Promise<{ searchOptions: { sessionIds?: string[]; agent?: string; lineageSessions?: Array<{ sessionId: string; maxMessageSeq?: number; maxBlockId?: number }> }; effectiveScope: 'current-session' | 'current-agent' }> {
     if (!ctx?.sessionId) {
         throw new Error('search_vector requires an active session context.');
     }
@@ -608,6 +609,23 @@ export async function resolveMemorySearchOptions(
     const agentName = session.agent || 'main';
     const effectiveIsolated = sessionManager.isSessionEffectivelyIsolated(session);
     const subconsciousPrimarySessionId = sessionManager.getSubconsciousPrimarySessionId(session);
+
+    async function buildSessionScopedSearchOptions(targetSessionId: string, extraSessionIds: string[] = []) {
+        const lineage = await getVectorSearchLineage(targetSessionId);
+        if (lineage.length > 0) {
+            return {
+                lineageSessions: lineage.map(entry => ({
+                    sessionId: entry.sessionId,
+                    maxMessageSeq: entry.maxMessageSeq,
+                    maxBlockId: entry.maxBlockId,
+                })),
+            };
+        }
+
+        return {
+            sessionIds: [targetSessionId, ...extraSessionIds],
+        };
+    }
 
     if (subconsciousPrimarySessionId) {
         if (request.targetAgentName && request.targetAgentName !== agentName) {
@@ -622,14 +640,14 @@ export async function resolveMemorySearchOptions(
 
             if (request.targetSessionId === session.id || (session.aliases || []).includes(request.targetSessionId)) {
                 return {
-                    searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+                    searchOptions: await buildSessionScopedSearchOptions(session.id, session.aliases || []),
                     effectiveScope: 'current-session',
                 };
             }
         }
 
         return {
-            searchOptions: { sessionIds: [subconsciousPrimarySessionId] },
+            searchOptions: await buildSessionScopedSearchOptions(subconsciousPrimarySessionId),
             effectiveScope: 'current-session',
         };
     }
@@ -642,7 +660,7 @@ export async function resolveMemorySearchOptions(
             throw new Error('Isolated session can only search the current session.');
         }
         return {
-            searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+            searchOptions: await buildSessionScopedSearchOptions(session.id, session.aliases || []),
             effectiveScope: 'current-session',
         };
     }
@@ -660,14 +678,14 @@ export async function resolveMemorySearchOptions(
             throw new Error('search_vector cannot access memories outside the current agent.');
         }
         return {
-            searchOptions: { sessionIds: [targetSession.id, ...(targetSession.aliases || [])] },
+            searchOptions: await buildSessionScopedSearchOptions(targetSession.id, targetSession.aliases || []),
             effectiveScope: 'current-session',
         };
     }
 
     if (request.scope === 'current-session') {
         return {
-            searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+            searchOptions: await buildSessionScopedSearchOptions(session.id, session.aliases || []),
             effectiveScope: 'current-session',
         };
     }
@@ -726,11 +744,17 @@ export function formatMemorySearchResults(results: any): string {
         const seqLabel = r.start_seq != null && r.end_seq != null && Number(r.start_seq) !== Number(r.end_seq)
             ? `${r.start_seq}-${r.end_seq}`
             : `${r.start_seq ?? r.seq}`;
+        const rawSeqLabel = r.raw_start_seq != null && r.raw_end_seq != null && Number(r.raw_start_seq) !== Number(r.raw_end_seq)
+            ? `${r.raw_start_seq}-${r.raw_end_seq}`
+            : `${r.raw_start_seq ?? r.start_seq ?? r.seq}`;
         const messageLabel = r.message_count > 1
             ? `[messages: ${r.message_count}]`
             : '';
         const chunkLabel = r.chunk_count > 1
             ? `[chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]`
+            : '';
+        const kindLabel = r.kind === 'block'
+            ? `[kind: block] [B#${r.block_id ?? '?'} L${r.block_level ?? '?'}] [raw: ${rawSeqLabel}]`
             : '';
         const ageLabel = `[${formatAgeLabel(ts)}]`;
         const preview = buildPreview(r.text || r.chunk_text || '');
@@ -738,6 +762,7 @@ export function formatMemorySearchResults(results: any): string {
         return [
             `[${dateStr}] [session: ${r.session_id}] [seq: ${seqLabel}]`,
             ageLabel,
+            kindLabel,
             messageLabel,
             chunkLabel,
             `[ID: ${idStr}]`,

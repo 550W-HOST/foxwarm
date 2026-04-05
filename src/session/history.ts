@@ -32,7 +32,7 @@ export interface ArchivedMessagesQueryOptions {
 }
 
 export interface ArchivedMessagesQueryResult {
-  records: Array<{ seq: number; message: Message }>;
+  records: Array<{ seq: number; message: Message; sourceSessionId?: string; inherited?: boolean }>;
   totalMatched: number;
   returnedCount: number;
   availableRange: { startSeq?: number; endSeq?: number };
@@ -191,8 +191,9 @@ export async function forceIndexSession(deps: SessionHistoryDeps, sessionId: str
 
   try {
     const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
+    const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
     logger.info({ sessionId, latestSeqHint }, 'Force indexing session archive');
-    await vector.indexSessionArchive(sessionId, latestSeqHint);
+    await vector.indexSessionArchive(sessionId, latestSeqHint, latestBlockIdHint);
     session.vectorIndexPosition = session.history.length;
     session.indexingState = undefined;
     await deps.saveSession(sessionId);
@@ -1092,6 +1093,8 @@ export async function getArchivedMessages(sessionId: string, options: ArchivedMe
   const sliced = matched.map(record => ({
     seq: record.seq,
     message: record.message,
+    sourceSessionId: record.sourceSessionId,
+    inherited: record.inherited,
   }));
 
   return {

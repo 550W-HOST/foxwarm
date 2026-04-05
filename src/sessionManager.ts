@@ -16,6 +16,7 @@ import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq } from './session/archive';
 import { appendMessagesToContextFrontier, copyLayeredContextFiles, ensureContextFrontier, loadSessionFrontier, moveLayeredContextFiles, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
+import { ensureSessionBranch, renameSessionArchiveStore } from './session/archiveStore';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
@@ -982,22 +983,11 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 
   sessions.set(newSessionId, forkedSession);
 
-  const sourceArchiveLog = getSessionArchiveLogPath(sourceSessionId);
-  const targetArchiveLog = getSessionArchiveLogPath(newSessionId);
-  if (await fs.pathExists(sourceArchiveLog)) {
-    await fs.ensureDir(path.dirname(targetArchiveLog));
-    await fs.copy(sourceArchiveLog, targetArchiveLog, { overwrite: true });
-  }
-
-  const sourceArchiveImagesDir = getSessionArchiveImagesDir(sourceSessionId);
-  const targetArchiveImagesDir = getSessionArchiveImagesDir(newSessionId);
-  if (await fs.pathExists(sourceArchiveImagesDir)) {
-    await fs.ensureDir(path.dirname(targetArchiveImagesDir));
-    await fs.copy(sourceArchiveImagesDir, targetArchiveImagesDir, { overwrite: true });
-  }
-
-  await copyLayeredContextFiles(sourceSessionId, newSessionId);
-  await vector.copySessionArchiveIndexCheckpoint(sourceSessionId, newSessionId);
+  await ensureSessionBranch(newSessionId, {
+    parentSessionId: sourceSessionId,
+    forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
+    forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
+  });
   await appendSessionMessages(forkedSession, appendedForkMessages);
 
   logger.info({ sourceSessionId, newSessionId, isChildSession }, 'Session forked');
@@ -1150,12 +1140,13 @@ export async function saveSession(sessionId: string): Promise<void> {
 
     // Schedule archive-based vector indexing (non-blocking)
     const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
+    const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
     const lastMessage = session.history[session.history.length - 1];
     const latestMessageTokenEstimate = lastMessage?.__meta?.seq === latestSeqHint
       ? vector.estimateArchiveMessageTokenCount(lastMessage)
       : undefined;
 
-    vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate)
+    vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
       .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
     
     // Notify session list update

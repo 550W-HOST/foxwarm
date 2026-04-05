@@ -8,6 +8,12 @@ import {
 } from '../config';
 import { logger } from '../common';
 import { ArchiveMessageRecord, readArchiveMessagesBySeqRange } from './archive';
+import {
+  ensureSessionBranch,
+  readEffectiveArchiveBlocks,
+  readLocalArchiveBlocks as readLocalArchiveBlocksFromStore,
+  writeArchiveBlocks,
+} from './archiveStore';
 
 const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
   'This session has been compacted.',
@@ -30,6 +36,8 @@ export interface ArchiveBlockRecord {
   rawEndSeq: number;
   summary: string;
   createdAt: number;
+  sourceSessionId?: string;
+  inherited?: boolean;
 }
 
 export interface CreateArchiveBlockInput {
@@ -189,40 +197,27 @@ export async function appendBlocksToArchive(session: Session, blocks: CreateArch
 
   const archivePath = getSessionBlockArchiveLogPath(session.id);
   await fs.ensureDir(path.dirname(archivePath));
+  await ensureSessionBranch(session.id);
   const records = await buildArchiveBlockRecords(session, blocks);
   await fs.appendFile(archivePath, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
+  await writeArchiveBlocks(records);
   return records;
 }
 
 export async function readArchiveBlocks(sessionId: string): Promise<ArchiveBlockRecord[]> {
-  const archivePath = getSessionBlockArchiveLogPath(sessionId);
-  if (!await fs.pathExists(archivePath)) {
-    return [];
-  }
-
-  const raw = await fs.readFile(archivePath, 'utf8');
-  const parsed: ArchiveBlockRecord[] = [];
-  for (const line of raw.split('\n').map(line => line.trim()).filter(Boolean)) {
-    try {
-      const record = JSON.parse(line);
-      if (record?.kind === 'block' && typeof record.id === 'number' && typeof record.level === 'number') {
-        parsed.push(record as ArchiveBlockRecord);
-      }
-    } catch (e) {
-      logger.warn({ err: e, sessionId }, 'Skipping malformed block archive line');
-    }
-  }
-
-  return parsed.sort((a, b) => a.id - b.id);
+  return readEffectiveArchiveBlocks(sessionId);
 }
 
 export async function readArchiveBlocksByIdRange(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
-  const records = await readArchiveBlocks(sessionId);
-  return records.filter(record => {
-    if (typeof startId === 'number' && record.id < startId) return false;
-    if (typeof endId === 'number' && record.id > endId) return false;
-    return true;
-  });
+  return readEffectiveArchiveBlocks(sessionId, startId, endId);
+}
+
+export async function readLocalArchiveBlocks(sessionId: string): Promise<ArchiveBlockRecord[]> {
+  return readLocalArchiveBlocksFromStore(sessionId);
+}
+
+export async function readLocalArchiveBlocksByIdRange(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
+  return readLocalArchiveBlocksFromStore(sessionId, startId, endId);
 }
 
 function formatSeqRange(startSeq: number, endSeq: number): string {
