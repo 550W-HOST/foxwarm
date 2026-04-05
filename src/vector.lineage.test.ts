@@ -42,6 +42,7 @@ function makeBlockRecord(sessionId: string, id: number, rawStartSeq: number, raw
 test('mixed vector search works after bootstrapping legacy archive data into sqlite store', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-vector-lineage-'));
   process.env.FOXWARM_DATA_DIR = tempRoot;
+  let embeddingRequestCount = 0;
 
   const makeEmbedding = (text: string): number[] => {
     const vector = new Array(1024).fill(0);
@@ -55,6 +56,7 @@ test('mixed vector search works after bootstrapping legacy archive data into sql
 
   const originalFetch = global.fetch;
   global.fetch = (async (_input: any, init?: any) => {
+    embeddingRequestCount += 1;
     const body = JSON.parse(String(init?.body || '{}'));
     const embedding = makeEmbedding(String(body.input || ''));
     return new Response(JSON.stringify({ data: [{ embedding }] }), {
@@ -97,8 +99,16 @@ test('mixed vector search works after bootstrapping legacy archive data into sql
 
     await archiveStore.initArchiveStore();
     await vector.init();
-    await vector.indexSessionArchive('parent', 3, 1);
-    await vector.indexSessionArchive('child', 4, 1);
+
+    assert.ok(embeddingRequestCount > 0, 'startup bootstrap import should automatically backfill vector rows');
+
+    const embeddingRequestCountAfterFirstInit = embeddingRequestCount;
+    await vector.init();
+    assert.equal(
+      embeddingRequestCount,
+      embeddingRequestCountAfterFirstInit,
+      'already-checkpointed sessions should not be backfilled again on later init calls',
+    );
 
     const lineage = await archiveStore.getVectorSearchLineage('child');
     const lineageSessions = lineage.map(entry => ({
@@ -118,6 +128,10 @@ test('mixed vector search works after bootstrapping legacy archive data into sql
     const status = vector.getArchiveIndexStatus('child');
     assert.equal(status.lastIndexedBlockId, 1, 'child should inherit imported parent block checkpoint');
     assert.equal(status.lastIndexedSeq, 4, 'child checkpoint should advance on imported local child messages');
+
+    const parentStatus = vector.getArchiveIndexStatus('parent');
+    assert.equal(parentStatus.lastIndexedSeq, 3, 'parent startup backfill should advance raw checkpoint');
+    assert.equal(parentStatus.lastIndexedBlockId, 1, 'parent startup backfill should advance block checkpoint');
   } finally {
     global.fetch = originalFetch;
   }

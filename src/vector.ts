@@ -16,6 +16,7 @@ import {
 } from './session/archive';
 import {
     getVectorCheckpointSync,
+    listSessionsNeedingVectorBackfill,
     getVectorSearchLineage,
     getVectorSearchLineageSync,
     initArchiveStore,
@@ -43,6 +44,7 @@ let table: any;
 let legacyCheckpoints: VectorIndexCheckpointFile = { version: 2, sessions: {} };
 const indexingChains = new Map<string, Promise<number>>();
 const archiveIndexBatchStates = new Map<string, SessionArchiveBatchState>();
+let startupBackfillPromise: Promise<void> | null = null;
 
 type VectorRow = {
     id: string;
@@ -1074,6 +1076,48 @@ async function indexAllSessionArchives(sessionIds?: string[]): Promise<void> {
     }
 }
 
+async function runStartupArchiveVectorBackfill(): Promise<void> {
+    const candidates = await listSessionsNeedingVectorBackfill();
+    if (candidates.length === 0) {
+        return;
+    }
+
+    logger.info({
+        sessionCount: candidates.length,
+        sessions: candidates.map(candidate => candidate.sessionId),
+    }, 'Starting startup archive vector backfill for imported/pending sessions');
+
+    for (const candidate of candidates) {
+        try {
+            await indexSessionArchive(candidate.sessionId, candidate.latestLocalMessageSeq, candidate.latestLocalBlockId);
+        } catch (err) {
+            logger.error({
+                err,
+                sessionId: candidate.sessionId,
+                latestLocalMessageSeq: candidate.latestLocalMessageSeq,
+                latestLocalBlockId: candidate.latestLocalBlockId,
+                checkpointRawLastIndexedSeq: candidate.checkpointRawLastIndexedSeq,
+                checkpointLastIndexedBlockId: candidate.checkpointLastIndexedBlockId,
+            }, 'Startup archive vector backfill failed for session');
+        }
+    }
+
+    logger.info({
+        sessionCount: candidates.length,
+        sessions: candidates.map(candidate => candidate.sessionId),
+    }, 'Completed startup archive vector backfill for imported/pending sessions');
+}
+
+async function ensureStartupArchiveVectorBackfill(): Promise<void> {
+    if (!startupBackfillPromise) {
+        startupBackfillPromise = runStartupArchiveVectorBackfill().finally(() => {
+            startupBackfillPromise = null;
+        });
+    }
+
+    await startupBackfillPromise;
+}
+
 async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: string): Promise<void> {
     const oldCheckpoint = getSessionArchiveCheckpoint(oldSessionId);
     const newCheckpoint = getSessionArchiveCheckpoint(newSessionId);
@@ -1378,6 +1422,7 @@ async function init() {
 
     await loadCheckpoints();
     await migrateLegacyCheckpointsToDb();
+    await ensureStartupArchiveVectorBackfill();
 }
 
 // Compatibility wrapper during migration away from history-based indexing.

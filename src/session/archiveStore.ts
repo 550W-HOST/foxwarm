@@ -34,6 +34,15 @@ export type ArchiveVectorCheckpoint = {
   updatedAt: number;
 };
 
+export type ArchiveVectorBackfillCandidate = {
+  sessionId: string;
+  parentSessionId?: string;
+  latestLocalMessageSeq: number;
+  latestLocalBlockId: number;
+  checkpointRawLastIndexedSeq: number;
+  checkpointLastIndexedBlockId: number;
+};
+
 type LineageEntry = {
   sessionId: string;
   inherited: boolean;
@@ -821,4 +830,71 @@ export async function getVectorSearchLineage(sessionId: string): Promise<Lineage
 export function getVectorSearchLineageSync(sessionId: string): LineageEntry[] {
   initArchiveStoreSync();
   return buildLineage(sessionId);
+}
+
+export async function listSessionsNeedingVectorBackfill(): Promise<ArchiveVectorBackfillCandidate[]> {
+  await initArchiveStore();
+
+  const rows = getDb().prepare(`
+    WITH message_max AS (
+      SELECT session_id, MAX(seq) AS latest_local_message_seq
+      FROM archive_messages
+      GROUP BY session_id
+    ),
+    block_max AS (
+      SELECT session_id, MAX(id) AS latest_local_block_id
+      FROM archive_blocks
+      GROUP BY session_id
+    )
+    SELECT
+      b.session_id,
+      b.parent_session_id,
+      COALESCE(m.latest_local_message_seq, 0) AS latest_local_message_seq,
+      COALESCE(bl.latest_local_block_id, 0) AS latest_local_block_id,
+      COALESCE(c.raw_last_indexed_seq, 0) AS checkpoint_raw_last_indexed_seq,
+      COALESCE(c.last_indexed_block_id, 0) AS checkpoint_last_indexed_block_id
+    FROM archive_branches b
+    LEFT JOIN message_max m ON m.session_id = b.session_id
+    LEFT JOIN block_max bl ON bl.session_id = b.session_id
+    LEFT JOIN archive_checkpoints c ON c.session_id = b.session_id
+    WHERE COALESCE(m.latest_local_message_seq, 0) > COALESCE(c.raw_last_indexed_seq, 0)
+       OR COALESCE(bl.latest_local_block_id, 0) > COALESCE(c.last_indexed_block_id, 0)
+  `).all() as any[];
+
+  const candidates = rows.map((row): ArchiveVectorBackfillCandidate => ({
+    sessionId: String(row.session_id),
+    parentSessionId: typeof row.parent_session_id === 'string' && row.parent_session_id.length > 0
+      ? row.parent_session_id
+      : undefined,
+    latestLocalMessageSeq: Number(row.latest_local_message_seq) || 0,
+    latestLocalBlockId: Number(row.latest_local_block_id) || 0,
+    checkpointRawLastIndexedSeq: Number(row.checkpoint_raw_last_indexed_seq) || 0,
+    checkpointLastIndexedBlockId: Number(row.checkpoint_last_indexed_block_id) || 0,
+  }));
+
+  const candidateById = new Map(candidates.map(candidate => [candidate.sessionId, candidate]));
+  const depthCache = new Map<string, number>();
+  const getDepth = (sessionId: string): number => {
+    if (depthCache.has(sessionId)) {
+      return depthCache.get(sessionId)!;
+    }
+
+    const candidate = candidateById.get(sessionId);
+    if (!candidate?.parentSessionId || !candidateById.has(candidate.parentSessionId)) {
+      depthCache.set(sessionId, 0);
+      return 0;
+    }
+
+    const depth = getDepth(candidate.parentSessionId) + 1;
+    depthCache.set(sessionId, depth);
+    return depth;
+  };
+
+  return candidates.sort((a, b) => {
+    const depthDelta = getDepth(a.sessionId) - getDepth(b.sessionId);
+    if (depthDelta !== 0) {
+      return depthDelta;
+    }
+    return a.sessionId.localeCompare(b.sessionId);
+  });
 }
