@@ -165,6 +165,31 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     return map
   }, [sessions, normalizedParentMap])
 
+  const descendantBusyCountMap = useMemo(() => {
+    const map = new Map<string, number>()
+
+    const countBusyDescendants = (sessionId: string): number => {
+      if (map.has(sessionId)) {
+        return map.get(sessionId) || 0
+      }
+
+      const children = childrenMap.get(sessionId) || []
+      const total = children.reduce((sum, child) => {
+        const childBusy = child.busy ? 1 : 0
+        return sum + childBusy + countBusyDescendants(child.id)
+      }, 0)
+
+      map.set(sessionId, total)
+      return total
+    }
+
+    for (const session of sessions) {
+      countBusyDescendants(session.id)
+    }
+
+    return map
+  }, [childrenMap, sessions])
+
   const rootSessions = useMemo(
     () => sessions.filter(session => !normalizedParentMap.get(session.id)).sort(sortSessions),
     [sessions, normalizedParentMap]
@@ -445,6 +470,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null) => {
     const children = childrenMap.get(session.id) || []
     const hasChildren = children.length > 0
+    const descendantBusyCount = descendantBusyCountMap.get(session.id) || 0
     const isExpanded = expandedSessions.has(session.id)
     const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
     const visibleChildren = children.slice(0, visibleCount)
@@ -486,25 +512,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </div>
             )}
             <div className="text-xs text-gray-500 dark:text-gray-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              {hasChildren && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    toggleExpand(session.id)
-                  }}
-                  className="inline-flex items-center rounded p-0.5 -ml-1 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                  title={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
-                  aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    {isExpanded ? (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    ) : (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    )}
-                  </svg>
-                </button>
-              )}
               {session.busy && (
                 <>
                   <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-300">
@@ -525,16 +532,38 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 </>
               )}
               <span>{session.messageCount || 0} msgs</span>
-              {hasChildren && (
-                <>
-                  <span>•</span>
-                  <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
-                </>
-              )}
             </div>
             {session.cwd && (
               <div className="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500" title={session.cwd}>
                 cwd: {session.cwd}
+              </div>
+            )}
+            {hasChildren && (
+              <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    toggleExpand(session.id)
+                  }}
+                  className="inline-flex items-center rounded p-0.5 -ml-1 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  title={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+                  aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    {isExpanded ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    )}
+                  </svg>
+                </button>
+                <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
+                {descendantBusyCount > 0 && (
+                  <>
+                    <span>•</span>
+                    <span className="text-blue-600 dark:text-blue-300">{descendantBusyCount} busy</span>
+                  </>
+                )}
               </div>
             )}
           </div>
