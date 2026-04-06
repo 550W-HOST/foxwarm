@@ -79,6 +79,9 @@ type SearchOptions = {
     sessionIds?: string[];
     agent?: string;
     lineageSessions?: Array<{ sessionId: string; maxMessageSeq?: number; maxBlockId?: number }>;
+    includeRegex?: string;
+    excludeRegex?: string;
+    preferBlocks?: boolean;
 };
 
 type ArchiveMessageLine = ArchiveMessageRecord;
@@ -1236,11 +1239,23 @@ function getMemorySearchCandidateCount(limit: number): number {
     return Math.max(limit * 4, 20);
 }
 
+function buildSearchRegex(pattern: string | undefined, label: 'includeRegex' | 'excludeRegex'): RegExp | null {
+    if (!pattern) {
+        return null;
+    }
+
+    try {
+        return new RegExp(pattern, 'i');
+    } catch (err: any) {
+        throw new Error(`Invalid ${label}: ${err?.message || 'failed to compile regex'}`);
+    }
+}
+
 function reciprocalRank(rank: number, k: number = 60): number {
     return 1 / (k + rank + 1);
 }
 
-function rerankSearchResultsByRecency(results: any[], limit: number): any[] {
+function rerankSearchResultsByRecency(results: any[], limit: number, options?: SearchOptions): any[] {
     if (results.length <= 1) {
         return results.slice(0, limit);
     }
@@ -1265,9 +1280,12 @@ function rerankSearchResultsByRecency(results: any[], limit: number): any[] {
             const id = String(row.id);
             const semantic = reciprocalRank(semanticRank.get(id) ?? results.length);
             const recency = reciprocalRank(recencyRank.get(id) ?? results.length);
+            const blockBoost = row.kind === 'block'
+                ? (options?.preferBlocks ? 0.012 : 0.004)
+                : 0;
             return {
                 ...row,
-                _rerankScore: semantic + (recency * 0.75),
+                _rerankScore: semantic + (recency * 0.75) + blockBoost,
             };
         })
         .sort((a, b) => {
@@ -1347,7 +1365,9 @@ async function clipResultToLineageBoundary(result: any, options?: SearchOptions)
 async function search(query: string, limit = 5, format = true, options?: SearchOptions) {
     const vector = await getEmbedding(query);
     const results: any[] = [];
-    const candidateLimit = getMemorySearchCandidateCount(limit);
+    const candidateLimit = options?.includeRegex || options?.excludeRegex || options?.preferBlocks
+        ? Math.max(getMemorySearchCandidateCount(limit) * 2, 40)
+        : getMemorySearchCandidateCount(limit);
     let searchQuery = table.search(vector);
     const predicate = buildFilterPredicate(options);
     if (predicate) {
@@ -1392,7 +1412,20 @@ async function search(query: string, limit = 5, format = true, options?: SearchO
     const normalizedResults = (await Promise.all(results.map(result => clipResultToLineageBoundary(result, options))))
         .filter((result): result is any => Boolean(result));
 
-    const reranked = rerankSearchResultsByRecency(normalizedResults, limit);
+    const includeRegex = buildSearchRegex(options?.includeRegex, 'includeRegex');
+    const excludeRegex = buildSearchRegex(options?.excludeRegex, 'excludeRegex');
+    const filteredResults = normalizedResults.filter((result) => {
+        const haystack = `${result.text || ''}\n${result.chunk_text || ''}`;
+        if (includeRegex && !includeRegex.test(haystack)) {
+            return false;
+        }
+        if (excludeRegex && excludeRegex.test(haystack)) {
+            return false;
+        }
+        return true;
+    });
+
+    const reranked = rerankSearchResultsByRecency(filteredResults, limit, options);
 
     if (!format) return reranked;
     if (reranked.length === 0) return '';

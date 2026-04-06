@@ -770,14 +770,37 @@ export function formatMemorySearchResults(results: any): string {
     }).join('\n\n---\n\n');
 }
 
-async function tool_search_vector({ query, limit = 5, scope = 'all', sessionId, agentName }: { query: string; limit?: number; scope?: 'all' | 'current-session' | 'current-agent'; sessionId?: string; agentName?: string }, ctx?: ToolContext) {
+async function tool_search_vector({
+    query,
+    limit = 5,
+    scope = 'all',
+    sessionId,
+    agentName,
+    includeRegex,
+    excludeRegex,
+    preferBlocks,
+}: {
+    query: string;
+    limit?: number;
+    scope?: 'all' | 'current-session' | 'current-agent';
+    sessionId?: string;
+    agentName?: string;
+    includeRegex?: string;
+    excludeRegex?: string;
+    preferBlocks?: boolean;
+}, ctx?: ToolContext) {
     const { searchOptions } = await resolveMemorySearchOptions({
         scope,
         targetSessionId: sessionId,
         targetAgentName: agentName,
     }, ctx);
 
-    const results = await vector.search(query, limit, false, searchOptions);
+    const results = await vector.search(query, limit, false, {
+        ...searchOptions,
+        includeRegex,
+        excludeRegex,
+        preferBlocks,
+    });
     return formatMemorySearchResults(results);
 }
 
@@ -1304,7 +1327,10 @@ export const definitions = [
                     limit: { type: 'number' },
                     scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: 'Requested scope. It will be capped to the caller\'s allowed range.' },
                     sessionId: { type: 'string', description: 'Optional specific session id, limited to your allowed scope.' },
-                    agentName: { type: 'string', description: 'Optional agent name, limited to your current agent.' }
+                    agentName: { type: 'string', description: 'Optional agent name, limited to your current agent.' },
+                    includeRegex: { type: 'string', description: 'Optional case-insensitive regex. Results must match this pattern in their text/preview span.' },
+                    excludeRegex: { type: 'string', description: 'Optional case-insensitive regex. Results matching this pattern in their text/preview span are filtered out.' },
+                    preferBlocks: { type: 'boolean', description: 'If true, give block summary hits a modest ranking boost.' }
                 },
                 required: ['query']
             }
