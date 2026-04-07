@@ -231,6 +231,37 @@ function truncateToTokenLimit(text: string, limit: number): string {
     return text.substring(0, left);
 }
 
+function sanitizeEmbeddingInput(text: string): string {
+    const maybeToWellFormed = (text as string & { toWellFormed?: () => string }).toWellFormed;
+    if (typeof maybeToWellFormed === 'function') {
+        return maybeToWellFormed.call(text);
+    }
+
+    let result = '';
+    for (let index = 0; index < text.length; index += 1) {
+        const code = text.charCodeAt(index);
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const nextCode = index + 1 < text.length ? text.charCodeAt(index + 1) : 0;
+            if (nextCode >= 0xDC00 && nextCode <= 0xDFFF) {
+                result += text[index] + text[index + 1];
+                index += 1;
+            } else {
+                result += '\uFFFD';
+            }
+            continue;
+        }
+
+        if (code >= 0xDC00 && code <= 0xDFFF) {
+            result += '\uFFFD';
+            continue;
+        }
+
+        result += text[index];
+    }
+
+    return result;
+}
+
 function splitTextIntoChunks(text: string): string[] {
     const normalized = text.trim();
     if (!normalized) {
@@ -465,6 +496,7 @@ async function createRowFromBlockRecord(record: ArchiveBlockRecord): Promise<Omi
 
 async function getEmbedding(text: string) {
     const truncated = truncateToTokenLimit(text, EMBEDDING_MAX_LENGTH);
+    const sanitized = sanitizeEmbeddingInput(truncated);
     // Keep using the existing OLLAMA_BASE_URL config key for compatibility,
     // but send embeddings requests through the OpenAI-compatible /v1/embeddings API.
     const baseUrl = OLLAMA_BASE_URL.replace(/\/+$/, '');
@@ -475,7 +507,7 @@ async function getEmbedding(text: string) {
         },
         body: JSON.stringify({
             model: EMBEDDING_MODEL,
-            input: truncated,
+            input: sanitized,
         }),
         signal: AbortSignal.timeout(60_000),
     });
@@ -1569,6 +1601,7 @@ export {
     indexSessionArchive,
     init,
     renameSessionArchiveIndex,
+    sanitizeEmbeddingInput,
     scheduleSessionArchiveIndex,
     search,
     getContextAround,
