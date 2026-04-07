@@ -607,21 +607,6 @@ export const COMMANDS: Record<string, CommandDef> = {
     },
     handler: handleCompactCommand,
   },
-  '/compress': {
-    description: 'Alias of /compact. `args: [keep%]` or `/compress tools [keep%]`',
-    requiresSession: true,
-    autocomplete: {
-      children: [
-        placeholderNode('[keep%]', 'Optional keep percentage, e.g. 20 or 50'),
-        literalNode('tools', 'Compact oversized historical tool calls/results without running full history compaction', {
-          usage: '/compress tools [keep%]',
-          children: [placeholderNode('[keep%]', 'Optional keep percentage for recent messages left untouched')],
-        }),
-      ],
-    },
-    handler: handleCompactCommand,
-    showInTelegram: false,
-  },
   '/timer': {
     description: 'Manage session timers: help, list, create, delete',
     requiresSession: true,

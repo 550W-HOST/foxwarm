@@ -38,7 +38,6 @@ const NODE_CAPABILITIES = {
         type: 'object',
         properties: {
           filePath: { type: 'string' },
-          node: { type: 'string' },
           startLine: { type: 'number' },
           endLine: { type: 'number' }
         },
@@ -66,8 +65,7 @@ const NODE_CAPABILITIES = {
         properties: {
           filePath: { type: 'string' },
           oldText: { type: 'string' },
-          newText: { type: 'string' },
-          node: { type: 'string' }
+          newText: { type: 'string' }
         },
         required: ['filePath', 'oldText', 'newText']
       }
@@ -78,8 +76,7 @@ const NODE_CAPABILITIES = {
       parameters: {
         type: 'object',
         properties: {
-          input: { type: 'string' },
-          node: { type: 'string' }
+          input: { type: 'string' }
         },
         required: ['input']
       }
@@ -102,8 +99,7 @@ const NODE_CAPABILITIES = {
       parameters: {
         type: 'object',
         properties: {
-          url: { type: 'string' },
-          node: { type: 'string' }
+          url: { type: 'string' }
         },
         required: ['url']
       }
@@ -113,9 +109,7 @@ const NODE_CAPABILITIES = {
       description: 'List all open browser tabs with their IDs, titles, and URLs.',
       parameters: {
         type: 'object',
-        properties: {
-          node: { type: 'string' }
-        }
+        properties: {}
       }
     },
     {
@@ -125,7 +119,6 @@ const NODE_CAPABILITIES = {
         type: 'object',
         properties: {
           tabId: { type: 'string' },
-          node: { type: 'string' },
           screenshot: { type: ['boolean', 'string'], default: false }
         },
         required: ['tabId']
@@ -137,8 +130,7 @@ const NODE_CAPABILITIES = {
       parameters: {
         type: 'object',
         properties: {
-          tabId: { type: 'string' },
-          node: { type: 'string' }
+          tabId: { type: 'string' }
         },
         required: ['tabId']
       }
@@ -154,7 +146,6 @@ const NODE_CAPABILITIES = {
             type: 'string',
             enum: ['click', 'type', 'fill', 'press', 'scroll', 'wait', 'evaluate', 'goto', 'back', 'forward', 'reload']
           },
-          node: { type: 'string' },
           params: {
             type: 'object',
             properties: {

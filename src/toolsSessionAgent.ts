@@ -328,7 +328,7 @@ export async function tool_end_turn(args: ToolArgs) {
 }
 
 export async function tool_submit_compact_plan() {
-  return `${COMPACT_PLAN_TOOL_NAME} is only valid inside the dedicated compact planning flow. Request compaction with compact_session/compress_session and only submit a plan when the system compact prompt explicitly asks for it.`;
+  return `${COMPACT_PLAN_TOOL_NAME} is only valid inside the dedicated compact planning flow. Request compaction with compact_session and only submit a plan when the system compact prompt explicitly asks for it.`;
 }
 
 export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
@@ -958,8 +958,6 @@ export async function tool_compact_session(args: ToolArgs, ctx: ToolContext) {
 
   return `Compaction requested for session \`${targetSessionId}\` using ${mode}. Pending queue length: ${result.queueLength}`;
 }
-
-export const tool_compress_session = tool_compact_session;
 
 export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
   await checkTimerPermission(ctx, {

@@ -95,6 +95,27 @@ export const formatToolLabel = (name: string, args?: any): string => {
     }
   }
 
+  if (name === 'call_tool') {
+    const toolId = normalizeToolLabelValue(args?.toolId)
+    if (toolId) {
+      return `tool:${toolId}`
+    }
+
+    const source = normalizeToolLabelValue(args?.source)
+    const tool = normalizeToolLabelValue(args?.name)
+    if (source && tool) {
+      const scope = normalizeToolLabelValue(args?.server) || normalizeToolLabelValue(args?.nodeId)
+      return scope ? `tool:${source}:${scope}:${tool}` : `tool:${source}:${tool}`
+    }
+  }
+
+  if (name === 'search_tools') {
+    const sources = Array.isArray(args?.sources) ? args.sources.join(',') : normalizeToolLabelValue(args?.sources)
+    const scope = normalizeToolLabelValue(args?.server) || normalizeToolLabelValue(args?.nodeId)
+    const query = normalizeToolLabelValue(args?.query)
+    return ['search_tools', sources, scope, query].filter(Boolean).join(':')
+  }
+
   return name
 }
 

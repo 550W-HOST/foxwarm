@@ -104,12 +104,13 @@ export class NodesManager {
       'set_session_compact_threshold',
       'stop_session',
       'compact_session',
-      'compress_session',
       'browse_open',
       'browse_list',
       'browse_get',
       'browse_close',
       'browse_interact',
+      'search_tools',
+      'call_tool',
       'copy_between_nodes',
     ]);
   }
@@ -525,7 +526,7 @@ export class NodesManager {
   getToolDefinition(toolName: string): any {
     // Keep lazy require here to avoid a real circular dependency:
     // tools -> nodesManager -> tools.
-    const toolsModule = require('./tools');
+    const toolsModule = require('../tools');
     const definitions = toolsModule.definitions;
     
     return definitions.find((d: any) => d.name === toolName)
@@ -538,7 +539,7 @@ export class NodesManager {
   async executeToolLocally(toolName: string, args: Record<string, any>, sessionId: string): Promise<any> {
     // Keep lazy require here to avoid a real circular dependency:
     // tools -> nodesManager -> tools.
-    const toolsModule = require('./tools');
+    const toolsModule = require('../tools');
     const tool = toolsModule[toolName];
     
     if (!tool) {

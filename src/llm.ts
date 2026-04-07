@@ -316,7 +316,7 @@ export async function buildSessionSystemPromptSnapshot(options: {
     const skillCatalog = await appendSkillCatalogForAgent(agentName);
     const agentMemoryDir = getAgentMemoryDir(agentName);
     const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_memory: ' + agentMemoryDir + '\n- agent_folder: ' + getAgentDir(agentName) + '\n';
-    const archiveInfo = '\n\n--- COMPACTED HISTORY ACCESS ---\n- To inspect compacted raw messages, use `get_archived_messages(...)`.\n- To inspect archived layered-context blocks, use `get_archived_blocks(...)`.\n- If you are not sure which archive view you need, use `get_context_archive(...)`.\n';
+    const archiveInfo = '\n\n--- COMPACTED HISTORY ACCESS ---\n- Use `get_context_archive(...)` for the normal archived-history entry point.\n- If you specifically need raw-message or block-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.\n';
     return [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
         .filter(Boolean)
         .join('\n\n');
@@ -762,8 +762,9 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             result = { error: `Subconscious side sessions cannot use ${call.name}.` };
         }
         
-        // Check if tool has node parameter
-        const nodeParam = call.args?.node;
+        const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
+        const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
+        const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
         const sessionId = toolContext.sessionId || 'main';
         
         // Get current node for this session
@@ -774,26 +775,13 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         
         // Remove node parameter from args before execution
         const toolArgs = { ...call.args };
-        delete toolArgs.node;
+        if (supportsExplicitNode) {
+            delete toolArgs.node;
+        }
         
         // Tools that must run on master because they depend on host-local
         // session/channel/agent/vector/MCP state rather than remote node files.
-        const masterOnlyTools = [
-            'remote_node', 'list_nodes', 'node_tools',
-            'search_vector', 'search_memory', 'get_memory_context',
-            'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
-            'copy_between_nodes',
-            'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
-            'list_sessions', 'list_agents', 'list_skills', 'load_skill',
-            'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
-            'update_session_name', 'set_todo', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
-            'compact_session', 'compress_session',
-            'create_timer', 'list_timers', 'delete_timer',
-            'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
-            'change_current_node',
-            'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
-        ];
-        const forceMaster = masterOnlyTools.includes(call.name);
+        const forceMaster = tools.isMasterOnlyToolName(call.name);
         const executionNode = forceMaster ? 'master' : targetNode;
         const permissionNode = call.name === 'send_file' ? targetNode : executionNode;
 
@@ -954,8 +942,8 @@ export async function chat(
     const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
     const availableToolDefinitions = options?.toolDefinitions
         ?? (isSubconsciousSession(session)
-            ? tools.definitions.filter(def => SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(def.name))
-            : tools.definitions);
+            ? tools.modelFacingDefinitions.filter(def => SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(def.name))
+            : tools.modelFacingDefinitions);
 
     const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh' :
                          THINKING_BUDGET >= 4000 ? 'high' :
