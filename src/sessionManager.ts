@@ -1283,6 +1283,31 @@ export function setSessionTriggerCallback(onTrigger: (sessionId: string) => void
   onSessionTriggered = onTrigger;
 }
 
+function isQueuedSystemEventItem(
+  item: QueueItem | undefined,
+  message: string,
+  type: 'background' | 'trigger' | 'onboot',
+): boolean {
+  if (!item || item.type !== type || item.source || item.message || !item.parts || item.parts.length !== 1) {
+    return false;
+  }
+
+  const [part] = item.parts;
+  return typeof part?.system === 'string' && part.system === message;
+}
+
+export function hasTrailingQueuedSystemEvent(
+  queue: QueueItem[] | undefined,
+  message: string,
+  type: 'background' | 'trigger' | 'onboot',
+): boolean {
+  if (!queue?.length) {
+    return false;
+  }
+
+  return isQueuedSystemEventItem(queue[queue.length - 1], message, type);
+}
+
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
   const session = await getSession(sessionId);
 
@@ -1695,8 +1720,14 @@ export async function resumeBusySessions(): Promise<void> {
       // Reset busy flag and trigger
       session.busy = false;
       session.busyStartedAt = undefined;
-      // Will save session inside, no need to call saveSession() here.
-      await queueSessionSystemEvent(sessionId, 'session resumed after process restart');
+      const resumeMessage = 'session resumed after process restart';
+      if (hasTrailingQueuedSystemEvent(session.queue, resumeMessage, 'background')) {
+        await saveSession(sessionId);
+        onSessionTriggered?.(sessionId);
+      } else {
+        // Will save session inside, no need to call saveSession() here.
+        await queueSessionSystemEvent(sessionId, resumeMessage, 'background');
+      }
       logger.info({ sessionId }, 'Busy session resumed');
     } catch (e) {
       logger.error({ err: e, sessionId }, 'Failed to resume busy session');
