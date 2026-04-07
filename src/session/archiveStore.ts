@@ -1,6 +1,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { DatabaseSync } from 'node:sqlite';
+import { createInterface } from 'node:readline';
 import { ARCHIVE_DB_PATH, SESSION_LOGS_DIR, getSessionArchiveLogPath, getSessionBlockArchiveLogPath } from '../config';
 import { logger } from '../common';
 import type { Message } from '../types';
@@ -54,6 +55,26 @@ let db: DatabaseSync | null = null;
 const importedSessions = new Set<string>();
 let bootstrapPromise: Promise<void> | null = null;
 
+const ARCHIVE_IMPORT_BATCH_SIZE = Math.max(1, Number(process.env.FOXWARM_ARCHIVE_IMPORT_BATCH_SIZE || 200));
+const MISSING_IMPORT_FILE_SIZE = -1;
+
+type ArchiveImportSourceKind = 'messages' | 'blocks';
+
+type ArchiveImportSourceState = {
+  exists: boolean;
+  size: number;
+  mtimeMs: number;
+};
+
+type ArchiveImportStateRecord = {
+  sessionId: string;
+  messagesFileSize: number;
+  messagesFileMtimeMs: number;
+  blocksFileSize: number;
+  blocksFileMtimeMs: number;
+  updatedAt: number;
+};
+
 function getDb(): DatabaseSync {
   if (!db) {
     throw new Error('Archive store is not initialized.');
@@ -72,6 +93,143 @@ function runInTransaction(fn: () => void): void {
       database.exec('ROLLBACK');
     } catch {}
     throw e;
+  }
+}
+
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>(resolve => setImmediate(resolve));
+}
+
+function getImportSourcePath(sessionId: string, kind: ArchiveImportSourceKind): string {
+  return kind === 'messages'
+    ? getSessionArchiveLogPath(sessionId)
+    : getSessionBlockArchiveLogPath(sessionId);
+}
+
+async function getImportSourceState(filePath: string): Promise<ArchiveImportSourceState> {
+  try {
+    const stat = await fs.stat(filePath);
+    return {
+      exists: true,
+      size: stat.size,
+      mtimeMs: Math.floor(stat.mtimeMs),
+    };
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') {
+      return {
+        exists: false,
+        size: MISSING_IMPORT_FILE_SIZE,
+        mtimeMs: 0,
+      };
+    }
+    throw err;
+  }
+}
+
+function getImportStateInternal(sessionId: string): ArchiveImportStateRecord | null {
+  const row = getDb().prepare(`
+    SELECT session_id, messages_file_size, messages_file_mtime_ms, blocks_file_size, blocks_file_mtime_ms, updated_at
+    FROM archive_import_state
+    WHERE session_id = ?
+  `).get(sessionId) as any;
+
+  if (!row?.session_id) {
+    return null;
+  }
+
+  return {
+    sessionId: String(row.session_id),
+    messagesFileSize: Number(row.messages_file_size),
+    messagesFileMtimeMs: Number(row.messages_file_mtime_ms),
+    blocksFileSize: Number(row.blocks_file_size),
+    blocksFileMtimeMs: Number(row.blocks_file_mtime_ms),
+    updatedAt: Number(row.updated_at) || 0,
+  };
+}
+
+function isImportStateCurrent(state: ArchiveImportStateRecord | null, kind: ArchiveImportSourceKind, fileState: ArchiveImportSourceState): boolean {
+  if (!state) {
+    return false;
+  }
+
+  if (kind === 'messages') {
+    return state.messagesFileSize === fileState.size && state.messagesFileMtimeMs === fileState.mtimeMs;
+  }
+
+  return state.blocksFileSize === fileState.size && state.blocksFileMtimeMs === fileState.mtimeMs;
+}
+
+function setImportStateSync(
+  sessionId: string,
+  next: Partial<Pick<ArchiveImportStateRecord, 'messagesFileSize' | 'messagesFileMtimeMs' | 'blocksFileSize' | 'blocksFileMtimeMs'>>,
+): ArchiveImportStateRecord {
+  const current = getImportStateInternal(sessionId) || {
+    sessionId,
+    messagesFileSize: MISSING_IMPORT_FILE_SIZE,
+    messagesFileMtimeMs: 0,
+    blocksFileSize: MISSING_IMPORT_FILE_SIZE,
+    blocksFileMtimeMs: 0,
+    updatedAt: 0,
+  };
+
+  const merged: ArchiveImportStateRecord = {
+    ...current,
+    ...next,
+    updatedAt: Date.now(),
+  };
+
+  getDb().prepare(`
+    INSERT INTO archive_import_state (
+      session_id, messages_file_size, messages_file_mtime_ms, blocks_file_size, blocks_file_mtime_ms, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(session_id) DO UPDATE SET
+      messages_file_size = excluded.messages_file_size,
+      messages_file_mtime_ms = excluded.messages_file_mtime_ms,
+      blocks_file_size = excluded.blocks_file_size,
+      blocks_file_mtime_ms = excluded.blocks_file_mtime_ms,
+      updated_at = excluded.updated_at
+  `).run(
+    merged.sessionId,
+    merged.messagesFileSize,
+    merged.messagesFileMtimeMs,
+    merged.blocksFileSize,
+    merged.blocksFileMtimeMs,
+    merged.updatedAt,
+  );
+
+  return merged;
+}
+
+async function refreshImportStateFromFile(sessionId: string, kind: ArchiveImportSourceKind): Promise<void> {
+  await initArchiveStore();
+  const fileState = await getImportSourceState(getImportSourcePath(sessionId, kind));
+  if (kind === 'messages') {
+    setImportStateSync(sessionId, {
+      messagesFileSize: fileState.size,
+      messagesFileMtimeMs: fileState.mtimeMs,
+    });
+  } else {
+    setImportStateSync(sessionId, {
+      blocksFileSize: fileState.size,
+      blocksFileMtimeMs: fileState.mtimeMs,
+    });
+  }
+}
+
+async function streamJsonlLines(filePath: string, onLine: (line: string) => Promise<void> | void): Promise<void> {
+  const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const rawLine of rl) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      await onLine(line);
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
   }
 }
 
@@ -126,6 +284,15 @@ function openArchiveStore(): void {
       raw_last_indexed_seq INTEGER NOT NULL DEFAULT 0,
       raw_tail_start_seq INTEGER NOT NULL DEFAULT 0,
       last_indexed_block_id INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS archive_import_state (
+      session_id TEXT PRIMARY KEY,
+      messages_file_size INTEGER NOT NULL DEFAULT -1,
+      messages_file_mtime_ms INTEGER NOT NULL DEFAULT 0,
+      blocks_file_size INTEGER NOT NULL DEFAULT -1,
+      blocks_file_mtime_ms INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL
     );
   `);
@@ -252,14 +419,14 @@ async function collectBootstrapSessionCandidates(): Promise<BootstrapSessionCand
 
 async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: string): Promise<number> {
   const archivePath = getSessionArchiveLogPath(sessionId);
-  if (!await fs.pathExists(archivePath)) {
+  const fileState = await getImportSourceState(archivePath);
+  if (!fileState.exists) {
     return 0;
   }
 
-  const raw = await fs.readFile(archivePath, 'utf8');
   let maxSeq = 0;
   let minLocalSeq = Number.POSITIVE_INFINITY;
-  for (const line of raw.split('\n').map(line => line.trim()).filter(Boolean)) {
+  await streamJsonlLines(archivePath, async (line) => {
     const record = parseMessageRecord(line);
     if (record?.sessionId === parentSessionId && record.seq > maxSeq) {
       maxSeq = record.seq;
@@ -267,7 +434,7 @@ async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: str
     if (record?.sessionId === sessionId && record.seq < minLocalSeq) {
       minLocalSeq = record.seq;
     }
-  }
+  });
 
   if (maxSeq <= 0 && Number.isFinite(minLocalSeq)) {
     return Math.max(0, minLocalSeq - 1);
@@ -278,14 +445,14 @@ async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: str
 
 async function inferLegacyForkBlockId(sessionId: string, parentSessionId: string): Promise<number> {
   const archivePath = getSessionBlockArchiveLogPath(sessionId);
-  if (!await fs.pathExists(archivePath)) {
+  const fileState = await getImportSourceState(archivePath);
+  if (!fileState.exists) {
     return 0;
   }
 
-  const raw = await fs.readFile(archivePath, 'utf8');
   let maxId = 0;
   let minLocalId = Number.POSITIVE_INFINITY;
-  for (const line of raw.split('\n').map(line => line.trim()).filter(Boolean)) {
+  await streamJsonlLines(archivePath, async (line) => {
     const record = parseBlockRecord(line);
     if (record?.sessionId === parentSessionId && record.id > maxId) {
       maxId = record.id;
@@ -293,7 +460,7 @@ async function inferLegacyForkBlockId(sessionId: string, parentSessionId: string
     if (record?.sessionId === sessionId && record.id < minLocalId) {
       minLocalId = record.id;
     }
-  }
+  });
 
   if (maxId <= 0 && Number.isFinite(minLocalId)) {
     return Math.max(0, minLocalId - 1);
@@ -309,6 +476,11 @@ async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
   }
 
   for (const candidate of candidates) {
+    const existingBranch = getBranchInternal(candidate.sessionId);
+    if (existingBranch) {
+      continue;
+    }
+
     if (candidate.parentSessionId) {
       const forkMessageSeq = await inferLegacyForkMessageSeq(candidate.sessionId, candidate.parentSessionId);
       const forkBlockId = await inferLegacyForkBlockId(candidate.sessionId, candidate.parentSessionId);
@@ -320,12 +492,15 @@ async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
     } else {
       await ensureSessionBranch(candidate.sessionId);
     }
+
+    await yieldToEventLoop();
   }
 
   for (const candidate of candidates) {
     await importSessionMessagesFromJsonl(candidate.sessionId);
     await importSessionBlocksFromJsonl(candidate.sessionId);
     importedSessions.add(candidate.sessionId);
+    await yieldToEventLoop();
   }
 }
 
@@ -342,13 +517,17 @@ async function ensureBootstrapped(): Promise<void> {
 
 async function importSessionMessagesFromJsonl(sessionId: string): Promise<void> {
   const archivePath = getSessionArchiveLogPath(sessionId);
-  if (!await fs.pathExists(archivePath)) {
+  const fileState = await getImportSourceState(archivePath);
+  const currentState = getImportStateInternal(sessionId);
+  if (isImportStateCurrent(currentState, 'messages', fileState)) {
     return;
   }
 
-  const raw = await fs.readFile(archivePath, 'utf8');
-  const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
-  if (lines.length === 0) {
+  if (!fileState.exists || fileState.size === 0) {
+    setImportStateSync(sessionId, {
+      messagesFileSize: fileState.size,
+      messagesFileMtimeMs: fileState.mtimeMs,
+    });
     return;
   }
 
@@ -359,8 +538,14 @@ async function importSessionMessagesFromJsonl(sessionId: string): Promise<void> 
     ) VALUES (?, ?, ?, ?, ?, ?)
   `);
 
-  const records = lines.map(parseMessageRecord).filter((record): record is ArchiveMessageRecord => Boolean(record));
-  if (records.length > 0) {
+  let batch: ArchiveMessageRecord[] = [];
+  const flushBatch = async () => {
+    if (batch.length === 0) {
+      return;
+    }
+
+    const records = batch;
+    batch = [];
     runInTransaction(() => {
       for (const record of records) {
         insert.run(
@@ -373,18 +558,41 @@ async function importSessionMessagesFromJsonl(sessionId: string): Promise<void> 
         );
       }
     });
-  }
+    await yieldToEventLoop();
+  };
+
+  await streamJsonlLines(archivePath, async (line) => {
+    const record = parseMessageRecord(line);
+    if (!record) {
+      return;
+    }
+
+    batch.push(record);
+    if (batch.length >= ARCHIVE_IMPORT_BATCH_SIZE) {
+      await flushBatch();
+    }
+  });
+
+  await flushBatch();
+  setImportStateSync(sessionId, {
+    messagesFileSize: fileState.size,
+    messagesFileMtimeMs: fileState.mtimeMs,
+  });
 }
 
 async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
   const archivePath = getSessionBlockArchiveLogPath(sessionId);
-  if (!await fs.pathExists(archivePath)) {
+  const fileState = await getImportSourceState(archivePath);
+  const currentState = getImportStateInternal(sessionId);
+  if (isImportStateCurrent(currentState, 'blocks', fileState)) {
     return;
   }
 
-  const raw = await fs.readFile(archivePath, 'utf8');
-  const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
-  if (lines.length === 0) {
+  if (!fileState.exists || fileState.size === 0) {
+    setImportStateSync(sessionId, {
+      blocksFileSize: fileState.size,
+      blocksFileMtimeMs: fileState.mtimeMs,
+    });
     return;
   }
 
@@ -396,8 +604,14 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const records = lines.map(parseBlockRecord).filter((record): record is ArchiveBlockRecord => Boolean(record));
-  if (records.length > 0) {
+  let batch: ArchiveBlockRecord[] = [];
+  const flushBatch = async () => {
+    if (batch.length === 0) {
+      return;
+    }
+
+    const records = batch;
+    batch = [];
     runInTransaction(() => {
       for (const record of records) {
         insert.run(
@@ -415,7 +629,26 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
         );
       }
     });
-  }
+    await yieldToEventLoop();
+  };
+
+  await streamJsonlLines(archivePath, async (line) => {
+    const record = parseBlockRecord(line);
+    if (!record) {
+      return;
+    }
+
+    batch.push(record);
+    if (batch.length >= ARCHIVE_IMPORT_BATCH_SIZE) {
+      await flushBatch();
+    }
+  });
+
+  await flushBatch();
+  setImportStateSync(sessionId, {
+    blocksFileSize: fileState.size,
+    blocksFileMtimeMs: fileState.mtimeMs,
+  });
 }
 
 async function ensureImported(sessionId: string): Promise<void> {
@@ -566,6 +799,10 @@ export async function writeArchiveMessages(records: ArchiveMessageRecord[]): Pro
     }
   });
   importedSessions.add(records[0].sessionId);
+}
+
+export async function refreshSessionArchiveImportState(sessionId: string, kind: ArchiveImportSourceKind): Promise<void> {
+  await refreshImportStateFromFile(sessionId, kind);
 }
 
 export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise<void> {
@@ -814,6 +1051,7 @@ export async function renameSessionArchiveStore(oldSessionId: string, newSession
     database.prepare(`UPDATE archive_messages SET session_id = ? WHERE session_id = ?`).run(newSessionId, oldSessionId);
     database.prepare(`UPDATE archive_blocks SET session_id = ? WHERE session_id = ?`).run(newSessionId, oldSessionId);
     database.prepare(`UPDATE archive_checkpoints SET session_id = ? WHERE session_id = ?`).run(newSessionId, oldSessionId);
+    database.prepare(`UPDATE archive_import_state SET session_id = ?, updated_at = ? WHERE session_id = ?`).run(newSessionId, Date.now(), oldSessionId);
   });
 
   if (importedSessions.delete(oldSessionId)) {

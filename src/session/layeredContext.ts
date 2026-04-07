@@ -10,6 +10,7 @@ import { logger } from '../common';
 import { ArchiveMessageRecord, readArchiveMessagesBySeqRange } from './archive';
 import {
   ensureSessionBranch,
+  refreshSessionArchiveImportState,
   readEffectiveArchiveBlocks,
   readLocalArchiveBlocks as readLocalArchiveBlocksFromStore,
   writeArchiveBlocks,
@@ -201,6 +202,7 @@ export async function appendBlocksToArchive(session: Session, blocks: CreateArch
   const records = await buildArchiveBlockRecords(session, blocks);
   await fs.appendFile(archivePath, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
   await writeArchiveBlocks(records);
+  await refreshSessionArchiveImportState(session.id, 'blocks');
   return records;
 }
 

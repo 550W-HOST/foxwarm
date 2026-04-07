@@ -6,6 +6,7 @@ import { getSessionArchiveImagesDir, getSessionArchiveLogPath } from '../config'
 import { logger } from '../common';
 import {
   ensureSessionBranch,
+  refreshSessionArchiveImportState,
   readEffectiveArchiveMessages,
   readLocalArchiveMessages as readLocalArchiveMessagesFromStore,
   writeArchiveMessages,
@@ -159,6 +160,7 @@ export async function appendMessagesToArchive(session: Session, messages: Messag
 
   await fs.appendFile(archiveLogPath, `${lines.join('\n')}\n`);
   await writeArchiveMessages(records);
+  await refreshSessionArchiveImportState(session.id, 'messages');
 }
 
 export async function readArchiveMessages(sessionId: string): Promise<ArchiveMessageRecord[]> {
