@@ -87,14 +87,16 @@ function getPromptCacheKey(session: Session): string {
     return crypto.createHash('md5').update(`session_${sessionId}`).digest('hex');
 }
 
-function isOpenAIReasoningModel(modelName: string): boolean {
-    return /^gpt-5(?:[.-]|$)/.test(modelName)
-        || /^o[1-9](?:[.-]|$)/.test(modelName);
-}
+export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-completions' | null {
+    if (providerType === 'openai' || providerType === 'openai-responses') {
+        return 'responses';
+    }
 
-function shouldUseOpenAIResponsesApi(providerType: string, modelName: string): boolean {
-    return providerType === 'openai-responses'
-        || (providerType === 'openai' && isOpenAIReasoningModel(modelName));
+    if (providerType === 'openai-completions') {
+        return 'chat-completions';
+    }
+
+    return null;
 }
 
 function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
@@ -939,6 +941,9 @@ export async function chat(
         ? (modelEntry.model[0] || '')
         : (modelEntry?.model || '');
     const promptCacheKey = getPromptCacheKey(session);
+    const openaiRequestApi = getOpenAIRequestApi(providerType);
+    const useOpenAIResponsesApi = openaiRequestApi === 'responses';
+    const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
 
     if (!baseUrl) {
         throw new Error('Model config has no baseUrl');
@@ -946,9 +951,7 @@ export async function chat(
 
     logger.info(`Requesting LLM (${modelKey}, type ${providerType}, iteration ${iteration})...`);
 
-    const useOpenAIResponsesApi = shouldUseOpenAIResponsesApi(providerType, modelName);
-    const useOpenAIChatStream = providerType === 'openai';
-    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatStream;
+    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
     const availableToolDefinitions = options?.toolDefinitions
         ?? (isSubconsciousSession(session)
             ? tools.definitions.filter(def => SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(def.name))
@@ -997,7 +1000,7 @@ export async function chat(
             prompt_cache_key: promptCacheKey,
             stream: true,
         };
-    } else if (providerType === 'openai') {
+    } else if (useOpenAIChatCompletionsApi) {
         // OpenAI format
         messages = convertToOpenAIFormatProvider(fixedContents);
         url = `${baseUrl}/chat/completions`;
@@ -1254,7 +1257,7 @@ export async function chat(
                 });
             }
         }
-    } else if (providerType === 'openai') {
+    } else if (useOpenAIChatCompletionsApi) {
         // Parse OpenAI response
         const choice = resp.choices?.[0];
         if (!choice) {
@@ -1330,7 +1333,7 @@ export async function chat(
             outputTokens: resp.usage.output_tokens,
             cachedTokens: cached
         } : null;
-    } else if (providerType === 'openai') {
+    } else if (useOpenAIChatCompletionsApi) {
         usage = resp.usage ? {
             inputTokens: resp.usage.prompt_tokens,
             outputTokens: resp.usage.completion_tokens,

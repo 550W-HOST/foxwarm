@@ -124,7 +124,7 @@ Example:
 default: openai/gpt-5.2-codex
 models:
   openai:
-    provider: openai
+    provider: openai-completions
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
     model:
@@ -142,6 +142,12 @@ models:
       - claude-sonnet-4-5-thinking
       - claude-sonnet-4-6-thinking
 ```
+
+Provider routing semantics:
+
+- `openai` -> OpenAI Responses API (`/responses`)
+- `openai-responses` -> OpenAI Responses API (`/responses`)
+- `openai-completions` -> legacy chat/completions API (`/chat/completions`)
 
 You can also replace those provider entries with a local OpenAI-compatible endpoint if you want to use your own hosted model.
 
