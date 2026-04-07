@@ -966,25 +966,18 @@ export async function chat(
         headers = {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
-            'user-agent': 'foxwarm/1.0',
+            'user-agent': 'codex-tui/0.118.0 (Debian 13.0.0; x86_64) xterm.js_6.1.0-beta.191_ (codex-tui; 0.118.0)',
+            'originator': 'codex-tui',
+            'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
+                crypto.createHash('md5').update(`turn_id_${session.id}_${Date.now()}`).digest('hex')
+            }","sandbox":"seccomp"}`,
+            'x-client-request-id': crypto.createHash('md5').update(`req_id_${session.id}_${Date.now()}`).digest('hex'),
         };
 
         data = {
             model: modelName,
-            include: ['reasoning.encrypted_content'],
-            max_output_tokens: MAX_OUTPUT,
-            prompt_cache_key: promptCacheKey,
-            stream: true,
-            reasoning: {
-                summary: 'auto',
-                ...(openaiEffort ? { effort: openaiEffort } : {}),
-            },
+            instructions: systemPrompt,
             input: [
-                {
-                    type: 'message',
-                    role: 'developer',
-                    content: [{ type: 'input_text', text: systemPrompt }]
-                },
                 ...messages
             ],
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
@@ -992,7 +985,17 @@ export async function chat(
                 name: fd.name,
                 description: fd.description,
                 parameters: fd.parameters
-            })) : undefined
+            })) : undefined,
+            tool_choice: 'auto',
+            parallel_tool_calls: true,
+            reasoning: {
+                summary: 'auto',
+                ...(openaiEffort ? { effort: openaiEffort } : {}),
+            },
+            store: false,
+            include: ['reasoning.encrypted_content'],
+            prompt_cache_key: promptCacheKey,
+            stream: true,
         };
     } else if (providerType === 'openai') {
         // OpenAI format
@@ -1051,19 +1054,17 @@ export async function chat(
     }
 
     const extraFields = modelEntry.extraFields || {};
+    Object.assign(data, extraFields);
     if (useOpenAIResponsesApi && extraFields.reasoning && typeof extraFields.reasoning === 'object') {
-        const { reasoning: extraReasoning, ...restExtraFields } = extraFields;
+        const { reasoning: extraReasoning } = extraFields;
         const hasSummaryOverride = Object.prototype.hasOwnProperty.call(extraReasoning, 'summary');
-        Object.assign(data, restExtraFields);
         data.reasoning = {
             ...(data.reasoning || {}),
             ...extraReasoning,
             summary: hasSummaryOverride
                 ? extraReasoning.summary
-                : (data.reasoning?.summary || 'auto'),
+                : ((data.reasoning as any)?.summary || 'auto'),
         };
-    } else {
-        Object.assign(data, extraFields);
     }
     
     const logFiles = await logRequest(data, iteration);
@@ -1115,7 +1116,7 @@ export async function chat(
                         if (attempt === maxRetries) {
                             return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts`);
                         }
-                        await sleepWithSignal(2000, abortController.signal);
+                        await sleepWithSignal(5000, abortController.signal);
                         continue;
                     }
 
