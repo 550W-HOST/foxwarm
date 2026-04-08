@@ -350,11 +350,11 @@ export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
 }
 
 export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
-  const { sessionId, channelTargetId, channelId, filePath } = args;
+  const { sessionId, channelTargetId, filePath } = args;
   const hasSessionId = isNonEmptyString(sessionId);
   const normalizedChannelTargetId = isNonEmptyString(channelTargetId)
     ? channelTargetId.trim()
-    : (isNonEmptyString(channelId) ? channelId.trim() : undefined);
+    : undefined;
   const hasChannelTargetId = Boolean(normalizedChannelTargetId);
 
   if (hasSessionId === hasChannelTargetId) {

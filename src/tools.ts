@@ -1705,7 +1705,6 @@ export const definitions = [
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID whose attached channels should receive the file' },
                     channelTargetId: { type: 'string', description: 'Target channel in format <channel-instance-id>:<conversation-id>' },
-                    channelId: { type: 'string', description: 'Legacy alias of channelTargetId. Prefer channelTargetId.' },
                     filePath: { type: 'string', description: 'File path on the selected node. Relative paths are resolved under the current agent folder on that node; absolute paths and ~/... are also accepted when allowed.' },
                     node: { type: 'string', description: 'Optional. Node where the file lives. Defaults to the current node; send_file still delivers through master-side channel/session routing.' },
                     caption: { type: 'string', description: 'Optional caption/text sent with the file where supported' },

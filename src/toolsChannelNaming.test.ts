@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from './sessionManager';
 import { definitions } from './tools';
-import { tool_send_to_channel } from './toolsSessionAgent';
+import { tool_send_file, tool_send_to_channel } from './toolsSessionAgent';
 
 test('send_to_channel tool schema uses channelTargetId and drops channelId parameter', () => {
   const def = definitions.find(entry => entry.name === 'send_to_channel');
@@ -36,4 +36,19 @@ test('tool_send_to_channel sends via channelTargetId and no longer accepts chann
   } finally {
     (sessionManager as any).sendToChannelTargetId = original;
   }
+});
+
+test('send_file tool schema uses channelTargetId and drops channelId parameter', () => {
+  const def = definitions.find(entry => entry.name === 'send_file');
+  assert.ok(def, 'send_file definition should exist');
+  assert.ok(def?.description.includes('channelTargetId'));
+  assert.equal(Object.prototype.hasOwnProperty.call(def?.parameters?.properties || {}, 'channelTargetId'), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(def?.parameters?.properties || {}, 'channelId'), false);
+});
+
+test('tool_send_file no longer accepts legacy channelId arg', async () => {
+  await assert.rejects(
+    () => tool_send_file({ channelId: 'mainbot:conversation-42', filePath: 'dummy.txt' }),
+    /Exactly one of sessionId or channelTargetId is required/,
+  );
 });
