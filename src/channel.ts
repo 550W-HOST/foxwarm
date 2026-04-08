@@ -31,9 +31,9 @@ export interface ChannelContext {
  * Message source information (without channel methods)
  */
 export interface MessageSource {
-  platform: string;
-  channelId?: string;
-  channelType?: string;
+  platform: string; // Legacy alias of channelType
+  channelId?: string; // Configured channel instance id
+  channelType?: string; // Adapter/platform type
   channelUserId: string;
   conversationId?: string;
   username: string;
@@ -56,7 +56,7 @@ export interface ChannelSendFileOptions {
 
 export interface Channel {
   readonly name: string;
-  readonly platform: string; // Adapter/platform type
+  readonly platform: string; // Legacy alias of channelType / adapter-platform type
 
   /**
    * Start the channel (connect, listen for messages)
@@ -101,24 +101,24 @@ const channelInstances = new Map<string, Channel>();
 /**
  * Register a channel instance for broadcast
  */
-export function registerChannel(channelId: string, channel: Channel): void {
-  channelInstances.set(channelId, channel);
+export function registerChannel(channelInstanceId: string, channel: Channel): void {
+  channelInstances.set(channelInstanceId, channel);
 }
 
-export function unregisterChannel(channelId: string): void {
-  channelInstances.delete(channelId);
+export function unregisterChannel(channelInstanceId: string): void {
+  channelInstances.delete(channelInstanceId);
 }
 
 /**
  * Get a registered channel instance
  */
-export function getChannelInstance(channelId: string): Channel | undefined {
-  return channelInstances.get(channelId);
+export function getChannelInstance(channelInstanceId: string): Channel | undefined {
+  return channelInstances.get(channelInstanceId);
 }
 
-export function listRegisteredChannels(): Array<{ channelId: string; type: string; name: string }> {
-  return Array.from(channelInstances.entries()).map(([channelId, channel]) => ({
-    channelId,
+export function listRegisteredChannels(): Array<{ channelInstanceId: string; type: string; name: string }> {
+  return Array.from(channelInstances.entries()).map(([channelInstanceId, channel]) => ({
+    channelInstanceId,
     type: channel.platform,
     name: channel.name,
   }));

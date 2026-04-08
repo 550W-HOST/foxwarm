@@ -197,7 +197,7 @@ export function listChannelRuntimeStatuses(filter?: { type?: string }): ChannelR
   ensureFactories();
   const channelIds = new Set<string>([
     ...getManagedChannelIds(),
-    ...listRegisteredChannels().map(item => item.channelId),
+    ...listRegisteredChannels().map(item => item.channelInstanceId),
     ...getNormalizedChannelConfigs(readAppConfigFile()).map(item => item.id),
   ]);
   return Array.from(channelIds)

@@ -332,9 +332,9 @@ export async function tool_submit_compact_plan() {
 }
 
 export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
-  const { channelId, message } = args;
-  if (!channelId || typeof channelId !== 'string') {
-    throw new Error('channelId is required (format: platform:userId)');
+  const { channelTargetId, message } = args;
+  if (!channelTargetId || typeof channelTargetId !== 'string') {
+    throw new Error('channelTargetId is required (format: <channel-instance-id>:<conversation-id>)');
   }
   if (!message || typeof message !== 'string') {
     throw new Error('message is required');
@@ -342,20 +342,23 @@ export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
 
   // Check isolated session channel permission
   if (ctx?.sessionId) {
-    await checkChannelPermission(ctx.sessionId, channelId);
+    await checkChannelPermission(ctx.sessionId, channelTargetId);
   }
 
-  await sessionManager.sendToChannelById(channelId, message);
-  return `Message sent to channel \`${channelId}\``;
+  await sessionManager.sendToChannelTargetId(channelTargetId, message);
+  return `Message sent to channel target \`${channelTargetId}\``;
 }
 
 export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
-  const { sessionId, channelId, filePath } = args;
+  const { sessionId, channelTargetId, channelId, filePath } = args;
   const hasSessionId = isNonEmptyString(sessionId);
-  const hasChannelId = isNonEmptyString(channelId);
+  const normalizedChannelTargetId = isNonEmptyString(channelTargetId)
+    ? channelTargetId.trim()
+    : (isNonEmptyString(channelId) ? channelId.trim() : undefined);
+  const hasChannelTargetId = Boolean(normalizedChannelTargetId);
 
-  if (hasSessionId === hasChannelId) {
-    throw new Error('Exactly one of sessionId or channelId is required');
+  if (hasSessionId === hasChannelTargetId) {
+    throw new Error('Exactly one of sessionId or channelTargetId is required');
   }
   if (!isNonEmptyString(filePath)) {
     throw new Error('filePath is required');
@@ -367,17 +370,16 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
 
   if (ctx?.sessionId) {
     await checkSendFilePermission(ctx.sessionId, {
-      channelId: hasChannelId ? channelId.trim() : undefined,
+      channelTargetId: normalizedChannelTargetId,
       targetSessionId: hasSessionId ? sessionId.trim() : undefined,
     });
   }
 
   const file = await prepareChannelFile(filePath.trim(), ctx);
 
-  if (hasChannelId) {
-    const normalizedChannelId = channelId.trim();
-    await sessionManager.sendFileToChannelById(normalizedChannelId, file, { caption });
-    return `File \`${file.name}\` sent to channel \`${normalizedChannelId}\``;
+  if (normalizedChannelTargetId) {
+    await sessionManager.sendFileToChannelTargetId(normalizedChannelTargetId, file, { caption });
+    return `File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``;
   }
 
   const normalizedSessionId = sessionId.trim();

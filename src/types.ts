@@ -90,20 +90,20 @@ export interface SessionMeta {
   lastMessageTime: number;
   messageCount?: number; // Cached message count for quick access
   lastChannel?: {
-    channelId: string;
-    channelType?: string;
-    channelUserId: string;
-    conversationId?: string;
+    channelId: string; // Configured channel instance id
+    channelType?: string; // Adapter/platform type
+    channelUserId: string; // Legacy alias of conversationId
+    conversationId?: string; // Preferred channel-side conversation target id
   };
   [key: string]: any;
 }
 
 export interface QueueSource {
-  platform: string;
-  channelId?: string;
-  channelType?: string;
-  channelUserId: string;
-  conversationId?: string;
+  platform: string; // Legacy alias of channelType
+  channelId?: string; // Configured channel instance id
+  channelType?: string; // Adapter/platform type
+  channelUserId: string; // Legacy alias of conversationId
+  conversationId?: string; // Preferred channel-side conversation target id
   username?: string;
   senderId?: string;
 }

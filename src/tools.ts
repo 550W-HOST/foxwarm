@@ -1687,24 +1687,25 @@ export const definitions = [
         },
         {
             name: 'send_to_channel',
-            description: 'Send a message directly to a specific channel by channelId (platform:userId).',
+            description: 'Send a message directly to a specific channel target by channelTargetId (<channel-instance-id>:<conversation-id>).',
             parameters: {
                 type: 'object',
                 properties: {
-                    channelId: { type: 'string', description: 'Channel ID in format platform:userId' },
+                    channelTargetId: { type: 'string', description: 'Target channel in format <channel-instance-id>:<conversation-id>' },
                     message: { type: 'string', description: 'Message to send' }
                 },
-                required: ['channelId', 'message']
+                required: ['channelTargetId', 'message']
             }
         },
         {
             name: 'send_file',
-            description: 'Send a local file or image to a specific channel, or to all non-push-only channels attached to a session. Exactly one of sessionId or channelId is required.',
+            description: 'Send a local file or image to a specific channel target, or to all non-push-only channels attached to a session. Exactly one of sessionId or channelTargetId is required.',
             parameters: {
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID whose attached channels should receive the file' },
-                    channelId: { type: 'string', description: 'Target channel ID in format platform:userId' },
+                    channelTargetId: { type: 'string', description: 'Target channel in format <channel-instance-id>:<conversation-id>' },
+                    channelId: { type: 'string', description: 'Legacy alias of channelTargetId. Prefer channelTargetId.' },
                     filePath: { type: 'string', description: 'File path on the selected node. Relative paths are resolved under the current agent folder on that node; absolute paths and ~/... are also accepted when allowed.' },
                     node: { type: 'string', description: 'Optional. Node where the file lives. Defaults to the current node; send_file still delivers through master-side channel/session routing.' },
                     caption: { type: 'string', description: 'Optional caption/text sent with the file where supported' },

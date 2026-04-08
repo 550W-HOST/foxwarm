@@ -645,14 +645,22 @@ export function detachChannel(channelId: string, conversationId: string): void {
   sessionChannels.detachChannel(channelId, conversationId);
 }
 
+export async function sendToChannelTargetId(channelTargetId: string, message: string): Promise<void> {
+  await sessionChannels.sendToChannelTargetId(channelTargetId, message);
+}
+
 export async function sendToChannelById(channelId: string, message: string): Promise<void> {
-  await sessionChannels.sendToChannelById(channelId, message);
+  await sendToChannelTargetId(channelId, message);
 }
 
 export type FileDeliveryResult = sessionChannels.FileDeliveryResult;
 
+export async function sendFileToChannelTargetId(channelTargetId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+  await sessionChannels.sendFileToChannelTargetId(channelTargetId, file, options);
+}
+
 export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
-  await sessionChannels.sendFileToChannelById(channelId, file, options);
+  await sendFileToChannelTargetId(channelId, file, options);
 }
 
 export async function sendFileToSession(sessionId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<FileDeliveryResult> {
