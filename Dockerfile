@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/webui/package.json packages/webui/package-lock.json ./packages/webui/
 
-RUN npm ci && npm --prefix packages/webui ci
+RUN npm ci --libc=glibc && npm --prefix packages/webui ci
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -51,7 +51,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --libc=glibc && npm cache clean --force
 
 COPY --from=build /app/lib ./lib
 COPY --from=build /app/templates ./templates

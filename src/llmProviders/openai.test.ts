@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
-import { collectOpenAIChatCompletionsStream } from './openai';
+import { collectOpenAIChatCompletionsStream, collectOpenAIResponsesStream } from './openai';
 
-function makeStream(events: Array<any | '[DONE]'>): PassThrough {
+function makeChatStream(events: Array<any | '[DONE]'>): PassThrough {
   const stream = new PassThrough();
   process.nextTick(() => {
     for (const event of events) {
@@ -15,8 +15,13 @@ function makeStream(events: Array<any | '[DONE]'>): PassThrough {
   return stream;
 }
 
+function writeSseEvent(stream: PassThrough, event: any) {
+  stream.write(`event: ${event.type}\n`);
+  stream.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
 test('collectOpenAIChatCompletionsStream aggregates streamed text and usage', async () => {
-  const stream = makeStream([
+  const stream = makeChatStream([
     {
       choices: [{ index: 0, delta: { role: 'assistant', content: 'Hel' }, finish_reason: null }],
     },
@@ -38,7 +43,7 @@ test('collectOpenAIChatCompletionsStream aggregates streamed text and usage', as
 });
 
 test('collectOpenAIChatCompletionsStream aggregates streamed tool calls', async () => {
-  const stream = makeStream([
+  const stream = makeChatStream([
     {
       choices: [{
         index: 0,
@@ -74,4 +79,92 @@ test('collectOpenAIChatCompletionsStream aggregates streamed tool calls', async 
   assert.equal(response.choices[0].message.tool_calls[0].id, 'call_abc');
   assert.equal(response.choices[0].message.tool_calls[0].function.name, 'read');
   assert.equal(response.choices[0].message.tool_calls[0].function.arguments, '{"filePath":"x"}');
+});
+
+test('collectOpenAIResponsesStream reconstructs output from output_item.done when completed output is empty', async () => {
+  const stream = new PassThrough();
+  const controller = new AbortController();
+  const promise = collectOpenAIResponsesStream(stream, controller.signal);
+
+  writeSseEvent(stream, {
+    type: 'response.output_item.done',
+    output_index: 0,
+    item: {
+      id: 'msg_1',
+      type: 'message',
+      status: 'completed',
+      role: 'assistant',
+      phase: 'final_answer',
+      content: [
+        {
+          type: 'output_text',
+          text: 'OK',
+          annotations: [],
+        },
+      ],
+    },
+  });
+  writeSseEvent(stream, {
+    type: 'response.completed',
+    response: {
+      id: 'resp_1',
+      object: 'response',
+      status: 'completed',
+      output: [],
+    },
+  });
+  stream.end();
+
+  const response = await promise;
+  assert.equal(response.output.length, 1);
+  assert.equal(response.output[0].type, 'message');
+  assert.equal(response.output[0].content[0].text, 'OK');
+});
+
+test('collectOpenAIResponsesStream reconstructs assistant text from output_text events when completed output is empty', async () => {
+  const stream = new PassThrough();
+  const controller = new AbortController();
+  const promise = collectOpenAIResponsesStream(stream, controller.signal);
+
+  writeSseEvent(stream, {
+    type: 'response.output_text.delta',
+    output_index: 0,
+    content_index: 0,
+    item_id: 'msg_2',
+    delta: 'O',
+  });
+  writeSseEvent(stream, {
+    type: 'response.output_text.delta',
+    output_index: 0,
+    content_index: 0,
+    item_id: 'msg_2',
+    delta: 'K',
+  });
+  writeSseEvent(stream, {
+    type: 'response.content_part.done',
+    output_index: 0,
+    content_index: 0,
+    item_id: 'msg_2',
+    part: {
+      type: 'output_text',
+      text: 'OK',
+      annotations: [],
+    },
+  });
+  writeSseEvent(stream, {
+    type: 'response.completed',
+    response: {
+      id: 'resp_2',
+      object: 'response',
+      status: 'completed',
+      output: [],
+    },
+  });
+  stream.end();
+
+  const response = await promise;
+  assert.equal(response.output.length, 1);
+  assert.equal(response.output[0].type, 'message');
+  assert.equal(response.output[0].role, 'assistant');
+  assert.equal(response.output[0].content[0].text, 'OK');
 });

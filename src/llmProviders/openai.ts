@@ -412,6 +412,103 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
     return responseInput;
 }
 
+function cloneJsonValue<T>(value: T): T {
+    return value === undefined ? value : JSON.parse(JSON.stringify(value));
+}
+
+function ensureOrderedOutputItem(
+    itemsByIndex: Map<number, any>,
+    orderedIndexes: number[],
+    outputIndex: number,
+    factory: () => any,
+): any {
+    let item = itemsByIndex.get(outputIndex);
+    if (!item) {
+        item = factory();
+        itemsByIndex.set(outputIndex, item);
+        orderedIndexes.push(outputIndex);
+    }
+    return item;
+}
+
+function ensureMessageContentPart(item: any, contentIndex: number): any {
+    if (!Array.isArray(item.content)) {
+        item.content = [];
+    }
+
+    while (item.content.length <= contentIndex) {
+        item.content.push({ type: 'output_text', annotations: [], text: '' });
+    }
+
+    if (!item.content[contentIndex]) {
+        item.content[contentIndex] = { type: 'output_text', annotations: [], text: '' };
+    }
+
+    return item.content[contentIndex];
+}
+
+function buildReasoningOutputItem(summaryParts: Map<string, string>): any | null {
+    const summary = Array.from(summaryParts.entries())
+        .sort(([leftKey], [rightKey]) => {
+            const [leftOutput = '0', leftSummary = '0'] = leftKey.split(':');
+            const [rightOutput = '0', rightSummary = '0'] = rightKey.split(':');
+            const outputDelta = Number(leftOutput) - Number(rightOutput);
+            if (outputDelta !== 0) {
+                return outputDelta;
+            }
+            return Number(leftSummary) - Number(rightSummary);
+        })
+        .map(([, text]) => text)
+        .filter(Boolean)
+        .map(text => ({ type: 'summary_text', text }));
+
+    if (summary.length === 0) {
+        return null;
+    }
+
+    return {
+        type: 'reasoning',
+        summary,
+    };
+}
+
+function buildCompletedResponseWithAssembledOutput(
+    completedResponse: any,
+    itemsByIndex: Map<number, any>,
+    orderedIndexes: number[],
+    summaryParts: Map<string, string>,
+): any {
+    if (!completedResponse) {
+        return completedResponse;
+    }
+
+    const existingOutput = Array.isArray(completedResponse.output) ? completedResponse.output : [];
+    if (existingOutput.length > 0) {
+        return completedResponse;
+    }
+
+    const assembledOutput = orderedIndexes
+        .slice()
+        .sort((left, right) => left - right)
+        .map(index => itemsByIndex.get(index))
+        .filter(Boolean)
+        .map(item => cloneJsonValue(item));
+
+    const reasoningItem = buildReasoningOutputItem(summaryParts);
+    if (reasoningItem && !assembledOutput.some(item => item?.type === 'reasoning')) {
+        assembledOutput.unshift(reasoningItem);
+    }
+
+    if (assembledOutput.length === 0) {
+        return completedResponse;
+    }
+
+    return {
+        ...completedResponse,
+        output: assembledOutput,
+    };
+}
+
 export async function collectOpenAIResponsesStream(
     stream: any,
     signal: AbortSignal,
@@ -429,6 +526,8 @@ export async function collectOpenAIResponsesStream(
         let completedResponse: any = null;
         let lastSummaryText = '';
         const summaryParts = new Map<string, string>();
+        const outputItemsByIndex = new Map<number, any>();
+        const orderedOutputIndexes: number[] = [];
         const decoder = new StringDecoder('utf8');
 
         const cleanup = () => {
@@ -460,8 +559,152 @@ export async function collectOpenAIResponsesStream(
 
         const handleEvent = (event: any) => {
             const key = `${event.output_index ?? 0}:${event.summary_index ?? 0}`;
+            const outputIndex = Number(event.output_index ?? 0);
 
             switch (event.type) {
+                case 'response.output_item.added':
+                    ensureOrderedOutputItem(
+                        outputItemsByIndex,
+                        orderedOutputIndexes,
+                        outputIndex,
+                        () => cloneJsonValue(event.item),
+                    );
+                    return;
+                case 'response.output_item.done':
+                    outputItemsByIndex.set(outputIndex, cloneJsonValue(event.item));
+                    if (!orderedOutputIndexes.includes(outputIndex)) {
+                        orderedOutputIndexes.push(outputIndex);
+                    }
+                    return;
+                case 'response.content_part.added': {
+                    const item = ensureOrderedOutputItem(
+                        outputItemsByIndex,
+                        orderedOutputIndexes,
+                        outputIndex,
+                        () => ({
+                            id: event.item_id,
+                            type: 'message',
+                            role: 'assistant',
+                            status: 'in_progress',
+                            content: [],
+                        }),
+                    );
+                    item.id = item.id || event.item_id;
+                    item.role = item.role || 'assistant';
+                    item.type = item.type || 'message';
+                    item.status = item.status || 'in_progress';
+                    item.content[Number(event.content_index ?? 0)] = cloneJsonValue(event.part);
+                    return;
+                }
+                case 'response.content_part.done': {
+                    const item = ensureOrderedOutputItem(
+                        outputItemsByIndex,
+                        orderedOutputIndexes,
+                        outputIndex,
+                        () => ({
+                            id: event.item_id,
+                            type: 'message',
+                            role: 'assistant',
+                            status: 'in_progress',
+                            content: [],
+                        }),
+                    );
+                    item.id = item.id || event.item_id;
+                    item.role = item.role || 'assistant';
+                    item.type = item.type || 'message';
+                    item.status = item.status || 'in_progress';
+                    ensureMessageContentPart(item, Number(event.content_index ?? 0));
+                    item.content[Number(event.content_index ?? 0)] = cloneJsonValue(event.part);
+                    return;
+                }
+                case 'response.output_text.delta': {
+                    const item = ensureOrderedOutputItem(
+                        outputItemsByIndex,
+                        orderedOutputIndexes,
+                        outputIndex,
+                        () => ({
+                            id: event.item_id,
+                            type: 'message',
+                            role: 'assistant',
+                            status: 'in_progress',
+                            content: [],
+                        }),
+                    );
+                    item.id = item.id || event.item_id;
+                    item.role = item.role || 'assistant';
+                    item.type = item.type || 'message';
+                    item.status = item.status || 'in_progress';
+                    const contentPart = ensureMessageContentPart(item, Number(event.content_index ?? 0));
+                    contentPart.type = 'output_text';
+                    contentPart.text = appendDelta(contentPart.text, event.delta) || '';
+                    return;
+                }
+                case 'response.output_text.done': {
+                    const item = ensureOrderedOutputItem(
+                        outputItemsByIndex,
+                        orderedOutputIndexes,
+                        outputIndex,
+                        () => ({
+                            id: event.item_id,
+                            type: 'message',
+                            role: 'assistant',
+                            status: 'in_progress',
+                            content: [],
+                        }),
+                    );
+                    item.id = item.id || event.item_id;
+                    item.role = item.role || 'assistant';
+                    item.type = item.type || 'message';
+                    item.status = item.status || 'in_progress';
+                    const contentPart = ensureMessageContentPart(item, Number(event.content_index ?? 0));
+                    contentPart.type = 'output_text';
+                    contentPart.text = event.text || contentPart.text || '';
+                    return;
+                }
+                case 'response.function_call_arguments.delta': {
+                    const item = ensureOrderedOutputItem(
+                        outputItemsByIndex,
+                        orderedOutputIndexes,
+                        outputIndex,
+                        () => ({
+                            id: event.item_id,
+                            type: 'function_call',
+                            status: 'in_progress',
+                            call_id: event.call_id || event.item_id,
+                            name: event.name || '',
+                            arguments: '',
+                        }),
+                    );
+                    item.id = item.id || event.item_id;
+                    item.type = item.type || 'function_call';
+                    item.status = item.status || 'in_progress';
+                    item.call_id = item.call_id || event.call_id || event.item_id;
+                    item.name = item.name || event.name || '';
+                    item.arguments = appendDelta(item.arguments, event.delta) || '';
+                    return;
+                }
+                case 'response.function_call_arguments.done': {
+                    const item = ensureOrderedOutputItem(
+                        outputItemsByIndex,
+                        orderedOutputIndexes,
+                        outputIndex,
+                        () => ({
+                            id: event.item_id,
+                            type: 'function_call',
+                            status: 'completed',
+                            call_id: event.call_id || event.item_id,
+                            name: event.name || '',
+                            arguments: '',
+                        }),
+                    );
+                    item.id = item.id || event.item_id;
+                    item.type = item.type || 'function_call';
+                    item.status = 'completed';
+                    item.call_id = item.call_id || event.call_id || event.item_id;
+                    item.name = item.name || event.name || '';
+                    item.arguments = event.arguments || item.arguments || '';
+                    return;
+                }
                 case 'response.reasoning_summary_part.done':
                     if (event.part?.text) {
                         summaryParts.set(key, event.part.text);
@@ -477,7 +720,12 @@ export async function collectOpenAIResponsesStream(
                     emitSummaryUpdate();
                     return;
                 case 'response.completed':
-                    completedResponse = event.response;
+                    completedResponse = buildCompletedResponseWithAssembledOutput(
+                        event.response,
+                        outputItemsByIndex,
+                        orderedOutputIndexes,
+                        summaryParts,
+                    );
                     return;
                 case 'response.failed':
                     finish(() => reject(new Error(event.response?.error?.message || 'OpenAI Responses request failed.')));
@@ -532,7 +780,12 @@ export async function collectOpenAIResponsesStream(
             appendDecodedText(decoder.end());
             finish(() => {
                 if (completedResponse) {
-                    resolve(completedResponse);
+                    resolve(buildCompletedResponseWithAssembledOutput(
+                        completedResponse,
+                        outputItemsByIndex,
+                        orderedOutputIndexes,
+                        summaryParts,
+                    ));
                     return;
                 }
 
