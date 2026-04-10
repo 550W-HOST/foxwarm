@@ -3,9 +3,10 @@ import os from 'os';
 import path from 'path';
 import * as vector from './vector';
 import * as sessionManager from './sessionManager';
+import { getVectorSearchLineage } from './session/archiveStore';
 import { estimateTokenCount } from './tokenCount';
 import { WORKSPACE_DIR, getAgentDir, getAgentMemoryDir } from './config';
-import { checkPathAccess } from './isolatedCheck';
+import { checkPathAccess, checkToolPermission } from './isolatedCheck';
 import * as mcpClient from './mcpClient';
 import { browserManager } from './browser';
 import { logger } from './common';
@@ -32,8 +33,6 @@ import {
     tool_list_sessions,
     tool_list_agents,
     tool_list_skills,
-    tool_attach_agent_skill,
-    tool_detach_agent_skill,
     tool_load_skill,
     tool_get_session_messages,
     tool_get_archived_messages,
@@ -47,7 +46,6 @@ import {
     tool_update_session_snapshot,
     tool_stop_session,
     tool_compact_session,
-    tool_compress_session,
     tool_create_timer,
     tool_list_timers,
     tool_delete_timer,
@@ -69,11 +67,60 @@ interface ToolContext {
 
 // Tool function type
 type ToolArgs = Record<string, any>;
+type UnifiedToolSource = 'builtin' | 'mcp' | 'node';
 
 const WORKSPACE = WORKSPACE_DIR;
 fs.ensureDirSync(getAgentDir('main'));
 
 const OPTIONAL_NODE_DESCRIPTION = 'Optional. Empty = current node; avoid `current`.';
+
+export const MODEL_HIDDEN_TOOL_NAMES = new Set([
+    'browse_open',
+    'browse_list',
+    'browse_get',
+    'browse_close',
+    'browse_interact',
+    'get_archived_messages',
+    'get_archived_blocks',
+    'set_session_child_model',
+    'set_session_compact_threshold',
+    'update_session_snapshot',
+    'create_agent',
+    'create_session',
+    'set_agent_inherit',
+    'set_agent_isolated',
+    'move_session',
+    'remote_node',
+    'call_mcp',
+    'search_mcp_tools',
+]);
+
+export const MASTER_ONLY_TOOL_NAMES = [
+    'remote_node', 'list_nodes', 'node_tools',
+    'search_vector', 'search_memory', 'get_memory_context',
+    'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
+    'copy_between_nodes',
+    'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
+    'list_sessions', 'list_agents', 'list_skills', 'load_skill',
+    'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
+    'update_session_name', 'set_todo', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
+    'compact_session',
+    'create_timer', 'list_timers', 'delete_timer',
+    'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
+    'search_tools', 'call_tool',
+    'change_current_node',
+    'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
+];
+
+const MASTER_ONLY_TOOL_NAME_SET = new Set(MASTER_ONLY_TOOL_NAMES);
+
+export function isToolDirectlyExposedToModel(toolName: string): boolean {
+    return !MODEL_HIDDEN_TOOL_NAMES.has(toolName);
+}
+
+export function isMasterOnlyToolName(toolName: string): boolean {
+    return MASTER_ONLY_TOOL_NAME_SET.has(toolName);
+}
 
 // Helper function to resolve file path for agent
 function expandHomePath(filePath: string): string {
@@ -321,6 +368,47 @@ async function tool_delete_memory(args: ToolArgs, ctx: ToolContext) {
     return `Deleted memory file \`${relativePath}\``;
 }
 
+async function applyPatchOperations(input: string, resolveOperationPath: (filePath: string) => {
+    fullPath: string;
+    displayPath: string;
+}): Promise<string> {
+    const operations = parseApplyPatchInput(input);
+    const summaries: string[] = [];
+
+    for (const operation of operations) {
+        const { fullPath, displayPath } = resolveOperationPath(operation.filePath);
+
+        if (operation.action === 'update') {
+            if (!await fs.pathExists(fullPath)) {
+                throw new Error(`Cannot update missing file: ${displayPath}`);
+            }
+            const content = await fs.readFile(fullPath, 'utf8');
+            const updatedContent = applyUpdatePatch(content, operation.lines, displayPath);
+            await fs.writeFile(fullPath, updatedContent);
+            summaries.push(`Updated ${displayPath}`);
+            continue;
+        }
+
+        if (operation.action === 'add') {
+            if (await fs.pathExists(fullPath)) {
+                throw new Error(`Cannot add file that already exists: ${displayPath}`);
+            }
+            await fs.ensureDir(path.dirname(fullPath));
+            await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
+            summaries.push(`Added ${displayPath}`);
+            continue;
+        }
+
+        if (!await fs.pathExists(fullPath)) {
+            throw new Error(`Cannot delete missing file: ${displayPath}`);
+        }
+        await fs.remove(fullPath);
+        summaries.push(`Deleted ${displayPath}`);
+    }
+
+    return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;
+}
+
 async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
     const { input } = args;
 
@@ -329,44 +417,30 @@ async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
     }
 
     const agentName = ctx.session?.agent || 'main';
-    const operations = parseApplyPatchInput(input);
-    const summaries: string[] = [];
-
-    for (const operation of operations) {
-        const fullPath = resolveAgentPath(operation.filePath, agentName, ctx.session?.cwd);
+    return applyPatchOperations(input, (filePath) => {
+        const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
         if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
             checkPathAccess(fullPath, agentName);
         }
+        return {
+            fullPath,
+            displayPath: filePath,
+        };
+    });
+}
 
-        if (operation.action === 'update') {
-            if (!await fs.pathExists(fullPath)) {
-                throw new Error(`Cannot update missing file: ${operation.filePath}`);
-            }
-            const content = await fs.readFile(fullPath, 'utf8');
-            const updatedContent = applyUpdatePatch(content, operation.lines, operation.filePath);
-            await fs.writeFile(fullPath, updatedContent);
-            summaries.push(`Updated ${operation.filePath}`);
-            continue;
-        }
+async function tool_apply_patch_memory(args: ToolArgs, ctx: ToolContext) {
+    const { input } = args;
 
-        if (operation.action === 'add') {
-            if (await fs.pathExists(fullPath)) {
-                throw new Error(`Cannot add file that already exists: ${operation.filePath}`);
-            }
-            await fs.ensureDir(path.dirname(fullPath));
-            await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
-            summaries.push(`Added ${operation.filePath}`);
-            continue;
-        }
-
-        if (!await fs.pathExists(fullPath)) {
-            throw new Error(`Cannot delete missing file: ${operation.filePath}`);
-        }
-        await fs.remove(fullPath);
-        summaries.push(`Deleted ${operation.filePath}`);
+    if (!input || typeof input !== 'string') {
+        throw new Error('apply_patch_memory requires input string.');
     }
 
-    return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;
+    const agentName = ctx.session?.agent || 'main';
+    return applyPatchOperations(input, (filePath) => ({
+        fullPath: resolveAgentMemoryPath(filePath, agentName),
+        displayPath: normalizeMemoryRelativePath(filePath),
+    }));
 }
 
 type ListFilesEntry = {
@@ -520,53 +594,6 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     return cwdNotice ? `${cwdNotice}\n\n${result}` : result;
 }
 
-async function tool_change_directory(args: ToolArgs, ctx: ToolContext) {
-    const { path: targetPath } = args;
-
-    if (!ctx.sessionId || !ctx.session) {
-        throw new Error('change_directory requires an active session context.');
-    }
-    if (typeof targetPath !== 'string' || targetPath.trim().length === 0) {
-        throw new Error('path is required');
-    }
-
-    const agentName = ctx.session.agent || 'main';
-    const resolvedPath = resolveExecCwd(targetPath, ctx, agentName);
-    if (!resolvedPath) {
-        throw new Error('path is required');
-    }
-
-    const nodeId = ctx.runtimeNodeId || ctx.session.currentNode || 'master';
-    if (nodeId === 'master') {
-        if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
-            checkPathAccess(resolvedPath, agentName);
-        }
-        let stat: fs.Stats | null = null;
-        try {
-            stat = await fs.stat(resolvedPath);
-        } catch {
-            stat = null;
-        }
-        if (!stat) {
-            throw new Error(`Directory does not exist: ${resolvedPath}`);
-        }
-        if (!stat.isDirectory()) {
-            throw new Error(`Path is not a directory: ${resolvedPath}`);
-        }
-    } else {
-        await nodesManager.executeTool(nodeId, 'exec', { command: 'pwd', cwd: resolvedPath }, ctx.sessionId);
-    }
-
-    const changed = await sessionManager.setSessionCwd(ctx.sessionId, resolvedPath);
-    if (!changed.changed) {
-        return `Working directory unchanged: \`${resolvedPath}\`.`;
-    }
-
-    return changed.previous
-        ? `Working directory changed: \`${changed.previous}\` → \`${resolvedPath}\`.`
-        : `Working directory changed to \`${resolvedPath}\`.`;
-}
-
 export async function resolveMemorySearchOptions(
     request: {
         scope?: 'all' | 'current-session' | 'current-agent';
@@ -574,15 +601,32 @@ export async function resolveMemorySearchOptions(
         targetAgentName?: string;
     },
     ctx?: ToolContext,
-): Promise<{ searchOptions: { sessionIds?: string[]; agent?: string }; effectiveScope: 'current-session' | 'current-agent' }> {
+): Promise<{ searchOptions: { sessionIds?: string[]; agent?: string; lineageSessions?: Array<{ sessionId: string; maxMessageSeq?: number; maxBlockId?: number }> }; effectiveScope: 'current-session' | 'current-agent' }> {
     if (!ctx?.sessionId) {
-        throw new Error('search_memory requires an active session context.');
+        throw new Error('search_vector requires an active session context.');
     }
 
     const session = await sessionManager.getSession(ctx.sessionId);
     const agentName = session.agent || 'main';
     const effectiveIsolated = sessionManager.isSessionEffectivelyIsolated(session);
     const subconsciousPrimarySessionId = sessionManager.getSubconsciousPrimarySessionId(session);
+
+    async function buildSessionScopedSearchOptions(targetSessionId: string, extraSessionIds: string[] = []) {
+        const lineage = await getVectorSearchLineage(targetSessionId);
+        if (lineage.length > 0) {
+            return {
+                lineageSessions: lineage.map(entry => ({
+                    sessionId: entry.sessionId,
+                    maxMessageSeq: entry.maxMessageSeq,
+                    maxBlockId: entry.maxBlockId,
+                })),
+            };
+        }
+
+        return {
+            sessionIds: [targetSessionId, ...extraSessionIds],
+        };
+    }
 
     if (subconsciousPrimarySessionId) {
         if (request.targetAgentName && request.targetAgentName !== agentName) {
@@ -597,14 +641,14 @@ export async function resolveMemorySearchOptions(
 
             if (request.targetSessionId === session.id || (session.aliases || []).includes(request.targetSessionId)) {
                 return {
-                    searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+                    searchOptions: await buildSessionScopedSearchOptions(session.id, session.aliases || []),
                     effectiveScope: 'current-session',
                 };
             }
         }
 
         return {
-            searchOptions: { sessionIds: [subconsciousPrimarySessionId] },
+            searchOptions: await buildSessionScopedSearchOptions(subconsciousPrimarySessionId),
             effectiveScope: 'current-session',
         };
     }
@@ -617,13 +661,13 @@ export async function resolveMemorySearchOptions(
             throw new Error('Isolated session can only search the current session.');
         }
         return {
-            searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+            searchOptions: await buildSessionScopedSearchOptions(session.id, session.aliases || []),
             effectiveScope: 'current-session',
         };
     }
 
     if (request.targetAgentName && request.targetAgentName !== agentName) {
-        throw new Error('search_memory cannot access memories outside the current agent.');
+        throw new Error('search_vector cannot access memories outside the current agent.');
     }
 
     if (request.targetSessionId) {
@@ -632,17 +676,17 @@ export async function resolveMemorySearchOptions(
             throw new Error(`Session \`${request.targetSessionId}\` not found.`);
         }
         if ((targetSession.agent || 'main') !== agentName) {
-            throw new Error('search_memory cannot access memories outside the current agent.');
+            throw new Error('search_vector cannot access memories outside the current agent.');
         }
         return {
-            searchOptions: { sessionIds: [targetSession.id, ...(targetSession.aliases || [])] },
+            searchOptions: await buildSessionScopedSearchOptions(targetSession.id, targetSession.aliases || []),
             effectiveScope: 'current-session',
         };
     }
 
     if (request.scope === 'current-session') {
         return {
-            searchOptions: { sessionIds: [session.id, ...(session.aliases || [])] },
+            searchOptions: await buildSessionScopedSearchOptions(session.id, session.aliases || []),
             effectiveScope: 'current-session',
         };
     }
@@ -701,11 +745,17 @@ export function formatMemorySearchResults(results: any): string {
         const seqLabel = r.start_seq != null && r.end_seq != null && Number(r.start_seq) !== Number(r.end_seq)
             ? `${r.start_seq}-${r.end_seq}`
             : `${r.start_seq ?? r.seq}`;
+        const rawSeqLabel = r.raw_start_seq != null && r.raw_end_seq != null && Number(r.raw_start_seq) !== Number(r.raw_end_seq)
+            ? `${r.raw_start_seq}-${r.raw_end_seq}`
+            : `${r.raw_start_seq ?? r.start_seq ?? r.seq}`;
         const messageLabel = r.message_count > 1
             ? `[messages: ${r.message_count}]`
             : '';
         const chunkLabel = r.chunk_count > 1
             ? `[chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]`
+            : '';
+        const kindLabel = r.kind === 'block'
+            ? `[kind: block] [B#${r.block_id ?? '?'} L${r.block_level ?? '?'}] [raw: ${rawSeqLabel}]`
             : '';
         const ageLabel = `[${formatAgeLabel(ts)}]`;
         const preview = buildPreview(r.text || r.chunk_text || '');
@@ -713,6 +763,7 @@ export function formatMemorySearchResults(results: any): string {
         return [
             `[${dateStr}] [session: ${r.session_id}] [seq: ${seqLabel}]`,
             ageLabel,
+            kindLabel,
             messageLabel,
             chunkLabel,
             `[ID: ${idStr}]`,
@@ -720,14 +771,37 @@ export function formatMemorySearchResults(results: any): string {
     }).join('\n\n---\n\n');
 }
 
-async function tool_search_memory({ query, limit = 5, scope = 'all', sessionId, agentName }: { query: string; limit?: number; scope?: 'all' | 'current-session' | 'current-agent'; sessionId?: string; agentName?: string }, ctx?: ToolContext) {
+async function tool_search_vector({
+    query,
+    limit = 5,
+    scope = 'all',
+    sessionId,
+    agentName,
+    includeRegex,
+    excludeRegex,
+    preferBlocks,
+}: {
+    query: string;
+    limit?: number;
+    scope?: 'all' | 'current-session' | 'current-agent';
+    sessionId?: string;
+    agentName?: string;
+    includeRegex?: string;
+    excludeRegex?: string;
+    preferBlocks?: boolean;
+}, ctx?: ToolContext) {
     const { searchOptions } = await resolveMemorySearchOptions({
         scope,
         targetSessionId: sessionId,
         targetAgentName: agentName,
     }, ctx);
 
-    const results = await vector.search(query, limit, false, searchOptions);
+    const results = await vector.search(query, limit, false, {
+        ...searchOptions,
+        includeRegex,
+        excludeRegex,
+        preferBlocks,
+    });
     return formatMemorySearchResults(results);
 }
 
@@ -809,6 +883,324 @@ async function tool_browse_interact(args: ToolArgs) {
     const { tabId, action, params } = args;
     const result = await browserManager.interact(tabId, action, params || {});
     return result;
+}
+
+function buildUnifiedToolId(source: UnifiedToolSource, name: string, options: { server?: string; nodeId?: string } = {}): string {
+    if (source === 'builtin') {
+        return `builtin:${name}`;
+    }
+
+    if (source === 'mcp') {
+        if (!options.server) {
+            throw new Error('MCP tool IDs require server.');
+        }
+        return `mcp:${options.server}/${name}`;
+    }
+
+    if (!options.nodeId) {
+        throw new Error('Node tool IDs require nodeId.');
+    }
+
+    return `node:${options.nodeId}/${name}`;
+}
+
+function parseUnifiedToolId(toolId: string): { source: UnifiedToolSource; name: string; server?: string; nodeId?: string } {
+    if (typeof toolId !== 'string' || toolId.trim().length === 0) {
+        throw new Error('toolId is required');
+    }
+
+    if (toolId.startsWith('builtin:')) {
+        const name = toolId.slice('builtin:'.length).trim();
+        if (!name) throw new Error(`Invalid builtin toolId: ${toolId}`);
+        return { source: 'builtin', name };
+    }
+
+    if (toolId.startsWith('mcp:')) {
+        const remainder = toolId.slice('mcp:'.length);
+        const separator = remainder.indexOf('/');
+        if (separator <= 0 || separator === remainder.length - 1) {
+            throw new Error(`Invalid MCP toolId: ${toolId}`);
+        }
+        return {
+            source: 'mcp',
+            server: remainder.slice(0, separator),
+            name: remainder.slice(separator + 1),
+        };
+    }
+
+    if (toolId.startsWith('node:')) {
+        const remainder = toolId.slice('node:'.length);
+        const separator = remainder.indexOf('/');
+        if (separator <= 0 || separator === remainder.length - 1) {
+            throw new Error(`Invalid node toolId: ${toolId}`);
+        }
+        return {
+            source: 'node',
+            nodeId: remainder.slice(0, separator),
+            name: remainder.slice(separator + 1),
+        };
+    }
+
+    throw new Error(`Unsupported toolId source: ${toolId}`);
+}
+
+function normalizeUnifiedToolSources(rawSources: unknown): UnifiedToolSource[] {
+    const allowed: UnifiedToolSource[] = ['builtin', 'mcp', 'node'];
+    if (rawSources === undefined || rawSources === null) {
+        return allowed;
+    }
+
+    const items = Array.isArray(rawSources) ? rawSources : [rawSources];
+    const normalized = items.map(item => String(item).trim()).filter(Boolean);
+    if (normalized.length === 0) {
+        return allowed;
+    }
+
+    const invalid = normalized.filter((item): item is string => !allowed.includes(item as UnifiedToolSource));
+    if (invalid.length > 0) {
+        throw new Error(`Invalid sources: ${invalid.join(', ')}. Supported sources: ${allowed.join(', ')}`);
+    }
+
+    return Array.from(new Set(normalized as UnifiedToolSource[]));
+}
+
+function normalizeRequestedNodeForToolCall(nodeParam: unknown, currentNode: string): string {
+    if (nodeParam === undefined || nodeParam === null) {
+        return currentNode;
+    }
+
+    if (typeof nodeParam !== 'string') {
+        return String(nodeParam) || currentNode;
+    }
+
+    const trimmed = nodeParam.trim();
+    if (!trimmed || trimmed.toLowerCase() === 'current') {
+        return currentNode;
+    }
+
+    return trimmed;
+}
+
+function matchesUnifiedToolQuery(query: string, fields: Array<string | undefined>): boolean {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+        return true;
+    }
+
+    return fields.some(field => String(field || '').toLowerCase().includes(normalizedQuery));
+}
+
+async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolArgs, ctx: ToolContext): Promise<any> {
+    const toolDefinition = definitions.find(def => def.name === toolName);
+    if (!toolDefinition) {
+        throw new Error(`Unknown builtin tool: ${toolName}`);
+    }
+
+    const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition.parameters?.properties || {}, 'node');
+    if (!supportsExplicitNode && rawArgs && Object.prototype.hasOwnProperty.call(rawArgs, 'node')) {
+        throw new Error(`Builtin tool \`${toolName}\` does not support node selection. Use call_tool with source=\`node\` for remote-node execution.`);
+    }
+
+    const sessionId = ctx.sessionId || 'main';
+    const currentNode = ctx.sessionId
+        ? (await nodesManager.getCurrentNode(sessionId) || 'master')
+        : (ctx.session?.currentNode || 'master');
+    const targetNode = supportsExplicitNode
+        ? normalizeRequestedNodeForToolCall(rawArgs?.node, currentNode)
+        : currentNode;
+    const toolArgs = { ...(rawArgs || {}) };
+    delete toolArgs.node;
+
+    const executionNode = isMasterOnlyToolName(toolName) ? 'master' : targetNode;
+    const permissionNode = toolName === 'send_file' ? targetNode : executionNode;
+
+    if (ctx.sessionId) {
+        await checkToolPermission(toolName, sessionId, permissionNode, toolArgs);
+    }
+
+    if (executionNode !== 'master') {
+        return await nodesManager.executeTool(executionNode, toolName, toolArgs, sessionId);
+    }
+
+    return await nodesManager.executeToolLocally(toolName, toolArgs, sessionId);
+}
+
+async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean) {
+    return definitions
+        .filter(def => matchesUnifiedToolQuery(query, [def.name, def.description]))
+        .map(def => ({
+            source: 'builtin' as const,
+            toolId: buildUnifiedToolId('builtin', def.name),
+            name: def.name,
+            description: def.description,
+            ...(includeSchema ? { inputSchema: def.parameters } : {}),
+            directExposed: isToolDirectlyExposedToModel(def.name),
+            hidden: !isToolDirectlyExposedToModel(def.name),
+        }));
+}
+
+async function collectMcpUnifiedSearchResults(query: string, includeSchema: boolean, serverFilter: string | undefined, ctx?: ToolContext) {
+    if (ctx?.sessionId) {
+        await checkToolPermission('search_mcp_tools', ctx.sessionId, 'master', { server: serverFilter, query });
+    }
+
+    const servers = serverFilter
+        ? [serverFilter]
+        : (await mcpClient.listServers())
+            .filter(server => server.enabled)
+            .map(server => server.name);
+
+    const results: Array<Record<string, any>> = [];
+    for (const serverName of servers) {
+        const tools = await mcpClient.listTools(serverName);
+        const items = Array.isArray((tools as any)?.tools)
+            ? (tools as any).tools
+            : (Array.isArray(tools) ? tools as any[] : []);
+
+        for (const item of items) {
+            if (!matchesUnifiedToolQuery(query, [item?.name, item?.description, serverName])) {
+                continue;
+            }
+
+            results.push({
+                source: 'mcp',
+                toolId: buildUnifiedToolId('mcp', String(item?.name || ''), { server: serverName }),
+                name: item?.name || 'unknown',
+                description: item?.description || '',
+                server: serverName,
+                ...(includeSchema ? { inputSchema: item?.inputSchema || null } : {}),
+                ...(includeSchema && item?.annotations ? { annotations: item.annotations } : {}),
+            });
+        }
+    }
+
+    return results;
+}
+
+async function collectNodeUnifiedSearchResults(query: string, includeSchema: boolean, nodeFilter: string | undefined, ctx?: ToolContext) {
+    const nodeListing = await tool_remote_node({ action: 'list' }, (ctx || ({} as ToolContext))) as any;
+    const nodes = Array.isArray(nodeListing?.nodes) ? nodeListing.nodes : [];
+    const filteredNodes = nodeFilter
+        ? nodes.filter((node: any) => node?.id === nodeFilter)
+        : nodes;
+
+    const results: Array<Record<string, any>> = [];
+    for (const node of filteredNodes) {
+        for (const item of Array.isArray(node?.tools) ? node.tools : []) {
+            if (!matchesUnifiedToolQuery(query, [item?.name, item?.description, node?.id, node?.type])) {
+                continue;
+            }
+
+            results.push({
+                source: 'node',
+                toolId: buildUnifiedToolId('node', String(item?.name || ''), { nodeId: String(node?.id || '') }),
+                name: item?.name || 'unknown',
+                description: item?.description || '',
+                nodeId: node?.id || '',
+                nodeType: node?.type || '',
+                ...(includeSchema ? { inputSchema: item?.parameters || null } : {}),
+            });
+        }
+    }
+
+    return results;
+}
+
+async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
+    const query = typeof args?.query === 'string' ? args.query : '';
+    const sources = normalizeUnifiedToolSources(args?.sources);
+    const server = typeof args?.server === 'string' && args.server.trim() ? args.server.trim() : undefined;
+    const nodeId = typeof args?.nodeId === 'string' && args.nodeId.trim() ? args.nodeId.trim() : undefined;
+    const includeSchema = args?.includeSchema !== false;
+    const limit = Math.max(1, Math.min(Number(args?.limit) || 20, 200));
+    const warnings: string[] = [];
+
+    const collected: Array<Record<string, any>> = [];
+
+    if (sources.includes('builtin')) {
+        collected.push(...await collectBuiltinUnifiedSearchResults(query, includeSchema));
+    }
+
+    if (sources.includes('mcp')) {
+        try {
+            collected.push(...await collectMcpUnifiedSearchResults(query, includeSchema, server, ctx));
+        } catch (e: any) {
+            warnings.push(e?.message || String(e));
+        }
+    }
+
+    if (sources.includes('node')) {
+        try {
+            collected.push(...await collectNodeUnifiedSearchResults(query, includeSchema, nodeId, ctx));
+        } catch (e: any) {
+            warnings.push(e?.message || String(e));
+        }
+    }
+
+    collected.sort((a, b) => {
+        const sourceCompare = String(a.source).localeCompare(String(b.source));
+        if (sourceCompare !== 0) return sourceCompare;
+        const scopeA = String(a.server || a.nodeId || '');
+        const scopeB = String(b.server || b.nodeId || '');
+        const scopeCompare = scopeA.localeCompare(scopeB);
+        if (scopeCompare !== 0) return scopeCompare;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+
+    return {
+        count: Math.min(collected.length, limit),
+        totalMatched: collected.length,
+        tools: collected.slice(0, limit),
+        ...(warnings.length > 0 ? { warnings } : {}),
+    };
+}
+
+async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
+    const explicitSource = typeof args?.source === 'string' ? args.source.trim() : undefined;
+    const ref = args?.toolId
+        ? parseUnifiedToolId(String(args.toolId))
+        : {
+            source: explicitSource as UnifiedToolSource,
+            name: typeof args?.name === 'string' ? args.name : '',
+            server: typeof args?.server === 'string' ? args.server : undefined,
+            nodeId: typeof args?.nodeId === 'string' ? args.nodeId : undefined,
+        };
+
+    if (!ref?.source || !['builtin', 'mcp', 'node'].includes(ref.source)) {
+        throw new Error('call_tool requires either toolId or a valid source (builtin, mcp, node).');
+    }
+    if (!ref.name) {
+        throw new Error('call_tool requires a tool name.');
+    }
+
+    const toolArgs = args?.args && typeof args.args === 'object' ? args.args : {};
+
+    if (ref.source === 'builtin') {
+        return await executeBuiltinToolViaUnifiedCall(ref.name, toolArgs, ctx);
+    }
+
+    if (ref.source === 'mcp') {
+        if (!ctx?.sessionId) {
+            throw new Error('call_tool for MCP requires session context.');
+        }
+        await checkToolPermission('call_mcp', ctx.sessionId, 'master', {
+            server: ref.server,
+            tool: ref.name,
+            args: toolArgs,
+        });
+        return await mcpClient.callTool(ref.server, ref.name, toolArgs);
+    }
+
+    if (!ref.nodeId) {
+        throw new Error('call_tool for node source requires nodeId.');
+    }
+
+    return await tool_remote_node({
+        action: 'call',
+        nodeId: ref.nodeId,
+        tool: ref.name,
+        args: toolArgs,
+    }, ctx);
 }
 
 async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
@@ -949,6 +1341,23 @@ async function tool_search_mcp_tools(args: ToolArgs) {
     return `MCP tools (${limited.length}${filtered.length > limited.length ? ` of ${filtered.length}` : ''}):\n` + limited.join('\n');
 }
 
+async function tool_list_mcp_servers(_args: ToolArgs) {
+    const servers = await mcpClient.listServers();
+
+    if (!servers.length) {
+        return {
+            count: 0,
+            servers: [] as mcpClient.McpServerSummary[],
+            message: 'No MCP servers configured.',
+        };
+    }
+
+    return {
+        count: servers.length,
+        servers,
+    };
+}
+
 export const read = tool_read;
 export const write = tool_write;
 export const edit = tool_edit;
@@ -956,13 +1365,14 @@ export const read_memory = tool_read_memory;
 export const write_memory = tool_write_memory;
 export const edit_memory = tool_edit_memory;
 export const delete_memory = tool_delete_memory;
+export const apply_patch_memory = tool_apply_patch_memory;
 export const apply_patch = tool_apply_patch;
 export const list_files = tool_list_files;
 export const delete_file = tool_delete_file;
 export const copy_between_nodes = tool_copy_between_nodes;
 export const exec = tool_exec;
-export const change_directory = tool_change_directory;
-export const search_memory = tool_search_memory;
+export const search_vector = tool_search_vector;
+export const search_memory = tool_search_vector;
 export const get_memory_context = tool_get_memory_context;
 export const create_child_session = tool_create_child_session;
 export const create_agent = tool_create_agent;
@@ -978,8 +1388,6 @@ export const send_file = tool_send_file;
 export const list_sessions = tool_list_sessions;
 export const list_agents = tool_list_agents;
 export const list_skills = tool_list_skills;
-export const attach_agent_skill = tool_attach_agent_skill;
-export const detach_agent_skill = tool_detach_agent_skill;
 export const load_skill = tool_load_skill;
 export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
@@ -993,7 +1401,6 @@ export const set_session_compact_threshold = tool_set_session_compact_threshold;
 export const update_session_snapshot = tool_update_session_snapshot;
 export const stop_session = tool_stop_session;
 export const compact_session = tool_compact_session;
-export const compress_session = tool_compress_session;
 export const create_timer = tool_create_timer;
 export const list_timers = tool_list_timers;
 export const delete_timer = tool_delete_timer;
@@ -1007,6 +1414,9 @@ export const node_tools = tool_remote_node;
 export const mcp_config = tool_mcp_config;
 export const call_mcp = tool_call_mcp;
 export const search_mcp_tools = tool_search_mcp_tools;
+export const list_mcp_servers = tool_list_mcp_servers;
+export const search_tools = tool_search_tools;
+export const call_tool = tool_call_tool;
 
 // New tools for nodes
 export const list_nodes = async (args: ToolArgs) => {
@@ -1055,7 +1465,6 @@ export const definitions = [
                 type: 'object',
                 properties: { 
                     filePath: { type: 'string' },
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION },
                     startLine: { type: 'number', description: 'Starting line number (1-indexed, optional)' },
                     endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional)' }
                 },
@@ -1070,7 +1479,6 @@ export const definitions = [
                 properties: { 
                     content: { type: 'string' },
                     filePath: { type: 'string' },
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION },
                     overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' }
                 },
                 required: ['filePath', 'content']
@@ -1085,7 +1493,6 @@ export const definitions = [
                     filePath: { type: 'string' },
                     oldText: { type: 'string', description: 'The exact text to find' },
                     newText: { type: 'string', description: 'The text to replace it with' },
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
                 },
                 required: ['filePath', 'oldText', 'newText']
             }
@@ -1096,8 +1503,7 @@ export const definitions = [
             parameters: {
                 type: 'object',
                 properties: {
-                    input: { type: 'string', description: 'The apply_patch command text that you wish to execute.' },
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
+                    input: { type: 'string', description: 'The apply_patch command text that you wish to execute.' }
                 },
                 required: ['input']
             }
@@ -1152,6 +1558,17 @@ export const definitions = [
             }
         },
         {
+            name: 'apply_patch_memory',
+            description: 'Apply an apply_patch-style patch only within the current agent\'s memory/ directory. Pass memory-relative paths in the patch file headers; `memory/` prefixes are accepted but optional. Supports the same patch envelope and bare-patch compatibility as apply_patch.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    input: { type: 'string', description: 'The apply_patch command text to execute against files under the current agent memory/ directory.' }
+                },
+                required: ['input']
+            }
+        },
+        {
             name: 'list_files',
             description: 'List files under the current agent directory. Can recurse, but path traversal outside the agent folder is blocked.',
             parameters: {
@@ -1160,8 +1577,7 @@ export const definitions = [
                     dirPath: { type: 'string', description: 'Directory path relative to the current agent folder. Defaults to .' },
                     recursive: { type: 'boolean', description: 'Whether to recurse into subdirectories. Default: false' },
                     includeHidden: { type: 'boolean', description: 'Whether to include dotfiles. Default: false' },
-                    limit: { type: 'number', description: 'Maximum number of entries to return. Default: 200, max: 1000' },
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
+                    limit: { type: 'number', description: 'Maximum number of entries to return. Default: 200, max: 1000' }
                 }
             }
         },
@@ -1171,8 +1587,7 @@ export const definitions = [
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'File path relative to the current agent folder.' },
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
+                    filePath: { type: 'string', description: 'File path relative to the current agent folder.' }
                 },
                 required: ['filePath']
             }
@@ -1205,18 +1620,7 @@ export const definitions = [
             }
         },
         {
-            name: 'change_directory',
-            description: 'Change the current session working directory (session.cwd). Relative paths resolve from the current session cwd when set, otherwise from the agent folder.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    path: { type: 'string', description: 'Target directory path. May be absolute or relative.' }
-                },
-                required: ['path']
-            }
-        },
-        {
-            name: 'search_memory',
+            name: 'search_vector',
             description: 'Search for relevant past conversations in vector memory within the caller\'s allowed scope. Non-isolated sessions are limited to the current agent; isolated sessions are limited to the current session.',
             parameters: {
                 type: 'object',
@@ -1225,7 +1629,10 @@ export const definitions = [
                     limit: { type: 'number' },
                     scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: 'Requested scope. It will be capped to the caller\'s allowed range.' },
                     sessionId: { type: 'string', description: 'Optional specific session id, limited to your allowed scope.' },
-                    agentName: { type: 'string', description: 'Optional agent name, limited to your current agent.' }
+                    agentName: { type: 'string', description: 'Optional agent name, limited to your current agent.' },
+                    includeRegex: { type: 'string', description: 'Optional case-insensitive regex. Results must match this pattern in their text/preview span.' },
+                    excludeRegex: { type: 'string', description: 'Optional case-insensitive regex. Results matching this pattern in their text/preview span are filtered out.' },
+                    preferBlocks: { type: 'boolean', description: 'If true, give block summary hits a modest ranking boost.' }
                 },
                 required: ['query']
             }
@@ -1280,24 +1687,24 @@ export const definitions = [
         },
         {
             name: 'send_to_channel',
-            description: 'Send a message directly to a specific channel by channelId (platform:userId).',
+            description: 'Send a message directly to a specific channel target by channelTargetId (<channel-instance-id>:<conversation-id>).',
             parameters: {
                 type: 'object',
                 properties: {
-                    channelId: { type: 'string', description: 'Channel ID in format platform:userId' },
+                    channelTargetId: { type: 'string', description: 'Target channel in format <channel-instance-id>:<conversation-id>' },
                     message: { type: 'string', description: 'Message to send' }
                 },
-                required: ['channelId', 'message']
+                required: ['channelTargetId', 'message']
             }
         },
         {
             name: 'send_file',
-            description: 'Send a local file or image to a specific channel, or to all non-push-only channels attached to a session. Exactly one of sessionId or channelId is required.',
+            description: 'Send a local file or image to a specific channel target, or to all non-push-only channels attached to a session. Exactly one of sessionId or channelTargetId is required.',
             parameters: {
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID whose attached channels should receive the file' },
-                    channelId: { type: 'string', description: 'Target channel ID in format platform:userId' },
+                    channelTargetId: { type: 'string', description: 'Target channel in format <channel-instance-id>:<conversation-id>' },
                     filePath: { type: 'string', description: 'File path on the selected node. Relative paths are resolved under the current agent folder on that node; absolute paths and ~/... are also accepted when allowed.' },
                     node: { type: 'string', description: 'Optional. Node where the file lives. Defaults to the current node; send_file still delivers through master-side channel/session routing.' },
                     caption: { type: 'string', description: 'Optional caption/text sent with the file where supported' },
@@ -1336,30 +1743,6 @@ export const definitions = [
                     agentName: { type: 'string', description: 'Optional agent name whose visible skills should be listed. Defaults to the current session agent.' }
                 },
                 required: [] as string[]
-            }
-        },
-        {
-            name: 'attach_agent_skill',
-            description: 'Attach a skill to an agent. This updates the agent metadata and refreshes session prompt snapshots for that agent.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    agentName: { type: 'string', description: 'Target agent name' },
-                    skillName: { type: 'string', description: 'Skill name to attach' }
-                },
-                required: ['agentName', 'skillName']
-            }
-        },
-        {
-            name: 'detach_agent_skill',
-            description: 'Detach a skill from an agent. This updates the agent metadata and refreshes session prompt snapshots for that agent.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    agentName: { type: 'string', description: 'Target agent name' },
-                    skillName: { type: 'string', description: 'Skill name to detach' }
-                },
-                required: ['agentName', 'skillName']
             }
         },
         {
@@ -1492,7 +1875,7 @@ export const definitions = [
         },
         {
             name: 'update_session_snapshot',
-            description: 'Refresh a session prompt snapshot from the latest agent memory, inheritance, and attached skills. Defaults to the current session.',
+            description: 'Refresh a session prompt snapshot from the latest session-configured memory sources, inheritance, and visible skills catalog. Defaults to the current session.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1515,18 +1898,6 @@ export const definitions = [
         {
             name: 'compact_session',
             description: 'Request a compaction flow for the current session or another idle session. This does not return compact candidates directly. Instead, the target session enters a dedicated compaction planning flow where the model must call submit_compact_plan. Use summary only as optional extra guidance for the compaction prompt, not as the final compacted summary.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    sessionId: { type: 'string', description: 'Target session ID (optional, default: current session)' },
-                    summary: { type: 'string', description: 'Optional extra guidance for the compaction prompt. The model must still submit the actual keep/drop plan and final summary via submit_compact_plan.' },
-                    keepPercent: { type: 'number', description: 'How much recent history to keep. Use 0-1 fraction or 1-100 percentage. Optional.' }
-                }
-            }
-        },
-        {
-            name: 'compress_session',
-            description: 'Compatibility alias of compact_session.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1582,8 +1953,7 @@ export const definitions = [
             parameters: {
                 type: 'object',
                 properties: {
-                    url: { type: 'string', description: 'URL to visit' },
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
+                    url: { type: 'string', description: 'URL to visit' }
                 },
                 required: ['url']
             }
@@ -1593,9 +1963,7 @@ export const definitions = [
             description: 'List all open browser tabs with their IDs, titles, and URLs.',
             parameters: {
                 type: 'object',
-                properties: {
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
-                }
+                properties: {}
             }
         },
         {
@@ -1605,7 +1973,6 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     tabId: { type: 'string', description: 'Tab ID (e.g., "tab1")' },
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION },
                     screenshot: { 
                         type: ['boolean', 'string'], 
                         description: 'If true, return screenshot to LLM for viewing. If a file path (string), save screenshot to that file. If false/omitted, return text content.',
@@ -1621,8 +1988,7 @@ export const definitions = [
             parameters: {
                 type: 'object',
                 properties: {
-                    tabId: { type: 'string', description: 'Tab ID to close' },
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION }
+                    tabId: { type: 'string', description: 'Tab ID to close' }
                 },
                 required: ['tabId']
             }
@@ -1639,7 +2005,6 @@ export const definitions = [
                         description: 'Action to perform: click, type, fill, press, scroll, wait, evaluate, goto, back, forward, reload',
                         enum: ['click', 'type', 'fill', 'press', 'scroll', 'wait', 'evaluate', 'goto', 'back', 'forward', 'reload']
                     },
-                    node: { type: 'string', description: OPTIONAL_NODE_DESCRIPTION },
                     params: { 
                         type: 'object', 
                         description: 'Action parameters. Examples: {selector: "#id"}, {selector: "input", text: "hello"}, {key: "Enter"}, {y: 500}, {url: "https://..."}, {code: "document.title"}',
@@ -1655,6 +2020,40 @@ export const definitions = [
                     }
                 },
                 required: ['tabId', 'action']
+            }
+        },
+        {
+            name: 'search_tools',
+            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Prefer this unified catalog before calling long-tail tools via call_tool.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'Optional search query matched against tool names/descriptions.' },
+                    sources: {
+                        type: 'array',
+                        description: 'Optional source filter. Defaults to builtin + mcp + node.',
+                        items: { type: 'string', enum: ['builtin', 'mcp', 'node'] }
+                    },
+                    server: { type: 'string', description: 'Optional MCP server name filter.' },
+                    nodeId: { type: 'string', description: 'Optional remote node id filter.' },
+                    limit: { type: 'number', description: 'Maximum number of results to return (default: 20, max: 200).' },
+                    includeSchema: { type: 'boolean', description: 'If true (default), include each tool\'s input schema in results.' }
+                }
+            }
+        },
+        {
+            name: 'call_tool',
+            description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    toolId: { type: 'string', description: 'Preferred unified tool identifier returned by search_tools (for example builtin:read, mcp:server/tool, node:node-id/tool).' },
+                    source: { type: 'string', enum: ['builtin', 'mcp', 'node'], description: 'Explicit source when not using toolId.' },
+                    name: { type: 'string', description: 'Tool name when not using toolId.' },
+                    server: { type: 'string', description: 'MCP server name for source=mcp.' },
+                    nodeId: { type: 'string', description: 'Remote node id for source=node.' },
+                    args: { type: 'object', description: 'Tool arguments.' }
+                }
             }
         },
         {
@@ -1732,6 +2131,14 @@ export const definitions = [
             }
         },
         {
+            name: 'list_mcp_servers',
+            description: 'List configured MCP servers with safe config summaries. Returns disabled servers too.',
+            parameters: {
+                type: 'object',
+                properties: {}
+            }
+        },
+        {
             name: 'list_nodes',
             description: 'List all registered nodes.',
             parameters: {
@@ -1777,7 +2184,12 @@ export const definitions = [
                     sessionName: { type: 'string', description: 'Session name without agent prefix (cannot contain /).' },
                     displayName: { type: 'string', description: 'Optional display name for the new session.' },
                     parentSessionId: { type: 'string', description: 'Optional parent session ID.' },
-                    model: { type: 'string', description: 'Optional explicit model key for the new session. When omitted, the current session child-default model behavior is used.' }
+                    model: { type: 'string', description: 'Optional explicit model key for the new session. When omitted, the current session child-default model behavior is used.' },
+                    systemPromptFiles: {
+                        type: 'array',
+                        description: 'Optional file list for composing the memory-file portion of the new session snapshot. When set, only these files are used as memory sources, while other system injections remain.',
+                        items: { type: 'string', description: 'A file path. Relative paths resolve from the agent directory; absolute and ~/ paths are also accepted.' }
+                    }
                 },
                 required: ['agentName', 'sessionName']
             }
@@ -1821,3 +2233,5 @@ export const definitions = [
             }
         }
     ];
+
+export const modelFacingDefinitions = definitions.filter(def => isToolDirectlyExposedToModel(def.name));

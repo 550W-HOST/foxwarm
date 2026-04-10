@@ -467,6 +467,7 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
   const tempDir = path.join(agentDir, '.temp', 'exec');
 
   await fs.ensureDir(tempDir);
+  await fs.ensureDir(initialCwd);
   const execId = `exec_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
   const logFileName = `${execId}_${formatTime()}.log`;
   const logPath = await getDatedLogPath(tempDir, logFileName);
@@ -489,7 +490,7 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
           args: ['/d', '/s', '/c', scriptPath],
         }
       : {
-          command: 'bash',
+          command: '/bin/sh',
           args: [scriptPath],
         };
 

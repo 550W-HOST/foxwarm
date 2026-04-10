@@ -104,20 +104,20 @@ export class MessageRouter {
     }
 
     const systemParts: MessagePart[] = [];
-    const channelId = source.channelId || source.platform;
+    const channelInstanceId = source.channelId || source.platform;
     const channelType = source.channelType || source.platform;
     const conversationId = source.conversationId || source.channelUserId;
+    const channelTargetId = `${channelInstanceId}:${conversationId}`;
     const senderInfo = source.username ? `; sender: \`${source.username}\`` : '';
-    systemParts.push({ system: `The following message is a direct user message via channel; channel_id: \`${channelId}\`; channel_type: \`${channelType}\`; conversation_id: \`${conversationId}\`${senderInfo}` });
+    systemParts.push({ system: `The following message is a direct user message via channel; channel_instance_id: \`${channelInstanceId}\`; channel_type: \`${channelType}\`; conversation_id: \`${conversationId}\`; channel_target_id: \`${channelTargetId}\`${senderInfo}` });
 
     // Push-only channel notice
     if (conversationId) {
-      const channelConfig = sessionManager.getChannelConfig(channelId, conversationId);
-      logger.debug({ channelId, channelType, conversationId, channelConfig }, 'Channel config check for push-only');
+      const channelConfig = sessionManager.getChannelConfig(channelInstanceId, conversationId);
+      logger.debug({ channelInstanceId, channelType, conversationId, channelConfig }, 'Channel config check for push-only');
       if (channelConfig?.mode === 'push-only') {
-        const replyTargetId = `${channelId}:${conversationId}`;
-        systemParts.push({ system: `Channel is in push-only mode. If you need to reply, call send_to_channel({channelId: "${replyTargetId}", message: "..."}).` });
-        logger.info({ channelId, conversationId }, 'Push-only system part added');
+        systemParts.push({ system: `Channel is in push-only mode. If you need to reply, call send_to_channel({channelTargetId: "${channelTargetId}", message: "..."}).` });
+        logger.info({ channelInstanceId, conversationId }, 'Push-only system part added');
       }
     }
 

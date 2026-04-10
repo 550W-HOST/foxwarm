@@ -24,10 +24,25 @@ type SessionChannelDeps = {
   getExistingSession: (sessionId: string) => Promise<Session | null>;
 };
 
+export type ChannelTarget = {
+  channelInstanceId: string;
+  conversationId: string;
+};
+
 const channelAttachments = new Map<string, ChannelConfig>();
 
-function makeChannelKey(channelId: string, conversationId: string): string {
-  return `${channelId}:${conversationId}`;
+function makeChannelKey(channelInstanceId: string, conversationId: string): string {
+  return `${channelInstanceId}:${conversationId}`;
+}
+
+export function parseChannelTargetId(channelTargetId: string): ChannelTarget {
+  const [channelInstanceId, ...rest] = channelTargetId.split(':');
+  const conversationId = rest.join(':');
+  if (!channelInstanceId || !conversationId) {
+    throw new Error('Invalid channelTargetId format. Use <channel-instance-id>:<conversation-id>');
+  }
+
+  return { channelInstanceId, conversationId };
 }
 
 function normalizeChannelConfig(config: ChannelConfig): ChannelConfig {
@@ -151,35 +166,34 @@ export function detachChannel(channelId: string, conversationId: string): void {
   logger.info({ channelId, conversationId }, 'Channel detached from session');
 }
 
-export async function sendToChannelById(channelId: string, message: string): Promise<void> {
-  const [instanceId, ...rest] = channelId.split(':');
-  const conversationId = rest.join(':');
-  if (!instanceId || !conversationId) {
-    throw new Error('Invalid channelId format. Use <channel-instance-id>:<conversation-id>');
-  }
-  const channel = getChannelInstance(instanceId);
+export async function sendToChannelTargetId(channelTargetId: string, message: string): Promise<void> {
+  const { channelInstanceId, conversationId } = parseChannelTargetId(channelTargetId);
+  const channel = getChannelInstance(channelInstanceId);
   if (!channel) {
-    throw new Error(`Channel \`${instanceId}\` not found`);
+    throw new Error(`Channel instance \`${channelInstanceId}\` not found`);
   }
   await channel.sendMessage(conversationId, message);
 }
 
-export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
-  const [instanceId, ...rest] = channelId.split(':');
-  const conversationId = rest.join(':');
-  if (!instanceId || !conversationId) {
-    throw new Error('Invalid channelId format. Use <channel-instance-id>:<conversation-id>');
-  }
+export async function sendToChannelById(channelId: string, message: string): Promise<void> {
+  await sendToChannelTargetId(channelId, message);
+}
 
-  const channel = getChannelInstance(instanceId);
+export async function sendFileToChannelTargetId(channelTargetId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+  const { channelInstanceId, conversationId } = parseChannelTargetId(channelTargetId);
+  const channel = getChannelInstance(channelInstanceId);
   if (!channel) {
-    throw new Error(`Channel \`${instanceId}\` not found`);
+    throw new Error(`Channel instance \`${channelInstanceId}\` not found`);
   }
   if (!channel.sendFile) {
-    throw new Error(`Channel \`${instanceId}\` does not support file sending yet`);
+    throw new Error(`Channel instance \`${channelInstanceId}\` does not support file sending yet`);
   }
 
   await channel.sendFile(conversationId, file, options);
+}
+
+export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+  await sendFileToChannelTargetId(channelId, file, options);
 }
 
 export async function sendFileToSession(
@@ -281,7 +295,7 @@ function parseSourceSystemPart(system?: string): { channelId: string; channelUse
     return { channelId, channelUserId, conversationId: channelUserId };
   }
 
-  const directChannelIdMatch = system.match(/channel_id:\s*`([^`]+)`/);
+  const directChannelIdMatch = system.match(/channel_(?:instance_)?id:\s*`([^`]+)`/);
   const conversationIdMatch = system.match(/conversation_id:\s*`([^`]+)`/);
   if (directChannelIdMatch && conversationIdMatch) {
     const channelId = directChannelIdMatch[1];
@@ -319,7 +333,7 @@ export function getChannelBySession(sessionId: string, session?: Session): { cha
         const msg = session.history[i];
         if (msg.role !== 'user') continue;
 
-        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && (part.system.startsWith('FROM: ') || part.system.includes('channel_id: `')));
+        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && (part.system.startsWith('FROM: ') || part.system.includes('channel_id: `') || part.system.includes('channel_instance_id: `')));
         const parsedChannel = parseSourceSystemPart(sourcePart?.system);
         const attachedChannel = findAttachedChannel(channels, parsedChannel);
         if (attachedChannel) {

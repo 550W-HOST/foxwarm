@@ -160,6 +160,18 @@ TOOL_DEFINITIONS = [
             },
             "required": ["packageName"]
         }
+    },
+    {
+        "name": "android_shell",
+        "description": "Execute an arbitrary adb shell command on the Android device and return its output",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The shell command to execute on the device"},
+                "timeout": {"type": "number", "description": "Timeout in seconds (default: 10)", "default": 10}
+            },
+            "required": ["command"]
+        }
     }
 ]
 
@@ -239,6 +251,8 @@ class AndroidNode:
                 return await self.launch_app(args)
             elif tool == "android_stop_app":
                 return await self.stop_app(args)
+            elif tool == "android_shell":
+                return await self.shell(args)
             else:
                 return {"error": f"Unknown tool: {tool}"}
         except Exception as e:
@@ -457,6 +471,35 @@ class AndroidNode:
             "output": output,
             "state": await self.current_app({}),
         }
+
+    async def shell(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute an arbitrary adb shell command"""
+        command = args.get("command")
+        if not command:
+            return {"error": "Missing command"}
+        timeout = int(args.get("timeout", 10))
+        timeout = max(1, min(timeout, 120))
+
+        serial = getattr(self.device, "serial", None) or getattr(self.device, "_serial", None)
+        cmd = ["adb"]
+        if serial:
+            cmd.extend(["-s", serial])
+        cmd.extend(["shell", command])
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout
+            )
+            output = (result.stdout + result.stderr).strip()
+            return {
+                "success": True,
+                "action": "shell",
+                "command": command,
+                "exitCode": result.returncode,
+                "output": output,
+            }
+        except subprocess.TimeoutExpired:
+            return {"error": f"Command timed out after {timeout}s", "command": command}
 
     async def unlock(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Wake device and unlock with numeric PIN"""

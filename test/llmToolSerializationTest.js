@@ -1,11 +1,7 @@
 const assert = require('assert');
 const path = require('path');
-const {
-  convertToOpenAIResponsesFormat,
-  convertToOpenAIFormat,
-  fixToolCalls,
-  executeTools,
-} = require('../lib/llm.js');
+const { convertToOpenAIResponsesFormat, convertToOpenAIFormat } = require('../lib/llmProviders/openai.js');
+const { fixToolCalls, executeTools } = require('../lib/llm.js');
 
 async function run() {
   const history = [
@@ -23,6 +19,7 @@ async function run() {
         { functionResponse: { tool_use_id: 'call_empty', name: 'read', response: { output: '' } } },
         { functionResponse: { tool_use_id: 'call_text', name: 'exec', response: { output: 'ok' } } },
         { functionResponse: { tool_use_id: 'call_obj', name: 'remote_node', response: { nodes: [] } } },
+        { functionResponse: { tool_use_id: 'call_result_null_error', name: 'remote_node', response: { result: 'remote ok', error: null, logs: [] } } },
       ],
     },
     {
@@ -47,8 +44,9 @@ async function run() {
       ['call_empty', ''],
       ['call_text', 'ok'],
       ['call_obj', '{\n  "nodes": []\n}'],
+      ['call_result_null_error', '{\n  "result": "remote ok",\n  "error": null,\n  "logs": []\n}'],
     ],
-    'responses serializer should preserve empty, text, and object tool outputs in order'
+    'responses serializer should preserve empty, text, object, and null-error tool outputs in order'
   );
 
   const emptyOutput = responseOutputs.find(item => item.call_id === 'call_empty');
@@ -56,7 +54,7 @@ async function run() {
   assert.strictEqual(emptyOutput.output, '', 'empty tool output should remain empty string');
 
   const followUpIndex = responsesItems.findIndex(item => item.type === 'message' && item.role === 'user');
-  const lastOutputIndex = responsesItems.findIndex(item => item.type === 'function_call_output' && item.call_id === 'call_obj');
+  const lastOutputIndex = responsesItems.findIndex(item => item.type === 'function_call_output' && item.call_id === 'call_result_null_error');
   assert.ok(lastOutputIndex > -1 && followUpIndex > lastOutputIndex, 'user follow-up must remain after all tool outputs');
 
   const chatMessages = convertToOpenAIFormat(history);
@@ -67,8 +65,9 @@ async function run() {
       ['call_empty', ''],
       ['call_text', 'ok'],
       ['call_obj', '{\n  "nodes": []\n}'],
+      ['call_result_null_error', '{\n  "result": "remote ok",\n  "error": null,\n  "logs": []\n}'],
     ],
-    'chat/completions serializer should preserve empty, text, and object tool outputs in order'
+    'chat/completions serializer should preserve empty, text, object, and null-error tool outputs in order'
   );
 
   const toolResultMessage = await executeTools(

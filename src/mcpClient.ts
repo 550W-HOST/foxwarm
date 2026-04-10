@@ -55,6 +55,21 @@ export type McpConfig = {
   servers: Record<string, McpServerConfig>;
 };
 
+export type McpServerSummary = {
+  name: string;
+  enabled: boolean;
+  transport: McpTransport;
+  description?: string;
+  url?: string;
+  command?: string;
+  cwd?: string;
+  stderr?: 'inherit' | 'pipe' | 'ignore';
+  argsCount: number;
+  envKeys: string[];
+  headerKeys: string[];
+  hasToken: boolean;
+};
+
 type StandardTransportKind = 'streamable-http' | 'sse' | 'stdio';
 
 type StandardConnection = {
@@ -107,6 +122,35 @@ function sanitizeServerConfig(server: McpServerConfig): McpServerConfig {
   }
   delete next.type;
   return next;
+}
+
+export function summarizeServerConfig(name: string, server: McpServerConfig): McpServerSummary {
+  const normalized = sanitizeServerConfig(server);
+  return {
+    name,
+    enabled: normalized.enable !== false,
+    transport: normalizeTransport(normalized),
+    ...(normalized.description ? { description: normalized.description } : {}),
+    ...(normalized.url ? { url: normalized.url } : {}),
+    ...(normalized.command ? { command: normalized.command } : {}),
+    ...(normalized.cwd ? { cwd: normalized.cwd } : {}),
+    ...(normalized.stderr ? { stderr: normalized.stderr } : {}),
+    argsCount: Array.isArray(normalized.args) ? normalized.args.length : 0,
+    envKeys: normalized.env && typeof normalized.env === 'object'
+      ? Object.keys(normalized.env).sort()
+      : [],
+    headerKeys: normalized.headers && typeof normalized.headers === 'object'
+      ? Object.keys(normalized.headers).sort()
+      : [],
+    hasToken: Boolean(normalized.token),
+  };
+}
+
+export function summarizeServers(servers: Record<string, McpServerConfig> | undefined | null): McpServerSummary[] {
+  const entries = Object.entries(servers || {});
+  return entries
+    .map(([name, server]) => summarizeServerConfig(name, server))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function loadConfig(): Promise<McpConfig> {
@@ -415,4 +459,9 @@ export async function setServerEnabled(name: string, enable: boolean) {
 export async function getServers() {
   const cfg = await loadConfig();
   return cfg.servers || {};
+}
+
+export async function listServers() {
+  const servers = await getServers();
+  return summarizeServers(servers);
 }

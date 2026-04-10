@@ -2,14 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import path from 'path';
-import { getAgentDir } from './config';
+import { getAgentDir, getAgentMemoryDir } from './config';
 import * as sessionManager from './sessionManager';
-import { read, write, edit, apply_patch, definitions, submit_compact_plan } from './tools';
+import { read, write, edit, apply_patch, apply_patch_memory, definitions, submit_compact_plan, search_memory, search_vector } from './tools';
 
 test('submit_compact_plan is present in regular tool definitions and guarded outside compact flow', async () => {
   assert.ok(definitions.some(def => def.name === 'submit_compact_plan'));
   const result = await submit_compact_plan();
   assert.match(String(result), /only valid inside the dedicated compact planning flow/i);
+});
+
+test('apply_patch_memory is present in regular tool definitions', () => {
+  assert.ok(definitions.some(def => def.name === 'apply_patch_memory'));
+});
+
+test('search_vector is the public vector-memory tool name while search_memory remains a runtime alias', () => {
+  assert.ok(definitions.some(def => def.name === 'search_vector'));
+  assert.equal(definitions.some(def => def.name === 'search_memory'), false);
+  assert.equal(search_vector, search_memory);
 });
 
 test('file tools resolve relative paths from session cwd', async () => {
@@ -48,6 +58,58 @@ test('file tools resolve relative paths from session cwd', async () => {
     assert.equal(await fs.readFile(path.join(nestedDir, 'note.txt'), 'utf8'), 'patched');
   } finally {
     await fs.remove(baseDir);
+  }
+});
+
+test('apply_patch_memory is restricted to the current agent memory directory and preserves apply_patch compatibility', async () => {
+  const memoryDir = getAgentMemoryDir('main');
+  const relativePath = `tools-memory-${Date.now()}-${Math.random().toString(36).slice(2, 8)}/note.txt`;
+  const fullPath = path.join(memoryDir, relativePath);
+
+  try {
+    await apply_patch_memory({
+      input: [
+        `*** Add File: ${relativePath}`,
+        '+alpha',
+        '+beta',
+      ].join('\n'),
+    }, { session: { agent: 'main' } } as any);
+    assert.equal(await fs.readFile(fullPath, 'utf8'), 'alpha\nbeta');
+
+    await apply_patch_memory({
+      input: [
+        '*** Begin Patch',
+        `*** Update File: memory/${relativePath}`,
+        '@@',
+        '-beta',
+        '+patched',
+        '*** End Patch',
+      ].join('\n'),
+    }, { session: { agent: 'main' } } as any);
+    assert.equal(await fs.readFile(fullPath, 'utf8'), 'alpha\npatched');
+
+    await apply_patch_memory({
+      input: [
+        '*** Begin Patch',
+        `*** Delete File: ${relativePath}`,
+        '*** End Patch',
+      ].join('\n'),
+    }, { session: { agent: 'main' } } as any);
+    assert.equal(await fs.pathExists(fullPath), false);
+
+    await assert.rejects(
+      () => apply_patch_memory({
+        input: [
+          '*** Begin Patch',
+          '*** Add File: /tmp/escape.txt',
+          '+nope',
+          '*** End Patch',
+        ].join('\n'),
+      }, { session: { agent: 'main' } } as any),
+      /relative to the current agent memory\/ directory/i,
+    );
+  } finally {
+    await fs.remove(path.dirname(fullPath));
   }
 });
 

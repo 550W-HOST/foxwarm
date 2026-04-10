@@ -16,6 +16,7 @@ import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq } from './session/archive';
 import { appendMessagesToContextFrontier, copyLayeredContextFiles, ensureContextFrontier, loadSessionFrontier, moveLayeredContextFiles, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
+import { ensureSessionBranch, renameSessionArchiveStore } from './session/archiveStore';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
@@ -363,7 +364,11 @@ export async function getSession(sessionId: string): Promise<Session> {
       session.agent = 'main';
     }
   }
-  if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent);
+  session.systemPromptFiles = llm.normalizeSystemPromptFiles(session.systemPromptFiles);
+  if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
+    agentName: session.agent,
+    systemPromptFiles: session.systemPromptFiles,
+  });
   if (!session.stats) session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
   if (session.stats.totalCachedTokens === null) session.stats.totalCachedTokens = 0;
   if (!session.queue) session.queue = [];
@@ -506,10 +511,6 @@ export async function setAgentMetadata(agentName: string, meta: sessionAgentMeta
   await sessionAgentMetadata.setAgentMetadata(agentName, meta);
 }
 
-export function getAgentSkills(agentName: string): string[] {
-  return sessionAgentMetadata.getAgentSkills(agentName);
-}
-
 export async function refreshSessionSnapshot(sessionId: string): Promise<{ sessionId: string; agentName: string }> {
   return sessionAgentMetadata.refreshSessionSnapshot(getAgentMetadataDeps(), sessionId);
 }
@@ -524,14 +525,6 @@ export async function setAgentInherit(agentName: string, inheritAgentName?: stri
 
 export async function setAgentIsolation(agentName: string, isolatedNode?: string): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
   return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, isolatedNode);
-}
-
-export async function attachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
-  return sessionAgentMetadata.attachAgentSkill(getAgentMetadataDeps(), agentName, skillName);
-}
-
-export async function detachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
-  return sessionAgentMetadata.detachAgentSkill(getAgentMetadataDeps(), agentName, skillName);
 }
 
 export async function createAgentWithMainSession(options: {
@@ -582,6 +575,7 @@ export async function createSessionInAgent(options: {
   currentNode?: string;
   model?: string;
   parentSessionId?: string;
+  systemPromptFiles?: string[];
 }): Promise<{ sessionId: string }> {
   return sessionAgentOps.createSessionInAgent(options, getSessionAgentOpsDeps());
 }
@@ -651,14 +645,22 @@ export function detachChannel(channelId: string, conversationId: string): void {
   sessionChannels.detachChannel(channelId, conversationId);
 }
 
+export async function sendToChannelTargetId(channelTargetId: string, message: string): Promise<void> {
+  await sessionChannels.sendToChannelTargetId(channelTargetId, message);
+}
+
 export async function sendToChannelById(channelId: string, message: string): Promise<void> {
-  await sessionChannels.sendToChannelById(channelId, message);
+  await sendToChannelTargetId(channelId, message);
 }
 
 export type FileDeliveryResult = sessionChannels.FileDeliveryResult;
 
+export async function sendFileToChannelTargetId(channelTargetId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+  await sessionChannels.sendFileToChannelTargetId(channelTargetId, file, options);
+}
+
 export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
-  await sessionChannels.sendFileToChannelById(channelId, file, options);
+  await sendFileToChannelTargetId(channelId, file, options);
 }
 
 export async function sendFileToSession(sessionId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<FileDeliveryResult> {
@@ -744,11 +746,15 @@ export async function ensureSubconsciousSession(primarySessionId: string): Promi
   }
 
   const agentName = primarySession.agent || 'main';
-  const snapshot = await llm.getPersistentMemory(agentName);
+  const snapshot = await llm.buildSessionSystemPromptSnapshot({
+    agentName,
+    systemPromptFiles: primarySession.systemPromptFiles,
+  });
   const sideSession: Session = {
     id: requestedSessionId,
     agent: agentName,
     history: [],
+    systemPromptFiles: primarySession.systemPromptFiles ? [...primarySession.systemPromptFiles] : undefined,
     persistentMemorySnapshot: snapshot,
     stats: {
       totalCachedTokens: 0,
@@ -896,6 +902,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   const forkedSession: Session = {
     id: newSessionId,
     history: structuredClone(sourceSession.history),
+    systemPromptFiles: sourceSession.systemPromptFiles ? [...sourceSession.systemPromptFiles] : undefined,
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
     stats: {
       totalCachedTokens: 0,
@@ -939,7 +946,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 
       // Add tool responses for all tool calls
       appendedForkMessages.push({
-        role: 'user',
+        role: 'tool',
         parts: toolCalls.map((part, index) => ({
           functionResponse: {
             tool_use_id: part.functionCall!.id,
@@ -984,22 +991,11 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 
   sessions.set(newSessionId, forkedSession);
 
-  const sourceArchiveLog = getSessionArchiveLogPath(sourceSessionId);
-  const targetArchiveLog = getSessionArchiveLogPath(newSessionId);
-  if (await fs.pathExists(sourceArchiveLog)) {
-    await fs.ensureDir(path.dirname(targetArchiveLog));
-    await fs.copy(sourceArchiveLog, targetArchiveLog, { overwrite: true });
-  }
-
-  const sourceArchiveImagesDir = getSessionArchiveImagesDir(sourceSessionId);
-  const targetArchiveImagesDir = getSessionArchiveImagesDir(newSessionId);
-  if (await fs.pathExists(sourceArchiveImagesDir)) {
-    await fs.ensureDir(path.dirname(targetArchiveImagesDir));
-    await fs.copy(sourceArchiveImagesDir, targetArchiveImagesDir, { overwrite: true });
-  }
-
-  await copyLayeredContextFiles(sourceSessionId, newSessionId);
-  await vector.copySessionArchiveIndexCheckpoint(sourceSessionId, newSessionId);
+  await ensureSessionBranch(newSessionId, {
+    parentSessionId: sourceSessionId,
+    forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
+    forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
+  });
   await appendSessionMessages(forkedSession, appendedForkMessages);
 
   logger.info({ sourceSessionId, newSessionId, isChildSession }, 'Session forked');
@@ -1047,11 +1043,15 @@ export async function createChildSession(parentSessionId: string, suffix: string
     const childSessionId = `${parentSessionId}_${suffix}`;
 
     const agentName = parentSession.agent || 'main';
-    const snapshot = await llm.getPersistentMemory(agentName);
+    const snapshot = await llm.buildSessionSystemPromptSnapshot({
+      agentName,
+      systemPromptFiles: parentSession.systemPromptFiles,
+    });
     const newSession: Session = {
       id: childSessionId,
       agent: agentName,
       history: [],
+      systemPromptFiles: parentSession.systemPromptFiles ? [...parentSession.systemPromptFiles] : undefined,
       persistentMemorySnapshot: snapshot,
       stats: {
         totalCachedTokens: 0,
@@ -1148,12 +1148,13 @@ export async function saveSession(sessionId: string): Promise<void> {
 
     // Schedule archive-based vector indexing (non-blocking)
     const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
+    const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
     const lastMessage = session.history[session.history.length - 1];
     const latestMessageTokenEstimate = lastMessage?.__meta?.seq === latestSeqHint
       ? vector.estimateArchiveMessageTokenCount(lastMessage)
       : undefined;
 
-    vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate)
+    vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
       .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
     
     // Notify session list update
@@ -1222,6 +1223,7 @@ export async function loadSessions(): Promise<void> {
         busy: false,
         meta: { lastMessageTime: Date.now() },
         ...metadata,
+        systemPromptFiles: llm.normalizeSystemPromptFiles((metadata as any).systemPromptFiles),
         history: [], // Empty, will be loaded when getSession is called
         queue: metadata.queue || [],
       };
@@ -1287,6 +1289,31 @@ export function getAllAttachments(): Map<string, sessionChannels.ChannelConfig> 
  */
 export function setSessionTriggerCallback(onTrigger: (sessionId: string) => void): void {
   onSessionTriggered = onTrigger;
+}
+
+function isQueuedSystemEventItem(
+  item: QueueItem | undefined,
+  message: string,
+  type: 'background' | 'trigger' | 'onboot',
+): boolean {
+  if (!item || item.type !== type || item.source || item.message || !item.parts || item.parts.length !== 1) {
+    return false;
+  }
+
+  const [part] = item.parts;
+  return typeof part?.system === 'string' && part.system === message;
+}
+
+export function hasTrailingQueuedSystemEvent(
+  queue: QueueItem[] | undefined,
+  message: string,
+  type: 'background' | 'trigger' | 'onboot',
+): boolean {
+  if (!queue?.length) {
+    return false;
+  }
+
+  return isQueuedSystemEventItem(queue[queue.length - 1], message, type);
 }
 
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
@@ -1701,8 +1728,14 @@ export async function resumeBusySessions(): Promise<void> {
       // Reset busy flag and trigger
       session.busy = false;
       session.busyStartedAt = undefined;
-      // Will save session inside, no need to call saveSession() here.
-      await queueSessionSystemEvent(sessionId, 'session resumed after process restart');
+      const resumeMessage = 'session resumed after process restart';
+      if (hasTrailingQueuedSystemEvent(session.queue, resumeMessage, 'background')) {
+        await saveSession(sessionId);
+        onSessionTriggered?.(sessionId);
+      } else {
+        // Will save session inside, no need to call saveSession() here.
+        await queueSessionSystemEvent(sessionId, resumeMessage, 'background');
+      }
       logger.info({ sessionId }, 'Busy session resumed');
     } catch (e) {
       logger.error({ err: e, sessionId }, 'Failed to resume busy session');

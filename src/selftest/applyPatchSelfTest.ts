@@ -122,4 +122,26 @@ test('add file syntax requires leading plus and preserves blank lines via +', ()
   assert.strictEqual(buildAddedFileContent(operations[0].lines), ['alpha', '', 'omega'].join('\n'));
 });
 
+test('bare patch without envelope is accepted when it starts with a file action header', () => {
+  const patch = ['*** Add File: created.txt', '+alpha', '+', '+omega'].join('\n');
+  const operations = parseApplyPatchInput(patch);
+  assert.strictEqual(operations.length, 1);
+  assert.strictEqual(operations[0].action, 'add');
+  assert.strictEqual(buildAddedFileContent(operations[0].lines), ['alpha', '', 'omega'].join('\n'));
+});
+
+test('obviously invalid input still fails clearly', () => {
+  assert.throws(
+    () => parseApplyPatchInput('hello world'),
+    /missing \*\*\* Begin Patch \/ \*\*\* End Patch envelope, or bare patch must start with \*\*\* Update File: \/ \*\*\* Add File: \/ \*\*\* Delete File:/,
+  );
+});
+
+test('partial envelope still fails as malformed input', () => {
+  assert.throws(
+    () => parseApplyPatchInput(['*** Begin Patch', '*** Add File: created.txt', '+alpha'].join('\n')),
+    /malformed patch envelope/,
+  );
+});
+
 console.log('apply_patch selftest passed');

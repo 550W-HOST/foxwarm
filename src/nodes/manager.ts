@@ -76,10 +76,12 @@ export class NodesManager {
       'write_memory',
       'edit_memory',
       'delete_memory',
+      'apply_patch_memory',
       'apply_patch',
       'list_files',
       'delete_file',
       'exec',
+      'search_vector',
       'search_memory',
       'get_memory_context',
       'create_child_session',
@@ -91,8 +93,6 @@ export class NodesManager {
       'submit_compact_plan',
       'list_sessions',
       'list_skills',
-      'attach_agent_skill',
-      'detach_agent_skill',
       'load_skill',
       'get_session_messages',
       'get_archived_messages',
@@ -104,12 +104,13 @@ export class NodesManager {
       'set_session_compact_threshold',
       'stop_session',
       'compact_session',
-      'compress_session',
       'browse_open',
       'browse_list',
       'browse_get',
       'browse_close',
       'browse_interact',
+      'search_tools',
+      'call_tool',
       'copy_between_nodes',
     ]);
   }
@@ -316,6 +317,12 @@ export class NodesManager {
       this.toolCalls.set(callId, toolCall);
       
       // Send tool call to node
+      // Only send sessionCwd when the session's currentNode matches the target node.
+      // When using call_tool to temporarily execute on a remote node, session.cwd
+      // is a master-local path and should not be forwarded.
+      const shouldSendCwd = session.currentNode === nodeId && typeof session.cwd === 'string';
+      const timeoutMs = 30000;
+
       node.ws!.send(JSON.stringify({
         type: 'tool_call',
         callId: callId,
@@ -323,16 +330,17 @@ export class NodesManager {
         args: args,
         sessionId,
         agentName: session.agent || 'main',
-        sessionCwd: typeof session.cwd === 'string' ? session.cwd : undefined
+        timeoutMs,
+        ...(shouldSendCwd ? { sessionCwd: session.cwd } : {}),
       }));
       
-      // Set timeout (30 seconds default)
+      // Set timeout
       setTimeout(() => {
         if (this.toolCalls.has(callId)) {
           this.toolCalls.delete(callId);
           reject(`Tool call \`${callId}\` timed out`);
         }
-      }, 30000);
+      }, timeoutMs);
     });
   }
 
@@ -525,10 +533,11 @@ export class NodesManager {
   getToolDefinition(toolName: string): any {
     // Keep lazy require here to avoid a real circular dependency:
     // tools -> nodesManager -> tools.
-    const toolsModule = require('./tools');
+    const toolsModule = require('../tools');
     const definitions = toolsModule.definitions;
     
-    return definitions.find((d: any) => d.name === toolName);
+    return definitions.find((d: any) => d.name === toolName)
+      || (toolName === 'search_memory' ? definitions.find((d: any) => d.name === 'search_vector') : undefined);
   }
 
   /**
@@ -537,7 +546,7 @@ export class NodesManager {
   async executeToolLocally(toolName: string, args: Record<string, any>, sessionId: string): Promise<any> {
     // Keep lazy require here to avoid a real circular dependency:
     // tools -> nodesManager -> tools.
-    const toolsModule = require('./tools');
+    const toolsModule = require('../tools');
     const tool = toolsModule[toolName];
     
     if (!tool) {

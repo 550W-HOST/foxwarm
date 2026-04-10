@@ -1,6 +1,7 @@
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import * as skills from './skills';
 import * as timers from './timers';
@@ -128,7 +129,7 @@ function normalizeToolModelKey(value: unknown): string | undefined {
 
 function formatArchivedMessagePreview(
   sessionId: string,
-  records: Array<{ seq: number; message: any }>,
+  records: Array<{ seq: number; message: any; inherited?: boolean; sourceSessionId?: string }>,
   meta: { totalMatched: number; startSeq?: number; endSeq?: number },
   previewLength: number,
 ): string {
@@ -156,7 +157,10 @@ function formatArchivedMessagePreview(
       skipRagMemorySnippets: true,
       skipThinking: true,
     });
-    result += `${formatPrefixedMultilineText(`[#${record.seq}] ${roleEmoji} ${record.message.role}: `, preview)}\n`;
+    const originLabel = record.inherited
+      ? `[inherited from ${record.sourceSessionId || 'unknown'}] `
+      : '[local] ';
+    result += `${formatPrefixedMultilineText(`[#${record.seq}] ${originLabel}${roleEmoji} ${record.message.role}: `, preview)}\n`;
   }
   return result;
 }
@@ -164,7 +168,7 @@ function formatArchivedMessagePreview(
 
 function formatArchivedBlockPreview(
   sessionId: string,
-  records: Array<{ id: number; level: number; rawStartSeq: number; rawEndSeq: number; summary: string; sourceKind: string; sourceStart: number; sourceEnd: number; }>,
+  records: Array<{ id: number; level: number; rawStartSeq: number; rawEndSeq: number; summary: string; sourceKind: string; sourceStart: number; sourceEnd: number; inherited?: boolean; sourceSessionId?: string; }>,
   meta: { totalMatched: number; startId?: number; endId?: number },
   previewLength: number,
 ): string {
@@ -184,7 +188,8 @@ function formatArchivedBlockPreview(
 
 `;
   for (const record of records) {
-    const prefix = `[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
+    const locality = record.inherited ? `[inherited from ${record.sourceSessionId || 'unknown'}] ` : '[local] ';
+    const prefix = `${locality}[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
     result += `${formatPrefixedMultilineText(prefix, (record.summary || '').slice(0, previewLength) || '[empty summary]')}
 `;
   }
@@ -323,13 +328,13 @@ export async function tool_end_turn(args: ToolArgs) {
 }
 
 export async function tool_submit_compact_plan() {
-  return `${COMPACT_PLAN_TOOL_NAME} is only valid inside the dedicated compact planning flow. Request compaction with compact_session/compress_session and only submit a plan when the system compact prompt explicitly asks for it.`;
+  return `${COMPACT_PLAN_TOOL_NAME} is only valid inside the dedicated compact planning flow. Request compaction with compact_session and only submit a plan when the system compact prompt explicitly asks for it.`;
 }
 
 export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
-  const { channelId, message } = args;
-  if (!channelId || typeof channelId !== 'string') {
-    throw new Error('channelId is required (format: platform:userId)');
+  const { channelTargetId, message } = args;
+  if (!channelTargetId || typeof channelTargetId !== 'string') {
+    throw new Error('channelTargetId is required (format: <channel-instance-id>:<conversation-id>)');
   }
   if (!message || typeof message !== 'string') {
     throw new Error('message is required');
@@ -337,20 +342,23 @@ export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
 
   // Check isolated session channel permission
   if (ctx?.sessionId) {
-    await checkChannelPermission(ctx.sessionId, channelId);
+    await checkChannelPermission(ctx.sessionId, channelTargetId);
   }
 
-  await sessionManager.sendToChannelById(channelId, message);
-  return `Message sent to channel \`${channelId}\``;
+  await sessionManager.sendToChannelTargetId(channelTargetId, message);
+  return `Message sent to channel target \`${channelTargetId}\``;
 }
 
 export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
-  const { sessionId, channelId, filePath } = args;
+  const { sessionId, channelTargetId, filePath } = args;
   const hasSessionId = isNonEmptyString(sessionId);
-  const hasChannelId = isNonEmptyString(channelId);
+  const normalizedChannelTargetId = isNonEmptyString(channelTargetId)
+    ? channelTargetId.trim()
+    : undefined;
+  const hasChannelTargetId = Boolean(normalizedChannelTargetId);
 
-  if (hasSessionId === hasChannelId) {
-    throw new Error('Exactly one of sessionId or channelId is required');
+  if (hasSessionId === hasChannelTargetId) {
+    throw new Error('Exactly one of sessionId or channelTargetId is required');
   }
   if (!isNonEmptyString(filePath)) {
     throw new Error('filePath is required');
@@ -362,17 +370,16 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
 
   if (ctx?.sessionId) {
     await checkSendFilePermission(ctx.sessionId, {
-      channelId: hasChannelId ? channelId.trim() : undefined,
+      channelTargetId: normalizedChannelTargetId,
       targetSessionId: hasSessionId ? sessionId.trim() : undefined,
     });
   }
 
   const file = await prepareChannelFile(filePath.trim(), ctx);
 
-  if (hasChannelId) {
-    const normalizedChannelId = channelId.trim();
-    await sessionManager.sendFileToChannelById(normalizedChannelId, file, { caption });
-    return `File \`${file.name}\` sent to channel \`${normalizedChannelId}\``;
+  if (normalizedChannelTargetId) {
+    await sessionManager.sendFileToChannelTargetId(normalizedChannelTargetId, file, { caption });
+    return `File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``;
   }
 
   const normalizedSessionId = sessionId.trim();
@@ -433,7 +440,7 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   const entries = await fs.readdir(agentsDir, { withFileTypes: true });
-  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, skills?: string[], isolated?: boolean, isolatedNode?: string}> = [];
+  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, isolated?: boolean, isolatedNode?: string}> = [];
 
   for (const entry of entries) {
     if (entry.isDirectory()) {
@@ -446,7 +453,6 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
         hasSessions: sessions.length > 0,
         sessionCount: sessions.length,
         inherit: sessionManager.getAgentMetadata(agentName).inherit,
-        skills: sessionManager.getAgentSkills(agentName),
         isolated: sessionManager.getAgentMetadata(agentName).isolated,
         isolatedNode: sessionManager.getAgentIsolationNode(agentName),
       });
@@ -468,9 +474,6 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
     }
     if (agent.isolated) {
       result += ` [isolated${agent.isolatedNode ? `:${agent.isolatedNode}` : ''}]`;
-    }
-    if (agent.skills && agent.skills.length > 0) {
-      result += ` [skills: ${agent.skills.join(', ')}]`;
     }
     result += '\n';
   }
@@ -502,58 +505,6 @@ export async function tool_list_skills(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   return result;
-}
-
-export async function tool_attach_agent_skill(args: ToolArgs, ctx?: ToolContext) {
-  await requireNotIsolated(ctx, 'attach_agent_skill');
-  const { agentName, skillName } = args;
-
-  if (!agentName || typeof agentName !== 'string') {
-    throw new Error('agentName is required');
-  }
-  if (!skillName || typeof skillName !== 'string') {
-    throw new Error('skillName is required');
-  }
-
-  const result = await sessionManager.attachAgentSkill(agentName, skillName);
-  if (!result.changed) {
-    return `Agent "${agentName}" already has skill "${skillName}" attached.`;
-  }
-
-  let message = `Skill "${skillName}" attached to agent "${agentName}".`;
-  if (result.skills.length > 0) {
-    message += `\nCurrent skills: ${result.skills.join(', ')}`;
-  }
-  if (result.affectedSessions.length > 0) {
-    message += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`;
-  }
-  return message;
-}
-
-export async function tool_detach_agent_skill(args: ToolArgs, ctx?: ToolContext) {
-  await requireNotIsolated(ctx, 'detach_agent_skill');
-  const { agentName, skillName } = args;
-
-  if (!agentName || typeof agentName !== 'string') {
-    throw new Error('agentName is required');
-  }
-  if (!skillName || typeof skillName !== 'string') {
-    throw new Error('skillName is required');
-  }
-
-  const result = await sessionManager.detachAgentSkill(agentName, skillName);
-  if (!result.changed) {
-    return `Agent "${agentName}" does not have skill "${skillName}" attached.`;
-  }
-
-  let message = `Skill "${skillName}" detached from agent "${agentName}".`;
-  message += result.skills.length > 0
-    ? `\nCurrent skills: ${result.skills.join(', ')}`
-    : '\nCurrent skills: (none)';
-  if (result.affectedSessions.length > 0) {
-    message += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`;
-  }
-  return message;
 }
 
 export async function tool_load_skill(args: ToolArgs, ctx?: ToolContext) {
@@ -1010,8 +961,6 @@ export async function tool_compact_session(args: ToolArgs, ctx: ToolContext) {
   return `Compaction requested for session \`${targetSessionId}\` using ${mode}. Pending queue length: ${result.queueLength}`;
 }
 
-export const tool_compress_session = tool_compact_session;
-
 export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
   await checkTimerPermission(ctx, {
     targetSessionId: args.sessionId,
@@ -1156,6 +1105,13 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_session');
   const { agentName, sessionName, displayName, parentSessionId } = args;
   const requestedModel = normalizeToolModelKey(args.model);
+  const systemPromptFiles = args.systemPromptFiles === undefined
+    ? undefined
+    : llm.normalizeSystemPromptFiles(args.systemPromptFiles);
+
+  if (args.systemPromptFiles !== undefined && !Array.isArray(args.systemPromptFiles)) {
+    throw new Error('systemPromptFiles must be an array of strings');
+  }
 
   if (!agentName || typeof agentName !== 'string') {
     throw new Error('agentName is required');
@@ -1169,6 +1125,7 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     sessionName,
     displayName,
     parentSessionId,
+    systemPromptFiles,
     currentNode: ctx.session?.currentNode,
     model: sessionManager.resolveSpawnedSessionModel(ctx.session, requestedModel),
   });
@@ -1179,6 +1136,9 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   }
   if (parentSessionId) {
     message += `\nParent session: ${parentSessionId}`;
+  }
+  if (systemPromptFiles) {
+    message += `\nSystem prompt files: ${systemPromptFiles.length > 0 ? systemPromptFiles.join(', ') : '(none)'}`;
   }
   const createdSession = await sessionManager.getSession(result.sessionId);
   const { currentKey } = resolveModelConfig(createdSession.model);

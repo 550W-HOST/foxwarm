@@ -1,4 +1,5 @@
 import { MessagePart, Message, InlineData } from './types';
+import { stringifyFunctionCallArgs } from './toolCallArgs';
 
 export interface TokenEstimateSummary {
     tokens: number;
@@ -93,8 +94,7 @@ export function estimateMessagePartSummary(part: MessagePart): TokenEstimateSumm
     // Function calls
     if (part.functionCall) {
         tokens += estimateTokenCount(part.functionCall.name || '');
-        const rawArgsText = typeof (part.functionCall as any).rawArgsText === 'string' ? String((part.functionCall as any).rawArgsText) : JSON.stringify(part.functionCall.args || {});
-        tokens += estimateTokenCount(rawArgsText);
+        tokens += estimateTokenCount(stringifyFunctionCallArgs(part.functionCall));
     }
     
     // Function responses

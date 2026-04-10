@@ -6,6 +6,7 @@ import {
   buildCompactFlowToolDefinitions,
   buildCompactPromptText,
   buildMessageCandidateItem,
+  COMPACT_FLOW_MAX_ROUNDS,
   COMPACT_PLAN_TOOL_NAME,
   CompactPlanValidationError,
   validateCompactPlanArgs,
@@ -19,6 +20,7 @@ const messageCandidates = [
 ];
 
 test('message and block candidates render stable compact keys', () => {
+  assert.equal(COMPACT_FLOW_MAX_ROUNDS, 10);
   assert.equal(messageCandidates[0].kind, 'message');
   assert.equal(messageCandidates[0].key, 'M#1');
   const block = buildBlockCandidateItem(8, 2, 10, 30, 'summarized prior discussion');
@@ -47,6 +49,8 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /Preserve decisions/i);
   assert.match(prompt, /get_context_archive/);
   assert.match(prompt, /read_memory/);
+  assert.match(prompt, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
+  assert.match(prompt, /apply_patch_memory/);
 });
 
 test('buildCompactFlowToolDefinitions exposes only compact-safe helper tools plus plan submission', () => {
@@ -57,6 +61,7 @@ test('buildCompactFlowToolDefinitions exposes only compact-safe helper tools plu
     'write_memory',
     'edit_memory',
     'delete_memory',
+    'apply_patch_memory',
     'get_archived_messages',
     'get_archived_blocks',
     'get_context_archive',

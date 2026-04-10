@@ -1,4 +1,5 @@
 import { Message, MessagePart } from '../types';
+import { stringifyFunctionCallArgs } from '../toolCallArgs';
 
 export const DEFAULT_TOOL_CONTENT_CHAR_LIMIT = 200;
 
@@ -60,11 +61,7 @@ export function formatPrefixedMultilineText(prefix: string, text: string, contin
 }
 
 function stringifyFunctionArgs(part: MessagePart): string {
-  try {
-    return JSON.stringify(part.functionCall?.args);
-  } catch {
-    return '[unserializable args]';
-  }
+  return stringifyFunctionCallArgs(part.functionCall);
 }
 
 function formatFunctionResponse(part: MessagePart): string | undefined {

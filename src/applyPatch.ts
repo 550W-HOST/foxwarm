@@ -24,20 +24,40 @@ const FILE_HEADER_PREFIXES = [
 ] as const;
 const UPDATE_SECTION_TERMINATORS = [END_PATCH, END_FILE] as const;
 
+function isFileHeader(line: string): boolean {
+  return FILE_HEADER_PREFIXES.some(prefix => line.startsWith(prefix));
+}
+
 function normalizeNewlines(text: string): string {
   return text.replace(/\r\n/g, '\n');
 }
 
 export function extractPatchEnvelope(input: string): string {
   const normalized = normalizeNewlines(input);
+  const trimmed = normalized.trim();
   const beginIndex = normalized.indexOf('*** Begin Patch');
   const endIndex = normalized.lastIndexOf(END_PATCH);
 
-  if (beginIndex === -1 || endIndex === -1 || endIndex < beginIndex) {
+  if (beginIndex !== -1 || endIndex !== -1) {
+    if (beginIndex === -1 || endIndex === -1 || endIndex < beginIndex) {
+      throw new Error('Invalid apply_patch input: malformed patch envelope.');
+    }
+
+    return normalized.slice(beginIndex, endIndex + END_PATCH.length).trim();
+  }
+
+  if (trimmed) {
+    const lines = trimmed.split('\n');
+    if (isFileHeader(lines[0])) {
+      return ['*** Begin Patch', trimmed, END_PATCH].join('\n');
+    }
+  }
+
+  if (!trimmed) {
     throw new Error('Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope.');
   }
 
-  return normalized.slice(beginIndex, endIndex + END_PATCH.length).trim();
+  throw new Error('Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope, or bare patch must start with *** Update File: / *** Add File: / *** Delete File:.');
 }
 
 export function parseApplyPatchInput(input: string): ApplyPatchOperation[] {
@@ -51,8 +71,6 @@ export function parseApplyPatchInput(input: string): ApplyPatchOperation[] {
   const body = lines.slice(1, -1);
   const operations: ApplyPatchOperation[] = [];
   let i = 0;
-
-  const isFileHeader = (line: string): boolean => FILE_HEADER_PREFIXES.some(prefix => line.startsWith(prefix));
 
   while (i < body.length) {
     while (i < body.length && body[i].trim() === '') i++;

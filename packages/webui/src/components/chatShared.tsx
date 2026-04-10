@@ -69,6 +69,56 @@ export interface FunctionCall {
   args: any
 }
 
+const normalizeToolLabelValue = (value: unknown): string | null => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed || null
+  }
+  if (value === undefined || value === null) return null
+  return String(value)
+}
+
+export const formatToolLabel = (name: string, args?: any): string => {
+  if (name === 'remote_node') {
+    const nodeId = normalizeToolLabelValue(args?.nodeId)
+    const tool = normalizeToolLabelValue(args?.tool)
+    if (nodeId && tool) {
+      return `node:${nodeId}:${tool}`
+    }
+  }
+
+  if (name === 'call_mcp') {
+    const tool = normalizeToolLabelValue(args?.tool)
+    if (tool) {
+      const server = normalizeToolLabelValue(args?.server) || 'default'
+      return `mcp:${server}:${tool}`
+    }
+  }
+
+  if (name === 'call_tool') {
+    const toolId = normalizeToolLabelValue(args?.toolId)
+    if (toolId) {
+      return `tool:${toolId}`
+    }
+
+    const source = normalizeToolLabelValue(args?.source)
+    const tool = normalizeToolLabelValue(args?.name)
+    if (source && tool) {
+      const scope = normalizeToolLabelValue(args?.server) || normalizeToolLabelValue(args?.nodeId)
+      return scope ? `tool:${source}:${scope}:${tool}` : `tool:${source}:${tool}`
+    }
+  }
+
+  if (name === 'search_tools') {
+    const sources = Array.isArray(args?.sources) ? args.sources.join(',') : normalizeToolLabelValue(args?.sources)
+    const scope = normalizeToolLabelValue(args?.server) || normalizeToolLabelValue(args?.nodeId)
+    const query = normalizeToolLabelValue(args?.query)
+    return ['search_tools', sources, scope, query].filter(Boolean).join(':')
+  }
+
+  return name
+}
+
 export interface FunctionResponse {
   tool_use_id?: string
   name: string
@@ -455,6 +505,7 @@ const toolIcons: Record<string, LucideIcon> = {
   write: Pencil,
   edit: Pencil,
   apply_patch: Wrench,
+  apply_patch_memory: Wrench,
   exec: Terminal,
 }
 
@@ -464,6 +515,7 @@ export type ToolTagTone = 'neutral' | 'success' | 'error'
 
 export interface ToolTagItem {
   name: string
+  label?: string
   tone?: ToolTagTone
 }
 
@@ -473,23 +525,23 @@ const toolTagToneClasses: Record<ToolTagTone, string> = {
   error: 'border-red-200 dark:border-red-800 bg-red-50/80 dark:bg-red-900/20 text-red-700 dark:text-red-300',
 }
 
-export const ToolTag = ({ name, tone = 'neutral', className = '' }: { name: string; tone?: ToolTagTone; className?: string }) => {
+export const ToolTag = ({ name, label = name, tone = 'neutral', className = '' }: { name: string; label?: string; tone?: ToolTagTone; className?: string }) => {
   const Icon = getToolIcon(name)
 
   return (
     <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
       <Icon size={12} />
-      <span>{name}</span>
+      <span>{label}</span>
     </span>
   )
 }
 
-export const ToolLabel = ({ name }: { name: string }) => <ToolTag name={name} />
+export const ToolLabel = ({ name, label }: { name: string; label?: string }) => <ToolTag name={name} label={label} />
 
 export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
   <div className="flex min-w-0 flex-wrap items-center gap-1.5">
     {items.map((item, idx) => (
-      <ToolTag key={`${item.name}-${idx}`} name={item.name} tone={item.tone} />
+      <ToolTag key={`${item.name}-${idx}`} name={item.name} label={item.label} tone={item.tone} />
     ))}
   </div>
 )

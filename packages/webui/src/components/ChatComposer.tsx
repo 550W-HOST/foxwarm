@@ -36,6 +36,16 @@ interface ChatComposerProps {
     stop: () => void
     cancel: () => void
   }>
+  onDraftEdited?: (draftText: string) => void
+}
+
+function persistDraft(sessionId: string, value: string) {
+  const draftKey = `draft_${sessionId}`
+  if (value.length > 0) {
+    localStorage.setItem(draftKey, value)
+  } else {
+    localStorage.removeItem(draftKey)
+  }
 }
 
 const ChatComposer = memo(function ChatComposer({
@@ -48,6 +58,7 @@ const ChatComposer = memo(function ChatComposer({
   onSend,
   onTranscribeAudio,
   onCreateStreamingTranscriber,
+  onDraftEdited,
 }: ChatComposerProps) {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<File[]>([])
@@ -147,12 +158,7 @@ const ChatComposer = memo(function ChatComposer({
     }
 
     draftSaveTimerRef.current = setTimeout(() => {
-      const draftKey = `draft_${sessionId}`
-      if (input.trim()) {
-        localStorage.setItem(draftKey, input)
-      } else {
-        localStorage.removeItem(draftKey)
-      }
+      persistDraft(sessionId, input)
     }, 2000)
 
     return () => {
@@ -325,9 +331,11 @@ const ChatComposer = memo(function ChatComposer({
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextValue = e.target.value
     setInput(nextValue)
+    persistDraft(sessionId, nextValue)
+    onDraftEdited?.(nextValue)
     setDismissedSlashQuery(null)
     resizeTextarea(e.target)
-  }, [])
+  }, [onDraftEdited, sessionId])
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items
@@ -374,7 +382,10 @@ const ChatComposer = memo(function ChatComposer({
 
     setInput(prev => {
       const prefix = prev.trim()
-      return prefix ? `${prefix}\n\n${trimmed}` : trimmed
+      const nextValue = prefix ? `${prefix}\n\n${trimmed}` : trimmed
+      persistDraft(sessionId, nextValue)
+      onDraftEdited?.(nextValue)
+      return nextValue
     })
 
     requestAnimationFrame(() => {
@@ -385,7 +396,7 @@ const ChatComposer = memo(function ChatComposer({
         textareaRef.current.setSelectionRange(caret, caret)
       }
     })
-  }, [])
+  }, [onDraftEdited, sessionId])
 
   const pushAsrDebug = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString([], { hour12: false })

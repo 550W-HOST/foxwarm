@@ -1,4 +1,5 @@
 import axios, { AxiosResponse } from 'axios';
+import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { StringDecoder } from 'string_decoder';
@@ -10,7 +11,7 @@ import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BU
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
-import { loadSkillDocuments } from './skills';
+import { listSkills } from './skills';
 import { checkToolPermission, checkPathAccess } from './isolatedCheck';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -18,6 +19,7 @@ import {
     convertToOpenAIFormat as convertToOpenAIFormatProvider,
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
+import { parseFunctionCallArgs } from './toolCallArgs';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -81,17 +83,20 @@ export function isAbortError(error: any): boolean {
 }
 
 function getPromptCacheKey(session: Session): string {
-    return `${session.id || 'default'}`;
+    const sessionId = session.id || 'default';
+    return crypto.createHash('md5').update(`session_${sessionId}`).digest('hex');
 }
 
-function isOpenAIReasoningModel(modelName: string): boolean {
-    return /^gpt-5(?:[.-]|$)/.test(modelName)
-        || /^o[1-9](?:[.-]|$)/.test(modelName);
-}
+export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-completions' | null {
+    if (providerType === 'openai' || providerType === 'openai-responses') {
+        return 'responses';
+    }
 
-function shouldUseOpenAIResponsesApi(providerType: string, modelName: string): boolean {
-    return providerType === 'openai-responses'
-        || (providerType === 'openai' && isOpenAIReasoningModel(modelName));
+    if (providerType === 'openai-completions') {
+        return 'chat-completions';
+    }
+
+    return null;
 }
 
 function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
@@ -182,8 +187,139 @@ function formatMemoryBlock(filePath: string, agentName: string, kind: 'self' | '
     return `\nFILE: ${filePath}\n[MEMORY: agent=${agentName}; ownership=${kind}]\n${content}\n`;
 }
 
-function formatSkillBlock(filePath: string, skillName: string, content: string): string {
-    return `\nFILE: ${filePath}\n[SKILL: ${skillName}]\n${content}\n`;
+function escapeXmlText(value: string): string {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+export function normalizeSystemPromptFiles(value: unknown): string[] | undefined {
+    if (Array.isArray(value)) {
+        const normalized = value
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map(entry => entry.trim())
+            .filter(entry => entry.length > 0);
+        return normalized;
+    }
+
+    if (typeof value === 'string') {
+        const normalized = value
+            .split(/[,\n]/)
+            .map(entry => entry.trim())
+            .filter(entry => entry.length > 0 && !entry.startsWith('#'));
+        return normalized;
+    }
+
+    return undefined;
+}
+
+function expandHomePath(filePath: string): string {
+    if (filePath === '~') {
+        return process.env.HOME || filePath;
+    }
+    if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
+        return path.join(process.env.HOME || '~', filePath.slice(2));
+    }
+
+    return filePath;
+}
+
+function resolveSystemPromptFilePath(agentName: string, fileReference: string): string {
+    const expandedPath = expandHomePath(fileReference);
+    if (path.isAbsolute(expandedPath)) {
+        return path.resolve(expandedPath);
+    }
+
+    return path.resolve(getAgentDir(agentName), expandedPath);
+}
+
+async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[]): Promise<string> {
+    let combined = '';
+    const restrictToAgentDir = sessionManager.isAgentIsolated(agentName);
+
+    for (const fileReference of systemPromptFiles) {
+        const filePath = resolveSystemPromptFilePath(agentName, fileReference);
+        if (restrictToAgentDir) {
+            checkPathAccess(filePath, agentName);
+        }
+        if (!await fs.pathExists(filePath)) {
+            throw new Error(`systemPromptFiles entry \`${fileReference}\` not found for agent \`${agentName}\`.`);
+        }
+
+        const stats = await fs.stat(filePath);
+        if (!stats.isFile()) {
+            throw new Error(`systemPromptFiles entry \`${fileReference}\` is not a file.`);
+        }
+
+        const content = await fs.readFile(filePath, 'utf8');
+        combined += formatMemoryBlock(filePath, agentName, 'self', content);
+    }
+
+    return combined;
+}
+
+async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
+    const visibleSkills = await listSkills({ agentName });
+    if (visibleSkills.length === 0) {
+        return '';
+    }
+
+    let combined = '';
+    combined += 'The following skills provide specialized instructions for specific tasks.\n';
+    combined += 'When a task matches a skill\'s description, call the load_skill tool\n';
+    combined += 'with the skill\'s name to load its full instructions:\n';
+    combined += '<available_skills>\n';
+
+    for (const skill of visibleSkills) {
+        combined += '  <skill>\n';
+        combined += `    <name>${escapeXmlText(skill.name)}</name>\n`;
+        combined += `    <description>${escapeXmlText(skill.description || '')}</description>\n`;
+        combined += '  </skill>\n';
+    }
+
+    combined += '</available_skills>\n';
+    return combined;
+}
+
+async function appendDefaultMemoryFiles(agentName: string): Promise<string> {
+    const mainMemoryDir = MAIN_AGENT_MEMORY_DIR;
+    let combined = '';
+
+    const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
+    if (await fs.pathExists(mainSystemPath)) {
+        const content = await fs.readFile(mainSystemPath, 'utf8');
+        const kind = agentName === 'main' ? 'self' : 'inherited';
+        combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
+    }
+
+    const inheritChain = sessionManager.getAgentInheritanceChain(agentName);
+    for (const inheritedAgentName of inheritChain) {
+        const kind = inheritedAgentName === agentName ? 'self' : 'inherited';
+        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind);
+    }
+
+    return combined;
+}
+
+export async function buildSessionSystemPromptSnapshot(options: {
+    agentName?: string;
+    systemPromptFiles?: string[] | string;
+} = {}): Promise<string> {
+    const agentName = options.agentName || 'main';
+    const normalizedSystemPromptFiles = normalizeSystemPromptFiles(options.systemPromptFiles);
+    const hasCustomMemorySources = options.systemPromptFiles !== undefined;
+
+    const memoryBlocks = hasCustomMemorySources
+        ? await appendConfiguredMemoryFiles(agentName, normalizedSystemPromptFiles || [])
+        : await appendDefaultMemoryFiles(agentName);
+    const skillCatalog = await appendSkillCatalogForAgent(agentName);
+    const agentMemoryDir = getAgentMemoryDir(agentName);
+    const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_memory: ' + agentMemoryDir + '\n- agent_folder: ' + getAgentDir(agentName) + '\n';
+    const archiveInfo = '\n\n--- COMPACTED HISTORY ACCESS ---\n- Use `get_context_archive(...)` for the normal archived-history entry point.\n- If you specifically need raw-message or block-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.\n';
+    return [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
+        .filter(Boolean)
+        .join('\n\n');
 }
 
 function stringifyToolOutput(output: unknown): string {
@@ -215,11 +351,21 @@ function extractToolResponseOutput(response: any): unknown {
         return response.output;
     }
 
-    if (Object.prototype.hasOwnProperty.call(response, 'error')) {
+    if (Object.prototype.hasOwnProperty.call(response, 'error') && response.error) {
         return response.error;
     }
 
     return response;
+}
+
+function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string; message: string; rawArgsText?: string } } {
+    return {
+        error: {
+            type: 'invalid_tool_arguments',
+            message: call.argsParseError || 'Invalid tool arguments JSON',
+            ...(typeof call.rawArgsText === 'string' ? { rawArgsText: call.rawArgsText } : {}),
+        }
+    };
 }
 
 function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string {
@@ -244,6 +390,7 @@ function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string
 }
 
 const SUBCONSCIOUS_ALLOWED_TOOL_NAMES = new Set([
+    'search_vector',
     'search_memory',
     'get_archived_messages',
     'get_archived_blocks',
@@ -277,51 +424,10 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
     return combined;
 }
 
-async function appendSkillFilesForAgent(agentName: string): Promise<string> {
-    const skills = sessionManager.getAgentSkills(agentName);
-    if (skills.length === 0) {
-        return '';
-    }
-
-    let combined = '';
-    for (const skillName of skills) {
-        try {
-            const { documents } = await loadSkillDocuments(skillName, { agentName });
-            for (const document of documents) {
-                combined += formatSkillBlock(document.filePath, skillName, document.content);
-            }
-        } catch (e) {
-            logger.warn({ err: e, agentName, skillName }, 'Failed to load skill documents for prompt injection');
-        }
-    }
-
-    return combined;
-}
 
 export async function getPersistentMemory(agentName: string = 'main') {
     try {
-        const agentMemoryDir = getAgentMemoryDir(agentName);
-        const mainMemoryDir = MAIN_AGENT_MEMORY_DIR;
-        let combined = '';
-
-        const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
-        if (await fs.pathExists(mainSystemPath)) {
-            const content = await fs.readFile(mainSystemPath, 'utf8');
-            const kind = agentName === 'main' ? 'self' : 'inherited';
-            combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
-        }
-
-        const inheritChain = sessionManager.getAgentInheritanceChain(agentName);
-        for (const inheritedAgentName of inheritChain) {
-            const kind = inheritedAgentName === agentName ? 'self' : 'inherited';
-            combined += await appendMemoryFilesForAgent(inheritedAgentName, kind);
-        }
-
-        combined += await appendSkillFilesForAgent(agentName);
-
-        const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_memory: ' + agentMemoryDir + '\n- agent_folder: ' + getAgentDir(agentName) + '\n';
-        const archiveInfo = '\n\n--- COMPACTED HISTORY ACCESS ---\n- To inspect compacted raw messages, use `get_archived_messages(...)`.\n- To inspect archived layered-context blocks, use `get_archived_blocks(...)`.\n- If you are not sure which archive view you need, use `get_context_archive(...)`.\n';
-        return combined.trim() + dirInfo + archiveInfo;
+        return await buildSessionSystemPromptSnapshot({ agentName });
     } catch (e) {
         logger.error({ err: e, agentName }, 'Error reading persistent memory');
         return '';
@@ -617,10 +723,14 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         
         // Log what's being executed
         let argStr = '';
-        if (call.name === 'exec') {
+        if (call.argsParseError && typeof call.rawArgsText === 'string') {
+            argStr = call.rawArgsText;
+        } else if (call.name === 'exec') {
             argStr = call.args.command;
         } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
             argStr = call.args.filePath;
+        } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
+            argStr = typeof call.args.input === 'string' ? call.args.input : '';
         } else if (call.name === 'read' || call.name === 'read_memory') {
             const { filePath, startLine, endLine } = call.args;
             argStr = filePath + (startLine ? ` (lines ${startLine}-${endLine})` : '');
@@ -646,12 +756,15 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         }
 
         let result;
-        if (isSubconsciousSession(session) && !SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(call.name)) {
+        if (call.argsParseError) {
+            result = buildInvalidToolArgsResult(call);
+        } else if (isSubconsciousSession(session) && !SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(call.name)) {
             result = { error: `Subconscious side sessions cannot use ${call.name}.` };
         }
         
-        // Check if tool has node parameter
-        const nodeParam = call.args?.node;
+        const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
+        const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
+        const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
         const sessionId = toolContext.sessionId || 'main';
         
         // Get current node for this session
@@ -662,27 +775,13 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         
         // Remove node parameter from args before execution
         const toolArgs = { ...call.args };
-        delete toolArgs.node;
+        if (supportsExplicitNode) {
+            delete toolArgs.node;
+        }
         
         // Tools that must run on master because they depend on host-local
         // session/channel/agent/vector/MCP state rather than remote node files.
-        const masterOnlyTools = [
-            'remote_node', 'list_nodes', 'node_tools',
-            'search_memory', 'get_memory_context',
-            'read_memory', 'write_memory', 'edit_memory', 'delete_memory',
-            'copy_between_nodes',
-            'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
-            'list_sessions', 'list_agents', 'list_skills',
-            'attach_agent_skill', 'detach_agent_skill', 'load_skill',
-            'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
-            'update_session_name', 'set_todo', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
-            'compact_session', 'compress_session',
-            'create_timer', 'list_timers', 'delete_timer',
-            'mcp_config', 'call_mcp', 'search_mcp_tools',
-            'change_current_node',
-            'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
-        ];
-        const forceMaster = masterOnlyTools.includes(call.name);
+        const forceMaster = tools.isMasterOnlyToolName(call.name);
         const executionNode = forceMaster ? 'master' : targetNode;
         const permissionNode = call.name === 'send_file' ? targetNode : executionNode;
 
@@ -803,7 +902,10 @@ export async function chat(
 
     // Get persistent context
     const agentName = session.agent || 'main';
-    const systemPrompt = session.persistentMemorySnapshot || await getPersistentMemory(agentName);
+    const systemPrompt = session.persistentMemorySnapshot || await buildSessionSystemPromptSnapshot({
+        agentName,
+        systemPromptFiles: session.systemPromptFiles,
+    });
 
     // Add user message if provided
     if (parts) {
@@ -827,6 +929,9 @@ export async function chat(
         ? (modelEntry.model[0] || '')
         : (modelEntry?.model || '');
     const promptCacheKey = getPromptCacheKey(session);
+    const openaiRequestApi = getOpenAIRequestApi(providerType);
+    const useOpenAIResponsesApi = openaiRequestApi === 'responses';
+    const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
 
     if (!baseUrl) {
         throw new Error('Model config has no baseUrl');
@@ -834,13 +939,11 @@ export async function chat(
 
     logger.info(`Requesting LLM (${modelKey}, type ${providerType}, iteration ${iteration})...`);
 
-    const useOpenAIResponsesApi = shouldUseOpenAIResponsesApi(providerType, modelName);
-    const useOpenAIChatStream = providerType === 'openai';
-    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatStream;
+    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
     const availableToolDefinitions = options?.toolDefinitions
         ?? (isSubconsciousSession(session)
-            ? tools.definitions.filter(def => SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(def.name))
-            : tools.definitions);
+            ? tools.modelFacingDefinitions.filter(def => SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(def.name))
+            : tools.modelFacingDefinitions);
 
     const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh' :
                          THINKING_BUDGET >= 4000 ? 'high' :
@@ -854,25 +957,18 @@ export async function chat(
         headers = {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
-            'user-agent': 'foxwarm/1.0',
+            'user-agent': 'codex-tui/0.118.0 (Debian 13.0.0; x86_64) xterm.js_6.1.0-beta.191_ (codex-tui; 0.118.0)',
+            'originator': 'codex-tui',
+            'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
+                crypto.createHash('md5').update(`turn_id_${session.id}_${Date.now()}`).digest('hex')
+            }","sandbox":"seccomp"}`,
+            'x-client-request-id': crypto.createHash('md5').update(`req_id_${session.id}_${Date.now()}`).digest('hex'),
         };
 
         data = {
             model: modelName,
-            include: ['reasoning.encrypted_content'],
-            max_output_tokens: MAX_OUTPUT,
-            prompt_cache_key: promptCacheKey,
-            stream: true,
-            reasoning: {
-                summary: 'auto',
-                ...(openaiEffort ? { effort: openaiEffort } : {}),
-            },
+            instructions: systemPrompt,
             input: [
-                {
-                    type: 'message',
-                    role: 'developer',
-                    content: [{ type: 'input_text', text: systemPrompt }]
-                },
                 ...messages
             ],
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
@@ -880,9 +976,19 @@ export async function chat(
                 name: fd.name,
                 description: fd.description,
                 parameters: fd.parameters
-            })) : undefined
+            })) : undefined,
+            tool_choice: 'auto',
+            parallel_tool_calls: true,
+            reasoning: {
+                summary: 'auto',
+                ...(openaiEffort ? { effort: openaiEffort } : {}),
+            },
+            store: false,
+            include: ['reasoning.encrypted_content'],
+            prompt_cache_key: promptCacheKey,
+            stream: true,
         };
-    } else if (providerType === 'openai') {
+    } else if (useOpenAIChatCompletionsApi) {
         // OpenAI format
         messages = convertToOpenAIFormatProvider(fixedContents);
         url = `${baseUrl}/chat/completions`;
@@ -939,19 +1045,17 @@ export async function chat(
     }
 
     const extraFields = modelEntry.extraFields || {};
+    Object.assign(data, extraFields);
     if (useOpenAIResponsesApi && extraFields.reasoning && typeof extraFields.reasoning === 'object') {
-        const { reasoning: extraReasoning, ...restExtraFields } = extraFields;
+        const { reasoning: extraReasoning } = extraFields;
         const hasSummaryOverride = Object.prototype.hasOwnProperty.call(extraReasoning, 'summary');
-        Object.assign(data, restExtraFields);
         data.reasoning = {
             ...(data.reasoning || {}),
             ...extraReasoning,
             summary: hasSummaryOverride
                 ? extraReasoning.summary
-                : (data.reasoning?.summary || 'auto'),
+                : ((data.reasoning as any)?.summary || 'auto'),
         };
-    } else {
-        Object.assign(data, extraFields);
     }
     
     const logFiles = await logRequest(data, iteration);
@@ -1003,7 +1107,7 @@ export async function chat(
                         if (attempt === maxRetries) {
                             return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts`);
                         }
-                        await sleepWithSignal(2000, abortController.signal);
+                        await sleepWithSignal(5000, abortController.signal);
                         continue;
                     }
 
@@ -1127,18 +1231,21 @@ export async function chat(
             }
 
             if (item.type === 'function_call') {
-                const args = JSON.parse(item.arguments || '{}');
+                const parsedArgs = parseFunctionCallArgs(item.arguments);
                 const callId = item.call_id || item.id;
+                if (parsedArgs.argsParseError) {
+                    logger.warn({ providerType, callId, toolName: item.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI Responses tool arguments; converting to structured tool error');
+                }
                 allParts.push({
                     functionCall: {
                         id: callId,
                         name: item.name,
-                        args
+                        ...parsedArgs,
                     }
                 });
             }
         }
-    } else if (providerType === 'openai') {
+    } else if (useOpenAIChatCompletionsApi) {
         // Parse OpenAI response
         const choice = resp.choices?.[0];
         if (!choice) {
@@ -1160,12 +1267,15 @@ export async function chat(
         if (message.tool_calls) {
             for (const toolCall of message.tool_calls) {
                 if (toolCall.type === 'function') {
-                    const args = JSON.parse(toolCall.function.arguments || '{}');
+                    const parsedArgs = parseFunctionCallArgs(toolCall.function.arguments);
+                    if (parsedArgs.argsParseError) {
+                        logger.warn({ providerType, callId: toolCall.id, toolName: toolCall.function.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI chat tool arguments; converting to structured tool error');
+                    }
                     allParts.push({ 
                         functionCall: { 
                             id: toolCall.id, 
                             name: toolCall.function.name, 
-                            args: args 
+                            ...parsedArgs,
                         } 
                     });
                 }
@@ -1211,7 +1321,7 @@ export async function chat(
             outputTokens: resp.usage.output_tokens,
             cachedTokens: cached
         } : null;
-    } else if (providerType === 'openai') {
+    } else if (useOpenAIChatCompletionsApi) {
         usage = resp.usage ? {
             inputTokens: resp.usage.prompt_tokens,
             outputTokens: resp.usage.completion_tokens,

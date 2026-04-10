@@ -113,3 +113,39 @@ test('child default model falls back to current session model when unset, then u
     }
   }
 });
+
+test('forked child sessions append inherited tool responses as tool-role messages', async () => {
+  await sessionManager.loadSessions();
+  const parentSessionId = makeId('fork_tool_role_parent');
+  const childSessionId = `${parentSessionId}_forked`;
+
+  try {
+    const parent = await ensureSession(parentSessionId);
+    parent.history = [
+      {
+        role: 'model',
+        parts: [
+          { functionCall: { id: 'call_create_child', name: 'create_child_session', args: { suffix: 'forked' } } },
+          { functionCall: { id: 'call_other', name: 'read', args: { filePath: 'MEMORY.md' } } },
+        ],
+      },
+    ];
+    await sessionManager.saveSession(parentSessionId);
+
+    await sessionManager.createChildSession(parentSessionId, 'forked', true);
+    const child = await sessionManager.getSession(childSessionId);
+
+    const appendedToolMessage = child.history.find((message, index) => index > 0 && message.role === 'tool');
+    assert.ok(appendedToolMessage, 'expected forked child history to include appended tool response message');
+    assert.deepEqual(
+      appendedToolMessage?.parts.map(part => part.functionResponse?.response?.output),
+      [
+        `Child session created: ${childSessionId}`,
+        'Pending execution in parent session',
+      ],
+    );
+  } finally {
+    await sessionManager.deleteSession(childSessionId).catch(() => {});
+    await sessionManager.deleteSession(parentSessionId).catch(() => {});
+  }
+});

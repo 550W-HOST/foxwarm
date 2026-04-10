@@ -147,6 +147,7 @@ function resolveDataRootDir(): string {
 
 export const DATA_ROOT_DIR = resolveDataRootDir();
 export const STATE_DIR = path.join(DATA_ROOT_DIR, 'state');
+export const ARCHIVE_DB_PATH = path.join(STATE_DIR, 'archive-store.sqlite');
 
 const CONFIG_PATH_ENV = process.env.FOXWARM_CONFIG_PATH || process.env.CONFIG_PATH;
 export const APP_CONFIG_PATH = CONFIG_PATH_ENV
@@ -519,7 +520,7 @@ function applyProviderDefaults(entry: ModelConfigEntry): ModelConfigEntry {
     };
   }
 
-  if (provider === 'openai' || provider === 'openai-responses') {
+  if (provider === 'openai' || provider === 'openai-responses' || provider === 'openai-completions') {
     return {
       ...entry,
       provider,

@@ -12,6 +12,7 @@ import {
   buildPatchHunkSnippets,
   clampContentStyle,
   copyTextToClipboard,
+  formatToolLabel,
   formatObject,
   formatStructuredSystemText,
   getCollapsedReasoningPreview,
@@ -300,12 +301,14 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
   )
 })
 
-const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassName = 'text-gray-700 dark:text-gray-200') => (
+const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassName = 'text-gray-700 dark:text-gray-200', label = name) => (
   <div className="flex items-center gap-2 min-w-0">
-    <ToolLabel name={name} />
+    <ToolLabel name={name} label={label} />
     <div className={`min-w-0 flex-1 ${summaryClassName}`}>{summary}</div>
   </div>
 )
+
+const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
 
 const formatToolResponseText = (resp: FunctionResponse): string => {
   if (resp.response?.error !== undefined && resp.response?.error !== null) {
@@ -359,6 +362,7 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
 }
 
 const isLegacyDiffToolName = (name: string): boolean => name === 'edit' || name === 'edit_memory'
+const isPatchToolName = (name: string): boolean => name === 'apply_patch' || name === 'apply_patch_memory'
 
 const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
@@ -392,7 +396,7 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
     )
   }
 
-  if (call.name === 'apply_patch') {
+  if (isPatchToolName(call.name)) {
     try {
       const operations = parseApplyPatchPreview(call.args.input)
       const totalHunks = operations.reduce((sum, operation) => sum + (operation.action === 'update' ? operation.hunks.length : 0), 0)
@@ -462,7 +466,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     )
   }
 
-  if (call.name === 'apply_patch') {
+  if (isPatchToolName(call.name)) {
     try {
       const operations = parseApplyPatchPreview(call.args.input)
       return (
@@ -773,7 +777,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         <div>
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-2 flex-wrap">
-              <ToolLabel name={call.name} />
+              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
               {hasLegacyDiff ? (
                 <span className="text-xs"><span className="text-orange-600 dark:text-orange-400">-{oldLines}</span><span className="mx-1 text-gray-500">/</span><span className="text-blue-600 dark:text-blue-400">+{newLines}</span></span>
               ) : (
@@ -798,7 +802,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
       )
     }
 
-    if (call.name === 'apply_patch') {
+    if (isPatchToolName(call.name)) {
       try {
         const operations = parseApplyPatchPreview(call.args.input)
         const totalHunks = operations.reduce((sum, operation) => sum + (operation.action === 'update' ? operation.hunks.length : 0), 0)
@@ -807,7 +811,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
           <div>
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 flex-wrap">
-                <ToolLabel name={call.name} />
+                <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
                 <span className="ml-2 text-xs text-gray-500">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
                 <span className="ml-2 text-gray-600 dark:text-gray-400">{fileSummary}</span>
               </span>
@@ -857,7 +861,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         return (
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <ToolLabel name={call.name} />
+              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
               <span className="text-xs text-red-500">invalid patch</span>
             </div>
             {expanded && (
@@ -874,7 +878,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         <div className="space-y-1">
           {expanded ? (
             <>
-              <ToolLabel name={call.name} />
+              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
               <div className="break-all">{call.args.command}</div>
             </>
           ) : renderInlineToolSummary(call.name, <div className="truncate font-mono" title={call.args.command}>{preview}</div>)}
@@ -904,10 +908,10 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
       <div className="space-y-1">
         {expanded ? (
           <>
-            <ToolLabel name={call.name} />
+            <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
             <div className="whitespace-pre-wrap break-all">{argsFormatted}</div>
           </>
-        ) : renderInlineToolSummary(call.name, <div className="truncate break-all">{preview}</div>)}
+        ) : renderInlineToolSummary(call.name, <div className="truncate break-all">{preview}</div>, 'text-gray-700 dark:text-gray-200', getToolDisplayLabel(call))}
       </div>
     )
   }, [call, callIdx, diffViewMode, expanded, viewMode])
@@ -915,7 +919,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
   return (
     <div className={`text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${roundedClass} p-2 ${borderClass} relative group`}>
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        {isLegacyDiffToolName(call.name) || call.name === 'apply_patch' ? (
+        {isLegacyDiffToolName(call.name) || isPatchToolName(call.name) ? (
           <>
             <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={viewMode !== 'json' && diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
             <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={viewMode !== 'json' && diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
@@ -1059,7 +1063,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       {viewMode === 'json' ? (
         <div className={`${baseTextClass} ${expanded ? '' : 'pr-10'}`}>
           <div className="flex items-center gap-2 min-w-0">
-            <ToolTag name={call.name} tone={tagTone} />
+            <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
           </div>
           <pre className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : clampContentStyle(6)}>{jsonText}</pre>
         </div>
@@ -1067,7 +1071,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={`${baseTextClass} pr-10`}>
             <div className="space-y-1">
             <div className="flex items-center gap-2 min-w-0">
-              <ToolTag name={call.name} tone={tagTone} />
+              <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
               <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>
             </div>
             <div className="text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>
@@ -1077,12 +1081,12 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           <div>
             <div className="flex items-center gap-2 min-w-0">
-              <ToolTag name={call.name} tone={tagTone} />
+              <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
             </div>
 
             <div className="mt-2 cursor-default" onClick={(e) => e.stopPropagation()}>
-              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(isLegacyDiffToolName(call.name) || call.name === 'apply_patch') ? 'relative' : ''}`}>
-                {(isLegacyDiffToolName(call.name) || call.name === 'apply_patch') && (
+              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) ? 'relative' : ''}`}>
+                {(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) && (
                   <div className="absolute top-1 right-0 flex gap-1" onClick={(e) => e.stopPropagation()}>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
@@ -1449,6 +1453,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
             const status = p.functionCall.id ? toolStatusById.get(p.functionCall.id) : undefined
             items.push({
               name: p.functionCall.name,
+              label: formatToolLabel(p.functionCall.name, p.functionCall.args),
               tone: status === 'error' ? 'error' : status === 'success' ? 'success' : 'neutral',
             })
           }

@@ -72,6 +72,7 @@ interface ChatProps {
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
   onOpenWorkspace?: () => void
   onOpenTerminal?: () => void
+  onDraftEdited?: (draftText: string) => void
 }
 
 type StreamingAsrSession = {
@@ -119,7 +120,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange, onOpenWorkspace, onOpenTerminal }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange, onOpenWorkspace, onOpenTerminal, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -1014,6 +1015,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         onSend={handleSend}
         onTranscribeAudio={handleTranscribeAudio}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
+        onDraftEdited={onDraftEdited}
       />
 
       {showDebugInfo && (
