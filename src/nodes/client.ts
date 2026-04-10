@@ -21,6 +21,10 @@ interface NodeClientOptions {
   credentialsFile?: string;
   localTrigger?: boolean;
   localTriggerPort?: number;
+  /** Optional hook called before each tool execution. Return false/'rejected'/'timeout' to reject. */
+  toolCallInterceptor?: (tool: string, args: any, sessionId: string, callId: string, timeoutMs?: number) => Promise<boolean | string>;
+  /** Optional status callback for UI integration */
+  onStatus?: (event: string, detail?: Record<string, any>) => void;
 }
 
 type StoredNodeCredentials = {
@@ -251,6 +255,8 @@ export class NodeClient {
   private localTriggerPort = 0;
   private localTriggerServer: http.Server | null = null;
   private localTriggerRuntime: LocalTriggerRuntime | null = null;
+  private toolCallInterceptor?: (tool: string, args: any, sessionId: string, callId: string, timeoutMs?: number) => Promise<boolean | string>;
+  private onStatus?: (event: string, detail?: Record<string, any>) => void;
 
   constructor(options: NodeClientOptions) {
     this.host = options.host;
@@ -263,6 +269,8 @@ export class NodeClient {
     this.localTriggerPort = typeof options.localTriggerPort === 'number' && Number.isFinite(options.localTriggerPort)
       ? options.localTriggerPort
       : 0;
+    this.toolCallInterceptor = options.toolCallInterceptor;
+    this.onStatus = options.onStatus;
   }
 
   private get isAuthenticatedMode(): boolean {
@@ -472,11 +480,13 @@ export class NodeClient {
       : this.host.replace(/^http/, 'ws') + `/node_ws?token=${encodeURIComponent(String(this.pairingToken))}`;
 
     logger.info({ host: this.host, nodeId: this.connectedNodeId, requestedName: this.requestedName, mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' }, 'Connecting to foxwarm master...');
+    this.onStatus?.('connecting', { mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' });
 
     this.ws = new WebSocket(wsUrl);
 
     this.ws.on('open', () => {
       logger.info({ nodeId: this.connectedNodeId, mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' }, 'Connected to foxwarm master');
+      this.onStatus?.('connected', { mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' });
 
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
@@ -519,6 +529,7 @@ export class NodeClient {
       this.stopHeartbeat();
       const reasonText = reason.toString();
       logger.warn({ code, reason: reasonText }, 'Disconnected from master');
+      this.onStatus?.('disconnected', { code, reason: reasonText });
       if (this.pairingRejected) {
         logger.warn('Pairing was rejected; not reconnecting automatically');
         return;
@@ -544,6 +555,7 @@ export class NodeClient {
     const delay = this.forceImmediateReconnect ? 250 : this.reconnectDelay;
     this.forceImmediateReconnect = false;
     logger.info({ delay }, 'Scheduling reconnect...');
+    this.onStatus?.('reconnecting', { delay });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect().catch(err => {
@@ -557,6 +569,7 @@ export class NodeClient {
     switch (message.type) {
       case 'registered':
         logger.info({ nodeId: message.nodeId }, 'Node registered');
+        this.onStatus?.('registered', { nodeId: message.nodeId });
         this.connectedNodeId = message.nodeId;
         if (this.localTriggerRuntime) {
           await this.writeLocalTriggerArtifacts(this.localTriggerRuntime);
@@ -564,9 +577,11 @@ export class NodeClient {
         break;
       case 'pair_pending':
         logger.info({ pendingId: message.pendingId, pairCode: message.pairCode, requestedName: message.requestedName }, 'Node pairing pending approval');
+        this.onStatus?.('pair_pending', { pendingId: message.pendingId, pairCode: message.pairCode });
         break;
       case 'pair_approved':
         logger.info({ nodeId: message.nodeId }, 'Node pairing approved, storing credentials');
+        this.onStatus?.('pair_approved', { nodeId: message.nodeId });
         await this.saveStoredCredentials(String(message.nodeId), String(message.authToken));
         this.connectedNodeId = String(message.nodeId);
         this.authToken = String(message.authToken);
@@ -642,6 +657,7 @@ export class NodeClient {
 
   private async handleToolCall(message: any): Promise<void> {
     const { callId, tool, args } = message;
+    const timeoutMs = typeof message.timeoutMs === 'number' ? message.timeoutMs : undefined;
     const sessionId = typeof message.sessionId === 'string'
       ? message.sessionId
       : (typeof args?.sessionId === 'string' ? args.sessionId : 'node');
@@ -652,6 +668,23 @@ export class NodeClient {
     logger.info({ callId, tool }, 'Executing tool');
 
     try {
+      // Interceptor hook: allow external code to approve/reject before execution
+      if (this.toolCallInterceptor) {
+        const result = await this.toolCallInterceptor(tool, args, sessionId, callId, timeoutMs);
+        if (result !== true) {
+          const reason = typeof result === 'string' ? result : 'rejected';
+          const errorMsg = reason === 'timeout'
+            ? 'Tool call timed out waiting for user confirmation on interactive node. The user was not present to approve.'
+            : 'Tool execution rejected by user on interactive node';
+          this.send({
+            type: 'tool_call_error',
+            callId,
+            error: errorMsg,
+          });
+          return;
+        }
+      }
+
       const toolFn = (tools as any)[tool];
       if (!toolFn) {
         throw new Error(`Tool \`${tool}\` not found`);

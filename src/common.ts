@@ -7,11 +7,15 @@ const LOG_DIR = LOGS_DIR;
 // Configure logger based on TUI mode
 const targets: any[] = [];
 
-// Only add console output if TUI is not enabled
-if (!ENABLE_TUI) {
+// Skip console output when TUI is enabled or when running as interactive node client
+const suppressConsole = ENABLE_TUI || !!process.env.FOXWARM_NO_CONSOLE_LOG;
+if (!suppressConsole) {
     targets.push({
         target: 'pino-pretty',
-        options: {},
+        options: {
+            // Use stderr (fd 2) when FOXWARM_LOG_STDERR is set (e.g. interactive node client)
+            ...(process.env.FOXWARM_LOG_STDERR ? { destination: 2 } : {}),
+        },
     });
 }
 

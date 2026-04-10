@@ -317,6 +317,12 @@ export class NodesManager {
       this.toolCalls.set(callId, toolCall);
       
       // Send tool call to node
+      // Only send sessionCwd when the session's currentNode matches the target node.
+      // When using call_tool to temporarily execute on a remote node, session.cwd
+      // is a master-local path and should not be forwarded.
+      const shouldSendCwd = session.currentNode === nodeId && typeof session.cwd === 'string';
+      const timeoutMs = 30000;
+
       node.ws!.send(JSON.stringify({
         type: 'tool_call',
         callId: callId,
@@ -324,16 +330,17 @@ export class NodesManager {
         args: args,
         sessionId,
         agentName: session.agent || 'main',
-        sessionCwd: typeof session.cwd === 'string' ? session.cwd : undefined
+        timeoutMs,
+        ...(shouldSendCwd ? { sessionCwd: session.cwd } : {}),
       }));
       
-      // Set timeout (30 seconds default)
+      // Set timeout
       setTimeout(() => {
         if (this.toolCalls.has(callId)) {
           this.toolCalls.delete(callId);
           reject(`Tool call \`${callId}\` timed out`);
         }
-      }, 30000);
+      }, timeoutMs);
     });
   }
 
