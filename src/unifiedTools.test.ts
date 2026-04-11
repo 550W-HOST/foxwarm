@@ -58,6 +58,27 @@ test('call_tool can invoke hidden builtin browse_list', async () => {
   assert.match(String(result), /no tabs open/i);
 });
 
+test('call_tool rejects missing args wrapper with a caller-level error', async () => {
+  await assert.rejects(
+    () => call_tool(
+      {
+        toolId: 'builtin:create_agent',
+      },
+      {
+        sessionId: 'main',
+        session: { agent: 'main', currentNode: 'master' },
+      } as any,
+    ),
+    /call_tool requires args/i,
+  );
+});
+
+test('call_tool schema marks args as required', () => {
+  const def = definitions.find((item) => item.name === 'call_tool');
+  assert.ok(def);
+  assert.deepEqual(def?.parameters?.required, ['args']);
+});
+
 test('search_tools and call_tool cover MCP tools with schema-preserving structured results', async () => {
   const originalListServers = mcpClient.listServers;
   const originalListTools = mcpClient.listTools;
