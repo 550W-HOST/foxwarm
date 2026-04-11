@@ -1173,7 +1173,15 @@ async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
         throw new Error('call_tool requires a tool name.');
     }
 
-    const toolArgs = args?.args && typeof args.args === 'object' ? args.args : {};
+    if (!Object.prototype.hasOwnProperty.call(args || {}, 'args')) {
+        throw new Error('call_tool requires args (wrapped target tool arguments object).');
+    }
+
+    if (!args?.args || typeof args.args !== 'object' || Array.isArray(args.args)) {
+        throw new Error('call_tool args must be an object containing the target tool arguments.');
+    }
+
+    const toolArgs = args.args;
 
     if (ref.source === 'builtin') {
         return await executeBuiltinToolViaUnifiedCall(ref.name, toolArgs, ctx);
@@ -2043,7 +2051,7 @@ export const definitions = [
         },
         {
             name: 'call_tool',
-            description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted.',
+            description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. Put the target tool arguments inside the required `args` object.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -2052,8 +2060,9 @@ export const definitions = [
                     name: { type: 'string', description: 'Tool name when not using toolId.' },
                     server: { type: 'string', description: 'MCP server name for source=mcp.' },
                     nodeId: { type: 'string', description: 'Remote node id for source=node.' },
-                    args: { type: 'object', description: 'Tool arguments.' }
-                }
+                    args: { type: 'object', description: 'Required wrapper object containing the target tool arguments.' }
+                },
+                required: ['args']
             }
         },
         {
