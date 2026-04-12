@@ -3,6 +3,7 @@ import path from 'path';
 import { Message, Session } from '../types';
 import { logger } from '../common';
 import { SESSIONS_DIR, SESSIONS_FILE } from '../config';
+import { DiskJsonData, getNumberedBackupPath } from '../utils/diskJsonData';
 
 const SESSION_HISTORY_STATE_FIELDS = [
   'queue',
@@ -91,7 +92,7 @@ export function stripSessionMetadataForSave(session: Session): Omit<Session, 'hi
 }
 
 export function getSessionsMetadataBackupPath(index: number): string {
-  return `${SESSIONS_FILE}.${index}.bak`;
+  return getNumberedBackupPath(SESSIONS_FILE, index);
 }
 
 export function getSessionHistoryFilePath(sessionId: string): string {
@@ -99,29 +100,43 @@ export function getSessionHistoryFilePath(sessionId: string): string {
 }
 
 export function getSessionsMetadataCandidatePaths(): string[] {
-  return [
-    SESSIONS_FILE,
-    ...Array.from({ length: 5 }, (_, i) => getSessionsMetadataBackupPath(i + 1)),
-    `${SESSIONS_FILE}.bak`,
-  ];
+  return sessionsMetadataStore.listCandidatePaths();
 }
 
-export async function readSessionsMetadataSnapshotFromFile(filePath: string): Promise<any | null> {
-  if (!await fs.pathExists(filePath)) {
-    return null;
-  }
-
-  const data = await fs.readJson(filePath);
-  if (!data || typeof data !== 'object') {
+function normalizeSessionsMetadataSnapshot(raw: any, filePath: string): any {
+  if (!raw || typeof raw !== 'object') {
     throw new Error(`Invalid sessions metadata payload in ${filePath}`);
   }
 
-  const sessionsData = data.sessions || data;
+  const sessionsData = raw.sessions || raw;
   if (!sessionsData || typeof sessionsData !== 'object') {
     throw new Error(`Invalid sessions metadata object in ${filePath}`);
   }
 
-  return data.sessions ? data : { sessions: sessionsData };
+  return raw.sessions ? raw : { sessions: sessionsData };
+}
+
+export function createSessionsMetadataStore(filePath: string = SESSIONS_FILE): DiskJsonData<any> {
+  return new DiskJsonData<any>(filePath, {
+    backup: {
+      rotate: 5,
+      includeLegacyBak: true,
+      bestEffort: true,
+    },
+    normalizeLoadedData: normalizeSessionsMetadataSnapshot,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read sessions metadata candidate');
+    },
+    onBackupError: (err: unknown) => {
+      logger.warn({ err }, 'Failed to rotate sessions metadata backups');
+    },
+  });
+}
+
+export const sessionsMetadataStore = createSessionsMetadataStore();
+
+export async function readSessionsMetadataSnapshotFromFile(filePath: string): Promise<any | null> {
+  return sessionsMetadataStore.readFromPath(filePath);
 }
 
 export async function collectSessionHistoryFiles(dir: string): Promise<string[]> {
@@ -215,15 +230,9 @@ export async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
 }
 
 export async function loadSessionsMetadataSnapshot(): Promise<{ data: any; source: string }> {
-  for (const candidatePath of getSessionsMetadataCandidatePaths()) {
-    try {
-      const data = await readSessionsMetadataSnapshotFromFile(candidatePath);
-      if (data) {
-        return { data, source: candidatePath };
-      }
-    } catch (e) {
-      logger.warn({ err: e, candidatePath }, 'Failed to read sessions metadata candidate');
-    }
+  const loaded = await sessionsMetadataStore.loadFirstAvailable();
+  if (loaded) {
+    return loaded;
   }
 
   const rebuilt = await rebuildSessionsMetadataFromHistoryFiles();
@@ -231,25 +240,5 @@ export async function loadSessionsMetadataSnapshot(): Promise<{ data: any; sourc
 }
 
 export async function writeSessionsMetadataAtomically(data: any): Promise<void> {
-  await fs.ensureDir(path.dirname(SESSIONS_FILE));
-  const tempFile = `${SESSIONS_FILE}.tmp-${process.pid}-${Date.now()}`;
-  await fs.writeJson(tempFile, data, { spaces: 2 });
-
-  if (await fs.pathExists(SESSIONS_FILE)) {
-    try {
-      for (let i = 5; i >= 2; i--) {
-        const prevBackup = getSessionsMetadataBackupPath(i - 1);
-        const nextBackup = getSessionsMetadataBackupPath(i);
-        if (await fs.pathExists(prevBackup)) {
-          await fs.move(prevBackup, nextBackup, { overwrite: true });
-        }
-      }
-      await fs.copy(SESSIONS_FILE, getSessionsMetadataBackupPath(1), { overwrite: true });
-      await fs.copy(SESSIONS_FILE, `${SESSIONS_FILE}.bak`, { overwrite: true });
-    } catch (e) {
-      logger.warn({ err: e }, 'Failed to rotate sessions metadata backups');
-    }
-  }
-
-  await fs.move(tempFile, SESSIONS_FILE, { overwrite: true });
+  await sessionsMetadataStore.write(data);
 }

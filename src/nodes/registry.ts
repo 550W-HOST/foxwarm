@@ -1,8 +1,8 @@
 import crypto from 'crypto'
-import fs from 'fs-extra'
-import path from 'path'
 import { WebSocket } from 'ws'
 import { NODES_FILE } from '../config'
+import { logger } from '../common'
+import { DiskJsonData } from '../utils/diskJsonData'
 
 export type NodeToolDefinition = {
   name: string
@@ -50,6 +50,36 @@ const DEFAULT_REGISTRY: NodeRegistryData = {
 let registryData: NodeRegistryData | null = null
 const pendingSockets = new Map<string, WebSocket>()
 
+function normalizeRegistryData(raw: any, filePath: string): NodeRegistryData {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid node registry payload in ${filePath}`)
+  }
+
+  return {
+    approvedNodes: raw.approvedNodes && typeof raw.approvedNodes === 'object' ? raw.approvedNodes : {},
+    pendingPairings: raw.pendingPairings && typeof raw.pendingPairings === 'object' ? raw.pendingPairings : {},
+  }
+}
+
+export function createNodeRegistryStore(filePath: string = NODES_FILE): DiskJsonData<NodeRegistryData> {
+  return new DiskJsonData<NodeRegistryData>(filePath, {
+    backup: {
+      rotate: 3,
+      includeLegacyBak: true,
+      bestEffort: true,
+    },
+    normalizeLoadedData: normalizeRegistryData,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read node registry candidate')
+    },
+    onBackupError: (err: unknown) => {
+      logger.warn({ err }, 'Failed to rotate node registry backups')
+    },
+  })
+}
+
+let registryStore = createNodeRegistryStore()
+
 function cloneDefaultRegistry(): NodeRegistryData {
   return {
     approvedNodes: {},
@@ -62,25 +92,34 @@ async function loadRegistry(): Promise<NodeRegistryData> {
     return registryData
   }
 
-  if (!await fs.pathExists(NODES_FILE)) {
+  const loaded = await registryStore.loadFirstAvailable()
+  if (!loaded) {
     registryData = cloneDefaultRegistry()
     return registryData
   }
 
-  const raw = await fs.readJSON(NODES_FILE)
-  registryData = {
-    approvedNodes: raw?.approvedNodes || {},
-    pendingPairings: raw?.pendingPairings || {},
+  registryData = loaded.data
+  if (loaded.source !== registryStore.filePath) {
+    logger.warn({ source: loaded.source }, 'Recovering node registry from fallback source')
+    await registryStore.write(registryData)
   }
+
   return registryData
 }
 
 async function saveRegistry(): Promise<void> {
   const data = await loadRegistry()
-  await fs.ensureDir(path.dirname(NODES_FILE))
-  const tempPath = `${NODES_FILE}.tmp`
-  await fs.writeJSON(tempPath, data, { spaces: 2 })
-  await fs.move(tempPath, NODES_FILE, { overwrite: true })
+  await registryStore.write(data)
+}
+
+export function setNodeRegistryStoreForTests(store: DiskJsonData<NodeRegistryData> | null): void {
+  registryStore = store || createNodeRegistryStore()
+  registryData = null
+}
+
+export function resetNodeRegistryForTests(): void {
+  registryData = null
+  pendingSockets.clear()
 }
 
 function hashToken(token: string): string {
