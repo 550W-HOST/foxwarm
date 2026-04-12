@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isIgnoredCompactLifecycleSystemText, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import fs from 'fs-extra';
+import os from 'os';
+import path from 'path';
+import { createSessionFrontierStore, isIgnoredCompactLifecycleSystemText, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 import { Message } from '../types';
+
+async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
+  const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-frontier-store-'));
+  try {
+    await run(dirPath);
+  } finally {
+    await fs.remove(dirPath).catch(() => {});
+  }
+}
 
 test('recognizes compact lifecycle system texts that should be ignored in compact candidates', () => {
   assert.equal(isIgnoredCompactLifecycleSystemText('This session has been compacted. Messages before this are removed.'), true);
@@ -28,4 +40,37 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
     __meta: { seq: 11 },
   };
   assert.equal(shouldIgnoreMessageInCompactCandidates(mixedContent), false);
+});
+
+test('session frontier store uses lightweight no-backup writes', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'session-a.frontier.json');
+    const store = createSessionFrontierStore(filePath);
+
+    assert.deepEqual(store.listCandidatePaths(), [filePath]);
+
+    await store.write({
+      v: 1,
+      sessionId: 'session-a',
+      nextBlockId: 4,
+      frontier: [
+        { kind: 'message', seq: 1 },
+        { kind: 'block', id: 3, level: 1, rawStartSeq: 1, rawEndSeq: 2 },
+      ],
+    });
+
+    const loaded = await store.readFromPath();
+    assert.deepEqual(loaded, {
+      v: 1,
+      sessionId: 'session-a',
+      nextBlockId: 4,
+      frontier: [
+        { kind: 'message', seq: 1 },
+        { kind: 'block', id: 3, level: 1, rawStartSeq: 1, rawEndSeq: 2 },
+      ],
+    });
+
+    const siblingFiles = await fs.readdir(dirPath);
+    assert.deepEqual(siblingFiles, ['session-a.frontier.json']);
+  });
 });

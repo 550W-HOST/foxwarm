@@ -4,6 +4,7 @@ import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from '../chan
 import { logger } from '../common';
 import { CHANNELS_FILE } from '../config';
 import { Session, SessionReply } from '../types';
+import { DiskJsonData } from '../utils/diskJsonData';
 
 export type ChannelMode = 'push-only' | undefined;
 
@@ -30,6 +31,36 @@ export type ChannelTarget = {
 };
 
 const channelAttachments = new Map<string, ChannelConfig>();
+
+function normalizeChannelsPayload(raw: any, filePath: string): { channels: Record<string, ChannelConfig> } {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid channels payload in ${filePath}`);
+  }
+
+  const channels = raw.channels && typeof raw.channels === 'object' ? raw.channels : {};
+  return { channels };
+}
+
+export function createChannelsStore(filePath: string = CHANNELS_FILE): DiskJsonData<{ channels: Record<string, ChannelConfig> }> {
+  return new DiskJsonData<{ channels: Record<string, ChannelConfig> }>(filePath, {
+    backup: false,
+    normalizeLoadedData: normalizeChannelsPayload,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read channels candidate');
+    },
+  });
+}
+
+let channelsStore = createChannelsStore();
+
+export function setChannelsStoreForTests(store: DiskJsonData<{ channels: Record<string, ChannelConfig> }> | null): void {
+  channelsStore = store || createChannelsStore();
+  channelAttachments.clear();
+}
+
+export function resetChannelsForTests(): void {
+  channelAttachments.clear();
+}
 
 function makeChannelKey(channelInstanceId: string, conversationId: string): string {
   return `${channelInstanceId}:${conversationId}`;
@@ -64,12 +95,11 @@ function normalizeChannelConfig(config: ChannelConfig): ChannelConfig {
 
 async function persistChannels(): Promise<void> {
   try {
-    await fs.ensureDir(path.dirname(CHANNELS_FILE));
     const data: any = { channels: {} };
     for (const [channelKey, config] of channelAttachments.entries()) {
       data.channels[channelKey] = normalizeChannelConfig(config);
     }
-    await fs.writeJson(CHANNELS_FILE, data, { spaces: 2 });
+    await channelsStore.write(data);
   } catch (e) {
     logger.error(e, 'Failed to save channels');
   }
@@ -78,13 +108,18 @@ async function persistChannels(): Promise<void> {
 export async function loadChannels(): Promise<void> {
   channelAttachments.clear();
 
-  if (await fs.pathExists(CHANNELS_FILE)) {
+  const loaded = await channelsStore.loadFirstAvailable();
+  if (loaded) {
     try {
-      const data = await fs.readJson(CHANNELS_FILE);
+      const data = loaded.data;
       if (data.channels) {
         for (const [channelKey, config] of Object.entries(data.channels)) {
           channelAttachments.set(channelKey, normalizeChannelConfig(config as ChannelConfig));
         }
+      }
+      if (loaded.source !== channelsStore.filePath) {
+        logger.warn({ source: loaded.source }, 'Recovering channels from fallback source');
+        await channelsStore.write(data);
       }
       logger.info({ attachmentCount: channelAttachments.size }, 'Channels loaded');
     } catch (e) {

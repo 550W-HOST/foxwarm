@@ -1,5 +1,5 @@
 import fs from 'fs-extra';
-import { getSessionHistoryFilePath } from './metadataStore';
+import { getSessionHistoryFilePath, getSessionHistoryStore } from './metadataStore';
 import { AgentMetadata } from './agentMetadata';
 import { MessagePart, QueueItem, Session } from '../types';
 
@@ -21,8 +21,8 @@ async function persistSessionMetadataUpdate(
   const historyFile = getSessionHistoryFilePath(sessionId);
 
   if (await fs.pathExists(historyFile)) {
-    const historyData = await fs.readJson(historyFile);
-    await fs.writeJson(historyFile, { ...historyData, ...updates }, { spaces: 2 });
+    const historyData = await getSessionHistoryStore(sessionId).readFromPath(historyFile);
+    await getSessionHistoryStore(sessionId).write({ ...(historyData || {}), ...updates });
     return;
   }
 

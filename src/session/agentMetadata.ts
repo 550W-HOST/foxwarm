@@ -3,6 +3,7 @@ import * as llm from '../llm';
 import { logger } from '../common';
 import { AGENTS_FILE, getAgentDir } from '../config';
 import { Session } from '../types';
+import { DiskJsonData } from '../utils/diskJsonData';
 
 function getSessionSystemPromptOptions(session: Session): { agentName: string; systemPromptFiles?: string[] } {
   return {
@@ -28,6 +29,34 @@ type AgentMetadataDeps = {
 
 const agentMetadata = new Map<string, AgentMetadata>();
 
+function normalizeAgentMetadataPayload(raw: any, filePath: string): Record<string, AgentMetadata> {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid agent metadata payload in ${filePath}`);
+  }
+  return raw;
+}
+
+export function createAgentMetadataStore(filePath: string = AGENTS_FILE): DiskJsonData<Record<string, AgentMetadata>> {
+  return new DiskJsonData<Record<string, AgentMetadata>>(filePath, {
+    backup: false,
+    normalizeLoadedData: normalizeAgentMetadataPayload,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read agent metadata candidate');
+    },
+  });
+}
+
+let agentMetadataStore = createAgentMetadataStore();
+
+export function setAgentMetadataStoreForTests(store: DiskJsonData<Record<string, AgentMetadata>> | null): void {
+  agentMetadataStore = store || createAgentMetadataStore();
+  agentMetadata.clear();
+}
+
+export function resetAgentMetadataForTests(): void {
+  agentMetadata.clear();
+}
+
 function normalizeAgentMetadata(meta: AgentMetadata): AgentMetadata {
   const nextMeta = { ...meta };
   const isolatedNode = typeof meta.isolatedNode === 'string' && meta.isolatedNode.trim()
@@ -47,7 +76,7 @@ async function saveAgentMetadata(): Promise<void> {
   for (const [agentName, meta] of agentMetadata.entries()) {
     data[agentName] = meta;
   }
-  await fs.writeJson(AGENTS_FILE, data, { spaces: 2 });
+  await agentMetadataStore.write(data);
 }
 
 async function refreshDirectAgentSessions(deps: AgentMetadataDeps, agentName: string): Promise<string[]> {
@@ -68,11 +97,16 @@ async function refreshDirectAgentSessions(deps: AgentMetadataDeps, agentName: st
 
 export async function loadAgentMetadata(): Promise<void> {
   agentMetadata.clear();
-  if (await fs.pathExists(AGENTS_FILE)) {
+  const loaded = await agentMetadataStore.loadFirstAvailable();
+  if (loaded) {
     try {
-      const data = await fs.readJson(AGENTS_FILE);
+      const data = loaded.data;
       for (const [agentName, meta] of Object.entries(data)) {
         agentMetadata.set(agentName, normalizeAgentMetadata(meta as AgentMetadata));
+      }
+      if (loaded.source !== agentMetadataStore.filePath) {
+        logger.warn({ source: loaded.source }, 'Recovering agent metadata from fallback source');
+        await agentMetadataStore.write(data);
       }
       logger.info({ count: agentMetadata.size }, 'Agent metadata loaded');
     } catch (e) {
