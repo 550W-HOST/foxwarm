@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import {
+  buildTimerTriggeredMessage,
   createTimersStore,
   initializeTimers,
   listTimers,
@@ -73,4 +74,25 @@ test('timers persistence uses lightweight no-backup writes', async () => {
     assert.deepEqual(createTimersStore(filePath).listCandidatePaths(), [filePath]);
     assert.deepEqual(await listBackupMatches(filePath), []);
   });
+});
+
+test('buildTimerTriggeredMessage adds current local time with numeric offset', () => {
+  const firedAt = new Date(1_700_000_000_000);
+  const offsetMinutes = -firedAt.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const offset = `${sign}${String(Math.floor(absoluteMinutes / 60)).padStart(2, '0')}${String(absoluteMinutes % 60).padStart(2, '0')}`;
+
+  const message = buildTimerTriggeredMessage({
+    id: 'timer-1',
+    sessionId: 'session-a',
+    message: 'run nightly sync',
+    createdAt: 1,
+    cron: '0 * * * *',
+  }, firedAt);
+
+  assert.match(message, /^Scheduled timer fired \(id: timer-1\)\nCurrent time: /);
+  assert.match(message, new RegExp(`${offset.replace('+', '\\+')}$`, 'm'));
+  assert.match(message, /\nrun nightly sync$/);
+  assert.doesNotMatch(message, /Asia\/Shanghai/);
 });

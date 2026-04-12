@@ -32,9 +32,8 @@ async function run() {
   ];
 
   const fixed = fixToolCalls(history);
-  assert.strictEqual(fixed.length, 4, 'user after tool should get interruption assistant message inserted');
-  assert.strictEqual(fixed[2].role, 'model');
-  assert.strictEqual(fixed[2].parts[0].text, '[interrupted by user/system event]');
+  assert.strictEqual(fixed.length, 3, 'user after tool should no longer get an interruption marker inserted');
+  assert.strictEqual(fixed[2].role, 'user');
 
   const responsesItems = convertToOpenAIResponsesFormat(history);
   const responseOutputs = responsesItems.filter(item => item.type === 'function_call_output');

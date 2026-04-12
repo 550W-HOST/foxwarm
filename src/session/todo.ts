@@ -1,5 +1,6 @@
 import { Message, Session, SessionTodoState } from '../types';
 import { partsContainNoActionSignal } from './childSessionReminder';
+import { buildSystemMessageParts } from '../utils/systemMessageParts';
 
 const TODO_REMINDER_META_KEY = 'todoReminder';
 const TODO_REMINDER_SYSTEM_PREFIX = 'TODO reminder for this session:';
@@ -120,7 +121,7 @@ function hasTodoReminderForAnchorSeq(session: Session, anchorSeq: number): boole
 function buildTodoReminderMessage(state: SessionTodoState, anchorSeq: number, kind: TodoReminderKind): Message {
   return {
     role: 'user',
-    parts: [{ system: `${TODO_REMINDER_SYSTEM_PREFIX}\n${TODO_REMINDER_GUIDANCE}\n${state.todo}` }],
+    parts: buildSystemMessageParts(`${TODO_REMINDER_SYSTEM_PREFIX}\n${TODO_REMINDER_GUIDANCE}\n${state.todo}`),
     __meta: {
       timestamp: Date.now(),
       [TODO_REMINDER_META_KEY]: true,

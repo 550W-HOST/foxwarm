@@ -22,6 +22,7 @@ import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
 import { maybeBuildTodoReminderMessage } from './session/todo';
+import { buildSystemMessageParts } from './utils/systemMessageParts';
 
 function systemPart(system: string): MessagePart {
   return { system };
@@ -1407,7 +1408,7 @@ export async function queueSessionMessageEvent(sessionId: string, message: Messa
 }
 
 export async function queueSessionSystemEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
-  await queueSessionStructuredEvent(sessionId, [{ system: message }], type);
+  await queueSessionStructuredEvent(sessionId, buildSystemMessageParts(message), type);
 }
 
 /**

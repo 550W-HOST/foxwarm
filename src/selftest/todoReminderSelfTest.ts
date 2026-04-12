@@ -175,7 +175,7 @@ async function main(): Promise<void> {
       const firstReminder = session.history.find(message => message.__meta?.todoReminder === true)!;
       assert.strictEqual(firstReminder.__meta?.todoReminder, true);
       assert.match(firstReminder.parts[0].system || '', /TODO reminder for this session/);
-      assert.match(firstReminder.parts[0].system || '', /- \[ \] ship feature/);
+      assert.match(firstReminder.parts[1].text || '', /- \[ \] ship feature/);
       const reminderSeqs = session.history
         .filter(message => message.__meta?.todoReminder === true)
         .map(message => message.__meta?.todoAnchorSeq);

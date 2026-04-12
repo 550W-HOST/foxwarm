@@ -2,6 +2,7 @@
 export interface MessagePart {
   text?: string;
   system?: string;
+  systemPayload?: boolean;
   thinking?: string;
   providerMeta?: {
     thinkingSummaries?: string[]; // OpenAI Responses

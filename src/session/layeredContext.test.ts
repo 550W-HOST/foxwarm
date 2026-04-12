@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { createSessionFrontierStore, isIgnoredCompactLifecycleSystemText, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import { createSessionFrontierStore, formatArchiveBlockTimeRange, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 import { Message } from '../types';
+import { formatLocalTimeRange } from '../utils/localTime';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-frontier-store-'));
@@ -73,4 +74,22 @@ test('session frontier store uses lightweight no-backup writes', async () => {
     const siblingFiles = await fs.readdir(dirPath);
     assert.deepEqual(siblingFiles, ['session-a.frontier.json']);
   });
+});
+
+test('renderBlockMessage includes raw message local time range when available', () => {
+  const record: any = {
+    id: 3,
+    level: 1,
+    rawStartSeq: 10,
+    rawEndSeq: 12,
+    rawStartTimestamp: 1_700_000_000_000,
+    rawEndTimestamp: 1_700_000_060_000,
+    summary: 'block summary',
+    createdAt: 1_700_000_070_000,
+  };
+
+  const message = renderBlockMessage(record);
+  const expectedRange = formatLocalTimeRange(record.rawStartTimestamp, record.rawEndTimestamp);
+  assert.equal(formatArchiveBlockTimeRange(record), ` time ${expectedRange}`);
+  assert.equal(message.parts[0].text, `[CTX-BLOCK L1 B#3 raw#10-#12 time ${expectedRange}] block summary`);
 });
