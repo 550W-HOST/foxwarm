@@ -10,6 +10,7 @@ import { checkPathAccess, checkToolPermission } from './isolatedCheck';
 import * as mcpClient from './mcpClient';
 import { browserManager } from './browser';
 import { logger } from './common';
+import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from './execTimeout';
 import { nodesManager } from './nodes/manager';
 import {
     buildBackgroundTimeoutResult,
@@ -258,6 +259,22 @@ function resolveExecCwd(cwdValue: unknown, ctx: ToolContext, agentName: string):
         ? ctx.session.cwd.trim()
         : getAgentDir(agentName);
     return path.resolve(base, raw);
+}
+
+function resolveExecTimeoutSeconds(timeoutValue: unknown): number {
+    if (timeoutValue === undefined || timeoutValue === null) {
+        return DEFAULT_EXEC_TIMEOUT_SECONDS;
+    }
+
+    if (typeof timeoutValue !== 'number' || !Number.isFinite(timeoutValue)) {
+        throw new Error(`timeout must be a number between ${MIN_EXEC_TIMEOUT_SECONDS} and ${MAX_EXEC_TIMEOUT_SECONDS} seconds`);
+    }
+
+    if (timeoutValue < MIN_EXEC_TIMEOUT_SECONDS || timeoutValue > MAX_EXEC_TIMEOUT_SECONDS) {
+        throw new Error(`timeout must be between ${MIN_EXEC_TIMEOUT_SECONDS} and ${MAX_EXEC_TIMEOUT_SECONDS} seconds`);
+    }
+
+    return timeoutValue;
 }
 
 async function maybeSyncSessionCwdFromExec(ctx: ToolContext, entry: { initialCwd?: string }, nextCwd: string | null | undefined): Promise<string | null> {
@@ -559,7 +576,8 @@ async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
 }
 
 async function tool_exec(args: ToolArgs, ctx: ToolContext) {
-    const { command, cwd } = args;
+    const { command, cwd, timeout } = args;
+    const timeoutSeconds = resolveExecTimeoutSeconds(timeout);
 
     // Mark that we're about to exec, then save session
     if (ctx && ctx.sessionId) {
@@ -577,7 +595,7 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
         cwd: execCwd,
     });
 
-    const status = await waitForExecCompletion(execEntry.id, 15000);
+    const status = await waitForExecCompletion(execEntry.id, timeoutSeconds * 1000);
     if (status) {
         try {
             const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readFinishedExecWorkingDirectory(execEntry));
@@ -590,7 +608,7 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
 
     const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readLiveExecWorkingDirectory(execEntry));
     await markExecForBackgroundNotification(execEntry.id);
-    const result = await buildBackgroundTimeoutResult(execEntry);
+    const result = await buildBackgroundTimeoutResult(execEntry, timeoutSeconds);
     return cwdNotice ? `${cwdNotice}\n\n${result}` : result;
 }
 
@@ -1617,12 +1635,13 @@ export const definitions = [
         },
         {
             name: 'exec',
-            description: 'Execute a shell command in agent-folder. Defaults to the session cwd when set; otherwise uses the agent folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running over 15 seconds will time out, continue in the background, and send a completion system message later.',
+            description: 'Execute a shell command in agent-folder. Defaults to the session cwd when set; otherwise uses the agent folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running longer than the configured timeout (default 15s, allowed range 1-60s) continue in the background and send a completion system message later.',
             parameters: {
                 type: 'object',
                 properties: {
                     command: { type: 'string' },
-                    cwd: { type: 'string', description: 'Optional working directory override. Defaults to session.cwd when set.' }
+                    cwd: { type: 'string', description: 'Optional working directory override. Defaults to session.cwd when set.' },
+                    timeout: { type: 'number', minimum: MIN_EXEC_TIMEOUT_SECONDS, maximum: MAX_EXEC_TIMEOUT_SECONDS, description: `Optional timeout in seconds before the command is moved to background. Default: ${DEFAULT_EXEC_TIMEOUT_SECONDS}. Allowed range: ${MIN_EXEC_TIMEOUT_SECONDS}-${MAX_EXEC_TIMEOUT_SECONDS}.` }
                 },
                 required: ['command']
             }

@@ -5,6 +5,7 @@ import { ChildProcess, spawn } from 'child_process';
 import { promises as fsp } from 'fs';
 import { STATE_DIR, getAgentDir } from './config';
 import { logger } from './common';
+import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from './execTimeout';
 import { estimateTokenCount } from './tokenCount';
 import { formatTime, getDatedLogPath } from './logRotation';
 import * as sessionManager from './sessionManager';
@@ -17,6 +18,8 @@ const PARTIAL_LOG_BYTES = 4000;
 const INLINE_LOG_LIMIT_BYTES = 20000;
 const INLINE_EXCERPT_HALF_BYTES = 5000;
 const BACKGROUND_COMMAND_PREVIEW_LIMIT = 100;
+
+export { DEFAULT_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS };
 
 export interface ExecStatus {
   exitCode: number | null;
@@ -89,6 +92,19 @@ function summarizeCommandForNotification(text: string, maxLength: number = BACKG
     return compact;
   }
   return `${compact.slice(0, maxLength)}...`;
+}
+
+function formatExecTimeoutSeconds(seconds: number): string {
+  return Number.isInteger(seconds) ? String(seconds) : String(seconds);
+}
+
+function buildBackgroundTimeoutShortNotice(timeoutSeconds: number): string {
+  return `[Process running longer than ${formatExecTimeoutSeconds(timeoutSeconds)}s]`;
+}
+
+function buildBackgroundTimeoutFullNotice(timeoutSeconds: number): string {
+  const shortNotice = buildBackgroundTimeoutShortNotice(timeoutSeconds);
+  return `${shortNotice} Switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification (unless working on other tasks in parallel).`;
 }
 
 function isPidRunning(pid: number): boolean {
@@ -308,13 +324,13 @@ async function readDisplayOutput(logPath: string): Promise<{ text: string; trunc
 
     if (excerpt.truncated) {
       return {
-        text: `[OUTPUT TOO LONG]\n${excerpt.text}`,
+        text: excerpt.text,
         truncated: true,
       };
     }
 
     return {
-      text: `[OUTPUT TOO LONG]\n${excerpt.text.substring(0, INLINE_EXCERPT_HALF_BYTES)}\n\n[...TRUNCATED...]\n\n${excerpt.text.substring(Math.max(0, excerpt.text.length - INLINE_EXCERPT_HALF_BYTES))}`,
+      text: `${excerpt.text.substring(0, INLINE_EXCERPT_HALF_BYTES)}\n\n[...TRUNCATED...]\n\n${excerpt.text.substring(Math.max(0, excerpt.text.length - INLINE_EXCERPT_HALF_BYTES))}`,
       truncated: true,
     };
   } catch (err: any) {
@@ -581,15 +597,21 @@ export async function buildForegroundExecResult(entry: RunningExecEntry, status:
       : '';
 
   if (output.truncated) {
-    return `${prefix}${output.text}\n\nFull output saved to: ${entry.logPath}`;
+    const openingNotice = '[OUTPUT TOO LONG]';
+    const closingNotice = `${openingNotice} Full output saved to: ${entry.logPath}`;
+    return [prefix.trim(), openingNotice, output.text.trim() || '(No output)', closingNotice]
+      .filter(Boolean)
+      .join('\n\n');
   }
 
   return `${prefix}${output.text}`.trim() || '(No output)';
 }
 
-export async function buildBackgroundTimeoutResult(entry: RunningExecEntry): Promise<string> {
+export async function buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS): Promise<string> {
   const partialOutput = await readPartialLog(entry.logPath);
-  return `[Process running longer than 15s, switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification (unless working on other tasks in parallel).]\nPID: ${entry.pid}\nLog file: ${entry.logPath}\n\nPartial Output:\n${partialOutput}`;
+  const shortNotice = buildBackgroundTimeoutShortNotice(timeoutSeconds);
+  const fullNotice = buildBackgroundTimeoutFullNotice(timeoutSeconds);
+  return `${shortNotice}\n\nPartial Output:\n${partialOutput}\n\n${fullNotice}\nPID: ${entry.pid}\nLog file: ${entry.logPath}`;
 }
 
 export async function readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
