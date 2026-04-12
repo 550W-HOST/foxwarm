@@ -17,7 +17,7 @@ import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq } from './session/archive';
 import { appendMessagesToContextFrontier, copyLayeredContextFiles, ensureContextFrontier, loadSessionFrontier, moveLayeredContextFiles, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
 import { ensureSessionBranch, renameSessionArchiveStore } from './session/archiveStore';
-import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './session/metadataStore';
+import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
@@ -335,7 +335,10 @@ export async function getSession(sessionId: string): Promise<Session> {
     const historyFile = path.join(SESSIONS_DIR, `${realId}.json`);
     if (await fs.pathExists(historyFile)) {
       try {
-        const historyData = await fs.readJson(historyFile);
+        const historyData = await readSessionHistorySnapshot(realId);
+        if (!historyData) {
+          throw new Error('Session history file disappeared during read');
+        }
         session.history = historyData.history || [];
         if (historyData.persistentMemorySnapshot) {
           session.persistentMemorySnapshot = historyData.persistentMemorySnapshot;
@@ -1140,7 +1143,7 @@ export async function saveSession(sessionId: string): Promise<void> {
     // Save history, persistentMemorySnapshot, parentSessionId, indexingState, historyVersion, displayName, currentNode, agent to separate file
     const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
     await fs.ensureDir(path.dirname(historyFile));
-    await fs.writeJson(historyFile, serializeSessionHistoryPayload(session), { spaces: 2 });
+    await writeSessionHistoryAtomically(sessionId, serializeSessionHistoryPayload(session));
     await saveSessionFrontier(session);
     
     // Save metadata (lightweight operation)

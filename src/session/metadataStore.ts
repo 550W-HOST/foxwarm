@@ -99,6 +99,44 @@ export function getSessionHistoryFilePath(sessionId: string): string {
   return path.join(SESSIONS_DIR, `${sessionId}.json`);
 }
 
+function normalizeSessionHistoryPayload(raw: any, filePath: string): Record<string, any> {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid session history payload in ${filePath}`);
+  }
+
+  return {
+    ...raw,
+    history: Array.isArray(raw.history) ? raw.history : [],
+  };
+}
+
+export function createSessionHistoryStore(filePath: string): DiskJsonData<Record<string, any>> {
+  return new DiskJsonData<Record<string, any>>(filePath, {
+    backup: false,
+    normalizeLoadedData: normalizeSessionHistoryPayload,
+  });
+}
+
+const sessionHistoryStores = new Map<string, DiskJsonData<Record<string, any>>>();
+
+export function getSessionHistoryStore(sessionId: string): DiskJsonData<Record<string, any>> {
+  const filePath = getSessionHistoryFilePath(sessionId);
+  let store = sessionHistoryStores.get(filePath);
+  if (!store) {
+    store = createSessionHistoryStore(filePath);
+    sessionHistoryStores.set(filePath, store);
+  }
+  return store;
+}
+
+export async function readSessionHistorySnapshot(sessionId: string): Promise<Record<string, any> | null> {
+  return getSessionHistoryStore(sessionId).readFromPath();
+}
+
+export async function writeSessionHistoryAtomically(sessionId: string, data: Record<string, any>): Promise<void> {
+  await getSessionHistoryStore(sessionId).write(data);
+}
+
 export function getSessionsMetadataCandidatePaths(): string[] {
   return sessionsMetadataStore.listCandidatePaths();
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { createSessionsMetadataStore } from './metadataStore';
+import { createSessionHistoryStore, createSessionsMetadataStore } from './metadataStore';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-session-metadata-store-'));
@@ -68,5 +68,30 @@ test('sessions metadata store recovers from backup candidate after primary corru
         alpha: { id: 'alpha', displayName: 'first' },
       },
     });
+  });
+});
+
+test('session history store uses lightweight no-backup config and still round-trips payloads', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'sessions', 'alpha.json');
+    const store = createSessionHistoryStore(filePath);
+
+    assert.deepEqual(store.listCandidatePaths(), [filePath]);
+
+    await store.write({
+      history: [{ role: 'user', parts: [{ text: 'hello' }] }],
+      queue: [{ type: 'trigger', parts: [{ text: 'queued' }] }],
+      persistentMemorySnapshot: 'snapshot',
+    });
+
+    const loaded = await store.readFromPath();
+    assert.deepEqual(loaded, {
+      history: [{ role: 'user', parts: [{ text: 'hello' }] }],
+      queue: [{ type: 'trigger', parts: [{ text: 'queued' }] }],
+      persistentMemorySnapshot: 'snapshot',
+    });
+
+    const siblingFiles = await fs.readdir(path.dirname(filePath));
+    assert.deepEqual(siblingFiles, ['alpha.json']);
   });
 });
