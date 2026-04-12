@@ -1,7 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
+import os from 'os';
+import path from 'path';
 
-import { summarizeServerConfig, summarizeServers } from './mcpClient';
+import { createMcpConfigStore, listServers, setMcpConfigStoreForTests, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
+
+async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
+  const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-mcp-config-'));
+  try {
+    await run(dirPath);
+  } finally {
+    setMcpConfigStoreForTests(null);
+    await fs.remove(dirPath).catch(() => {});
+  }
+}
 
 test('summarizeServerConfig redacts sensitive MCP config values', () => {
   const summary = summarizeServerConfig('demo', {
@@ -52,4 +65,22 @@ test('summarizeServers sorts by name and defaults transport to auto', () => {
     ['alpha', 'sse'],
     ['zebra', 'auto'],
   ]);
+});
+
+test('MCP config recovers from backup candidate after primary corruption', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'mcp.json');
+    setMcpConfigStoreForTests(createMcpConfigStore(filePath));
+
+    await upsertServer('alpha', { url: 'https://example.com/alpha' });
+    await upsertServer('beta', { url: 'https://example.com/beta', transport: 'sse' });
+
+    await fs.writeFile(filePath, '{broken-json');
+
+    const servers = await listServers();
+    assert.deepEqual(servers.map((item) => item.name), ['alpha']);
+
+    const rewritten = await fs.readJson(filePath);
+    assert.deepEqual(Object.keys(rewritten.servers).sort(), ['alpha']);
+  });
 });

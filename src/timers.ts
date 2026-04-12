@@ -1,10 +1,10 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
-import path from 'path';
 import schedule, { Job } from 'node-schedule';
 import { TIMERS_FILE, getAgentDir } from './config';
 import { logger } from './common';
 import * as sessionManager from './sessionManager';
+import { DiskJsonData } from './utils/diskJsonData';
 
 export interface SessionTimer {
   id: string;
@@ -29,6 +29,48 @@ export interface TimerView extends SessionTimer {
 const timers = new Map<string, SessionTimer>();
 const jobs = new Map<string, Job>();
 let initialized = false;
+
+function normalizeTimersPayload(raw: any, filePath: string): { timers: any[] } {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid timers payload in ${filePath}`);
+  }
+
+  return {
+    timers: Array.isArray(raw.timers) ? raw.timers : [],
+  };
+}
+
+export function createTimersStore(filePath: string = TIMERS_FILE): DiskJsonData<{ timers: any[] }> {
+  return new DiskJsonData<{ timers: any[] }>(filePath, {
+    backup: {
+      rotate: 2,
+      includeLegacyBak: true,
+      bestEffort: true,
+    },
+    normalizeLoadedData: normalizeTimersPayload,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read timers candidate');
+    },
+    onBackupError: (err: unknown) => {
+      logger.warn({ err }, 'Failed to rotate timers backups');
+    },
+  });
+}
+
+let timersStore = createTimersStore();
+
+export function setTimersStoreForTests(store: DiskJsonData<{ timers: any[] }> | null): void {
+  timersStore = store || createTimersStore();
+  cancelAllJobs();
+  timers.clear();
+  initialized = false;
+}
+
+export function resetTimersForTests(): void {
+  cancelAllJobs();
+  timers.clear();
+  initialized = false;
+}
 
 function generateTimerId(): string {
   return crypto.randomBytes(4).toString('hex');
@@ -89,18 +131,7 @@ function toTimerView(timer: SessionTimer): TimerView {
 }
 
 async function saveTimers(): Promise<void> {
-  await fs.ensureDir(path.dirname(TIMERS_FILE));
-  const tempPath = `${TIMERS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-
-  try {
-    await fs.writeJson(tempPath, {
-      timers: Array.from(timers.values()),
-    }, { spaces: 2 });
-    await fs.rename(tempPath, TIMERS_FILE);
-  } catch (err) {
-    await fs.remove(tempPath).catch(() => {});
-    throw err;
-  }
+  await timersStore.write({ timers: Array.from(timers.values()) });
 }
 
 function cancelTimerJob(timerId: string): void {
@@ -351,9 +382,10 @@ export async function initializeTimers(): Promise<void> {
   cancelAllJobs();
   timers.clear();
 
-  if (await fs.pathExists(TIMERS_FILE)) {
+  const loaded = await timersStore.loadFirstAvailable();
+  if (loaded) {
     try {
-      const data = await fs.readJson(TIMERS_FILE);
+      const data = loaded.data;
       const rawTimers = Array.isArray(data?.timers) ? data.timers : [];
       for (const rawTimer of rawTimers) {
         const timer = validatePersistedTimer(rawTimer);
@@ -362,6 +394,10 @@ export async function initializeTimers(): Promise<void> {
           continue;
         }
         timers.set(timer.id, timer);
+      }
+      if (loaded.source !== timersStore.filePath) {
+        logger.warn({ source: loaded.source }, 'Recovering timers from fallback source');
+        await timersStore.write({ timers: Array.from(timers.values()) });
       }
     } catch (err) {
       logger.error({ err }, 'Failed to load timers');

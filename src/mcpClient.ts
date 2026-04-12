@@ -1,5 +1,7 @@
 import fs from 'fs-extra';
-import { MCP_CONFIG_PATH, STATE_DIR } from './config';
+import { MCP_CONFIG_PATH } from './config';
+import { logger } from './common';
+import { DiskJsonData } from './utils/diskJsonData';
 
 type McpSdkModules = {
   Client: any;
@@ -95,6 +97,41 @@ const VALID_TRANSPORTS = new Set<McpTransport>(['streamable-http', 'sse', 'stdio
 const STDIO_POOL_IDLE_TTL_MS = 60_000;
 const stdioConnectionPool = new Map<string, PooledStdioConnection>();
 
+function normalizeMcpConfigPayload(raw: any, filePath: string): McpConfig {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid MCP config payload in ${filePath}`);
+  }
+
+  const servers = raw.servers && typeof raw.servers === 'object' ? raw.servers : {};
+  const normalizedServers = Object.fromEntries(
+    Object.entries(servers).map(([name, server]) => [name, sanitizeServerConfig(server as McpServerConfig)])
+  );
+  return { servers: normalizedServers };
+}
+
+export function createMcpConfigStore(filePath: string = MCP_CONFIG_PATH): DiskJsonData<McpConfig> {
+  return new DiskJsonData<McpConfig>(filePath, {
+    backup: {
+      rotate: 2,
+      includeLegacyBak: true,
+      bestEffort: true,
+    },
+    normalizeLoadedData: normalizeMcpConfigPayload,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read MCP config candidate');
+    },
+    onBackupError: (err: unknown) => {
+      logger.warn({ err }, 'Failed to rotate MCP config backups');
+    },
+  });
+}
+
+let mcpConfigStore = createMcpConfigStore();
+
+export function setMcpConfigStoreForTests(store: DiskJsonData<McpConfig> | null): void {
+  mcpConfigStore = store || createMcpConfigStore();
+}
+
 function normalizeTransport(server: McpServerConfig): McpTransport {
   const raw = typeof server.transport === 'string'
     ? server.transport
@@ -155,23 +192,20 @@ export function summarizeServers(servers: Record<string, McpServerConfig> | unde
 
 async function loadConfig(): Promise<McpConfig> {
   try {
-    const exists = await fs.pathExists(MCP_CONFIG_PATH);
-    if (!exists) return { servers: {} };
-    const raw = await fs.readFile(MCP_CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    const servers = parsed.servers || {};
-    const normalizedServers = Object.fromEntries(
-      Object.entries(servers).map(([name, server]) => [name, sanitizeServerConfig(server as McpServerConfig)])
-    );
-    return { servers: normalizedServers };
+    const loaded = await mcpConfigStore.loadFirstAvailable();
+    if (!loaded) return { servers: {} };
+    if (loaded.source !== mcpConfigStore.filePath) {
+      logger.warn({ source: loaded.source }, 'Recovering MCP config from fallback source');
+      await mcpConfigStore.write(loaded.data);
+    }
+    return loaded.data;
   } catch (e) {
     throw new Error(`Failed to load MCP config: ${e}`);
   }
 }
 
 async function saveConfig(config: McpConfig) {
-  await fs.ensureDir(STATE_DIR);
-  await fs.writeFile(MCP_CONFIG_PATH, JSON.stringify(config, null, 2));
+  await mcpConfigStore.write(config);
 }
 
 async function getServerConfig(name?: string): Promise<{ name: string; config: McpServerConfig }> {
