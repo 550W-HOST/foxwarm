@@ -22,7 +22,14 @@ async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<voi
   }
 }
 
-test('timers initialization recovers from backup candidate after primary corruption', async () => {
+async function listBackupMatches(filePath: string): Promise<string[]> {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const entries = await fs.readdir(dir).catch(() => [] as string[]);
+  return entries.filter((name) => name === `${base}.bak` || name.startsWith(`${base}.`) && name.endsWith('.bak')).map((name) => path.join(dir, name));
+}
+
+test('timers persistence uses lightweight no-backup writes', async () => {
   await withTempDir(async (dirPath) => {
     const filePath = path.join(dirPath, 'timers.json');
     const store = createTimersStore(filePath);
@@ -53,17 +60,17 @@ test('timers initialization recovers from backup candidate after primary corrupt
         at: Date.now() + 120_000,
       }],
     });
-
-    await fs.writeFile(filePath, '{broken-json');
     resetTimersForTests();
     await initializeTimers();
 
     const timers = listTimers();
-    assert.equal(timers.length, 1);
-    assert.equal(timers[0].id, 'timer-a');
+    assert.equal(timers.length, 2);
+    assert.deepEqual(timers.map(timer => timer.id), ['timer-a', 'timer-b']);
 
     const rewritten = await fs.readJson(filePath);
-    assert.equal(rewritten.timers.length, 1);
-    assert.equal(rewritten.timers[0].id, 'timer-a');
+    assert.equal(rewritten.timers.length, 2);
+    assert.deepEqual(rewritten.timers.map((timer: any) => timer.id), ['timer-a', 'timer-b']);
+    assert.deepEqual(createTimersStore(filePath).listCandidatePaths(), [filePath]);
+    assert.deepEqual(await listBackupMatches(filePath), []);
   });
 });

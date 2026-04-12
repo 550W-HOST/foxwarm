@@ -43,17 +43,10 @@ function normalizeChannelsPayload(raw: any, filePath: string): { channels: Recor
 
 export function createChannelsStore(filePath: string = CHANNELS_FILE): DiskJsonData<{ channels: Record<string, ChannelConfig> }> {
   return new DiskJsonData<{ channels: Record<string, ChannelConfig> }>(filePath, {
-    backup: {
-      rotate: 2,
-      includeLegacyBak: true,
-      bestEffort: true,
-    },
+    backup: false,
     normalizeLoadedData: normalizeChannelsPayload,
     onReadError: (err: unknown, candidatePath: string) => {
       logger.warn({ err, candidatePath }, 'Failed to read channels candidate');
-    },
-    onBackupError: (err: unknown) => {
-      logger.warn({ err }, 'Failed to rotate channels backups');
     },
   });
 }

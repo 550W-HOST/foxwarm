@@ -16,6 +16,13 @@ async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<voi
   }
 }
 
+async function listBackupMatches(filePath: string): Promise<string[]> {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const entries = await fs.readdir(dir).catch(() => [] as string[]);
+  return entries.filter((name) => name === `${base}.bak` || name.startsWith(`${base}.`) && name.endsWith('.bak')).map((name) => path.join(dir, name));
+}
+
 test('summarizeServerConfig redacts sensitive MCP config values', () => {
   const summary = summarizeServerConfig('demo', {
     type: 'stdio',
@@ -67,7 +74,7 @@ test('summarizeServers sorts by name and defaults transport to auto', () => {
   ]);
 });
 
-test('MCP config recovers from backup candidate after primary corruption', async () => {
+test('MCP config uses lightweight no-backup writes', async () => {
   await withTempDir(async (dirPath) => {
     const filePath = path.join(dirPath, 'mcp.json');
     setMcpConfigStoreForTests(createMcpConfigStore(filePath));
@@ -75,12 +82,12 @@ test('MCP config recovers from backup candidate after primary corruption', async
     await upsertServer('alpha', { url: 'https://example.com/alpha' });
     await upsertServer('beta', { url: 'https://example.com/beta', transport: 'sse' });
 
-    await fs.writeFile(filePath, '{broken-json');
-
     const servers = await listServers();
-    assert.deepEqual(servers.map((item) => item.name), ['alpha']);
+    assert.deepEqual(servers.map((item) => item.name), ['alpha', 'beta']);
 
     const rewritten = await fs.readJson(filePath);
-    assert.deepEqual(Object.keys(rewritten.servers).sort(), ['alpha']);
+    assert.deepEqual(Object.keys(rewritten.servers).sort(), ['alpha', 'beta']);
+    assert.deepEqual(createMcpConfigStore(filePath).listCandidatePaths(), [filePath]);
+    assert.deepEqual(await listBackupMatches(filePath), []);
   });
 });

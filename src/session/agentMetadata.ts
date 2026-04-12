@@ -38,17 +38,10 @@ function normalizeAgentMetadataPayload(raw: any, filePath: string): Record<strin
 
 export function createAgentMetadataStore(filePath: string = AGENTS_FILE): DiskJsonData<Record<string, AgentMetadata>> {
   return new DiskJsonData<Record<string, AgentMetadata>>(filePath, {
-    backup: {
-      rotate: 3,
-      includeLegacyBak: true,
-      bestEffort: true,
-    },
+    backup: false,
     normalizeLoadedData: normalizeAgentMetadataPayload,
     onReadError: (err: unknown, candidatePath: string) => {
       logger.warn({ err, candidatePath }, 'Failed to read agent metadata candidate');
-    },
-    onBackupError: (err: unknown) => {
-      logger.warn({ err }, 'Failed to rotate agent metadata backups');
     },
   });
 }

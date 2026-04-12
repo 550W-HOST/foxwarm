@@ -23,7 +23,14 @@ async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<voi
   }
 }
 
-test('channels persistence recovers from backup candidate after primary corruption', async () => {
+async function listBackupMatches(filePath: string): Promise<string[]> {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const entries = await fs.readdir(dir).catch(() => [] as string[]);
+  return entries.filter((name) => name === `${base}.bak` || name.startsWith(`${base}.`) && name.endsWith('.bak')).map((name) => path.join(dir, name));
+}
+
+test('channels persistence uses lightweight no-backup writes', async () => {
   await withTempDir(async (dirPath) => {
     const filePath = path.join(dirPath, 'channels.json');
     setChannelsStoreForTests(createChannelsStore(filePath));
@@ -37,7 +44,6 @@ test('channels persistence recovers from backup candidate after primary corrupti
       'telegram:beta': { sessionId: 'session-beta' },
     });
 
-    await fs.writeFile(filePath, '{broken-json');
     resetChannelsForTests();
     await loadChannels();
 
@@ -45,9 +51,13 @@ test('channels persistence recovers from backup candidate after primary corrupti
       sessionId: 'session-alpha',
       mode: 'push-only',
     });
-    assert.equal(getChannelConfig('telegram', 'beta'), undefined);
+    assert.deepEqual(getChannelConfig('telegram', 'beta'), {
+      sessionId: 'session-beta',
+    });
 
     const rewritten = await fs.readJson(filePath);
-    assert.deepEqual(Object.keys(rewritten.channels).sort(), ['webui:alpha']);
+    assert.deepEqual(Object.keys(rewritten.channels).sort(), ['telegram:beta', 'webui:alpha']);
+    assert.deepEqual(createChannelsStore(filePath).listCandidatePaths(), [filePath]);
+    assert.deepEqual(await listBackupMatches(filePath), []);
   });
 });

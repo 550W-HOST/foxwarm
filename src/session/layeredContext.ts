@@ -7,6 +7,7 @@ import {
   getSessionFrontierPath,
 } from '../config';
 import { logger } from '../common';
+import { DiskJsonData } from '../utils/diskJsonData';
 import { ArchiveMessageRecord, readArchiveMessagesBySeqRange } from './archive';
 import {
   ensureSessionBranch,
@@ -85,6 +86,40 @@ function cloneFrontier(frontier: ContextFrontierItem[] | undefined): ContextFron
   return frontier ? structuredClone(frontier) : undefined;
 }
 
+function normalizeFrontierPayload(raw: any, filePath: string): { v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] } {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid layered context frontier payload in ${filePath}`);
+  }
+
+  return {
+    ...raw,
+    v: typeof raw.v === 'number' ? raw.v : 1,
+    frontier: Array.isArray(raw.frontier) ? raw.frontier : [],
+  };
+}
+
+export function createSessionFrontierStore(filePath: string): DiskJsonData<{ v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] }> {
+  return new DiskJsonData(filePath, {
+    backup: false,
+    normalizeLoadedData: normalizeFrontierPayload,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read layered context frontier');
+    },
+  });
+}
+
+const frontierStores = new Map<string, DiskJsonData<{ v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] }>>();
+
+export function getSessionFrontierStore(sessionId: string): DiskJsonData<{ v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] }> {
+  const frontierPath = getSessionFrontierPath(sessionId);
+  let store = frontierStores.get(frontierPath);
+  if (!store) {
+    store = createSessionFrontierStore(frontierPath);
+    frontierStores.set(frontierPath, store);
+  }
+  return store;
+}
+
 export function getNextSessionBlockId(session: Session): number {
   if (typeof session.nextBlockId === 'number' && session.nextBlockId > 0) {
     return session.nextBlockId;
@@ -140,13 +175,12 @@ export async function saveSessionFrontier(session: Session): Promise<void> {
     return;
   }
 
-  await fs.ensureDir(path.dirname(frontierPath));
-  await fs.writeJson(frontierPath, {
+  await getSessionFrontierStore(session.id).write({
     v: 1,
     sessionId: session.id,
     nextBlockId: getNextSessionBlockId(session),
     frontier: session.contextFrontier,
-  }, { spaces: 2 });
+  });
 }
 
 export async function loadSessionFrontier(session: Session): Promise<void> {
@@ -156,7 +190,7 @@ export async function loadSessionFrontier(session: Session): Promise<void> {
   }
 
   try {
-    const data = await fs.readJson(frontierPath);
+    const data = await getSessionFrontierStore(session.id).readFromPath(frontierPath);
     if (Array.isArray(data?.frontier)) {
       session.contextFrontier = data.frontier;
       if (typeof data.nextBlockId === 'number' && data.nextBlockId > 0) {

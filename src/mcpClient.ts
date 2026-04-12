@@ -111,17 +111,10 @@ function normalizeMcpConfigPayload(raw: any, filePath: string): McpConfig {
 
 export function createMcpConfigStore(filePath: string = MCP_CONFIG_PATH): DiskJsonData<McpConfig> {
   return new DiskJsonData<McpConfig>(filePath, {
-    backup: {
-      rotate: 2,
-      includeLegacyBak: true,
-      bestEffort: true,
-    },
+    backup: false,
     normalizeLoadedData: normalizeMcpConfigPayload,
     onReadError: (err: unknown, candidatePath: string) => {
       logger.warn({ err, candidatePath }, 'Failed to read MCP config candidate');
-    },
-    onBackupError: (err: unknown) => {
-      logger.warn({ err }, 'Failed to rotate MCP config backups');
     },
   });
 }

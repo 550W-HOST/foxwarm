@@ -42,17 +42,10 @@ function normalizeTimersPayload(raw: any, filePath: string): { timers: any[] } {
 
 export function createTimersStore(filePath: string = TIMERS_FILE): DiskJsonData<{ timers: any[] }> {
   return new DiskJsonData<{ timers: any[] }>(filePath, {
-    backup: {
-      rotate: 2,
-      includeLegacyBak: true,
-      bestEffort: true,
-    },
+    backup: false,
     normalizeLoadedData: normalizeTimersPayload,
     onReadError: (err: unknown, candidatePath: string) => {
       logger.warn({ err, candidatePath }, 'Failed to read timers candidate');
-    },
-    onBackupError: (err: unknown) => {
-      logger.warn({ err }, 'Failed to rotate timers backups');
     },
   });
 }
