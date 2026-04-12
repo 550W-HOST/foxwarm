@@ -127,7 +127,7 @@ test('foreground exec truncated output is wrapped with repeated notices and keep
   }
 });
 
-test('read tool truncated output still uses the current single leading banner format', async () => {
+test('read tool truncated output is wrapped with opening and closing notices', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-read-truncated-'));
   const filePath = path.join(tempDir, 'large.txt');
 
@@ -135,8 +135,9 @@ test('read tool truncated output still uses the current single leading banner fo
     await fs.writeFile(filePath, 'a'.repeat(40000));
     const result = await read({ filePath }, { session: { agent: 'main' } } as any);
 
-    assert.match(String(result), /^\[TOO LONG \(~\d+ tokens\), TRUNCATED\. showing first 10000 chars only\.\]\n/);
-    assert.equal(String(result).includes('\n[TOO LONG'), false);
+    assert.match(String(result), /^\[TOO LONG \(~\d+ tokens\)\]\n\n/);
+    assert.match(String(result), /a{100}/);
+    assert.match(String(result), /\n\n\[TOO LONG \(~\d+ tokens\)\] TRUNCATED\. Showing first 10000 chars only\.$/);
   } finally {
     await fs.remove(tempDir);
   }
