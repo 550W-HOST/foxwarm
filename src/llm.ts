@@ -20,6 +20,7 @@ import {
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
 import { parseFunctionCallArgs } from './toolCallArgs';
+import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -481,6 +482,7 @@ export function fixToolCalls(contents: Message[]): Message[] {
         return message.parts.every((part: MessagePart) => {
             if (part.functionCall || part.functionResponse || part.inlineData || part.thinking) return false;
             if (part.system) return true;
+            if (isSystemPayloadTextPart(part)) return true;
             return typeof part.text === 'string' && part.text.startsWith('[SYSTEM:');
         });
     };
@@ -498,6 +500,17 @@ export function fixToolCalls(contents: Message[]): Message[] {
         }
         return false;
     };
+
+    const hasNearbyToolResponse = (index: number): boolean => {
+        for (let j = index + 1; j < contents.length; j++) {
+            const next = contents[j];
+            if (isSkippableSystemInterruption(next)) {
+                continue;
+            }
+            return next.role === 'tool';
+        }
+        return false;
+    };
     
     for (let i = 0; i < contents.length; i++) {
         const msg = contents[i];
@@ -508,9 +521,7 @@ export function fixToolCalls(contents: Message[]): Message[] {
             const toolCalls = msg.parts.filter((p: MessagePart) => p.functionCall);
             
             if (toolCalls.length > 0) {
-                // Check if next message is a tool response
-                const nextMsg = i + 1 < contents.length ? contents[i + 1] : null;
-                const hasToolResponse = nextMsg && nextMsg.role === 'tool';
+                const hasToolResponse = hasNearbyToolResponse(i);
                 
                 if (!hasToolResponse) {
                     // Missing tool response - insert one
