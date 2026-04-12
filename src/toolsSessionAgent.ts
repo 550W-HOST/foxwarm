@@ -11,6 +11,7 @@ import { logger } from './common';
 import { nodesManager } from './nodes/manager';
 import { AGENTS_DIR, COMPACT_PERCENT } from './config';
 import { clearSessionTodo, normalizeRemindEvery, normalizeTodoText, setSessionTodo } from './session/todo';
+import { formatArchiveBlockTimeRange } from './session/layeredContext';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
 import { requireNotIsolated, checkArchivedReadPermission, checkChannelPermission, checkPathAccess, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
@@ -168,7 +169,20 @@ function formatArchivedMessagePreview(
 
 function formatArchivedBlockPreview(
   sessionId: string,
-  records: Array<{ id: number; level: number; rawStartSeq: number; rawEndSeq: number; summary: string; sourceKind: string; sourceStart: number; sourceEnd: number; inherited?: boolean; sourceSessionId?: string; }>,
+  records: Array<{
+    id: number;
+    level: number;
+    rawStartSeq: number;
+    rawEndSeq: number;
+    rawStartTimestamp?: number;
+    rawEndTimestamp?: number;
+    summary: string;
+    sourceKind: string;
+    sourceStart: number;
+    sourceEnd: number;
+    inherited?: boolean;
+    sourceSessionId?: string;
+  }>,
   meta: { totalMatched: number; startId?: number; endId?: number },
   previewLength: number,
 ): string {
@@ -189,7 +203,7 @@ function formatArchivedBlockPreview(
 `;
   for (const record of records) {
     const locality = record.inherited ? `[inherited from ${record.sourceSessionId || 'unknown'}] ` : '[local] ';
-    const prefix = `${locality}[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
+    const prefix = `${locality}[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`}${formatArchiveBlockTimeRange(record)} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
     result += `${formatPrefixedMultilineText(prefix, (record.summary || '').slice(0, previewLength) || '[empty summary]')}
 `;
   }

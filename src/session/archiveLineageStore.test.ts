@@ -82,10 +82,17 @@ test('archive store reads inherited and local messages/blocks without copying pa
 
   const archivedBlocks = await layeredContext.readArchiveBlocksByIdRange('child');
   assert.deepEqual(
-    archivedBlocks.map(record => ({ id: record.id, inherited: !!record.inherited, source: record.sourceSessionId, summary: record.summary })),
+    archivedBlocks.map(record => ({
+      id: record.id,
+      inherited: !!record.inherited,
+      source: record.sourceSessionId,
+      summary: record.summary,
+      rawStartTimestamp: record.rawStartTimestamp,
+      rawEndTimestamp: record.rawEndTimestamp,
+    })),
     [
-      { id: 1, inherited: true, source: 'parent', summary: 'alpha summary block' },
-      { id: 2, inherited: false, source: 'child', summary: 'gamma child local block' },
+      { id: 1, inherited: true, source: 'parent', summary: 'alpha summary block', rawStartTimestamp: 1000, rawEndTimestamp: 2000 },
+      { id: 2, inherited: false, source: 'child', summary: 'gamma child local block', rawStartTimestamp: 4000, rawEndTimestamp: 4000 },
     ],
   );
 
@@ -97,6 +104,7 @@ test('archive store reads inherited and local messages/blocks without copying pa
   });
   assert.match(String(combinedPreview), /\[inherited from parent\]/);
   assert.match(String(combinedPreview), /\[local\]/);
+  assert.match(String(combinedPreview), /raw#1-#2 time /);
   assert.match(String(combinedPreview), /alpha summary block/);
   assert.match(String(combinedPreview), /gamma child local/);
 

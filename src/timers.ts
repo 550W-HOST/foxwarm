@@ -5,6 +5,7 @@ import { TIMERS_FILE, getAgentDir } from './config';
 import { logger } from './common';
 import * as sessionManager from './sessionManager';
 import { DiskJsonData } from './utils/diskJsonData';
+import { formatLocalTimestamp } from './utils/localTime';
 
 export interface SessionTimer {
   id: string;
@@ -115,6 +116,14 @@ function getNextRunAt(timer: SessionTimer): number | null {
   return timer.at > Date.now() ? timer.at : null;
 }
 
+export function buildTimerTriggeredMessage(timer: SessionTimer, firedAt: Date = new Date()): string {
+  const label = isCronTimer(timer) ? 'Scheduled timer fired' : 'Timer fired';
+  const currentTimeLine = `Current time: ${formatLocalTimestamp(firedAt)}`;
+  return timer.message
+    ? `${label} (id: ${timer.id})\n${currentTimeLine}\n${timer.message}`
+    : `${label} (id: ${timer.id})\n${currentTimeLine}`;
+}
+
 function toTimerView(timer: SessionTimer): TimerView {
   return {
     ...timer,
@@ -146,8 +155,8 @@ async function fireTimer(timerId: string): Promise<void> {
   if (!timer) {
     return;
   }
-
-  const label = isCronTimer(timer) ? 'Scheduled timer fired' : 'Timer fired';
+  const firedAt = new Date();
+  const message = buildTimerTriggeredMessage(timer, firedAt);
 
   try {
     if (timer.newSession) {
@@ -167,7 +176,7 @@ async function fireTimer(timerId: string): Promise<void> {
 
       await sessionManager.queueSessionSystemEvent(
         sessionId,
-        `${label} (id: ${timer.id})\n${timer.message}`,
+        message,
         'background'
       );
     } else {
@@ -178,7 +187,7 @@ async function fireTimer(timerId: string): Promise<void> {
 
       await sessionManager.queueSessionSystemEvent(
         timer.sessionId,
-        `${label} (id: ${timer.id})\n${timer.message}`,
+        message,
         'background'
       );
     }
@@ -193,7 +202,7 @@ async function fireTimer(timerId: string): Promise<void> {
     return;
   }
 
-  timer.lastTriggeredAt = Date.now();
+  timer.lastTriggeredAt = firedAt.getTime();
 
   if (isCronTimer(timer)) {
     await saveTimers();

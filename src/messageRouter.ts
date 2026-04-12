@@ -13,6 +13,7 @@ import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { Message, MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
 import { formatMessageText, formatPrefixedMultilineText } from './utils/messageFormat';
+import { formatLocalTimestamp } from './utils/localTime';
 
 const SUBCONSCIOUS_RETRY_BUSY_MS = 1500;
 
@@ -22,19 +23,7 @@ type SubconsciousRetryTimer = {
 };
 
 function formatCurrentTimeForPrompt(date: Date): string {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  });
-
-  const parts = formatter.formatToParts(date);
-  const get = (type: string) => parts.find(p => p.type === type)?.value || '';
-  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')} (Asia/Shanghai)`;
+  return formatLocalTimestamp(date);
 }
 
 

@@ -9,6 +9,7 @@ import {
 import { logger } from '../common';
 import { DiskJsonData } from '../utils/diskJsonData';
 import { ArchiveMessageRecord, readArchiveMessagesBySeqRange } from './archive';
+import { formatLocalTimeRange } from '../utils/localTime';
 import {
   ensureSessionBranch,
   refreshSessionArchiveImportState,
@@ -36,6 +37,8 @@ export interface ArchiveBlockRecord {
   sourceEnd: number;
   rawStartSeq: number;
   rawEndSeq: number;
+  rawStartTimestamp?: number;
+  rawEndTimestamp?: number;
   summary: string;
   createdAt: number;
   sourceSessionId?: string;
@@ -204,9 +207,13 @@ export async function loadSessionFrontier(session: Session): Promise<void> {
 
 export async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
   const createdAt = Date.now();
-  return blocks.map(block => {
+  return Promise.all(blocks.map(async (block) => {
     const id = getNextSessionBlockId(session);
     session.nextBlockId = id + 1;
+    const [startRecord, endRecord] = await Promise.all([
+      readArchiveMessagesBySeqRange(session.id, block.rawStartSeq, block.rawStartSeq),
+      readArchiveMessagesBySeqRange(session.id, block.rawEndSeq, block.rawEndSeq),
+    ]);
     return {
       v: 1,
       kind: 'block',
@@ -219,10 +226,12 @@ export async function buildArchiveBlockRecords(session: Session, blocks: CreateA
       sourceEnd: block.sourceEnd,
       rawStartSeq: block.rawStartSeq,
       rawEndSeq: block.rawEndSeq,
+      rawStartTimestamp: startRecord[0]?.timestamp,
+      rawEndTimestamp: endRecord[0]?.timestamp,
       summary: block.summary,
       createdAt,
     };
-  });
+  }));
 }
 
 export async function appendBlocksToArchive(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
@@ -260,11 +269,16 @@ function formatSeqRange(startSeq: number, endSeq: number): string {
   return startSeq === endSeq ? `#${startSeq}` : `#${startSeq}-#${endSeq}`;
 }
 
+export function formatArchiveBlockTimeRange(record: Pick<ArchiveBlockRecord, 'rawStartTimestamp' | 'rawEndTimestamp'>): string {
+  const range = formatLocalTimeRange(record.rawStartTimestamp, record.rawEndTimestamp);
+  return range ? ` time ${range}` : '';
+}
+
 export function renderBlockMessage(record: ArchiveBlockRecord): Message {
   return {
     role: 'model',
     parts: [{
-      text: `[CTX-BLOCK L${record.level} B#${record.id} raw${formatSeqRange(record.rawStartSeq, record.rawEndSeq)}] ${record.summary}`,
+      text: `[CTX-BLOCK L${record.level} B#${record.id} raw${formatSeqRange(record.rawStartSeq, record.rawEndSeq)}${formatArchiveBlockTimeRange(record)}] ${record.summary}`,
     }],
     __meta: { timestamp: record.createdAt },
   };

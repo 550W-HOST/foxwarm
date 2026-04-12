@@ -274,6 +274,8 @@ function openArchiveStore(): void {
       source_end INTEGER NOT NULL,
       raw_start_seq INTEGER NOT NULL,
       raw_end_seq INTEGER NOT NULL,
+      raw_start_timestamp INTEGER,
+      raw_end_timestamp INTEGER,
       summary TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       PRIMARY KEY (session_id, id)
@@ -301,6 +303,12 @@ function openArchiveStore(): void {
   } catch {}
   try {
     db.exec(`ALTER TABLE archive_blocks ADD COLUMN agent TEXT NOT NULL DEFAULT 'main'`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE archive_blocks ADD COLUMN raw_start_timestamp INTEGER`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE archive_blocks ADD COLUMN raw_end_timestamp INTEGER`);
   } catch {}
 }
 
@@ -600,8 +608,8 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
   const insert = database.prepare(`
     INSERT OR IGNORE INTO archive_blocks (
       session_id, agent, id, level, source_kind, source_start, source_end,
-      raw_start_seq, raw_end_seq, summary, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let batch: ArchiveBlockRecord[] = [];
@@ -624,6 +632,8 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
           record.sourceEnd,
           record.rawStartSeq,
           record.rawEndSeq,
+          record.rawStartTimestamp ?? null,
+          record.rawEndTimestamp ?? null,
           record.summary,
           record.createdAt,
         );
@@ -816,8 +826,8 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
   const insert = database.prepare(`
     INSERT OR REPLACE INTO archive_blocks (
       session_id, agent, id, level, source_kind, source_start, source_end,
-      raw_start_seq, raw_end_seq, summary, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   runInTransaction(() => {
     for (const record of records) {
@@ -831,6 +841,8 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
         record.sourceEnd,
         record.rawStartSeq,
         record.rawEndSeq,
+        record.rawStartTimestamp ?? null,
+        record.rawEndTimestamp ?? null,
         record.summary,
         record.createdAt,
       );
@@ -901,7 +913,7 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
   await ensureImported(sessionId);
 
   const rows = getDb().prepare(`
-    SELECT agent, id, level, source_kind, source_start, source_end, raw_start_seq, raw_end_seq, summary, created_at
+    SELECT agent, id, level, source_kind, source_start, source_end, raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
     FROM archive_blocks
     WHERE session_id = ?
       AND (? IS NULL OR id >= ?)
@@ -921,6 +933,8 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
     sourceEnd: Number(row.source_end),
     rawStartSeq: Number(row.raw_start_seq),
     rawEndSeq: Number(row.raw_end_seq),
+    rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
+    rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp),
     summary: String(row.summary || ''),
     createdAt: Number(row.created_at),
   }));
