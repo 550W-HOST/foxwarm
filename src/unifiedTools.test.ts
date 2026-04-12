@@ -59,6 +59,40 @@ test('search_tools multi-word queries rank tools matching more words higher', as
   assert.ok(archiveIndex < sessionIndex, 'tool matching more query words should rank higher');
 });
 
+test('search_tools includeSchema=true keeps full schema only for the first 10 results', async () => {
+  const result: any = await search_tools({
+    sources: ['builtin'],
+    includeSchema: true,
+    limit: 15,
+  });
+
+  assert.equal(result.tools.length, 15);
+
+  for (const tool of result.tools.slice(0, 10)) {
+    assert.equal(Object.prototype.hasOwnProperty.call(tool, 'inputSchema'), true);
+  }
+
+  for (const tool of result.tools.slice(10)) {
+    assert.equal(Object.prototype.hasOwnProperty.call(tool, 'inputSchema'), false);
+    assert.equal(typeof tool.toolId, 'string');
+    assert.equal(typeof tool.source, 'string');
+    assert.equal(typeof tool.name, 'string');
+  }
+});
+
+test('search_tools includeSchema=false removes schema from all results', async () => {
+  const result: any = await search_tools({
+    sources: ['builtin'],
+    includeSchema: false,
+    limit: 15,
+  });
+
+  assert.equal(result.tools.length, 15);
+  for (const tool of result.tools) {
+    assert.equal(Object.prototype.hasOwnProperty.call(tool, 'inputSchema'), false);
+  }
+});
+
 test('call_tool can invoke hidden builtin browse_list', async () => {
   const result = await call_tool(
     {

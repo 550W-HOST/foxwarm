@@ -1245,10 +1245,19 @@ async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
         return String(a.name || '').localeCompare(String(b.name || ''));
     });
 
+    const tools = collected.slice(0, limit).map(({ _score, ...tool }, index) => {
+        if (!includeSchema || index < 10) {
+            return tool;
+        }
+
+        const { inputSchema, annotations, ...summaryTool } = tool;
+        return summaryTool;
+    });
+
     return {
         count: Math.min(collected.length, limit),
         totalMatched: collected.length,
-        tools: collected.slice(0, limit).map(({ _score, ...tool }) => tool),
+        tools,
         ...(warnings.length > 0 ? { warnings } : {}),
     };
 }
