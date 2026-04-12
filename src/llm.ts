@@ -556,16 +556,6 @@ export function fixToolCalls(contents: Message[]): Message[] {
             }
         }
 
-        if (msg.role === 'user') {
-            if (contents[i - 1]?.role === 'tool') {
-                fixed.splice(fixed.length - 1, 0, {
-                    role: 'model',
-                    parts: [
-                        { text: '[interrupted by user/system event]' },
-                    ],
-                });
-            }
-        }
     }
     
     return fixed as Message[];

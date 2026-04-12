@@ -113,3 +113,28 @@ test('fixToolCalls treats structured system event payloads as skippable interrup
   assert.equal(fixed[2].role, 'tool');
   assert.equal(fixed[2].parts[0].functionResponse?.tool_use_id, 'call_1');
 });
+
+test('fixToolCalls no longer inserts interruption marker between tool output and later user turn', () => {
+  const history = [
+    {
+      role: 'model' as const,
+      parts: [{ functionCall: { id: 'call_1', name: 'read', args: { filePath: 'a.txt' } } }],
+    },
+    {
+      role: 'tool' as const,
+      parts: [{ functionResponse: { tool_use_id: 'call_1', name: 'read', response: { output: 'ok' } } }],
+    },
+    {
+      role: 'user' as const,
+      parts: [
+        { system: 'current session ID = demo/test' },
+        { text: 'follow-up' },
+      ],
+    },
+  ];
+
+  const fixed = fixToolCalls(history as any);
+  assert.equal(fixed.length, 3);
+  assert.equal(fixed[2].role, 'user');
+  assert.notEqual(fixed[1].role, 'model');
+});
