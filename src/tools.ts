@@ -10,6 +10,7 @@ import { checkPathAccess, checkToolPermission } from './isolatedCheck';
 import * as mcpClient from './mcpClient';
 import { browserManager } from './browser';
 import { logger } from './common';
+import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from './execTimeout';
 import { nodesManager } from './nodes/manager';
 import {
     buildBackgroundTimeoutResult,
@@ -211,7 +212,13 @@ async function readResolvedPath(fullPath: string, displayPath: string, startLine
     }
 
     const tokens = estimateTokenCount(content);
-    return tokens > 10000 ? `[TOO LONG (~${tokens} tokens), TRUNCATED. showing first 10000 chars only.]\n${content.slice(0, 10000)}` : content;
+    if (tokens > 10000) {
+        const shortNotice = `[TOO LONG (~${tokens} tokens)]`;
+        const fullNotice = `${shortNotice} TRUNCATED. Showing first 10000 chars only.`;
+        return `${shortNotice}\n\n${content.slice(0, 10000)}\n\n${fullNotice}`;
+    }
+
+    return content;
 }
 
 async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string) {
@@ -258,6 +265,22 @@ function resolveExecCwd(cwdValue: unknown, ctx: ToolContext, agentName: string):
         ? ctx.session.cwd.trim()
         : getAgentDir(agentName);
     return path.resolve(base, raw);
+}
+
+function resolveExecTimeoutSeconds(timeoutValue: unknown): number {
+    if (timeoutValue === undefined || timeoutValue === null) {
+        return DEFAULT_EXEC_TIMEOUT_SECONDS;
+    }
+
+    if (typeof timeoutValue !== 'number' || !Number.isFinite(timeoutValue)) {
+        throw new Error(`timeout must be a number between ${MIN_EXEC_TIMEOUT_SECONDS} and ${MAX_EXEC_TIMEOUT_SECONDS} seconds`);
+    }
+
+    if (timeoutValue < MIN_EXEC_TIMEOUT_SECONDS || timeoutValue > MAX_EXEC_TIMEOUT_SECONDS) {
+        throw new Error(`timeout must be between ${MIN_EXEC_TIMEOUT_SECONDS} and ${MAX_EXEC_TIMEOUT_SECONDS} seconds`);
+    }
+
+    return timeoutValue;
 }
 
 async function maybeSyncSessionCwdFromExec(ctx: ToolContext, entry: { initialCwd?: string }, nextCwd: string | null | undefined): Promise<string | null> {
@@ -559,7 +582,8 @@ async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
 }
 
 async function tool_exec(args: ToolArgs, ctx: ToolContext) {
-    const { command, cwd } = args;
+    const { command, cwd, timeout } = args;
+    const timeoutSeconds = resolveExecTimeoutSeconds(timeout);
 
     // Mark that we're about to exec, then save session
     if (ctx && ctx.sessionId) {
@@ -577,7 +601,7 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
         cwd: execCwd,
     });
 
-    const status = await waitForExecCompletion(execEntry.id, 15000);
+    const status = await waitForExecCompletion(execEntry.id, timeoutSeconds * 1000);
     if (status) {
         try {
             const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readFinishedExecWorkingDirectory(execEntry));
@@ -590,7 +614,7 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
 
     const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readLiveExecWorkingDirectory(execEntry));
     await markExecForBackgroundNotification(execEntry.id);
-    const result = await buildBackgroundTimeoutResult(execEntry);
+    const result = await buildBackgroundTimeoutResult(execEntry, timeoutSeconds);
     return cwdNotice ? `${cwdNotice}\n\n${result}` : result;
 }
 
@@ -982,12 +1006,80 @@ function normalizeRequestedNodeForToolCall(nodeParam: unknown, currentNode: stri
 }
 
 function matchesUnifiedToolQuery(query: string, fields: Array<string | undefined>): boolean {
+    return scoreUnifiedToolQuery(query, fields) >= 0;
+}
+
+function normalizeUnifiedToolQueryTerms(query: string): string[] {
+    const normalizedQuery = query.trim().toLowerCase();
+    return normalizedQuery ? Array.from(new Set(normalizedQuery.split(/\s+/).filter(Boolean))) : [];
+}
+
+function scoreUnifiedToolQuery(query: string, fields: Array<string | undefined>): number {
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) {
-        return true;
+        return 0;
     }
 
-    return fields.some(field => String(field || '').toLowerCase().includes(normalizedQuery));
+    const terms = normalizeUnifiedToolQueryTerms(query);
+    const normalizedFields = fields.map(field => String(field || '').toLowerCase());
+    const primaryField = normalizedFields[0] || '';
+    let score = 0;
+    let matchedTerms = 0;
+
+    if (primaryField === normalizedQuery) {
+        score += 400;
+    } else if (primaryField.startsWith(normalizedQuery)) {
+        score += 260;
+    } else if (primaryField.includes(normalizedQuery)) {
+        score += 180;
+    } else if (normalizedFields.some(field => field.includes(normalizedQuery))) {
+        score += 120;
+    }
+
+    for (const term of terms) {
+        let matched = false;
+        for (const field of normalizedFields) {
+            if (!field.includes(term)) {
+                continue;
+            }
+            matched = true;
+            score += field === primaryField ? 40 : 24;
+            if (field.startsWith(term)) {
+                score += field === primaryField ? 16 : 8;
+            }
+            break;
+        }
+
+        if (matched) {
+            matchedTerms += 1;
+        }
+    }
+
+    if (matchedTerms === 0) {
+        return -1;
+    }
+
+    if (matchedTerms === terms.length && terms.length > 1) {
+        score += 90;
+    }
+
+    score += matchedTerms * 12;
+    return score;
+}
+
+async function resolveDefaultNodeSearchTarget(ctx?: ToolContext): Promise<string> {
+    if (typeof ctx?.session?.currentNode === 'string' && ctx.session.currentNode.trim().length > 0) {
+        return ctx.session.currentNode.trim();
+    }
+
+    if (ctx?.sessionId) {
+        const currentNode = await nodesManager.getCurrentNode(ctx.sessionId);
+        if (typeof currentNode === 'string' && currentNode.trim().length > 0) {
+            return currentNode.trim();
+        }
+    }
+
+    return 'master';
 }
 
 async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolArgs, ctx: ToolContext): Promise<any> {
@@ -1027,15 +1119,17 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
 
 async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean) {
     return definitions
-        .filter(def => matchesUnifiedToolQuery(query, [def.name, def.description]))
+        .map(def => ({ def, score: scoreUnifiedToolQuery(query, [def.name, def.description]) }))
+        .filter(entry => entry.score >= 0)
         .map(def => ({
+            _score: def.score,
             source: 'builtin' as const,
-            toolId: buildUnifiedToolId('builtin', def.name),
-            name: def.name,
-            description: def.description,
-            ...(includeSchema ? { inputSchema: def.parameters } : {}),
-            directExposed: isToolDirectlyExposedToModel(def.name),
-            hidden: !isToolDirectlyExposedToModel(def.name),
+            toolId: buildUnifiedToolId('builtin', def.def.name),
+            name: def.def.name,
+            description: def.def.description,
+            ...(includeSchema ? { inputSchema: def.def.parameters } : {}),
+            directExposed: isToolDirectlyExposedToModel(def.def.name),
+            hidden: !isToolDirectlyExposedToModel(def.def.name),
         }));
 }
 
@@ -1058,11 +1152,13 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
             : (Array.isArray(tools) ? tools as any[] : []);
 
         for (const item of items) {
-            if (!matchesUnifiedToolQuery(query, [item?.name, item?.description, serverName])) {
+            const score = scoreUnifiedToolQuery(query, [item?.name, item?.description, serverName]);
+            if (score < 0) {
                 continue;
             }
 
             results.push({
+                _score: score,
                 source: 'mcp',
                 toolId: buildUnifiedToolId('mcp', String(item?.name || ''), { server: serverName }),
                 name: item?.name || 'unknown',
@@ -1078,20 +1174,20 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
 }
 
 async function collectNodeUnifiedSearchResults(query: string, includeSchema: boolean, nodeFilter: string | undefined, ctx?: ToolContext) {
-    const nodeListing = await tool_remote_node({ action: 'list' }, (ctx || ({} as ToolContext))) as any;
+    const effectiveNodeId = nodeFilter || await resolveDefaultNodeSearchTarget(ctx);
+    const nodeListing = await tool_remote_node({ action: 'list', nodeId: effectiveNodeId }, (ctx || ({} as ToolContext))) as any;
     const nodes = Array.isArray(nodeListing?.nodes) ? nodeListing.nodes : [];
-    const filteredNodes = nodeFilter
-        ? nodes.filter((node: any) => node?.id === nodeFilter)
-        : nodes;
 
     const results: Array<Record<string, any>> = [];
-    for (const node of filteredNodes) {
+    for (const node of nodes) {
         for (const item of Array.isArray(node?.tools) ? node.tools : []) {
-            if (!matchesUnifiedToolQuery(query, [item?.name, item?.description, node?.id, node?.type])) {
+            const score = scoreUnifiedToolQuery(query, [item?.name, item?.description, node?.id, node?.type]);
+            if (score < 0) {
                 continue;
             }
 
             results.push({
+                _score: score,
                 source: 'node',
                 toolId: buildUnifiedToolId('node', String(item?.name || ''), { nodeId: String(node?.id || '') }),
                 name: item?.name || 'unknown',
@@ -1138,6 +1234,8 @@ async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
     }
 
     collected.sort((a, b) => {
+        const scoreCompare = Number(b._score || 0) - Number(a._score || 0);
+        if (scoreCompare !== 0) return scoreCompare;
         const sourceCompare = String(a.source).localeCompare(String(b.source));
         if (sourceCompare !== 0) return sourceCompare;
         const scopeA = String(a.server || a.nodeId || '');
@@ -1147,10 +1245,19 @@ async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
         return String(a.name || '').localeCompare(String(b.name || ''));
     });
 
+    const tools = collected.slice(0, limit).map(({ _score, ...tool }, index) => {
+        if (!includeSchema || index < 10) {
+            return tool;
+        }
+
+        const { inputSchema, annotations, ...summaryTool } = tool;
+        return summaryTool;
+    });
+
     return {
         count: Math.min(collected.length, limit),
         totalMatched: collected.length,
-        tools: collected.slice(0, limit),
+        tools,
         ...(warnings.length > 0 ? { warnings } : {}),
     };
 }
@@ -1232,13 +1339,16 @@ async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
     }
     
     if (action === 'list') {
-        // List all nodes and their tools
+        // List visible nodes and their tools, with optional node filter
         const nodes = nodesManager.listNodesWithTools();
         const visibleNodes = sessionManager.isSessionEffectivelyIsolated(session)
             ? nodes.filter((n: any) => isolatedAllowedRemoteNodes.includes(n.id))
             : nodes;
+        const filteredNodes = typeof nodeId === 'string' && nodeId.trim().length > 0
+            ? visibleNodes.filter((n: any) => n.id === nodeId)
+            : visibleNodes;
         return {
-            nodes: visibleNodes.map((n: any) => ({
+            nodes: filteredNodes.map((n: any) => ({
                 id: n.id,
                 type: n.type,
                 tools: n.tools.map((t: any) => ({
@@ -1617,12 +1727,13 @@ export const definitions = [
         },
         {
             name: 'exec',
-            description: 'Execute a shell command in agent-folder. Defaults to the session cwd when set; otherwise uses the agent folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running over 15 seconds will time out, continue in the background, and send a completion system message later.',
+            description: 'Execute a shell command in agent-folder. Defaults to the session cwd when set; otherwise uses the agent folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running longer than the configured timeout (default 15s, allowed range 1-60s) continue in the background and send a completion system message later.',
             parameters: {
                 type: 'object',
                 properties: {
                     command: { type: 'string' },
-                    cwd: { type: 'string', description: 'Optional working directory override. Defaults to session.cwd when set.' }
+                    cwd: { type: 'string', description: 'Optional working directory override. Defaults to session.cwd when set.' },
+                    timeout: { type: 'number', minimum: MIN_EXEC_TIMEOUT_SECONDS, maximum: MAX_EXEC_TIMEOUT_SECONDS, description: `Optional timeout in seconds before the command is moved to background. Default: ${DEFAULT_EXEC_TIMEOUT_SECONDS}. Allowed range: ${MIN_EXEC_TIMEOUT_SECONDS}-${MAX_EXEC_TIMEOUT_SECONDS}.` }
                 },
                 required: ['command']
             }
@@ -2032,18 +2143,18 @@ export const definitions = [
         },
         {
             name: 'search_tools',
-            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Prefer this unified catalog before calling long-tail tools via call_tool.',
+            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
             parameters: {
                 type: 'object',
                 properties: {
-                    query: { type: 'string', description: 'Optional search query matched against tool names/descriptions.' },
+                    query: { type: 'string', description: 'Optional search query matched against tool names/descriptions. Multi-word queries are split on spaces and ranked by how many words match.' },
                     sources: {
                         type: 'array',
                         description: 'Optional source filter. Defaults to builtin + mcp + node.',
                         items: { type: 'string', enum: ['builtin', 'mcp', 'node'] }
                     },
                     server: { type: 'string', description: 'Optional MCP server name filter.' },
-                    nodeId: { type: 'string', description: 'Optional remote node id filter.' },
+                    nodeId: { type: 'string', description: 'Optional remote node id filter. For source=`node`, omitted means use the current node instead of listing tools from every node.' },
                     limit: { type: 'number', description: 'Maximum number of results to return (default: 20, max: 200).' },
                     includeSchema: { type: 'boolean', description: 'If true (default), include each tool\'s input schema in results.' }
                 }
@@ -2051,7 +2162,7 @@ export const definitions = [
         },
         {
             name: 'call_tool',
-            description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. Put the target tool arguments inside the required `args` object.',
+            description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. Always put the target tool arguments inside the required `args` object. Example using toolId: `{toolId:"builtin:read", args:{filePath:"README.md"}}`. Example using explicit MCP fields: `{source:"mcp", server:"github", name:"search_repos", args:{query:"foxwarm"}}`. Example using explicit node fields: `{source:"node", nodeId:"android-node", name:"android_screenshot", args:{inline:true}}`.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -2060,7 +2171,7 @@ export const definitions = [
                     name: { type: 'string', description: 'Tool name when not using toolId.' },
                     server: { type: 'string', description: 'MCP server name for source=mcp.' },
                     nodeId: { type: 'string', description: 'Remote node id for source=node.' },
-                    args: { type: 'object', description: 'Required wrapper object containing the target tool arguments.' }
+                    args: { type: 'object', description: 'Required wrapper object containing the target tool arguments. Example: for builtin read, use `args: { filePath: "README.md" }`.' }
                 },
                 required: ['args']
             }

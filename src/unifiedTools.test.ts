@@ -43,6 +43,56 @@ test('search_tools returns structured builtin results with hidden/direct exposur
   assert.equal(Object.prototype.hasOwnProperty.call(readTool, 'inputSchema'), false);
 });
 
+test('search_tools multi-word queries rank tools matching more words higher', async () => {
+  const result: any = await search_tools({
+    query: 'session archive',
+    sources: ['builtin'],
+    includeSchema: false,
+    limit: 10,
+  });
+
+  assert.ok(result.tools.length >= 2);
+  const archiveIndex = result.tools.findIndex((tool: any) => tool.name === 'get_context_archive');
+  const sessionIndex = result.tools.findIndex((tool: any) => tool.name === 'get_session_messages');
+  assert.ok(archiveIndex >= 0, 'get_context_archive should match both words');
+  assert.ok(sessionIndex >= 0, 'get_session_messages should still match one word');
+  assert.ok(archiveIndex < sessionIndex, 'tool matching more query words should rank higher');
+});
+
+test('search_tools includeSchema=true keeps full schema only for the first 10 results', async () => {
+  const result: any = await search_tools({
+    sources: ['builtin'],
+    includeSchema: true,
+    limit: 15,
+  });
+
+  assert.equal(result.tools.length, 15);
+
+  for (const tool of result.tools.slice(0, 10)) {
+    assert.equal(Object.prototype.hasOwnProperty.call(tool, 'inputSchema'), true);
+  }
+
+  for (const tool of result.tools.slice(10)) {
+    assert.equal(Object.prototype.hasOwnProperty.call(tool, 'inputSchema'), false);
+    assert.equal(typeof tool.toolId, 'string');
+    assert.equal(typeof tool.source, 'string');
+    assert.equal(typeof tool.name, 'string');
+  }
+});
+
+test('search_tools includeSchema=false removes schema from all results', async () => {
+  const result: any = await search_tools({
+    sources: ['builtin'],
+    includeSchema: false,
+    limit: 15,
+  });
+
+  assert.equal(result.tools.length, 15);
+  for (const tool of result.tools) {
+    assert.equal(Object.prototype.hasOwnProperty.call(tool, 'inputSchema'), false);
+  }
+});
+
 test('call_tool can invoke hidden builtin browse_list', async () => {
   const result = await call_tool(
     {
@@ -164,6 +214,7 @@ test('search_tools and call_tool cover MCP tools with schema-preserving structur
 test('search_tools and call_tool cover remote node tools', async () => {
   const originalListNodesWithTools = nodesManager.listNodesWithTools;
   const originalExecuteNodeTool = nodesManager.executeNodeTool;
+  const originalGetCurrentNode = nodesManager.getCurrentNode;
 
   try {
     (nodesManager as any).listNodesWithTools = () => ([
@@ -183,6 +234,22 @@ test('search_tools and call_tool cover remote node tools', async () => {
           },
         ],
       },
+      {
+        id: 'other-node',
+        type: 'android',
+        tools: [
+          {
+            name: 'android_input_text',
+            description: 'Type text on another node',
+            parameters: {
+              type: 'object',
+              properties: {
+                text: { type: 'string' },
+              },
+            },
+          },
+        ],
+      },
     ]);
     (nodesManager as any).executeNodeTool = async (nodeId: string, tool: string, args: Record<string, any>, sessionId: string) => ({
       ok: true,
@@ -191,6 +258,7 @@ test('search_tools and call_tool cover remote node tools', async () => {
       args,
       sessionId,
     });
+    (nodesManager as any).getCurrentNode = async () => 'android-node';
 
     const searchResult: any = await search_tools({
       sources: ['node'],
@@ -226,10 +294,39 @@ test('search_tools and call_tool cover remote node tools', async () => {
       args: { inline: true },
       sessionId: 'main',
     });
+
+    const defaultNodeSearchResult: any = await search_tools({
+      sources: ['node'],
+      includeSchema: false,
+    }, {
+      sessionId: 'main',
+      session: { agent: 'main', currentNode: 'android-node' },
+    } as any);
+
+    assert.equal(defaultNodeSearchResult.count, 1);
+    assert.equal(defaultNodeSearchResult.tools[0].nodeId, 'android-node');
+    assert.equal(defaultNodeSearchResult.tools.some((tool: any) => tool.nodeId === 'other-node'), false);
   } finally {
     (nodesManager as any).listNodesWithTools = originalListNodesWithTools;
     (nodesManager as any).executeNodeTool = originalExecuteNodeTool;
+    (nodesManager as any).getCurrentNode = originalGetCurrentNode;
   }
+});
+
+test('search_tools and call_tool descriptions include usage guidance and examples', () => {
+  const searchDef = definitions.find((entry) => entry.name === 'search_tools');
+  const callDef = definitions.find((entry) => entry.name === 'call_tool');
+  assert.ok(searchDef);
+  assert.ok(callDef);
+
+  assert.match(String(searchDef?.description), /builtin results include file\/edit tools, exec, session\/channel tools, vector\/archive tools, timers/i);
+  assert.match(String(searchDef?.description), /example search_tools calls/i);
+  assert.match(String((searchDef?.parameters?.properties as any)?.nodeId?.description), /current node/i);
+
+  assert.match(String(callDef?.description), /always put the target tool arguments inside the required `args` object/i);
+  assert.match(String(callDef?.description), /builtin:read/i);
+  assert.match(String(callDef?.description), /source:\"mcp\"/i);
+  assert.match(String((callDef?.parameters?.properties as any)?.args?.description), /required wrapper object/i);
 });
 
 test('default model-facing tool definitions exclude hidden browser and legacy wrapper tools', () => {
