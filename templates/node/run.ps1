@@ -113,9 +113,15 @@ try {
     & npm install
     if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
 
-    Write-Host "Building ..."
-    & npm run build
-    if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
+    # source.tar.gz includes pre-built lib/, only build if missing
+    $clientJs = Join-Path $SourceDir "lib\nodes\client.js"
+    if (-not (Test-Path $clientJs)) {
+        Write-Host "Building ..."
+        & npm run build
+        if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
+    } else {
+        Write-Host "Using pre-built lib/ from source bundle."
+    }
 } finally {
     Pop-Location
 }
