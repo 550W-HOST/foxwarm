@@ -78,10 +78,6 @@ function buildStatusWriterInvocationPosix(): string {
   return `"$FOXWARM_EXEC_NODE_PATH" -e 'const fs = require("fs"); const statusPath = process.argv[1]; const rawExitCode = process.argv[2]; const exitCode = rawExitCode === "null" ? null : Number(rawExitCode); fs.writeFileSync(statusPath, JSON.stringify({ exitCode, finishedAt: new Date().toISOString() }) + "\\n");'`;
 }
 
-function buildStatusWriterInvocationWindows(): string {
-  return `powershell -NoProfile -ExecutionPolicy Bypass -Command "$status = @{ exitCode = if ($env:FOXWARM_EXEC_EXIT_CODE -eq 'null') { $null } else { [int]$env:FOXWARM_EXEC_EXIT_CODE }; finishedAt = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json -Compress; Set-Content -LiteralPath $env:FOXWARM_EXEC_STATUS_TMP -Value $status"`;
-}
-
 function escapeInlineCode(text: string): string {
   return text.replace(/`/g, '\\`');
 }
@@ -194,20 +190,20 @@ async function updateRunningExec(id: string, updates: Partial<RunningExecEntry>)
 
 function buildManagedExecScript(command: string): string {
   if (process.platform === 'win32') {
+    // PowerShell script: run command via cmd /c for shell compatibility,
+    // then write exit status and cwd
     return [
-      '@echo off',
-      'setlocal EnableExtensions',
-      command,
-      'set "EXIT_CODE=%ERRORLEVEL%"',
-      'set "CWD_TMP=%FOXWARM_EXEC_CWD_PATH%.tmp.%RANDOM%%RANDOM%"',
-      'set "STATUS_TMP=%FOXWARM_EXEC_STATUS_PATH%.tmp.%RANDOM%%RANDOM%"',
-      'set "FOXWARM_EXEC_EXIT_CODE=%EXIT_CODE%"',
-      'set "FOXWARM_EXEC_STATUS_TMP=%STATUS_TMP%"',
-      'cd > "%CWD_TMP%"',
-      'move /Y "%CWD_TMP%" "%FOXWARM_EXEC_CWD_PATH%" >nul',
-      buildStatusWriterInvocationWindows(),
-      'move /Y "%STATUS_TMP%" "%FOXWARM_EXEC_STATUS_PATH%" >nul',
-      'exit /b %EXIT_CODE%',
+      '$ErrorActionPreference = "Continue"',
+      `cmd /c @"\n${command}\n"@`,
+      '$EXIT_CODE = $LASTEXITCODE',
+      '$cwdTmp = "$env:FOXWARM_EXEC_CWD_PATH.tmp.$PID"',
+      '$statusTmp = "$env:FOXWARM_EXEC_STATUS_PATH.tmp.$PID"',
+      '(Get-Location).Path | Set-Content -LiteralPath $cwdTmp -NoNewline',
+      'Move-Item -LiteralPath $cwdTmp -Destination $env:FOXWARM_EXEC_CWD_PATH -Force',
+      '$status = @{ exitCode = $EXIT_CODE; finishedAt = [DateTime]::UtcNow.ToString("o") } | ConvertTo-Json -Compress',
+      'Set-Content -LiteralPath $statusTmp -Value $status',
+      'Move-Item -LiteralPath $statusTmp -Destination $env:FOXWARM_EXEC_STATUS_PATH -Force',
+      'exit $EXIT_CODE',
     ].join('\r\n');
   }
 
@@ -488,7 +484,7 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
   const logFileName = `${execId}_${formatTime()}.log`;
   const logPath = await getDatedLogPath(tempDir, logFileName);
   const statusPath = `${logPath}.exit.json`;
-  const scriptPath = `${logPath}.command${process.platform === 'win32' ? '.cmd' : '.sh'}`;
+  const scriptPath = `${logPath}.command${process.platform === 'win32' ? '.ps1' : '.sh'}`;
   const cwdPath = `${logPath}.cwd.txt`;
   const logHandle = await fsp.open(logPath, 'a');
 
@@ -502,8 +498,8 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
   try {
     const launcher = process.platform === 'win32'
       ? {
-          command: process.env.ComSpec || 'cmd.exe',
-          args: ['/d', '/s', '/c', scriptPath],
+          command: 'powershell.exe',
+          args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
         }
       : {
           command: '/bin/sh',
@@ -520,7 +516,8 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
         FOXWARM_EXEC_NODE_PATH: process.execPath,
       },
       stdio: ['ignore', logHandle.fd, logHandle.fd],
-      detached: true,
+      detached: process.platform !== 'win32',  // Don't detach on Windows — avoids new console window
+      windowsHide: true,  // Hide console window on Windows
       shell: false,
     });
 
