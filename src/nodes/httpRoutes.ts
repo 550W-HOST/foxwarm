@@ -10,6 +10,7 @@ const NODE_TEMPLATE_DIR = path.join(BASE_DIR, 'templates', 'node');
 const NODE_RUN_SH_PATH = path.join(NODE_TEMPLATE_DIR, 'run.sh');
 const NODE_RUN_DOCKER_SH_PATH = path.join(NODE_TEMPLATE_DIR, 'run-docker.sh');
 const NODE_RUN_INTERACTIVE_SH_PATH = path.join(NODE_TEMPLATE_DIR, 'run-interactive.sh');
+const NODE_RUN_PS1_PATH = path.join(NODE_TEMPLATE_DIR, 'run.ps1');
 const NODE_DOCKER_COMPOSE_PATH = path.join(NODE_TEMPLATE_DIR, 'docker-compose.yaml');
 const NODE_SOURCE_FILES = [
   'package.json',
@@ -46,6 +47,7 @@ export function registerNodeHttpRoutes(httpServer: HttpServer): void {
   addTextRoute(httpServer, '/node/run.sh', NODE_RUN_SH_PATH, 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/run-docker.sh', NODE_RUN_DOCKER_SH_PATH, 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/run-interactive.sh', NODE_RUN_INTERACTIVE_SH_PATH, 'text/x-shellscript; charset=utf-8');
+  addTextRoute(httpServer, '/node/run.ps1', NODE_RUN_PS1_PATH, 'text/plain; charset=utf-8');
   addTextRoute(httpServer, '/node/docker-compose.yaml', NODE_DOCKER_COMPOSE_PATH, 'text/yaml; charset=utf-8');
 
   httpServer.addRoute({
