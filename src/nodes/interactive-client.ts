@@ -116,6 +116,19 @@ class InteractiveConfirm {
           return;
         }
 
+        // 'a'/'A' — toggle auto-approve-all (works anytime, even without pending question)
+        if (byte === 97 || byte === 65) {
+          this.autoAll = !this.autoAll;
+          process.stderr.write(c(this.autoAll ? C.green : C.yellow,
+            `\n  [Auto-approve: ${this.autoAll ? 'ON — all tools will be auto-approved' : 'OFF — back to manual confirmation'}]\n`));
+          // If toggled ON while a question is pending, approve it immediately
+          if (this.autoAll && this.pendingResolve) {
+            process.stderr.write(c(C.green, '  ✓ Auto-approved\n'));
+            this.resolve(true);
+          }
+          continue;
+        }
+
         if (!this.pendingResolve) {
           // No pending question — discard all input
           continue;
@@ -284,7 +297,7 @@ async function main() {
   if (opts.timeout)     process.stderr.write(`  Timeout: ${opts.timeout}s\n`);
   process.stderr.write('\n');
   process.stderr.write(c(C.yellow, '  Every tool call will require your confirmation.\n'));
-  process.stderr.write(c(C.dim,    '  Press Y/Enter to approve, N to reject.\n'));
+  process.stderr.write(c(C.dim,    '  Press Y/Enter to approve, N to reject, A to toggle auto-approve.\n'));
   process.stderr.write('\n');
 
   const log = (msg: string) => process.stderr.write(c(C.dim, `  ${msg}\n`));
