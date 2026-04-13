@@ -190,10 +190,11 @@ async function updateRunningExec(id: string, updates: Partial<RunningExecEntry>)
 
 function buildManagedExecScript(command: string): string {
   if (process.platform === 'win32') {
-    // PowerShell script: run command via cmd /c for shell compatibility,
+    // PowerShell script: set UTF-8 codepage, run command via cmd /c for shell compatibility,
     // then write exit status and cwd
     return [
       '$ErrorActionPreference = "Continue"',
+      'chcp 65001 | Out-Null',
       `cmd /c @"\n${command}\n"@`,
       '$EXIT_CODE = $LASTEXITCODE',
       '$cwdTmp = "$env:FOXWARM_EXEC_CWD_PATH.tmp.$PID"',
