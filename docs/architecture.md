@@ -165,8 +165,9 @@ state/
 
 ### `state/models.yaml`
 - 默认模型 key
-- 可选模型列表
-- 每个模型条目的 provider / model / baseUrl / apiKey 覆盖
+- `providers`（首选）或兼容旧根层 `models`
+- 每个 provider entry 的 `providerType` / `models` / `baseUrl` / `apiKey`
+- `models` 支持字符串列表，或带 `id` / `contextLimit` / `extraFields` / `extraHeaders` 的 object list
 
 ### `templates/`
 - 初始 agent memory 模板

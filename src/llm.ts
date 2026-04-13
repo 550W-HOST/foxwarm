@@ -923,12 +923,10 @@ export async function chat(
 
     const { modelEntry, currentKey: modelKey } = resolveModelConfig(session.model);
 
-    const providerType = modelEntry?.provider || 'openai';
+    const providerType = modelEntry?.providerType || 'openai';
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
-    const modelName = Array.isArray(modelEntry?.model)
-        ? (modelEntry.model[0] || '')
-        : (modelEntry?.model || '');
+    const modelName = modelEntry?.model || '';
     const promptCacheKey = getPromptCacheKey(session);
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
