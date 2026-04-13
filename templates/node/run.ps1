@@ -25,9 +25,9 @@ param(
 
     [string]$NodeId = "node-$(if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'foxwarm-node' })",
 
-    [string]$StateDir = ".\data",
+    [string]$StateDir = "",
 
-    [string]$SourceDir = ".\foxwarm-node",
+    [string]$SourceDir = "",
 
     [switch]$Interactive,
 
@@ -71,8 +71,13 @@ foreach ($cmd in @("node", "npm")) {
     }
 }
 
+# ─── Resolve base directory (script location, or cwd if piped) ───
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Get-Location }
+
 # ─── Normalize paths ───
 $HostUrl = $HostUrl.TrimEnd("/")
+if (-not $StateDir) { $StateDir = Join-Path $ScriptDir "data" }
+if (-not $SourceDir) { $SourceDir = Join-Path $ScriptDir "foxwarm-node" }
 $StateDir = [System.IO.Path]::GetFullPath($StateDir)
 $SourceDir = [System.IO.Path]::GetFullPath($SourceDir)
 $CredentialsFile = Join-Path $StateDir "state\node_credentials.json"
