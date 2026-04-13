@@ -23,7 +23,7 @@ param(
 
     [string]$Pairing = "",
 
-    [string]$NodeId = "node-$($env:COMPUTERNAME ?? 'foxwarm-node')",
+    [string]$NodeId = "node-$(if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'foxwarm-node' })",
 
     [string]$StateDir = ".\data",
 
