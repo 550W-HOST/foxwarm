@@ -119,7 +119,7 @@ class InteractiveConfirm {
         // 'a'/'A' — toggle auto-approve-all (works anytime, even without pending question)
         if (byte === 97 || byte === 65) {
           this.autoAll = !this.autoAll;
-          process.stderr.write(c(this.autoAll ? C.green : C.yellow,
+          process.stderr.write(c(this.autoAll ? C.yellow : C.green,
             `\n  [Auto-approve: ${this.autoAll ? 'ON — all tools will be auto-approved' : 'OFF — back to manual confirmation'}]\n`));
           // If toggled ON while a question is pending, approve it immediately
           if (this.autoAll && this.pendingResolve) {
