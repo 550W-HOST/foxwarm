@@ -44,11 +44,23 @@ test('single-key object formatting still collapses to value only', () => {
   assert.equal(getPrimaryToolResponseText({ name: 'list_mcp_servers', response: { servers: [{ name: 'demo' }] } }), '[{"name":"demo"}]')
 })
 
-test('output responses still prefer output over structured fallback', () => {
+test('single-key output and content responses still collapse to value only', () => {
   assert.equal(getPrimaryToolResponseText({
     name: 'exec',
-    response: { output: 'ok', extra: 'ignored in default preview' },
+    response: { output: 'ok' },
   }), 'ok')
+
+  assert.equal(getPrimaryToolResponseText({
+    name: 'read',
+    response: { content: 'hello' },
+  }), 'hello')
+})
+
+test('multi-key responses keep sibling fields instead of collapsing to output only', () => {
+  assert.equal(getPrimaryToolResponseText({
+    name: 'search_tools',
+    response: { output: 'ok', count: 2 },
+  }), 'output: ok\ncount: 2')
 })
 
 test('error responses still format as error text', () => {
@@ -56,4 +68,9 @@ test('error responses still format as error text', () => {
     name: 'edit',
     response: { error: { message: 'failed', code: 'E_FAIL' } },
   }), '{\n  "message": "failed",\n  "code": "E_FAIL"\n}')
+
+  assert.equal(getPrimaryToolResponseText({
+    name: 'search_tools',
+    response: { error: 'bad', output: 'ignored' },
+  }), 'bad')
 })

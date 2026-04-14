@@ -13,24 +13,12 @@ export const formatToolResponseText = (resp: ToolResponseLike): string => {
   if (resp.response?.error !== undefined && resp.response?.error !== null) {
     return formatToolValue(resp.response.error)
   }
-  if (resp.response?.output !== undefined && resp.response?.output !== null) {
-    return formatToolValue(resp.response.output)
-  }
-  if (resp.response?.content !== undefined && resp.response?.content !== null) {
-    return formatToolValue(resp.response.content)
-  }
   return formatObject(resp.response)
 }
 
 export const getPrimaryToolResponseText = (resp: ToolResponseLike): string | null => {
   if (resp.response?.error !== undefined && resp.response?.error !== null) {
     return formatToolValue(resp.response.error)
-  }
-  if (resp.response?.output !== undefined && resp.response?.output !== null) {
-    return formatToolValue(resp.response.output)
-  }
-  if (resp.response?.content !== undefined && resp.response?.content !== null) {
-    return formatToolValue(resp.response.content)
   }
 
   const formatted = formatObject(resp.response)
