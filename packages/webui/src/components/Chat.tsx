@@ -969,7 +969,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         </div>
       )}
 
-      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 pb-56 md:pb-52">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4">
         <ChatTimeline messages={timelineMessages} isMobile={isMobile} verbose={verbose} />
         <ProcessingStatus
           sessionBusy={sessionBusy}
