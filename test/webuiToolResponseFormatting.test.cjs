@@ -63,14 +63,14 @@ test('multi-key responses keep sibling fields instead of collapsing to output on
   }), 'output: ok\ncount: 2')
 })
 
-test('error responses still format as error text', () => {
+test('single-key error responses also collapse to value only via formatObject', () => {
   assert.equal(formatToolResponseText({
     name: 'edit',
     response: { error: { message: 'failed', code: 'E_FAIL' } },
-  }), '{\n  "message": "failed",\n  "code": "E_FAIL"\n}')
+  }), '{"message":"failed","code":"E_FAIL"}')
 
   assert.equal(getPrimaryToolResponseText({
     name: 'search_tools',
-    response: { error: 'bad', output: 'ignored' },
+    response: { error: 'bad' },
   }), 'bad')
 })

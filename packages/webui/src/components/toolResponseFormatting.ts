@@ -5,22 +5,9 @@ export interface ToolResponseLike {
   response: any
 }
 
-const formatToolValue = (value: unknown): string => (
-  typeof value === 'string' ? value : JSON.stringify(value, null, 2)
-)
-
-export const formatToolResponseText = (resp: ToolResponseLike): string => {
-  if (resp.response?.error !== undefined && resp.response?.error !== null) {
-    return formatToolValue(resp.response.error)
-  }
-  return formatObject(resp.response)
-}
+export const formatToolResponseText = (resp: ToolResponseLike): string => formatObject(resp.response)
 
 export const getPrimaryToolResponseText = (resp: ToolResponseLike): string | null => {
-  if (resp.response?.error !== undefined && resp.response?.error !== null) {
-    return formatToolValue(resp.response.error)
-  }
-
   const formatted = formatObject(resp.response)
   return formatted ? formatted : null
 }
