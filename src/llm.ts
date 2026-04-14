@@ -20,6 +20,7 @@ import {
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
 import { parseFunctionCallArgs } from './toolCallArgs';
+import { formatToolResponseForModel } from './toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
 type LlmInteractionLogFiles = {
@@ -323,42 +324,6 @@ export async function buildSessionSystemPromptSnapshot(options: {
         .join('\n\n');
 }
 
-function stringifyToolOutput(output: unknown): string {
-    if (output === undefined || output === null) {
-        return '';
-    }
-
-    if (typeof output === 'string') {
-        return output;
-    }
-
-    if (typeof output === 'object') {
-        try {
-            return JSON.stringify(output, null, 2);
-        } catch {
-            return '[unserializable object]';
-        }
-    }
-
-    return String(output);
-}
-
-function extractToolResponseOutput(response: any): unknown {
-    if (response === undefined || response === null) {
-        return response;
-    }
-
-    if (Object.prototype.hasOwnProperty.call(response, 'output')) {
-        return response.output;
-    }
-
-    if (Object.prototype.hasOwnProperty.call(response, 'error') && response.error) {
-        return response.error;
-    }
-
-    return response;
-}
-
 function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string; message: string; rawArgsText?: string } } {
     return {
         error: {
@@ -607,11 +572,10 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
             // Handle function response
             if (part.functionResponse) {
                 const resp = part.functionResponse.response || {};
-                const output = extractToolResponseOutput(resp);
                 const toolResult = {
                     type: 'tool_result',
                     tool_use_id: part.functionResponse.tool_use_id || part.toolUseId || 'unknown',
-                    content: stringifyToolOutput(output)
+                    content: formatToolResponseForModel(resp)
                 };
                 if (config.baseUrl?.startsWith('https://api.kimi.com/')) {
                     if (!content.find(x => x.type === 'thinking')) {
