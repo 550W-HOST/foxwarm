@@ -6,8 +6,10 @@ import { logger } from '../common';
 import {
   attachPendingPairingSocket,
   authenticateApprovedNode,
+  claimApprovedPairing,
   createPendingPairing,
   detachPendingPairingSocket,
+  listPendingPairings,
   touchApprovedNode,
 } from './registry';
 
@@ -142,6 +144,30 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
             error: 'Invalid pair_request message: missing nodeType or capabilities.tools'
           }));
           return;
+        }
+
+        // Check if there's an existing approved-but-undelivered pending for this client
+        const existingPendings = await listPendingPairings();
+        const approvedPending = existingPendings.find(p =>
+          p.approvedNodeId && p.approvedAuthToken &&
+          p.nodeType === nodeType && p.requestedName === requestedName
+        );
+
+        if (approvedPending) {
+          const claimed = await claimApprovedPairing(approvedPending.id);
+          if (claimed) {
+            logger.info({ nodeId: claimed.nodeId, pendingId: approvedPending.id }, 'Delivering previously approved pairing');
+            ws.send(JSON.stringify({
+              type: 'pair_approved',
+              pendingId: approvedPending.id,
+              nodeId: claimed.nodeId,
+              authToken: claimed.authToken,
+            }));
+            try {
+              ws.close(1000, 'Pairing approved; reconnect with node credentials');
+            } catch {}
+            return;
+          }
         }
 
         const pending = await createPendingPairing({
