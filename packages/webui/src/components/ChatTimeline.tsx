@@ -32,6 +32,10 @@ import {
   type ToolViewMode,
   type ViewMode,
 } from './chatShared'
+import {
+  formatToolResponseText,
+  getPrimaryToolResponseText,
+} from './toolResponseFormatting'
 
 interface ChatTimelineProps {
   messages: Message[]
@@ -309,32 +313,6 @@ const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassN
 )
 
 const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
-
-const formatToolResponseText = (resp: FunctionResponse): string => {
-  if (resp.response?.error !== undefined && resp.response?.error !== null) {
-    return typeof resp.response.error === 'string' ? resp.response.error : JSON.stringify(resp.response.error, null, 2)
-  }
-  if (resp.response?.output !== undefined && resp.response?.output !== null) {
-    return typeof resp.response.output === 'string' ? resp.response.output : JSON.stringify(resp.response.output, null, 2)
-  }
-  if (resp.response?.content !== undefined && resp.response?.content !== null) {
-    return typeof resp.response.content === 'string' ? resp.response.content : JSON.stringify(resp.response.content, null, 2)
-  }
-  return formatObject(resp.response)
-}
-
-const getPrimaryToolResponseText = (resp: FunctionResponse): string | null => {
-  if (resp.response?.error !== undefined && resp.response?.error !== null) {
-    return typeof resp.response.error === 'string' ? resp.response.error : JSON.stringify(resp.response.error, null, 2)
-  }
-  if (resp.response?.output !== undefined && resp.response?.output !== null) {
-    return typeof resp.response.output === 'string' ? resp.response.output : JSON.stringify(resp.response.output, null, 2)
-  }
-  if (resp.response?.content !== undefined && resp.response?.content !== null) {
-    return typeof resp.response.content === 'string' ? resp.response.content : JSON.stringify(resp.response.content, null, 2)
-  }
-  return null
-}
 
 const getToolResponseStatus = (resp: FunctionResponse): 'success' | 'error' => {
   if (resp.response?.error !== undefined && resp.response?.error !== null) {
