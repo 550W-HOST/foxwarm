@@ -2,7 +2,7 @@ import { StringDecoder } from 'string_decoder';
 import { logger } from '../common';
 import { Message, MessagePart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
-import { formatToolResponseForModel } from '../toolResponseFormatting';
+import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };
@@ -178,7 +178,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    const outputText = formatToolResponseForModel(resp);
+                    const outputText = formatToolResponsePayload(resp);
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'text', text: outputText });
                     }
@@ -357,7 +357,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    const outputText = formatToolResponseForModel(resp);
+                    const outputText = formatToolResponsePayload(resp);
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'input_text', text: outputText });
                     }

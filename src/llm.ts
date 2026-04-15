@@ -20,7 +20,7 @@ import {
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
 import { parseFunctionCallArgs } from './toolCallArgs';
-import { formatToolResponseForModel } from './toolResponseFormatting';
+import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
 type LlmInteractionLogFiles = {
@@ -575,7 +575,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
                 const toolResult = {
                     type: 'tool_result',
                     tool_use_id: part.functionResponse.tool_use_id || part.toolUseId || 'unknown',
-                    content: formatToolResponseForModel(resp)
+                    content: formatToolResponsePayload(resp)
                 };
                 if (config.baseUrl?.startsWith('https://api.kimi.com/')) {
                     if (!content.find(x => x.type === 'thinking')) {

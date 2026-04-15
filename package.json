@@ -4,7 +4,7 @@
   "description": "A lightweight, extensible AI assistant framework with multi-channel support",
   "main": "lib/index.js",
   "scripts": {
-    "build": "rm -f lib/nodeClient.js lib/nodeClient.js.map && tsc",
+    "build": "npm --prefix packages/shared run build && rm -f lib/nodeClient.js lib/nodeClient.js.map && tsc",
     "build-all": "npm install && npm run build && npm --prefix packages/webui install && npm --prefix packages/webui run build",
     "start": "./scripts/start.sh",
     "start:notmux": "npm run build && node lib/index.js",

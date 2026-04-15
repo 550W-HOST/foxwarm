@@ -18,22 +18,18 @@ require.extensions['.ts'] = function compileTypeScript(module, filename) {
   module._compile(outputText, filename)
 }
 
+const sharedToolResponseFormatting = require('/home/ldmbot/git/foxwarm/packages/shared/src/toolResponseFormatting.ts')
 const {
-  formatToolResponseText,
-  getPrimaryToolResponseText,
-} = require('/home/ldmbot/git/foxwarm/packages/webui/src/components/toolResponseFormatting.ts')
-const {
-  formatObject,
-} = require('/home/ldmbot/git/foxwarm/packages/webui/src/components/objectFormatting.ts')
+  formatCompactObjectPreview,
+  formatToolResponsePayload: formatToolResponseText,
+} = sharedToolResponseFormatting
+const formatObject = formatCompactObjectPreview
 
 test('structured success tool responses use formatted object preview instead of null', () => {
-  const text = getPrimaryToolResponseText({
-    name: 'search_tools',
-    response: {
-      count: 1,
-      totalMatched: 1,
-      tools: [{ name: 'read', toolId: 'builtin:read' }],
-    },
+  const text = formatToolResponseText({
+    count: 1,
+    totalMatched: 1,
+    tools: [{ name: 'read', toolId: 'builtin:read' }],
   })
 
   assert.equal(text, 'count: 1\ntotalMatched: 1\ntools: [{name: read, toolId: builtin:read}]')
@@ -41,36 +37,22 @@ test('structured success tool responses use formatted object preview instead of 
 
 test('single-key non-output objects keep their key in shared yaml-style formatting', () => {
   assert.equal(formatObject({ count: 3 }), '3')
-  assert.equal(getPrimaryToolResponseText({ name: 'list_mcp_servers', response: { servers: [{ name: 'demo' }] } }), 'servers: [{name: demo}]')
+  assert.equal(formatCompactObjectPreview({ count: 3 }), '3')
+  assert.equal(formatToolResponseText({ servers: [{ name: 'demo' }] }), 'servers: [{name: demo}]')
 })
 
 test('single-key output and content responses still collapse to value only', () => {
-  assert.equal(getPrimaryToolResponseText({
-    name: 'exec',
-    response: { output: 'ok' },
-  }), 'ok')
+  assert.equal(formatToolResponseText({ output: 'ok' }), 'ok')
 
-  assert.equal(getPrimaryToolResponseText({
-    name: 'read',
-    response: { content: 'hello' },
-  }), 'content: hello')
+  assert.equal(formatToolResponseText({ content: 'hello' }), 'content: hello')
 })
 
 test('multi-key responses keep sibling fields instead of collapsing to output only', () => {
-  assert.equal(getPrimaryToolResponseText({
-    name: 'search_tools',
-    response: { output: 'ok', count: 2 },
-  }), 'output: ok\ncount: 2')
+  assert.equal(formatToolResponseText({ output: 'ok', count: 2 }), 'output: ok\ncount: 2')
 })
 
 test('single-key error responses also collapse to value only via formatObject', () => {
-  assert.equal(formatToolResponseText({
-    name: 'edit',
-    response: { error: { message: 'failed', code: 'E_FAIL' } },
-  }), 'error: {message: failed, code: E_FAIL}')
+  assert.equal(formatToolResponseText({ error: { message: 'failed', code: 'E_FAIL' } }), 'error: {message: failed, code: E_FAIL}')
 
-  assert.equal(getPrimaryToolResponseText({
-    name: 'search_tools',
-    response: { error: 'bad' },
-  }), 'error: bad')
+  assert.equal(formatToolResponseText({ error: 'bad' }), 'error: bad')
 })

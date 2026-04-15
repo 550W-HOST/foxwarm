@@ -10,7 +10,10 @@ import {
 } from 'lucide-react'
 import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
-export { formatObject } from './objectFormatting'
+export { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
+import { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
+
+export const formatObject = formatCompactObjectPreview
 
 export interface SlashCommandOption {
   name: string

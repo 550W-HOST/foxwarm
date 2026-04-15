@@ -1,6 +1,9 @@
 {
   "name": "@foxwarm/shared",
   "private": true,
-  "main": "./toolResponseFormatting.js",
-  "types": "./toolResponseFormatting.d.ts"
+  "main": "./dist/toolResponseFormatting.js",
+  "types": "./dist/toolResponseFormatting.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  }
 }
