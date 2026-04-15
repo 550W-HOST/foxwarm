@@ -12,6 +12,7 @@ async function run() {
         { functionCall: { id: 'call_text', name: 'exec', args: { command: 'echo ok' } } },
         { functionCall: { id: 'call_obj', name: 'remote_node', args: { action: 'list' } } },
         { functionCall: { id: 'call_output_plus_meta', name: 'search_tools', args: { query: 'read' } } },
+        { functionCall: { id: 'call_nested', name: 'search_tools', args: { query: 'schema' } } },
       ],
     },
     {
@@ -21,6 +22,7 @@ async function run() {
         { functionResponse: { tool_use_id: 'call_text', name: 'exec', response: { output: 'ok' } } },
         { functionResponse: { tool_use_id: 'call_obj', name: 'remote_node', response: { nodes: [] } } },
         { functionResponse: { tool_use_id: 'call_output_plus_meta', name: 'search_tools', response: { output: 'ok', count: 2, tools: [{ name: 'read' }] } } },
+        { functionResponse: { tool_use_id: 'call_nested', name: 'search_tools', response: { meta: { server: 'github', flags: ['fast'] }, tools: [{ name: 'read', inputSchema: { type: 'object' } }] } } },
         { functionResponse: { tool_use_id: 'call_result_null_error', name: 'remote_node', response: { result: 'remote ok', error: null, logs: [] } } },
       ],
     },
@@ -45,7 +47,8 @@ async function run() {
       ['call_empty', ''],
       ['call_text', 'ok'],
       ['call_obj', 'nodes: []'],
-      ['call_output_plus_meta', 'output: ok\ncount: 2\ntools: [{"name":"read"}]'],
+      ['call_output_plus_meta', 'output: ok\ncount: 2\ntools: [{name: read}]'],
+      ['call_nested', 'meta: {server: github, flags: [fast]}\ntools: [{name: read, inputSchema: {type: object}}]'],
       ['call_result_null_error', 'result: remote ok\nerror: null\nlogs: []'],
     ],
     'responses serializer should preserve output-only shorthand while keeping keys for structured tool outputs'
@@ -67,7 +70,8 @@ async function run() {
       ['call_empty', ''],
       ['call_text', 'ok'],
       ['call_obj', 'nodes: []'],
-      ['call_output_plus_meta', 'output: ok\ncount: 2\ntools: [{"name":"read"}]'],
+      ['call_output_plus_meta', 'output: ok\ncount: 2\ntools: [{name: read}]'],
+      ['call_nested', 'meta: {server: github, flags: [fast]}\ntools: [{name: read, inputSchema: {type: object}}]'],
       ['call_result_null_error', 'result: remote ok\nerror: null\nlogs: []'],
     ],
     'chat/completions serializer should preserve output-only shorthand while keeping keys for structured tool outputs'

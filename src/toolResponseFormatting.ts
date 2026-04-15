@@ -1,4 +1,22 @@
-function stringifyModelToolValue(value: unknown): string {
+import yaml from 'js-yaml';
+
+const YAML_OPTIONS = {
+  flowLevel: 1,
+  lineWidth: -1,
+  noRefs: true,
+  sortKeys: false,
+} as const;
+
+const YAML_FLOW_OPTIONS = {
+  ...YAML_OPTIONS,
+  flowLevel: 0,
+} as const;
+
+function dumpYaml(value: unknown, flowOnly = false): string {
+  return yaml.dump(value, flowOnly ? YAML_FLOW_OPTIONS : YAML_OPTIONS).trimEnd();
+}
+
+function formatOutputOnlyValue(value: unknown): string {
   if (value === undefined || value === null) {
     return String(value);
   }
@@ -7,15 +25,11 @@ function stringifyModelToolValue(value: unknown): string {
     return value;
   }
 
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return '[unserializable object]';
-    }
+  if (typeof value !== 'object') {
+    return String(value);
   }
 
-  return String(value);
+  return dumpYaml(value, true);
 }
 
 export function formatToolResponseForModel(response: unknown): string {
@@ -32,7 +46,7 @@ export function formatToolResponseForModel(response: unknown): string {
   }
 
   if (Array.isArray(response)) {
-    return stringifyModelToolValue(response);
+    return dumpYaml(response, true);
   }
 
   const entries = Object.entries(response as Record<string, unknown>);
@@ -41,10 +55,8 @@ export function formatToolResponseForModel(response: unknown): string {
   }
 
   if (entries.length === 1 && entries[0][0] === 'output') {
-    return stringifyModelToolValue(entries[0][1]);
+    return formatOutputOnlyValue(entries[0][1]);
   }
 
-  return entries
-    .map(([key, value]) => `${key}: ${stringifyModelToolValue(value)}`)
-    .join('\n');
+  return dumpYaml(response);
 }
