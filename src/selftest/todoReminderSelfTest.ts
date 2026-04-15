@@ -98,10 +98,12 @@ async function main(): Promise<void> {
       assert.strictEqual(String(result), 'ok');
       assert.strictEqual(session.todoState?.todo, '- [ ] write docs');
       assert.strictEqual(session.todoState?.remindEvery, 3);
+      assert.strictEqual(session.todoState?.remindOnTurnEnd, true);
 
       const historyPayload = await fs.readJson(getSessionHistoryFilePath(sessionId));
       assert.strictEqual(historyPayload.todoState?.todo, '- [ ] write docs');
       assert.strictEqual(historyPayload.todoState?.remindEvery, 3);
+      assert.strictEqual(historyPayload.todoState?.remindOnTurnEnd, true);
 
       const cleared = await tool_set_todo({ clear: true }, { sessionId, session });
       assert.strictEqual(String(cleared), 'ok');
@@ -203,6 +205,24 @@ async function main(): Promise<void> {
       );
     });
 
+    await test('set_todo defaults remindEvery to current value or 10 when omitted', async () => {
+      const sessionId = makeSessionId('selftest_todo_default_remind_every');
+      createdSessionIds.push(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await tool_set_todo({ todo: '- [ ] first item' }, { sessionId, session });
+      assert.strictEqual(session.todoState?.remindEvery, 10);
+      assert.strictEqual(session.todoState?.remindOnTurnEnd, true);
+
+      await tool_set_todo({ todo: '- [ ] second item', remindEvery: 4, remindOnTurnEnd: false }, { sessionId, session });
+      assert.strictEqual(session.todoState?.remindEvery, 4);
+      assert.strictEqual(session.todoState?.remindOnTurnEnd, false);
+
+      await tool_set_todo({ todo: '- [ ] third item' }, { sessionId, session });
+      assert.strictEqual(session.todoState?.remindEvery, 4);
+      assert.strictEqual(session.todoState?.remindOnTurnEnd, false);
+    });
+
     await test('turn-end reminder appears once unless final response ends with [NO_ACTION] or todo is cleared', async () => {
       const sessionId = makeSessionId('selftest_todo_endturn');
       createdSessionIds.push(sessionId);
@@ -300,6 +320,30 @@ async function main(): Promise<void> {
       assert.strictEqual(reminderMessages.length, 1);
       assert.strictEqual(reminderMessages[0].__meta?.todoReminderKind, 'end-turn');
       assert.strictEqual(refreshedSession.queue.length, 0);
+    });
+
+    await test('turn-end todo reminder can be disabled via set_todo', async () => {
+      const sessionId = makeSessionId('selftest_todo_disable_endturn');
+      createdSessionIds.push(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await tool_set_todo({ todo: '- [ ] disable end turn', remindEvery: 99, remindOnTurnEnd: false }, { sessionId, session });
+
+      (llm as any).chat = async (parts: Message['parts'] | null, activeSession: Session) => {
+        assert.strictEqual(activeSession.id, sessionId);
+        await appendStubUserMessage(activeSession, parts);
+        await appendStubModelMessage(activeSession, 'Normal reply');
+        return { text: 'Normal reply' };
+      };
+
+      await (router as any).runSessionTurn(sessionId, {
+        parts: [{ text: 'normal turn' }],
+        session,
+        preclaimed: true,
+      });
+
+      const reminderMessages = session.history.filter(message => message.__meta?.todoReminder === true);
+      assert.strictEqual(reminderMessages.length, 0);
     });
 
     await test('interval todo reminder independently triggers a queued follow-up turn', async () => {

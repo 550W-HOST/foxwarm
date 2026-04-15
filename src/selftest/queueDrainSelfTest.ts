@@ -3,6 +3,7 @@ import { MessageRouter } from '../messageRouter';
 import * as sessionManager from '../sessionManager';
 import * as llm from '../llm';
 import * as vector from '../vector';
+import { formatCompactionCompletionMarker } from '../session/history';
 import { Message, MessagePart, Session } from '../types';
 
 function makeSessionId(prefix: string): string {
@@ -210,7 +211,7 @@ async function main(): Promise<void> {
         compactRequestCount += 1;
         await sessionManager.appendSessionMessage(targetSessionId, {
           role: 'user',
-          parts: [{ system: item.completionMarker || 'Compaction completed.' }],
+          parts: [{ system: formatCompactionCompletionMarker(targetSessionId, item.completionMarker || 'Compaction completed.') }],
         });
       };
 
@@ -230,7 +231,7 @@ async function main(): Promise<void> {
         const userTexts = activeSession.history
           .filter(message => message.role === 'user')
           .map(message => message.parts.map(part => part.system || part.text || '').join('\n'));
-        assert(userTexts.some(text => text === 'Compaction completed.'));
+        assert(userTexts.some(text => text === `Compaction completed. (session: \`${sessionId}\`)`));
         await appendStubModelMessage(activeSession, 'handled after compact boundary');
         return { text: 'handled after compact boundary' };
       };

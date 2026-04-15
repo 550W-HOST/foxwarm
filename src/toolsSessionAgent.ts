@@ -10,7 +10,7 @@ import { getAgentDir, resolveModelConfig } from './config';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
 import { AGENTS_DIR, COMPACT_PERCENT } from './config';
-import { clearSessionTodo, normalizeRemindEvery, normalizeTodoText, setSessionTodo } from './session/todo';
+import { clearSessionTodo, normalizeTodoText, resolveSessionTodoRemindEvery, resolveSessionTodoRemindOnTurnEnd, setSessionTodo } from './session/todo';
 import { formatArchiveBlockTimeRange } from './session/layeredContext';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
@@ -801,8 +801,9 @@ export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
       : 'ok';
   }
 
-  const remindEvery = normalizeRemindEvery(args.remindEvery);
-  setSessionTodo(session, todo, remindEvery);
+  const remindEvery = resolveSessionTodoRemindEvery(session, args.remindEvery);
+  const remindOnTurnEnd = resolveSessionTodoRemindOnTurnEnd(session, args.remindOnTurnEnd);
+  setSessionTodo(session, todo, remindEvery, remindOnTurnEnd);
   await sessionManager.saveSession(session.id);
 
   return 'ok';
