@@ -1,0 +1,1 @@
+export function formatToolResponsePayload(response: unknown): string;

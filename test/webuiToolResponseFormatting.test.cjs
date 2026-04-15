@@ -36,12 +36,12 @@ test('structured success tool responses use formatted object preview instead of 
     },
   })
 
-  assert.equal(text, 'count: 1\ntotalMatched: 1\ntools: [{"name":"read","toolId":"builtin:read"}]')
+  assert.equal(text, 'count: 1\ntotalMatched: 1\ntools: [{name: read, toolId: builtin:read}]')
 })
 
-test('single-key object formatting still collapses to value only', () => {
+test('single-key non-output objects keep their key in shared yaml-style formatting', () => {
   assert.equal(formatObject({ count: 3 }), '3')
-  assert.equal(getPrimaryToolResponseText({ name: 'list_mcp_servers', response: { servers: [{ name: 'demo' }] } }), '[{"name":"demo"}]')
+  assert.equal(getPrimaryToolResponseText({ name: 'list_mcp_servers', response: { servers: [{ name: 'demo' }] } }), 'servers: [{name: demo}]')
 })
 
 test('single-key output and content responses still collapse to value only', () => {
@@ -53,7 +53,7 @@ test('single-key output and content responses still collapse to value only', () 
   assert.equal(getPrimaryToolResponseText({
     name: 'read',
     response: { content: 'hello' },
-  }), 'hello')
+  }), 'content: hello')
 })
 
 test('multi-key responses keep sibling fields instead of collapsing to output only', () => {
@@ -67,10 +67,10 @@ test('single-key error responses also collapse to value only via formatObject', 
   assert.equal(formatToolResponseText({
     name: 'edit',
     response: { error: { message: 'failed', code: 'E_FAIL' } },
-  }), '{"message":"failed","code":"E_FAIL"}')
+  }), 'error: {message: failed, code: E_FAIL}')
 
   assert.equal(getPrimaryToolResponseText({
     name: 'search_tools',
     response: { error: 'bad' },
-  }), 'bad')
+  }), 'error: bad')
 })

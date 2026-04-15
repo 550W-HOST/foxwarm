@@ -1,0 +1,6 @@
+{
+  "name": "@foxwarm/shared",
+  "private": true,
+  "main": "./toolResponseFormatting.js",
+  "types": "./toolResponseFormatting.d.ts"
+}
