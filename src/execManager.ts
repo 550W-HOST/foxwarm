@@ -7,7 +7,7 @@ import { STATE_DIR, getAgentDir } from './config';
 import { logger } from './common';
 import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from './execTimeout';
 import { estimateTokenCount } from './tokenCount';
-import { formatTime, getDatedLogPath } from './logRotation';
+import { formatDate, formatTime } from './logRotation';
 import * as sessionManager from './sessionManager';
 
 const RUNNING_EXEC_FILE = path.join(STATE_DIR, 'running-exec.json');
@@ -18,6 +18,8 @@ const PARTIAL_LOG_BYTES = 4000;
 const INLINE_LOG_LIMIT_BYTES = 20000;
 const INLINE_EXCERPT_HALF_BYTES = 5000;
 const BACKGROUND_COMMAND_PREVIEW_LIMIT = 100;
+const EXEC_PATHS_WAIT_TIMEOUT_MS = 1000;
+const EXEC_PATHS_POLL_INTERVAL_MS = 25;
 
 export { DEFAULT_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS };
 
@@ -53,6 +55,12 @@ interface StartPersistentExecOptions {
   agentName?: string;
   nodeId?: string;
   cwd?: string;
+}
+
+interface ResolvedExecPaths {
+  logPath: string;
+  statusPath: string;
+  cwdPath: string;
 }
 
 type ExecCompletionDispatcher = (entry: RunningExecEntry, status: ExecStatus, message: string) => Promise<void>;
@@ -191,19 +199,38 @@ async function updateRunningExec(id: string, updates: Partial<RunningExecEntry>)
 function buildManagedExecScript(command: string): string {
   if (process.platform === 'win32') {
     // PowerShell script: set UTF-8 codepage, run command via cmd /c for shell compatibility,
-    // then write exit status and cwd
+    // choose compact log/status/cwd paths, then run command and write exit status/cwd
     return [
       '$ErrorActionPreference = "Continue"',
       'chcp 65001 | Out-Null',
+      '$basePath = Join-Path $env:FOXWARM_EXEC_LOG_DIR ("{0}_pid{1}" -f $env:FOXWARM_EXEC_TIME_TOKEN, $PID)',
+      '$index = 0',
+      'while ($true) {',
+      '  if ($index -eq 0) {',
+      '    $logPath = "$basePath.log"',
+      '  } else {',
+      '    $logPath = "${basePath}_$index.log"',
+      '  }',
+      '  $statusPath = "$logPath.exit.json"',
+      '  $cwdPath = "$logPath.cwd.txt"',
+      '  if (!(Test-Path -LiteralPath $logPath) -and !(Test-Path -LiteralPath $statusPath) -and !(Test-Path -LiteralPath $cwdPath)) { break }',
+      '  $index += 1',
+      '}',
+      '$pathsTmp = "$env:FOXWARM_EXEC_PATHS_PATH.tmp.$PID"',
+      '$paths = @{ logPath = $logPath; statusPath = $statusPath; cwdPath = $cwdPath } | ConvertTo-Json -Compress',
+      'Set-Content -LiteralPath $pathsTmp -Value $paths',
+      'Move-Item -LiteralPath $pathsTmp -Destination $env:FOXWARM_EXEC_PATHS_PATH -Force',
+      'Start-Transcript -LiteralPath $logPath -Append | Out-Null',
       `cmd /c @"\n${command}\n"@`,
       '$EXIT_CODE = $LASTEXITCODE',
-      '$cwdTmp = "$env:FOXWARM_EXEC_CWD_PATH.tmp.$PID"',
-      '$statusTmp = "$env:FOXWARM_EXEC_STATUS_PATH.tmp.$PID"',
+      '$cwdTmp = "$cwdPath.tmp.$PID"',
+      '$statusTmp = "$statusPath.tmp.$PID"',
       '(Get-Location).Path | Set-Content -LiteralPath $cwdTmp -NoNewline',
-      'Move-Item -LiteralPath $cwdTmp -Destination $env:FOXWARM_EXEC_CWD_PATH -Force',
+      'Move-Item -LiteralPath $cwdTmp -Destination $cwdPath -Force',
       '$status = @{ exitCode = $EXIT_CODE; finishedAt = [DateTime]::UtcNow.ToString("o") } | ConvertTo-Json -Compress',
       'Set-Content -LiteralPath $statusTmp -Value $status',
-      'Move-Item -LiteralPath $statusTmp -Destination $env:FOXWARM_EXEC_STATUS_PATH -Force',
+      'Move-Item -LiteralPath $statusTmp -Destination $statusPath -Force',
+      'Stop-Transcript | Out-Null',
       'exit $EXIT_CODE',
     ].join('\r\n');
   }
@@ -211,6 +238,31 @@ function buildManagedExecScript(command: string): string {
   return [
     '#!/usr/bin/env bash',
     'set +e',
+    'foxwarm_exec_choose_paths() {',
+    '  base_path="${FOXWARM_EXEC_LOG_DIR}/${FOXWARM_EXEC_TIME_TOKEN}_pid$$"',
+    '  index=0',
+    '  while :; do',
+    '    if [ "$index" -eq 0 ]; then',
+    '      log_path="${base_path}.log"',
+    '    else',
+    '      log_path="${base_path}_${index}.log"',
+    '    fi',
+    '    status_path="${log_path}.exit.json"',
+    '    cwd_path="${log_path}.cwd.txt"',
+    '    if [ ! -e "$log_path" ] && [ ! -e "$status_path" ] && [ ! -e "$cwd_path" ]; then',
+    '      break',
+    '    fi',
+    '    index=$((index + 1))',
+    '  done',
+    '  export FOXWARM_EXEC_LOG_PATH="$log_path"',
+    '  export FOXWARM_EXEC_STATUS_PATH="$status_path"',
+    '  export FOXWARM_EXEC_CWD_PATH="$cwd_path"',
+    '  paths_tmp="${FOXWARM_EXEC_PATHS_PATH}.tmp.$$"',
+    "  \"$FOXWARM_EXEC_NODE_PATH\" -e '\''const fs = require(\"fs\"); fs.writeFileSync(process.argv[1], JSON.stringify({ logPath: process.argv[2], statusPath: process.argv[3], cwdPath: process.argv[4] }) + \"\\n\");'\'' \"$paths_tmp\" \"$FOXWARM_EXEC_LOG_PATH\" \"$FOXWARM_EXEC_STATUS_PATH\" \"$FOXWARM_EXEC_CWD_PATH\"", 
+    '  mv "$paths_tmp" "$FOXWARM_EXEC_PATHS_PATH"',
+    '  exec >> "$FOXWARM_EXEC_LOG_PATH" 2>&1',
+    '}',
+    'foxwarm_exec_choose_paths',
     'foxwarm_exec_finalize() {',
     '  exit_code=$?',
     '  cwd_tmp="${FOXWARM_EXEC_CWD_PATH}.tmp.$$"',
@@ -224,6 +276,42 @@ function buildManagedExecScript(command: string): string {
     'set +e',
     command,
   ].join('\n');
+}
+
+function buildResolvedExecPaths(execDir: string, timeToken: string, pid: number, collisionIndex: number = 0): ResolvedExecPaths {
+  const suffix = collisionIndex > 0 ? `_${collisionIndex}` : '';
+  const logPath = path.join(execDir, `${timeToken}_pid${pid}${suffix}.log`);
+  return {
+    logPath,
+    statusPath: `${logPath}.exit.json`,
+    cwdPath: `${logPath}.cwd.txt`,
+  };
+}
+
+async function waitForResolvedExecPaths(pathsPath: string, fallback: ResolvedExecPaths): Promise<ResolvedExecPaths> {
+  const deadline = Date.now() + EXEC_PATHS_WAIT_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    try {
+      const raw = await fs.readJson(pathsPath);
+      if (typeof raw?.logPath === 'string' && typeof raw?.statusPath === 'string' && typeof raw?.cwdPath === 'string') {
+        await fs.remove(pathsPath).catch(() => {});
+        return {
+          logPath: raw.logPath,
+          statusPath: raw.statusPath,
+          cwdPath: raw.cwdPath,
+        };
+      }
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') {
+        logger.warn({ err, pathsPath }, 'Failed to read exec paths metadata; retrying');
+      }
+    }
+
+    await sleep(EXEC_PATHS_POLL_INTERVAL_MS);
+  }
+
+  return fallback;
 }
 
 async function readExecCwd(cwdPath: string): Promise<string | null> {
@@ -478,16 +566,16 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
   const agentDir = getAgentDir(agentName);
   const initialCwd = typeof options.cwd === 'string' && options.cwd.trim().length > 0 ? options.cwd.trim() : agentDir;
   const tempDir = path.join(agentDir, '.temp', 'exec');
+  const startedAt = new Date();
+  const dateDir = path.join(tempDir, formatDate(startedAt));
+  const timeToken = formatTime(startedAt);
 
   await fs.ensureDir(tempDir);
+  await fs.ensureDir(dateDir);
   await fs.ensureDir(initialCwd);
   const execId = `exec_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-  const logFileName = `${execId}_${formatTime()}.log`;
-  const logPath = await getDatedLogPath(tempDir, logFileName);
-  const statusPath = `${logPath}.exit.json`;
-  const scriptPath = `${logPath}.command${process.platform === 'win32' ? '.ps1' : '.sh'}`;
-  const cwdPath = `${logPath}.cwd.txt`;
-  const logHandle = await fsp.open(logPath, 'a');
+  const scriptPath = `${path.join(tempDir, execId)}.command${process.platform === 'win32' ? '.ps1' : '.sh'}`;
+  const pathsPath = path.join(tempDir, `${execId}.paths.json`);
 
   await fs.writeFile(
     scriptPath,
@@ -495,46 +583,44 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
     process.platform === 'win32' ? undefined : { mode: 0o700 },
   );
 
-  let child: ChildProcess;
-  try {
-    const launcher = process.platform === 'win32'
-      ? {
-          command: 'powershell.exe',
-          args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-        }
-      : {
-          command: '/bin/sh',
-          args: [scriptPath],
-        };
+  const launcher = process.platform === 'win32'
+    ? {
+        command: 'powershell.exe',
+        args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+      }
+    : {
+        command: '/bin/sh',
+        args: [scriptPath],
+      };
 
-    child = spawn(launcher.command, launcher.args, {
-      cwd: initialCwd,
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
-        FOXWARM_EXEC_STATUS_PATH: statusPath,
-        FOXWARM_EXEC_CWD_PATH: cwdPath,
-        FOXWARM_EXEC_NODE_PATH: process.execPath,
-      },
-      stdio: ['ignore', logHandle.fd, logHandle.fd],
-      detached: process.platform !== 'win32',  // Don't detach on Windows — avoids new console window
-      windowsHide: true,  // Hide console window on Windows
-      shell: false,
-    });
+  const child: ChildProcess = spawn(launcher.command, launcher.args, {
+    cwd: initialCwd,
+    env: {
+      ...process.env,
+      TERM: 'xterm-256color',
+      FOXWARM_EXEC_LOG_DIR: dateDir,
+      FOXWARM_EXEC_TIME_TOKEN: timeToken,
+      FOXWARM_EXEC_PATHS_PATH: pathsPath,
+      FOXWARM_EXEC_NODE_PATH: process.execPath,
+    },
+    stdio: 'ignore',
+    detached: process.platform !== 'win32',  // Don't detach on Windows — avoids new console window
+    windowsHide: true,  // Hide console window on Windows
+    shell: false,
+  });
 
-    await new Promise<void>((resolve, reject) => {
-      child.once('spawn', () => resolve());
-      child.once('error', reject);
-    });
-  } finally {
-    await logHandle.close().catch(() => {});
-  }
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', () => resolve());
+    child.once('error', reject);
+  });
 
   child.unref();
 
   if (!child.pid) {
     throw new Error('Failed to start background process: missing pid');
   }
+
+  const resolvedPaths = await waitForResolvedExecPaths(pathsPath, buildResolvedExecPaths(dateDir, timeToken, child.pid));
 
   const entry: RunningExecEntry = {
     id: execId,
@@ -544,10 +630,10 @@ export async function startPersistentExec(options: StartPersistentExecOptions): 
     nodeId,
     command,
     initialCwd,
-    logPath,
-    statusPath,
-    cwdPath,
-    startedAt: Date.now(),
+    logPath: resolvedPaths.logPath,
+    statusPath: resolvedPaths.statusPath,
+    cwdPath: resolvedPaths.cwdPath,
+    startedAt: startedAt.getTime(),
     notifyOnCompletion: false,
   };
 

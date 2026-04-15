@@ -4,7 +4,8 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import * as execManager from './execManager';
-import { buildBackgroundTimeoutResult, buildForegroundExecResult, type RunningExecEntry } from './execManager';
+import { buildBackgroundTimeoutResult, buildForegroundExecResult, finalizeForegroundExec, startPersistentExec, waitForExecCompletion, type RunningExecEntry } from './execManager';
+import { getAgentDir } from './config';
 import { definitions, exec, read } from './tools';
 
 function buildExecEntry(logPath: string, overrides: Partial<RunningExecEntry> = {}): RunningExecEntry {
@@ -140,5 +141,35 @@ test('read tool truncated output is wrapped with opening and closing notices', a
     assert.match(String(result), /\n\n\[TOO LONG \(~\d+ tokens\)\] TRUNCATED\. Showing first 10000 chars only\.$/);
   } finally {
     await fs.remove(tempDir);
+  }
+});
+
+test('persistent exec log files use compact time-and-pid filenames under the date directory', async () => {
+  const agentName = `exec_log_name_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const agentDir = getAgentDir(agentName);
+  let execId: string | null = null;
+
+  try {
+    const entry = await startPersistentExec({
+      command: 'echo compact-log-name-test',
+      agentName,
+    });
+    execId = entry.id;
+
+    const status = await waitForExecCompletion(entry.id, 5000);
+    assert.ok(status, 'exec should finish during test timeout');
+
+    const logBaseName = path.basename(entry.logPath);
+    assert.match(logBaseName, /^\d{9}_pid\d+(?:_\d+)?\.log$/);
+    assert.match(entry.logPath, /[\\/]\.temp[\\/]exec[\\/]\d{4}-\d{2}-\d{2}[\\/]/);
+    assert.match(logBaseName, new RegExp(`_pid${entry.pid}(?:_\\d+)?\\.log$`));
+    assert.equal(entry.statusPath, `${entry.logPath}.exit.json`);
+    assert.equal(entry.cwdPath, `${entry.logPath}.cwd.txt`);
+    assert.equal(await fs.pathExists(entry.logPath), true);
+  } finally {
+    if (execId) {
+      await finalizeForegroundExec(execId).catch(() => {});
+    }
+    await fs.remove(agentDir);
   }
 });
