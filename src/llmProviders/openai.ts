@@ -2,48 +2,13 @@ import { StringDecoder } from 'string_decoder';
 import { logger } from '../common';
 import { Message, MessagePart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
+import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };
     error.name = 'AbortError';
     error.code = 'ERR_CANCELED';
     return error;
-}
-
-function stringifyToolOutput(output: unknown): string {
-    if (output === undefined || output === null) {
-        return '';
-    }
-
-    if (typeof output === 'string') {
-        return output;
-    }
-
-    if (typeof output === 'object') {
-        try {
-            return JSON.stringify(output, null, 2);
-        } catch {
-            return '[unserializable object]';
-        }
-    }
-
-    return String(output);
-}
-
-function extractToolResponseOutput(response: any): unknown {
-    if (response === undefined || response === null) {
-        return response;
-    }
-
-    if (Object.prototype.hasOwnProperty.call(response, 'output')) {
-        return response.output;
-    }
-
-    if (Object.prototype.hasOwnProperty.call(response, 'error') && response.error) {
-        return response.error;
-    }
-
-    return response;
 }
 
 function parseSseEventBlock(block: string): any | null {
@@ -198,7 +163,6 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
 
                 if (part.functionResponse) {
                     const resp = part.functionResponse.response || {};
-                    const output = extractToolResponseOutput(resp);
                     const toolId = part.functionResponse.tool_use_id || part.toolUseId;
                     if (!toolId) {
                         logger.warn({ part }, 'Skipping tool response without tool_call_id');
@@ -214,7 +178,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    const outputText = stringifyToolOutput(output);
+                    const outputText = formatToolResponsePayload(resp);
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'text', text: outputText });
                     }
@@ -377,7 +341,6 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
 
                 if (part.functionResponse) {
                     const resp = part.functionResponse.response || {};
-                    const output = extractToolResponseOutput(resp);
                     const toolId = part.functionResponse.tool_use_id || part.toolUseId;
 
                     if (!toolId) {
@@ -394,7 +357,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    const outputText = stringifyToolOutput(output);
+                    const outputText = formatToolResponsePayload(resp);
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'input_text', text: outputText });
                     }

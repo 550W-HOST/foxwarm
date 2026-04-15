@@ -955,6 +955,13 @@ async function indexSessionArchiveInternal(sessionId: string, latestSeqHint?: nu
         }
     }
 
+    // Advance lastIndexedBlockId to latestBlockIdHint when there are no new local blocks to index,
+    // preventing infinite retry loops when the hint indicates blocks exist but local data is empty
+    // (e.g. blocks inherited from parent sessions via lineage).
+    if (nextLastIndexedBlockId < (latestBlockIdHint ?? 0) && blockCount === 0) {
+        nextLastIndexedBlockId = latestBlockIdHint!;
+    }
+
     logger.info({
         sessionId,
         latestSeqHint,

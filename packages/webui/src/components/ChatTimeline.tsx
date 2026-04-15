@@ -13,7 +13,7 @@ import {
   clampContentStyle,
   copyTextToClipboard,
   formatToolLabel,
-  formatObject,
+  formatCompactObjectPreview,
   formatStructuredSystemText,
   getCollapsedReasoningPreview,
   isCollapsibleSystemText,
@@ -32,6 +32,9 @@ import {
   type ToolViewMode,
   type ViewMode,
 } from './chatShared'
+import { formatToolResponsePayload } from '../../../shared/src/toolResponseFormatting'
+
+const formatToolResponseText = (resp: { response: unknown }): string => formatToolResponsePayload(resp.response)
 
 interface ChatTimelineProps {
   messages: Message[]
@@ -310,32 +313,6 @@ const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassN
 
 const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
 
-const formatToolResponseText = (resp: FunctionResponse): string => {
-  if (resp.response?.error !== undefined && resp.response?.error !== null) {
-    return typeof resp.response.error === 'string' ? resp.response.error : JSON.stringify(resp.response.error, null, 2)
-  }
-  if (resp.response?.output !== undefined && resp.response?.output !== null) {
-    return typeof resp.response.output === 'string' ? resp.response.output : JSON.stringify(resp.response.output, null, 2)
-  }
-  if (resp.response?.content !== undefined && resp.response?.content !== null) {
-    return typeof resp.response.content === 'string' ? resp.response.content : JSON.stringify(resp.response.content, null, 2)
-  }
-  return formatObject(resp.response)
-}
-
-const getPrimaryToolResponseText = (resp: FunctionResponse): string | null => {
-  if (resp.response?.error !== undefined && resp.response?.error !== null) {
-    return typeof resp.response.error === 'string' ? resp.response.error : JSON.stringify(resp.response.error, null, 2)
-  }
-  if (resp.response?.output !== undefined && resp.response?.output !== null) {
-    return typeof resp.response.output === 'string' ? resp.response.output : JSON.stringify(resp.response.output, null, 2)
-  }
-  if (resp.response?.content !== undefined && resp.response?.content !== null) {
-    return typeof resp.response.content === 'string' ? resp.response.content : JSON.stringify(resp.response.content, null, 2)
-  }
-  return null
-}
-
 const getToolResponseStatus = (resp: FunctionResponse): 'success' | 'error' => {
   if (resp.response?.error !== undefined && resp.response?.error !== null) {
     return 'error'
@@ -419,7 +396,7 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
 
   if (call.name === 'send_to_session') {
     const targetSessionId = String(call.args.sessionId || '')
-    const message = typeof call.args.message === 'string' ? call.args.message : formatObject(call.args.message)
+    const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
     const preview = message.length > 160 ? `${message.slice(0, 160)}...` : message
     return (
       <span className="flex items-center gap-1 min-w-0" title={`${targetSessionId}: ${message}`}>
@@ -430,7 +407,7 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
     )
   }
 
-  const argsFormatted = formatObject(call.args)
+  const argsFormatted = formatCompactObjectPreview(call.args)
   const preview = argsFormatted.length > 200 ? `${argsFormatted.substring(0, 200)}...` : argsFormatted
   return <span className="truncate break-all">{preview}</span>
 }
@@ -516,7 +493,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
 
   if (call.name === 'send_to_session') {
     const targetSessionId = String(call.args.sessionId || '')
-    const message = typeof call.args.message === 'string' ? call.args.message : formatObject(call.args.message)
+    const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
     return (
       <div className="space-y-1">
         <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">To</span><SessionHashLink sessionId={targetSessionId} /><span>:</span></div>
@@ -525,7 +502,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     )
   }
 
-  return <div className="whitespace-pre-wrap break-all">{formatObject(call.args)}</div>
+  return <div className="whitespace-pre-wrap break-all">{formatCompactObjectPreview(call.args)}</div>
 }
 
 const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): ReactNode | null => {
@@ -549,8 +526,8 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): R
     return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
   }
 
-  const primaryText = getPrimaryToolResponseText(resp)
-  if (primaryText !== null) {
+  const primaryText = formatToolResponseText(resp)
+  if (primaryText) {
     const preview = truncatePreviewText(primaryText, 400)
     return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
   }
@@ -888,7 +865,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
 
     if (call.name === 'send_to_session') {
       const targetSessionId = String(call.args.sessionId || '')
-      const message = typeof call.args.message === 'string' ? call.args.message : formatObject(call.args.message)
+      const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
       const preview = message.length > 200 ? `${message.slice(0, 200)}...` : message
       return (
         <div className="space-y-1">
@@ -902,7 +879,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
       )
     }
 
-    const argsFormatted = formatObject(call.args)
+    const argsFormatted = formatCompactObjectPreview(call.args)
     const preview = argsFormatted.length > 200 ? `${argsFormatted.substring(0, 200)}...` : argsFormatted
     return (
       <div className="space-y-1">
@@ -968,8 +945,8 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
       return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
     }
 
-    const primaryText = getPrimaryToolResponseText(resp)
-    if (primaryText !== null) {
+    const primaryText = formatToolResponseText(resp)
+    if (primaryText) {
       const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
       return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
     }

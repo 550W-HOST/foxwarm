@@ -94,6 +94,8 @@ export const MODEL_HIDDEN_TOOL_NAMES = new Set([
     'remote_node',
     'call_mcp',
     'search_mcp_tools',
+    'node_pair_approve',
+    'node_pair_list',
 ]);
 
 export const MASTER_ONLY_TOOL_NAMES = [
@@ -110,6 +112,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
     'search_tools', 'call_tool',
     'change_current_node',
+    'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
 ];
 
@@ -1575,6 +1578,28 @@ export const change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
   return `Current node changed to \`${nodeId}\``;
 };
 
+export const node_pair_approve = async (args: ToolArgs) => {
+  const { pendingId, nodeId: requestedNodeId } = args;
+  if (!pendingId) throw new Error('Missing required parameter: pendingId');
+
+  const { approvePendingPairing } = await import('./nodes/registry');
+  const result = await approvePendingPairing(pendingId, requestedNodeId || undefined);
+  return `✅ Approved node \`${result.nodeId}\` (delivered live: ${result.deliveredLive})`;
+};
+
+export const node_pair_list = async () => {
+  const { listPendingPairings } = await import('./nodes/registry');
+  const pendings = await listPendingPairings();
+  if (pendings.length === 0) return 'No pending pairing requests.';
+
+  let result = `${pendings.length} pending pairing(s):\n\n`;
+  for (const p of pendings) {
+    const status = p.approvedNodeId ? `approved→${p.approvedNodeId} (unclaimed)` : (p.connected ? 'online' : 'offline');
+    result += `- \`${p.id}\` [${p.nodeType}] name=${p.requestedName || '(none)'} code=${p.pairCode} ${status}\n`;
+  }
+  return result;
+};
+
 export const definitions = [
         {
             name: 'read',
@@ -2275,6 +2300,26 @@ export const definitions = [
                     nodeId: { type: 'string', description: 'Node ID to switch to' }
                 },
                 required: ['nodeId']
+            }
+        },
+        {
+            name: 'node_pair_approve',
+            description: 'Approve a pending node pairing request. Use node_pair_list first to see pending requests.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    pendingId: { type: 'string', description: 'Pending pairing ID (from node_pair_list)' },
+                    nodeId: { type: 'string', description: 'Optional node ID to assign (defaults to requested name)' },
+                },
+                required: ['pendingId']
+            }
+        },
+        {
+            name: 'node_pair_list',
+            description: 'List all pending node pairing requests.',
+            parameters: {
+                type: 'object',
+                properties: {}
             }
         },
         {

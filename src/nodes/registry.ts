@@ -34,6 +34,11 @@ export type PendingPairingRecord = {
   updatedAt: number
   pairCode: string
   capabilities: NodeCapabilitiesSnapshot
+  /** Set when approved but not yet delivered to the client */
+  approvedNodeId?: string
+  /** Plaintext auth token — stored temporarily until client picks it up */
+  approvedAuthToken?: string
+  approvedAt?: number
 }
 
 type NodeRegistryData = {
@@ -302,10 +307,37 @@ export async function approvePendingPairing(pendingId: string, requestedNodeId?:
       ws.close(1000, 'Pairing approved; reconnect with node credentials')
     } catch {}
     deliveredLive = true
+  } else {
+    // Client is offline — keep the pending record with approval info
+    // so the client can pick it up on next reconnect
+    data.pendingPairings[pendingId] = {
+      ...pending,
+      approvedNodeId: nodeId,
+      approvedAuthToken: authToken,
+      approvedAt: now,
+      updatedAt: now,
+    }
+    await saveRegistry()
   }
   pendingSockets.delete(pendingId)
 
   return { nodeId, authToken, pending, deliveredLive }
+}
+
+/** Check if a pending pairing has been approved offline. If so, claim it (delete pending, return credentials). */
+export async function claimApprovedPairing(pendingId: string): Promise<{
+  nodeId: string
+  authToken: string
+} | null> {
+  const data = await loadRegistry()
+  const pending = data.pendingPairings[pendingId]
+  if (!pending || !pending.approvedNodeId || !pending.approvedAuthToken) {
+    return null
+  }
+  const { approvedNodeId, approvedAuthToken } = pending
+  delete data.pendingPairings[pendingId]
+  await saveRegistry()
+  return { nodeId: approvedNodeId, authToken: approvedAuthToken }
 }
 
 export async function rejectPendingPairing(pendingId: string, reason?: string): Promise<void> {

@@ -321,7 +321,7 @@ export class NodesManager {
       // When using call_tool to temporarily execute on a remote node, session.cwd
       // is a master-local path and should not be forwarded.
       const shouldSendCwd = session.currentNode === nodeId && typeof session.cwd === 'string';
-      const timeoutMs = 30000;
+      const timeoutMs = 62000;
 
       node.ws!.send(JSON.stringify({
         type: 'tool_call',

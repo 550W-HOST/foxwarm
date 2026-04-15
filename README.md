@@ -116,27 +116,47 @@ The runtime resolves model definitions in this order:
 2. `state/models.yaml`
 3. `templates/models.example.yaml`
 
-Foxwarm's public setup flow is **YAML-first**: put each provider's connection settings and model list directly in `state/models.yaml`.
+Foxwarm's public setup flow is **YAML-first**: put each provider entry's connection settings and model list directly in `state/models.yaml`.
+
+Preferred schema:
+- root `providers:`
+- each provider entry uses `providerType:` and `models:`
+- `models:` is a list of either string ids or objects with `id`
+
+Backward compatibility:
+- root legacy `models:` is still accepted
+- entry legacy `model:` is still accepted
+- legacy `provider:` is still accepted as an alias of `providerType:`
 
 Example:
 
 ```yaml
 default: openai/gpt-5.2-codex
-models:
+providers:
   openai:
-    provider: openai-completions
+    providerType: openai-completions
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
-    model:
+    contextLimit: 200000
+    extraFields:
+      reasoning:
+        effort: medium
+    models:
       - gpt-5.2-codex
-      - gpt-5.3-codex
+      - id: gpt-5.3-codex
+        contextLimit: 400000
+        extraHeaders:
+          x-model: gpt-5.3-codex
+        extraFields:
+          reasoning:
+            effort: high
       - gpt-5.4
 
   anthropic:
-    provider: anthropic
+    providerType: anthropic
     baseUrl: https://api.anthropic.com
     apiKey: your-anthropic-key
-    model:
+    models:
       - claude-sonnet-4-5
       - claude-sonnet-4-6
       - claude-sonnet-4-5-thinking
@@ -148,6 +168,12 @@ Provider routing semantics:
 - `openai` -> OpenAI Responses API (`/responses`)
 - `openai-responses` -> OpenAI Responses API (`/responses`)
 - `openai-completions` -> legacy chat/completions API (`/chat/completions`)
+
+Merge / precedence rules:
+
+- `contextLimit`: model item > provider entry > app-level global fallback
+- `extraHeaders`: provider entry defaults shallow-merged with model item override
+- `extraFields`: provider entry defaults deep-merged with model item override
 
 You can also replace those provider entries with a local OpenAI-compatible endpoint if you want to use your own hosted model.
 
