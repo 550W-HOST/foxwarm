@@ -1037,7 +1037,7 @@ export function resolveSpawnedSessionModel(
     : undefined;
 }
 
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = true, options?: { node?: string; model?: string }): Promise<string> {
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
   if (fork) {
     // Fork from parent (inherit context)
     return await forkSession(parentSessionId, suffix, true, options);
