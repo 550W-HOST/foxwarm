@@ -186,7 +186,7 @@ function extractAnthropicThinkingTaggedParts(text: string): MessagePart[] | null
 }
 
 function formatMemoryBlock(filePath: string, agentName: string, kind: 'self' | 'inherited', content: string): string {
-    return `\nFILE: ${filePath}\n[MEMORY: agent=${agentName}; ownership=${kind}]\n${content}\n`;
+    return `\n<memory_file agent=${agentName}; ownership=${kind}; path=${filePath}>\n${content}\n</memory_file>`;
 }
 
 function escapeXmlText(value: string): string {
@@ -274,10 +274,10 @@ async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
     combined += '<available_skills>\n';
 
     for (const skill of visibleSkills) {
-        combined += '  <skill>\n';
-        combined += `    <name>${escapeXmlText(skill.name)}</name>\n`;
-        combined += `    <description>${escapeXmlText(skill.description || '')}</description>\n`;
-        combined += '  </skill>\n';
+        combined += '  <skill>';
+        combined += `    <name>${escapeXmlText(skill.name)}</name>`;
+        combined += `    <description>${escapeXmlText(skill.description || '')}</description>`;
+        combined += '</skill>\n';
     }
 
     combined += '</available_skills>\n';

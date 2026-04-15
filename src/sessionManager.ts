@@ -970,7 +970,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   // Add separator message
   appendedForkMessages.push({
     role: 'user',
-    parts: [systemPart('--- HISTORY ABOVE IS INHERITED FROM PARENT SESSION FOR REFERENCE ONLY --- FOLLOW THE INSTRUCTIONS BELOW')],
+    parts: [systemPart('**HISTORY ABOVE IS INHERITED FROM PARENT SESSION FOR REFERENCE ONLY. FOLLOW THE INSTRUCTIONS BELOW**')],
     __meta: { timestamp: Date.now() }
   });
 

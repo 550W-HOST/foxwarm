@@ -114,12 +114,12 @@ function formatPartLines(message: Message, part: MessagePart, options: Required<
 
   if (part.functionCall) {
     const args = truncateText(stringifyFunctionArgs(part), toolCharLimit);
-    lines.push(`[function_call:${part.functionCall.name}] ${args}`);
+    lines.push(`[call:${part.functionCall.name}] ${args}`);
   }
 
   const functionResponse = formatFunctionResponse(part);
   if (functionResponse) {
-    lines.push(`[function_response:${part.functionResponse?.name || 'unknown'}] ${truncateText(functionResponse, toolCharLimit)}`);
+    lines.push(`[tool:${part.functionResponse?.name || 'unknown'}] ${truncateText(functionResponse, toolCharLimit)}`);
   }
 
   const inlineDataRef = part.inlineDataRef as any;
