@@ -280,6 +280,16 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
       const targetPane = findPaneNode(state.root, targetPaneId)
       if (!sourcePane || !targetPane) return state
 
+      if (sourcePane.id === targetPaneId) {
+        return {
+          root: mapLayoutTree(state.root, (node) => {
+            if (node.kind !== 'pane' || node.id !== sourcePane.id) return node
+            return getInsertedPane(getPaneAfterTabRemoval(node, tabId), tabId, options)
+          }),
+          focusedPaneId: options?.activate === false ? state.focusedPaneId : targetPaneId,
+        }
+      }
+
       let nextRoot = mapLayoutTree(state.root, (node) => {
         if (node.kind !== 'pane') return node
         if (node.id === sourcePane.id) {
