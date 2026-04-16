@@ -75,10 +75,13 @@ export default function WorkbenchPane({
   const hasActiveTab = !!activeTabId
   const { active } = useDndContext()
   const dragActive = !!active
+  const containerChromeClass = emphasizeFocus
+    ? (focused ? 'border-blue-300 shadow-[0_0_0_1px_rgba(59,130,246,0.25)] dark:border-blue-500/60' : 'border-gray-200 dark:border-gray-700')
+    : 'border-transparent shadow-none'
 
   return (
     <div
-      className={`relative flex h-full min-h-0 flex-col overflow-hidden border ${focused && emphasizeFocus ? 'border-blue-300 shadow-[0_0_0_1px_rgba(59,130,246,0.25)] dark:border-blue-500/60' : 'border-gray-200 dark:border-gray-700'}`}
+      className={`relative flex h-full min-h-0 flex-col overflow-hidden border ${containerChromeClass}`}
       onMouseDown={() => onFocusPane(paneId)}
     >
       <WorkbenchTabs
