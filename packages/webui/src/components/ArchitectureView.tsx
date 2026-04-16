@@ -247,6 +247,7 @@ export default function ArchitectureView({
   onSelectSession,
   onBack,
 }: ArchitectureViewProps) {
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [showMoreChildren, setShowMoreChildren] = useState<Set<string>>(new Set())
   const [now, setNow] = useState(Date.now())
@@ -260,6 +261,35 @@ export default function ArchitectureView({
   }, [sessions])
 
   const sessionMap = useMemo(() => new Map(sessions.map(session => [session.id, session])), [sessions])
+
+  const agents = useMemo(() => {
+    const agentMap = new Map<string, { name: string; sessionCount: number; busyCount: number }>()
+
+    for (const session of sessions) {
+      const agentName = session.agent || 'main'
+      const existing = agentMap.get(agentName)
+      if (existing) {
+        existing.sessionCount++
+        if (session.busy) existing.busyCount++
+      } else {
+        agentMap.set(agentName, { name: agentName, sessionCount: 1, busyCount: session.busy ? 1 : 0 })
+      }
+    }
+
+    return Array.from(agentMap.values()).sort((a, b) => b.sessionCount - a.sessionCount)
+  }, [sessions])
+
+  // Reset selectedAgent if it no longer exists
+  useEffect(() => {
+    if (selectedAgent && !agents.some(a => a.name === selectedAgent)) {
+      setSelectedAgent(null)
+    }
+  }, [agents, selectedAgent])
+
+  const filteredSessionSet = useMemo(() => {
+    if (!selectedAgent) return null
+    return new Set(sessions.filter(s => (s.agent || 'main') === selectedAgent).map(s => s.id))
+  }, [sessions, selectedAgent])
 
   const aliasMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -296,6 +326,8 @@ export default function ArchitectureView({
     for (const session of sessions) {
       const parentId = normalizedParentMap.get(session.id)
       if (!parentId) continue
+      // When filtering, skip children that don't belong to the selected agent
+      if (filteredSessionSet && !filteredSessionSet.has(session.id)) continue
 
       if (!map.has(parentId)) {
         map.set(parentId, [])
@@ -309,11 +341,22 @@ export default function ArchitectureView({
     }
 
     return map
-  }, [sessions, normalizedParentMap])
+  }, [sessions, normalizedParentMap, filteredSessionSet])
 
   const roots = useMemo(
-    () => sessions.filter(session => !normalizedParentMap.get(session.id)).sort(sortSessions),
-    [sessions, normalizedParentMap],
+    () => {
+      if (!filteredSessionSet) {
+        return sessions.filter(session => !normalizedParentMap.get(session.id)).sort(sortSessions)
+      }
+      // When filtering by agent: a session is a root if it belongs to the selected agent AND
+      // either has no parent or its parent is not in the filtered set
+      return sessions.filter(session => {
+        if (!filteredSessionSet.has(session.id)) return false
+        const parentId = normalizedParentMap.get(session.id)
+        return !parentId || !filteredSessionSet.has(parentId)
+      }).sort(sortSessions)
+    },
+    [sessions, normalizedParentMap, filteredSessionSet],
   )
 
   useEffect(() => {
@@ -435,7 +478,43 @@ export default function ArchitectureView({
         </div>
 
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Sessions</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setSelectedAgent(null)}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                selectedAgent === null
+                  ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
+                  : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-700 dark:hover:bg-gray-700'
+              }`}
+            >
+              All
+              <span className="ml-1.5 text-xs opacity-70">{sessions.length}</span>
+            </button>
+            {agents.map(agent => (
+              <button
+                key={agent.name}
+                onClick={() => setSelectedAgent(prev => prev === agent.name ? null : agent.name)}
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                  selectedAgent === agent.name
+                    ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
+                    : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-700 dark:hover:bg-gray-700'
+                }`}
+              >
+                {agent.name}
+                <span className="ml-1.5 text-xs opacity-70">{agent.sessionCount}</span>
+                {agent.busyCount > 0 && (
+                  <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-200">
+                    {agent.busyCount} busy
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+            Sessions
+            {selectedAgent && <span className="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">filtered by {selectedAgent}</span>}
+          </h2>
 
           <div className="space-y-2">
             {roots.map(root => (
