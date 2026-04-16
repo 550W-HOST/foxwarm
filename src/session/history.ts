@@ -475,7 +475,7 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
     }
 
     const preview = groupedRecords
-      .map(groupRecord => formatMessagePreviewText(groupRecord.message, 40, {
+      .map(groupRecord => formatMessagePreviewText(groupRecord.message, 50, {
         skipEphemeralSystem: true,
         skipRagMemorySnippets: true,
         skipThinking: true,

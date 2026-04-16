@@ -2,7 +2,8 @@ import { ToolDefinition } from '../types';
 
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
 export const COMPACT_FLOW_MAX_ROUNDS = 15;
-const DEFAULT_PREVIEW_CHAR_LIMIT = 80;
+export const DEFAULT_PREVIEW_CHAR_LIMIT = 80;
+const EDGE_PREVIEW_CHAR_LIMIT = 300;
 const COMPACT_FLOW_MEMORY_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'read_memory',
@@ -184,7 +185,7 @@ export function formatSeqRange(startSeq?: number, endSeq?: number): string {
   return '(seq unavailable)';
 }
 
-function trimPreview(text: string, limit: number = DEFAULT_PREVIEW_CHAR_LIMIT): string {
+export function trimPreview(text: string, limit: number = DEFAULT_PREVIEW_CHAR_LIMIT): string {
   const normalized = text.trim().replace(/\s+/g, ' ');
   if (normalized.length <= limit) return normalized;
   return `${normalized.slice(0, limit - 1)}…`;
@@ -196,7 +197,7 @@ export function buildMessageCandidateItem(startSeq: number, endSeq: number, prev
     key: startSeq === endSeq ? `M#${startSeq}` : `M#${startSeq}-#${endSeq}`,
     startSeq,
     endSeq,
-    preview: trimPreview(preview),
+    preview,
   };
 }
 
@@ -208,8 +209,33 @@ export function buildBlockCandidateItem(id: number, level: number, rawStartSeq: 
     level,
     rawStartSeq,
     rawEndSeq,
-    preview: trimPreview(summary),
+    preview: summary,
   };
+}
+
+interface CandidateGroup {
+  targetLevel: number;
+  items: CompactCandidateItem[];
+}
+
+function getCandidateTargetLevel(item: CompactCandidateItem): number {
+  return item.kind === 'message' ? 1 : item.level + 1;
+}
+
+function groupCandidatesByTargetLevel(items: CompactCandidateItem[]): CandidateGroup[] {
+  const groups: CandidateGroup[] = [];
+  let currentGroup: CandidateGroup | null = null;
+
+  for (const item of items) {
+    const targetLevel = getCandidateTargetLevel(item);
+    if (!currentGroup || currentGroup.targetLevel !== targetLevel) {
+      currentGroup = { targetLevel, items: [] };
+      groups.push(currentGroup);
+    }
+    currentGroup.items.push(item);
+  }
+
+  return groups;
 }
 
 export function buildCompactPromptText(options: {
@@ -223,16 +249,28 @@ export function buildCompactPromptText(options: {
   const lines: string[] = [
     'COMPACTION STARTED: stop any previous task and focus only on layered-context compaction.',
     `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. No need to summarize/replace them.`,
-    'Compaction candidates (for seq/id reference):',
   ];
 
-  for (const item of candidateItems) {
-    if (item.kind === 'message') {
-      lines.push(`- ${item.key} ${item.preview || '[empty message]'}`);
-      continue;
-    }
+  // Group consecutive candidates by target summary level and render with group headers
+  const groups = groupCandidatesByTargetLevel(candidateItems);
 
-    lines.push(`- ${item.key} L${item.level} raw${formatSeqRange(item.rawStartSeq, item.rawEndSeq)} ${item.preview || '[empty block]'}`);
+  for (const group of groups) {
+    lines.push(`Items below can be optionally summarized into L${group.targetLevel} blocks:`);
+
+    const count = group.items.length;
+    for (let i = 0; i < count; i++) {
+      const item = group.items[i];
+      const isEdge = i < 2 || i >= count - 2;
+      const limit = isEdge ? EDGE_PREVIEW_CHAR_LIMIT : DEFAULT_PREVIEW_CHAR_LIMIT;
+
+      if (item.kind === 'message') {
+        const preview = trimPreview(item.preview, limit) || '[empty message]';
+        lines.push(`- ${item.key} ${preview}`);
+      } else {
+        const preview = trimPreview(item.preview, limit) || '[empty block]';
+        lines.push(`- ${item.key} L${item.level} raw${formatSeqRange(item.rawStartSeq, item.rawEndSeq)} ${preview}`);
+      }
+    }
   }
 
   lines.push(
