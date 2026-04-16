@@ -114,6 +114,41 @@ test('child default model falls back to current session model when unset, then u
   }
 });
 
+test('create_child_session defaults to non-fork when fork is omitted', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const parentSessionId = makeId('child_default_nonfork_parent');
+  const childSessionId = `${parentSessionId}_implicit_default`;
+
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.history = [
+      {
+        role: 'user',
+        parts: [{ text: 'parent-only history' }],
+      },
+    ];
+    await sessionManager.saveSession(parentSessionId);
+
+    const result = await tool_create_child_session(
+      { suffix: 'implicit_default' },
+      { sessionId: parentSessionId, session: parent },
+    );
+
+    assert.match(String(result), /new session/i);
+
+    const child = await sessionManager.getSession(childSessionId);
+    assert.equal(child.model, primary);
+    assert.equal(child.history.length, 1);
+    assert.equal(child.history[0]?.role, 'user');
+    assert.match(String(child.history[0]?.parts?.[0]?.system || ''), /new, empty context/i);
+    assert.doesNotMatch(JSON.stringify(child.history), /parent-only history/);
+  } finally {
+    await sessionManager.deleteSession(childSessionId).catch(() => {});
+    await sessionManager.deleteSession(parentSessionId).catch(() => {});
+  }
+});
+
 test('forked child sessions append inherited tool responses as tool-role messages', async () => {
   await sessionManager.loadSessions();
   const parentSessionId = makeId('fork_tool_role_parent');

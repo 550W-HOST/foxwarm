@@ -53,3 +53,26 @@ test('set_todo returns concise output without echoing todo content or remindEver
     }
   }
 });
+
+test('set_todo accepts omitted remindEvery and configurable remindOnTurnEnd', async () => {
+  await sessionManager.loadSessions();
+  const sessionId = makeSessionId('tool_result_todo_optional');
+  const session = await ensureSession(sessionId);
+  try {
+    const updated = await tool_set_todo({ todo: '- [ ] ship feature', remindOnTurnEnd: false }, { sessionId, session });
+    assert.equal(updated, 'ok');
+    assert.equal(session.todoState?.remindEvery, 10);
+    assert.equal(session.todoState?.remindOnTurnEnd, false);
+
+    const second = await tool_set_todo({ todo: '- [ ] ship feature later' }, { sessionId, session });
+    assert.equal(second, 'ok');
+    assert.equal(session.todoState?.remindEvery, 10);
+    assert.equal(session.todoState?.remindOnTurnEnd, false);
+  } finally {
+    try {
+      await sessionManager.deleteSession(sessionId);
+    } catch {
+      // ignore cleanup failures in test
+    }
+  }
+});

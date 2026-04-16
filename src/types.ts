@@ -63,6 +63,7 @@ export interface SessionStreamEvent {
 export interface SessionTodoState {
   todo: string;
   remindEvery: number;
+  remindOnTurnEnd?: boolean;
   anchorSeq: number;
   updatedAt: number;
 }

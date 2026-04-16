@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import { createSessionFrontierStore, formatArchiveBlockTimeRange, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import { formatCompactionCompletionMarker } from './history';
 import { Message } from '../types';
 import { formatLocalTimeRange } from '../utils/localTime';
 
@@ -41,6 +42,12 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
     __meta: { seq: 11 },
   };
   assert.equal(shouldIgnoreMessageInCompactCandidates(mixedContent), false);
+});
+
+test('formatCompactionCompletionMarker appends the session id without changing the base message prefix', () => {
+  const text = formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.');
+  assert.equal(text, 'Compaction completed. You can continue working now. (session: `session-123`)');
+  assert.equal(isIgnoredCompactLifecycleSystemText(text), true);
 });
 
 test('session frontier store uses lightweight no-backup writes', async () => {

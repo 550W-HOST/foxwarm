@@ -222,28 +222,8 @@ export function buildCompactPromptText(options: {
   const { forcedKeptCount, forcedKeptStartSeq, forcedKeptEndSeq, candidateItems, guidance } = options;
   const lines: string[] = [
     'COMPACTION STARTED: stop any previous task and focus only on layered-context compaction.',
-    `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. Do not replace them.`,
-    `Review the older candidate items below and finish by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
-    'Rules:',
-    '- Pass the plan via createBlocksJson as a JSON array string.',
-    '- createBlocksJson may include one or more new blocks.',
-    '- A block must summarize a continuous range of same-kind candidate items only.',
-    '- Level 1 blocks summarize raw messages (sourceKind=message).',
-    '- Higher-level blocks summarize existing blocks from the immediately lower level (sourceKind=block and level = child level + 1).',
-    '- Items not covered by createBlocks stay verbatim in working history.',
-    '- Do not overlap source ranges across createBlocks.',
-    '- Keep each summary compact, factual, and continuation-oriented.',
-    '- Preserve decisions, rationale that still matters, constraints, active tasks, blockers, unresolved questions, and concrete identifiers (paths, commits, branches, nodes, URLs, session IDs, config names).',
-    '- Prefer current state plus what remains over conversational narration.',
-    '- Mention when an earlier plan or decision was superseded by a later one if that matters for future work.',
-    '- Drop filler, repetition, resolved low-value process chatter, and tool-internal mechanics unless they matter to continue safely.',
-    `- You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including helper-tool rounds and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,
-    '- If durable project/user/workflow facts should outlive this session, you may use read_memory/write_memory/edit_memory/delete_memory/apply_patch_memory before submitting the final plan.',
-    '- If you need more detail from compacted history, use get_context_archive, get_archived_messages, or get_archived_blocks.',
-    `- You may use only these helper tools during compaction: read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, get_context_archive, get_archived_messages, get_archived_blocks, and ${COMPACT_PLAN_TOOL_NAME}.`,
-    '',
-    ...(guidance ? ['Additional requester guidance:', guidance, ''] : []),
-    'Older compaction candidates:',
+    `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. No need to summarize/replace them.`,
+    'Compaction candidates (for seq/id reference):',
   ];
 
   for (const item of candidateItems) {
@@ -254,6 +234,25 @@ export function buildCompactPromptText(options: {
 
     lines.push(`- ${item.key} L${item.level} raw${formatSeqRange(item.rawStartSeq, item.rawEndSeq)} ${item.preview || '[empty block]'}`);
   }
+
+  lines.push(
+    `Review the older candidate items above and finish by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
+    'Rules:',
+    '- Pass the plan via createBlocksJson as a JSON array string.',
+    '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
+    '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim.',
+    '- Blocks must have same kind and same level of source.',
+    '- Blocks must not overlap source ranges across createBlocks.',
+    '- Blocks must not separate seq/id range inside a candidate (can not separate a tool call and its response).',
+    '- Keep each summary compact, factual, and continuation-oriented.',
+    '- Preserve decisions, rationale that still matters, constraints, active tasks, blockers, unresolved questions, and concrete identifiers (paths, commits, branches, nodes, URLs, session IDs, config names).',
+    '- Mention when an earlier plan or decision was superseded by a later one if that matters for future work.',
+    `- You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including helper-tool rounds and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,
+    '- If durable project/user/workflow/rule facts should outlive this session, you may use edit_memory/apply_patch_memory before submitting the final plan.',
+    `- You may use only these helper tools during compaction: read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, get_context_archive, get_archived_messages, get_archived_blocks, and call ${COMPACT_PLAN_TOOL_NAME} to finish the compaction.`,
+    '',
+    ...(guidance ? ['Additional guidance from compaction requester:', guidance, ''] : []),
+  );
 
   return lines.join('\n');
 }

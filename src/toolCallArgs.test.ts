@@ -1,9 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'path';
 
 import { executeTools, fixToolCalls } from './llm';
 import { convertToOpenAIFormat, convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { parseFunctionCallArgs } from './toolCallArgs';
+import * as sessionManager from './sessionManager';
+
+function makeSessionId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function makeMissingFilePath(): string {
+  return path.join(process.cwd(), `.missing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+}
+
+function hasStopCurrentTurn(toolMessage: any): boolean {
+  return toolMessage?.__toolLoopControl?.stopCurrentTurn === true;
+}
 
 test('parseFunctionCallArgs preserves malformed raw JSON and reports structured error', () => {
   const rawArgsText = '{"filePath":';
@@ -40,6 +54,109 @@ test('executeTools turns malformed tool arguments into a structured tool error',
       },
     },
   });
+});
+
+test('executeTools suppresses end_turn when a later tool in the batch returns an error', async () => {
+  const sessionId = makeSessionId('tool_end_turn_after_error_late');
+  const toolMessage = await executeTools(
+    [
+      { id: 'call_end_turn_first', name: 'end_turn', args: {} },
+      { id: 'call_read_missing', name: 'read', args: { filePath: makeMissingFilePath() } },
+    ],
+    { sessionId, session: { agent: 'main' } },
+    { agent: 'main', verbose: false },
+  );
+
+  try {
+    assert.equal(hasStopCurrentTurn(toolMessage), false);
+    assert.equal(toolMessage.parts.length, 2);
+    assert.equal(toolMessage.parts[1].functionResponse?.name, 'read');
+    assert.notEqual(toolMessage.parts[1].functionResponse?.response?.error, undefined);
+    assert.notEqual(toolMessage.parts[1].functionResponse?.response?.error, null);
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('executeTools suppresses end_turn when an earlier tool in the batch returns an error', async () => {
+  const sessionId = makeSessionId('tool_end_turn_after_error_early');
+  const toolMessage = await executeTools(
+    [
+      { id: 'call_read_missing', name: 'read', args: { filePath: makeMissingFilePath() } },
+      { id: 'call_end_turn_last', name: 'end_turn', args: {} },
+    ],
+    { sessionId, session: { agent: 'main' } },
+    { agent: 'main', verbose: false },
+  );
+
+  try {
+    assert.equal(hasStopCurrentTurn(toolMessage), false);
+    assert.equal(toolMessage.parts.length, 2);
+    assert.equal(toolMessage.parts[0].functionResponse?.name, 'read');
+    assert.notEqual(toolMessage.parts[0].functionResponse?.response?.error, undefined);
+    assert.notEqual(toolMessage.parts[0].functionResponse?.response?.error, null);
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('executeTools keeps end_turn behavior for successful send_to_session handoff batches', async () => {
+  const sourceSessionId = makeSessionId('tool_end_turn_handoff_source');
+  const targetSessionId = makeSessionId('tool_end_turn_handoff_target');
+
+  await sessionManager.getSession(sourceSessionId);
+  await sessionManager.getSession(targetSessionId);
+
+  const toolMessage = await executeTools(
+    [
+      { id: 'call_send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'handoff ok' } },
+      { id: 'call_end_turn', name: 'end_turn', args: {} },
+    ],
+    { sessionId: sourceSessionId, session: { agent: 'main' } },
+    { agent: 'main', verbose: false },
+  );
+
+  try {
+    assert.equal(hasStopCurrentTurn(toolMessage), true);
+    assert.equal(toolMessage.parts.length, 2);
+    assert.deepEqual(toolMessage.parts.map(part => part.functionResponse?.name), ['send_to_session', 'end_turn']);
+    assert.equal(toolMessage.parts[0].functionResponse?.response?.error, undefined);
+    assert.equal(toolMessage.parts[1].functionResponse?.response?.error, undefined);
+  } finally {
+    await sessionManager.deleteSession(sourceSessionId).catch(() => false);
+    await sessionManager.deleteSession(targetSessionId).catch(() => false);
+  }
+});
+
+test('executeTools suppresses end_turn when malformed tool arguments produce a structured error', async () => {
+  const sessionId = makeSessionId('tool_end_turn_bad_args');
+  const toolMessage = await executeTools(
+    [
+      {
+        id: 'call_bad_args',
+        name: 'read',
+        args: {},
+        rawArgsText: '{"filePath":',
+        argsParseError: 'Invalid tool arguments JSON: Unexpected end of JSON input',
+      },
+      { id: 'call_end_turn', name: 'end_turn', args: {} },
+    ],
+    { sessionId, session: { agent: 'main' } },
+    { agent: 'main', verbose: false },
+  );
+
+  try {
+    assert.equal(hasStopCurrentTurn(toolMessage), false);
+    assert.equal(toolMessage.parts.length, 2);
+    assert.equal(toolMessage.parts[0].functionResponse?.name, 'read');
+    assert.deepEqual(toolMessage.parts[0].functionResponse?.response?.error, {
+      type: 'invalid_tool_arguments',
+      message: 'Invalid tool arguments JSON: Unexpected end of JSON input',
+      rawArgsText: '{"filePath":',
+    });
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
 });
 
 test('OpenAI serializers preserve raw tool argument text exactly', () => {

@@ -73,8 +73,6 @@ type UnifiedToolSource = 'builtin' | 'mcp' | 'node';
 const WORKSPACE = WORKSPACE_DIR;
 fs.ensureDirSync(getAgentDir('main'));
 
-const OPTIONAL_NODE_DESCRIPTION = 'Optional. Empty = current node; avoid `current`.';
-
 export const MODEL_HIDDEN_TOOL_NAMES = new Set([
     'browse_open',
     'browse_list',
@@ -1800,7 +1798,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     suffix: { type: 'string', description: 'Suffix to append to session ID for identification (e.g., "task1", "research")' },
-                    fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: true', default: true },
+                    fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: false', default: false },
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
                     node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' }
                 },
@@ -1809,7 +1807,7 @@ export const definitions = [
         },
         {
             name: 'send_to_session',
-            description: 'Send a message to a specific session (including child sessions). The message will be queued and processed by that session. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call end_turn afterward in the same response.',
+            description: 'Send a message to a specific agent/session. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call end_turn in parallel in the same response.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1821,7 +1819,7 @@ export const definitions = [
         },
         {
             name: 'end_turn',
-            description: 'Stop the current assistant turn after the current batch of tool calls finishes. Use this after handoff tools like send_to_session or create_child_session when you do not want to add any further assistant reply in the current session.',
+            description: 'End current session turn, in the other words, pause the current session running after the current batch of tool calls finishes, until a message/event triggers current session. Use this when you are waiting for system events / notifications, and feeling no tool calls and reply needed at this moment. Can be call in parallel with other tools for less LLM request count.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1831,7 +1829,7 @@ export const definitions = [
         },
         {
             name: 'send_to_channel',
-            description: 'Send a message directly to a specific channel target by channelTargetId (<channel-instance-id>:<conversation-id>).',
+            description: 'Send a message directly to users by specific channel by channelTargetId (<channel-instance-id>:<conversation-id>).',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1843,12 +1841,12 @@ export const definitions = [
         },
         {
             name: 'send_file',
-            description: 'Send a local file or image to a specific channel target, or to all non-push-only channels attached to a session. Exactly one of sessionId or channelTargetId is required.',
+            description: 'Send a local file or image to users. Exactly one of channelTargetId or sessionId is required. If sessionId is specified, the message to will be sent to all channels attached to the session.',
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Target session ID whose attached channels should receive the file' },
                     channelTargetId: { type: 'string', description: 'Target channel in format <channel-instance-id>:<conversation-id>' },
+                    sessionId: { type: 'string', description: 'Target session ID whose attached channels should receive the file' },
                     filePath: { type: 'string', description: 'File path on the selected node. Relative paths are resolved under the current agent folder on that node; absolute paths and ~/... are also accepted when allowed.' },
                     node: { type: 'string', description: 'Optional. Node where the file lives. Defaults to the current node; send_file still delivers through master-side channel/session routing.' },
                     caption: { type: 'string', description: 'Optional caption/text sent with the file where supported' },
@@ -1910,7 +1908,7 @@ export const definitions = [
                     sessionId: { type: 'string', description: 'Session ID' },
                     start: { type: 'number', description: 'Start index (0-based, optional). Negative values count from end (e.g., -10 for last 10 messages)' },
                     count: { type: 'number', description: 'Number of messages to retrieve (optional)' },
-                    previewLength: { type: 'number', description: 'Maximum length of message preview (default: 100)' }
+                    previewLength: { type: 'number', description: 'Maximum preview length per message (default: 100)' }
                 },
                 required: ['sessionId']
             }
@@ -1924,7 +1922,7 @@ export const definitions = [
                     sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
                     startSeq: { type: 'number', description: 'Optional inclusive starting seq number' },
                     endSeq: { type: 'number', description: 'Optional inclusive ending seq number' },
-                    previewLength: { type: 'number', description: 'Maximum preview length per archived message (default: 1000)' }
+                    previewLength: { type: 'number', description: 'Maximum preview length per message (default: 1000)' }
                 }
             }
         },
@@ -1937,13 +1935,13 @@ export const definitions = [
                     sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
                     startId: { type: 'number', description: 'Optional inclusive starting block id' },
                     endId: { type: 'number', description: 'Optional inclusive ending block id' },
-                    previewLength: { type: 'number', description: 'Maximum length per block summary preview (default: 1000)' }
+                    previewLength: { type: 'number', description: 'Maximum preview length per block summary (default: 1000)' }
                 }
             }
         },
         {
             name: 'get_context_archive',
-            description: 'Unified archived-context inspection helper. Use this when you want archived raw messages, layered blocks, or both without deciding between separate tools first.',
+            description: 'Unified archived-context inspection helper. Use this when you want archived raw messages or layered CTX-BLOCKs.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1988,7 +1986,8 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     todo: { type: 'string', description: 'Markdown checklist text like `- [ ] first item`. Use empty string to clear.' },
-                    remindEvery: { type: 'number', description: 'Remind after this many later non-reminder session messages.' },
+                    remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current todo setting or default to 10.' },
+                    remindOnTurnEnd: { type: 'boolean', description: 'Optional. Whether to inject todo reminders at the end of a turn when newer work happened. If omitted, reuse the current setting or default to true.' },
                     clear: { type: 'boolean', description: 'If true, clear the current session todo reminder.' }
                 }
             }

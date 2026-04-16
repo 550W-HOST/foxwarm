@@ -6,6 +6,7 @@ const TODO_REMINDER_META_KEY = 'todoReminder';
 const TODO_REMINDER_SYSTEM_PREFIX = 'TODO reminder for this session:';
 const TODO_REMINDER_GUIDANCE = 'Update it: mark done items [x], reorder/edit remaining work, and clear it if finished.';
 const CHECKLIST_ITEM_REGEX = /(?:^|\n)\s*-\s*\[\s\]\s+\S/;
+export const DEFAULT_TODO_REMIND_EVERY = 10;
 
 type TodoReminderKind = 'interval' | 'end-turn';
 
@@ -21,6 +22,14 @@ export function normalizeRemindEvery(value: unknown): number {
   }
 
   return normalized;
+}
+
+export function normalizeRemindOnTurnEnd(value: unknown): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error('remindOnTurnEnd must be a boolean.');
+  }
+
+  return value;
 }
 
 export function normalizeTodoText(value: unknown): string {
@@ -150,13 +159,35 @@ export function countNonReminderMessagesAfterSeq(session: Session, anchorSeq: nu
   return count;
 }
 
-export function setSessionTodo(session: Session, todo: string, remindEvery: number): SessionTodoState {
+export function resolveSessionTodoRemindEvery(session: Session, value: unknown): number {
+  if (value !== undefined) {
+    return normalizeRemindEvery(value);
+  }
+
+  if (typeof session.todoState?.remindEvery === 'number') {
+    return normalizeRemindEvery(session.todoState.remindEvery);
+  }
+
+  return DEFAULT_TODO_REMIND_EVERY;
+}
+
+export function resolveSessionTodoRemindOnTurnEnd(session: Session, value: unknown): boolean {
+  if (value !== undefined) {
+    return normalizeRemindOnTurnEnd(value);
+  }
+
+  return session.todoState?.remindOnTurnEnd !== false;
+}
+
+export function setSessionTodo(session: Session, todo: string, remindEvery: number, remindOnTurnEnd: boolean = true): SessionTodoState {
   const normalizedTodo = normalizeTodoText(todo);
   const normalizedRemindEvery = normalizeRemindEvery(remindEvery);
+  const normalizedRemindOnTurnEnd = normalizeRemindOnTurnEnd(remindOnTurnEnd);
 
   const state: SessionTodoState = {
     todo: normalizedTodo,
     remindEvery: normalizedRemindEvery,
+    remindOnTurnEnd: normalizedRemindOnTurnEnd,
     anchorSeq: getLatestSessionMessageSeq(session),
     updatedAt: Date.now(),
   };
@@ -207,6 +238,10 @@ export function maybeBuildTodoReminderMessage(session: Session): Message | null 
 export function maybeBuildTodoEndTurnReminderMessage(session: Session): Message | null {
   const state = session.todoState;
   if (!state) {
+    return null;
+  }
+
+  if (state.remindOnTurnEnd === false) {
     return null;
   }
 

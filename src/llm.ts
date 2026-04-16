@@ -186,7 +186,7 @@ function extractAnthropicThinkingTaggedParts(text: string): MessagePart[] | null
 }
 
 function formatMemoryBlock(filePath: string, agentName: string, kind: 'self' | 'inherited', content: string): string {
-    return `\nFILE: ${filePath}\n[MEMORY: agent=${agentName}; ownership=${kind}]\n${content}\n`;
+    return `\n<memory_file agent=${agentName}; ownership=${kind}; path=${filePath}>\n${content}\n</memory_file>`;
 }
 
 function escapeXmlText(value: string): string {
@@ -274,10 +274,10 @@ async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
     combined += '<available_skills>\n';
 
     for (const skill of visibleSkills) {
-        combined += '  <skill>\n';
-        combined += `    <name>${escapeXmlText(skill.name)}</name>\n`;
-        combined += `    <description>${escapeXmlText(skill.description || '')}</description>\n`;
-        combined += '  </skill>\n';
+        combined += '  <skill>';
+        combined += `    <name>${escapeXmlText(skill.name)}</name>`;
+        combined += `    <description>${escapeXmlText(skill.description || '')}</description>`;
+        combined += '</skill>\n';
     }
 
     combined += '</available_skills>\n';
@@ -632,6 +632,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
     const parts = [];
     let stopCurrentTurn = false;
+    let batchHasError = false;
 
     const normalizeToolResult = (rawResult: any): any => {
         if (rawResult === undefined) return { output: '(No output)' };
@@ -680,6 +681,13 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         stopCurrentTurn = stopCurrentTurn || !!result.__toolLoopControl.stopCurrentTurn;
         const { __toolLoopControl, ...rest } = result;
         return rest;
+    };
+
+    const hasToolResponseError = (result: any): boolean => {
+        if (!result || typeof result !== 'object') {
+            return false;
+        }
+        return result.error !== undefined && result.error !== null;
     };
     
     for (const call of functionCalls) {
@@ -808,6 +816,8 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
                 result = { ...result, output: `[Screenshot of ${call.args.tabId || 'page'}]` };
             }
         }
+
+        batchHasError = batchHasError || hasToolResponseError(result);
         
         parts.push({
             functionResponse: {
@@ -823,8 +833,10 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         parts: parts
     };
 
-    if (stopCurrentTurn) {
+    if (stopCurrentTurn && !batchHasError) {
         (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true };
+    } else if (stopCurrentTurn && batchHasError) {
+        logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
 
     return toolMessage;

@@ -603,7 +603,7 @@ async function finalizeCompaction(
 
   const completionMessage: Message = {
     role: 'user',
-    parts: [{ system: completionMarker }],
+    parts: [{ system: formatCompactionCompletionMarker(sessionId, completionMarker) }],
     __meta: { timestamp: Date.now() },
   };
   await appendMessagesToArchive(session, [completionMessage]);
@@ -621,6 +621,13 @@ async function finalizeCompaction(
   if (session.broadcast) {
     session.broadcast(completionBroadcastMessage || `Layered-context compaction completed. Created ${createdBlockCount} block(s) replacing ${replacedItemCount} older item(s).`);
   }
+}
+
+export function formatCompactionCompletionMarker(sessionId: string, completionMarker: string): string {
+  const suffix = ` (session: \`${sessionId}\`)`;
+  return completionMarker.endsWith(suffix)
+    ? completionMarker
+    : `${completionMarker}${suffix}`;
 }
 
 async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot): Promise<CompactJobResult> {
