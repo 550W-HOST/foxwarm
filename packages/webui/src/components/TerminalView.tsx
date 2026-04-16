@@ -308,8 +308,8 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
-      <div className="border-b border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+        <div className="flex h-16 items-center justify-between gap-3 px-3">
           <div className="flex items-center gap-3">
             {onBack && (
               <button
@@ -339,7 +339,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => onOpenWorkspace?.(terminalInfo?.cwd || requestedCwd)}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
@@ -361,8 +361,10 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
         </div>
 
         {error && (
-          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
-            {error}
+          <div className="px-3 pb-3">
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
+              {error}
+            </div>
           </div>
         )}
       </div>

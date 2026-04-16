@@ -836,7 +836,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
-      <div className="sticky top-0 z-30 h-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4">
+      <div className="sticky top-0 z-30 h-16 border-b border-gray-200 bg-white px-3 dark:border-gray-700 dark:bg-gray-800">
         <div className="flex h-full items-center justify-between">
           <div className="flex items-center space-x-3 min-w-0">
             {isMobile && onBack && (

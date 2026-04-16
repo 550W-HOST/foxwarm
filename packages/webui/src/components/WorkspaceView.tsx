@@ -477,8 +477,8 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
-      <div className="border-b border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+        <div className="flex h-16 items-center justify-between gap-3 px-3">
           <div className="flex items-center gap-3">
             {onBack && (
               <button
@@ -497,7 +497,7 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
             {activeFilePath && onOpenFile && (
               <button
                 onClick={() => onOpenFile(rootNodeId, activeFilePath)}
@@ -538,18 +538,21 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
           </div>
         </div>
 
-        {error && (
-          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
-            {error}
+        {(error || notice) && (
+          <div className="px-3 pb-3">
+            {error && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
+                {error}
+              </div>
+            )}
+
+            {notice && !error && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200">
+                {notice}
+              </div>
+            )}
           </div>
         )}
-
-        {notice && !error && (
-          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200">
-            {notice}
-          </div>
-        )}
-
       </div>
 
       <div className="flex min-h-0 flex-1">
