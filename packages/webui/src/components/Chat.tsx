@@ -148,6 +148,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
   const [sessionFilePayload, setSessionFilePayload] = useState<SessionFilePayload | null>(null)
 
   const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const chatRootRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const lastKnownTimestampRef = useRef<number>(0)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -156,6 +157,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
   const shouldAutoScrollRef = useRef<boolean>(true)
   const pendingSentMessagesRef = useRef<string[]>([])
   const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
+  const composerHeightRef = useRef<number | null>(null)
 
   useEffect(() => {
     setProcessingReasoningSummary('')
@@ -210,6 +212,15 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
     if (container) {
       container.scrollTop = container.scrollHeight
     }
+  }, [])
+
+  const handleComposerHeightChange = useCallback((height: number) => {
+    const nextHeight = Math.max(0, Math.round(height))
+    if (composerHeightRef.current === nextHeight) {
+      return
+    }
+    composerHeightRef.current = nextHeight
+    chatRootRef.current?.style.setProperty('--chat-composer-offset', `${nextHeight}px`)
   }, [])
 
   useEffect(() => {
@@ -824,7 +835,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
   }, [messages])
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden">
+    <div ref={chatRootRef} className="relative flex h-full flex-col overflow-hidden">
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionId}
@@ -910,7 +921,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
             processingReasoningSummary={processingReasoningSummary}
             isMobile={isMobile}
           />
-          <div className="h-56 md:h-52" />
+          <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
         </div>
 
         {showScrollTopButton && (
@@ -929,6 +940,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
           <button
             onClick={scrollToBottom}
             className="absolute bottom-4 right-4 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            style={{ bottom: 'calc(var(--chat-composer-offset, 224px) + 1rem)' }}
             aria-label="Scroll to bottom"
           >
             <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -945,6 +957,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
         asrAvailable={asrAvailable}
         sendKeyMode={sendKeyMode}
         onToggleSendKeyMode={onToggleSendKeyMode}
+        onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
         onTranscribeAudio={handleTranscribeAudio}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
