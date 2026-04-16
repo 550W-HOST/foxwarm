@@ -41,24 +41,24 @@ export default function SessionList({
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">🦊 Foxwarm</h1>
 
-        <div className="mt-3 flex items-stretch gap-2">
+        <div className="mt-2 flex items-stretch gap-1">
           <button
             onClick={onSelectArchitecture}
-            className={`inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition-colors ${agentsBtnClass}`}
+            className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${agentsBtnClass}`}
           >
             <Workflow className="w-4 h-4" />
             <span>Agents</span>
           </button>
           <button
             onClick={onCreateSession}
-            className="inline-flex items-center justify-center rounded-xl px-3 text-sm font-medium transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700"
+            className="inline-flex items-center justify-center rounded-lg px-2 text-sm font-medium transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700"
             title="Create new session"
           >
-            <Plus className="w-5 h-5" />
+            <Plus className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="mt-2 flex items-start gap-2">
+        <div className="mt-2 flex items-start gap-1">
           <div className="flex-1 min-w-0">
             <CreateTabButton
               kind="workspace"
