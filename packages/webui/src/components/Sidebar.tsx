@@ -2,12 +2,18 @@ import { Plus, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 import CreateTabButton from './CreateTabButton'
+import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
+import type { SendKeyMode } from './chatShared'
 
 interface SidebarProps {
   sessions: Session[]
   currentSession: string
   currentView: 'session' | 'agents'
   currentSessionRecord?: Session
+  themeMode: 'auto' | 'light' | 'dark'
+  onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
+  sendKeyMode: SendKeyMode
+  onSendKeyModeChange: (mode: SendKeyMode) => void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
@@ -21,6 +27,10 @@ export default function Sidebar({
   currentSession,
   currentView,
   currentSessionRecord,
+  themeMode,
+  onThemeChange,
+  sendKeyMode,
+  onSendKeyModeChange,
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
@@ -39,7 +49,15 @@ export default function Sidebar({
   return (
     <div className="w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 space-y-3">
-        <h1 className="text-xl font-bold text-gray-900 dark:text-white">🦊 Foxwarm</h1>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white">🦊 Foxwarm</h1>
+          <GlobalUiSettingsMenu
+            themeMode={themeMode}
+            onThemeChange={onThemeChange}
+            sendKeyMode={sendKeyMode}
+            onSendKeyModeChange={onSendKeyModeChange}
+          />
+        </div>
 
         <div className="space-y-2">
           <div className="flex items-stretch gap-1">

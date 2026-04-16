@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, FolderOpen, SquareTerminal, X } from 'lucide-react'
+import { FolderOpen, SquareTerminal, X } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { API_BASE_PATH, makeWebSocketUrl } from '../config'
+import ContentHeader from './ContentHeader'
 
 type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
 
@@ -308,38 +309,25 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
-      <div className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-        <div className="flex h-16 items-center justify-between gap-3 px-3">
-          <div className="flex items-center gap-3">
-            {onBack && (
-              <button
-                onClick={onBack}
-                className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
-                title="Back"
-              >
-                <ArrowLeft className="h-5 w-5" />
-              </button>
+      <ContentHeader
+        icon={<SquareTerminal className="h-5 w-5" />}
+        title="Terminal"
+        subtitle={
+          <>
+            <span className="font-mono text-[12px]">cwd {terminalInfo?.cwd || requestedCwd || '—'}</span>
+            <span className="ml-2">status {status}</span>
+            {terminalInfo && (
+              <>
+                <span className="ml-2">shell {terminalInfo.shell}</span>
+                <span className="ml-2">pid {terminalInfo.pid}</span>
+                <span className="ml-2">node {terminalInfo.nodeId}</span>
+              </>
             )}
-            <div>
-              <div className="flex items-center gap-2">
-                <SquareTerminal className="h-5 w-5 text-gray-500 dark:text-gray-300" />
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Terminal</h2>
-              </div>
-              <div className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                <span className="font-mono text-[12px]">cwd {terminalInfo?.cwd || requestedCwd || '—'}</span>
-                <span className="ml-2">status {status}</span>
-                {terminalInfo && (
-                  <>
-                    <span className="ml-2">shell {terminalInfo.shell}</span>
-                    <span className="ml-2">pid {terminalInfo.pid}</span>
-                    <span className="ml-2">node {terminalInfo.nodeId}</span>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
+          </>
+        }
+        onBack={onBack}
+        actions={(
+          <>
             <button
               onClick={() => onOpenWorkspace?.(terminalInfo?.cwd || requestedCwd)}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
@@ -357,17 +345,14 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
               <X className="h-4 w-4" />
               <span className="hidden md:inline">{isClosing ? 'Closing...' : 'Close terminal'}</span>
             </button>
-          </div>
-        </div>
-
-        {error && (
-          <div className="px-3 pb-3">
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
-              {error}
-            </div>
-          </div>
+          </>
         )}
-      </div>
+        below={error ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
+            {error}
+          </div>
+        ) : null}
+      />
 
       <div className="min-h-0 flex-1 overflow-hidden bg-[#111827]">
         <div ref={hostRef} className="h-full w-full" />

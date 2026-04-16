@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Copy, FolderOpen, Menu, SquareTerminal, X } from 'lucide-react'
+import { Check, Copy, FolderOpen, Menu, MessageSquareText, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import ChatTimeline from './ChatTimeline'
+import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
 import type { Message, MessagePart, SendKeyMode, SessionStreamEvent } from './chatShared'
@@ -68,8 +69,8 @@ interface ChatProps {
   sessionId: string
   sessionDisplayName?: string
   onBack?: () => void
-  themeMode: 'auto' | 'light' | 'dark'
-  onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
+  sendKeyMode: SendKeyMode
+  onToggleSendKeyMode: () => void
   onOpenWorkspace?: () => void
   onOpenTerminal?: () => void
   onDraftEdited?: (draftText: string) => void
@@ -120,7 +121,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange, onOpenWorkspace, onOpenTerminal, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKeyMode, onToggleSendKeyMode, onOpenWorkspace, onOpenTerminal, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -131,10 +132,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [showScrollTopButton, setShowScrollTopButton] = useState(false)
-  const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>(() => {
-    const saved = localStorage.getItem('sendKeyMode')
-    return saved === 'enter' || saved === 'mod-enter' ? saved : 'mod-enter'
-  })
   const [verbose, setVerbose] = useState<boolean>(() => {
     const saved = localStorage.getItem(`verbose_${sessionId}`)
     return saved !== null ? saved === 'true' : true
@@ -159,10 +156,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   const shouldAutoScrollRef = useRef<boolean>(true)
   const pendingSentMessagesRef = useRef<string[]>([])
   const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    localStorage.setItem('sendKeyMode', sendKeyMode)
-  }, [sendKeyMode])
 
   useEffect(() => {
     setProcessingReasoningSummary('')
@@ -675,10 +668,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     }
   }, [loading, sessionId, sessionMissing])
 
-  const toggleSendKeyMode = useCallback(() => {
-    setSendKeyMode(prev => prev === 'enter' ? 'mod-enter' : 'enter')
-  }, [])
-
   const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
     const formData = new FormData()
     formData.append('audio', file)
@@ -836,27 +825,14 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
-      <div className="sticky top-0 z-30 h-16 border-b border-gray-200 bg-white px-3 dark:border-gray-700 dark:bg-gray-800">
-        <div className="flex h-full items-center justify-between">
-          <div className="flex items-center space-x-3 min-w-0">
-            {isMobile && onBack && (
-              <button
-                onClick={onBack}
-                className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
-            )}
-            <div className="min-w-0">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white truncate">{sessionDisplayName || sessionId}</h2>
-              {sessionDisplayName && (
-                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">{sessionId}</div>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+      <ContentHeader
+        icon={<MessageSquareText className="h-5 w-5" />}
+        title={sessionDisplayName || sessionId}
+        subtitle={<span className="font-mono text-[12px]">session {sessionId}</span>}
+        onBack={isMobile ? onBack : undefined}
+        sticky
+        actions={(
+          <>
             <button
               onClick={onOpenWorkspace}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
@@ -876,86 +852,41 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
             <div className="relative">
               <button
                 onClick={() => setShowMenu(!showMenu)}
-                className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-                title="Menu"
+                className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                title="Session options"
               >
                 <Menu size={20} />
               </button>
               {showMenu && (
-                <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 text-gray-900 dark:text-gray-100">
-                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                  <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Theme</div>
-                  <div className="flex gap-1">
-                    {(['auto', 'light', 'dark'] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        onClick={() => {
-                          onThemeChange(mode)
-                          setShowMenu(false)
-                        }}
-                        className={`flex-1 px-2 py-1 text-xs rounded capitalize ${themeMode === mode ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                      >
-                        {mode}
-                      </button>
-                    ))}
-                  </div>
+                <div className="absolute right-0 mt-2 w-56 rounded-lg border border-gray-200 bg-white text-gray-900 shadow-lg z-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+                  <button
+                    onClick={() => {
+                      const newVerbose = !verbose
+                      setVerbose(newVerbose)
+                      localStorage.setItem(`verbose_${sessionId}`, String(newVerbose))
+                      setShowMenu(false)
+                    }}
+                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span>Verbose Mode</span>
+                      <span className="inline-flex min-w-4 items-center justify-center">
+                        {verbose ? <Check size={14} /> : null}
+                      </span>
+                    </div>
+                  </button>
+                  <button
+                    onClick={handleOpenDebugInfo}
+                    className="w-full border-t border-gray-200 px-4 py-2 text-left text-sm hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-700"
+                  >
+                    debug info
+                  </button>
                 </div>
-                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                  <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Send key</div>
-                  <div className="grid grid-cols-2 gap-1">
-                    <button
-                      onClick={() => {
-                        setSendKeyMode('mod-enter')
-                        setShowMenu(false)
-                      }}
-                      className={`px-2 py-1 text-xs rounded ${sendKeyMode === 'mod-enter' ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                    >
-                      Ctrl/Cmd+Enter
-                    </button>
-                    <button
-                      onClick={() => {
-                        setSendKeyMode('enter')
-                        setShowMenu(false)
-                      }}
-                      className={`px-2 py-1 text-xs rounded ${sendKeyMode === 'enter' ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                    >
-                      Enter
-                    </button>
-                  </div>
-                  <div className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
-                    {sendKeyMode === 'mod-enter'
-                      ? 'Default: Ctrl/Cmd+Enter sends, Enter inserts a new line.'
-                      : 'Enter sends, Shift/Ctrl/Cmd+Enter inserts a new line.'}
-                  </div>
-                </div>
-                <button
-                  onClick={() => {
-                    const newVerbose = !verbose
-                    setVerbose(newVerbose)
-                    localStorage.setItem(`verbose_${sessionId}`, String(newVerbose))
-                    setShowMenu(false)
-                  }}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm"
-                >
-                  <div className="flex items-center justify-between">
-                    <span>Verbose Mode</span>
-                    <span className="inline-flex items-center justify-center min-w-4">
-                      {verbose ? <Check size={14} /> : null}
-                    </span>
-                  </div>
-                </button>
-                <button
-                  onClick={handleOpenDebugInfo}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm border-t border-gray-200 dark:border-gray-700"
-                >
-                  debug info
-                </button>
-              </div>
               )}
             </div>
-          </div>
-        </div>
-      </div>
+          </>
+        )}
+      />
 
       {connectionState !== 'connected' && (
         <div className={`sticky top-0 z-20 px-4 py-2 text-sm ${
@@ -969,41 +900,43 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         </div>
       )}
 
-      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4">
-        <ChatTimeline messages={timelineMessages} isMobile={isMobile} verbose={verbose} />
-        <ProcessingStatus
-          sessionBusy={sessionBusy}
-          sessionQueueLength={sessionQueueLength}
-          loading={loading}
-          processingReasoningSummary={processingReasoningSummary}
-          isMobile={isMobile}
-        />
-        <div className="h-56 md:h-52" />
+      <div className="relative min-h-0 flex-1">
+        <div ref={messagesContainerRef} className="h-full overflow-y-auto p-4">
+          <ChatTimeline messages={timelineMessages} isMobile={isMobile} verbose={verbose} />
+          <ProcessingStatus
+            sessionBusy={sessionBusy}
+            sessionQueueLength={sessionQueueLength}
+            loading={loading}
+            processingReasoningSummary={processingReasoningSummary}
+            isMobile={isMobile}
+          />
+          <div className="h-56 md:h-52" />
+        </div>
+
+        {showScrollTopButton && (
+          <button
+            onClick={scrollToTop}
+            className="absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            aria-label="Scroll to top"
+          >
+            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+            </svg>
+          </button>
+        )}
+
+        {showScrollButton && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-4 right-4 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            aria-label="Scroll to bottom"
+          >
+            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
+          </button>
+        )}
       </div>
-
-      {showScrollTopButton && (
-        <button
-          onClick={scrollToTop}
-          className="fixed right-6 top-24 z-30 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
-          aria-label="Scroll to top"
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-          </svg>
-        </button>
-      )}
-
-      {showScrollButton && (
-        <button
-          onClick={scrollToBottom}
-          className="fixed right-6 bottom-32 z-30 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center md:bottom-28"
-          aria-label="Scroll to bottom"
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-          </svg>
-        </button>
-      )}
 
       <ChatComposer
         sessionId={sessionId}
@@ -1011,7 +944,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         loading={loading}
         asrAvailable={asrAvailable}
         sendKeyMode={sendKeyMode}
-        onToggleSendKeyMode={toggleSendKeyMode}
+        onToggleSendKeyMode={onToggleSendKeyMode}
         onSend={handleSend}
         onTranscribeAudio={handleTranscribeAudio}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
@@ -1078,7 +1011,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&
   prev.sessionDisplayName === next.sessionDisplayName &&
-  prev.themeMode === next.themeMode &&
+  prev.sendKeyMode === next.sendKeyMode &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   prev.onOpenWorkspace === next.onOpenWorkspace &&
   prev.onOpenTerminal === next.onOpenTerminal
