@@ -909,6 +909,9 @@ function App() {
     }
 
     if (overData?.type === 'pane-edge' && overData.paneId && overData.edge) {
+      if (overData.edge === 'top') {
+        return
+      }
       dockTabToPaneEdge(activeId, overData.paneId, overData.edge)
       navigateToTab(activeId)
     }
@@ -1007,7 +1010,7 @@ function App() {
         {route.view === 'agents' ? (
           <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} />
         ) : (
-          <div className="h-full min-h-0 overflow-hidden p-3">
+          <div className="h-full min-h-0 overflow-hidden">
             {renderWorkbenchSurface(
               <WorkbenchLayout
                 node={root}
