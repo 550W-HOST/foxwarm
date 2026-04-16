@@ -909,6 +909,33 @@ function App() {
       return
     }
 
+    if (overData?.type === 'tab-row' && overData.paneId) {
+      const nextPinned = !!overData.pinned
+      const targetPane = findPaneNode(root, overData.paneId)
+      if (!targetPane) {
+        return
+      }
+
+      if (activeData.paneId === overData.paneId && !!activeData.pinned === nextPinned) {
+        return
+      }
+
+      const beforeTabId = nextPinned
+        ? targetPane.tabIds.find((tabId) => {
+            if (tabId === activeId) return false
+            return !(tabsById[tabId]?.pinned)
+          }) || null
+        : null
+
+      if (!!activeData.pinned !== nextPinned) {
+        updateTab(activeId, (current) => ({ ...current, pinned: nextPinned }))
+      }
+
+      moveTabToPane(activeId, overData.paneId, { beforeTabId, activate: true })
+      navigateToTab(activeId)
+      return
+    }
+
     if (overData?.type === 'pane-edge' && overData.paneId && overData.edge) {
       if (overData.edge === 'top') {
         return

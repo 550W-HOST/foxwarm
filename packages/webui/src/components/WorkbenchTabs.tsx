@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useDndContext, useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { Bookmark, Copy, FileText, FolderOpen, MessageSquareText, Pin, PinOff, SquareTerminal, X } from 'lucide-react'
@@ -110,6 +111,20 @@ function TabStripRow({
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
+  const { active } = useDndContext()
+  const activeData = active?.data.current as { type?: string; pinned?: boolean } | undefined
+  const { setNodeRef, isOver } = useDroppable({
+    id: `tab-row:${paneId}:${isPinnedRow ? 'pinned' : 'regular'}`,
+    data: {
+      type: 'tab-row',
+      paneId,
+      pinned: isPinnedRow,
+    },
+  })
+
+  const isDraggingTab = activeData?.type === 'tab'
+  const activePinned = !!activeData?.pinned
+  const shouldShowEmptyDropHint = tabs.length === 0 && isDraggingTab && activePinned !== isPinnedRow
 
   useEffect(() => {
     if (!activeTabId || !tabs.some((tab) => tab.id === activeTabId)) return
@@ -150,7 +165,10 @@ function TabStripRow({
   }
 
   return (
-    <div className={isPinnedRow ? 'border-b border-gray-200/80 pb-1 dark:border-gray-700/80' : 'pb-px'}>
+    <div
+      ref={setNodeRef}
+      className={`${isPinnedRow ? 'border-b border-gray-200/80 pb-1 dark:border-gray-700/80' : 'pb-px'} ${isOver ? 'rounded-lg bg-blue-500/5 dark:bg-blue-500/10' : ''}`}
+    >
       <SortableContext items={tabs.map((tab) => tab.id)} strategy={horizontalListSortingStrategy}>
         <div
           ref={containerRef}
@@ -177,6 +195,11 @@ function TabStripRow({
               onCloseTab={onCloseTab}
             />
           ))}
+          {shouldShowEmptyDropHint && (
+            <div className="flex h-10 min-w-[140px] items-center justify-center rounded-lg border border-dashed border-blue-300 px-3 text-xs font-medium text-blue-700 dark:border-blue-500/60 dark:text-blue-200">
+              {isPinnedRow ? 'Drop to pin' : 'Drop to unpin'}
+            </div>
+          )}
         </div>
       </SortableContext>
     </div>
@@ -272,7 +295,7 @@ export default function WorkbenchTabs({
   paneId,
   tabs,
   activeTabId,
-  focused = false,
+  focused: _focused = false,
   toolbar,
   dragEnabled = true,
   onSelectTab,
@@ -284,9 +307,12 @@ export default function WorkbenchTabs({
   onCloseAllPinnedTabs,
 }: WorkbenchTabsProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
+  const { active } = useDndContext()
 
   const pinnedTabs = useMemo(() => tabs.filter((tab) => tab.pinned), [tabs])
   const regularTabs = useMemo(() => tabs.filter((tab) => !tab.pinned), [tabs])
+  const activeData = active?.data.current as { type?: string } | undefined
+  const isDraggingTab = activeData?.type === 'tab'
   const contextMenuTab = useMemo(
     () => (contextMenu ? tabs.find((tab) => tab.id === contextMenu.tabId) || null : null),
     [contextMenu, tabs],
@@ -385,10 +411,10 @@ export default function WorkbenchTabs({
   }
 
   return (
-    <div className={`overflow-hidden border-b border-gray-200 bg-gray-100 px-3 pt-2 dark:border-gray-700 dark:bg-gray-900 ${focused ? 'ring-1 ring-inset ring-blue-300/70 dark:ring-blue-500/40' : ''}`}>
+    <div className="overflow-hidden border-b border-gray-200 bg-gray-100 px-3 pt-2 dark:border-gray-700 dark:bg-gray-900">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-1">
-          {pinnedTabs.length > 0 && (
+          {(pinnedTabs.length > 0 || isDraggingTab) && (
             <TabStripRow
               paneId={paneId}
               dragEnabled={dragEnabled}
