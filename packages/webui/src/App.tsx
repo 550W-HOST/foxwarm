@@ -848,6 +848,7 @@ function App() {
         tabs={paneTabs}
         activeTabId={pane.activeTabId}
         focused={focusedPaneId === paneId}
+        emphasizeFocus={paneIds.length > 1}
         dragEnabled={!isMobile}
         canClosePane={paneIds.length > 1}
         canMoveActiveTab={otherPaneIds.length > 0}
