@@ -700,7 +700,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     })
   };
 
-  const maxCompactAttempts = 3;
   let nextPromptParts: MessagePart[] | null = [summaryPrompt];
   let compactPlan: CompactPlan | null = null;
   let compactRoundsUsed = 0;
@@ -717,11 +716,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     'get_context_archive',
   ]);
 
-  while (invalidCompactPlanAttempts < maxCompactAttempts) {
-    if (compactRoundsUsed >= COMPACT_FLOW_MAX_ROUNDS) {
-      throw new Error(`Compaction failed because it exceeded ${COMPACT_FLOW_MAX_ROUNDS} compact-phase round(s) without producing a valid ${COMPACT_PLAN_TOOL_NAME}.`);
-    }
-
+  while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
     compactRoundsUsed += 1;
     const result = await llm.chat(nextPromptParts, transientSession, invalidCompactPlanAttempts, {
       toolDefinitions: compactToolDefinitions,
@@ -769,14 +764,10 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       }
 
       invalidCompactPlanAttempts += 1;
-      const attemptsRemaining = maxCompactAttempts - invalidCompactPlanAttempts;
-      if (attemptsRemaining <= 0) {
-        throw new Error(`Compaction failed after ${maxCompactAttempts} invalid ${COMPACT_PLAN_TOOL_NAME} submissions: ${e.message}`);
-      }
 
-      logger.warn({ sessionId, invalidCompactPlanAttempts, attemptsRemaining, compactRoundsUsed, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
+      logger.warn({ sessionId, invalidCompactPlanAttempts, compactRoundsUsed, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
       nextPromptParts = [{
-        system: buildCompactPlanValidationFeedback(e, attemptsRemaining),
+        system: buildCompactPlanValidationFeedback(e),
       }];
     }
   }

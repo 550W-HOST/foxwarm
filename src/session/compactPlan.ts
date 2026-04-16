@@ -1,7 +1,7 @@
 import { ToolDefinition } from '../types';
 
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
-export const COMPACT_FLOW_MAX_ROUNDS = 10;
+export const COMPACT_FLOW_MAX_ROUNDS = 15;
 const DEFAULT_PREVIEW_CHAR_LIMIT = 80;
 const COMPACT_FLOW_MEMORY_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -416,11 +416,10 @@ export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateI
   };
 }
 
-export function buildCompactPlanValidationFeedback(error: CompactPlanValidationError, attemptsRemaining: number): string {
+export function buildCompactPlanValidationFeedback(error: CompactPlanValidationError): string {
   return [
     'COMPACT PLAN INVALID.',
     error.message,
-    `Attempts remaining after this feedback: ${attemptsRemaining}.`,
     `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, get_context_archive, get_archived_messages, and get_archived_blocks if you truly need them.`,
   ].join(' ');
 }

@@ -201,8 +201,8 @@ test('buildCompactPlanValidationFeedback explains invalid layered compact plans'
     createBlockErrors: ['createBlocks[0].summary must be a non-empty string.'],
   });
 
-  const feedback = buildCompactPlanValidationFeedback(error, 2);
+  const feedback = buildCompactPlanValidationFeedback(error);
   assert.match(feedback, /COMPACT PLAN INVALID/);
   assert.match(feedback, /summary must be a non-empty string/);
-  assert.match(feedback, /Attempts remaining after this feedback: 2/);
+  assert.match(feedback, /Fix only the layered-context plan/);
 });
