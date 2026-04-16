@@ -367,10 +367,8 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
         )}
       </div>
 
-      <div className="min-h-0 flex-1 p-4">
-        <div className="h-full overflow-hidden rounded-xl border border-gray-300 bg-[#111827] shadow-sm dark:border-gray-700">
-          <div ref={hostRef} className="h-full w-full p-2" />
-        </div>
+      <div className="min-h-0 flex-1 overflow-hidden bg-[#111827]">
+        <div ref={hostRef} className="h-full w-full" />
       </div>
     </div>
   )
