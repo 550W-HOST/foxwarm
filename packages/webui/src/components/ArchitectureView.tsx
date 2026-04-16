@@ -170,21 +170,25 @@ function SessionNode({
         </div>
 
         {/* Row 2: Metadata */}
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600 dark:text-gray-300">
-          <span><span className="font-medium text-gray-900 dark:text-gray-100">status</span> {statusText}</span>
-          <span><span className="font-medium text-gray-900 dark:text-gray-100">msgs</span> {session.messageCount || 0}</span>
-          {children.length > 0 && <span><span className="font-medium text-gray-900 dark:text-gray-100">children</span> {children.length}</span>}
-          <span><span className="font-medium text-gray-900 dark:text-gray-100">node</span> {session.currentNode || 'master'}</span>
-          {!!session.queueLength && <span><span className="font-medium text-gray-900 dark:text-gray-100">queued</span> {session.queueLength}</span>}
-          {session.cwd && (
-            <span className="truncate font-mono text-[11px] text-gray-500 dark:text-gray-400" title={session.cwd}>
-              cwd {session.cwd}
+        <div className="mt-1.5 flex items-center gap-x-3 text-xs text-gray-600 dark:text-gray-300">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 flex-1">
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">status</span> {statusText}</span>
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">msgs</span> {session.messageCount || 0}</span>
+            {children.length > 0 && <span><span className="font-medium text-gray-900 dark:text-gray-100">children</span> {children.length}</span>}
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">node</span> {session.currentNode || 'master'}</span>
+            {!!session.queueLength && <span><span className="font-medium text-gray-900 dark:text-gray-100">queued</span> {session.queueLength}</span>}
+            {session.cwd && (
+              <span className="truncate font-mono text-[11px] text-gray-500 dark:text-gray-400 max-w-[200px]" title={session.cwd}>
+                cwd {session.cwd}
+              </span>
+            )}
+          </div>
+          <div className="flex-shrink-0 flex items-center gap-x-2 text-right">
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">tokens</span> {formatTokenMillions(totalTokens)}</span>
+            <span className="text-gray-400 dark:text-gray-500">
+              cached {formatTokenMillions(tokenUsage.cachedTokens)} · in {formatTokenMillions(tokenUsage.inputTokens)} · out {formatTokenMillions(tokenUsage.outputTokens)}
             </span>
-          )}
-          <span><span className="font-medium text-gray-900 dark:text-gray-100">tokens</span> {formatTokenMillions(totalTokens)}</span>
-          <span className="text-gray-400 dark:text-gray-500">
-            cached {formatTokenMillions(tokenUsage.cachedTokens)} · in {formatTokenMillions(tokenUsage.inputTokens)} · out {formatTokenMillions(tokenUsage.outputTokens)}
-          </span>
+          </div>
         </div>
       </div>
 
