@@ -6,7 +6,7 @@ import CreateTabButton from './CreateTabButton'
 interface SessionListProps {
   sessions: Session[]
   currentSession?: string
-  currentView: 'session' | 'architecture'
+  currentView: 'session' | 'agents'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
@@ -32,50 +32,51 @@ export default function SessionList({
   const defaultPath = currentSessionRecord?.cwd || '/'
   const sessionLabel = currentSessionRecord?.displayName || currentSession || 'main'
 
+  const agentsBtnClass = currentView === 'agents'
+    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
+    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700'
+
   return (
     <div className="fixed inset-0 bg-gray-100 dark:bg-gray-900 flex flex-col">
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">🦊 Foxwarm</h1>
-            <p className="text-gray-600 dark:text-gray-400 mt-1">Select a session</p>
-          </div>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">🦊 Foxwarm</h1>
+
+        <div className="mt-2 flex items-stretch gap-1">
+          <button
+            onClick={onSelectArchitecture}
+            className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${agentsBtnClass}`}
+          >
+            <Workflow className="w-4 h-4" />
+            <span>Agents</span>
+          </button>
           <button
             onClick={onCreateSession}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            className="inline-flex items-center justify-center rounded-lg px-2 text-sm font-medium transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700"
             title="Create new session"
           >
-            <Plus className="w-6 h-6 text-gray-600 dark:text-gray-400" />
+            <Plus className="w-4 h-4" />
           </button>
         </div>
-        <button
-          onClick={onSelectArchitecture}
-          className={`mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition-colors ${
-            currentView === 'architecture'
-              ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700'
-          }`}
-        >
-          <Workflow className="w-4 h-4" />
-          <span>Architecture</span>
-        </button>
-        <div className="mt-2">
-          <CreateTabButton
-            kind="workspace"
-            defaultNodeId={defaultNodeId}
-            defaultPath={defaultPath}
-            sessionLabel={sessionLabel}
-            onCreate={(options) => onCreateWorkspaceTab(options)}
-          />
-        </div>
-        <div className="mt-2">
-          <CreateTabButton
-            kind="terminal"
-            defaultNodeId={defaultNodeId}
-            defaultPath={defaultPath}
-            sessionLabel={sessionLabel}
-            onCreate={(options) => onCreateTerminalTab(options)}
-          />
+
+        <div className="mt-2 flex items-start gap-1">
+          <div className="flex-1 min-w-0">
+            <CreateTabButton
+              kind="workspace"
+              defaultNodeId={defaultNodeId}
+              defaultPath={defaultPath}
+              sessionLabel={sessionLabel}
+              onCreate={(options) => onCreateWorkspaceTab(options)}
+            />
+          </div>
+          <div className="flex-1 min-w-0">
+            <CreateTabButton
+              kind="terminal"
+              defaultNodeId={defaultNodeId}
+              defaultPath={defaultPath}
+              sessionLabel={sessionLabel}
+              onCreate={(options) => onCreateTerminalTab(options)}
+            />
+          </div>
         </div>
       </div>
       

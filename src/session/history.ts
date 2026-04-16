@@ -475,7 +475,7 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
     }
 
     const preview = groupedRecords
-      .map(groupRecord => formatMessagePreviewText(groupRecord.message, 40, {
+      .map(groupRecord => formatMessagePreviewText(groupRecord.message, 50, {
         skipEphemeralSystem: true,
         skipRagMemorySnippets: true,
         skipThinking: true,
@@ -584,6 +584,26 @@ function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCo
   return operations.sort((a, b) => a.startIndex - b.startIndex || a.planIndex - b.planIndex);
 }
 
+/** Extract skill names from load_skill calls in the compacted portion of history */
+function extractCompactedSkillNames(history: Message[], consumedFrontierCount: number): string[] {
+  const skillNames = new Set<string>();
+  // Scan messages that correspond to the consumed frontier portion
+  const scanLimit = Math.min(consumedFrontierCount, history.length);
+  for (let i = 0; i < scanLimit; i++) {
+    const msg = history[i];
+    if (!msg.parts) continue;
+    for (const part of msg.parts) {
+      if (part.functionCall?.name === 'load_skill') {
+        const skillName = part.functionCall.args?.skillName;
+        if (typeof skillName === 'string' && skillName.trim()) {
+          skillNames.add(skillName.trim());
+        }
+      }
+    }
+  }
+  return [...skillNames];
+}
+
 async function finalizeCompaction(
   deps: SessionHistoryDeps,
   sessionId: string,
@@ -593,6 +613,7 @@ async function finalizeCompaction(
   completionBroadcastMessage: string | undefined,
   createdBlockCount: number,
   replacedItemCount: number,
+  compactedSkillNames: string[] = [],
 ): Promise<void> {
   session.contextFrontier = newFrontier;
   session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
@@ -601,9 +622,15 @@ async function finalizeCompaction(
   });
   session.history = await renderHistoryFromFrontier(session, newFrontier);
 
+  let completionText = formatCompactionCompletionMarker(sessionId, completionMarker);
+  if (compactedSkillNames.length > 0) {
+    const skillList = compactedSkillNames.map(s => `\`${s}\``).join(', ');
+    completionText += `\nNote: The following skill(s) were loaded via load_skill but their content was compacted away: ${skillList}. If you still need them, call load_skill again.`;
+  }
+
   const completionMessage: Message = {
     role: 'user',
-    parts: [{ system: formatCompactionCompletionMarker(sessionId, completionMarker) }],
+    parts: [{ system: completionText }],
     __meta: { timestamp: Date.now() },
   };
   await appendMessagesToArchive(session, [completionMessage]);
@@ -673,7 +700,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     })
   };
 
-  const maxCompactAttempts = 3;
   let nextPromptParts: MessagePart[] | null = [summaryPrompt];
   let compactPlan: CompactPlan | null = null;
   let compactRoundsUsed = 0;
@@ -690,11 +716,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     'get_context_archive',
   ]);
 
-  while (invalidCompactPlanAttempts < maxCompactAttempts) {
-    if (compactRoundsUsed >= COMPACT_FLOW_MAX_ROUNDS) {
-      throw new Error(`Compaction failed because it exceeded ${COMPACT_FLOW_MAX_ROUNDS} compact-phase round(s) without producing a valid ${COMPACT_PLAN_TOOL_NAME}.`);
-    }
-
+  while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
     compactRoundsUsed += 1;
     const result = await llm.chat(nextPromptParts, transientSession, invalidCompactPlanAttempts, {
       toolDefinitions: compactToolDefinitions,
@@ -742,14 +764,10 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       }
 
       invalidCompactPlanAttempts += 1;
-      const attemptsRemaining = maxCompactAttempts - invalidCompactPlanAttempts;
-      if (attemptsRemaining <= 0) {
-        throw new Error(`Compaction failed after ${maxCompactAttempts} invalid ${COMPACT_PLAN_TOOL_NAME} submissions: ${e.message}`);
-      }
 
-      logger.warn({ sessionId, invalidCompactPlanAttempts, attemptsRemaining, compactRoundsUsed, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
+      logger.warn({ sessionId, invalidCompactPlanAttempts, compactRoundsUsed, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
       nextPromptParts = [{
-        system: buildCompactPlanValidationFeedback(e, attemptsRemaining),
+        system: buildCompactPlanValidationFeedback(e),
       }];
     }
   }
@@ -830,6 +848,10 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
   }
 
   const newFrontier = [...rewrittenOlderFrontier, ...currentFrontier.slice(result.consumedFrontierCount)];
+
+  // Scan compacted messages for load_skill calls to remind agent after compaction
+  const compactedSkillNames = extractCompactedSkillNames(session.history, result.consumedFrontierCount);
+
   await finalizeCompaction(
     deps,
     sessionId,
@@ -839,6 +861,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     result.completionBroadcastMessage,
     createdRecords.length,
     result.replacedItemCount,
+    compactedSkillNames,
   );
   return true;
 }

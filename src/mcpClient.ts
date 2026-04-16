@@ -446,23 +446,21 @@ async function withServerConnection<T>(serverName: string, config: McpServerConf
 
 export async function listTools(serverName?: string) {
   const { name, config } = await getServerConfig(serverName);
-  return withServerConnection(name, config, async ({ client, transportKind }) => {
-    const result = await client.listTools();
-    return {
-      ...result,
-      _transport: transportKind,
-    };
+  return withServerConnection(name, config, async ({ client }) => {
+    return await client.listTools();
   });
 }
 
 export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>) {
   const { name, config } = await getServerConfig(serverName);
-  return withServerConnection(name, config, async ({ client, transportKind }) => {
+  return withServerConnection(name, config, async ({ client }) => {
     const result = await client.callTool({ name: tool, arguments: args || {} });
-    return {
-      ...result,
-      _transport: transportKind,
-    };
+    // Unwrap single text content for cleaner output
+    const content = result.content;
+    if (Array.isArray(content) && content.length === 1 && content[0].type === 'text') {
+      return { output: content[0].text };
+    }
+    return result;
   });
 }
 
