@@ -6,7 +6,7 @@ import CreateTabButton from './CreateTabButton'
 interface SidebarProps {
   sessions: Session[]
   currentSession: string
-  currentView: 'session' | 'architecture'
+  currentView: 'session' | 'agents'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
@@ -50,14 +50,14 @@ export default function Sidebar({
           <button
             onClick={onSelectArchitecture}
             className={`inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              currentView === 'architecture'
+              currentView === 'agents'
                 ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
             }`}
-            title="Open architecture overview"
+            title="Open agents overview"
           >
             <Workflow className="w-4 h-4" />
-            <span>Architecture</span>
+            <span>Agents</span>
           </button>
           <CreateTabButton
             kind="workspace"

@@ -11,10 +11,10 @@ import type { Session } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
-type AppView = 'session' | 'architecture'
+type AppView = 'session' | 'agents'
 
 type RouteState =
-  | { view: 'architecture' }
+  | { view: 'agents' }
   | { view: 'tab'; tabId: string | null }
 
 type TerminalRegistryRecord = {
@@ -29,7 +29,7 @@ type TerminalRegistryRecord = {
 
 const LIGHT_THEME_COLOR = '#f3f4f6'
 const DARK_THEME_COLOR = '#111827'
-const ARCHITECTURE_HASH = 'architecture'
+const ARCHITECTURE_HASH = 'agents'
 const TAB_HASH_PREFIX = 'tab/'
 const WORKBENCH_TABS_STORAGE_KEY = 'foxwarm_workbench_tabs_v3'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
@@ -129,8 +129,8 @@ function getHashState(): RouteState {
     return { view: 'tab', tabId: fallbackTabId }
   }
 
-  if (hash === ARCHITECTURE_HASH || hash === '__architecture__') {
-    return { view: 'architecture' }
+  if (hash === ARCHITECTURE_HASH || hash === '__architecture__' || hash === 'architecture') {
+    return { view: 'agents' }
   }
 
   if (hash.startsWith(TAB_HASH_PREFIX)) {
@@ -465,7 +465,7 @@ function App() {
     ? activeTab.sessionId
     : activeTab?.contextSessionId || loadStoredLastVisitedSession()
   const currentContextSessionRecord = sessions.find(session => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
-  const currentView: AppView = route.view === 'architecture' ? 'architecture' : 'session'
+  const currentView: AppView = route.view === 'agents' ? 'agents' : 'session'
   const busyCount = useMemo(() => sessions.filter(session => session.busy).length, [sessions])
 
   useEffect(() => {
@@ -943,7 +943,7 @@ function App() {
           onSelectSession={openChatTab}
           onKeepSession={openKeptChatTab}
           onSelectArchitecture={() => {
-            setRoute({ view: 'architecture' })
+            setRoute({ view: 'agents' })
             window.location.hash = ARCHITECTURE_HASH
             setShowSessionList(false)
           }}
@@ -954,7 +954,7 @@ function App() {
       )
     }
 
-    if (route.view === 'architecture') {
+    if (route.view === 'agents') {
       return (
         <div className="fixed inset-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
           <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} onBack={handleBackToList} />
@@ -984,7 +984,7 @@ function App() {
         onSelectSession={openChatTab}
         onKeepSession={openKeptChatTab}
         onSelectArchitecture={() => {
-          setRoute({ view: 'architecture' })
+          setRoute({ view: 'agents' })
           window.location.hash = ARCHITECTURE_HASH
         }}
         onCreateWorkspaceTab={(options) => openWorkspaceTab(currentContextSessionId, options)}
@@ -992,7 +992,7 @@ function App() {
         onCreateSession={handleCreateSession}
       />
       <div className="flex-1 h-screen overflow-hidden">
-        {route.view === 'architecture' ? (
+        {route.view === 'agents' ? (
           <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} />
         ) : (
           <div className="flex h-full min-h-0 flex-col">
