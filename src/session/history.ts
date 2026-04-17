@@ -16,7 +16,9 @@ import {
   CompactPlan,
   CompactPlanValidationError,
   describeCreatedRanges,
+  getCandidateTargetLevel,
   formatSeqRange,
+  selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
 } from './compactPlan';
 import { Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
@@ -389,6 +391,21 @@ type LayeredCompactCandidateEntry = {
   frontierEndIndex: number;
 };
 
+export function isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(
+  olderFrontier: ContextFrontierItem[],
+  frontierIndex: number,
+): boolean {
+  const current = olderFrontier[frontierIndex];
+  const previous = olderFrontier[frontierIndex - 1];
+  const next = olderFrontier[frontierIndex + 1];
+
+  return current?.kind === 'block'
+    && previous?.kind === 'block'
+    && next?.kind === 'block'
+    && previous.level > current.level
+    && next.level > current.level;
+}
+
 export function resolveCompactionSplitIndex(history: Message[], keepPercent: number): number {
   let splitIndex = Math.floor(history.length * (1 - keepPercent));
 
@@ -440,7 +457,15 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       }
 
       entries.push({
-        item: buildBlockCandidateItem(record.id, record.level, record.rawStartSeq, record.rawEndSeq, record.summary),
+        item: buildBlockCandidateItem(
+          record.id,
+          record.level,
+          record.rawStartSeq,
+          record.rawEndSeq,
+          record.summary,
+          estimateTokenCount(record.summary),
+          isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderFrontier, frontierIndex),
+        ),
         frontierStartIndex: frontierIndex,
         frontierEndIndex: frontierIndex,
       });
@@ -483,8 +508,16 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       .filter(Boolean)
       .join(' | ') || '[empty message]';
 
+    const estimatedTokens = groupedRecords.reduce((sum, groupRecord) => {
+      return sum + estimateTokenCount(formatMessagePreviewText(groupRecord.message, Number.MAX_SAFE_INTEGER, {
+        skipEphemeralSystem: true,
+        skipRagMemorySnippets: true,
+        skipThinking: true,
+      }));
+    }, 0);
+
     entries.push({
-      item: buildMessageCandidateItem(item.seq, groupedRecords[groupedRecords.length - 1].seq, preview),
+      item: buildMessageCandidateItem(item.seq, groupedRecords[groupedRecords.length - 1].seq, preview, estimatedTokens),
       frontierStartIndex: frontierIndex,
       frontierEndIndex: groupedEndFrontierIndex,
     });
@@ -493,6 +526,11 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
   }
 
   return entries;
+}
+
+function filterLayeredCompactCandidateEntries(entries: LayeredCompactCandidateEntry[]): LayeredCompactCandidateEntry[] {
+  const allowedLevels = selectCompactCandidateTargetLevels(entries.map(entry => entry.item));
+  return entries.filter(entry => allowedLevels.has(getCandidateTargetLevel(entry.item)));
 }
 
 function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> {
@@ -673,7 +711,9 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
 
   const olderFrontier = frontierSnapshot.slice(0, splitIndex);
   const forceKeptRecentFrontier = splitIndex < frontierSnapshot.length ? frontierSnapshot.slice(splitIndex) : [];
-  const candidateEntries = await buildLayeredCompactCandidateEntries(transientSession, olderFrontier);
+  const candidateEntries = filterLayeredCompactCandidateEntries(
+    await buildLayeredCompactCandidateEntries(transientSession, olderFrontier)
+  );
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   if (candidateItems.length === 0) {

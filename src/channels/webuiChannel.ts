@@ -6,6 +6,7 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs-extra';
+import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
 import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelMessage } from '../channel';
@@ -937,6 +938,7 @@ export class WebUIChannel implements Channel {
               res.json({ 
                 path: finalPath,
                 filename: req.file.originalname,
+                mimeType: req.file.mimetype,
                 size: req.file.size
               });
             });
@@ -1153,7 +1155,12 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            const { text, parts, filePaths } = req.body;
+            const { text, parts, filePaths, uploadedFiles } = req.body;
+
+            const existingSession = await sessionManager.getExistingSession(sessionId);
+            if (!existingSession) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
 
             // Support both old format (text) and new format (parts)
             let finalParts = parts || (text ? [{ text }] : []);
@@ -1200,45 +1207,63 @@ export class WebUIChannel implements Channel {
               conversationId: sessionId,
               username: 'webui'
             };
-            
-            // If filePaths provided, read and add image parts
-            if (filePaths && Array.isArray(filePaths)) {
-              for (const filePath of filePaths) {
+
+            const uploadedEntries = Array.isArray(uploadedFiles)
+              ? uploadedFiles
+              : (Array.isArray(filePaths) ? filePaths.map((filePath) => ({ path: filePath })) : []);
+
+            if (uploadedEntries.length > 0) {
+              for (const entry of uploadedEntries) {
+                const tempPath = typeof entry === 'string'
+                  ? entry
+                  : (typeof entry?.path === 'string' ? entry.path : '');
+                if (!tempPath) continue;
+
                 try {
-                  // Check if file exists and is an image
-                  const stats = await fs.stat(filePath);
-                  if (stats.isFile()) {
-                    const ext = path.extname(filePath).toLowerCase();
-                    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
-                    
-                    if (imageExts.includes(ext)) {
-                      // Read image and convert to base64
-                      const imageBuffer = await fs.readFile(filePath);
-                      const base64 = imageBuffer.toString('base64');
-                      const mimeType = ext === '.png' ? 'image/png' : 
-                                      ext === '.gif' ? 'image/gif' :
-                                      ext === '.webp' ? 'image/webp' : 'image/jpeg';
-                      
-                      finalParts.push({
-                        inlineData: {
-                          data: base64,
-                          mimeType
-                        }
-                      });
-                    }
+                  const stats = await fs.stat(tempPath);
+                  if (!stats.isFile()) continue;
+
+                  const fileBuffer = await fs.readFile(tempPath);
+                  const originalName = typeof entry?.filename === 'string' && entry.filename.trim()
+                    ? entry.filename.trim()
+                    : path.basename(tempPath);
+                  const ext = path.extname(originalName || tempPath).toLowerCase();
+                  const mimeType = typeof entry?.mimeType === 'string' && entry.mimeType.trim()
+                    ? entry.mimeType.trim()
+                    : (ext === '.png' ? 'image/png'
+                      : ext === '.gif' ? 'image/gif'
+                      : ext === '.webp' ? 'image/webp'
+                      : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+                      : 'application/octet-stream');
+                  const isImage = mimeType.startsWith('image/');
+                  const saved = await saveInboundSessionFile({
+                    sessionId,
+                    platform: 'webui',
+                    buffer: fileBuffer,
+                    fileName: originalName,
+                    mimeType,
+                    isImage,
+                  });
+
+                  finalParts.push({ text: buildSavedFileText(saved, isImage ? 'image' : 'file') });
+
+                  if (isImage) {
+                    finalParts.push({
+                      inlineData: {
+                        data: fileBuffer.toString('base64'),
+                        mimeType,
+                      }
+                    });
                   }
                 } catch (err) {
-                  logger.warn({ filePath, err }, 'Failed to read uploaded file');
+                  logger.warn({ filePath: tempPath, err }, 'Failed to process uploaded file');
+                } finally {
+                  await fs.remove(tempPath).catch(() => {});
                 }
               }
             }
             
             if (finalParts.length === 0) throw new Error('Missing message content');
-
-            const existingSession = await sessionManager.getExistingSession(sessionId);
-            if (!existingSession) {
-              return res.status(404).json({ error: 'Session not found' });
-            }
 
             // Attach webui channel if not already attached
             // Use sessionId as channelUserId so each session has its own channel
