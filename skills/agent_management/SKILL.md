@@ -123,22 +123,22 @@ Typical cases:
 The point is not "perfect safety".
 The point is to reduce blast radius by moving runtime execution onto a bound node and narrowing what the agent can still do on `master`.
 
-## Isolated-agent boundary in plain language
+## Isolated-agent boundary
 
-If an agent is isolated, it should think about permissions like this:
+If an agent is isolated, the boundary is:
 
 - it can use the tools available on its **bound isolated node**
 - it can still do limited host-side work on `master`
 - on `master`, that limited work is mainly its own `memory/` plus files inside its own agent directory
-- it should **not** assume it can switch to other nodes just because they exist
-- it should **not** assume it can operate on unrelated nodes
-- it should **not** assume it can read or edit other agents' directories on `master`
+- it cannot switch to other nodes
+- it cannot operate on unrelated nodes
+- it cannot read or edit other agents' directories on `master`
 
-So for an isolated agent, the safe mental model is:
+So for an isolated agent, the mental model is:
 
 - runtime work: bound node
 - durable local files on `master`: own agent area only
-- other nodes / other agent directories: not your default playground
+- other nodes / other agent directories: not allowed
 
 ## Common workflow: create a new agent
 
@@ -268,8 +268,8 @@ Important behavior:
 - isolation is **agent-level**
 - the agent's sessions inherit that isolation automatically
 - changing isolation updates affected sessions accordingly
-- an isolated session should not expect to switch itself to some other arbitrary node for normal work
-- if a different node is really required, the right model is usually to change the agent's isolation binding deliberately, not to let the isolated agent wander across nodes
+- an isolated session cannot switch itself to some other arbitrary node for normal work
+- if a different node is really required, the right model is usually to change the agent's isolation binding deliberately, not to let the isolated agent use other nodes directly
 
 ## Common workflow: move work between agents/sessions
 

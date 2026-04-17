@@ -346,18 +346,18 @@ Important behavior:
 - they do **not** get ordinary freedom to roam across other agents' files on `master`
 - they do **not** get ordinary freedom to switch to or operate unrelated nodes
 
-### Node/permission boundary in plain language
+### Node/permission boundary
 
-For an isolated agent, think of the boundary like this:
+For an isolated agent, the boundary is:
 
 - **allowed:** the bound isolated node and its tool surface
 - **allowed:** limited host-side operations on `master`, but only for the isolated agent's own memory and agent-directory files
-- **not allowed:** casually switching to another node
-- **not allowed:** using unrelated nodes just because they exist
+- **not allowed:** switching to another node
+- **not allowed:** using unrelated nodes
 - **not allowed:** reading/writing other agents' directories on `master`
 
-So if an isolated agent asks "can I just switch to another node for this?", the default answer is **no**.
-If a workflow really needs another node, the user should change the agent's isolation binding deliberately instead of the isolated agent hopping around by itself.
+An isolated agent cannot switch itself to another node.
+If a workflow really needs another node, the user should change the agent's isolation binding deliberately instead of the isolated agent using other nodes directly.
 
 ## Sandbox/test-environment note
 
