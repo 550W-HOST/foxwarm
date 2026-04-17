@@ -14,7 +14,7 @@ import type { Session } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
-import { findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
+import { createWorkbenchId, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 type AppView = 'session' | 'agents'
@@ -39,7 +39,7 @@ const ARCHITECTURE_HASH = 'agents'
 const TAB_HASH_PREFIX = 'tab/'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
-const PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
+const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 
 function isChatTab(tab: WorkbenchTab): tab is Extract<WorkbenchTab, { type: 'chat' }> {
   return tab.type === 'chat'
@@ -120,9 +120,13 @@ function setTabHash(tabId?: string | null) {
   window.location.hash = `${TAB_HASH_PREFIX}${encodeURIComponent(tabId)}`
 }
 
+function makePreviewChatTabId() {
+  return createWorkbenchId('chatpreview')
+}
+
 function makeChatTab(sessionId: string, title: string, options?: { preview?: boolean; pinned?: boolean }): WorkbenchTab {
   return {
-    id: options?.preview ? PREVIEW_CHAT_TAB_ID : getPersistentChatTabId(sessionId),
+    id: options?.preview ? makePreviewChatTabId() : getPersistentChatTabId(sessionId),
     type: 'chat',
     sessionId,
     title,
@@ -217,7 +221,7 @@ function App() {
   const updateSplitSizes = useWorkbenchStore((state) => state.updateSplitSizes)
 
   const darkMode = themeMode === 'dark' || (themeMode === 'auto' && systemPrefersDark)
-  const [draggingTabId, setDraggingTabId] = useState<string | null>(null)
+  const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session'; id: string; title: string } | null>(null)
 
   const globalSSERef = useRef<EventSource | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -371,6 +375,19 @@ function App() {
       }
     })
   }, [allTabs, sessions])
+
+  useEffect(() => {
+    const legacyPreview = allTabs.find((tab) => isPreviewChatTab(tab) && tab.id === LEGACY_PREVIEW_CHAT_TAB_ID)
+    if (!legacyPreview) return
+
+    const nextId = makePreviewChatTabId()
+    replaceTabId(legacyPreview.id, { ...legacyPreview, id: nextId })
+
+    if (route.view === 'tab' && route.tabId === legacyPreview.id) {
+      setRoute({ view: 'tab', tabId: nextId })
+      setTabHash(nextId)
+    }
+  }, [allTabs, route, replaceTabId])
 
   useEffect(() => {
     const activeTerminalMap = new Map(activeTerminals.map((terminal) => [terminal.id, terminal]))
@@ -594,6 +611,34 @@ function App() {
     navigateToTab(persistentTab.id)
   }
 
+  const promotePreviewTab = (tabId: string, options?: { pinned?: boolean }): string | null => {
+    const targetTab = tabsById[tabId]
+    if (!targetTab) return null
+
+    if (!isPreviewChatTab(targetTab)) {
+      if (typeof options?.pinned === 'boolean' && targetTab.pinned !== options.pinned) {
+        updateTab(tabId, (current) => ({ ...current, pinned: options.pinned }))
+      }
+      return tabId
+    }
+
+    const persistentId = getPersistentChatTabId(targetTab.sessionId)
+    const existingTab = tabsById[persistentId]
+    if (existingTab) {
+      if (typeof options?.pinned === 'boolean' && existingTab.pinned !== options.pinned) {
+        updateTab(existingTab.id, (current) => ({ ...current, pinned: options.pinned }))
+      }
+      removeTab(tabId)
+      return existingTab.id
+    }
+
+    const persistentTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId), {
+      pinned: typeof options?.pinned === 'boolean' ? options.pinned : !!targetTab.pinned,
+    })
+    replaceTabId(tabId, persistentTab)
+    return persistentTab.id
+  }
+
   const pinWorkbenchTab = (tabId: string) => {
     const targetTab = tabsById[tabId]
     if (!targetTab) {
@@ -601,18 +646,10 @@ function App() {
     }
 
     if (isPreviewChatTab(targetTab)) {
-      const persistentId = getPersistentChatTabId(targetTab.sessionId)
-      const existingTab = tabsById[persistentId]
-      if (existingTab) {
-        updateTab(existingTab.id, (current) => ({ ...current, pinned: true }))
-        removeTab(tabId)
-        navigateToTab(existingTab.id)
-        return
+      const nextId = promotePreviewTab(tabId, { pinned: true })
+      if (nextId) {
+        navigateToTab(nextId)
       }
-
-      const pinnedTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId), { pinned: true })
-      replaceTabId(tabId, pinnedTab)
-      navigateToTab(pinnedTab.id)
       return
     }
 
@@ -673,6 +710,42 @@ function App() {
       void closeWorkbenchTab(target.id)
     }
     void fetchActiveTerminals()
+  }
+
+  const openPersistentChatTab = (sessionId: string, options?: { paneId?: string; beforeTabId?: string | null; edge?: 'left' | 'right' | 'bottom' }) => {
+    const title = sessionTitle(sessionId)
+    const existingTab = findPreferredChatTab(sessionId)
+
+    let targetTabId: string | null = null
+
+    if (existingTab) {
+      if (existingTab.title !== title) {
+        updateTab(existingTab.id, (current) => isChatTab(current) ? { ...current, title } : current)
+      }
+      targetTabId = existingTab.id
+    } else {
+      const previewTab = allTabs.find((tab) => isPreviewChatTab(tab) && tab.sessionId === sessionId)
+      if (previewTab) {
+        targetTabId = promotePreviewTab(previewTab.id, { pinned: false })
+      }
+
+      if (!targetTabId) {
+        const tab = makeChatTab(sessionId, title)
+        upsertTab(tab, { activate: false })
+        targetTabId = tab.id
+      }
+    }
+
+    if (!targetTabId) return null
+
+    if (options?.edge && options.paneId) {
+      dockTabToPaneEdge(targetTabId, options.paneId, options.edge)
+    } else if (options?.paneId) {
+      moveTabToPane(targetTabId, options.paneId, { beforeTabId: options.beforeTabId || null, activate: true })
+    }
+
+    navigateToTab(targetTabId)
+    return targetTabId
   }
 
   const handleCreateSession = () => {
@@ -869,22 +942,58 @@ function App() {
     )
   }
 
-  const draggingTab = draggingTabId ? (tabsById[draggingTabId] || null) : null
+  const draggingTab = draggingItem?.type === 'tab' && draggingItem.id ? (tabsById[draggingItem.id] || null) : null
 
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = String(event.active.id)
-    setDraggingTabId(activeId)
+    const activeData = event.active.data.current as { type?: string; title?: string; sessionId?: string } | undefined
+    if (activeData?.type === 'session') {
+      setDraggingItem({ type: 'session', id: activeData.sessionId || activeId, title: activeData.title || activeData.sessionId || activeId })
+      return
+    }
+    const tab = tabsById[activeId]
+    setDraggingItem({ type: 'tab', id: activeId, title: tab?.title || activeId })
   }
 
   const handleDragEnd = (event: DragEndEvent) => {
     const activeId = String(event.active.id)
     const overId = event.over?.id ? String(event.over.id) : null
-    const activeData = event.active.data.current as { type?: string; paneId?: string; pinned?: boolean } | undefined
+    const activeData = event.active.data.current as { type?: string; paneId?: string; pinned?: boolean; sessionId?: string } | undefined
     const overData = event.over?.data.current as { type?: string; paneId?: string; pinned?: boolean; edge?: 'left' | 'right' | 'top' | 'bottom' } | undefined
 
-    setDraggingTabId(null)
+    setDraggingItem(null)
 
-    if (!overId || !activeData || activeData.type !== 'tab') {
+    if (!overId || !activeData) {
+      return
+    }
+
+    if (activeData.type === 'session') {
+      const draggedSessionId = activeData.sessionId || activeId
+      if (overData?.type === 'tab' && overData.paneId) {
+        openPersistentChatTab(draggedSessionId, { paneId: overData.paneId, beforeTabId: overId })
+        return
+      }
+
+      if (overData?.type === 'tab-row' && overData.paneId) {
+        const openedId = openPersistentChatTab(draggedSessionId, { paneId: overData.paneId })
+        if (openedId && overData.pinned) {
+          pinWorkbenchTab(openedId)
+        }
+        return
+      }
+
+      if (overData?.type === 'pane-center' && overData.paneId) {
+        openPersistentChatTab(draggedSessionId, { paneId: overData.paneId })
+        return
+      }
+
+      if (overData?.type === 'pane-edge' && overData.paneId && overData.edge && overData.edge !== 'top') {
+        openPersistentChatTab(draggedSessionId, { paneId: overData.paneId, edge: overData.edge })
+      }
+      return
+    }
+
+    if (activeData.type !== 'tab') {
       return
     }
 
@@ -912,6 +1021,7 @@ function App() {
     if (overData?.type === 'tab-row' && overData.paneId) {
       const nextPinned = !!overData.pinned
       const targetPane = findPaneNode(root, overData.paneId)
+      const activeTabRecord = tabsById[activeId] || null
       if (!targetPane) {
         return
       }
@@ -927,12 +1037,20 @@ function App() {
           }) || null
         : null
 
-      if (!!activeData.pinned !== nextPinned) {
+      let nextActiveId = activeId
+
+      if (nextPinned && activeTabRecord && isPreviewChatTab(activeTabRecord)) {
+        const promotedId = promotePreviewTab(activeId, { pinned: true })
+        if (!promotedId) {
+          return
+        }
+        nextActiveId = promotedId
+      } else if (!!activeData.pinned !== nextPinned) {
         updateTab(activeId, (current) => ({ ...current, pinned: nextPinned }))
       }
 
-      moveTabToPane(activeId, overData.paneId, { beforeTabId, activate: true })
-      navigateToTab(activeId)
+      moveTabToPane(nextActiveId, overData.paneId, { beforeTabId, activate: true })
+      navigateToTab(nextActiveId)
       return
     }
 
@@ -946,7 +1064,7 @@ function App() {
   }
 
   const handleDragCancel = () => {
-    setDraggingTabId(null)
+    setDraggingItem(null)
   }
 
   const renderWorkbenchSurface = (content: ReactNode) => (
@@ -962,6 +1080,10 @@ function App() {
         {draggingTab ? (
           <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
             <span className="truncate">{draggingTab.title}</span>
+          </div>
+        ) : draggingItem?.type === 'session' ? (
+          <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+            <span className="truncate">{draggingItem.title}</span>
           </div>
         ) : null}
       </DragOverlay>
@@ -1013,7 +1135,7 @@ function App() {
     )
   }
 
-  return (
+  return renderWorkbenchSurface(
     <div className="flex h-screen bg-gray-100 dark:bg-gray-900">
       <Sidebar
         sessions={sessions}
@@ -1039,17 +1161,15 @@ function App() {
           <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} />
         ) : (
           <div className="h-full min-h-0 overflow-hidden">
-            {renderWorkbenchSurface(
-              <WorkbenchLayout
-                node={root}
-                renderPane={(paneId) => renderPane(paneId)}
-                onLayoutResize={updateSplitSizes}
-              />,
-            )}
+            <WorkbenchLayout
+              node={root}
+              renderPane={(paneId) => renderPane(paneId)}
+              onLayoutResize={updateSplitSizes}
+            />
           </div>
         )}
       </div>
-    </div>
+    </div>,
   )
 }
 

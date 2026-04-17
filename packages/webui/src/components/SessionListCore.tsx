@@ -1,4 +1,6 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { useDraggable } from '@dnd-kit/core'
+import { CSS } from '@dnd-kit/utilities'
 import { API_BASE_PATH } from '../config'
 import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2 } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
@@ -89,6 +91,52 @@ const isFullyVisibleInContainer = (element: HTMLElement, container: HTMLElement)
   const containerRect = container.getBoundingClientRect()
 
   return elementRect.top >= containerRect.top && elementRect.bottom <= containerRect.bottom
+}
+
+function DraggableSessionRow({
+  session,
+  children,
+  className,
+  onClick,
+  onDoubleClick,
+  onContextMenu,
+  setRowRef,
+}: {
+  session: Session
+  children: ReactNode
+  className: string
+  onClick: () => void
+  onDoubleClick: () => void
+  onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void
+  setRowRef: (node: HTMLDivElement | null) => void
+}) {
+  const title = session.displayName || session.id
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `session:${session.id}`,
+    data: {
+      type: 'session',
+      sessionId: session.id,
+      title,
+    },
+  })
+
+  return (
+    <div
+      ref={(node) => {
+        setNodeRef(node)
+        setRowRef(node)
+      }}
+      style={{ transform: CSS.Translate.toString(transform) }}
+      className={`${className} ${isDragging ? 'opacity-50' : ''}`}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
+      {...attributes}
+      {...listeners}
+    >
+      {children}
+    </div>
+  )
 }
 
 export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession }: SessionListCoreProps) {
@@ -486,10 +534,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       <div
         key={session.id}
       >
-        <div
-          ref={(node) => {
-            sessionRefs.current.set(session.id, node)
-          }}
+        <DraggableSessionRow
+          session={session}
           className={`flex items-center rounded cursor-pointer mt-1 ${
             isCurrentSession
               ? 'bg-blue-100 dark:bg-blue-900/30' 
@@ -498,6 +544,9 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           onClick={() => onSelectSession(session.id)}
           onDoubleClick={() => onKeepSession?.(session.id)}
           onContextMenu={(e) => handleContextMenu(e, session.id)}
+          setRowRef={(node) => {
+            sessionRefs.current.set(session.id, node)
+          }}
         >
           <div className="flex-1 min-w-0 py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
             <div className="font-medium truncate text-gray-900 dark:text-white text-sm">
@@ -575,7 +624,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           >
             <MoreVertical className="w-4 h-4" />
           </button>
-        </div>
+        </DraggableSessionRow>
 
         {hasChildren && isExpanded && (
           <div>
