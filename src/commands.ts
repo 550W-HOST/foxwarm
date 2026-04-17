@@ -1,6 +1,4 @@
 import fs from 'fs-extra'
-import path from 'path'
-import crypto from 'crypto'
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from './channel'
 import { inspectChannelAuthorizationFromContext, formatAuthorizationInspection } from './channelAuth'
 import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses, restartManagedChannel, startManagedChannel, stopManagedChannel } from './channelRuntime'
@@ -11,11 +9,12 @@ import * as sessionManager from './sessionManager'
 import * as skills from './skills'
 import * as tools from './tools'
 import { estimateSessionSummary } from './tokenCount'
-import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, getDefaultChannelIdByType, HTTP_PORT, NODE_TOKEN_FILE, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
+import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, getDefaultChannelIdByType, HTTP_PORT, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api'
 import { checkTimerPermission } from './isolatedCheck'
+import { ensureNodePairingToken } from './nodes/bootstrapInfo'
 
 export type CommandDef = {
   description: string
@@ -231,21 +230,6 @@ const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   placeholderNode('<node-id>', 'Existing node id; omit it to list nodes'),
 ]
 
-async function ensureNodePairingToken(): Promise<string> {
-  try {
-    const token = await fs.readFile(NODE_TOKEN_FILE, 'utf8')
-    return token.trim()
-  } catch (err: any) {
-    if (err?.code === 'ENOENT') {
-      const token = crypto.randomBytes(32).toString('hex')
-      await fs.ensureDir(path.dirname(NODE_TOKEN_FILE))
-      await fs.writeFile(NODE_TOKEN_FILE, token)
-      return token
-    }
-    throw err
-  }
-}
-
 function buildNodePairHelp(token: string): string {
   return [
     '🧩 **Node Pairing / Bootstrap Help**',
@@ -314,6 +298,7 @@ function buildNodePairHelp(token: string): string {
     '- `/node/run-docker.sh` = Docker bootstrap; starts containers and follows logs by default, use `-d` to skip log following',
     '- `/node/run-interactive.sh` = interactive approval mode for every tool call',
     '- `/node/docker-compose.yaml` = inspect/customize the self-contained compose template first',
+    '- agent/tool workflows can use the `node_bootstrap_info` tool for structured bootstrap info',
   ].join('\n')
 }
 

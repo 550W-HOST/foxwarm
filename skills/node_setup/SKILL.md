@@ -15,6 +15,12 @@ This is the main skill for:
 - how isolated agents bind to nodes
 - how sandbox/test nodes relate to ordinary nodes
 
+There is also a structured builtin tool for agent workflows:
+
+- `node_bootstrap_info`
+
+Use that tool when you want machine-readable bootstrap info instead of re-parsing prose help text.
+
 This skill matches the current bootstrap surfaces exposed by a running master:
 
 - `/node/run.sh`
@@ -67,6 +73,12 @@ What Foxwarm **can** do is:
 - when serving `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1`
 - look at the **current HTTP request** (for example `Host` / forwarded proto)
 - fill that request-derived URL into the downloaded script as the **default** host
+
+Tool note:
+
+- the `node_bootstrap_info` tool does **not** have that bootstrap HTTP request context
+- so if you do not pass `baseUrl`, it will explicitly say the external URL is unresolved in tool context
+- if you *do* pass a chosen reachable `baseUrl`, it returns concrete URLs and explains that fetching the script from that URL would make that same URL the request-derived default inside the script
 
 So the rule is:
 

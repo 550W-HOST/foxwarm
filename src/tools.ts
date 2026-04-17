@@ -12,6 +12,7 @@ import { browserManager } from './browser';
 import { logger } from './common';
 import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from './execTimeout';
 import { nodesManager } from './nodes/manager';
+import { buildNodeBootstrapInfo, ensureNodePairingToken } from './nodes/bootstrapInfo';
 import {
     buildBackgroundTimeoutResult,
     buildForegroundExecResult,
@@ -89,7 +90,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
     'search_tools', 'call_tool',
     'change_current_node',
-    'node_pair_approve', 'node_pair_list',
+    'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
 ];
 
@@ -1647,6 +1648,15 @@ export const change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
   return `Current node changed to \`${nodeId}\``;
 };
 
+export const node_bootstrap_info = async (args: ToolArgs = {}) => {
+  const token = await ensureNodePairingToken();
+  return buildNodeBootstrapInfo({
+    pairingToken: token,
+    baseUrl: args.baseUrl,
+    includeExamples: args.includeExamples !== false,
+  });
+};
+
 export const node_pair_approve = async (args: ToolArgs) => {
   const { pendingId, nodeId: requestedNodeId } = args;
   if (!pendingId) throw new Error('Missing required parameter: pendingId');
@@ -2441,6 +2451,17 @@ export const definitions = [
                     nodeId: { type: 'string', description: 'Node ID to switch to' }
                 },
                 required: ['nodeId']
+            }
+        },
+        {
+            name: 'node_bootstrap_info',
+            description: 'Return structured node bootstrap info: pairing token, base-URL semantics, bootstrap endpoint URLs/paths, and example commands. Pass baseUrl only if you already know the reachable master URL from the node\'s point of view.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    baseUrl: { type: 'string', description: 'Optional reachable Foxwarm master base URL chosen by the caller/operator (for example http://192.168.1.50:3001 or https://example.com). If omitted, the tool explains that tool context alone cannot infer the universally correct external URL.' },
+                    includeExamples: { type: 'boolean', description: 'Whether to include example curl/docker-compose commands in the result. Defaults to true.' },
+                }
             }
         },
         {
