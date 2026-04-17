@@ -6,11 +6,12 @@ import { CHANNELS_FILE } from '../config';
 import { Session, SessionReply } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
 
-export type ChannelMode = 'push-only' | undefined;
+export type ChannelMode = 'send-only' | undefined;
+type LegacyChannelMode = 'push-only';
 
 export interface ChannelConfig {
   sessionId: string;
-  mode?: ChannelMode;
+  mode?: ChannelMode | LegacyChannelMode;
   dangerouslyAllowAllUsers?: boolean;
   dangerouslyAllowAllGroupMembers?: boolean; // legacy compatibility on load/read only
 }
@@ -81,8 +82,8 @@ function normalizeChannelConfig(config: ChannelConfig): ChannelConfig {
     sessionId: config.sessionId,
   };
 
-  if (config.mode) {
-    normalized.mode = config.mode;
+  if (config.mode === 'send-only' || config.mode === 'push-only') {
+    normalized.mode = 'send-only';
   }
 
   const dangerouslyAllowAllUsers = config.dangerouslyAllowAllUsers ?? config.dangerouslyAllowAllGroupMembers;
@@ -256,8 +257,8 @@ export async function sendFileToSession(
   for (const channelInfo of channels) {
     const targetId = `${channelInfo.channelId}:${channelInfo.conversationId}`;
     const channelConfig = getChannelConfig(channelInfo.channelId, channelInfo.conversationId);
-    if (channelConfig?.mode === 'push-only') {
-      result.skippedChannels.push({ channelId: targetId, reason: 'push-only' });
+    if (channelConfig?.mode === 'send-only') {
+      result.skippedChannels.push({ channelId: targetId, reason: 'send-only' });
       continue;
     }
 
@@ -394,8 +395,8 @@ export function createSessionBroadcast(sessionId: string): SessionReply {
       }
 
       const channelConfig = getChannelConfig(channelInfo.channelId, channelInfo.conversationId);
-      if (channelConfig?.mode === 'push-only') {
-        logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId, sessionId }, 'Skipping push-only channel during broadcast');
+      if (channelConfig?.mode === 'send-only') {
+        logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId, sessionId }, 'Skipping send-only channel during broadcast');
         continue;
       }
 
