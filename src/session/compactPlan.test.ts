@@ -6,9 +6,12 @@ import {
   buildCompactFlowToolDefinitions,
   buildCompactPromptText,
   buildMessageCandidateItem,
+  COMPACT_LEVEL_TOKEN_THRESHOLD,
   COMPACT_FLOW_MAX_ROUNDS,
   COMPACT_PLAN_TOOL_NAME,
   CompactPlanValidationError,
+  filterCompactCandidateItemsByLevel,
+  selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
 } from './compactPlan';
 
@@ -20,7 +23,7 @@ const messageCandidates = [
 ];
 
 test('message and block candidates render stable compact keys', () => {
-  assert.equal(COMPACT_FLOW_MAX_ROUNDS, 10);
+  assert.equal(COMPACT_FLOW_MAX_ROUNDS, 15);
   assert.equal(messageCandidates[0].kind, 'message');
   assert.equal(messageCandidates[0].key, 'M#1');
   const block = buildBlockCandidateItem(8, 2, 10, 30, 'summarized prior discussion');
@@ -51,6 +54,23 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /read_memory/);
   assert.match(prompt, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
   assert.match(prompt, /apply_patch_memory/);
+  assert.match(prompt, /leave it uncompressed by simply omitting it from createBlocksJson/i);
+});
+
+test('filterCompactCandidateItemsByLevel removes levels at or below 2k tokens and block-only levels with fewer than two blocks', () => {
+  const candidates = [
+    buildMessageCandidateItem(1, 1, 'small message a', COMPACT_LEVEL_TOKEN_THRESHOLD),
+    buildMessageCandidateItem(2, 2, 'small message b', 0),
+    buildBlockCandidateItem(10, 1, 3, 4, 'large but single block level', COMPACT_LEVEL_TOKEN_THRESHOLD + 500),
+    buildBlockCandidateItem(20, 2, 5, 6, 'first eligible block', 1200),
+    buildBlockCandidateItem(21, 2, 7, 8, 'second eligible block', 1001),
+  ];
+
+  const allowedLevels = selectCompactCandidateTargetLevels(candidates);
+  assert.deepStrictEqual([...allowedLevels].sort((a, b) => a - b), [3]);
+
+  const filtered = filterCompactCandidateItemsByLevel(candidates);
+  assert.deepStrictEqual(filtered.map(item => item.key), ['B#20', 'B#21']);
 });
 
 test('buildCompactFlowToolDefinitions exposes only compact-safe helper tools plus plan submission', () => {
@@ -149,6 +169,37 @@ test('validateCompactPlanArgs treats grouped tool call/response candidates as at
       summary: 'invalid partial tool exchange',
     }]),
   }, groupedCandidates), /continuous message range/i);
+});
+
+test('validateCompactPlanArgs rejects a single-block source but still allows a single-message source', () => {
+  const blockCandidates = [
+    buildBlockCandidateItem(10, 1, 5, 8, 'prior block'),
+    buildBlockCandidateItem(11, 1, 9, 12, 'next prior block'),
+  ];
+
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 2,
+      sourceKind: 'block',
+      sourceStart: 10,
+      sourceEnd: 10,
+      summary: 'invalid single block summary',
+    }]),
+  }, blockCandidates), /at least two blocks/i);
+
+  const singleMessagePlan = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 1,
+      summary: 'single large message summary',
+    }]),
+  }, [buildMessageCandidateItem(1, 1, 'large single message')]);
+
+  assert.equal(singleMessagePlan.createBlocks.length, 1);
+  assert.equal(singleMessagePlan.createBlocks[0].sourceStart, 1);
+  assert.equal(singleMessagePlan.createBlocks[0].sourceEnd, 1);
 });
 
 test('validateCompactPlanArgs rejects non-continuous or overlapping ranges', () => {

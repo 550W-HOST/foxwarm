@@ -7,7 +7,7 @@ import { MessageRouter } from '../messageRouter';
 import * as sessionManager from '../sessionManager';
 import * as llm from '../llm';
 import * as vector from '../vector';
-import { buildCompactFlowToolDefinitions } from '../session/compactPlan';
+import { buildCompactFlowToolDefinitions, COMPACT_FLOW_MAX_ROUNDS } from '../session/compactPlan';
 import { MessagePart, Session } from '../types';
 import { tool_get_archived_messages } from '../toolsSessionAgent';
 
@@ -78,6 +78,8 @@ function assertLastModelText(session: Session, expected: string): void {
   assert.strictEqual(last.role, 'model');
   assert.strictEqual(last.parts.find(part => typeof part.text === 'string')?.text, expected);
 }
+
+const LARGE_COMPACT_TEXT = 'compactable context item '.repeat(900);
 
 async function test(name: string, fn: () => Promise<void>): Promise<void> {
   try {
@@ -341,7 +343,12 @@ async function main(): Promise<void> {
     await test('compact_session retries invalid compact plans and then resumes with compacted history', async () => {
       const sessionId = makeSessionId('selftest_compact_current');
       createdSessionIds.push(sessionId);
-      await ensureSession(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await sessionManager.appendSessionMessage(session, {
+        role: 'user',
+        parts: [{ text: LARGE_COMPACT_TEXT }],
+      });
 
       let llmCallCount = 0;
       let compactMessageRange: { sourceStart: number; sourceEnd: number } | null = null;
@@ -374,7 +381,7 @@ async function main(): Promise<void> {
         if (llmCallCount === 2) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
-          assert.match(systemText, /10 total rounds/i);
+          assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
           assert.match(systemText, /M#1/);
           assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), compactToolNames);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
@@ -448,7 +455,7 @@ async function main(): Promise<void> {
 
       await sessionManager.appendSessionMessage(session, {
         role: 'user',
-        parts: [{ text: 'async compact message 1' }],
+        parts: [{ text: LARGE_COMPACT_TEXT }],
       });
       await sessionManager.appendSessionMessage(session, {
         role: 'model',
@@ -573,7 +580,12 @@ async function main(): Promise<void> {
     await test('automatic in-turn compaction after tool calls continues immediately and commits async compact later', async () => {
       const sessionId = makeSessionId('selftest_auto_compact_current');
       createdSessionIds.push(sessionId);
-      await ensureSession(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await sessionManager.appendSessionMessage(session, {
+        role: 'user',
+        parts: [{ text: LARGE_COMPACT_TEXT }],
+      });
 
       const sampleFile = path.join(tempRoot, 'auto-compact-read.txt');
       await fs.writeFile(sampleFile, 'auto compact\n');
@@ -597,7 +609,7 @@ async function main(): Promise<void> {
           compactJobCallCount += 1;
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
-          assert.match(systemText, /10 total rounds/i);
+          assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
           assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), compactToolNames);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in auto compact prompt');

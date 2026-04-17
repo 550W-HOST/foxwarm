@@ -1,8 +1,10 @@
 import { ToolDefinition } from '../types';
+import { estimateTokenCount } from '../tokenCount';
 
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
 export const COMPACT_FLOW_MAX_ROUNDS = 15;
 export const DEFAULT_PREVIEW_CHAR_LIMIT = 80;
+export const COMPACT_LEVEL_TOKEN_THRESHOLD = 2000;
 const EDGE_PREVIEW_CHAR_LIMIT = 300;
 const COMPACT_FLOW_MEMORY_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -117,6 +119,7 @@ export type CompactCandidateItem =
       startSeq: number;
       endSeq: number;
       preview: string;
+      estimatedTokens: number;
     }
   | {
       kind: 'block';
@@ -126,6 +129,7 @@ export type CompactCandidateItem =
       rawStartSeq: number;
       rawEndSeq: number;
       preview: string;
+      estimatedTokens: number;
     };
 
 export interface LayeredCreateBlockPlan {
@@ -191,17 +195,18 @@ export function trimPreview(text: string, limit: number = DEFAULT_PREVIEW_CHAR_L
   return `${normalized.slice(0, limit - 1)}…`;
 }
 
-export function buildMessageCandidateItem(startSeq: number, endSeq: number, preview: string): CompactCandidateItem {
+export function buildMessageCandidateItem(startSeq: number, endSeq: number, preview: string, estimatedTokens: number = estimateTokenCount(preview)): CompactCandidateItem {
   return {
     kind: 'message',
     key: startSeq === endSeq ? `M#${startSeq}` : `M#${startSeq}-#${endSeq}`,
     startSeq,
     endSeq,
     preview,
+    estimatedTokens,
   };
 }
 
-export function buildBlockCandidateItem(id: number, level: number, rawStartSeq: number, rawEndSeq: number, summary: string): CompactCandidateItem {
+export function buildBlockCandidateItem(id: number, level: number, rawStartSeq: number, rawEndSeq: number, summary: string, estimatedTokens: number = estimateTokenCount(summary)): CompactCandidateItem {
   return {
     kind: 'block',
     key: `B#${id}`,
@@ -210,6 +215,7 @@ export function buildBlockCandidateItem(id: number, level: number, rawStartSeq: 
     rawStartSeq,
     rawEndSeq,
     preview: summary,
+    estimatedTokens,
   };
 }
 
@@ -218,8 +224,40 @@ interface CandidateGroup {
   items: CompactCandidateItem[];
 }
 
-function getCandidateTargetLevel(item: CompactCandidateItem): number {
+export function getCandidateTargetLevel(item: CompactCandidateItem): number {
   return item.kind === 'message' ? 1 : item.level + 1;
+}
+
+export function selectCompactCandidateTargetLevels(items: CompactCandidateItem[]): Set<number> {
+  const stats = new Map<number, { totalEstimatedTokens: number; itemCount: number }>();
+
+  for (const item of items) {
+    const targetLevel = getCandidateTargetLevel(item);
+    const current = stats.get(targetLevel) || { totalEstimatedTokens: 0, itemCount: 0 };
+    current.totalEstimatedTokens += Math.max(0, item.estimatedTokens || 0);
+    current.itemCount += 1;
+    stats.set(targetLevel, current);
+  }
+
+  const allowedLevels = new Set<number>();
+  for (const [targetLevel, levelStats] of stats.entries()) {
+    if (levelStats.totalEstimatedTokens <= COMPACT_LEVEL_TOKEN_THRESHOLD) {
+      continue;
+    }
+
+    if (targetLevel > 1 && levelStats.itemCount < 2) {
+      continue;
+    }
+
+    allowedLevels.add(targetLevel);
+  }
+
+  return allowedLevels;
+}
+
+export function filterCompactCandidateItemsByLevel(items: CompactCandidateItem[]): CompactCandidateItem[] {
+  const allowedLevels = selectCompactCandidateTargetLevels(items);
+  return items.filter(item => allowedLevels.has(getCandidateTargetLevel(item)));
 }
 
 function groupCandidatesByTargetLevel(items: CompactCandidateItem[]): CandidateGroup[] {
@@ -279,6 +317,7 @@ export function buildCompactPromptText(options: {
     '- Pass the plan via createBlocksJson as a JSON array string.',
     '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
     '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim.',
+    '- If a block/message still seems useful, you can leave it uncompressed by simply omitting it from createBlocksJson.',
     '- Blocks must have same kind and same level of source.',
     '- Blocks must not overlap source ranges across createBlocks.',
     '- Blocks must not separate seq/id range inside a candidate (can not separate a tool call and its response).',
@@ -355,6 +394,9 @@ function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPla
     if (sourceKind === 'block' && Number.isInteger(level) && level < 2) {
       details.createBlockErrors.push(`createBlocks[${index}] uses sourceKind=block so level must be >= 2.`);
     }
+    if (sourceKind === 'block' && Number.isInteger(sourceStart) && Number.isInteger(sourceEnd) && sourceStart === sourceEnd) {
+      details.createBlockErrors.push(`createBlocks[${index}] uses sourceKind=block so it must summarize at least two blocks.`);
+    }
 
     return [{ level, sourceKind, sourceStart, sourceEnd, summary } as LayeredCreateBlockPlan];
   });
@@ -380,6 +422,10 @@ function findMessageRange(candidateItems: CompactCandidateItem[], sourceStart: n
 }
 
 function findBlockRange(candidateItems: CompactCandidateItem[], level: number, sourceStart: number, sourceEnd: number): [number, number] | null {
+  if (sourceStart === sourceEnd) {
+    return null;
+  }
+
   const childLevel = level - 1;
   const startIndex = candidateItems.findIndex(item => item.kind === 'block' && item.id === sourceStart && item.level === childLevel);
   if (startIndex < 0) return null;
