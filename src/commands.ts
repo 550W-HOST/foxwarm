@@ -247,8 +247,6 @@ async function ensureNodePairingToken(): Promise<string> {
 }
 
 function buildNodePairHelp(token: string): string {
-  const baseUrl = `http://localhost:${HTTP_PORT}`
-
   return [
     '🧩 **Node Pairing / Bootstrap Help**',
     '',
@@ -256,24 +254,45 @@ function buildNodePairHelp(token: string): string {
     '',
     'Use `/node pair token` if you only want the raw token for copying.',
     '',
-    `Default examples below use \`${baseUrl}\`. If the node runs on another machine or phone, replace \`localhost\` with a reachable host/IP/domain for this Foxwarm master.`,
+    'First choose a **reachable base URL** for this Foxwarm master from the node\'s point of view.',
+    'There is no single globally correct external URL that Foxwarm can always know in advance — it might be localhost, a LAN IP, a Docker host IP, or a reverse-proxy domain depending on where the node runs.',
+    '',
+    'If you fetch `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1` from that reachable URL, the downloaded script uses that same request URL as its default `--host`/`HostUrl` value.',
+    'Override `--host=...` only when the script was fetched through one address but the node should connect to another reachable address.',
+    '',
+    '**Pick a reachable URL first**',
+    '```bash',
+    'BASE_URL=http://YOUR_MASTER:3001',
+    '```',
     '',
     '**Bare metal (recommended Linux host bootstrap)**',
     '```bash',
-    `curl -fsSL ${baseUrl}/node/run.sh | bash -s -- \\\n  --host=${baseUrl} \\\n  --pairing=${token} \\\n  --node-id=my-node`,
+    `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --pairing=${token} \
+  --node-id=my-node`,
     '```',
     '',
     '**Docker bootstrap**',
     '```bash',
-    `curl -fsSL ${baseUrl}/node/run-docker.sh | bash -s -- \\\n  --host=${baseUrl} \\\n  --pairing=${token} \\\n  --node-id=my-node`,
+    `curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
+  --pairing=${token} \
+  --node-id=my-node`,
+    '```',
+    '',
+    '**Explicit host override example**',
+    '```bash',
+    `curl -fsSL "http://127.0.0.1:${HTTP_PORT}/node/run.sh" | bash -s -- \
+  --host=http://192.168.1.50:${HTTP_PORT} \
+  --pairing=${token} \
+  --node-id=my-node`,
     '```',
     '',
     '**Manual docker-compose template**',
     '```bash',
-    `curl -fsSL ${baseUrl}/node/docker-compose.yaml -o docker-compose.yaml`,
+    'curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml',
     'cat > .env <<\'EOF\'',
-    `NODE_HOST=${baseUrl}`,
-    `NODE_SOURCE_URL=${baseUrl}/node/source.tar.gz`,
+    'NODE_HOST=$BASE_URL',
+    'NODE_SOURCE_URL=$BASE_URL/node/source.tar.gz',
     `NODE_PAIRING_TOKEN=${token}`,
     'NODE_ID=my-node',
     'NODE_DATA_DIR=./data',
@@ -291,8 +310,9 @@ function buildNodePairHelp(token: string): string {
     '```',
     '',
     'Notes:',
-    '- `/node/run.sh` = bare-metal bootstrap',
-    '- `/node/run-docker.sh` = Docker bootstrap',
+    '- `/node/run.sh` = bare-metal bootstrap; runs in foreground by default, use `-d` to detach',
+    '- `/node/run-docker.sh` = Docker bootstrap; starts containers and follows logs by default, use `-d` to skip log following',
+    '- `/node/run-interactive.sh` = interactive approval mode for every tool call',
     '- `/node/docker-compose.yaml` = inspect/customize the self-contained compose template first',
   ].join('\n')
 }
@@ -1802,14 +1822,13 @@ export const COMMANDS: Record<string, CommandDef> = {
         if (sub === 'token') {
           try {
             const token = await ensureNodePairingToken()
-            const baseUrl = `http://localhost:${HTTP_PORT}`
             ctx.reply(
               `🔑 **Current node pairing token**\n\n` +
               `\`${token}\`\n\n` +
               `Direct copy:\n` +
               `\`--pairing=${token}\`\n\n` +
-              `Default local master URL: \`${baseUrl}\`\n` +
-              `If the node is on another machine/device, replace \`localhost\` with a reachable host/IP/domain.\n\n` +
+              `Next step: choose a reachable base URL for this Foxwarm master from the node's point of view (for example localhost, a LAN IP, a Docker host IP, or a reverse-proxy domain), then fetch the bootstrap script from that URL.\n` +
+              `Those bootstrap scripts default their host value from the URL used to fetch them; pass \`--host=...\` only when you need to override that default.\n\n` +
               `Pairing/bootstrap examples: \`/node pair help\``
             )
           } catch (e: any) {

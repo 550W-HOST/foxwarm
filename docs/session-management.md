@@ -36,6 +36,7 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 /node [node-id]
 /agent list
 /agent create <name> [--no-main]
+/agent delete <name> [--confirm]
 /agent inherit <agent> <parent-agent|none>
 /skill list
 ```
@@ -45,6 +46,7 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 - `/session move my-project`：在当前 agent 内重命名当前 session
 - `/session move my-agent/main`：把当前 session 移动到**已存在的** agent `my-agent` 下，并改名为 `main`
 - 该命令**不会创建 agent**；如果目标 agent 不存在，请先用 `/agent create`
+- 该命令也**不会重命名 agent 本身**；agent 级别变更更适合走新建/迁移/清理流程
 
 ## 持久化结构
 
@@ -105,6 +107,12 @@ Foxwarm 会把当前 session 可见的长期记忆预组装成 `persistentMemory
 如果 session 设置了 `systemPromptFiles`，则只替换 memory 文件来源为该数组列出的文件；相对路径按 agent 工作目录解析。skills catalog、目录信息、压缩历史提示等非-memory 注入仍保留。
 
 当 agent memory / inherit / skills 变化时，相关 session snapshot 会刷新。
+
+如果你是**从别的会话/agent 侧**修改某个 agent 的 memory，并且希望一个已存在的 session 立刻吃到新内容，手动执行一次：
+
+```bash
+/session update-snapshot [session-id]
+```
 
 ## Queue
 

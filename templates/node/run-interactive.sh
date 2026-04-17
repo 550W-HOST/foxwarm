@@ -2,7 +2,7 @@
 
 set -eu
 
-HOST=""
+HOST="__FOXWARM_DEFAULT_BASE_URL__"
 PAIRING=""
 NODE_ID="node-$(hostname 2>/dev/null || echo foxwarm-node)"
 STATE_DIR="./data"
@@ -15,14 +15,16 @@ usage() {
   cat <<'EOF'
 Usage:
   curl -fsSL http(s)://master/node/run-interactive.sh | bash -s -- \
-    --host=http://master:3001 \
     --pairing=PAIRING_TOKEN \
     --node-id=macbook
 
 Interactive node client — every tool call requires your confirmation.
 
+The script defaults `--host` from the URL used to fetch `/node/run-interactive.sh`.
+Pass `--host=...` only when the node should connect to a different reachable master URL.
+
 Options:
-  --host=URL              Foxwarm master base URL (required)
+  --host=URL              Override Foxwarm master base URL (default: derived from request URL)
   --pairing=TOKEN         Pairing token for first-time setup
   --node-id=ID            Node name (default: node-<hostname>)
   --state-dir=DIR         Persistent data dir (default: ./data)
@@ -33,14 +35,14 @@ Options:
 
 Examples:
   # Full interactive (confirm everything):
-  curl ... | bash -s -- --host=http://master:3001 --pairing=TOKEN --node-id=macbook
+  curl ... | bash -s -- --pairing=TOKEN --node-id=macbook
 
   # Auto-approve read-only tools:
-  curl ... | bash -s -- --host=http://master:3001 --pairing=TOKEN --node-id=macbook \
+  curl ... | bash -s -- --pairing=TOKEN --node-id=macbook \
     --auto-approve="read|browse_list|browse_get"
 
   # Auto-reject after 60s of no input:
-  curl ... | bash -s -- --host=http://master:3001 --pairing=TOKEN --node-id=macbook --timeout=60
+  curl ... | bash -s -- --pairing=TOKEN --node-id=macbook --timeout=60
 EOF
 }
 
@@ -89,10 +91,14 @@ echo "Downloading node source from $HOST/node/source.tar.gz ..."
 curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$ABS_SOURCE_DIR"
 
 echo "Installing dependencies ..."
-(cd "$ABS_SOURCE_DIR" && npm install)
+(cd "$ABS_SOURCE_DIR" && npm ci)
 
-echo "Building ..."
-(cd "$ABS_SOURCE_DIR" && npm run build)
+if [ -f "$ABS_SOURCE_DIR/lib/nodes/interactive-client.js" ] && [ -f "$ABS_SOURCE_DIR/packages/shared/dist/toolResponseFormatting.js" ]; then
+  echo "Using prebuilt node bundle from source archive."
+else
+  echo "Building ..."
+  (cd "$ABS_SOURCE_DIR" && npm run build)
+fi
 
 # ─── Verify build ───
 if [ ! -f "$ABS_SOURCE_DIR/lib/nodes/interactive-client.js" ]; then

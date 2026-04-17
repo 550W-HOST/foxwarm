@@ -7,19 +7,18 @@
   Runs synchronously in the foreground.
 
 .EXAMPLE
-  # First-time setup:
+  # First-time setup (the downloaded script defaults HostUrl from the URL you fetched):
   irm https://master:3001/node/run.ps1 | iex
-  # (then set params manually, or use the parameterized form below)
 
-  .\run.ps1 -Host "http://master:3001" -Pairing "TOKEN" -NodeId "my-pc"
+  # Override HostUrl if the node should connect to a different reachable address:
+  .\run.ps1 -HostUrl "http://master:3001" -Pairing "TOKEN" -NodeId "my-pc"
 
   # With stored credentials (subsequent runs):
-  .\run.ps1 -Host "http://master:3001" -NodeId "my-pc"
+  .\run.ps1 -NodeId "my-pc"
 #>
 
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$HostUrl,
+    [string]$HostUrl = "__FOXWARM_DEFAULT_BASE_URL__",
 
     [string]$Pairing = "",
 
@@ -46,11 +45,11 @@ Foxwarm Node Client Bootstrap (Windows)
 ========================================
 
 Usage:
-  .\run.ps1 -HostUrl http://master:3001 -Pairing TOKEN -NodeId my-pc
-  .\run.ps1 -HostUrl http://master:3001 -NodeId my-pc -Interactive
+  .\run.ps1 -Pairing TOKEN -NodeId my-pc
+  .\run.ps1 -NodeId my-pc -Interactive
 
 Parameters:
-  -HostUrl        Foxwarm master base URL (required)
+  -HostUrl        Override Foxwarm master base URL (default: derived from request URL)
   -Pairing        Pairing token for first-time setup
   -NodeId         Node name (default: node-<hostname>)
   -StateDir       Persistent data dir (default: .\data)
@@ -76,6 +75,10 @@ $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Get-Location }
 
 # ─── Normalize paths ───
 $HostUrl = $HostUrl.TrimEnd("/")
+if (-not $HostUrl) {
+    Write-Error "HostUrl is required. Download the script from a reachable Foxwarm master URL or pass -HostUrl explicitly."
+    exit 1
+}
 if (-not $StateDir) { $StateDir = Join-Path $ScriptDir "data" }
 if (-not $SourceDir) { $SourceDir = Join-Path $ScriptDir "foxwarm-node" }
 $StateDir = [System.IO.Path]::GetFullPath($StateDir)
@@ -115,17 +118,18 @@ Remove-Item $tarFile -Force -ErrorAction SilentlyContinue
 Write-Host "Installing dependencies ..."
 Push-Location $SourceDir
 try {
-    & npm install
-    if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+    & npm ci
+    if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
 
-    # source.tar.gz includes pre-built lib/, only build if missing
+    # source.tar.gz includes pre-built lib/ and packages/shared/dist; only build if missing
     $clientJs = Join-Path $SourceDir "lib\nodes\client.js"
-    if (-not (Test-Path $clientJs)) {
+    $sharedDist = Join-Path $SourceDir "packages\shared\dist\toolResponseFormatting.js"
+    if (-not (Test-Path $clientJs) -or -not (Test-Path $sharedDist)) {
         Write-Host "Building ..."
         & npm run build
         if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
     } else {
-        Write-Host "Using pre-built lib/ from source bundle."
+        Write-Host "Using pre-built node bundle from source archive."
     }
 } finally {
     Pop-Location
@@ -161,7 +165,7 @@ if ($Interactive -and $Timeout -gt 0) {
 # ─── Print info ───
 Write-Host ""
 Write-Host "Starting node client ..."
-Write-Host "  Mode:        $(if ($Interactive) { 'Interactive' } else { 'Background' })"
+Write-Host "  Mode:        $(if ($Interactive) { 'Interactive' } else { 'Foreground' })"
 Write-Host "  Source:       $SourceDir"
 Write-Host "  State:        $StateDir"
 Write-Host "  Credentials:  $CredentialsFile"
