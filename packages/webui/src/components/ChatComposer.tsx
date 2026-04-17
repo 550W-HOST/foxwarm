@@ -17,6 +17,7 @@ interface ChatComposerProps {
   asrAvailable: boolean
   sendKeyMode: SendKeyMode
   onToggleSendKeyMode: () => void
+  onHeightChange?: (height: number) => void
   onSend: (payload: { text: string; attachments: File[] }) => Promise<boolean>
   onTranscribeAudio: (file: File, context: string) => Promise<{
     text: string
@@ -55,6 +56,7 @@ const ChatComposer = memo(function ChatComposer({
   asrAvailable,
   sendKeyMode,
   onToggleSendKeyMode,
+  onHeightChange,
   onSend,
   onTranscribeAudio,
   onCreateStreamingTranscriber,
@@ -76,6 +78,7 @@ const ChatComposer = memo(function ChatComposer({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
@@ -98,6 +101,7 @@ const ChatComposer = memo(function ChatComposer({
     stop: () => void
     cancel: () => void
   } | null>(null)
+  const lastReportedHeightRef = useRef<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -210,6 +214,31 @@ const ChatComposer = memo(function ChatComposer({
       void cleanupRecording()
     }
   }, [cleanupRecording])
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root || !onHeightChange) return
+
+    const reportHeight = () => {
+      const nextHeight = Math.max(0, Math.round(root.getBoundingClientRect().height))
+      if (lastReportedHeightRef.current === nextHeight) {
+        return
+      }
+      lastReportedHeightRef.current = nextHeight
+      onHeightChange(nextHeight)
+    }
+
+    reportHeight()
+
+    const observer = new ResizeObserver(() => {
+      reportHeight()
+    })
+    observer.observe(root)
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [onHeightChange])
 
   const slashCompletion = useMemo(() => getSlashCommandCompletion(input, availableCommands), [availableCommands, input])
   const slashCommandSuggestions = slashCompletion?.suggestions || []
@@ -712,6 +741,7 @@ const ChatComposer = memo(function ChatComposer({
 
   return (
     <div
+      ref={rootRef}
       className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
     >
       {isDragging && (

@@ -548,6 +548,11 @@ export class NodesManager {
     // tools -> nodesManager -> tools.
     const toolsModule = require('../tools');
     const tool = toolsModule[toolName];
+    const runtimeNodeId = typeof args?.__runtimeNodeId === 'string' && args.__runtimeNodeId.trim().length > 0
+      ? args.__runtimeNodeId.trim()
+      : 'master';
+    const toolArgs = { ...(args || {}) };
+    delete toolArgs.__runtimeNodeId;
     
     if (!tool) {
       throw new Error(`Tool \`${toolName}\` not found`);
@@ -556,7 +561,7 @@ export class NodesManager {
     const ctx = {
       sessionId,
       session: await sessionManager.getSession(sessionId),
-      runtimeNodeId: 'master',
+      runtimeNodeId,
       broadcast: async (text: string) => {
         // Broadcast via session
         const session = await sessionManager.getSession(sessionId);
@@ -566,7 +571,7 @@ export class NodesManager {
       }
     };
     
-    return await tool(args, ctx);
+    return await tool(toolArgs, ctx);
   }
 }
 

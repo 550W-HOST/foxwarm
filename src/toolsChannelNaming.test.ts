@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
 import * as sessionManager from './sessionManager';
 import { definitions } from './tools';
 import { tool_send_file, tool_send_to_channel } from './toolsSessionAgent';
@@ -51,4 +52,30 @@ test('tool_send_file no longer accepts legacy channelId arg', async () => {
     () => tool_send_file({ channelId: 'mainbot:conversation-42', filePath: 'dummy.txt' }),
     /Exactly one of sessionId or channelTargetId is required/,
   );
+});
+
+test('tool_send_file returns generic success result with fullPath instead of failing when only WebUI session delivery is available', async () => {
+  const originalStat = fs.stat;
+  const originalSendFileToSession = sessionManager.sendFileToSession;
+
+  try {
+    (fs as any).stat = async () => ({
+      isFile: () => true,
+      size: 12,
+    });
+
+    (sessionManager as any).sendFileToSession = async () => ({
+      deliveredChannels: [] as string[],
+      skippedChannels: [{ channelId: 'webui:test-session', reason: 'channel does not support file sending yet' }],
+      failedChannels: [] as Array<{ channelId: string; error: string }>,
+    });
+
+    const result = await tool_send_file({ sessionId: 'test-session', filePath: '/tmp/demo.txt' });
+    assert.equal(typeof result, 'object');
+    assert.equal((result as any).fullPath, '/tmp/demo.txt');
+    assert.match(String((result as any).output || ''), /File `demo.txt` sent for session `test-session`/);
+  } finally {
+    (fs as any).stat = originalStat;
+    (sessionManager as any).sendFileToSession = originalSendFileToSession;
+  }
 });

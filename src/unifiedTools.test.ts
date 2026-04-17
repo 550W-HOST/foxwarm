@@ -357,6 +357,19 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(modelFacingDefinitions.some(def => def.name === 'search_tools'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'call_tool'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'get_context_archive'), true);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'image_crop'), true);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'image_write_to_file'), true);
+});
+
+test('defaultInject metadata is the single source of truth for default model injection', () => {
+  for (const definition of modelFacingDefinitions) {
+    assert.equal(definition.defaultInject, true, `${definition.name} should explicitly opt in to default model injection`);
+  }
+
+  const hiddenBrowse = definitions.find(def => def.name === 'browse_list');
+  assert.ok(hiddenBrowse);
+  assert.equal(hiddenBrowse?.defaultInject, undefined);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'browse_list'), false);
 });
 
 test('change_directory and compress_session are removed entirely', () => {

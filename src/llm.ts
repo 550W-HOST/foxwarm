@@ -22,6 +22,7 @@ import {
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
+import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -540,6 +541,17 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
         if (role === 'tool') role = 'user';
 
         let content = [];
+        const imagePartsByToolUseId = new Map<string, MessagePart[]>();
+        if (msg.role === 'tool') {
+            for (const part of msg.parts || []) {
+                if (!part.inlineData || !part.toolUseId) {
+                    continue;
+                }
+                const grouped = imagePartsByToolUseId.get(part.toolUseId) || [];
+                grouped.push(part);
+                imagePartsByToolUseId.set(part.toolUseId, grouped);
+            }
+        }
         
         for (const part of msg.parts || []) {
             // Handle thinking (with signature support)
@@ -572,10 +584,11 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
             // Handle function response
             if (part.functionResponse) {
                 const resp = part.functionResponse.response || {};
+                const toolUseId = part.functionResponse.tool_use_id || part.toolUseId || 'unknown';
                 const toolResult = {
                     type: 'tool_result',
-                    tool_use_id: part.functionResponse.tool_use_id || part.toolUseId || 'unknown',
-                    content: formatToolResponsePayload(resp)
+                    tool_use_id: toolUseId,
+                    content: appendImageGuidanceText(imagePartsByToolUseId.get(toolUseId) || [], formatToolResponsePayload(resp))
                 };
                 if (config.baseUrl?.startsWith('https://api.kimi.com/')) {
                     if (!content.find(x => x.type === 'thinking')) {
@@ -646,31 +659,15 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         return { output: String(rawResult) };
     };
 
-    const consumeInlineData = (result: any, toolId: string, fallbackLabel: string): any => {
+    const consumeInlineData = async (result: any, toolId: string, fallbackLabel: string): Promise<any> => {
         if (!result || typeof result !== 'object') return result;
 
-        const inlineItems = [
-            ...(result.inlineData ? [result.inlineData] : []),
-            ...(Array.isArray(result.inlineDataItems) ? result.inlineDataItems : []),
-        ].filter((item: any) => item?.data);
-
-        if (inlineItems.length === 0) return result;
-
-        for (const item of inlineItems) {
-            parts.push({
-                toolUseId: toolId,
-                inlineData: {
-                    data: item.data,
-                    mimeType: item.mimeType || item.mime_type || 'application/octet-stream'
-                }
-            });
+        const normalized = await normalizeToolResultImages(result, toolId, fallbackLabel);
+        if (normalized.imageParts.length > 0) {
+            parts.push(...normalized.imageParts);
         }
 
-        const { inlineData, inlineDataItems, ...rest } = result;
-        if (rest.output === undefined) {
-            rest.output = fallbackLabel;
-        }
-        return rest;
+        return normalized.result;
     };
 
     const extractToolLoopControl = (result: any): any => {
@@ -756,7 +753,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         // session/channel/agent/vector/MCP state rather than remote node files.
         const forceMaster = tools.isMasterOnlyToolName(call.name);
         const executionNode = forceMaster ? 'master' : targetNode;
-        const permissionNode = call.name === 'send_file' ? targetNode : executionNode;
+        const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
 
         // Check isolated session tool permission (includes path access check for master)
         try {
@@ -780,7 +777,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             }
         } else if (toolFn) {
             // Execute locally on master
-            const localToolContext = call.name === 'send_file'
+            const localToolContext = call.name === 'send_file' || call.name === 'image_write_to_file'
                 ? { ...toolContext, runtimeNodeId: targetNode }
                 : toolContext;
             try {
@@ -794,28 +791,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         } // End if (result?.error)
 
         result = extractToolLoopControl(result);
-        result = consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
-
-        // Backward-compat fallback for older tools/nodes still returning marker strings.
-        if (result && typeof result.output === 'string') {
-            const output = result.output;
-
-            if (output.startsWith('__IMAGE__:')) {
-                const [, mimeType, base64] = output.split(':', 3);
-                parts.push({
-                    toolUseId: toolId,
-                    inlineData: { data: base64, mimeType }
-                });
-                result = { ...result, output: `[Image loaded: ${call.args.filePath || 'file'}]` };
-            } else if (output.startsWith('__SCREENSHOT__:')) {
-                const base64 = output.substring('__SCREENSHOT__:'.length);
-                parts.push({
-                    toolUseId: toolId,
-                    inlineData: { data: base64, mimeType: 'image/png' }
-                });
-                result = { ...result, output: `[Screenshot of ${call.args.tabId || 'page'}]` };
-            }
-        }
+        result = await consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
 
         batchHasError = batchHasError || hasToolResponseError(result);
         

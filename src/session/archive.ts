@@ -89,6 +89,7 @@ export async function buildArchiveRecord(session: Session, message: Message): Pr
 
   for (let partIndex = 0; partIndex < message.parts.length; partIndex++) {
     const part = message.parts[partIndex];
+    const existingImageMeta = part.imageMeta;
 
     if (!part.inlineData?.data) {
       archiveParts.push(part);
@@ -97,7 +98,7 @@ export async function buildArchiveRecord(session: Session, message: Message): Pr
 
     const mimeType = getInlineDataMimeType(part);
     const extension = getArchiveFileExtension(mimeType);
-    const imageId = `msg${String(seq).padStart(8, '0')}_part${partIndex + 1}`;
+    const imageId = existingImageMeta?.imageId || `msg${String(seq).padStart(8, '0')}_part${partIndex + 1}`;
     const imageDir = getSessionArchiveImagesDir(session.id);
     const fileName = `${imageId}.${extension}`;
     const filePath = path.join(imageDir, fileName);
@@ -117,6 +118,8 @@ export async function buildArchiveRecord(session: Session, message: Message): Pr
         mimeType,
         byteLength: binary.length,
         sha256,
+        width: existingImageMeta?.width,
+        height: existingImageMeta?.height,
       },
     });
   }

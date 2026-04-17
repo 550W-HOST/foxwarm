@@ -3,6 +3,7 @@ import { logger } from '../common';
 import { Message, MessagePart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
+import { appendImageGuidanceText } from '../toolImages';
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };
@@ -128,6 +129,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
 
         if (role === 'tool') {
             const groupedByToolId = new Map<string, any[]>();
+            const imagePartsByToolId = new Map<string, MessagePart[]>();
             const toolIdOrder: string[] = [];
             const pendingInlineWithoutId: any[] = [];
 
@@ -154,6 +156,9 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
 
                     const toolId = part.toolUseId;
                     if (toolId) {
+                        const groupedImageParts = imagePartsByToolId.get(toolId) || [];
+                        groupedImageParts.push(part);
+                        imagePartsByToolId.set(toolId, groupedImageParts);
                         pushGroupPart(toolId, imagePart);
                     } else {
                         pendingInlineWithoutId.push(imagePart);
@@ -178,7 +183,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    const outputText = formatToolResponsePayload(resp);
+                    const outputText = appendImageGuidanceText(imagePartsByToolId.get(toolId) || [], formatToolResponsePayload(resp));
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'text', text: outputText });
                     }
@@ -308,6 +313,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
     for (const msg of contents) {
         if (msg.role === 'tool') {
             const groupedByToolId = new Map<string, any[]>();
+            const imagePartsByToolId = new Map<string, MessagePart[]>();
             const toolIdOrder: string[] = [];
             const pendingInlineWithoutId: any[] = [];
 
@@ -332,6 +338,9 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
 
                     const toolId = part.toolUseId;
                     if (toolId) {
+                        const groupedImageParts = imagePartsByToolId.get(toolId) || [];
+                        groupedImageParts.push(part);
+                        imagePartsByToolId.set(toolId, groupedImageParts);
                         pushGroupPart(toolId, imagePart);
                     } else {
                         pendingInlineWithoutId.push(imagePart);
@@ -357,7 +366,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    const outputText = formatToolResponsePayload(resp);
+                    const outputText = appendImageGuidanceText(imagePartsByToolId.get(toolId) || [], formatToolResponsePayload(resp));
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'input_text', text: outputText });
                     }

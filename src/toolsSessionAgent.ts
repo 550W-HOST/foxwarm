@@ -286,6 +286,17 @@ function formatSendFileSessionResult(targetSessionId: string, file: ChannelFile,
   return lines.join('\n');
 }
 
+function isWebUiUnsupportedFileDelivery(channelId: string, reason: string): boolean {
+  return channelId.startsWith('webui:') && reason === 'channel does not support file sending yet';
+}
+
+function buildSendFileResult(output: string, file: ChannelFile) {
+  return {
+    output,
+    fullPath: file.path,
+  };
+}
+
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
   const { suffix, fork = false, message, node, noFurtherAssistantReply } = args;
@@ -392,17 +403,32 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
   const file = await prepareChannelFile(filePath.trim(), ctx);
 
   if (normalizedChannelTargetId) {
+    if (normalizedChannelTargetId.startsWith('webui:')) {
+      return buildSendFileResult(`File \`${file.name}\` is ready for WebUI target \`${normalizedChannelTargetId}\`.`, file);
+    }
+
     await sessionManager.sendFileToChannelTargetId(normalizedChannelTargetId, file, { caption });
-    return `File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``;
+    return buildSendFileResult(`File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``, file);
   }
 
   const normalizedSessionId = sessionId.trim();
   const result = await sessionManager.sendFileToSession(normalizedSessionId, file, { caption });
-  if (result.deliveredChannels.length === 0) {
-    throw new Error(formatSendFileSessionResult(normalizedSessionId, file, result));
+  const hasWebUiDownloadFallback = result.skippedChannels.some((item) => isWebUiUnsupportedFileDelivery(item.channelId, item.reason));
+  const output = formatSendFileSessionResult(normalizedSessionId, file, result);
+
+  if (hasWebUiDownloadFallback && result.deliveredChannels.length === 0 && result.failedChannels.length === 0) {
+    return buildSendFileResult(output, file);
   }
 
-  return formatSendFileSessionResult(normalizedSessionId, file, result);
+  if (result.deliveredChannels.length === 0) {
+    throw new Error(output);
+  }
+
+  if (hasWebUiDownloadFallback) {
+    return buildSendFileResult(output, file);
+  }
+
+  return buildSendFileResult(output, file);
 }
 
 export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext) {
