@@ -4,7 +4,7 @@ import { buildSavedFileText, saveInboundChannelFile, saveInboundSessionFile } fr
 import * as sessionManager from './sessionManager';
 import { nodesManager } from './nodes/manager';
 
-test('saveInboundSessionFile stores isolated WebUI uploads on the isolated node using cwd when available', async () => {
+test('saveInboundSessionFile stores isolated WebUI uploads on the isolated node under agent-dir-relative temp path and ignores cwd', async () => {
   const originalGetExistingSession = sessionManager.getExistingSession;
   const originalIsSessionEffectivelyIsolated = sessionManager.isSessionEffectivelyIsolated;
   const originalGetAgentIsolationNode = sessionManager.getAgentIsolationNode;
@@ -36,11 +36,11 @@ test('saveInboundSessionFile stores isolated WebUI uploads on the isolated node 
 
     assert.equal(captured.nodeId, 'sandbox-node');
     assert.equal(captured.sessionId, 'isolated/session');
-    assert.match(String(captured.filePath), /\/workspace\/project\/.temp\/channel-files\/webui\//);
+    assert.match(String(captured.filePath), /^\.temp[\\/]channel-files[\\/]webui[\\/]/);
     assert.equal(saved.nodeId, 'sandbox-node');
     assert.equal(saved.promptPath, captured.filePath);
     assert.match(buildSavedFileText(saved, 'file'), /Node: sandbox-node/);
-    assert.match(buildSavedFileText(saved, 'file'), /Path: \/workspace\/project\/.temp\/channel-files\/webui\//);
+    assert.match(buildSavedFileText(saved, 'file'), /Path: \.temp[\\/]channel-files[\\/]webui[\\/]/);
   } finally {
     (sessionManager as any).getExistingSession = originalGetExistingSession;
     (sessionManager as any).isSessionEffectivelyIsolated = originalIsSessionEffectivelyIsolated;

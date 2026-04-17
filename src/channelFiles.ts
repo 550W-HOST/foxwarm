@@ -96,7 +96,6 @@ function buildInboundStoragePaths(options: {
   platform: string;
   fileName: string;
   nodeId: string;
-  session?: any;
 }): { writePath: string; absolutePath: string; relativePath?: string; promptPath: string } {
   const relativePath = path.join('.temp', 'channel-files', sanitizeSegment(options.platform), options.fileName);
 
@@ -110,19 +109,11 @@ function buildInboundStoragePaths(options: {
     };
   }
 
-  const sessionCwd = typeof options.session?.cwd === 'string' && options.session.cwd.trim()
-    ? options.session.cwd.trim()
-    : undefined;
-  const useAbsoluteCwdPath = options.session?.currentNode === options.nodeId && sessionCwd;
-  const writePath = useAbsoluteCwdPath
-    ? path.resolve(sessionCwd!, '.temp', 'channel-files', sanitizeSegment(options.platform), options.fileName)
-    : relativePath;
-
   return {
-    writePath,
-    absolutePath: writePath,
-    relativePath: useAbsoluteCwdPath ? undefined : relativePath,
-    promptPath: writePath,
+    writePath: relativePath,
+    absolutePath: relativePath,
+    relativePath,
+    promptPath: relativePath,
   };
 }
 
@@ -148,7 +139,6 @@ async function saveInboundFile(options: {
     platform: options.platform,
     fileName: storedFileName,
     nodeId,
-    session: options.session,
   });
 
   if (nodeId === 'master') {
