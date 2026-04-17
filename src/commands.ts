@@ -1,6 +1,4 @@
 import fs from 'fs-extra'
-import path from 'path'
-import crypto from 'crypto'
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from './channel'
 import { inspectChannelAuthorizationFromContext, formatAuthorizationInspection } from './channelAuth'
 import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses, restartManagedChannel, startManagedChannel, stopManagedChannel } from './channelRuntime'
@@ -11,11 +9,12 @@ import * as sessionManager from './sessionManager'
 import * as skills from './skills'
 import * as tools from './tools'
 import { estimateSessionSummary } from './tokenCount'
-import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, getDefaultChannelIdByType, HTTP_PORT, NODE_TOKEN_FILE, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
+import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, getDefaultChannelIdByType, HTTP_PORT, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api'
 import { checkTimerPermission } from './isolatedCheck'
+import { ensureNodePairingToken } from './nodes/bootstrapInfo'
 
 export type CommandDef = {
   description: string
@@ -208,72 +207,70 @@ const SKILL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 ]
 
 const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
-  literalNode('pair', 'Node pairing token, help, and pending requests', {
+  literalNode('list', 'List approved nodes, pending approvals, and current node status'),
+  literalNode('approve', 'Approve a pending node pairing request', {
+    usage: '/node approve <pending-id> [node-id]',
     children: [
-      literalNode('help', 'Show node pairing/bootstrap help'),
-      literalNode('list', 'List pending node pairing requests'),
-      literalNode('token', 'Show the current node pairing token'),
-      literalNode('approve', 'Approve a pending node pairing request', {
-        usage: '/node pair approve <pending-id> [node-id]',
-        children: [
-          placeholderNode('<pending-id>', 'Pending pairing id', {
-            children: [placeholderNode('[node-id]', 'Optional final node id')],
-          }),
-        ],
-      }),
-      literalNode('reject', 'Reject a pending node pairing request', {
-        usage: '/node pair reject <pending-id>',
-        children: [placeholderNode('<pending-id>', 'Pending pairing id')],
+      placeholderNode('<pending-id>', 'Pending pairing id', {
+        children: [placeholderNode('[node-id]', 'Optional final node id')],
       }),
     ],
   }),
-  literalNode('known', 'List approved nodes, including offline ones'),
+  literalNode('reject', 'Reject a pending node pairing request', {
+    usage: '/node reject <pending-id>',
+    children: [placeholderNode('<pending-id>', 'Pending pairing id')],
+  }),
+  literalNode('pair-help', 'Show node pairing/bootstrap help'),
   placeholderNode('<node-id>', 'Existing node id; omit it to list nodes'),
 ]
 
-async function ensureNodePairingToken(): Promise<string> {
-  try {
-    const token = await fs.readFile(NODE_TOKEN_FILE, 'utf8')
-    return token.trim()
-  } catch (err: any) {
-    if (err?.code === 'ENOENT') {
-      const token = crypto.randomBytes(32).toString('hex')
-      await fs.ensureDir(path.dirname(NODE_TOKEN_FILE))
-      await fs.writeFile(NODE_TOKEN_FILE, token)
-      return token
-    }
-    throw err
-  }
-}
-
 function buildNodePairHelp(token: string): string {
-  const baseUrl = `http://localhost:${HTTP_PORT}`
-
   return [
     '🧩 **Node Pairing / Bootstrap Help**',
     '',
     `Current pairing token: \`${token}\``,
     '',
-    'Use `/node pair token` if you only want the raw token for copying.',
+    'Use the pairing token below directly as `--pairing=...` when bootstrapping a node.',
     '',
-    `Default examples below use \`${baseUrl}\`. If the node runs on another machine or phone, replace \`localhost\` with a reachable host/IP/domain for this Foxwarm master.`,
+    'First choose a **reachable base URL** for this Foxwarm master from the node\'s point of view.',
+    'There is no single globally correct external URL that Foxwarm can always know in advance — it might be localhost, a LAN IP, a Docker host IP, or a reverse-proxy domain depending on where the node runs.',
+    '',
+    'If you fetch `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1` from that reachable URL, the downloaded script uses that same request URL as its default `--host`/`HostUrl` value.',
+    'Override `--host=...` only when the script was fetched through one address but the node should connect to another reachable address.',
+    '',
+    '**Pick a reachable URL first**',
+    '```bash',
+    'BASE_URL=http://YOUR_MASTER:3001',
+    '```',
     '',
     '**Bare metal (recommended Linux host bootstrap)**',
     '```bash',
-    `curl -fsSL ${baseUrl}/node/run.sh | bash -s -- \\\n  --host=${baseUrl} \\\n  --pairing=${token} \\\n  --node-id=my-node`,
+    `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --pairing=${token} \
+  --node-id=my-node`,
     '```',
     '',
     '**Docker bootstrap**',
     '```bash',
-    `curl -fsSL ${baseUrl}/node/run-docker.sh | bash -s -- \\\n  --host=${baseUrl} \\\n  --pairing=${token} \\\n  --node-id=my-node`,
+    `curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
+  --pairing=${token} \
+  --node-id=my-node`,
+    '```',
+    '',
+    '**Explicit host override example**',
+    '```bash',
+    `curl -fsSL "http://127.0.0.1:${HTTP_PORT}/node/run.sh" | bash -s -- \
+  --host=http://192.168.1.50:${HTTP_PORT} \
+  --pairing=${token} \
+  --node-id=my-node`,
     '```',
     '',
     '**Manual docker-compose template**',
     '```bash',
-    `curl -fsSL ${baseUrl}/node/docker-compose.yaml -o docker-compose.yaml`,
+    'curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml',
     'cat > .env <<\'EOF\'',
-    `NODE_HOST=${baseUrl}`,
-    `NODE_SOURCE_URL=${baseUrl}/node/source.tar.gz`,
+    'NODE_HOST=$BASE_URL',
+    'NODE_SOURCE_URL=$BASE_URL/node/source.tar.gz',
     `NODE_PAIRING_TOKEN=${token}`,
     'NODE_ID=my-node',
     'NODE_DATA_DIR=./data',
@@ -284,17 +281,66 @@ function buildNodePairHelp(token: string): string {
     '',
     '**Approve the pending node from Foxwarm**',
     '```text',
-    '/node pair list',
-    '/node pair approve <pending-id> my-node',
-    '/node known',
     '/node',
+    '/node approve <pending-id> my-node',
     '```',
     '',
     'Notes:',
-    '- `/node/run.sh` = bare-metal bootstrap',
-    '- `/node/run-docker.sh` = Docker bootstrap',
+    '- `/node/run.sh` = bare-metal bootstrap; runs in foreground by default, use `-d` to detach',
+    '- `/node/run-docker.sh` = Docker bootstrap; starts containers and follows logs by default, use `-d` to skip log following',
+    '- `/node/run-interactive.sh` = interactive approval mode for every tool call',
     '- `/node/docker-compose.yaml` = inspect/customize the self-contained compose template first',
+    '- `/node` = list current node, approved nodes, and pending approvals',
+    '- `/node approve` / `/node reject` = act on pending approvals',
+    '- agent/tool workflows can use the `node_bootstrap_info` tool for structured bootstrap info',
   ].join('\n')
+}
+
+async function buildNodeListReply(currentNode: string, boundNode?: string): Promise<string> {
+  const approved = await listApprovedNodes()
+  const pending = await listPendingPairings()
+
+  let reply = '📋 **Nodes**\n\n'
+  reply += `💡 Current node: \`${currentNode}\`\n`
+  if (boundNode) {
+    reply += `🔒 Runtime is bound by agent isolation to \`${boundNode}\`.\n`
+  }
+
+  reply += '\n**Approved Nodes**\n'
+  reply += currentNode === 'master' ? '- ✅ `master` (local)\n' : '- `master` (local)\n'
+
+  if (approved.length === 0) {
+    reply += '- (No approved remote nodes yet)\n'
+  } else {
+    for (const node of approved) {
+      const online = nodesManager.getNode(node.nodeId) ? 'online' : 'offline'
+      const requestedName = node.requestedName ? ` requested=\`${node.requestedName}\`` : ''
+      const lastSeen = node.lastSeenAt ? ` lastSeen=${new Date(node.lastSeenAt).toLocaleString()}` : ''
+      const currentMarker = currentNode === node.nodeId ? '✅ ' : ''
+      reply += `- ${currentMarker}\`${node.nodeId}\` [${node.nodeType}] ${online}${requestedName}${lastSeen}\n`
+    }
+  }
+
+  reply += '\n**Pending Approvals**\n'
+  if (pending.length === 0) {
+    reply += '- (No pending pairing requests)\n'
+  } else {
+    for (const entry of pending) {
+      const requestedName = entry.requestedName ? ` requested=\`${entry.requestedName}\`` : ''
+      const connected = entry.connected ? ' online' : ' offline'
+      const approvedMarker = entry.approvedNodeId ? ` approved→\`${entry.approvedNodeId}\`` : ''
+      reply += `- \`${entry.id}\` [${entry.nodeType}] code=\`${entry.pairCode}\`${requestedName}${connected}${approvedMarker}\n`
+    }
+  }
+
+  reply += '\nCommands:\n'
+  reply += '- `/node` or `/node list` — list nodes and pending approvals\n'
+  reply += '- `/node approve <pending-id> [node-id]` — approve a pending node\n'
+  reply += '- `/node reject <pending-id>` — reject a pending node\n'
+  reply += '- `/node pair-help` — show pairing/bootstrap help\n'
+  reply += '- `/node <node-id>` — switch current node\n'
+
+  return reply
 }
 
 const MESSAGES_AUTOCOMPLETE: CommandAutocompleteNode[] = [
@@ -1789,150 +1835,65 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/node': {
-    description: 'List or switch node. `args: [node-id]`',
+    description: 'List nodes/pending approvals, approve/reject pairings, show pair-help, or switch node with `/node <node-id>`.',
     requiresSession: true,
     autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
       const boundNode = sessionManager.getAgentIsolationNode(session.agent || 'main')
 
-      if (args[0] === 'pair') {
-        const sub = args[1]
-
-        if (sub === 'token') {
-          try {
-            const token = await ensureNodePairingToken()
-            const baseUrl = `http://localhost:${HTTP_PORT}`
-            ctx.reply(
-              `🔑 **Current node pairing token**\n\n` +
-              `\`${token}\`\n\n` +
-              `Direct copy:\n` +
-              `\`--pairing=${token}\`\n\n` +
-              `Default local master URL: \`${baseUrl}\`\n` +
-              `If the node is on another machine/device, replace \`localhost\` with a reachable host/IP/domain.\n\n` +
-              `Pairing/bootstrap examples: \`/node pair help\``
-            )
-          } catch (e: any) {
-            ctx.reply(`❌ Failed to read node pairing token: ${e.message}`)
-          }
-          return
-        }
-
-        if (sub === 'help') {
-          try {
-            const token = await ensureNodePairingToken()
-            ctx.reply(buildNodePairHelp(token))
-          } catch (e: any) {
-            ctx.reply(`❌ Failed to build node pairing help: ${e.message}`)
-          }
-          return
-        }
-
-        if (!sub || sub === 'list') {
-          const pending = await listPendingPairings()
-          if (pending.length === 0) {
-            ctx.reply('📭 No pending node pairing requests.')
-            return
-          }
-
-          let reply = `📥 **Pending Node Pairings** (${pending.length})\n\n`
-          for (const entry of pending) {
-            const requestedName = entry.requestedName ? ` requested=\`${entry.requestedName}\`` : ''
-            const connected = entry.connected ? ' online' : ' offline'
-            reply += `- \`${entry.id}\` [${entry.nodeType}]${requestedName} code=\`${entry.pairCode}\`${connected}\n`
-          }
-          reply += '\nApprove: `/node pair approve <pending-id> [node-id]`\nReject: `/node pair reject <pending-id>`\nToken: `/node pair token`\nBootstrap help: `/node pair help`'
-          ctx.reply(reply)
-          return
-        }
-
-        if (sub === 'approve') {
-          const pendingId = args[2]
-          const requestedNodeId = args[3]
-          if (!pendingId) {
-            ctx.reply('Usage: `/node pair approve <pending-id> [node-id]`')
-            return
-          }
-
-          try {
-            const approved = await approvePendingPairing(pendingId, requestedNodeId)
-            ctx.reply(
-              `✅ Approved pending pairing \`${pendingId}\`\n\n` +
-              `Node id: \`${approved.nodeId}\`\n` +
-              `Requested name: \`${approved.pending.requestedName || '-'}\`\n` +
-              `Delivered live: \`${approved.deliveredLive ? 'yes' : 'no'}\`\n\n` +
-              `Per-node token (save securely):\n\`${approved.authToken}\``
-            )
-          } catch (e: any) {
-            ctx.reply(`❌ Failed to approve pairing: ${e.message}`)
-          }
-          return
-        }
-
-        if (sub === 'reject') {
-          const pendingId = args[2]
-          if (!pendingId) {
-            ctx.reply('Usage: `/node pair reject <pending-id>`')
-            return
-          }
-
-          try {
-            await rejectPendingPairing(pendingId)
-            ctx.reply(`✅ Rejected pending pairing \`${pendingId}\``)
-          } catch (e: any) {
-            ctx.reply(`❌ Failed to reject pairing: ${e.message}`)
-          }
-          return
-        }
-
-        ctx.reply('Usage: `/node pair help` | `/node pair token` | `/node pair list` | `/node pair approve <pending-id> [node-id]` | `/node pair reject <pending-id>`')
-        return
-      }
-
-      if (args[0] === 'known') {
-        const approved = await listApprovedNodes()
-        if (approved.length === 0) {
-          ctx.reply('📋 No approved nodes yet.')
-          return
-        }
-
-        let reply = `📋 **Approved Nodes** (${approved.length})\n\n`
-        for (const node of approved) {
-          const online = nodesManager.getNode(node.nodeId) ? 'online' : 'offline'
-          const requestedName = node.requestedName ? ` requested=\`${node.requestedName}\`` : ''
-          const lastSeen = node.lastSeenAt ? ` lastSeen=${new Date(node.lastSeenAt).toLocaleString()}` : ''
-          reply += `- \`${node.nodeId}\` [${node.nodeType}] ${online}${requestedName}${lastSeen}\n`
-        }
-        ctx.reply(reply)
-        return
-      }
-      
-      // No args: list nodes
-      if (args.length === 0) {
-        const nodes = nodesManager.listNodes()
-        const remoteNodes = nodes.filter(node => node.id !== 'master')
+      if (args.length === 0 || args[0] === 'list') {
         const currentNode = boundNode || session.currentNode || 'master'
+        ctx.reply(await buildNodeListReply(currentNode, boundNode))
+        return
+      }
 
-        let reply = `📋 **Available Nodes** (${remoteNodes.length + 1} total):\n\n`
+      if (args[0] === 'pair-help') {
+        try {
+          const token = await ensureNodePairingToken()
+          ctx.reply(buildNodePairHelp(token))
+        } catch (e: any) {
+          ctx.reply(`❌ Failed to build node pairing help: ${e.message}`)
+        }
+        return
+      }
 
-        reply += currentNode === 'master' ? '✅ ' : '  '
-        reply += '`master` (local)\n'
-
-        for (const node of remoteNodes) {
-          reply += currentNode === node.id ? '✅ ' : '  '
-          reply += `\`${node.id}\` - Last activity: ${new Date(node.lastActivity).toLocaleString()}\n`
+      if (args[0] === 'approve') {
+        const pendingId = args[1]
+        const requestedNodeId = args[2]
+        if (!pendingId) {
+          ctx.reply('Usage: `/node approve <pending-id> [node-id]`')
+          return
         }
 
-        if (remoteNodes.length === 0) {
-          reply += '\n(No remote nodes currently online)'
+        try {
+          const approved = await approvePendingPairing(pendingId, requestedNodeId)
+          ctx.reply(
+            `✅ Approved pending pairing \`${pendingId}\`\n\n` +
+            `Node id: \`${approved.nodeId}\`\n` +
+            `Requested name: \`${approved.pending.requestedName || '-'}\`\n` +
+            `Delivered live: \`${approved.deliveredLive ? 'yes' : 'no'}\`\n\n` +
+            `Per-node token (save securely):\n\`${approved.authToken}\``
+          )
+        } catch (e: any) {
+          ctx.reply(`❌ Failed to approve pairing: ${e.message}`)
+        }
+        return
+      }
+
+      if (args[0] === 'reject') {
+        const pendingId = args[1]
+        if (!pendingId) {
+          ctx.reply('Usage: `/node reject <pending-id>`')
+          return
         }
 
-        reply += `\n\n💡 Current node: \`${currentNode}\``
-        if (boundNode) {
-          reply += `\n🔒 Runtime is bound by agent isolation to \`${boundNode}\`.`
+        try {
+          await rejectPendingPairing(pendingId)
+          ctx.reply(`✅ Rejected pending pairing \`${pendingId}\``)
+        } catch (e: any) {
+          ctx.reply(`❌ Failed to reject pairing: ${e.message}`)
         }
-
-        ctx.reply(reply)
         return
       }
 

@@ -325,7 +325,7 @@ async function main() {
           break;
         case 'pair_pending':
           log(c(C.yellow, `Pairing pending — code: ${detail?.pairCode || '?'}, id: ${detail?.pendingId || '?'}`));
-          log(c(C.yellow, `Approve on master: /node pair approve ${detail?.pendingId || '<id>'} ${opts.nodeId || ''}`));
+          log(c(C.yellow, `Approve on master: /node approve ${detail?.pendingId || '<id>'} ${opts.nodeId || ''}`));
           break;
         case 'pair_approved':
           log(c(C.green, `✓ Pairing approved! Node ID: ${detail?.nodeId || '?'}`));

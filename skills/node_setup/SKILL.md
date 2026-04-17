@@ -1,104 +1,217 @@
 ---
 name: node_setup
-description: Bootstrap and troubleshoot a general-purpose Foxwarm node with run.sh, docker-compose template, and pairing approval flow.
+description: Explain, bootstrap, and troubleshoot Foxwarm nodes, including pairing, sandbox nodes, and isolated-agent binding.
 ---
 
 # node_setup
 
-Use this skill when you need to explain, bootstrap, or troubleshoot a **normal remote Foxwarm node**.
+Use this skill when you need to explain, bootstrap, or troubleshoot a Foxwarm **node**.
 
-This skill matches the current deployment flow based on:
+This is the main skill for:
+
+- what a node is
+- how pairing / approval works
+- how to start a node on Linux / Docker / Windows
+- how isolated agents bind to nodes
+- how sandbox/test nodes relate to ordinary nodes
+
+There is also a structured builtin tool for agent workflows:
+
+- `node_bootstrap_info`
+
+Use that tool when you want LLM-friendly bootstrap info instead of re-parsing prose help text.
+
+This skill matches the current bootstrap surfaces exposed by a running master:
 
 - `/node/run.sh`
 - `/node/run-docker.sh`
+- `/node/run-interactive.sh`
+- `/node/run.ps1`
 - `/node/docker-compose.yaml`
 - `/node/source.tar.gz`
 
-It does **not** describe the removed old direct-registration flow.
+It does **not** use the removed old direct-registration flow.
 
-## What this skill is for
+## Mental model
 
-A normal node is a remote Foxwarm execution worker that can:
+A **node** is a remote Foxwarm execution worker.
 
-- connect to a Foxwarm master over pairing-based node auth
+After pairing/approval, a node can:
+
 - receive tool calls from the master
-- persist its credentials/state locally
-- reconnect automatically after approval
+- persist its own credentials/state locally
+- reconnect automatically with stored per-node credentials
 
-Use this when the goal is simply:
+A **sandbox node** is still just a node.
 
-- “start a node on another Linux machine quickly”
-- “pair a node with a running Foxwarm master”
-- “understand where credentials/state/logs go”
+The difference is usually deployment context / intended use:
 
-## Fastest startup: bare-metal one command
+- runs in a sandbox or Docker test environment
+- often used for isolated agents
+- may need test-environment-specific data-root settings
+
+So the relationship is:
+
+- **normal node** = general remote worker
+- **sandbox node** = a node deployed in a sandbox/test environment
+- **isolated agent** = an agent bound to a non-master node so its sessions inherit restricted execution
+
+## Base URL principle
+
+Foxwarm cannot reliably know one globally correct external base URL for every node bootstrap.
+
+Depending on where the node runs, the reachable master URL might be:
+
+- `http://localhost:3001`
+- a LAN IP such as `http://192.168.x.x:3001`
+- a Docker host IP
+- a public reverse-proxy domain
+- something else environment-specific
+
+What Foxwarm **can** do is:
+
+- when serving `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1`
+- look at the **current HTTP request** (for example `Host` / forwarded proto)
+- fill that request-derived URL into the downloaded script as the **default** host
+
+Tool note:
+
+- the `node_bootstrap_info` tool is intentionally **not** an API-style “tell me the exact external URL” interface
+- it returns `$BASE_URL` placeholders in the places where a real reachable master address is needed
+- it also explains that the caller/operator must choose `BASE_URL` from the node's point of view
+- this keeps the tool aligned with reality: Foxwarm does not know one unique globally correct external address
+
+So the rule is:
+
+- if you fetch the bootstrap script from the same URL the node should later use, you usually do **not** need to pass `--host`
+- if you fetched the script through a different address, pass `--host=...` explicitly
+
+Example of choosing a reachable URL first:
 
 ```bash
-curl -fsSL http://YOUR_MASTER:3001/node/run.sh | bash -s -- \
-  --host=http://YOUR_MASTER:3001 \
+BASE_URL=http://YOUR_MASTER:3001
+```
+
+## Pairing / approval flow
+
+On first run, the node connects with a **pairing token** and creates a pending pairing request.
+
+Approve it from the master:
+
+```text
+/node
+/node approve <pending-id> my-node
+```
+
+Useful follow-up checks:
+
+```text
+/node
+```
+
+After approval:
+
+- the node stores credentials locally
+- future restarts use stored node credentials
+- the pairing token is mainly for first-time pairing / re-pairing
+
+## Fastest startup: Linux bare-metal bootstrap
+
+Use this when you want a direct host-side node client.
+
+```bash
+BASE_URL=http://YOUR_MASTER:3001
+curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
 ```
 
-What this does:
+What it does:
 
 - downloads `/node/source.tar.gz`
 - extracts it into `./foxwarm-node/`
 - writes `./.env`
 - creates local state under `./data/`
-- runs `npm ci` and `npm run build`
-- starts the node client locally in the background by default
+- runs `npm ci`
+- uses the prebuilt bundle from the archive when available
+- builds only if required artifacts are missing
+- starts the node client in the **foreground by default**
 
-## Where data goes
-
-By default, node deployment state is written in the **current directory**:
-
-- `./.env`
-- `./data/`
-- `./foxwarm-node/`
-
-Inside `./data/`, the important persisted files are:
-
-- `./data/state/node_credentials.json` — paired node credentials
-- `./data/agents/` — node-side agent workspace/data
-- `./data/logs/` — node-side logs/artifacts
-
-If needed, `run.sh` also supports:
-
-- `--state-dir=DIR`
-- `--source-dir=DIR`
-- `--env-file=FILE`
-- `--prepare-only`
-
-## Docker bootstrap alternative
-
-If you explicitly want the Docker-based path instead, use:
+If you want background mode instead:
 
 ```bash
-curl -fsSL http://YOUR_MASTER:3001/node/run-docker.sh | bash -s -- \
-  --host=http://YOUR_MASTER:3001 \
+BASE_URL=http://YOUR_MASTER:3001
+curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --pairing=YOUR_PAIRING_TOKEN \
+  --node-id=my-node \
+  -d
+```
+
+Override the host explicitly only when needed:
+
+```bash
+curl -fsSL "http://127.0.0.1:3001/node/run.sh" | bash -s -- \
+  --host=http://192.168.1.50:3001 \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
 ```
 
-That path writes:
+## Interactive Linux bootstrap
 
-- `./docker-compose.yaml`
-- `./.env`
-- `./data/`
-
-and then runs `docker compose up -d --build`.
-
-## docker-compose template flow
-
-If you want to inspect or customize before starting, use the template directly:
+Use this when every tool call should require local confirmation:
 
 ```bash
-curl -fsSL http://YOUR_MASTER:3001/node/docker-compose.yaml -o docker-compose.yaml
+BASE_URL=http://YOUR_MASTER:3001
+curl -fsSL "$BASE_URL/node/run-interactive.sh" | bash -s -- \
+  --pairing=YOUR_PAIRING_TOKEN \
+  --node-id=my-interactive-node
+```
+
+Optional extras:
+
+- `--auto-approve=REGEX`
+- `--timeout=SECONDS`
+
+## Docker bootstrap
+
+Use this when you want the node in a containerized environment.
+
+```bash
+BASE_URL=http://YOUR_MASTER:3001
+curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
+  --pairing=YOUR_PAIRING_TOKEN \
+  --node-id=my-node
+```
+
+That path:
+
+- writes `./docker-compose.yaml`
+- writes `./.env`
+- creates `./data/`
+- starts the container
+- **follows logs by default** so startup/pairing is visible immediately
+
+If you want it to return immediately without following logs:
+
+```bash
+BASE_URL=http://YOUR_MASTER:3001
+curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
+  --pairing=YOUR_PAIRING_TOKEN \
+  --node-id=my-node \
+  -d
+```
+
+## Manual docker-compose template flow
+
+If you want to inspect or customize before starting:
+
+```bash
+BASE_URL=http://YOUR_MASTER:3001
+curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml
 
 cat > .env <<'EOF'
-NODE_HOST=http://YOUR_MASTER:3001
-NODE_SOURCE_URL=http://YOUR_MASTER:3001/node/source.tar.gz
+NODE_HOST=$BASE_URL
+NODE_SOURCE_URL=$BASE_URL/node/source.tar.gz
 NODE_PAIRING_TOKEN=YOUR_PAIRING_TOKEN
 NODE_ID=my-node
 NODE_DATA_DIR=./data
@@ -109,84 +222,131 @@ docker compose up -d --build
 
 Why this works:
 
-- the compose file contains an inline Dockerfile, so no separate local `Dockerfile.node` is needed
-- that inline Dockerfile downloads `/node/source.tar.gz` during build
-- the remote machine does **not** need a local Foxwarm git checkout first
+- the compose file contains an inline Dockerfile
+- it downloads `/node/source.tar.gz` during build
+- the node bundle includes prebuilt runtime artifacts and shared-package files needed by the current node client
+- the remote machine does not need a full Foxwarm checkout first
 
-## First startup: approve pairing on the master
+## Windows bootstrap
 
-On first run, the node connects with the pairing token and creates a pending pairing request.
+```powershell
+irm http://YOUR_MASTER:3001/node/run.ps1 | iex
+```
 
-Approve it from the master:
+That downloaded script also defaults `HostUrl` from the request URL.
+Override `-HostUrl` only when needed.
+
+## Where data goes
+
+By default, local node deployment state is written in the **current directory**:
+
+- `./.env`
+- `./data/`
+- `./foxwarm-node/`
+
+Inside `./data/`, the most important persisted files are:
+
+- `./data/state/node_credentials.json` — paired node credentials
+- `./data/agents/` — node-side agent workspace/data
+- `./data/logs/` — node-side logs/artifacts
+
+## Bind isolated agents to a node
+
+### Create a new isolated agent bound to a node
 
 ```text
-/node pair list
-/node pair approve <pending-id> my-node
+/agent create <agent-name> --isolated <node-id>
 ```
 
-Useful follow-up checks:
+Example:
 
 ```text
-/node known
-/node
+/agent create sandbox-agent --isolated sandbox-docker
 ```
 
-After approval:
-
-- the node stores credentials in `./data/state/node_credentials.json`
-- it reconnects with per-node credentials
-- future restarts do not require repeating approval unless credentials are cleared/rejected
-
-## Recommended troubleshooting checklist
-
-### 1. Check local container status
-
-```bash
-docker compose ps
-docker compose logs -f
-```
-
-### 2. Check whether the node is still pending approval
-
-On the master:
+### Change an existing agent to isolated mode
 
 ```text
-/node pair list
+/agent isolated <agent-name> <node-id>
 ```
 
-### 3. Check whether the node is approved but offline
-
-On the master:
+### Disable isolation again
 
 ```text
-/node known
-/node
+/agent isolated <agent-name> off
 ```
 
-### 4. Check credentials path
+Important behavior:
 
-Expected default location:
+- isolated agents must bind to a **non-master** node
+- isolated sessions inherit isolation automatically from the agent
+- isolated agents may still use `master` for limited in-agent host-side operations
+- current master-side file boundary is the whole current agent directory
+
+## Sandbox/test-environment note
+
+A sandbox node is often used for isolated agents in testing.
+
+The most important testing pitfall is the data root.
+
+For the main Foxwarm testing environment, the sandbox node must use:
 
 ```text
-./data/state/node_credentials.json
+FOXWARM_DATA_DIR=/app/test
 ```
 
-If the file is missing after approval, inspect container logs and verify the data directory mount.
+Why this matters:
 
-### 5. Re-pair cleanly if needed
+- the testing runtime stores data under `/app/test/state` and `/app/test/agents`
+- if the sandbox node uses `/app` instead, it will read/write the wrong state tree
+- then `/node`, node online state, file behavior, and test results become misleading
 
-If credentials are stale or invalid, remove the local data directory or credentials file and start again:
+So when sandbox behavior looks wrong, check the data root before debugging pairing/permissions.
+
+## Verification checklist
+
+After startup and approval:
+
+1. `/node` shows the node in the approved list
+2. `/node` shows it online when connected
+3. if using isolated agents, confirm the agent is actually bound to that node
+4. confirm tool execution is happening on the expected node, not accidentally on `master`
+5. confirm restricted cross-agent/cross-node behavior when isolation is expected
+
+## Common troubleshooting
+
+### Node never appears online
+
+Check:
+
+- local process / container logs
+- `/node`
+- whether the chosen host URL is actually reachable from the node
+
+### Node bundle builds or runs oddly
+
+Current bootstrap expects `/node/source.tar.gz` to provide the node client bundle plus the shared package artifacts needed by the current runtime.
+If you are debugging an older deployment or stale extracted directory, re-download/re-extract the bundle before assuming the problem is deeper.
+
+### Credentials seem stale
+
+Remove or reset the stored credentials file and pair again:
 
 ```bash
 rm -f ./data/state/node_credentials.json
-docker compose restart
 ```
 
-Then re-approve from the master if required.
+Then restart and re-approve.
 
-## Common pitfalls
+### Sandbox node acts like it sees the wrong files/state
 
-- Do **not** use the old removed direct-registration idea of `?token=...&id=...` as a final authenticated mode.
-- The pairing token is only for the initial approval flow; long-term reconnect uses stored credentials.
-- State is local to the current directory by default; changing directories changes where `./data` lives.
-- If compose comes up but the node never appears online, check container logs first, then `/node pair list` and `/node known`.
+First suspect `FOXWARM_DATA_DIR` mismatch.
+For testing, it must point at `/app/test`, not `/app`.
+
+## Related skill
+
+Use **`agent_management`** when the task is mainly about:
+
+- why agent rename/delete behave the way they do
+- safe agent migration / cleanup
+- snapshot refresh after editing another agent's memory

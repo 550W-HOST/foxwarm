@@ -46,6 +46,8 @@ type NodeRegistryData = {
   pendingPairings: Record<string, PendingPairingRecord>
 }
 
+export const PENDING_PAIRING_TTL_MS = 60 * 60 * 1000
+
 const RESERVED_NODE_IDS = new Set(['master'])
 const DEFAULT_REGISTRY: NodeRegistryData = {
   approvedNodes: {},
@@ -180,6 +182,7 @@ async function allocateUniqueNodeId(base: string): Promise<string> {
 
 export async function initializeNodeRegistry(): Promise<void> {
   await loadRegistry()
+  await cleanupExpiredPendingPairings()
 }
 
 export function isReservedNodeId(nodeId: string): boolean {
@@ -191,6 +194,7 @@ export async function createPendingPairing(input: {
   nodeType: string
   capabilities: NodeCapabilitiesSnapshot
 }): Promise<PendingPairingRecord> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   const now = Date.now()
   const pending: PendingPairingRecord = {
@@ -216,6 +220,7 @@ export function detachPendingPairingSocket(pendingId: string): void {
 }
 
 export async function listPendingPairings(): Promise<Array<PendingPairingRecord & { connected: boolean }>> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   return Object.values(data.pendingPairings)
     .sort((a, b) => a.requestedAt - b.requestedAt)
@@ -223,8 +228,56 @@ export async function listPendingPairings(): Promise<Array<PendingPairingRecord 
 }
 
 export async function listApprovedNodes(): Promise<ApprovedNodeRecord[]> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   return Object.values(data.approvedNodes).sort((a, b) => a.nodeId.localeCompare(b.nodeId))
+}
+
+function getPendingPairingExpiryTimestamp(record: PendingPairingRecord): number {
+  return Number(record.approvedAt) || Number(record.requestedAt) || Number(record.updatedAt) || 0
+}
+
+function isPendingPairingExpired(record: PendingPairingRecord, now = Date.now()): boolean {
+  const expiresFrom = getPendingPairingExpiryTimestamp(record)
+  return expiresFrom > 0 && now - expiresFrom > PENDING_PAIRING_TTL_MS
+}
+
+export async function cleanupExpiredPendingPairings(now = Date.now()): Promise<number> {
+  const data = await loadRegistry()
+  const expired = Object.entries(data.pendingPairings)
+    .filter(([, record]) => isPendingPairingExpired(record, now))
+
+  if (expired.length === 0) {
+    return 0
+  }
+
+  for (const [pendingId, record] of expired) {
+    delete data.pendingPairings[pendingId]
+
+    if (record.approvedNodeId) {
+      delete data.approvedNodes[record.approvedNodeId]
+    }
+
+    const ws = pendingSockets.get(pendingId)
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({
+          type: 'pair_rejected',
+          pendingId,
+          reason: 'Pairing request expired after 1 hour',
+        }))
+      } catch {}
+
+      try {
+        ws.close(1008, 'Pairing request expired after 1 hour')
+      } catch {}
+    }
+
+    pendingSockets.delete(pendingId)
+  }
+
+  await saveRegistry()
+  return expired.length
 }
 
 export async function authenticateApprovedNode(nodeId: string, authToken: string): Promise<ApprovedNodeRecord | null> {
@@ -262,6 +315,7 @@ export async function approvePendingPairing(pendingId: string, requestedNodeId?:
   pending: PendingPairingRecord
   deliveredLive: boolean
 }> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   const pending = data.pendingPairings[pendingId]
   if (!pending) {
@@ -329,6 +383,7 @@ export async function claimApprovedPairing(pendingId: string): Promise<{
   nodeId: string
   authToken: string
 } | null> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   const pending = data.pendingPairings[pendingId]
   if (!pending || !pending.approvedNodeId || !pending.approvedAuthToken) {
@@ -341,6 +396,7 @@ export async function claimApprovedPairing(pendingId: string): Promise<{
 }
 
 export async function rejectPendingPairing(pendingId: string, reason?: string): Promise<void> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   const pending = data.pendingPairings[pendingId]
   if (!pending) {

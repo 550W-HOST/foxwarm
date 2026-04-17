@@ -42,7 +42,8 @@ services:
         RUN test -n "$NODE_SOURCE_URL"
         RUN curl -fsSL "$NODE_SOURCE_URL" | tar -xzf - -C /app
 
-        RUN npm ci && npm run build
+        RUN npm ci \
+            && if [ ! -f /app/lib/nodes/client.js ] || [ ! -f /app/packages/shared/dist/toolResponseFormatting.js ]; then npm run build; else echo "Using prebuilt node bundle from source archive."; fi
         RUN chmod +x /app/scripts/start-sandbox-node.sh
 
         ENV NODE_ENV=production

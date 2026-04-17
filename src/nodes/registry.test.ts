@@ -4,9 +4,13 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import {
+  approvePendingPairing,
+  cleanupExpiredPendingPairings,
   createNodeRegistryStore,
   createPendingPairing,
+  listApprovedNodes,
   listPendingPairings,
+  PENDING_PAIRING_TTL_MS,
   resetNodeRegistryForTests,
   setNodeRegistryStoreForTests,
 } from './registry';
@@ -72,5 +76,60 @@ test('node registry falls back to backup candidate after primary corruption', as
 
     const rewritten = await fs.readJson(filePath);
     assert(rewritten.pendingPairings[firstPending.id]);
+  });
+});
+
+test('expired pending pairings older than 1 hour are removed from registry', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'nodes.json');
+    setNodeRegistryStoreForTests(createNodeRegistryStore(filePath));
+    resetNodeRegistryForTests();
+
+    const pending = await createPendingPairing({
+      requestedName: 'stale node',
+      nodeType: 'worker',
+      capabilities: capabilities('stale'),
+    });
+
+    const raw = await fs.readJson(filePath);
+    raw.pendingPairings[pending.id].requestedAt = Date.now() - PENDING_PAIRING_TTL_MS - 1000;
+    raw.pendingPairings[pending.id].updatedAt = raw.pendingPairings[pending.id].requestedAt;
+    await fs.writeJson(filePath, raw, { spaces: 2 });
+
+    resetNodeRegistryForTests();
+    const removed = await cleanupExpiredPendingPairings();
+    assert.equal(removed, 1);
+
+    const remaining = await listPendingPairings();
+    assert.equal(remaining.length, 0);
+  });
+});
+
+test('expired approved-but-undelivered pending pairings remove their temporary approved node too', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'nodes.json');
+    setNodeRegistryStoreForTests(createNodeRegistryStore(filePath));
+    resetNodeRegistryForTests();
+
+    const pending = await createPendingPairing({
+      requestedName: 'offline node',
+      nodeType: 'worker',
+      capabilities: capabilities('offline'),
+    });
+
+    const approved = await approvePendingPairing(pending.id, 'offline-node');
+    const raw = await fs.readJson(filePath);
+    raw.pendingPairings[pending.id].approvedAt = Date.now() - PENDING_PAIRING_TTL_MS - 1000;
+    raw.pendingPairings[pending.id].updatedAt = raw.pendingPairings[pending.id].approvedAt;
+    await fs.writeJson(filePath, raw, { spaces: 2 });
+
+    resetNodeRegistryForTests();
+    const removed = await cleanupExpiredPendingPairings();
+    assert.equal(removed, 1);
+
+    const remainingPending = await listPendingPairings();
+    const approvedNodes = await listApprovedNodes();
+    assert.equal(remainingPending.length, 0);
+    assert.equal(approvedNodes.some(node => node.nodeId === approved.nodeId), false);
   });
 });

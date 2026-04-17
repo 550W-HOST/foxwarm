@@ -12,6 +12,7 @@ import { browserManager } from './browser';
 import { logger } from './common';
 import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from './execTimeout';
 import { nodesManager } from './nodes/manager';
+import { buildNodeBootstrapInfo, ensureNodePairingToken } from './nodes/bootstrapInfo';
 import {
     buildBackgroundTimeoutResult,
     buildForegroundExecResult,
@@ -89,7 +90,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
     'search_tools', 'call_tool',
     'change_current_node',
-    'node_pair_approve', 'node_pair_list',
+    'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
 ];
 
@@ -1647,6 +1648,11 @@ export const change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
   return `Current node changed to \`${nodeId}\``;
 };
 
+export const node_bootstrap_info = async (args: ToolArgs = {}) => {
+  const token = await ensureNodePairingToken();
+  return buildNodeBootstrapInfo({ pairingToken: token });
+};
+
 export const node_pair_approve = async (args: ToolArgs) => {
   const { pendingId, nodeId: requestedNodeId } = args;
   if (!pendingId) throw new Error('Missing required parameter: pendingId');
@@ -2441,6 +2447,14 @@ export const definitions = [
                     nodeId: { type: 'string', description: 'Node ID to switch to' }
                 },
                 required: ['nodeId']
+            }
+        },
+        {
+            name: 'node_bootstrap_info',
+            description: 'Return structured LLM-facing node bootstrap info: pairing token, BASE_URL placeholder semantics, bootstrap endpoint paths/URLs written with $BASE_URL, and example commands. This helper explains the URL principle instead of pretending the system knows the one true external address.',
+            parameters: {
+                type: 'object',
+                properties: {}
             }
         },
         {
