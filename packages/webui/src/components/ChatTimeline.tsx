@@ -33,30 +33,32 @@ import {
   type ViewMode,
 } from './chatShared'
 import { formatToolResponsePayload } from '../../../shared/src/toolResponseFormatting'
-import { triggerBrowserDownload } from './workspaceShared'
+import { buildWorkspaceDownloadUrl, triggerBrowserDownload } from './workspaceShared'
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatToolResponsePayload(resp.response)
 
-const getToolResponseDownload = (resp: FunctionResponse): { url: string; fileName?: string } | null => {
+const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionResponse): { url: string; fileName?: string } | null => {
+  if (resp.name !== 'send_file') {
+    return null
+  }
+
   const response = resp.response
-  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+  const fullPath = response && typeof response === 'object' && !Array.isArray(response)
+    ? (response as { fullPath?: unknown }).fullPath
+    : undefined
+
+  const resolvedPath = typeof fullPath === 'string' && fullPath.trim()
+    ? fullPath.trim()
+    : (typeof call?.args?.filePath === 'string' && call.args.filePath.trim() ? call.args.filePath.trim() : null)
+
+  if (!resolvedPath) {
     return null
   }
 
-  const webuiDownload = (response as { webuiDownload?: unknown }).webuiDownload
-  if (!webuiDownload || typeof webuiDownload !== 'object' || Array.isArray(webuiDownload)) {
-    return null
-  }
-
-  const url = (webuiDownload as { url?: unknown }).url
-  if (typeof url !== 'string' || !url.trim()) {
-    return null
-  }
-
-  const fileName = (webuiDownload as { fileName?: unknown }).fileName
+  const fileName = resolvedPath.split(/[\\/]/).filter(Boolean).pop()
   return {
-    url,
-    fileName: typeof fileName === 'string' && fileName.trim() ? fileName : undefined,
+    url: buildWorkspaceDownloadUrl(resolvedPath),
+    fileName,
   }
 }
 
@@ -546,7 +548,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
   return <div className="whitespace-pre-wrap break-all">{formatCompactObjectPreview(call.args)}</div>
 }
 
-const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): ReactNode | null => {
+const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, call?: FunctionCall): ReactNode | null => {
   if (resp.name === 'read') {
     const fileContent = resp.response.content || resp.response.output || JSON.stringify(resp.response)
     return expanded
@@ -567,7 +569,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): R
     return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
   }
 
-  const download = getToolResponseDownload(resp)
+  const download = getSendFileDownload(call, resp)
   const primaryText = formatToolResponseText(resp)
   if (download) {
     const preview = truncatePreviewText(primaryText, 400)
@@ -997,7 +999,7 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
       return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
     }
 
-    const download = getToolResponseDownload(resp)
+    const download = getSendFileDownload(undefined, resp)
     const primaryText = formatToolResponseText(resp)
     if (download) {
       const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
@@ -1073,7 +1075,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const responsePreview = useMemo(() => {
     const firstResponse = responses[0]
     if (firstResponse) {
-      const previewNode = renderToolResponseContent(firstResponse, false)
+      const previewNode = renderToolResponseContent(firstResponse, false, call)
       if (responses.length > 1) {
         return (
           <div className="flex items-center gap-2 min-w-0">
@@ -1141,7 +1143,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                 <div>
                   {responses.length > 0 ? responses.map((resp, idx) => (
                     <div key={`${resp.tool_use_id || call.id || call.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
-                      {renderToolResponseContent(resp, true)}
+                      {renderToolResponseContent(resp, true, call)}
                     </div>
                   )) : <div className="text-gray-500 dark:text-gray-400">Waiting for result…</div>}
 

@@ -290,17 +290,10 @@ function isWebUiUnsupportedFileDelivery(channelId: string, reason: string): bool
   return channelId.startsWith('webui:') && reason === 'channel does not support file sending yet';
 }
 
-function buildRelativeWebUiDownloadUrl(file: ChannelFile): string {
-  return `download?${new URLSearchParams({ path: file.path }).toString()}`;
-}
-
-function buildWebUiDownloadResult(output: string, file: ChannelFile) {
+function buildSendFileResult(output: string, file: ChannelFile) {
   return {
     output,
-    webuiDownload: {
-      url: buildRelativeWebUiDownloadUrl(file),
-      fileName: file.name,
-    },
+    fullPath: file.path,
   };
 }
 
@@ -411,11 +404,11 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
 
   if (normalizedChannelTargetId) {
     if (normalizedChannelTargetId.startsWith('webui:')) {
-      return buildWebUiDownloadResult(`File \`${file.name}\` is ready to download for WebUI target \`${normalizedChannelTargetId}\`.`, file);
+      return buildSendFileResult(`File \`${file.name}\` is ready for WebUI target \`${normalizedChannelTargetId}\`.`, file);
     }
 
     await sessionManager.sendFileToChannelTargetId(normalizedChannelTargetId, file, { caption });
-    return `File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``;
+    return buildSendFileResult(`File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``, file);
   }
 
   const normalizedSessionId = sessionId.trim();
@@ -424,7 +417,7 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
   const output = formatSendFileSessionResult(normalizedSessionId, file, result);
 
   if (hasWebUiDownloadFallback && result.deliveredChannels.length === 0 && result.failedChannels.length === 0) {
-    return buildWebUiDownloadResult(output, file);
+    return buildSendFileResult(output, file);
   }
 
   if (result.deliveredChannels.length === 0) {
@@ -432,10 +425,10 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
   }
 
   if (hasWebUiDownloadFallback) {
-    return buildWebUiDownloadResult(output, file);
+    return buildSendFileResult(output, file);
   }
 
-  return output;
+  return buildSendFileResult(output, file);
 }
 
 export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext) {

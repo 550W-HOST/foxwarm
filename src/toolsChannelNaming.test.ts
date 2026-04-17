@@ -54,7 +54,7 @@ test('tool_send_file no longer accepts legacy channelId arg', async () => {
   );
 });
 
-test('tool_send_file returns WebUI download metadata instead of failing when only WebUI session delivery is available', async () => {
+test('tool_send_file returns generic success result with fullPath instead of failing when only WebUI session delivery is available', async () => {
   const originalStat = fs.stat;
   const originalSendFileToSession = sessionManager.sendFileToSession;
 
@@ -72,8 +72,7 @@ test('tool_send_file returns WebUI download metadata instead of failing when onl
 
     const result = await tool_send_file({ sessionId: 'test-session', filePath: '/tmp/demo.txt' });
     assert.equal(typeof result, 'object');
-    assert.equal((result as any).webuiDownload?.url, 'download?path=%2Ftmp%2Fdemo.txt');
-    assert.equal((result as any).webuiDownload?.fileName, 'demo.txt');
+    assert.equal((result as any).fullPath, '/tmp/demo.txt');
     assert.match(String((result as any).output || ''), /File `demo.txt` sent for session `test-session`/);
   } finally {
     (fs as any).stat = originalStat;
