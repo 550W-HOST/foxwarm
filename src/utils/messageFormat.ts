@@ -129,7 +129,8 @@ function formatPartLines(message: Message, part: MessagePart, options: Required<
     lines.push(`[image:${mimeType}] ${imageId}`);
   } else if (part.inlineData) {
     const mimeType = part.inlineData.mimeType || part.inlineData.mime_type || 'application/octet-stream';
-    lines.push(`[image:${mimeType}]`);
+    const imageId = part.imageMeta?.imageId;
+    lines.push(imageId ? `[image:${mimeType}] ${imageId}` : `[image:${mimeType}]`);
   }
 
   return lines;

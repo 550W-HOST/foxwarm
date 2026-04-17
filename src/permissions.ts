@@ -151,6 +151,7 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
     buildScopedPathToolRule(agentName, sessionId, 'edit', 'master'),
     buildScopedPathToolRule(agentName, sessionId, 'apply_patch', 'master'),
     buildScopedPathToolRule(agentName, sessionId, 'send_file', 'master'),
+    buildScopedPathToolRule(agentName, sessionId, 'image_write_to_file', 'master'),
     buildScopedPathToolRule(agentName, sessionId, 'read_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
     buildScopedPathToolRule(agentName, sessionId, 'write_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
     buildScopedPathToolRule(agentName, sessionId, 'edit_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
@@ -170,6 +171,7 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
       buildNodeToolRule(agentName, sessionId, 'browse_interact', targetNode),
       buildNodeToolRule(agentName, sessionId, 'exec', targetNode),
       buildNodeToolRule(agentName, sessionId, 'send_file', targetNode),
+      buildNodeToolRule(agentName, sessionId, 'image_write_to_file', targetNode),
     ]),
     {
       agent: agentName,
@@ -195,6 +197,13 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
         sourceNode: { oneOf: allowedCopyNodes },
         targetNode: { oneOf: allowedCopyNodes },
       },
+      action: 'accept',
+    },
+    {
+      agent: agentName,
+      session: sessionId,
+      target_node: 'master',
+      tool_name: 'image_crop',
       action: 'accept',
     },
     {

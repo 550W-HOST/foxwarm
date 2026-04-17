@@ -11,7 +11,10 @@ export interface MessagePart {
   };
   functionCall?: FunctionCall;
   functionResponse?: FunctionResponse;
+  toolUseId?: string;
   inlineData?: InlineData;  // Internal format - always use this
+  inlineDataRef?: InlineDataRef;
+  imageMeta?: ImageMeta;
   [key: string]: any;  // Allow additional properties for flexibility
 }
 
@@ -40,6 +43,26 @@ export interface InlineData {
   mimeType?: string;
   mime_type?: string;
   data: string;
+}
+
+export interface InlineDataRef {
+  imageId: string;
+  format: string;
+  path: string;
+  mimeType: string;
+  byteLength: number;
+  sha256: string;
+  width?: number;
+  height?: number;
+}
+
+export interface ImageMeta {
+  imageId: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  sizeBytes?: number;
+  sha256?: string;
 }
 
 export type MaybePromise<T> = T | Promise<T>;
@@ -209,6 +232,7 @@ export interface AnthropicContentBlock {
 export interface ToolDefinition {
   name: string;
   description: string;
+  defaultInject?: boolean;
   parameters: {
     type: string;
     properties: Record<string, any>;

@@ -77,6 +77,43 @@ async function run() {
     'chat/completions serializer should preserve output-only shorthand while keeping keys for structured tool outputs'
   );
 
+  const tinyPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnSUs8AAAAASUVORK5CYII=';
+  const imageHistory = [
+    {
+      role: 'model',
+      parts: [
+        { functionCall: { id: 'call_image', name: 'read', args: { filePath: 'demo.png' } } },
+      ],
+    },
+    {
+      role: 'tool',
+      parts: [
+        {
+          toolUseId: 'call_image',
+          inlineData: { mimeType: 'image/png', data: tinyPngBase64 },
+          imageMeta: { imageId: 'call_image#1', mimeType: 'image/png', width: 1, height: 1, sizeBytes: Buffer.byteLength(tinyPngBase64, 'base64') },
+        },
+        {
+          functionResponse: {
+            tool_use_id: 'call_image',
+            name: 'read',
+            response: { output: '[Image loaded: demo.png]' },
+          },
+        },
+      ],
+    },
+  ];
+
+  const imageChatMessages = convertToOpenAIFormat(imageHistory);
+  const imageToolMessage = imageChatMessages.find(item => item.role === 'tool');
+  assert.ok(imageToolMessage);
+  assert.match(JSON.stringify(imageToolMessage.content), /\[IMAGE: id=call_image#1, size=1x1\]/);
+
+  const imageResponses = convertToOpenAIResponsesFormat(imageHistory);
+  const imageResponseOutput = imageResponses.find(item => item.type === 'function_call_output' && item.call_id === 'call_image');
+  assert.ok(imageResponseOutput);
+  assert.match(JSON.stringify(imageResponseOutput.output), /\[IMAGE: id=call_image#1, size=1x1\]/);
+
   const toolResultMessage = await executeTools(
     [
       {

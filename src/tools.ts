@@ -24,6 +24,7 @@ import {
 } from './execManager';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from './applyPatch';
 import { COMPACT_PLAN_TOOL_DEFINITION } from './session/compactPlan';
+import { cropImageById, resolveImageById } from './toolImages';
 import {
     tool_create_child_session,
     tool_send_to_session,
@@ -73,34 +74,12 @@ type UnifiedToolSource = 'builtin' | 'mcp' | 'node';
 const WORKSPACE = WORKSPACE_DIR;
 fs.ensureDirSync(getAgentDir('main'));
 
-export const MODEL_HIDDEN_TOOL_NAMES = new Set([
-    'browse_open',
-    'browse_list',
-    'browse_get',
-    'browse_close',
-    'browse_interact',
-    'get_archived_messages',
-    'get_archived_blocks',
-    'set_session_child_model',
-    'set_session_compact_threshold',
-    'update_session_snapshot',
-    'create_agent',
-    'create_session',
-    'set_agent_inherit',
-    'set_agent_isolated',
-    'move_session',
-    'remote_node',
-    'call_mcp',
-    'search_mcp_tools',
-    'node_pair_approve',
-    'node_pair_list',
-]);
-
 export const MASTER_ONLY_TOOL_NAMES = [
     'remote_node', 'list_nodes', 'node_tools',
     'search_vector', 'search_memory', 'get_memory_context',
     'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
     'copy_between_nodes',
+    'image_crop', 'image_write_to_file',
     'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
     'list_sessions', 'list_agents', 'list_skills', 'load_skill',
     'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
@@ -116,12 +95,23 @@ export const MASTER_ONLY_TOOL_NAMES = [
 
 const MASTER_ONLY_TOOL_NAME_SET = new Set(MASTER_ONLY_TOOL_NAMES);
 
+const TARGET_NODE_PERMISSION_TOOL_NAMES = new Set([
+    'send_file',
+    'image_write_to_file',
+]);
+
 export function isToolDirectlyExposedToModel(toolName: string): boolean {
-    return !MODEL_HIDDEN_TOOL_NAMES.has(toolName);
+    return definitions.find(def => def.name === toolName)?.defaultInject === true;
 }
 
 export function isMasterOnlyToolName(toolName: string): boolean {
     return MASTER_ONLY_TOOL_NAME_SET.has(toolName);
+}
+
+export function getToolPermissionNode(toolName: string, executionNode: string, targetNode: string): string {
+    return TARGET_NODE_PERMISSION_TOOL_NAMES.has(toolName)
+        ? targetNode
+        : executionNode;
 }
 
 // Helper function to resolve file path for agent
@@ -579,6 +569,81 @@ async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
         `Size: ${file.sizeBytes} B`,
         `SHA256: ${result.sha256}`,
         `Overwrote existing file: ${result.overwritten ? 'yes' : 'no'}`,
+    ].join('\n');
+}
+
+async function tool_image_crop(args: ToolArgs, ctx: ToolContext) {
+    const { id, x, y, width, height } = args;
+
+    if (!ctx.sessionId) {
+        throw new Error('image_crop requires an active session context.');
+    }
+    if (!id || typeof id !== 'string') {
+        throw new Error('image_crop requires id.');
+    }
+
+    const cropped = await cropImageById(ctx.sessionId, id, {
+        x: Number(x),
+        y: Number(y),
+        width: Number(width),
+        height: Number(height),
+    });
+
+    return {
+        output: `[Cropped image from ${id}]`,
+        sourceImageId: id,
+        crop: {
+            x: Number(x),
+            y: Number(y),
+            width: Number(width),
+            height: Number(height),
+        },
+        mimeType: cropped.imageMeta.mimeType,
+        sizeBytes: cropped.imageMeta.sizeBytes,
+        inlineData: cropped.inlineData,
+    };
+}
+
+async function tool_image_write_to_file(args: ToolArgs, ctx: ToolContext) {
+    const { id, filePath, overwrite = false } = args;
+
+    if (!ctx.sessionId) {
+        throw new Error('image_write_to_file requires an active session context.');
+    }
+    if (!id || typeof id !== 'string') {
+        throw new Error('image_write_to_file requires id.');
+    }
+    if (!filePath || typeof filePath !== 'string') {
+        throw new Error('image_write_to_file requires filePath.');
+    }
+
+    const sessionId = ctx.sessionId;
+    const currentNode = ctx.runtimeNodeId
+        || ctx.session?.currentNode
+        || await nodesManager.getCurrentNode(sessionId)
+        || 'master';
+    const targetNode = currentNode;
+    const resolved = await resolveImageById(sessionId, id);
+
+    if (targetNode === 'master') {
+        const agentName = ctx.session?.agent || 'main';
+        const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
+        if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
+            checkPathAccess(fullPath, agentName);
+        }
+        const exists = await fs.pathExists(fullPath);
+        if (exists && overwrite !== true) {
+            throw new Error(`File already exists: ${filePath}. Use overwrite=true to overwrite.`);
+        }
+        await fs.ensureDir(path.dirname(fullPath));
+        await fs.writeFile(fullPath, resolved.buffer);
+    } else {
+        await nodesManager.writeFileToNode(targetNode, filePath, resolved.buffer.toString('base64'), overwrite === true, sessionId);
+    }
+
+    return [
+        `Image \`${id}\` written to \`${filePath}\` on node \`${targetNode}\`.`,
+        'You can send it with send_file({ filePath: "' + filePath + '"' + (targetNode !== 'master' ? ', node: "' + targetNode + '"' : '') + ' }).',
     ].join('\n');
 }
 
@@ -1105,7 +1170,7 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
     delete toolArgs.node;
 
     const executionNode = isMasterOnlyToolName(toolName) ? 'master' : targetNode;
-    const permissionNode = toolName === 'send_file' ? targetNode : executionNode;
+    const permissionNode = getToolPermissionNode(toolName, executionNode, targetNode);
 
     if (ctx.sessionId) {
         await checkToolPermission(toolName, sessionId, permissionNode, toolArgs);
@@ -1113,6 +1178,10 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
 
     if (executionNode !== 'master') {
         return await nodesManager.executeTool(executionNode, toolName, toolArgs, sessionId);
+    }
+
+    if (toolName === 'send_file' || toolName === 'image_write_to_file') {
+        return await nodesManager.executeToolLocally(toolName, { ...toolArgs, __runtimeNodeId: targetNode }, sessionId);
     }
 
     return await nodesManager.executeToolLocally(toolName, toolArgs, sessionId);
@@ -1489,6 +1558,8 @@ export const apply_patch = tool_apply_patch;
 export const list_files = tool_list_files;
 export const delete_file = tool_delete_file;
 export const copy_between_nodes = tool_copy_between_nodes;
+export const image_crop = tool_image_crop;
+export const image_write_to_file = tool_image_write_to_file;
 export const exec = tool_exec;
 export const search_vector = tool_search_vector;
 export const search_memory = tool_search_vector;
@@ -1601,6 +1672,7 @@ export const node_pair_list = async () => {
 export const definitions = [
         {
             name: 'read',
+            defaultInject: true,
             description: 'Read a file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
             parameters: {
                 type: 'object',
@@ -1614,6 +1686,7 @@ export const definitions = [
         },
         {
             name: 'write',
+            defaultInject: true,
             description: 'Write a file to agent-folder.',
             parameters: {
                 type: 'object',
@@ -1627,6 +1700,7 @@ export const definitions = [
         },
         {
             name: 'edit',
+            defaultInject: true,
             description: 'Replace exact text in a file (legacy surgical edit). Use oldText/newText for direct single-match replacement. Prefer apply_patch for patch-style changes.',
             parameters: {
                 type: 'object',
@@ -1640,6 +1714,7 @@ export const definitions = [
         },
         {
             name: 'apply_patch',
+            defaultInject: true,
             description: 'This is a custom utility that makes it more convenient to add, remove, or edit code files. Pass the patch command text as `input`. The expected format uses an apply_patch envelope with `*** Begin Patch` / `*** End Patch`, and file actions such as `*** Update File: path`, `*** Add File: path`, or `*** Delete File: path`. Update File bodies use a line-based patch format: optional `@@` / `@@ anchor` section markers, context lines prefixed with a single space, `-` deletions, `+` insertions, and optional `*** End of File`.',
             parameters: {
                 type: 'object',
@@ -1651,6 +1726,7 @@ export const definitions = [
         },
         {
             name: 'read_memory',
+            defaultInject: true,
             description: 'Read a file from the current agent\'s memory/ directory. Pass a path relative to memory/ (for example `MEMORY.md` or `notes/foo.md`). This always targets your own memory files on master; do not prefix with `memory/` or pass node=master.',
             parameters: {
                 type: 'object',
@@ -1664,6 +1740,7 @@ export const definitions = [
         },
         {
             name: 'write_memory',
+            defaultInject: true,
             description: 'Create a new file under the current agent\'s memory/ directory. Pass a path relative to memory/. This tool never overwrites existing files; use edit_memory to modify an existing memory file.',
             parameters: {
                 type: 'object',
@@ -1676,6 +1753,7 @@ export const definitions = [
         },
         {
             name: 'edit_memory',
+            defaultInject: true,
             description: 'Edit an existing file under the current agent\'s memory/ directory using an exact oldText/newText replacement. Pass a path relative to memory/.',
             parameters: {
                 type: 'object',
@@ -1689,6 +1767,7 @@ export const definitions = [
         },
         {
             name: 'delete_memory',
+            defaultInject: true,
             description: 'Delete a single file inside the current agent\'s memory/ directory. Pass a path relative to memory/.',
             parameters: {
                 type: 'object',
@@ -1700,6 +1779,7 @@ export const definitions = [
         },
         {
             name: 'apply_patch_memory',
+            defaultInject: true,
             description: 'Apply an apply_patch-style patch only within the current agent\'s memory/ directory. Pass memory-relative paths in the patch file headers; `memory/` prefixes are accepted but optional. Supports the same patch envelope and bare-patch compatibility as apply_patch.',
             parameters: {
                 type: 'object',
@@ -1711,6 +1791,7 @@ export const definitions = [
         },
         {
             name: 'list_files',
+            defaultInject: true,
             description: 'List files under the current agent directory. Can recurse, but path traversal outside the agent folder is blocked.',
             parameters: {
                 type: 'object',
@@ -1724,6 +1805,7 @@ export const definitions = [
         },
         {
             name: 'delete_file',
+            defaultInject: true,
             description: 'Delete a single file or symlink inside the current agent folder. Refuses to delete directories.',
             parameters: {
                 type: 'object',
@@ -1735,6 +1817,7 @@ export const definitions = [
         },
         {
             name: 'copy_between_nodes',
+            defaultInject: true,
             description: 'Copy a file between master/remote nodes using the current session agent directory on each endpoint. Paths must be relative to the agent folder.',
             parameters: {
                 type: 'object',
@@ -1749,7 +1832,39 @@ export const definitions = [
             }
         },
         {
+            name: 'image_crop',
+            defaultInject: true,
+            description: 'Crop an image that was previously returned in this session by image id. Returns another inline image that can be cropped again or written to a file.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', description: 'Image id from a prior tool-returned image label, such as `[IMAGE: id=...]`.' },
+                    x: { type: 'number', description: 'Left coordinate in pixels.' },
+                    y: { type: 'number', description: 'Top coordinate in pixels.' },
+                    width: { type: 'number', description: 'Crop width in pixels.' },
+                    height: { type: 'number', description: 'Crop height in pixels.' },
+                },
+                required: ['id', 'x', 'y', 'width', 'height']
+            }
+        },
+        {
+            name: 'image_write_to_file',
+            defaultInject: true,
+            description: 'Write a previously returned session image to a file so it can be reused or sent with send_file.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', description: 'Image id from a prior tool-returned image label.' },
+                    filePath: { type: 'string', description: 'Output file path.' },
+                    overwrite: { type: 'boolean', description: 'Overwrite the target file if it already exists. Default: false.' },
+                    node: { type: 'string', description: 'Optional. Node where the file should be written. Defaults to the current node.' },
+                },
+                required: ['id', 'filePath']
+            }
+        },
+        {
             name: 'exec',
+            defaultInject: true,
             description: 'Execute a shell command in agent-folder. Defaults to the session cwd when set; otherwise uses the agent folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running longer than the configured timeout (default 15s, allowed range 1-60s) continue in the background and send a completion system message later.',
             parameters: {
                 type: 'object',
@@ -1763,6 +1878,7 @@ export const definitions = [
         },
         {
             name: 'search_vector',
+            defaultInject: true,
             description: 'Search for relevant past conversations in vector memory within the caller\'s allowed scope. Non-isolated sessions are limited to the current agent; isolated sessions are limited to the current session.',
             parameters: {
                 type: 'object',
@@ -1781,6 +1897,7 @@ export const definitions = [
         },
         {
             name: 'get_memory_context',
+            defaultInject: true,
             description: 'Retrieve messages around a specific point in time to see conversation flow.',
             parameters: {
                 type: 'object',
@@ -1793,6 +1910,7 @@ export const definitions = [
         },
         {
             name: 'create_child_session',
+            defaultInject: true,
             description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. If handing off to the child is your final step for this turn, call end_turn afterward in the same response.',
             parameters: {
                 type: 'object',
@@ -1807,6 +1925,7 @@ export const definitions = [
         },
         {
             name: 'send_to_session',
+            defaultInject: true,
             description: 'Send a message to a specific agent/session. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call end_turn in parallel in the same response.',
             parameters: {
                 type: 'object',
@@ -1819,6 +1938,7 @@ export const definitions = [
         },
         {
             name: 'end_turn',
+            defaultInject: true,
             description: 'End current session turn, in the other words, pause the current session running after the current batch of tool calls finishes, until a message/event triggers current session. Use this when you are waiting for system events / notifications, and feeling no tool calls and reply needed at this moment. Can be call in parallel with other tools for less LLM request count.',
             parameters: {
                 type: 'object',
@@ -1829,6 +1949,7 @@ export const definitions = [
         },
         {
             name: 'send_to_channel',
+            defaultInject: true,
             description: 'Send a message directly to users by specific channel by channelTargetId (<channel-instance-id>:<conversation-id>).',
             parameters: {
                 type: 'object',
@@ -1841,6 +1962,7 @@ export const definitions = [
         },
         {
             name: 'send_file',
+            defaultInject: true,
             description: 'Send a local file or image to users. Exactly one of channelTargetId or sessionId is required. If sessionId is specified, the message to will be sent to all channels attached to the session.',
             parameters: {
                 type: 'object',
@@ -1857,6 +1979,7 @@ export const definitions = [
         },
         {
             name: 'list_sessions',
+            defaultInject: true,
             description: 'Get list of all sessions with basic info (ID, message count, last message time, channel status)',
             parameters: {
                 type: 'object',
@@ -1869,6 +1992,7 @@ export const definitions = [
         },
         {
             name: 'list_agents',
+            defaultInject: true,
             description: 'List all agents with their session counts',
             parameters: {
                 type: 'object',
@@ -1878,6 +2002,7 @@ export const definitions = [
         },
         {
             name: 'list_skills',
+            defaultInject: true,
             description: 'List available skills for the current session agent (or an optionally specified agent), including agent-local, inherited-agent, and global skills.',
             parameters: {
                 type: 'object',
@@ -1889,6 +2014,7 @@ export const definitions = [
         },
         {
             name: 'load_skill',
+            defaultInject: true,
             description: 'Load skill documentation content using the current session agent skill resolution (or an optionally specified agent). This only returns skill documents and metadata; it does not dynamically add tools.',
             parameters: {
                 type: 'object',
@@ -1901,6 +2027,7 @@ export const definitions = [
         },
         {
             name: 'get_session_messages',
+            defaultInject: true,
             description: 'Get messages from a session with optional pagination. Defaults to last 10 messages if no parameters specified.',
             parameters: {
                 type: 'object',
@@ -1941,6 +2068,7 @@ export const definitions = [
         },
         {
             name: 'get_context_archive',
+            defaultInject: true,
             description: 'Unified archived-context inspection helper. Use this when you want archived raw messages or layered CTX-BLOCKs.',
             parameters: {
                 type: 'object',
@@ -1958,6 +2086,7 @@ export const definitions = [
         },
         {
             name: 'delete_session',
+            defaultInject: true,
             description: 'Delete a session permanently. Cannot delete current session.',
             parameters: {
                 type: 'object',
@@ -1969,6 +2098,7 @@ export const definitions = [
         },
         {
             name: 'update_session_name',
+            defaultInject: true,
             description: 'Update the display name of a session. The display name is shown in the session list.',
             parameters: {
                 type: 'object',
@@ -1981,6 +2111,7 @@ export const definitions = [
         },
         {
             name: 'set_todo',
+            defaultInject: true,
             description: 'Set or clear a todo reminder for the current session. Recommended workflow: briefly plan first, store only the active checklist here, update it as milestones complete, and clear it when done. Reminders are injected as system messages after enough later session messages have passed, including tool-loop progress.',
             parameters: {
                 type: 'object',
@@ -2028,6 +2159,7 @@ export const definitions = [
         },
         {
             name: 'stop_session',
+            defaultInject: true,
             description: 'Stop a running session. Sets a flag that will stop tool call recursion after the current tool completes.',
             parameters: {
                 type: 'object',
@@ -2040,6 +2172,7 @@ export const definitions = [
         COMPACT_PLAN_TOOL_DEFINITION,
         {
             name: 'compact_session',
+            defaultInject: true,
             description: 'Request a compaction flow for the current session or another idle session. This does not return compact candidates directly. Instead, the target session enters a dedicated compaction planning flow where the model must call submit_compact_plan. Use summary only as optional extra guidance for the compaction prompt, not as the final compacted summary.',
             parameters: {
                 type: 'object',
@@ -2052,6 +2185,7 @@ export const definitions = [
         },
         {
             name: 'create_timer',
+            defaultInject: true,
             description: 'Create a one-shot or recurring timer for a session. Timers persist across restarts and deliver structured system events when they fire.',
             parameters: {
                 type: 'object',
@@ -2070,6 +2204,7 @@ export const definitions = [
         },
         {
             name: 'list_timers',
+            defaultInject: true,
             description: 'List timers for a session. Defaults to the current session.',
             parameters: {
                 type: 'object',
@@ -2080,6 +2215,7 @@ export const definitions = [
         },
         {
             name: 'delete_timer',
+            defaultInject: true,
             description: 'Delete a timer by ID. Defaults to the current session scope.',
             parameters: {
                 type: 'object',
@@ -2167,6 +2303,7 @@ export const definitions = [
         },
         {
             name: 'search_tools',
+            defaultInject: true,
             description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
             parameters: {
                 type: 'object',
@@ -2186,6 +2323,7 @@ export const definitions = [
         },
         {
             name: 'call_tool',
+            defaultInject: true,
             description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. Always put the target tool arguments inside the required `args` object. Example using toolId: `{toolId:"builtin:read", args:{filePath:"README.md"}}`. Example using explicit MCP fields: `{source:"mcp", server:"github", name:"search_repos", args:{query:"foxwarm"}}`. Example using explicit node fields: `{source:"node", nodeId:"android-node", name:"android_screenshot", args:{inline:true}}`.',
             parameters: {
                 type: 'object',
@@ -2229,6 +2367,7 @@ export const definitions = [
         },
         {
             name: 'mcp_config',
+            defaultInject: true,
             description: 'Configure an MCP server (store in state/mcp.json). Use enable=false to disable an existing server.',
             parameters: {
                 type: 'object',
@@ -2276,6 +2415,7 @@ export const definitions = [
         },
         {
             name: 'list_mcp_servers',
+            defaultInject: true,
             description: 'List configured MCP servers with safe config summaries. Returns disabled servers too.',
             parameters: {
                 type: 'object',
@@ -2284,6 +2424,7 @@ export const definitions = [
         },
         {
             name: 'list_nodes',
+            defaultInject: true,
             description: 'List all registered nodes.',
             parameters: {
                 type: 'object',
@@ -2292,6 +2433,7 @@ export const definitions = [
         },
         {
             name: 'change_current_node',
+            defaultInject: true,
             description: 'Change the current node for the session. Execute future tools on the specified node.',
             parameters: {
                 type: 'object',
