@@ -19,7 +19,7 @@ There is also a structured builtin tool for agent workflows:
 
 - `node_bootstrap_info`
 
-Use that tool when you want machine-readable bootstrap info instead of re-parsing prose help text.
+Use that tool when you want LLM-friendly bootstrap info instead of re-parsing prose help text.
 
 This skill matches the current bootstrap surfaces exposed by a running master:
 
@@ -76,9 +76,10 @@ What Foxwarm **can** do is:
 
 Tool note:
 
-- the `node_bootstrap_info` tool does **not** have that bootstrap HTTP request context
-- so if you do not pass `baseUrl`, it will explicitly say the external URL is unresolved in tool context
-- if you *do* pass a chosen reachable `baseUrl`, it returns concrete URLs and explains that fetching the script from that URL would make that same URL the request-derived default inside the script
+- the `node_bootstrap_info` tool is intentionally **not** an API-style “tell me the exact external URL” interface
+- it returns `$BASE_URL` placeholders in the places where a real reachable master address is needed
+- it also explains that the caller/operator must choose `BASE_URL` from the node's point of view
+- this keeps the tool aligned with reality: Foxwarm does not know one unique globally correct external address
 
 So the rule is:
 

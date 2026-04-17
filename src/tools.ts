@@ -1650,11 +1650,7 @@ export const change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
 
 export const node_bootstrap_info = async (args: ToolArgs = {}) => {
   const token = await ensureNodePairingToken();
-  return buildNodeBootstrapInfo({
-    pairingToken: token,
-    baseUrl: args.baseUrl,
-    includeExamples: args.includeExamples !== false,
-  });
+  return buildNodeBootstrapInfo({ pairingToken: token });
 };
 
 export const node_pair_approve = async (args: ToolArgs) => {
@@ -2455,13 +2451,10 @@ export const definitions = [
         },
         {
             name: 'node_bootstrap_info',
-            description: 'Return structured node bootstrap info: pairing token, base-URL semantics, bootstrap endpoint URLs/paths, and example commands. Pass baseUrl only if you already know the reachable master URL from the node\'s point of view.',
+            description: 'Return structured LLM-facing node bootstrap info: pairing token, BASE_URL placeholder semantics, bootstrap endpoint paths/URLs written with $BASE_URL, and example commands. This helper explains the URL principle instead of pretending the system knows the one true external address.',
             parameters: {
                 type: 'object',
-                properties: {
-                    baseUrl: { type: 'string', description: 'Optional reachable Foxwarm master base URL chosen by the caller/operator (for example http://192.168.1.50:3001 or https://example.com). If omitted, the tool explains that tool context alone cannot infer the universally correct external URL.' },
-                    includeExamples: { type: 'boolean', description: 'Whether to include example curl/docker-compose commands in the result. Defaults to true.' },
-                }
+                properties: {}
             }
         },
         {
