@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import * as sessionManager from './sessionManager';
 import { getAgentDir } from './config';
+import { nodesManager } from './nodes/manager';
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': '.jpg',
@@ -22,8 +23,10 @@ const EXT_BY_MIME: Record<string, string> = {
 
 export interface SavedChannelFile {
   agentName: string;
+  nodeId: string;
   absolutePath: string;
-  relativePath: string;
+  relativePath?: string;
+  promptPath: string;
   fileName: string;
   mimeType: string;
   sizeBytes: number;
@@ -54,6 +57,138 @@ export async function resolveChannelAgentName(platform: string, channelUserId: s
   return session?.agent || 'main';
 }
 
+async function resolveInboundSession(platform: string, channelUserId?: string, sessionId?: string) {
+  if (typeof sessionId === 'string' && sessionId.trim()) {
+    return await sessionManager.getExistingSession(sessionId.trim());
+  }
+
+  if (!channelUserId) {
+    return null;
+  }
+
+  const resolvedSessionId = sessionManager.getSessionByChannel(platform, channelUserId);
+  if (!resolvedSessionId) {
+    return null;
+  }
+
+  return await sessionManager.getExistingSession(resolvedSessionId);
+}
+
+function resolveInboundTargetNode(session: any, agentName: string): string {
+  if (!sessionManager.isSessionEffectivelyIsolated(session)) {
+    return 'master';
+  }
+
+  const currentNode = typeof session?.currentNode === 'string' && session.currentNode.trim()
+    ? session.currentNode.trim()
+    : undefined;
+  const isolatedNode = sessionManager.getAgentIsolationNode(agentName);
+
+  if (currentNode && currentNode !== 'master') {
+    return currentNode;
+  }
+
+  return isolatedNode || currentNode || 'master';
+}
+
+function buildInboundStoragePaths(options: {
+  agentName: string;
+  platform: string;
+  fileName: string;
+  nodeId: string;
+  session?: any;
+}): { writePath: string; absolutePath: string; relativePath?: string; promptPath: string } {
+  const relativePath = path.join('.temp', 'channel-files', sanitizeSegment(options.platform), options.fileName);
+
+  if (options.nodeId === 'master') {
+    const absolutePath = path.join(getAgentDir(options.agentName), relativePath);
+    return {
+      writePath: absolutePath,
+      absolutePath,
+      relativePath,
+      promptPath: relativePath,
+    };
+  }
+
+  const sessionCwd = typeof options.session?.cwd === 'string' && options.session.cwd.trim()
+    ? options.session.cwd.trim()
+    : undefined;
+  const useAbsoluteCwdPath = options.session?.currentNode === options.nodeId && sessionCwd;
+  const writePath = useAbsoluteCwdPath
+    ? path.resolve(sessionCwd!, '.temp', 'channel-files', sanitizeSegment(options.platform), options.fileName)
+    : relativePath;
+
+  return {
+    writePath,
+    absolutePath: writePath,
+    relativePath: useAbsoluteCwdPath ? undefined : relativePath,
+    promptPath: writePath,
+  };
+}
+
+async function saveInboundFile(options: {
+  platform: string;
+  buffer: Buffer;
+  fileName?: string;
+  mimeType?: string;
+  isImage?: boolean;
+  session?: any;
+}): Promise<SavedChannelFile> {
+  const agentName = options.session?.agent || 'main';
+  const nodeId = resolveInboundTargetNode(options.session, agentName);
+
+  const mimeType = options.mimeType || 'application/octet-stream';
+  const isImage = options.isImage ?? mimeType.startsWith('image/');
+  const originalBase = options.fileName ? path.basename(options.fileName, path.extname(options.fileName)) : 'upload';
+  const ext = getExtension(options.fileName, mimeType);
+  const safeBase = sanitizeSegment(originalBase).slice(0, 80) || 'upload';
+  const storedFileName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(4).toString('hex')}-${safeBase}${ext}`;
+  const paths = buildInboundStoragePaths({
+    agentName,
+    platform: options.platform,
+    fileName: storedFileName,
+    nodeId,
+    session: options.session,
+  });
+
+  if (nodeId === 'master') {
+    await fs.ensureDir(path.dirname(paths.writePath));
+    await fs.writeFile(paths.writePath, options.buffer);
+  } else {
+    if (!options.session?.id) {
+      throw new Error('Session context is required when saving inbound files to a remote node.');
+    }
+    await nodesManager.writeFileToNode(nodeId, paths.writePath, options.buffer.toString('base64'), false, options.session.id);
+  }
+
+  return {
+    agentName,
+    nodeId,
+    absolutePath: paths.absolutePath,
+    relativePath: paths.relativePath,
+    promptPath: paths.promptPath,
+    fileName: options.fileName || storedFileName,
+    mimeType,
+    sizeBytes: options.buffer.length,
+    isImage,
+  };
+}
+
+export async function saveInboundSessionFile(options: {
+  sessionId: string;
+  platform: string;
+  buffer: Buffer;
+  fileName?: string;
+  mimeType?: string;
+  isImage?: boolean;
+}): Promise<SavedChannelFile> {
+  const session = await resolveInboundSession(options.platform, undefined, options.sessionId);
+  return saveInboundFile({
+    ...options,
+    session,
+  });
+}
+
 export async function saveInboundChannelFile(options: {
   platform: string;
   channelUserId: string;
@@ -62,31 +197,11 @@ export async function saveInboundChannelFile(options: {
   mimeType?: string;
   isImage?: boolean;
 }): Promise<SavedChannelFile> {
-  const agentName = await resolveChannelAgentName(options.platform, options.channelUserId);
-  const agentDir = getAgentDir(agentName);
-  const tempDir = path.join(agentDir, '.temp', 'channel-files', sanitizeSegment(options.platform));
-  await fs.ensureDir(tempDir);
-
-  const mimeType = options.mimeType || 'application/octet-stream';
-  const isImage = options.isImage ?? mimeType.startsWith('image/');
-  const originalBase = options.fileName ? path.basename(options.fileName, path.extname(options.fileName)) : 'upload';
-  const ext = getExtension(options.fileName, mimeType);
-  const safeBase = sanitizeSegment(originalBase).slice(0, 80) || 'upload';
-  const fileName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(4).toString('hex')}-${safeBase}${ext}`;
-  const absolutePath = path.join(tempDir, fileName);
-
-  await fs.writeFile(absolutePath, options.buffer);
-
-  const relativePath = path.relative(agentDir, absolutePath) || path.basename(absolutePath);
-  return {
-    agentName,
-    absolutePath,
-    relativePath,
-    fileName: options.fileName || fileName,
-    mimeType,
-    sizeBytes: options.buffer.length,
-    isImage,
-  };
+  const session = await resolveInboundSession(options.platform, options.channelUserId);
+  return saveInboundFile({
+    ...options,
+    session,
+  });
 }
 
 function prependMessageDescriptor(text: string | undefined, descriptor: string): string {
@@ -98,6 +213,7 @@ function prependMessageDescriptor(text: string | undefined, descriptor: string):
 
 export function buildSavedFileText(saved: SavedChannelFile, kind: 'image' | 'file', extraText?: string): string {
   const label = kind === 'image' ? 'Image' : 'File';
-  const descriptor = `[${label}: ${saved.fileName}]\nPath: ${saved.relativePath}` + (kind === 'file' ? `\nMIME: ${saved.mimeType}` : '');
+  const nodeLine = saved.nodeId !== 'master' ? `\nNode: ${saved.nodeId}` : '';
+  const descriptor = `[${label}: ${saved.fileName}]${nodeLine}\nPath: ${saved.promptPath}` + (kind === 'file' ? `\nMIME: ${saved.mimeType}` : '');
   return prependMessageDescriptor(extraText, descriptor);
 }

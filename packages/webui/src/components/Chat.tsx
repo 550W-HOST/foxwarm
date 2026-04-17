@@ -621,7 +621,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
 
     const parts: any[] = []
     let messageText = userMessage
-    const filePaths: string[] = []
+    let requestText = userMessage
+    const uploadedFiles: Array<{ path: string; filename: string; mimeType: string; size?: number }> = []
 
     for (const file of files) {
       try {
@@ -637,26 +638,31 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
           throw new Error('Upload failed')
         }
 
-        const { path: filePath } = await uploadRes.json()
-        filePaths.push(filePath)
+        const uploadData = await uploadRes.json()
+        uploadedFiles.push({
+          path: uploadData.path,
+          filename: uploadData.filename || file.name,
+          mimeType: uploadData.mimeType || file.type || 'application/octet-stream',
+          size: uploadData.size,
+        })
 
-        if (file.type.startsWith('image/')) {
-          messageText += `\n\n[Image: ${file.name}]\nPath: ${filePath}`
-        } else {
-          messageText += `\n\n[File: ${file.name}]\nPath: ${filePath}`
-        }
+        messageText += file.type.startsWith('image/')
+          ? `\n\n[Image: ${file.name}]`
+          : `\n\n[File: ${file.name}]`
       } catch (err) {
         console.error('File upload failed:', err)
         messageText += `\n\n[Failed to upload: ${file.name}]`
       }
     }
 
-    if (messageText) {
-      parts.push({ text: messageText })
+    if (requestText) {
+      parts.push({ text: requestText })
     }
 
+    const previewParts = messageText ? [{ text: messageText }] : parts
+
     pendingSentMessagesRef.current.push(userMessage)
-    setMessages(prev => [...prev, { role: 'user', parts }])
+    setMessages(prev => [...prev, { role: 'user', parts: previewParts }])
 
     try {
       fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
@@ -664,7 +670,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ parts, filePaths }),
+        body: JSON.stringify({ parts, uploadedFiles }),
       }).catch(e => {
         console.error('Failed to send message:', e)
         setMessages(prev => [...prev, { role: 'model', parts: [{ text: 'Error: Failed to send message' }] }])
