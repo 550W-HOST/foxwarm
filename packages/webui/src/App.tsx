@@ -712,7 +712,7 @@ function App() {
     void fetchActiveTerminals()
   }
 
-  const openPersistentChatTab = (sessionId: string, options?: { paneId?: string; beforeTabId?: string | null; edge?: 'left' | 'right' | 'bottom' }) => {
+  const openPersistentChatTab = (sessionId: string, options?: { paneId?: string; beforeTabId?: string | null; edge?: 'left' | 'right' | 'bottom'; pinned?: boolean }) => {
     const title = sessionTitle(sessionId)
     const existingTab = findPreferredChatTab(sessionId)
 
@@ -722,15 +722,18 @@ function App() {
       if (existingTab.title !== title) {
         updateTab(existingTab.id, (current) => isChatTab(current) ? { ...current, title } : current)
       }
+      if (typeof options?.pinned === 'boolean' && existingTab.pinned !== options.pinned) {
+        updateTab(existingTab.id, (current) => ({ ...current, pinned: options.pinned }))
+      }
       targetTabId = existingTab.id
     } else {
       const previewTab = allTabs.find((tab) => isPreviewChatTab(tab) && tab.sessionId === sessionId)
       if (previewTab) {
-        targetTabId = promotePreviewTab(previewTab.id, { pinned: false })
+        targetTabId = promotePreviewTab(previewTab.id, { pinned: !!options?.pinned })
       }
 
       if (!targetTabId) {
-        const tab = makeChatTab(sessionId, title)
+        const tab = makeChatTab(sessionId, title, { pinned: !!options?.pinned })
         upsertTab(tab, { activate: false })
         targetTabId = tab.id
       }
@@ -967,18 +970,35 @@ function App() {
       return
     }
 
+    const applyTabDrop = (targetPaneId: string, options?: { beforeTabId?: string | null; pinned?: boolean }) => {
+      const activeTabRecord = tabsById[activeId] || null
+      let nextActiveId = activeId
+      const nextPinned = typeof options?.pinned === 'boolean' ? options.pinned : !!activeData.pinned
+
+      if (nextPinned && activeTabRecord && isPreviewChatTab(activeTabRecord)) {
+        const promotedId = promotePreviewTab(activeId, { pinned: true })
+        if (!promotedId) {
+          return null
+        }
+        nextActiveId = promotedId
+      } else if (activeTabRecord && (!!activeTabRecord.pinned !== nextPinned || (!!activeData.pinned !== nextPinned))) {
+        updateTab(nextActiveId, (current) => ({ ...current, pinned: nextPinned }))
+      }
+
+      moveTabToPane(nextActiveId, targetPaneId, { beforeTabId: options?.beforeTabId || null, activate: true })
+      navigateToTab(nextActiveId)
+      return nextActiveId
+    }
+
     if (activeData.type === 'session') {
       const draggedSessionId = activeData.sessionId || activeId
       if (overData?.type === 'tab' && overData.paneId) {
-        openPersistentChatTab(draggedSessionId, { paneId: overData.paneId, beforeTabId: overId })
+        openPersistentChatTab(draggedSessionId, { paneId: overData.paneId, beforeTabId: overId, pinned: !!overData.pinned })
         return
       }
 
       if (overData?.type === 'tab-row' && overData.paneId) {
-        const openedId = openPersistentChatTab(draggedSessionId, { paneId: overData.paneId })
-        if (openedId && overData.pinned) {
-          pinWorkbenchTab(openedId)
-        }
+        openPersistentChatTab(draggedSessionId, { paneId: overData.paneId, pinned: !!overData.pinned })
         return
       }
 
@@ -998,15 +1018,14 @@ function App() {
     }
 
     if (overData?.type === 'tab' && overData.paneId) {
-      if (activeData.paneId === overData.paneId) {
-        if (activeData.pinned === overData.pinned && activeId !== overId) {
+      if (activeData.paneId === overData.paneId && activeData.pinned === overData.pinned) {
+        if (activeId !== overId) {
           reorderTabs(overData.paneId, activeId, overId)
         }
         return
       }
 
-      moveTabToPane(activeId, overData.paneId, { beforeTabId: overId, activate: true })
-      navigateToTab(activeId)
+      applyTabDrop(overData.paneId, { beforeTabId: overId, pinned: !!overData.pinned })
       return
     }
 
@@ -1020,37 +1039,19 @@ function App() {
 
     if (overData?.type === 'tab-row' && overData.paneId) {
       const nextPinned = !!overData.pinned
-      const targetPane = findPaneNode(root, overData.paneId)
-      const activeTabRecord = tabsById[activeId] || null
-      if (!targetPane) {
-        return
-      }
-
       if (activeData.paneId === overData.paneId && !!activeData.pinned === nextPinned) {
         return
       }
 
-      const beforeTabId = nextPinned
+      const targetPane = findPaneNode(root, overData.paneId)
+      const beforeTabId = nextPinned && targetPane
         ? targetPane.tabIds.find((tabId) => {
             if (tabId === activeId) return false
             return !(tabsById[tabId]?.pinned)
           }) || null
         : null
 
-      let nextActiveId = activeId
-
-      if (nextPinned && activeTabRecord && isPreviewChatTab(activeTabRecord)) {
-        const promotedId = promotePreviewTab(activeId, { pinned: true })
-        if (!promotedId) {
-          return
-        }
-        nextActiveId = promotedId
-      } else if (!!activeData.pinned !== nextPinned) {
-        updateTab(activeId, (current) => ({ ...current, pinned: nextPinned }))
-      }
-
-      moveTabToPane(nextActiveId, overData.paneId, { beforeTabId, activate: true })
-      navigateToTab(nextActiveId)
+      applyTabDrop(overData.paneId, { beforeTabId, pinned: nextPinned })
       return
     }
 
@@ -1070,7 +1071,21 @@ function App() {
   const renderWorkbenchSurface = (content: ReactNode) => (
     <DndContext
       sensors={dragSensors}
-      collisionDetection={pointerWithin}
+      collisionDetection={(args) => {
+        const collisions = pointerWithin(args)
+        const priorityByType: Record<string, number> = {
+          tab: 0,
+          'tab-row': 1,
+          'pane-edge': 2,
+          'pane-center': 3,
+        }
+
+        return [...collisions].sort((a, b) => {
+          const aType = args.droppableContainers.find((container) => container.id === a.id)?.data.current?.type as string | undefined
+          const bType = args.droppableContainers.find((container) => container.id === b.id)?.data.current?.type as string | undefined
+          return (priorityByType[aType || ''] ?? 99) - (priorityByType[bType || ''] ?? 99)
+        })
+      }}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}

@@ -130,19 +130,19 @@ export default function WorkbenchPane({
           <PaneDropZone
             id={`pane-edge:${paneId}:left`}
             data={{ type: 'pane-edge', paneId, edge: 'left' }}
-            className="absolute inset-y-0 left-0 w-8 rounded-l-xl border-2 border-transparent"
+            className="absolute inset-y-0 left-0 w-14 rounded-l-xl border-2 border-transparent"
             activeClassName="border-blue-400/70 bg-blue-500/10 dark:border-blue-500/60 dark:bg-blue-500/10"
           />
           <PaneDropZone
             id={`pane-edge:${paneId}:right`}
             data={{ type: 'pane-edge', paneId, edge: 'right' }}
-            className="absolute inset-y-0 right-0 w-8 rounded-r-xl border-2 border-transparent"
+            className="absolute inset-y-0 right-0 w-14 rounded-r-xl border-2 border-transparent"
             activeClassName="border-blue-400/70 bg-blue-500/10 dark:border-blue-500/60 dark:bg-blue-500/10"
           />
           <PaneDropZone
             id={`pane-edge:${paneId}:bottom`}
             data={{ type: 'pane-edge', paneId, edge: 'bottom' }}
-            className="absolute inset-x-0 bottom-0 h-8 rounded-b-xl border-2 border-transparent"
+            className="absolute inset-x-0 bottom-0 h-12 rounded-b-xl border-2 border-transparent"
             activeClassName="border-blue-400/70 bg-blue-500/10 dark:border-blue-500/60 dark:bg-blue-500/10"
           />
         </div>
