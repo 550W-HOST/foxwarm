@@ -103,9 +103,16 @@ interface Session {
 Foxwarm 会把当前 session 可见的长期记忆预组装成 `persistentMemorySnapshot`。
 其来源通常是：
 
-1. inherited agent memory
-2. 当前 agent 自身 memory
-3. visible skills catalog（技能目录摘要，不是完整技能文档）
+1. `agents/main/memory/00_SYSTEM.md` 这一层全局系统 memory
+2. inherited agent memory
+3. 当前 agent 自身 memory
+4. visible skills catalog（技能目录摘要，不是完整技能文档）
+
+补充说明：
+
+- `agents/main/memory/00_SYSTEM.md` 是特殊文件，会作为框架层系统提示注入所有 agent
+- 默认的 per-agent memory 加载会跳过各 agent 自己目录下的 `00_SYSTEM.md`
+- 因此普通 agent 自己的长期记忆应放在 `MEMORY.md` / `SOUL.md` / `USER.md` 或其他普通 `.md` 文件里，而不是依赖自定义 `00_SYSTEM.md`
 
 如果 session 设置了 `systemPromptFiles`，则只替换 memory 文件来源为该数组列出的文件；相对路径按 agent 工作目录解析。skills catalog、目录信息、压缩历史提示等非-memory 注入仍保留。
 

@@ -7,6 +7,39 @@ description: Explain, bootstrap, and troubleshoot Foxwarm nodes, including pairi
 
 Use this skill when you need to explain, bootstrap, or troubleshoot a Foxwarm **node**.
 
+## First: tools vs commands
+
+This distinction matters here too.
+
+### Tools are agent-facing
+
+Examples in this area include:
+
+- `node_bootstrap_info`
+- `list_nodes`
+- general inspection tools such as `search_tools`, `load_skill`, file tools, etc.
+
+Use tools when you need agent-side reasoning help or machine-readable/bootstrap-ready information.
+
+### Commands are user-facing
+
+Examples in this area include:
+
+- `/node`
+- `/node approve ...`
+- `/node reject ...`
+- `/node pair-help`
+- `/agent create ... --isolated ...`
+- `/agent isolated ...`
+
+Do **not** assume you should execute those user commands yourself as an agent.
+
+Default rule:
+
+- use tools for agent-side work
+- if a workflow step really depends on the user command surface, tell the user exactly what to run
+- do not treat simulated WebUI/API command injection as the normal path
+
 This is the main skill for:
 
 - what a node is
@@ -20,6 +53,8 @@ There is also a structured builtin tool for agent workflows:
 - `node_bootstrap_info`
 
 Use that tool when you want LLM-friendly bootstrap info instead of re-parsing prose help text.
+
+When this skill shows `/node ...` examples below, read them as **commands for the user to run on the master side** unless the surrounding text explicitly says otherwise.
 
 This skill matches the current bootstrap surfaces exposed by a running master:
 
@@ -96,7 +131,7 @@ BASE_URL=http://YOUR_MASTER:3001
 
 On first run, the node connects with a **pairing token** and creates a pending pairing request.
 
-Approve it from the master:
+Then tell the user to approve it from the master command surface:
 
 ```text
 /node
@@ -252,6 +287,12 @@ Inside `./data/`, the most important persisted files are:
 
 ## Bind isolated agents to a node
 
+These `/agent ...` examples below are **user-facing commands**.
+If you have a suitable tool surface, the corresponding agent-facing operations are usually:
+
+- `create_agent` with `isolatedNode`
+- `set_agent_isolated`
+
 ### Create a new isolated agent bound to a node
 
 ```text
@@ -307,8 +348,8 @@ So when sandbox behavior looks wrong, check the data root before debugging pairi
 
 After startup and approval:
 
-1. `/node` shows the node in the approved list
-2. `/node` shows it online when connected
+1. tell the user to run `/node`, and confirm the node appears in the approved list
+2. tell the user to run `/node`, and confirm it shows online when connected
 3. if using isolated agents, confirm the agent is actually bound to that node
 4. confirm tool execution is happening on the expected node, not accidentally on `master`
 5. confirm restricted cross-agent/cross-node behavior when isolation is expected
@@ -320,7 +361,7 @@ After startup and approval:
 Check:
 
 - local process / container logs
-- `/node`
+- the output of the user-facing `/node` command
 - whether the chosen host URL is actually reachable from the node
 
 ### Node bundle builds or runs oddly
