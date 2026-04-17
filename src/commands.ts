@@ -365,7 +365,7 @@ const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   }),
   literalNode('mode', 'Set channel mode', {
     children: [
-      literalNode('push-only', 'Only accept direct/push-style messages'),
+      literalNode('send-only', 'Only allow direct sending via explicit tools, not normal session reply broadcasts'),
       literalNode('normal', 'Normal interactive mode'),
     ],
   }),
@@ -2311,7 +2311,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           '       /channel start <channel-id>',
           '       /channel stop <channel-id>',
           '       /channel restart <channel-id>',
-          '       /channel mode <push-only|normal>',
+          '       /channel mode <send-only|normal>',
           '       /channel dangerously-allow-all-users <yes|no>',
         ].join('\n'))
         return
@@ -2372,19 +2372,20 @@ export const COMMANDS: Record<string, CommandDef> = {
           // Show current mode
           const config = sessionManager.getChannelConfig(getChannelId(ctx), getConversationId(ctx))
           const currentMode = config?.mode || 'normal'
-          ctx.reply(`Current channel mode: *${currentMode}*\nUsage: /channel mode <push-only|normal>`)
+          ctx.reply(`Current channel mode: *${currentMode}*\nUsage: /channel mode <send-only|normal>`)
           return
         }
 
         const mode = args[1].toLowerCase()
-        if (mode !== 'push-only' && mode !== 'normal') {
-          ctx.reply('Invalid mode. Use: push-only or normal')
+        if (mode !== 'send-only' && mode !== 'push-only' && mode !== 'normal') {
+          ctx.reply('Invalid mode. Use: send-only or normal')
           return
         }
 
         try {
-          sessionManager.setChannelMode(getChannelId(ctx), getConversationId(ctx), mode === 'push-only' ? 'push-only' : undefined)
-          ctx.reply(`✅ Channel mode set to *${mode}*`)
+          const normalizedMode = mode === 'normal' ? undefined : 'send-only'
+          sessionManager.setChannelMode(getChannelId(ctx), getConversationId(ctx), normalizedMode)
+          ctx.reply(`✅ Channel mode set to *${normalizedMode || 'normal'}*`)
         } catch (e: any) {
           ctx.reply(`❌ Failed to set channel mode: ${e.message}`)
         }
@@ -2417,7 +2418,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           '/channel start <channel-id>',
           '/channel stop <channel-id>',
           '/channel restart <channel-id>',
-          '/channel mode <push-only|normal>',
+          '/channel mode <send-only|normal>',
           '/channel dangerously-allow-all-users <yes|no>',
         ].join('\n'))
       }

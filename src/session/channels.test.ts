@@ -30,7 +30,7 @@ async function listBackupMatches(filePath: string): Promise<string[]> {
   return entries.filter((name) => name === `${base}.bak` || name.startsWith(`${base}.`) && name.endsWith('.bak')).map((name) => path.join(dir, name));
 }
 
-test('channels persistence uses lightweight no-backup writes', async () => {
+test('channels persistence uses lightweight no-backup writes and normalizes legacy push-only mode to send-only', async () => {
   await withTempDir(async (dirPath) => {
     const filePath = path.join(dirPath, 'channels.json');
     setChannelsStoreForTests(createChannelsStore(filePath));
@@ -49,7 +49,7 @@ test('channels persistence uses lightweight no-backup writes', async () => {
 
     assert.deepEqual(getChannelConfig('webui', 'alpha'), {
       sessionId: 'session-alpha',
-      mode: 'push-only',
+      mode: 'send-only',
     });
     assert.deepEqual(getChannelConfig('telegram', 'beta'), {
       sessionId: 'session-beta',

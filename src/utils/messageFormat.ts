@@ -18,6 +18,7 @@ const EPHEMERAL_SYSTEM_PREFIXES = [
   'FROM:',
   'The following message is a direct user message via channel;',
   'Channel is in push-only mode.',
+  'Channel is in send-only mode.',
 ];
 
 function isEphemeralSystemText(text: string): boolean {
