@@ -1,6 +1,6 @@
 ---
 name: node_setup
-description: Explain, bootstrap, and troubleshoot Foxwarm nodes, including pairing, sandbox nodes, and isolated-agent binding.
+description: Use for Foxwarm node setup and troubleshooting: node pairing/approval flow, bootstrap scripts, sandbox nodes, and binding/unbinding isolated agents to nodes.
 ---
 
 # node_setup
@@ -90,6 +90,24 @@ So the relationship is:
 - **normal node** = general remote worker
 - **sandbox node** = a node deployed in a sandbox/test environment
 - **isolated agent** = an agent bound to a non-master node so its sessions inherit restricted execution
+
+## What isolated agents are mainly for
+
+Use an isolated agent when you want to put work onto a separate node to reduce risk to `master`.
+
+In ordinary language, this is mainly for cases like:
+
+- potentially risky tasks you do not want running directly on `master`
+- agents attached to external group chats / channels that may contain untrusted content
+- situations where prompt injection or other hostile content is a realistic concern
+
+The idea is not that an isolated agent becomes magically safe.
+The idea is that you give it a narrower execution boundary:
+
+- full runtime/tool use on its bound isolated node
+- only limited file/memory operations on `master`
+
+So isolated agents are a practical containment tool for higher-risk workflows.
 
 ## Base URL principle
 
@@ -322,7 +340,24 @@ Important behavior:
 - isolated agents must bind to a **non-master** node
 - isolated sessions inherit isolation automatically from the agent
 - isolated agents may still use `master` for limited in-agent host-side operations
-- current master-side file boundary is the whole current agent directory
+- on `master`, the practical writable/readable boundary is their own agent area:
+  - their own `memory/` via memory tools
+  - files inside their own agent directory (`agents/<agent>/...`) via the allowed file tools
+- they do **not** get ordinary freedom to roam across other agents' files on `master`
+- they do **not** get ordinary freedom to switch to or operate unrelated nodes
+
+### Node/permission boundary in plain language
+
+For an isolated agent, think of the boundary like this:
+
+- **allowed:** the bound isolated node and its tool surface
+- **allowed:** limited host-side operations on `master`, but only for the isolated agent's own memory and agent-directory files
+- **not allowed:** casually switching to another node
+- **not allowed:** using unrelated nodes just because they exist
+- **not allowed:** reading/writing other agents' directories on `master`
+
+So if an isolated agent asks "can I just switch to another node for this?", the default answer is **no**.
+If a workflow really needs another node, the user should change the agent's isolation binding deliberately instead of the isolated agent hopping around by itself.
 
 ## Sandbox/test-environment note
 

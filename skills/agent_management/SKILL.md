@@ -1,6 +1,6 @@
 ---
 name: agent_management
-description: Explain Foxwarm agent lifecycle, memory/snapshot behavior, safe migration/cleanup, isolation changes, and the boundary between agent-facing tools and user-facing commands.
+description: Use for Foxwarm agent management tasks: creating agents, editing agent memory, refreshing snapshots, understanding agent vs session boundaries, changing isolation/inheritance, and safely migrating or cleaning up agents.
 ---
 
 # agent_management
@@ -107,6 +107,38 @@ That means:
 
 - renaming or moving a **session** is comparatively lightweight
 - changing an **agent** is heavier because agent identity is tied to workspace paths, memory location, metadata, and all sessions under it
+
+## What isolated agents are for
+
+An isolated agent is mainly a **risk-containment** setup.
+
+Use it when you want an agent's runtime work to happen on a separate non-master node instead of freely on `master`.
+
+Typical cases:
+
+- the agent will handle tasks that may be risky
+- the agent is attached to an external group chat or channel that may contain untrusted content
+- prompt-injection exposure is plausible and you want a narrower execution boundary
+
+The point is not "perfect safety".
+The point is to reduce blast radius by moving runtime execution onto a bound node and narrowing what the agent can still do on `master`.
+
+## Isolated-agent boundary in plain language
+
+If an agent is isolated, it should think about permissions like this:
+
+- it can use the tools available on its **bound isolated node**
+- it can still do limited host-side work on `master`
+- on `master`, that limited work is mainly its own `memory/` plus files inside its own agent directory
+- it should **not** assume it can switch to other nodes just because they exist
+- it should **not** assume it can operate on unrelated nodes
+- it should **not** assume it can read or edit other agents' directories on `master`
+
+So for an isolated agent, the safe mental model is:
+
+- runtime work: bound node
+- durable local files on `master`: own agent area only
+- other nodes / other agent directories: not your default playground
 
 ## Common workflow: create a new agent
 
@@ -236,6 +268,8 @@ Important behavior:
 - isolation is **agent-level**
 - the agent's sessions inherit that isolation automatically
 - changing isolation updates affected sessions accordingly
+- an isolated session should not expect to switch itself to some other arbitrary node for normal work
+- if a different node is really required, the right model is usually to change the agent's isolation binding deliberately, not to let the isolated agent wander across nodes
 
 ## Common workflow: move work between agents/sessions
 

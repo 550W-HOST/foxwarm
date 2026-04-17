@@ -153,3 +153,10 @@ interface QueueItem {
 - `/node` 查看或切换当前执行 node
 - `/session isolated on [node]` 可把当前 session 固定在某个 node 范围内
 - isolated 主要用于限制跨 session / 跨 node 操作
+
+补充说明（agent 级隔离的实际边界）：
+
+- isolated agent 通常用于把高风险任务或可能接触不可信内容（例如外部群聊/channel）的 agent 绑定到非 master node 上
+- isolated agent 的运行时工具执行主要发生在其绑定 node 上
+- isolated agent 不能把“切去别的 node”当成默认能力
+- 在 `master` 上，它仍可做有限的本地操作，但范围应理解为自己的 memory 和自己 agent 目录内的文件
