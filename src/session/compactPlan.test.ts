@@ -55,6 +55,7 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
   assert.match(prompt, /apply_patch_memory/);
   assert.match(prompt, /leave it uncompressed by simply omitting it from createBlocksJson/i);
+  assert.match(prompt, /single block may be summarized only when it is a stranded island/i);
 });
 
 test('filterCompactCandidateItemsByLevel removes levels at or below 2k tokens and block-only levels with fewer than two blocks', () => {
@@ -71,6 +72,35 @@ test('filterCompactCandidateItemsByLevel removes levels at or below 2k tokens an
 
   const filtered = filterCompactCandidateItemsByLevel(candidates);
   assert.deepStrictEqual(filtered.map(item => item.key), ['B#20', 'B#21']);
+});
+
+test('filterCompactCandidateItemsByLevel allows a stranded single block in a 3,3,2,3,3 pattern', () => {
+  const candidates = [
+    buildBlockCandidateItem(1, 3, 1, 10, 'left higher block a', 200),
+    buildBlockCandidateItem(2, 3, 11, 20, 'left higher block b', 200),
+    buildBlockCandidateItem(3, 2, 21, 30, 'middle stranded block', COMPACT_LEVEL_TOKEN_THRESHOLD + 1, true),
+    buildBlockCandidateItem(4, 3, 31, 40, 'right higher block a', 200),
+    buildBlockCandidateItem(5, 3, 41, 50, 'right higher block b', 200),
+  ];
+
+  const allowedLevels = selectCompactCandidateTargetLevels(candidates);
+  assert.deepStrictEqual([...allowedLevels].sort((a, b) => a - b), [3]);
+
+  const filtered = filterCompactCandidateItemsByLevel(candidates);
+  assert.deepStrictEqual(filtered.map(item => item.key), ['B#3']);
+});
+
+test('filterCompactCandidateItemsByLevel does not let an unsupported single block escape just because it is alone in its target level', () => {
+  const candidates = [
+    buildBlockCandidateItem(1, 3, 1, 10, 'left higher block a', 200),
+    buildBlockCandidateItem(2, 3, 11, 20, 'left higher block b', 200),
+    buildBlockCandidateItem(3, 2, 21, 30, 'middle but not allowed block', COMPACT_LEVEL_TOKEN_THRESHOLD + 1, false),
+    buildBlockCandidateItem(4, 3, 31, 40, 'right higher block a', 200),
+    buildBlockCandidateItem(5, 3, 41, 50, 'right higher block b', 200),
+  ];
+
+  const allowedLevels = selectCompactCandidateTargetLevels(candidates);
+  assert.deepStrictEqual([...allowedLevels].sort((a, b) => a - b), []);
 });
 
 test('buildCompactFlowToolDefinitions exposes only compact-safe helper tools plus plan submission', () => {
@@ -185,7 +215,7 @@ test('validateCompactPlanArgs rejects a single-block source but still allows a s
       sourceEnd: 10,
       summary: 'invalid single block summary',
     }]),
-  }, blockCandidates), /at least two blocks/i);
+  }, blockCandidates), /single block source|higher-level blocks/i);
 
   const singleMessagePlan = validateCompactPlanArgs({
     createBlocksJson: JSON.stringify([{
@@ -200,6 +230,24 @@ test('validateCompactPlanArgs rejects a single-block source but still allows a s
   assert.equal(singleMessagePlan.createBlocks.length, 1);
   assert.equal(singleMessagePlan.createBlocks[0].sourceStart, 1);
   assert.equal(singleMessagePlan.createBlocks[0].sourceEnd, 1);
+});
+
+test('validateCompactPlanArgs allows a stranded single block source when the candidate explicitly permits it', () => {
+  const plan = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 3,
+      sourceKind: 'block',
+      sourceStart: 30,
+      sourceEnd: 30,
+      summary: 'lift the stranded middle block upward',
+    }]),
+  }, [
+    buildBlockCandidateItem(30, 2, 21, 30, 'middle stranded block', COMPACT_LEVEL_TOKEN_THRESHOLD + 1, true),
+  ]);
+
+  assert.equal(plan.createBlocks.length, 1);
+  assert.equal(plan.createBlocks[0].sourceStart, 30);
+  assert.equal(plan.createBlocks[0].sourceEnd, 30);
 });
 
 test('validateCompactPlanArgs rejects non-continuous or overlapping ranges', () => {

@@ -130,6 +130,7 @@ export type CompactCandidateItem =
       rawEndSeq: number;
       preview: string;
       estimatedTokens: number;
+      allowSingleBlockCompact?: boolean;
     };
 
 export interface LayeredCreateBlockPlan {
@@ -206,7 +207,15 @@ export function buildMessageCandidateItem(startSeq: number, endSeq: number, prev
   };
 }
 
-export function buildBlockCandidateItem(id: number, level: number, rawStartSeq: number, rawEndSeq: number, summary: string, estimatedTokens: number = estimateTokenCount(summary)): CompactCandidateItem {
+export function buildBlockCandidateItem(
+  id: number,
+  level: number,
+  rawStartSeq: number,
+  rawEndSeq: number,
+  summary: string,
+  estimatedTokens: number = estimateTokenCount(summary),
+  allowSingleBlockCompact: boolean = false,
+): CompactCandidateItem {
   return {
     kind: 'block',
     key: `B#${id}`,
@@ -216,6 +225,7 @@ export function buildBlockCandidateItem(id: number, level: number, rawStartSeq: 
     rawEndSeq,
     preview: summary,
     estimatedTokens,
+    allowSingleBlockCompact,
   };
 }
 
@@ -229,24 +239,28 @@ export function getCandidateTargetLevel(item: CompactCandidateItem): number {
 }
 
 export function selectCompactCandidateTargetLevels(items: CompactCandidateItem[]): Set<number> {
-  const stats = new Map<number, { totalEstimatedTokens: number; itemCount: number }>();
+  const groups = new Map<number, CompactCandidateItem[]>();
 
   for (const item of items) {
     const targetLevel = getCandidateTargetLevel(item);
-    const current = stats.get(targetLevel) || { totalEstimatedTokens: 0, itemCount: 0 };
-    current.totalEstimatedTokens += Math.max(0, item.estimatedTokens || 0);
-    current.itemCount += 1;
-    stats.set(targetLevel, current);
+    const current = groups.get(targetLevel) || [];
+    current.push(item);
+    groups.set(targetLevel, current);
   }
 
   const allowedLevels = new Set<number>();
-  for (const [targetLevel, levelStats] of stats.entries()) {
-    if (levelStats.totalEstimatedTokens <= COMPACT_LEVEL_TOKEN_THRESHOLD) {
+  for (const [targetLevel, groupItems] of groups.entries()) {
+    const totalEstimatedTokens = groupItems.reduce((sum, item) => sum + Math.max(0, item.estimatedTokens || 0), 0);
+
+    if (totalEstimatedTokens <= COMPACT_LEVEL_TOKEN_THRESHOLD) {
       continue;
     }
 
-    if (targetLevel > 1 && levelStats.itemCount < 2) {
-      continue;
+    if (targetLevel > 1 && groupItems.length < 2) {
+      const onlyItem = groupItems[0];
+      if (!onlyItem || onlyItem.kind !== 'block' || onlyItem.allowSingleBlockCompact !== true) {
+        continue;
+      }
     }
 
     allowedLevels.add(targetLevel);
@@ -318,6 +332,7 @@ export function buildCompactPromptText(options: {
     '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
     '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim.',
     '- If a block/message still seems useful, you can leave it uncompressed by simply omitting it from createBlocksJson.',
+    '- A single block may be summarized only when it is a stranded island immediately surrounded on both sides by higher-level blocks; otherwise block sources must span at least two blocks.',
     '- Blocks must have same kind and same level of source.',
     '- Blocks must not overlap source ranges across createBlocks.',
     '- Blocks must not separate seq/id range inside a candidate (can not separate a tool call and its response).',
@@ -394,10 +409,6 @@ function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPla
     if (sourceKind === 'block' && Number.isInteger(level) && level < 2) {
       details.createBlockErrors.push(`createBlocks[${index}] uses sourceKind=block so level must be >= 2.`);
     }
-    if (sourceKind === 'block' && Number.isInteger(sourceStart) && Number.isInteger(sourceEnd) && sourceStart === sourceEnd) {
-      details.createBlockErrors.push(`createBlocks[${index}] uses sourceKind=block so it must summarize at least two blocks.`);
-    }
-
     return [{ level, sourceKind, sourceStart, sourceEnd, summary } as LayeredCreateBlockPlan];
   });
 }
@@ -423,7 +434,16 @@ function findMessageRange(candidateItems: CompactCandidateItem[], sourceStart: n
 
 function findBlockRange(candidateItems: CompactCandidateItem[], level: number, sourceStart: number, sourceEnd: number): [number, number] | null {
   if (sourceStart === sourceEnd) {
-    return null;
+    const childLevel = level - 1;
+    const singleIndex = candidateItems.findIndex(item => item.kind === 'block' && item.id === sourceStart && item.level === childLevel);
+    if (singleIndex < 0) {
+      return null;
+    }
+    const singleItem = candidateItems[singleIndex];
+    if (singleItem.kind !== 'block' || singleItem.allowSingleBlockCompact !== true) {
+      return null;
+    }
+    return [singleIndex, singleIndex];
   }
 
   const childLevel = level - 1;
@@ -469,6 +489,11 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
       : findBlockRange(candidateItems, block.level, block.sourceStart, block.sourceEnd);
 
     if (!range) {
+      if (block.sourceKind === 'block' && block.sourceStart === block.sourceEnd) {
+        details.createBlockErrors.push(`createBlocks[${index}] uses a single block source, which is allowed only for a stranded block immediately surrounded by higher-level blocks.`);
+        return;
+      }
+
       const unitLabel = block.sourceKind === 'message' ? 'seq' : 'block id';
       details.createBlockErrors.push(`createBlocks[${index}] does not match a continuous ${block.sourceKind} range in current older context for ${unitLabel} ${block.sourceStart}-${block.sourceEnd}.`);
       return;

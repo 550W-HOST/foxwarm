@@ -391,6 +391,21 @@ type LayeredCompactCandidateEntry = {
   frontierEndIndex: number;
 };
 
+export function isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(
+  olderFrontier: ContextFrontierItem[],
+  frontierIndex: number,
+): boolean {
+  const current = olderFrontier[frontierIndex];
+  const previous = olderFrontier[frontierIndex - 1];
+  const next = olderFrontier[frontierIndex + 1];
+
+  return current?.kind === 'block'
+    && previous?.kind === 'block'
+    && next?.kind === 'block'
+    && previous.level > current.level
+    && next.level > current.level;
+}
+
 export function resolveCompactionSplitIndex(history: Message[], keepPercent: number): number {
   let splitIndex = Math.floor(history.length * (1 - keepPercent));
 
@@ -442,7 +457,15 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       }
 
       entries.push({
-        item: buildBlockCandidateItem(record.id, record.level, record.rawStartSeq, record.rawEndSeq, record.summary, estimateTokenCount(record.summary)),
+        item: buildBlockCandidateItem(
+          record.id,
+          record.level,
+          record.rawStartSeq,
+          record.rawEndSeq,
+          record.summary,
+          estimateTokenCount(record.summary),
+          isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderFrontier, frontierIndex),
+        ),
         frontierStartIndex: frontierIndex,
         frontierEndIndex: frontierIndex,
       });
