@@ -381,9 +381,15 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
     ? channelTargetId.trim()
     : undefined;
   const hasChannelTargetId = Boolean(normalizedChannelTargetId);
+  const normalizedSessionId = hasSessionId
+    ? sessionId.trim()
+    : (ctx?.sessionId ? ctx.sessionId : undefined);
 
-  if (hasSessionId === hasChannelTargetId) {
-    throw new Error('Exactly one of sessionId or channelTargetId is required');
+  if (hasSessionId && hasChannelTargetId) {
+    throw new Error('At most one of sessionId or channelTargetId may be specified');
+  }
+  if (!normalizedSessionId && !hasChannelTargetId) {
+    throw new Error('sessionId or channelTargetId is required when there is no active session context');
   }
   if (!isNonEmptyString(filePath)) {
     throw new Error('filePath is required');
@@ -396,7 +402,7 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
   if (ctx?.sessionId) {
     await checkSendFilePermission(ctx.sessionId, {
       channelTargetId: normalizedChannelTargetId,
-      targetSessionId: hasSessionId ? sessionId.trim() : undefined,
+      targetSessionId: normalizedChannelTargetId ? undefined : normalizedSessionId,
     });
   }
 
@@ -411,7 +417,6 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
     return buildSendFileResult(`File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``, file);
   }
 
-  const normalizedSessionId = sessionId.trim();
   const result = await sessionManager.sendFileToSession(normalizedSessionId, file, { caption });
   const hasWebUiDownloadFallback = result.skippedChannels.some((item) => isWebUiUnsupportedFileDelivery(item.channelId, item.reason));
   const output = formatSendFileSessionResult(normalizedSessionId, file, result);

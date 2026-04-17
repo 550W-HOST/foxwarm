@@ -1950,7 +1950,7 @@ export const definitions = [
         {
             name: 'send_to_channel',
             defaultInject: true,
-            description: 'Send a message directly to users by specific channel by channelTargetId (<channel-instance-id>:<conversation-id>).',
+            description: 'Send a message directly to users via a specific channel target (<channel-instance-id>:<conversation-id>). Usually you should not need this, because normal assistant text replies are already broadcast to all non-send-only channels attached to the current session. Use this only when the user explicitly wants a reply sent to a specific conversation / room / group.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1963,12 +1963,12 @@ export const definitions = [
         {
             name: 'send_file',
             defaultInject: true,
-            description: 'Send a local file or image to users. Exactly one of channelTargetId or sessionId is required. If sessionId is specified, the message to will be sent to all channels attached to the session.',
+            description: 'Send a local file or image to users. channelTargetId and sessionId are both optional, but not at the same time: if channelTargetId is specified, send only there; otherwise sessionId defaults to the current session, and the file is sent to all channels attached to that session.',
             parameters: {
                 type: 'object',
                 properties: {
-                    channelTargetId: { type: 'string', description: 'Target channel in format <channel-instance-id>:<conversation-id>' },
-                    sessionId: { type: 'string', description: 'Target session ID whose attached channels should receive the file' },
+                    channelTargetId: { type: 'string', description: 'Optional target channel in format <channel-instance-id>:<conversation-id>. Cannot be combined with sessionId.' },
+                    sessionId: { type: 'string', description: 'Optional target session ID whose attached channels should receive the file. Defaults to the current session when omitted.' },
                     filePath: { type: 'string', description: 'File path on the selected node. Relative paths are resolved under the current agent folder on that node; absolute paths and ~/... are also accepted when allowed.' },
                     node: { type: 'string', description: 'Optional. Node where the file lives. Defaults to the current node; send_file still delivers through master-side channel/session routing.' },
                     caption: { type: 'string', description: 'Optional caption/text sent with the file where supported' },
