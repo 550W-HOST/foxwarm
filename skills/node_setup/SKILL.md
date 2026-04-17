@@ -1,11 +1,44 @@
 ---
 name: node_setup
-description: Explain, bootstrap, and troubleshoot Foxwarm nodes, including pairing, sandbox nodes, and isolated-agent binding.
+description: Use for Foxwarm node setup and troubleshooting: node pairing/approval flow, bootstrap scripts, sandbox nodes, and binding/unbinding isolated agents to nodes.
 ---
 
 # node_setup
 
 Use this skill when you need to explain, bootstrap, or troubleshoot a Foxwarm **node**.
+
+## First: tools vs commands
+
+This distinction matters here too.
+
+### Tools are agent-facing
+
+Examples in this area include:
+
+- `node_bootstrap_info`
+- `list_nodes`
+- general inspection tools such as `search_tools`, `load_skill`, file tools, etc.
+
+Use tools when you need agent-side reasoning help or machine-readable/bootstrap-ready information.
+
+### Commands are user-facing
+
+Examples in this area include:
+
+- `/node`
+- `/node approve ...`
+- `/node reject ...`
+- `/node pair-help`
+- `/agent create ... --isolated ...`
+- `/agent isolated ...`
+
+Do **not** assume you should execute those user commands yourself as an agent.
+
+Default rule:
+
+- use tools for agent-side work
+- if a workflow step really depends on the user command surface, tell the user exactly what to run
+- do not treat simulated WebUI/API command injection as the normal path
 
 This is the main skill for:
 
@@ -20,6 +53,8 @@ There is also a structured builtin tool for agent workflows:
 - `node_bootstrap_info`
 
 Use that tool when you want LLM-friendly bootstrap info instead of re-parsing prose help text.
+
+When this skill shows `/node ...` examples below, read them as **commands for the user to run on the master side** unless the surrounding text explicitly says otherwise.
 
 This skill matches the current bootstrap surfaces exposed by a running master:
 
@@ -55,6 +90,24 @@ So the relationship is:
 - **normal node** = general remote worker
 - **sandbox node** = a node deployed in a sandbox/test environment
 - **isolated agent** = an agent bound to a non-master node so its sessions inherit restricted execution
+
+## What isolated agents are mainly for
+
+Use an isolated agent when you want to put work onto a separate node to reduce risk to `master`.
+
+In ordinary language, this is mainly for cases like:
+
+- potentially risky tasks you do not want running directly on `master`
+- agents attached to external group chats / channels that may contain untrusted content
+- situations where prompt injection or other hostile content is a realistic concern
+
+The idea is not that an isolated agent becomes magically safe.
+The idea is that you give it a narrower execution boundary:
+
+- full runtime/tool use on its bound isolated node
+- only limited file/memory operations on `master`
+
+So isolated agents are a practical containment tool for higher-risk workflows.
 
 ## Base URL principle
 
@@ -96,7 +149,7 @@ BASE_URL=http://YOUR_MASTER:3001
 
 On first run, the node connects with a **pairing token** and creates a pending pairing request.
 
-Approve it from the master:
+Then tell the user to approve it from the master command surface:
 
 ```text
 /node
@@ -252,6 +305,12 @@ Inside `./data/`, the most important persisted files are:
 
 ## Bind isolated agents to a node
 
+These `/agent ...` examples below are **user-facing commands**.
+If you have a suitable tool surface, the corresponding agent-facing operations are usually:
+
+- `create_agent` with `isolatedNode`
+- `set_agent_isolated`
+
 ### Create a new isolated agent bound to a node
 
 ```text
@@ -281,7 +340,24 @@ Important behavior:
 - isolated agents must bind to a **non-master** node
 - isolated sessions inherit isolation automatically from the agent
 - isolated agents may still use `master` for limited in-agent host-side operations
-- current master-side file boundary is the whole current agent directory
+- on `master`, the practical writable/readable boundary is their own agent area:
+  - their own `memory/` via memory tools
+  - files inside their own agent directory (`agents/<agent>/...`) via the allowed file tools
+- they do **not** get ordinary freedom to roam across other agents' files on `master`
+- they do **not** get ordinary freedom to switch to or operate unrelated nodes
+
+### Node/permission boundary
+
+For an isolated agent, the boundary is:
+
+- **allowed:** the bound isolated node and its tool surface
+- **allowed:** limited host-side operations on `master`, but only for the isolated agent's own memory and agent-directory files
+- **not allowed:** switching to another node
+- **not allowed:** using unrelated nodes
+- **not allowed:** reading/writing other agents' directories on `master`
+
+An isolated agent cannot switch itself to another node.
+If a workflow really needs another node, the user should change the agent's isolation binding deliberately instead of the isolated agent using other nodes directly.
 
 ## Sandbox/test-environment note
 
@@ -307,8 +383,8 @@ So when sandbox behavior looks wrong, check the data root before debugging pairi
 
 After startup and approval:
 
-1. `/node` shows the node in the approved list
-2. `/node` shows it online when connected
+1. tell the user to run `/node`, and confirm the node appears in the approved list
+2. tell the user to run `/node`, and confirm it shows online when connected
 3. if using isolated agents, confirm the agent is actually bound to that node
 4. confirm tool execution is happening on the expected node, not accidentally on `master`
 5. confirm restricted cross-agent/cross-node behavior when isolation is expected
@@ -320,7 +396,7 @@ After startup and approval:
 Check:
 
 - local process / container logs
-- `/node`
+- the output of the user-facing `/node` command
 - whether the chosen host URL is actually reachable from the node
 
 ### Node bundle builds or runs oddly
