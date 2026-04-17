@@ -134,8 +134,8 @@ if [ -z "$PAIRING" ] || [ -s "$ABS_STATE_DIR/state/node_credentials.json" ]; the
   echo "Using stored credentials."
 else
   echo "First run — after startup, approve on master:"
-  echo "  /node pair list"
-  echo "  /node pair approve <pending-id> $NODE_ID"
+  echo "  /node"
+  echo "  /node approve <pending-id> $NODE_ID"
 fi
 
 echo ""

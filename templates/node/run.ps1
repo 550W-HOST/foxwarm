@@ -175,8 +175,8 @@ if (-not $Pairing -or (Test-Path $CredentialsFile)) {
     Write-Host "Using stored credentials."
 } else {
     Write-Host "First run - after startup, approve on master:"
-    Write-Host "  /node pair list"
-    Write-Host "  /node pair approve <pending-id> $NodeId"
+    Write-Host "  /node"
+    Write-Host "  /node approve <pending-id> $NodeId"
 }
 
 Write-Host ""

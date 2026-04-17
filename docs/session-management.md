@@ -33,7 +33,10 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 /status
 /messages <num>
 /model [name|default]
-/node [node-id]
+/node [list|<node-id>]
+/node approve <pending-id> [node-id]
+/node reject <pending-id>
+/node pair-help
 /agent list
 /agent create <name> [--no-main]
 /agent delete <name> [--confirm]

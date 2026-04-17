@@ -141,8 +141,8 @@ Start later with:
   cd '$ABS_SOURCE_DIR' && node lib/nodes/client.js --host '$HOST' --id '$NODE_ID' ${PAIRING:+--token '$PAIRING'} --credentials-file '$ABS_STATE_DIR/state/node_credentials.json'
 
 If this is the first run, approve the pending pairing after startup:
-  /node pair list
-  /node pair approve <pending-id> $NODE_ID
+  /node
+  /node approve <pending-id> $NODE_ID
 
 EOF
   exit 0
@@ -164,8 +164,8 @@ Log file:
   $ABS_STATE_DIR/logs/node.log
 
 If this is the first run, approve the pending pairing on the master:
-  /node pair list
-  /node pair approve <pending-id> $NODE_ID
+  /node
+  /node approve <pending-id> $NODE_ID
 
 Useful follow-up commands:
   tail -f '$ABS_STATE_DIR/logs/node.log'
@@ -180,8 +180,8 @@ cat <<EOF
 Node client prepared. Starting in foreground below.
 
 If this is the first run, approve the pending pairing on the master:
-  /node pair list
-  /node pair approve <pending-id> $NODE_ID
+  /node
+  /node approve <pending-id> $NODE_ID
 
 Press Ctrl-C to stop the node process. Use -d/--detach if you want it to keep running in the background.
 

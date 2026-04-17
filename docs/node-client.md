@@ -54,8 +54,8 @@ Important persisted path:
 Then approve the pending node from the master:
 
 ```text
-/node pair list
-/node pair approve <pending-id> my-node
+/node
+/node approve <pending-id> my-node
 ```
 
 By default, the bare-metal script also:
@@ -170,8 +170,6 @@ docker compose logs -f
 Then check the master-side node state:
 
 ```text
-/node pair list
-/node known
 /node
 ```
 

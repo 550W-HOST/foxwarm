@@ -99,14 +99,13 @@ On first run, the node connects with a **pairing token** and creates a pending p
 Approve it from the master:
 
 ```text
-/node pair list
-/node pair approve <pending-id> my-node
+/node
+/node approve <pending-id> my-node
 ```
 
 Useful follow-up checks:
 
 ```text
-/node known
 /node
 ```
 
@@ -308,8 +307,8 @@ So when sandbox behavior looks wrong, check the data root before debugging pairi
 
 After startup and approval:
 
-1. `/node known` shows the node as approved
-2. `/node` shows it online
+1. `/node` shows the node in the approved list
+2. `/node` shows it online when connected
 3. if using isolated agents, confirm the agent is actually bound to that node
 4. confirm tool execution is happening on the expected node, not accidentally on `master`
 5. confirm restricted cross-agent/cross-node behavior when isolation is expected
@@ -321,8 +320,7 @@ After startup and approval:
 Check:
 
 - local process / container logs
-- `/node pair list`
-- `/node known`
+- `/node`
 - whether the chosen host URL is actually reachable from the node
 
 ### Node bundle builds or runs oddly

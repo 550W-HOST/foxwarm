@@ -43,7 +43,7 @@ Permission resolution order: **Tab-specific** → **Domain rule** → **Default*
 3. Enter the pairing token (from `state/node_token` on the master)
 4. Optionally set a node name
 5. Click **Connect**
-6. Approve the node on the Foxwarm master (WebUI or `/node pair approve`)
+6. Approve the node on the Foxwarm master (WebUI or `/node approve`)
 7. The extension will automatically reconnect with stored credentials
 
 ## Architecture
