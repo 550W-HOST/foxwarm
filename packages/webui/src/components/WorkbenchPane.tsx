@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useDndContext, useDroppable } from '@dnd-kit/core'
-import { ArrowRightLeft, Columns2, Rows2, X } from 'lucide-react'
+import { Columns2, Rows2, X } from 'lucide-react'
 import WorkbenchTabs from './WorkbenchTabs'
 import type { WorkbenchTab } from '../workbench/types'
 
@@ -11,8 +11,8 @@ interface WorkbenchPaneProps {
   focused: boolean
   emphasizeFocus?: boolean
   dragEnabled?: boolean
+  showPaneControls?: boolean
   canClosePane: boolean
-  canMoveActiveTab: boolean
   content: ReactNode
   onFocusPane: (paneId: string) => void
   onSelectTab: (tabId: string) => void
@@ -24,7 +24,6 @@ interface WorkbenchPaneProps {
   onCloseAllPinnedTabs: () => void
   onSplitRight: () => void
   onSplitDown: () => void
-  onMoveActiveTab: () => void
   onClosePane: () => void
 }
 
@@ -56,8 +55,8 @@ export default function WorkbenchPane({
   focused,
   emphasizeFocus = true,
   dragEnabled = true,
+  showPaneControls = true,
   canClosePane,
-  canMoveActiveTab,
   content,
   onFocusPane,
   onSelectTab,
@@ -69,7 +68,6 @@ export default function WorkbenchPane({
   onCloseAllPinnedTabs,
   onSplitRight,
   onSplitDown,
-  onMoveActiveTab,
   onClosePane,
 }: WorkbenchPaneProps) {
   const hasActiveTab = !!activeTabId
@@ -90,7 +88,7 @@ export default function WorkbenchPane({
         activeTabId={activeTabId}
         focused={focused}
         dragEnabled={dragEnabled}
-        toolbar={(
+        toolbar={showPaneControls ? (
           <>
             <ToolbarButton title="Split right with active tab" disabled={!hasActiveTab} onClick={onSplitRight}>
               <Columns2 className="h-4 w-4" />
@@ -98,14 +96,11 @@ export default function WorkbenchPane({
             <ToolbarButton title="Split down with active tab" disabled={!hasActiveTab} onClick={onSplitDown}>
               <Rows2 className="h-4 w-4" />
             </ToolbarButton>
-            <ToolbarButton title="Move active tab to another pane" disabled={!hasActiveTab || !canMoveActiveTab} onClick={onMoveActiveTab}>
-              <ArrowRightLeft className="h-4 w-4" />
-            </ToolbarButton>
             <ToolbarButton title="Close pane" disabled={!canClosePane} onClick={onClosePane}>
               <X className="h-4 w-4" />
             </ToolbarButton>
           </>
-        )}
+        ) : null}
         onSelectTab={onSelectTab}
         onCloseTab={onCloseTab}
         onKeepTab={onKeepTab}
@@ -120,7 +115,7 @@ export default function WorkbenchPane({
       </div>
 
       {dragActive && (
-        <div className="pointer-events-none absolute inset-0 z-20">
+        <div className="pointer-events-none absolute inset-0 z-[80]">
           <PaneDropZone
             id={`pane-center:${paneId}`}
             data={{ type: 'pane-center', paneId }}

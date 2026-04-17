@@ -226,6 +226,7 @@ function App() {
   const globalSSERef = useRef<EventSource | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const reconnectDelayRef = useRef<number>(1000)
+  const pendingRouteTabIdRef = useRef<string | null>(null)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const allTabs = useMemo(() => Object.values(tabsById), [tabsById])
@@ -438,6 +439,12 @@ function App() {
   }, [route, tabsById, focusedActiveTabId, activateTab])
 
   useEffect(() => {
+    if (route.view === 'tab' && route.tabId && tabsById[route.tabId] && pendingRouteTabIdRef.current === route.tabId) {
+      pendingRouteTabIdRef.current = null
+    }
+  }, [route, tabsById])
+
+  useEffect(() => {
     if (focusedActiveTabId) {
       localStorage.setItem(LAST_ACTIVE_TAB_STORAGE_KEY, focusedActiveTabId)
     }
@@ -459,6 +466,10 @@ function App() {
       return
     }
 
+    if (route.tabId && pendingRouteTabIdRef.current === route.tabId) {
+      return
+    }
+
     if (focusedActiveTabId) {
       setRoute({ view: 'tab', tabId: focusedActiveTabId })
       setTabHash(focusedActiveTabId)
@@ -477,6 +488,7 @@ function App() {
   }, [route.view, flattenedTabIds.length, focusedPaneId, paneIds.join('|')])
 
   const navigateToTab = (tabId: string) => {
+    pendingRouteTabIdRef.current = tabId
     activateTab(tabId)
     setRoute({ view: 'tab', tabId })
     setTabHash(tabId)
@@ -886,13 +898,6 @@ function App() {
       }
     }
 
-    const handleMoveActiveTab = () => {
-      if (!pane.activeTabId || otherPaneIds.length === 0) return
-      const targetPaneId = otherPaneIds[0]
-      moveTabToPane(pane.activeTabId, targetPaneId, { activate: true })
-      navigateToTab(pane.activeTabId)
-    }
-
     const handleClosePane = () => {
       if (otherPaneIds.length === 0) return
       if (pane.tabIds.length > 0) {
@@ -926,8 +931,8 @@ function App() {
         focused={focusedPaneId === paneId}
         emphasizeFocus={paneIds.length > 1}
         dragEnabled={!isMobile}
+        showPaneControls={!isMobile}
         canClosePane={paneIds.length > 1}
-        canMoveActiveTab={otherPaneIds.length > 0}
         content={content}
         onFocusPane={handleFocus}
         onSelectTab={navigateToTab}
@@ -939,7 +944,6 @@ function App() {
         onCloseAllPinnedTabs={() => { void closePaneTabsByPredicate(paneId, (tab) => !!tab.pinned) }}
         onSplitRight={() => handleSplit('right')}
         onSplitDown={() => handleSplit('bottom')}
-        onMoveActiveTab={handleMoveActiveTab}
         onClosePane={handleClosePane}
       />
     )

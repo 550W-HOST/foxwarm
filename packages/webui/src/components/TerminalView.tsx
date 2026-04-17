@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FolderOpen, SquareTerminal, X } from 'lucide-react'
+import { ArrowLeft, FolderOpen } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { API_BASE_PATH, makeWebSocketUrl } from '../config'
-import ContentHeader from './ContentHeader'
 
 type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
 
@@ -48,7 +47,6 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
-  const [isClosing, setIsClosing] = useState(false)
   const [startMode, setStartMode] = useState<'new' | 'reuse'>(createMode)
 
   const requestedCwd = useMemo(() => {
@@ -136,7 +134,6 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
     setStatus('connecting')
     setError(null)
     setTerminalInfo(null)
-    setIsClosing(false)
     terminalIdRef.current = null
     term.reset()
 
@@ -288,71 +285,50 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
     }
   }, [sessionId, requestedCwd, initialTerminalId, startMode])
 
-  const handleClose = async () => {
-    if (!terminalIdRef.current) return
-    setIsClosing(true)
-    try {
-      suppressCloseCallbackRef.current = true
-      await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(terminalIdRef.current)}`, { method: 'DELETE' })
-      wsRef.current?.close()
-      wsRef.current = null
-      setStatus('closed')
-      onTerminalClosedRef.current?.(terminalIdRef.current)
-      onSessionsChangedRef.current?.()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setStatus('error')
-    } finally {
-      setIsClosing(false)
-    }
-  }
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
-      <ContentHeader
-        icon={<SquareTerminal className="h-5 w-5" />}
-        title="Terminal"
-        subtitle={
-          <>
-            <span className="font-mono text-[12px]">cwd {terminalInfo?.cwd || requestedCwd || '—'}</span>
-            <span className="ml-2">status {status}</span>
-            {terminalInfo && (
-              <>
-                <span className="ml-2">shell {terminalInfo.shell}</span>
-                <span className="ml-2">pid {terminalInfo.pid}</span>
-                <span className="ml-2">node {terminalInfo.nodeId}</span>
-              </>
+      <div className="border-b border-gray-200 bg-gray-100 px-3 py-2 dark:border-gray-700 dark:bg-gray-900">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 text-[12px] text-gray-600 dark:text-gray-300">
+              {onBack && (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-200 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100 md:hidden"
+                  aria-label="Back"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </button>
+              )}
+              <span className="truncate font-mono">cwd {terminalInfo?.cwd || requestedCwd || '—'}</span>
+              <span>status {status}</span>
+              {terminalInfo && (
+                <>
+                  <span className="hidden sm:inline">shell {terminalInfo.shell}</span>
+                  <span className="hidden md:inline">pid {terminalInfo.pid}</span>
+                  <span className="hidden md:inline">node {terminalInfo.nodeId}</span>
+                </>
+              )}
+            </div>
+            {error && (
+              <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
+                {error}
+              </div>
             )}
-          </>
-        }
-        onBack={onBack}
-        actions={(
-          <>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
             <button
               onClick={() => onOpenWorkspace?.(terminalInfo?.cwd || requestedCwd)}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
               title="Open workspace"
             >
-              <FolderOpen className="h-4 w-4" />
-              <span className="hidden md:inline">Open workspace</span>
+              <FolderOpen className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">Workspace</span>
             </button>
-            <button
-              onClick={handleClose}
-              disabled={!terminalIdRef.current || isClosing}
-              className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-800/80 dark:text-red-200 dark:hover:bg-red-900/20"
-              title="Close terminal"
-            >
-              <X className="h-4 w-4" />
-              <span className="hidden md:inline">{isClosing ? 'Closing...' : 'Close terminal'}</span>
-            </button>
-          </>
-        )}
-        below={error ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
-            {error}
           </div>
-        ) : null}
-      />
+        </div>
+      </div>
 
       <div className="min-h-0 flex-1 overflow-hidden bg-[#111827]">
         <div ref={hostRef} className="h-full w-full" />

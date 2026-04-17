@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDraggable } from '@dnd-kit/core'
-import { CSS } from '@dnd-kit/utilities'
 import { API_BASE_PATH } from '../config'
 import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2 } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
@@ -111,7 +110,7 @@ function DraggableSessionRow({
   setRowRef: (node: HTMLDivElement | null) => void
 }) {
   const title = session.displayName || session.id
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `session:${session.id}`,
     data: {
       type: 'session',
@@ -126,7 +125,6 @@ function DraggableSessionRow({
         setNodeRef(node)
         setRowRef(node)
       }}
-      style={{ transform: CSS.Translate.toString(transform) }}
       className={`${className} ${isDragging ? 'opacity-50' : ''}`}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
