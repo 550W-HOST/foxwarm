@@ -286,6 +286,24 @@ function formatSendFileSessionResult(targetSessionId: string, file: ChannelFile,
   return lines.join('\n');
 }
 
+function isWebUiUnsupportedFileDelivery(channelId: string, reason: string): boolean {
+  return channelId.startsWith('webui:') && reason === 'channel does not support file sending yet';
+}
+
+function buildRelativeWebUiDownloadUrl(file: ChannelFile): string {
+  return `download?${new URLSearchParams({ path: file.path }).toString()}`;
+}
+
+function buildWebUiDownloadResult(output: string, file: ChannelFile) {
+  return {
+    output,
+    webuiDownload: {
+      url: buildRelativeWebUiDownloadUrl(file),
+      fileName: file.name,
+    },
+  };
+}
+
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
   const { suffix, fork = false, message, node, noFurtherAssistantReply } = args;
@@ -392,17 +410,32 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
   const file = await prepareChannelFile(filePath.trim(), ctx);
 
   if (normalizedChannelTargetId) {
+    if (normalizedChannelTargetId.startsWith('webui:')) {
+      return buildWebUiDownloadResult(`File \`${file.name}\` is ready to download for WebUI target \`${normalizedChannelTargetId}\`.`, file);
+    }
+
     await sessionManager.sendFileToChannelTargetId(normalizedChannelTargetId, file, { caption });
     return `File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``;
   }
 
   const normalizedSessionId = sessionId.trim();
   const result = await sessionManager.sendFileToSession(normalizedSessionId, file, { caption });
-  if (result.deliveredChannels.length === 0) {
-    throw new Error(formatSendFileSessionResult(normalizedSessionId, file, result));
+  const hasWebUiDownloadFallback = result.skippedChannels.some((item) => isWebUiUnsupportedFileDelivery(item.channelId, item.reason));
+  const output = formatSendFileSessionResult(normalizedSessionId, file, result);
+
+  if (hasWebUiDownloadFallback && result.deliveredChannels.length === 0 && result.failedChannels.length === 0) {
+    return buildWebUiDownloadResult(output, file);
   }
 
-  return formatSendFileSessionResult(normalizedSessionId, file, result);
+  if (result.deliveredChannels.length === 0) {
+    throw new Error(output);
+  }
+
+  if (hasWebUiDownloadFallback) {
+    return buildWebUiDownloadResult(output, file);
+  }
+
+  return output;
 }
 
 export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext) {

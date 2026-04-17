@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, UIEvent } from 'react'
-import { Eye, Code, FileJson, Copy, Check, X } from 'lucide-react'
+import { Eye, Code, FileJson, Copy, Check, X, Download } from 'lucide-react'
 import {
   Diff,
   IconToggleButton,
@@ -33,8 +33,49 @@ import {
   type ViewMode,
 } from './chatShared'
 import { formatToolResponsePayload } from '../../../shared/src/toolResponseFormatting'
+import { triggerBrowserDownload } from './workspaceShared'
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatToolResponsePayload(resp.response)
+
+const getToolResponseDownload = (resp: FunctionResponse): { url: string; fileName?: string } | null => {
+  const response = resp.response
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    return null
+  }
+
+  const webuiDownload = (response as { webuiDownload?: unknown }).webuiDownload
+  if (!webuiDownload || typeof webuiDownload !== 'object' || Array.isArray(webuiDownload)) {
+    return null
+  }
+
+  const url = (webuiDownload as { url?: unknown }).url
+  if (typeof url !== 'string' || !url.trim()) {
+    return null
+  }
+
+  const fileName = (webuiDownload as { fileName?: unknown }).fileName
+  return {
+    url,
+    fileName: typeof fileName === 'string' && fileName.trim() ? fileName : undefined,
+  }
+}
+
+const ToolDownloadButton = memo(function ToolDownloadButton({ url, fileName }: { url: string; fileName?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        triggerBrowserDownload(url)
+      }}
+      className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-200 dark:hover:bg-blue-900/30"
+      title={fileName ? `Download ${fileName}` : 'Download file'}
+    >
+      <Download size={12} />
+      <span>{fileName ? `Download ${fileName}` : 'Download file'}</span>
+    </button>
+  )
+})
 
 interface ChatTimelineProps {
   messages: Message[]
@@ -526,7 +567,18 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): R
     return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
   }
 
+  const download = getToolResponseDownload(resp)
   const primaryText = formatToolResponseText(resp)
+  if (download) {
+    const preview = truncatePreviewText(primaryText, 400)
+    return (
+      <div className="space-y-2">
+        <ToolDownloadButton url={download.url} fileName={download.fileName} />
+        {primaryText ? <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div> : null}
+      </div>
+    )
+  }
+
   if (primaryText) {
     const preview = truncatePreviewText(primaryText, 400)
     return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
@@ -945,7 +997,18 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
       return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
     }
 
+    const download = getToolResponseDownload(resp)
     const primaryText = formatToolResponseText(resp)
+    if (download) {
+      const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
+      return (
+        <div className="space-y-2">
+          <ToolDownloadButton url={download.url} fileName={download.fileName} />
+          {primaryText ? <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div> : null}
+        </div>
+      )
+    }
+
     if (primaryText) {
       const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
       return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
