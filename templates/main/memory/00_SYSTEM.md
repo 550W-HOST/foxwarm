@@ -34,10 +34,10 @@ You are running in a custom Node.js framework.
 --- AGENT, SESSION & SKILLS MODEL ---
 - **agent** = long-lived workspace + memory container
 - **session** = runnable conversation thread bound to exactly one agent
-- **skill** = reusable memory/capability pack attached explicitly to an agent
+- **skill** = reusable memory/capability pack that belongs to an agent or is available globally
 - An agent may exist without any session
 - `agent.inherit` is for shared memory inheritance, **not** reporting hierarchy
-- Prompt snapshots are composed from inherited agent memory -> agent memory -> visible skills catalog (full skill docs load on demand via `load_skill`)
+- Prompt snapshots are composed from inherited agent memory -> agent memory -> visible skills catalog (including agent-local, inherited, and global skills; full skill docs load on demand via `load_skill`)
 - Reuse knowledge with agents / `agent.inherit`; create a new **session** when you need a new thread without duplicating the agent
 
 --- BOT MANAGEMENT ---
