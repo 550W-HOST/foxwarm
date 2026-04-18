@@ -1137,7 +1137,7 @@ function App() {
 
     if (route.view === 'agents') {
       return (
-        <div className="foxwarm-safe-area-shell fixed inset-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
+        <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
           <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} onBack={handleBackToList} />
         </div>
       )
@@ -1146,7 +1146,7 @@ function App() {
     const mobilePaneId = focusedPaneId || paneIds[0]
 
     return (
-      <div className="foxwarm-safe-area-shell fixed inset-0 bg-gray-100 dark:bg-gray-900 overflow-hidden">
+      <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 bg-gray-100 dark:bg-gray-900 overflow-hidden">
         <div className="h-full min-h-0 overflow-hidden p-0">
           {renderWorkbenchSurface(mobilePaneId ? renderPane(mobilePaneId, handleBackToList) : null)}
         </div>
@@ -1155,7 +1155,7 @@ function App() {
   }
 
   return renderWorkbenchSurface(
-    <div className="foxwarm-safe-area-shell flex h-screen overflow-hidden bg-gray-100 dark:bg-gray-900">
+    <div className="foxwarm-safe-area-shell foxwarm-viewport-shell flex overflow-hidden bg-gray-100 dark:bg-gray-900">
       <Sidebar
         sessions={sessions}
         currentSession={currentContextSessionId}

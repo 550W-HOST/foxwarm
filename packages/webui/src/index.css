@@ -9,6 +9,26 @@
 }
 
 :root {
+  /*
+   * Runtime visual-viewport height used on iOS when the keyboard opens.
+   * We keep the app shell locked to the visible viewport instead of the
+   * layout viewport/body height, so the outer page does not keep scrolling.
+   */
+  --foxwarm-app-height: 100dvh;
+
+  /*
+   * Runtime visual-viewport top offset. On iOS the visual viewport can shift
+   * downward when browser UI / keyboard changes; fixed fullscreen shells use
+   * this to stay aligned with the actually visible area.
+   */
+  --foxwarm-app-top-offset: 0px;
+
+  /*
+   * Safe-area insets for notch / rounded-corner devices.
+   * Defaults are zero so unsupported browsers behave normally.
+   * The app currently uses top/left/right for layout spacing; bottom is kept
+   * available for page-specific handling without globally adding extra gap.
+   */
   --foxwarm-safe-area-top: 0px;
   --foxwarm-safe-area-right: 0px;
   --foxwarm-safe-area-bottom: 0px;
@@ -17,6 +37,7 @@
 
 @supports (padding: env(safe-area-inset-top, 0px)) {
   :root {
+    /* Replace safe-area defaults with the actual device insets when supported. */
     --foxwarm-safe-area-top: env(safe-area-inset-top, 0px);
     --foxwarm-safe-area-right: env(safe-area-inset-right, 0px);
     --foxwarm-safe-area-bottom: env(safe-area-inset-bottom, 0px);
@@ -31,6 +52,17 @@
   padding-left: var(--foxwarm-safe-area-left);
 }
 
+.foxwarm-viewport-shell {
+  height: var(--foxwarm-app-height);
+  min-height: var(--foxwarm-app-height);
+}
+
+.foxwarm-fixed-viewport-shell {
+  top: var(--foxwarm-app-top-offset);
+  height: var(--foxwarm-app-height);
+  min-height: var(--foxwarm-app-height);
+}
+
 html, body {
   /* Prevent iOS overscroll bounce */
   overscroll-behavior: none;
@@ -43,6 +75,7 @@ html, body {
 
 html {
   color-scheme: light;
+  /* Shared app background, also used to fill iOS safe-area / viewport gaps. */
   --foxwarm-app-background: rgb(243 244 246);
   --foxwarm-scrollbar-track: rgb(243 244 246);
   --foxwarm-scrollbar-thumb: rgb(156 163 175);
@@ -88,7 +121,8 @@ html.dark {
     top: 0;
     left: 0;
     right: 0;
-    bottom: 0;
+    height: var(--foxwarm-app-height);
+    min-height: var(--foxwarm-app-height);
     overflow: hidden;
   }
 }
@@ -115,8 +149,8 @@ input, textarea, select {
 #root {
   overscroll-behavior: none;
   max-width: 100vw;
-  height: 100dvh;
-  min-height: 100dvh;
+  height: var(--foxwarm-app-height);
+  min-height: var(--foxwarm-app-height);
   background-color: var(--foxwarm-app-background);
 }
 

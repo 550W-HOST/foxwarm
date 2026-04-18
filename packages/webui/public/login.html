@@ -10,6 +10,11 @@
   <title>🦊 Foxwarm - Login</title>
   <style>
     :root {
+      /*
+       * Login page only needs safe-area compensation for top/left/right so the
+       * page does not collide with the notch/status area in iOS PWA mode.
+       * Bottom is still exposed as a variable for future page-specific use.
+       */
       --foxwarm-safe-area-top: 0px;
       --foxwarm-safe-area-right: 0px;
       --foxwarm-safe-area-bottom: 0px;
@@ -18,6 +23,7 @@
 
     @supports (padding: env(safe-area-inset-top, 0px)) {
       :root {
+        /* Replace safe-area defaults with the actual device inset values. */
         --foxwarm-safe-area-top: env(safe-area-inset-top, 0px);
         --foxwarm-safe-area-right: env(safe-area-inset-right, 0px);
         --foxwarm-safe-area-bottom: env(safe-area-inset-bottom, 0px);

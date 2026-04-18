@@ -47,7 +47,7 @@ export default function SessionList({
     : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700'
 
   return (
-    <div className="foxwarm-safe-area-shell fixed inset-0 bg-gray-100 dark:bg-gray-900 flex flex-col">
+    <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 bg-gray-100 dark:bg-gray-900 flex flex-col">
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">🦊 Foxwarm</h1>
