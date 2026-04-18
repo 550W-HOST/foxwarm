@@ -2,10 +2,39 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="./favicon-32x32.png" sizes="32x32" type="image/png">
+  <link rel="icon" href="./favicon-64x64.png" sizes="64x64" type="image/png">
+  <link rel="icon" href="./favicon-128x128.png" sizes="128x128" type="image/png">
   <title>🦊 Foxwarm - Login</title>
   <style>
+    :root {
+      /*
+       * Login page only needs safe-area compensation for top/left/right so the
+       * page does not collide with the notch/status area in iOS PWA mode.
+       * Bottom is still exposed as a variable for future page-specific use.
+       */
+      --foxwarm-safe-area-top: 0px;
+      --foxwarm-safe-area-right: 0px;
+      --foxwarm-safe-area-bottom: 0px;
+      --foxwarm-safe-area-left: 0px;
+    }
+
+    @supports (padding: env(safe-area-inset-top, 0px)) {
+      :root {
+        /* Replace safe-area defaults with the actual device inset values. */
+        --foxwarm-safe-area-top: env(safe-area-inset-top, 0px);
+        --foxwarm-safe-area-right: env(safe-area-inset-right, 0px);
+        --foxwarm-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+        --foxwarm-safe-area-left: env(safe-area-inset-left, 0px);
+      }
+    }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      background: #f5f5f5;
+    }
     body {
       font-family: system-ui, -apple-system, sans-serif;
       background: #f5f5f5;
@@ -13,7 +42,10 @@
       align-items: center;
       justify-content: center;
       min-height: 100vh;
-      padding: 20px;
+      padding-top: calc(20px + var(--foxwarm-safe-area-top));
+      padding-right: calc(20px + var(--foxwarm-safe-area-right));
+      padding-bottom: 20px;
+      padding-left: calc(20px + var(--foxwarm-safe-area-left));
       /* Prevent iOS zoom on input focus */
       touch-action: manipulation;
     }

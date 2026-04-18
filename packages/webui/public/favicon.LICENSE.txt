@@ -1,0 +1,10 @@
+Favicon / app icon attribution
+
+Asset: OpenMoji fox emoji (U+1F98A)
+Source SVG: https://github.com/hfg-gmuend/openmoji/blob/master/color/svg/1F98A.svg
+Project: https://openmoji.org/
+License: CC BY-SA 4.0
+License URL: https://creativecommons.org/licenses/by-sa/4.0/
+
+This repo includes a derived favicon/app-icon set generated from the OpenMoji SVG.
+Attribution: © OpenMoji (https://openmoji.org/)
