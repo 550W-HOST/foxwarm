@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, Settings } from 'lucide-react'
 import type { SendKeyMode } from './chatShared'
+import ReloadAppButton from './ReloadAppButton'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 
@@ -98,6 +99,14 @@ export default function GlobalUiSettingsMenu({ themeMode, onThemeChange, sendKey
             <div className="mt-2 flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400">
               <Check className="h-3.5 w-3.5 shrink-0" />
               <span>{sendKeyMode === 'enter' ? 'Enter sends; modifiers insert a new line.' : 'Ctrl/Cmd+Enter sends; Enter inserts a new line.'}</span>
+            </div>
+          </div>
+
+          <div className="border-t border-gray-200 px-4 py-3 dark:border-gray-700">
+            <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Application</div>
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1 text-left text-xs text-gray-600 dark:text-gray-300">Clear cache and reload</div>
+              <ReloadAppButton />
             </div>
           </div>
         </div>
