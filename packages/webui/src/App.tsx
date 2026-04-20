@@ -35,6 +35,8 @@ const ARCHITECTURE_HASH = 'agents'
 const TAB_HASH_PREFIX = 'tab/'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
+const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
 const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
@@ -166,6 +168,13 @@ function makeFileTab(sessionId: string, nodeId: string, path: string): Workbench
   }
 }
 
+function formatTerminalTabTitle(cwd: string, nodeId?: string): string {
+  const trimmed = cwd.trim() || '/'
+  const normalized = trimmed === '/' ? '/' : trimmed.replace(/\/+$/, '')
+  const lastSegment = normalized === '/' ? '/' : normalized.split('/').filter(Boolean).pop() || normalized
+  return nodeId && nodeId !== 'master' ? `${lastSegment} · ${nodeId}` : lastSegment
+}
+
 function makeTerminalDraftTab(sessionId: string, nodeId: string, cwd: string): WorkbenchTab {
   return {
     id: `terminal-draft:${Date.now()}:${Math.random().toString(16).slice(2)}`,
@@ -174,7 +183,7 @@ function makeTerminalDraftTab(sessionId: string, nodeId: string, cwd: string): W
     cwd,
     contextSessionId: sessionId,
     createMode: 'new',
-    title: `Terminal · ${cwd}`,
+    title: formatTerminalTabTitle(cwd, nodeId),
   }
 }
 
@@ -186,7 +195,7 @@ function makeTerminalTabFromRecord(record: TerminalRegistryRecord): WorkbenchTab
     nodeId: record.nodeId,
     cwd: record.cwd,
     contextSessionId: record.sessionId,
-    title: `Terminal · ${record.cwd}`,
+    title: formatTerminalTabTitle(record.cwd, record.nodeId),
   }
 }
 
@@ -212,6 +221,12 @@ function App() {
     }
     return false
   })
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY) || 256)
+    return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
+  })
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
+  const [sidebarPeekVisible, setSidebarPeekVisible] = useState(false)
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
   const root = useWorkbenchStore((state) => state.root)
@@ -272,6 +287,17 @@ function App() {
   useEffect(() => {
     localStorage.setItem('sendKeyMode', sendKeyMode)
   }, [sendKeyMode])
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth))
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed ? 'true' : 'false')
+    if (!sidebarCollapsed) {
+      setSidebarPeekVisible(false)
+    }
+  }, [sidebarCollapsed])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
@@ -416,7 +442,7 @@ function App() {
         return
       }
 
-      const nextTitle = `Terminal · ${terminal.cwd}`
+      const nextTitle = formatTerminalTabTitle(terminal.cwd, terminal.nodeId)
       if (tab.title !== nextTitle || tab.cwd !== terminal.cwd || tab.nodeId !== terminal.nodeId || tab.contextSessionId !== terminal.sessionId || tab.createMode) {
         updateTab(tab.id, (current) => current.type === 'terminal'
           ? {
@@ -791,10 +817,29 @@ function App() {
           nodeId: terminal.nodeId || 'master',
           cwd: terminal.cwd,
           contextSessionId: terminal.sessionId,
-          title: `Terminal · ${terminal.cwd}`,
+          title: formatTerminalTabTitle(terminal.cwd, terminal.nodeId || 'master'),
         }
       : current)
     navigateToTab(draftTabId)
+  }
+
+  const startSidebarResize = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = sidebarWidth
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const nextWidth = Math.min(420, Math.max(180, startWidth + (moveEvent.clientX - startX)))
+      setSidebarWidth(nextWidth)
+    }
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
   }
 
   const handleTerminalClosed = (terminalId: string) => {
@@ -1263,26 +1308,75 @@ function App() {
   }
 
   return renderWorkbenchSurface(
-    <div className="foxwarm-safe-area-shell foxwarm-viewport-shell flex overflow-hidden bg-gray-100 dark:bg-gray-900">
-      <Sidebar
-        sessions={sessions}
-        currentSession={currentContextSessionId}
-        currentView={currentView}
-        currentSessionRecord={currentContextSessionRecord}
-        themeMode={themeMode}
-        onThemeChange={setThemeMode}
-        sendKeyMode={sendKeyMode}
-        onSendKeyModeChange={setSendKeyMode}
-        onSelectSession={openChatTab}
-        onKeepSession={openKeptChatTab}
-        onSelectArchitecture={() => {
-          setRoute({ view: 'agents' })
-          window.location.hash = ARCHITECTURE_HASH
-        }}
-        onCreateWorkspaceTab={(options) => openWorkspaceTab(currentContextSessionId, options)}
-        onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
-        onCreateSession={handleCreateSession}
-      />
+    <div className="foxwarm-safe-area-shell foxwarm-viewport-shell relative flex overflow-hidden bg-gray-100 dark:bg-gray-900">
+      {!sidebarCollapsed ? (
+        <div className="relative h-full shrink-0" style={{ width: sidebarWidth }}>
+          <Sidebar
+            sessions={sessions}
+            currentSession={currentContextSessionId}
+            currentView={currentView}
+            currentSessionRecord={currentContextSessionRecord}
+            themeMode={themeMode}
+            onThemeChange={setThemeMode}
+            sendKeyMode={sendKeyMode}
+            onSendKeyModeChange={setSendKeyMode}
+            onSelectSession={openChatTab}
+            onKeepSession={openKeptChatTab}
+            onSelectArchitecture={() => {
+              setRoute({ view: 'agents' })
+              window.location.hash = ARCHITECTURE_HASH
+            }}
+            onCreateWorkspaceTab={(options) => openWorkspaceTab(currentContextSessionId, options)}
+            onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
+            onCreateSession={handleCreateSession}
+            onToggleCollapsed={() => setSidebarCollapsed(true)}
+            isPeek={false}
+          />
+          <div
+            className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-blue-400/40"
+            onMouseDown={startSidebarResize}
+          />
+        </div>
+      ) : (
+        <>
+          <div
+            className="absolute inset-y-0 left-0 z-30 w-3"
+            onMouseEnter={() => setSidebarPeekVisible(true)}
+          />
+          {sidebarPeekVisible && (
+            <div
+              className="absolute inset-y-0 left-0 z-40 shadow-2xl"
+              style={{ width: sidebarWidth }}
+              onMouseLeave={() => setSidebarPeekVisible(false)}
+            >
+              <Sidebar
+                sessions={sessions}
+                currentSession={currentContextSessionId}
+                currentView={currentView}
+                currentSessionRecord={currentContextSessionRecord}
+                themeMode={themeMode}
+                onThemeChange={setThemeMode}
+                sendKeyMode={sendKeyMode}
+                onSendKeyModeChange={setSendKeyMode}
+                onSelectSession={openChatTab}
+                onKeepSession={openKeptChatTab}
+                onSelectArchitecture={() => {
+                  setRoute({ view: 'agents' })
+                  window.location.hash = ARCHITECTURE_HASH
+                }}
+                onCreateWorkspaceTab={(options) => openWorkspaceTab(currentContextSessionId, options)}
+                onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
+                onCreateSession={handleCreateSession}
+                onToggleCollapsed={() => {
+                  setSidebarCollapsed(false)
+                  setSidebarPeekVisible(false)
+                }}
+                isPeek
+              />
+            </div>
+          )}
+        </>
+      )}
       <div className="flex-1 h-full min-h-0 overflow-hidden">
         {route.view === 'agents' ? (
           <Suspense fallback={<LazyViewFallback label="Loading architecture…" />}>

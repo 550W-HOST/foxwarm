@@ -284,10 +284,10 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
-      <div className="border-b border-gray-200 bg-gray-100 px-3 py-2 dark:border-gray-700 dark:bg-gray-900">
+      <div className="border-b border-gray-200 bg-gray-100 px-2.5 py-1.5 dark:border-gray-700 dark:bg-gray-900">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-[12px] text-gray-600 dark:text-gray-300">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-gray-600 dark:text-gray-300">
               {onBack && (
                 <button
                   type="button"
@@ -298,13 +298,11 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
                   <ArrowLeft className="h-4 w-4" />
                 </button>
               )}
-              <span className="truncate font-mono">cwd {terminalInfo?.cwd || requestedCwd || '—'}</span>
               <span>status {status}</span>
               {terminalInfo && (
                 <>
-                  <span className="hidden sm:inline">shell {terminalInfo.shell}</span>
-                  <span className="hidden md:inline">pid {terminalInfo.pid}</span>
-                  <span className="hidden md:inline">node {terminalInfo.nodeId}</span>
+                  <span>node {terminalInfo.nodeId}</span>
+                  <span>pid {terminalInfo.pid}</span>
                 </>
               )}
             </div>
@@ -317,11 +315,11 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
           <div className="flex shrink-0 items-center gap-1.5">
             <button
               onClick={() => onOpenWorkspace?.(terminalInfo?.cwd || requestedCwd)}
-              className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              className="inline-flex h-6 items-center gap-1 rounded-md border border-gray-200 px-2 text-[11px] text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
               title="Open workspace"
             >
-              <FolderOpen className="h-3.5 w-3.5" />
-              <span className="hidden md:inline">Workspace</span>
+              <FolderOpen className="h-3 w-3" />
+              <span>Workspace</span>
             </button>
           </div>
         </div>

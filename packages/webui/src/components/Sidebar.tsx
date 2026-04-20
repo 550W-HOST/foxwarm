@@ -1,4 +1,4 @@
-import { Plus, Workflow } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Plus, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 import CreateTabButton from './CreateTabButton'
@@ -20,6 +20,8 @@ interface SidebarProps {
   onCreateWorkspaceTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateSession: () => void
+  onToggleCollapsed: () => void
+  isPeek?: boolean
 }
 
 export default function Sidebar({
@@ -37,6 +39,8 @@ export default function Sidebar({
   onCreateWorkspaceTab,
   onCreateTerminalTab,
   onCreateSession,
+  onToggleCollapsed,
+  isPeek = false,
 }: SidebarProps) {
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
@@ -47,16 +51,26 @@ export default function Sidebar({
     : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
 
   return (
-    <div className="w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
+    <div className="h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-bold text-gray-900 dark:text-white">🦊 Foxwarm</h1>
-          <GlobalUiSettingsMenu
-            themeMode={themeMode}
-            onThemeChange={onThemeChange}
-            sendKeyMode={sendKeyMode}
-            onSendKeyModeChange={onSendKeyModeChange}
-          />
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+              title={isPeek ? 'Pin sidebar open' : 'Collapse sidebar'}
+            >
+              {isPeek ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            </button>
+            <GlobalUiSettingsMenu
+              themeMode={themeMode}
+              onThemeChange={onThemeChange}
+              sendKeyMode={sendKeyMode}
+              onSendKeyModeChange={onSendKeyModeChange}
+            />
+          </div>
         </div>
 
         <div className="space-y-2">
