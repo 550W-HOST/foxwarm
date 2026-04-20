@@ -54,6 +54,9 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
     }
     return undefined
   }, [initialCwd])
+  const requestedCwdRef = useRef<string | undefined>(requestedCwd)
+  const initialTerminalIdRef = useRef<string | undefined>(initialTerminalId)
+  const createModeRef = useRef<'new' | 'reuse'>(createMode)
 
   useEffect(() => {
     onSessionsChangedRef.current = onSessionsChanged
@@ -137,7 +140,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
         const cols = term.cols || 100
         const rows = term.rows || 30
 
-        let terminalId = initialTerminalId || null
+        let terminalId = initialTerminalIdRef.current || null
 
         if (terminalId) {
           const lookupRes = await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(terminalId)}`)
@@ -149,7 +152,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
           }
         }
 
-        if (!terminalId && createMode !== 'new') {
+        if (!terminalId && createModeRef.current !== 'new') {
           const listRes = await fetch(`${API_BASE_PATH}/terminals?sessionId=${encodeURIComponent(sessionId)}`)
           const listData = await listRes.json().catch(() => ({}))
           if (!listRes.ok) {
@@ -157,8 +160,8 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
           }
 
           const terminals: TerminalInfo[] = Array.isArray(listData.terminals) ? listData.terminals : []
-          const reused = requestedCwd
-            ? terminals.find((item) => item.cwd === requestedCwd)
+          const reused = requestedCwdRef.current
+            ? terminals.find((item) => item.cwd === requestedCwdRef.current)
             : terminals[0]
 
           if (reused) {
@@ -173,7 +176,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
             body: JSON.stringify({
               sessionId,
               nodeId: 'master',
-              cwd: requestedCwd,
+              cwd: requestedCwdRef.current,
               cols,
               rows,
             }),
@@ -277,7 +280,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [sessionId, requestedCwd, initialTerminalId, createMode])
+  }, [sessionId])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
