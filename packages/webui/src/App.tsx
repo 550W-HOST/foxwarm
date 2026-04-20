@@ -439,7 +439,7 @@ function App() {
       }
 
       const matchingDraft = terminalDraftTabs.find((tab) => (
-        (tab.contextSessionId || currentContextSessionId) === terminal.sessionId
+        tab.contextSessionId === terminal.sessionId
         && (tab.nodeId || 'master') === terminal.nodeId
         && (tab.cwd || '/') === terminal.cwd
       ))
@@ -451,7 +451,7 @@ function App() {
       upsertTab(makeTerminalTabFromRecord(terminal), { activate: false })
     })
 
-  }, [activeTerminals, allTabs, currentContextSessionId, upsertTab])
+  }, [activeTerminals, allTabs, upsertTab])
 
   useEffect(() => {
     const baseTitle = '🦊 Foxwarm'
@@ -782,6 +782,8 @@ function App() {
   }
 
   const handleTerminalReady = (draftTabId: string, terminal: { id: string; sessionId: string; cwd: string; nodeId?: string }) => {
+    // Keep createMode='new' until activeTerminals reconciliation sees this terminal id,
+    // so the missing-terminal cleanup path does not immediately remove the just-opened tab.
     updateTab(draftTabId, (current) => current.type === 'terminal'
       ? {
           ...current,
@@ -790,7 +792,6 @@ function App() {
           cwd: terminal.cwd,
           contextSessionId: terminal.sessionId,
           title: `Terminal · ${terminal.cwd}`,
-          createMode: current.createMode,
         }
       : current)
     navigateToTab(draftTabId)
