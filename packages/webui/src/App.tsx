@@ -409,6 +409,9 @@ function App() {
       if (!tab.terminalId) return
       const terminal = activeTerminalMap.get(tab.terminalId)
       if (!terminal) {
+        if (tab.createMode === 'new') {
+          return
+        }
         removeTab(tab.id)
         return
       }
@@ -787,7 +790,7 @@ function App() {
           cwd: terminal.cwd,
           contextSessionId: terminal.sessionId,
           title: `Terminal · ${terminal.cwd}`,
-          createMode: undefined,
+          createMode: current.createMode,
         }
       : current)
     navigateToTab(draftTabId)
