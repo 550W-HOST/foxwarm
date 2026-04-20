@@ -79,6 +79,7 @@ export default function WorkbenchPane({
 
   return (
     <div
+      data-pane-id={paneId}
       className={`relative flex h-full min-h-0 flex-col overflow-hidden border ${containerChromeClass}`}
       onMouseDown={() => onFocusPane(paneId)}
     >
