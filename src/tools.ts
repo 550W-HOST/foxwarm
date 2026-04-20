@@ -27,6 +27,10 @@ import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from '.
 import { COMPACT_PLAN_TOOL_DEFINITION } from './session/compactPlan';
 import { cropImageById, resolveImageById } from './toolImages';
 import {
+    tool_run_script,
+    tool_continue_script,
+} from './toolscript';
+import {
     tool_create_child_session,
     tool_send_to_session,
     tool_end_turn,
@@ -89,6 +93,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'create_timer', 'list_timers', 'delete_timer',
     'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
     'search_tools', 'call_tool',
+    'run_script', 'continue_script',
     'change_current_node',
     'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
@@ -1608,6 +1613,8 @@ export const search_mcp_tools = tool_search_mcp_tools;
 export const list_mcp_servers = tool_list_mcp_servers;
 export const search_tools = tool_search_tools;
 export const call_tool = tool_call_tool;
+export const run_script = tool_run_script;
+export const continue_script = tool_continue_script;
 
 // New tools for nodes
 export const list_nodes = async (args: ToolArgs) => {
@@ -2342,6 +2349,33 @@ export const definitions = [
                     args: { type: 'object', description: 'Required wrapper object containing the target tool arguments. Example: for builtin read, use `args: { filePath: "README.md" }`.' }
                 },
                 required: ['args']
+            }
+        },
+        {
+            name: 'run_script',
+            defaultInject: true,
+            description: 'Run a ToolScript Python file from the current agent workspace. The script may call print(...), call_tool(...), ask_agent(...), and request_model_without_context(...). If the script pauses at ask_agent, this tool returns a continuationId for continue_script.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
+                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.' }
+                },
+                required: ['filePath']
+            }
+        },
+        {
+            name: 'continue_script',
+            defaultInject: true,
+            description: 'Resume a paused ToolScript run created by run_script. Use the returned continuationId from the paused ask_agent result and provide the agent answer in `input`.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    runId: { type: 'string', description: 'ToolScript run identifier returned by run_script.' },
+                    continuationId: { type: 'string', description: 'Continuation identifier returned when the script paused at ask_agent.' },
+                    input: { description: 'Value returned to the paused ask_agent(...) call inside the script.' }
+                },
+                required: ['runId', 'continuationId']
             }
         },
         {
