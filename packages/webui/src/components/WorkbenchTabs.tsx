@@ -196,7 +196,7 @@ function TabStripRow({
             />
           ))}
           {shouldShowEmptyDropHint && (
-            <div className="flex h-10 min-w-[140px] items-center justify-center rounded-lg border border-dashed border-blue-300 px-3 text-xs font-medium text-blue-700 dark:border-blue-500/60 dark:text-blue-200">
+            <div className="flex h-9 min-w-[120px] items-center justify-center rounded-lg border border-dashed border-blue-300 px-3 text-xs font-medium text-blue-700 dark:border-blue-500/60 dark:text-blue-200">
               {isPinnedRow ? 'Drop to pin' : 'Drop to unpin'}
             </div>
           )}
@@ -270,13 +270,13 @@ function SortableTab({
           onSelectTab(tab.id)
         }
       }}
-      className={`group relative -mb-px flex min-w-[120px] max-w-[24rem] shrink-0 cursor-pointer items-center gap-2 rounded-t-lg border border-b-0 px-3 py-2 text-sm transition-colors ${active ? 'border-gray-200 bg-white text-blue-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-blue-200' : 'border-transparent bg-gray-200/70 text-gray-700 hover:bg-white/70 dark:bg-gray-800/70 dark:text-gray-300 dark:hover:bg-gray-800'} ${isDragging ? 'opacity-50' : ''}`}
+      className={`group relative -mb-px flex min-w-[88px] max-w-[12rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 py-2 text-sm transition-colors ${active ? 'border-gray-200 bg-white text-blue-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-blue-200' : 'border-transparent bg-gray-200/70 text-gray-700 hover:bg-white/70 dark:bg-gray-800/70 dark:text-gray-300 dark:hover:bg-gray-800'} ${isDragging ? 'opacity-50' : ''}`}
       title={isPreview ? `${tab.title} (preview)` : tab.title}
       {...attributes}
       {...listeners}
     >
       <TabIcon type={tab.type} />
-      <span className={`min-w-0 flex-1 truncate ${isPreview ? 'italic' : ''}`}>{tab.title}</span>
+      <span className={`min-w-0 flex-1 truncate text-left [direction:rtl] ${isPreview ? 'italic' : ''}`}>{tab.title}</span>
       <button
         onClick={(event) => {
           event.stopPropagation()
