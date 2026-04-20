@@ -791,7 +791,6 @@ function App() {
         }
       : current)
     navigateToTab(draftTabId)
-    void fetchActiveTerminals()
   }
 
   const handleTerminalClosed = (terminalId: string) => {
