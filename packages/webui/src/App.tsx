@@ -428,12 +428,6 @@ function App() {
       }
     })
 
-    activeTerminals.forEach((terminal) => {
-      const existing = terminalTabs.find((tab) => tab.terminalId === terminal.id)
-      if (!existing) {
-        upsertTab(makeTerminalTabFromRecord(terminal), { activate: false })
-      }
-    })
   }, [activeTerminals, allTabs])
 
   useEffect(() => {
@@ -765,19 +759,18 @@ function App() {
   }
 
   const handleTerminalReady = (draftTabId: string, terminal: { id: string; sessionId: string; cwd: string; nodeId?: string }) => {
-    const draftTab = tabsById[draftTabId]
-    const nextId = `terminal:${terminal.id}`
-    replaceTabId(draftTabId, {
-      id: nextId,
-      type: 'terminal',
-      terminalId: terminal.id,
-      nodeId: terminal.nodeId || 'master',
-      cwd: terminal.cwd,
-      contextSessionId: terminal.sessionId,
-      title: `Terminal · ${terminal.cwd}`,
-      pinned: draftTab?.pinned,
-    })
-    navigateToTab(nextId)
+    updateTab(draftTabId, (current) => current.type === 'terminal'
+      ? {
+          ...current,
+          terminalId: terminal.id,
+          nodeId: terminal.nodeId || 'master',
+          cwd: terminal.cwd,
+          contextSessionId: terminal.sessionId,
+          title: `Terminal · ${terminal.cwd}`,
+          createMode: undefined,
+        }
+      : current)
+    navigateToTab(draftTabId)
     void fetchActiveTerminals()
   }
 
