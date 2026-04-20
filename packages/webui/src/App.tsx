@@ -226,6 +226,7 @@ function App() {
   const dockTabToPaneEdge = useWorkbenchStore((state) => state.dockTabToPaneEdge)
   const reorderTabs = useWorkbenchStore((state) => state.reorderTabs)
   const splitPaneWithTab = useWorkbenchStore((state) => state.splitPaneWithTab)
+  const splitPaneWithNewTab = useWorkbenchStore((state) => state.splitPaneWithNewTab)
   const closePane = useWorkbenchStore((state) => state.closePane)
   const updateSplitSizes = useWorkbenchStore((state) => state.updateSplitSizes)
 
@@ -640,13 +641,11 @@ function App() {
 
       if (getPaneHeight(sourcePaneId) > 700) {
         const draftTab = makeTerminalDraftTab(sessionId, nodeId, path)
-        upsertTab(draftTab, { paneId: sourcePaneId, activate: false })
-        const createdPaneId = splitPaneWithTab(sourcePaneId, draftTab.id, 'bottom')
+        const createdPaneId = splitPaneWithNewTab(sourcePaneId, draftTab, 'bottom')
         if (createdPaneId) {
           navigateToTab(draftTab.id)
           return
         }
-        removeTab(draftTab.id)
       }
     }
 
