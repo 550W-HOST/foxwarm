@@ -1,12 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import Chat from './components/Chat'
-import ArchitectureView from './components/ArchitectureView'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
-import TerminalView from './components/TerminalView'
-import WorkspaceView from './components/WorkspaceView'
-import FileEditorView from './components/FileEditorView'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
 import type { SendKeyMode } from './components/chatShared'
@@ -40,6 +36,19 @@ const TAB_HASH_PREFIX = 'tab/'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
+
+const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
+const TerminalView = lazy(() => import('./components/TerminalView'))
+const WorkspaceView = lazy(() => import('./components/WorkspaceView'))
+const FileEditorView = lazy(() => import('./components/FileEditorView'))
+
+function LazyViewFallback({ label = 'Loading…' }: { label?: string }) {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center bg-gray-50 px-6 text-center text-sm text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+      <div>{label}</div>
+    </div>
+  )
+}
 
 function isChatTab(tab: WorkbenchTab): tab is Extract<WorkbenchTab, { type: 'chat' }> {
   return tab.type === 'chat'
@@ -828,45 +837,51 @@ function App() {
     if (tab.type === 'workspace') {
       const sessionId = tab.contextSessionId || currentContextSessionId
       return (
-        <WorkspaceView
-          key={tab.id}
-          initialNodeId={tab.nodeId}
-          initialPath={tab.path}
-          onBack={onBack}
-          onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.path })}
-          onOpenFile={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
-        />
+        <Suspense fallback={<LazyViewFallback label="Loading workspace…" />}>
+          <WorkspaceView
+            key={tab.id}
+            initialNodeId={tab.nodeId}
+            initialPath={tab.path}
+            onBack={onBack}
+            onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.path })}
+            onOpenFile={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
+          />
+        </Suspense>
       )
     }
 
     if (tab.type === 'file') {
       const sessionId = tab.contextSessionId || currentContextSessionId
       return (
-        <FileEditorView
-          key={tab.id}
-          nodeId={tab.nodeId}
-          filePath={tab.path}
-          onBack={onBack}
-          onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.path.split('/').slice(0, -1).join('/') || '/' })}
-          onOpenFileTab={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
-        />
+        <Suspense fallback={<LazyViewFallback label="Loading file editor…" />}>
+          <FileEditorView
+            key={tab.id}
+            nodeId={tab.nodeId}
+            filePath={tab.path}
+            onBack={onBack}
+            onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.path.split('/').slice(0, -1).join('/') || '/' })}
+            onOpenFileTab={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
+          />
+        </Suspense>
       )
     }
 
     const sessionId = tab.contextSessionId || currentContextSessionId
     return (
-      <TerminalView
-        key={tab.id}
-        sessionId={sessionId}
-        initialCwd={tab.cwd}
-        initialTerminalId={tab.terminalId}
-        createMode={tab.createMode || 'reuse'}
-        onBack={onBack}
-        onSessionsChanged={() => { void fetchSessions() }}
-        onTerminalReady={(terminal) => handleTerminalReady(tab.id, terminal)}
-        onTerminalClosed={handleTerminalClosed}
-        onOpenWorkspace={(cwd) => openWorkspaceTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.cwd || '/' })}
-      />
+      <Suspense fallback={<LazyViewFallback label="Loading terminal…" />}>
+        <TerminalView
+          key={tab.id}
+          sessionId={sessionId}
+          initialCwd={tab.cwd}
+          initialTerminalId={tab.terminalId}
+          createMode={tab.createMode || 'reuse'}
+          onBack={onBack}
+          onSessionsChanged={() => { void fetchSessions() }}
+          onTerminalReady={(terminal) => handleTerminalReady(tab.id, terminal)}
+          onTerminalClosed={handleTerminalClosed}
+          onOpenWorkspace={(cwd) => openWorkspaceTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.cwd || '/' })}
+        />
+      </Suspense>
     )
   }
 
@@ -1138,7 +1153,9 @@ function App() {
     if (route.view === 'agents') {
       return (
         <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
-          <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} onBack={handleBackToList} />
+          <Suspense fallback={<LazyViewFallback label="Loading architecture…" />}>
+            <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} onBack={handleBackToList} />
+          </Suspense>
         </div>
       )
     }
@@ -1177,7 +1194,9 @@ function App() {
       />
       <div className="flex-1 h-full min-h-0 overflow-hidden">
         {route.view === 'agents' ? (
-          <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} />
+          <Suspense fallback={<LazyViewFallback label="Loading architecture…" />}>
+            <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} />
+          </Suspense>
         ) : (
           <div className="h-full min-h-0 overflow-hidden">
             <WorkbenchLayout
