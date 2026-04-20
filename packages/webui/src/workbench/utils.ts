@@ -76,6 +76,49 @@ export function findPaneContainingTab(node: WorkbenchLayoutNode, tabId: string):
   return null
 }
 
+function findFirstPane(node: WorkbenchLayoutNode): WorkbenchPaneNode | null {
+  if (isPaneNode(node)) {
+    return node
+  }
+
+  for (const child of node.children) {
+    const found = findFirstPane(child)
+    if (found) return found
+  }
+
+  return null
+}
+
+function findPanePath(node: WorkbenchLayoutNode, paneId: string, path: Array<{ split: WorkbenchSplitNode; childIndex: number }> = []): Array<{ split: WorkbenchSplitNode; childIndex: number }> | null {
+  if (isPaneNode(node)) {
+    return node.id === paneId ? path : null
+  }
+
+  for (let index = 0; index < node.children.length; index += 1) {
+    const child = node.children[index]
+    const found = findPanePath(child, paneId, [...path, { split: node, childIndex: index }])
+    if (found) return found
+  }
+
+  return null
+}
+
+export function findPaneBelow(node: WorkbenchLayoutNode, paneId: string): WorkbenchPaneNode | null {
+  const path = findPanePath(node, paneId)
+  if (!path) return null
+
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    const step = path[index]
+    if (step.split.direction !== 'column') continue
+    if (step.childIndex >= step.split.children.length - 1) continue
+
+    const siblingBelow = step.split.children[step.childIndex + 1]
+    return findFirstPane(siblingBelow)
+  }
+
+  return null
+}
+
 export function mapLayoutTree(node: WorkbenchLayoutNode, updater: (node: WorkbenchLayoutNode) => WorkbenchLayoutNode): WorkbenchLayoutNode {
   const nextNode = isSplitNode(node)
     ? updater({

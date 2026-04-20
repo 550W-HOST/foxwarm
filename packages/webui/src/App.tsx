@@ -10,7 +10,7 @@ import type { Session } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
-import { createWorkbenchId, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
+import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 type AppView = 'session' | 'agents'
@@ -479,6 +479,10 @@ function App() {
       return
     }
 
+    if (route.tabId?.startsWith('chat:')) {
+      return
+    }
+
     if (focusedActiveTabId) {
       setRoute({ view: 'tab', tabId: focusedActiveTabId })
       setTabHash(focusedActiveTabId)
@@ -578,7 +582,35 @@ function App() {
     navigateToTab(tab.id)
   }
 
-  const openTerminalTab = (sessionId: string, options?: { nodeId?: string; path?: string; terminalId?: string }) => {
+  const getPaneHeight = (paneId: string): number => {
+    const paneElement = document.querySelector<HTMLElement>(`[data-pane-id="${paneId}"]`)
+    return Math.round(paneElement?.getBoundingClientRect().height || 0)
+  }
+
+  const getTerminalTabInPane = (paneId: string, options?: { nodeId?: string; path?: string }): Extract<WorkbenchTab, { type: 'terminal' }> | null => {
+    const pane = findPaneNode(root, paneId)
+    if (!pane) return null
+
+    const paneTabs = pane.tabIds
+      .map((tabId) => tabsById[tabId])
+      .filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab?.type === 'terminal')
+
+    if (paneTabs.length === 0) return null
+
+    const activeTab = pane.activeTabId ? tabsById[pane.activeTabId] : null
+    if (activeTab?.type === 'terminal') {
+      return activeTab
+    }
+
+    if (options?.path) {
+      const matching = paneTabs.find((tab) => tab.cwd === options.path && (!options.nodeId || tab.nodeId === options.nodeId))
+      if (matching) return matching
+    }
+
+    return paneTabs[0]
+  }
+
+  const openTerminalTab = (sessionId: string, options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string }) => {
     if (options?.terminalId) {
       const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
       const terminal = activeTerminals.find((item) => item.id === options.terminalId)
@@ -593,8 +625,33 @@ function App() {
     const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
     const nodeId = options?.nodeId || sessionRecord?.currentNode || 'master'
     const path = options?.path || sessionRecord?.cwd || '/'
+
+    const sourcePaneId = options?.sourcePaneId || focusedPaneId || null
+
+    if (!isMobile && sourcePaneId) {
+      const paneBelow = findPaneBelow(root, sourcePaneId)
+      if (paneBelow) {
+        const existingBottomTerminal = getTerminalTabInPane(paneBelow.id, { nodeId, path })
+        if (existingBottomTerminal) {
+          navigateToTab(existingBottomTerminal.id)
+          return
+        }
+
+        if (getPaneHeight(sourcePaneId) > 700) {
+          const draftTab = makeTerminalDraftTab(sessionId, nodeId, path)
+          upsertTab(draftTab, { paneId: sourcePaneId, activate: false })
+          const createdPaneId = splitPaneWithTab(sourcePaneId, draftTab.id, 'bottom')
+          if (createdPaneId) {
+            navigateToTab(draftTab.id)
+            return
+          }
+          removeTab(draftTab.id)
+        }
+      }
+    }
+
     const tab = makeTerminalDraftTab(sessionId, nodeId, path)
-    upsertTab(tab, { activate: true })
+    upsertTab(tab, { paneId: sourcePaneId || undefined, activate: true })
     navigateToTab(tab.id)
   }
 
@@ -796,6 +853,23 @@ function App() {
   }
 
   useEffect(() => {
+    if (route.view !== 'tab' || !route.tabId || tabsById[route.tabId]) {
+      return
+    }
+
+    if (!route.tabId.startsWith('chat:')) {
+      return
+    }
+
+    const sessionId = route.tabId.slice('chat:'.length)
+    if (!sessionId) {
+      return
+    }
+
+    openPersistentChatTab(sessionId)
+  }, [route, tabsById, allTabs, sessions])
+
+  useEffect(() => {
     const helper = {
       sendMessage: (message: string) => {
         const activeTab = focusedActiveTab
@@ -817,6 +891,8 @@ function App() {
   }, [focusedActiveTab, sessions])
 
   const renderTabContent = (tab: WorkbenchTab, onBack?: () => void) => {
+    const sourcePaneId = findPaneContainingTab(root, tab.id)?.id
+
     if (tab.type === 'chat') {
       const sessionRecord = sessions.find((session) => session.id === tab.sessionId || session.aliases?.includes(tab.sessionId))
       return (
@@ -828,7 +904,7 @@ function App() {
           sendKeyMode={sendKeyMode}
           onToggleSendKeyMode={() => setSendKeyMode((current) => current === 'enter' ? 'mod-enter' : 'enter')}
           onOpenWorkspace={() => openWorkspaceTab(tab.sessionId)}
-          onOpenTerminal={() => openTerminalTab(tab.sessionId)}
+          onOpenTerminal={() => openTerminalTab(tab.sessionId, { sourcePaneId })}
           onDraftEdited={() => handleChatDraftEdited(tab.id)}
         />
       )
@@ -843,7 +919,7 @@ function App() {
             initialNodeId={tab.nodeId}
             initialPath={tab.path}
             onBack={onBack}
-            onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.path })}
+            onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.path, sourcePaneId })}
             onOpenFile={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
           />
         </Suspense>
@@ -859,7 +935,7 @@ function App() {
             nodeId={tab.nodeId}
             filePath={tab.path}
             onBack={onBack}
-            onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.path.split('/').slice(0, -1).join('/') || '/' })}
+            onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.path.split('/').slice(0, -1).join('/') || '/', sourcePaneId })}
             onOpenFileTab={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
           />
         </Suspense>

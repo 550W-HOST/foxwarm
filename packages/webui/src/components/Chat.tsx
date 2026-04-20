@@ -23,6 +23,7 @@ type AsrTranscribeResult = {
 
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
+const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
 
 function getMessagePlainText(message: Message): string {
   return message.parts
@@ -146,6 +147,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
   const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
   const [resolvedSessionFilePath, setResolvedSessionFilePath] = useState<string | null>(null)
   const [sessionFilePayload, setSessionFilePayload] = useState<SessionFilePayload | null>(null)
+  const [showFullTimeline, setShowFullTimeline] = useState(false)
 
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const chatRootRef = useRef<HTMLDivElement>(null)
@@ -158,6 +160,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
   const pendingSentMessagesRef = useRef<string[]>([])
   const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
   const composerHeightRef = useRef<number | null>(null)
+  const expandHistoryScrollRestoreRef = useRef<{ top: number; height: number } | null>(null)
 
   useEffect(() => {
     setProcessingReasoningSummary('')
@@ -167,6 +170,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
     setShowDebugInfo(false)
     setDebugInfoError(null)
     setDebugInfoCopied(false)
+  }, [sessionId])
+
+  useEffect(() => {
+    setShowFullTimeline(false)
+    expandHistoryScrollRestoreRef.current = null
   }, [sessionId])
 
   useEffect(() => {
@@ -251,6 +259,14 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
       setShowScrollButton(distanceFromBottom > 200)
       setShowScrollTopButton(scrollTop > 200)
       shouldAutoScrollRef.current = distanceFromBottom < 200
+
+      if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < 120) {
+        expandHistoryScrollRestoreRef.current = {
+          top: scrollTop,
+          height: container.scrollHeight,
+        }
+        setShowFullTimeline(true)
+      }
     }
 
     const container = messagesContainerRef.current
@@ -258,7 +274,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
       container.addEventListener('scroll', handleScroll)
       return () => container.removeEventListener('scroll', handleScroll)
     }
-  }, [])
+  }, [messages.length, showFullTimeline])
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -517,6 +533,22 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
     }
   }, [messages, scrollToBottom])
 
+  useEffect(() => {
+    const restore = expandHistoryScrollRestoreRef.current
+    if (!restore || !showFullTimeline) {
+      return
+    }
+
+    const container = messagesContainerRef.current
+    if (!container) {
+      return
+    }
+
+    const nextScrollHeight = container.scrollHeight
+    container.scrollTop = Math.max(0, nextScrollHeight - restore.height + restore.top)
+    expandHistoryScrollRestoreRef.current = null
+  }, [showFullTimeline, messages.length])
+
   const snapshotSystemMessage = useMemo<Message | null>(() => {
     const snapshotText = typeof sessionFilePayload?.persistentMemorySnapshot === 'string'
       ? sessionFilePayload.persistentMemorySnapshot.trim()
@@ -536,9 +568,18 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
     }
   }, [sessionFilePayload])
 
+  const visibleMessages = useMemo(() => {
+    if (showFullTimeline || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+      return messages
+    }
+    return messages.slice(-DEFAULT_VISIBLE_TIMELINE_MESSAGES)
+  }, [messages, showFullTimeline])
+
+  const hiddenMessageCount = messages.length - visibleMessages.length
+
   const timelineMessages = useMemo(() => (
-    snapshotSystemMessage ? [snapshotSystemMessage, ...messages] : messages
-  ), [messages, snapshotSystemMessage])
+    snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
+  ), [snapshotSystemMessage, visibleMessages])
 
   const debugInfoObject = useMemo(() => ({
     sessionId,
@@ -919,6 +960,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
 
       <div className="relative min-h-0 flex-1">
         <div ref={messagesContainerRef} className="h-full overflow-y-auto p-4">
+          {hiddenMessageCount > 0 && !showFullTimeline && (
+            <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
+              Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
+            </div>
+          )}
           <ChatTimeline messages={timelineMessages} isMobile={isMobile} verbose={verbose} />
           <ProcessingStatus
             sessionBusy={sessionBusy}

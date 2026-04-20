@@ -538,7 +538,7 @@ export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
 
 export const SessionHashLink = ({ sessionId, className = '' }: { sessionId: string; className?: string }) => (
   <a
-    href={`#${sessionId}`}
+    href={`#session/${encodeURIComponent(sessionId)}`}
     className={`font-mono underline decoration-dotted underline-offset-2 hover:text-blue-600 dark:hover:text-blue-300 ${className}`.trim()}
     title={`Open session ${sessionId}`}
   >
