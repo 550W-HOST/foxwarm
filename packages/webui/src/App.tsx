@@ -403,6 +403,7 @@ function App() {
   useEffect(() => {
     const activeTerminalMap = new Map(activeTerminals.map((terminal) => [terminal.id, terminal]))
     const terminalTabs = allTabs.filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal')
+    const terminalDraftTabs = terminalTabs.filter((tab) => !tab.terminalId)
 
     terminalTabs.forEach((tab) => {
       if (!tab.terminalId) return
@@ -428,7 +429,26 @@ function App() {
       }
     })
 
-  }, [activeTerminals, allTabs])
+    activeTerminals.forEach((terminal) => {
+      const existing = terminalTabs.find((tab) => tab.terminalId === terminal.id)
+      if (existing) {
+        return
+      }
+
+      const matchingDraft = terminalDraftTabs.find((tab) => (
+        (tab.contextSessionId || currentContextSessionId) === terminal.sessionId
+        && (tab.nodeId || 'master') === terminal.nodeId
+        && (tab.cwd || '/') === terminal.cwd
+      ))
+
+      if (matchingDraft) {
+        return
+      }
+
+      upsertTab(makeTerminalTabFromRecord(terminal), { activate: false })
+    })
+
+  }, [activeTerminals, allTabs, currentContextSessionId, upsertTab])
 
   useEffect(() => {
     const baseTitle = '🦊 Foxwarm'
