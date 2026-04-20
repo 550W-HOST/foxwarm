@@ -47,7 +47,6 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
-  const [startMode, setStartMode] = useState<'new' | 'reuse'>(createMode)
 
   const requestedCwd = useMemo(() => {
     if (typeof initialCwd === 'string' && initialCwd.trim().length > 0) {
@@ -67,10 +66,6 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
   useEffect(() => {
     onTerminalClosedRef.current = onTerminalClosed
   }, [onTerminalClosed])
-
-  useEffect(() => {
-    setStartMode(createMode)
-  }, [createMode])
 
   useEffect(() => {
     const term = new Terminal({
@@ -154,7 +149,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
           }
         }
 
-        if (!terminalId && startMode !== 'new') {
+        if (!terminalId && createMode !== 'new') {
           const listRes = await fetch(`${API_BASE_PATH}/terminals?sessionId=${encodeURIComponent(sessionId)}`)
           const listData = await listRes.json().catch(() => ({}))
           if (!listRes.ok) {
@@ -225,7 +220,6 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
                 term.write(payload.backlog)
               }
               suppressCloseCallbackRef.current = false
-              setStartMode('reuse')
               setTerminalInfo(payload.terminal)
               setStatus('ready')
               onTerminalReadyRef.current?.(payload.terminal)
@@ -283,7 +277,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [sessionId, requestedCwd, initialTerminalId, startMode])
+  }, [sessionId, requestedCwd, initialTerminalId, createMode])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">

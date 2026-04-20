@@ -636,17 +636,17 @@ function App() {
           navigateToTab(existingBottomTerminal.id)
           return
         }
+      }
 
-        if (getPaneHeight(sourcePaneId) > 700) {
-          const draftTab = makeTerminalDraftTab(sessionId, nodeId, path)
-          upsertTab(draftTab, { paneId: sourcePaneId, activate: false })
-          const createdPaneId = splitPaneWithTab(sourcePaneId, draftTab.id, 'bottom')
-          if (createdPaneId) {
-            navigateToTab(draftTab.id)
-            return
-          }
-          removeTab(draftTab.id)
+      if (getPaneHeight(sourcePaneId) > 700) {
+        const draftTab = makeTerminalDraftTab(sessionId, nodeId, path)
+        upsertTab(draftTab, { paneId: sourcePaneId, activate: false })
+        const createdPaneId = splitPaneWithTab(sourcePaneId, draftTab.id, 'bottom')
+        if (createdPaneId) {
+          navigateToTab(draftTab.id)
+          return
         }
+        removeTab(draftTab.id)
       }
     }
 
