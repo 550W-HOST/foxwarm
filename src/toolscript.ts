@@ -499,6 +499,76 @@ async function requestModelWithoutContext(prompt: string, session: Session): Pro
   return { text: result.text || '' };
 }
 
+async function findToolForScript(args: {
+  query: string;
+  sources?: string[];
+  limit?: number;
+  includeSchema?: boolean;
+}, ctx: ToolContext): Promise<{ tool: any | null; count: number; tools: any[] }> {
+  const toolsModule = require('./tools');
+  const result = await toolsModule.call_tool({
+    name: 'search_tools',
+    source: 'builtin',
+    args: {
+      query: args.query,
+      sources: Array.isArray(args.sources) && args.sources.length > 0 ? args.sources : ['builtin'],
+      limit: typeof args.limit === 'number' && Number.isFinite(args.limit) ? args.limit : 5,
+      includeSchema: args.includeSchema === true,
+    },
+  }, ctx);
+  const normalized = normalizeMontyValue(result);
+  const tools = Array.isArray(normalized?.tools) ? normalized.tools : [];
+  return {
+    tool: tools[0] || null,
+    count: typeof normalized?.count === 'number' ? normalized.count : tools.length,
+    tools,
+  };
+}
+
+async function stepAndReleaseManagedSession(args: {
+  sessionId: string;
+  ownerSessionId: string;
+  controllerRunId?: string;
+  leaseId: string;
+  expectedRevision?: number;
+  runMode?: 'idle' | 'tool';
+  inboxOrder?: 'before' | 'after' | 'ignore';
+  parts?: MessagePart[];
+  message?: Message;
+  includeMessages?: boolean;
+}): Promise<Record<string, any>> {
+  const stepResult = await managedSessions.managedSessionStep({
+    sessionId: args.sessionId,
+    ownerSessionId: args.ownerSessionId,
+    ...(args.controllerRunId ? { controllerRunId: args.controllerRunId } : {}),
+    leaseId: args.leaseId,
+    ...(typeof args.expectedRevision === 'number' ? { expectedRevision: args.expectedRevision } : {}),
+    ...(args.runMode ? { runMode: args.runMode } : {}),
+    ...(args.inboxOrder ? { inboxOrder: args.inboxOrder } : {}),
+    ...(args.parts ? { parts: args.parts } : {}),
+    ...(args.message ? { message: args.message } : {}),
+  });
+
+  const releaseResult = await managedSessions.releaseManagedSession({
+    sessionId: args.sessionId,
+    ownerSessionId: args.ownerSessionId,
+    ...(args.controllerRunId ? { controllerRunId: args.controllerRunId } : {}),
+    leaseId: args.leaseId,
+    expectedRevision: stepResult.revision,
+  });
+
+  return {
+    ...stepResult,
+    releasedPendingInboxCount: releaseResult.releasedPendingInboxCount,
+    ...(args.includeMessages
+      ? {}
+      : {
+          newMessagesCount: stepResult.newMessages.length,
+          newMessages: [] as Message[],
+        }),
+  };
+}
+
 function getToolScriptSession(ctx: ToolContext, functionName: string): Session {
   if (!ctx.session) {
     throw new Error(`${functionName} requires a session context.`);
@@ -568,6 +638,17 @@ function parseOptionalBoolean(value: any, label: string): boolean | undefined {
     return normalized;
   }
   throw new Error(`${label} must be a boolean.`);
+}
+
+function parseOptionalStringArray(value: any, label: string): string[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const normalized = normalizeMontyValue(value);
+  if (!Array.isArray(normalized) || normalized.some(item => typeof item !== 'string')) {
+    throw new Error(`${label} must be an array of strings.`);
+  }
+  return normalized.map(item => item.trim()).filter(Boolean);
 }
 
 function parseToolScriptRunMode(value: any): ToolScriptRunMode {
@@ -662,6 +743,26 @@ async function executeScriptHostCall(
     return normalizeMontyValue(await requestModelWithoutContext(prompt, session));
   }
 
+  if (functionName === 'find_tool') {
+    const query = requireStringArg(
+      getNamedArg(positionalArgs, kwargs, 0, ['query']),
+      'query',
+    );
+    const sources = parseOptionalStringArray(
+      getNamedArg(positionalArgs, kwargs, 1, ['sources']),
+      'sources',
+    );
+    const includeSchema = parseOptionalBoolean(
+      getNamedArg(positionalArgs, kwargs, 2, ['include_schema', 'includeSchema']),
+      'include_schema',
+    );
+    return normalizeMontyValue(await findToolForScript({
+      query,
+      ...(sources ? { sources } : {}),
+      ...(includeSchema !== undefined ? { includeSchema } : {}),
+    }, ctx));
+  }
+
   if (functionName === 'open_managed_session') {
     const ownerSession = getToolScriptSession(ctx, functionName);
     const targetSessionId = requireStringArg(
@@ -738,6 +839,43 @@ async function executeScriptHostCall(
       leaseId,
       expectedRevision,
       ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+    }));
+  }
+
+  if (functionName === 'step_and_release_managed_session') {
+    const ownerSession = getToolScriptSession(ctx, functionName);
+    const targetSessionId = requireStringArg(
+      getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
+      'session_id',
+    );
+    const leaseId = requireStringArg(
+      getNamedArg(positionalArgs, kwargs, 1, ['lease_id', 'leaseId']),
+      'lease_id',
+    );
+    const expectedRevision = parseOptionalExpectedRevision(
+      getNamedArg(positionalArgs, kwargs, 2, ['expected_revision', 'expectedRevision']),
+    );
+    const runMode = parseManagedSessionRunMode(
+      getNamedArg(positionalArgs, kwargs, 3, ['run_mode', 'runMode']),
+    );
+    const inboxOrder = parseManagedSessionInboxOrder(
+      getNamedArg(positionalArgs, kwargs, 4, ['inbox_order', 'inboxOrder']),
+    );
+    const includeMessages = parseOptionalBoolean(
+      getNamedArg(positionalArgs, kwargs, 5, ['include_messages', 'includeMessages']),
+      'include_messages',
+    );
+    const normalizedInput = normalizeManagedSessionStepInput(positionalArgs, kwargs);
+    return normalizeMontyValue(await stepAndReleaseManagedSession({
+      sessionId: targetSessionId,
+      ownerSessionId: ownerSession.id,
+      ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+      leaseId,
+      ...(typeof expectedRevision === 'number' ? { expectedRevision } : {}),
+      ...(runMode ? { runMode } : {}),
+      ...(inboxOrder ? { inboxOrder } : {}),
+      ...(includeMessages !== undefined ? { includeMessages } : {}),
+      ...normalizedInput,
     }));
   }
 

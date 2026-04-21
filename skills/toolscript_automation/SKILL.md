@@ -7,6 +7,17 @@ description: Use ToolScript when you want one script to orchestrate multiple too
 
 Use this skill when a task is better expressed as a **small script that drives tools** instead of a normal one-shot tool loop.
 
+## Fast start
+
+Before grepping tests, read:
+
+- `examples/toolscript/automation_basic.py`
+- `examples/toolscript/README.md`
+
+Small helper worth knowing immediately:
+
+- `find_tool(...)`
+
 Typical fit:
 
 - repeatable tool sequences
@@ -48,6 +59,10 @@ Current ToolScript run tools:
 
 All of these return **structured run data**, not only plain text.
 
+## Canonical examples
+
+If your task is close to the basic automation pattern, copy/adapt `automation_basic.py` first.
+
 Important result fields commonly include:
 
 - `runId`
@@ -66,8 +81,37 @@ Inside the script, you can currently use:
 
 - `print(...)`
 - `call_tool(...)`
+- `find_tool(...)`
 - `ask_agent(...)`
 - `request_model_without_context(...)`
+
+### `find_tool(...)`
+
+Use this as a small helper when you want the common pattern:
+
+- search tools
+- pick the first result
+- keep a structured record of what matched
+
+Example:
+
+```python
+found = find_tool("read file")
+tool = found["tool"]
+print(tool["name"])
+```
+
+Return shape is roughly:
+
+```python
+{
+    "tool": {...} or None,
+    "count": 3,
+    "tools": [...],
+}
+```
+
+Use `call_tool("search_tools", ...)` directly if you need full custom search behavior; use `find_tool(...)` for the common happy path.
 
 ### `call_tool(...)`
 
@@ -137,12 +181,7 @@ Notes:
 ```python
 print("starting automation")
 
-tool_search = call_tool("search_tools", {
-    "query": "read file",
-    "sources": ["builtin"],
-    "limit": 1,
-    "includeSchema": False,
-})
+tool_search = find_tool("read file")
 print(tool_search)
 
 doc = call_tool("read", {"filePath": "skills/toolscript_automation/SKILL.md"})
@@ -184,8 +223,9 @@ After `run_script(...)` or `start_toolscript_run(...)`, inspect:
 When asked to automate a task with ToolScript, a strong pattern is:
 
 1. inspect/load this skill
-2. draft the script file
-3. briefly sanity-check the script
-4. run it with `run_script(...)` or `start_toolscript_run(...)`
-5. inspect the structured run result
-6. if it is waiting for agent input, resume with `continue_script(...)`
+2. inspect the canonical example file if the task is similar
+3. draft the script file
+4. briefly sanity-check the script
+5. run it with `run_script(...)` or `start_toolscript_run(...)`
+6. inspect the structured run result
+7. if it is waiting for agent input, resume with `continue_script(...)`

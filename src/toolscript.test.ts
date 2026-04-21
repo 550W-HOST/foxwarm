@@ -143,6 +143,28 @@ test('request_model_without_context uses direct low-level llm request with no to
   }
 });
 
+test('find_tool helper returns the top structured tool match', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_find_tool');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, [
+    'found = find_tool("read file")',
+    'found["tool"]["name"] if found["tool"] else ""',
+  ].join('\n'));
+
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.result, 'search_tools');
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
 test('ToolScript manager host functions can open, step, and release a managed child session', async () => {
   await resetToolScriptRunsForTests();
   const router = new MessageRouter();
@@ -248,9 +270,8 @@ test('background ToolScript controller run can wait for managed inbox events and
   await writeScript(scriptName, [
     `lease = open_managed_session("${childId}")`,
     `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
-    `step = session_step("${childId}", lease["leaseId"], event["revision"], message="controller woke")`,
-    `release_managed_session("${childId}", lease["leaseId"], step["revision"])`,
-    'step',
+    `result = step_and_release_managed_session("${childId}", lease["leaseId"], event["revision"], message="controller woke")`,
+    'result',
   ].join('\n'));
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
@@ -284,6 +305,7 @@ test('background ToolScript controller run can wait for managed inbox events and
     const completed = await getToolScriptRunForTests(started.runId);
     assert.equal(completed?.status, 'completed');
     assert.equal(completed?.lastResult?.yieldReason, 'idle');
+    assert.equal(completed?.lastResult?.releasedPendingInboxCount, 0);
 
     const child = await sessionManager.getSession(childId);
     assert.match(child.history[child.history.length - 1]?.parts?.[0]?.text || '', /controller woke/);

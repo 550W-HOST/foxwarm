@@ -7,6 +7,17 @@ description: Use ToolScript managed-session primitives and background controller
 
 Use this skill when you want a ToolScript run to act like a **controller** for another session.
 
+## Fast start
+
+Before grepping tests, read:
+
+- `examples/toolscript/managed_controller_basic.py`
+- `examples/toolscript/README.md`
+
+Small helper worth knowing immediately:
+
+- `step_and_release_managed_session(...)`
+
 This is the skill for:
 
 - opening managed control of a child/related session
@@ -14,6 +25,10 @@ This is the skill for:
 - stepping the managed session in a controlled way
 - releasing control cleanly
 - understanding how this interacts with **background ToolScript runs**
+
+## Canonical examples
+
+If your task is “wait for one managed event, step once, then release”, start by copying the managed controller example.
 
 ## Core idea
 
@@ -99,6 +114,32 @@ Releases the lease and returns queued control to the session itself.
 
 Pending inbox work is replayed back into the normal queue when appropriate.
 
+### `step_and_release_managed_session(...)`
+
+Use this helper for the very common pattern:
+
+- step once
+- then immediately release the lease
+
+Example:
+
+```python
+result = step_and_release_managed_session(
+    child_id,
+    lease["leaseId"],
+    event["revision"],
+    run_mode="idle",
+    inbox_order="before",
+    message="Controller handled this request.",
+)
+```
+
+It returns the `session_step(...)` result plus:
+
+- `releasedPendingInboxCount`
+
+By default the helper keeps the result light. If you really need the full `newMessages` payload, pass `include_messages=True`.
+
 ## `runMode`, `inboxOrder`, `yieldReason`
 
 ### `runMode`
@@ -144,7 +185,7 @@ event = wait_for_managed_event(
     lease["revision"],
 )
 
-step = session_step(
+result = step_and_release_managed_session(
     child_id,
     lease["leaseId"],
     event["revision"],
@@ -153,9 +194,7 @@ step = session_step(
     message="Controller processed your request.",
 )
 
-release_managed_session(child_id, lease["leaseId"], step["revision"])
-
-step
+result
 ```
 
 ## Typical outer run pattern

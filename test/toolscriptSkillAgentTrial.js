@@ -36,6 +36,22 @@ function extractFunctionCallNames(session) {
   return names;
 }
 
+function extractFunctionCalls(session) {
+  const calls = [];
+  for (const message of session.history || []) {
+    for (const part of message.parts || []) {
+      if (part.functionCall?.name) {
+        calls.push({
+          name: String(part.functionCall.name),
+          args: part.functionCall.args || null,
+          rawArgsText: part.functionCall.rawArgsText || '',
+        });
+      }
+    }
+  }
+  return calls;
+}
+
 async function listRunRecords() {
   const dir = path.join(STATE_DIR, 'toolscript-runs');
   try {
@@ -110,8 +126,9 @@ async function main() {
 
     const automationPrompt = [
       'You have new ToolScript skills available.',
-      'Before guessing APIs, inspect the relevant ToolScript skill docs with load_skill.',
+      'Before guessing APIs, inspect the relevant ToolScript skill docs with load_skill, then read the canonical example path mentioned in that skill.',
       `Then create a ToolScript file named \`${automationScriptName}\` in the current agent folder.`,
+      'Prefer using any helper mentioned in the skill/example if it fits. Avoid repo-wide grep unless the skill/example is still insufficient.',
       'The script should search builtin tools for "read file", print the top tool name, read `skills/toolscript_automation/SKILL.md`, print a short excerpt, ask_agent("Reply with a short label"), and return a dict with the label and tool count.',
       'After writing the file, run it with run_script, continue it with input `TRIAL_OK`, and then briefly report whether it worked.',
       'Keep the final reply concise.',
@@ -125,9 +142,10 @@ async function main() {
 
     const controllerPrompt = [
       `A target session already exists with session id \`${targetSessionId}\`.`,
-      'Before guessing APIs, inspect the relevant ToolScript managed-controller skill docs with load_skill.',
+      'Before guessing APIs, inspect the relevant ToolScript managed-controller skill docs with load_skill, then read the canonical example path mentioned in that skill.',
       `Then create a ToolScript file named \`${controllerScriptName}\` in the current agent folder.`,
-      'The controller should open managed control of the target session, wait for one managed event, call session_step with a short manager message like "Controller handled this request.", then release the session.',
+      'Prefer using any helper mentioned in the skill/example if it fits. Avoid repo-wide grep unless the skill/example is still insufficient.',
+      'The controller should open managed control of the target session, wait for one managed event, handle it with a short manager message like "Controller handled this request.", then release the session.',
       'Start it as a background ToolScript run and briefly report the background run id plus whether it is waiting for managed_event.',
       'Keep the final reply concise.',
     ].join(' ');
@@ -171,7 +189,10 @@ async function main() {
         sessionId: automationSessionId,
         replies: automationResult.replies,
         functionCalls: extractFunctionCallNames(automationSession),
+        functionCallDetails: extractFunctionCalls(automationSession),
         usedLoadSkill: extractFunctionCallNames(automationSession).includes('load_skill'),
+        usedExampleRead: extractFunctionCalls(automationSession).some(call => call.name === 'read' && /examples\/toolscript\/automation_basic\.py/.test(call.rawArgsText || '')),
+        usedExec: extractFunctionCallNames(automationSession).includes('exec'),
         scriptExists: automationScriptExists,
         scriptPreview: automationScriptContent.slice(0, 1200),
         latestRun: automationRun ? {
@@ -190,7 +211,10 @@ async function main() {
         targetSessionId,
         replies: controllerResult.replies,
         functionCalls: extractFunctionCallNames(controllerSession),
+        functionCallDetails: extractFunctionCalls(controllerSession),
         usedLoadSkill: extractFunctionCallNames(controllerSession).includes('load_skill'),
+        usedExampleRead: extractFunctionCalls(controllerSession).some(call => call.name === 'read' && /examples\/toolscript\/managed_controller_basic\.py/.test(call.rawArgsText || '')),
+        usedExec: extractFunctionCallNames(controllerSession).includes('exec'),
         scriptExists: controllerScriptExists,
         scriptPreview: controllerScriptContent.slice(0, 1600),
         latestRun: controllerRun ? {
