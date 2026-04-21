@@ -5,9 +5,11 @@ import path from 'path';
 
 import { executeTools } from './llm';
 import * as llm from './llm';
+import { MessageRouter } from './messageRouter';
 import * as sessionManager from './sessionManager';
 import { getAgentDir } from './config';
 import { tool_continue_script, tool_run_script, getToolScriptRunForTests, resetToolScriptRunsForTests } from './toolscript';
+import type { Session } from './types';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -134,6 +136,54 @@ test('request_model_without_context uses direct low-level llm request with no to
     (llm as any).requestLlmOnce = originalRequestLlmOnce;
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('ToolScript manager host functions can open, step, and release a managed child session', async () => {
+  await resetToolScriptRunsForTests();
+  const router = new MessageRouter();
+  const originalChat = llm.chat;
+  const parentId = makeId('toolscript_manager_parent');
+  const childId = makeId('toolscript_manager_child');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, [
+    `lease = open_managed_session("${childId}")`,
+    `step = session_step("${childId}", lease["leaseId"], lease["revision"], message="managed hello")`,
+    `release_managed_session("${childId}", lease["leaseId"], step["revision"])`,
+    'step',
+  ].join('\n'));
+
+  sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
+  (llm as any).chat = async (parts: any, activeSession: Session) => {
+    if (parts?.length) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
+    await sessionManager.appendSessionMessage(activeSession, {
+      role: 'model',
+      parts: [{ text: `child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` }],
+    });
+    return { text: `child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` };
+  };
+
+  const parent = await sessionManager.getSession(parentId);
+  await sessionManager.getSession(childId);
+
+  try {
+    const result = await tool_run_script({ filePath: scriptName }, { sessionId: parentId, session: parent });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.result?.consumedPendingInboxCount, 0);
+    assert.equal(result.result?.pendingInboxCount, 0);
+    assert.equal(result.result?.newMessages?.length, 2);
+    assert.equal(result.result?.newMessages?.[0]?.role, 'user');
+    assert.equal(result.result?.newMessages?.[1]?.role, 'model');
+    assert.match(result.result?.newMessages?.[1]?.parts?.[0]?.text || '', /managed hello/);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.setSessionTriggerCallback(() => {});
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
   }
 });

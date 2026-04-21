@@ -8,6 +8,7 @@ import { ChannelContext, ChannelMessage, getChannelId, getChannelType, getConver
 import { formatAuthorizationInspection, inspectChannelAuthorizationFromContext } from './channelAuth';
 import { getAgentDir, getChannelConfigById, readAppConfigFile } from './config';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
+import { isManagedSessionActive } from './session/managedState';
 import { maybeBuildTodoEndTurnReminderMessage } from './session/todo';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
@@ -1054,6 +1055,16 @@ export class MessageRouter {
         channelUserId: getConversationId(ctx),
         conversationId: getConversationId(ctx),
       };
+    }
+
+    if (isManagedSessionActive(session)) {
+      await sessionManager.enqueueSessionItem(sessionId, {
+        type: 'user',
+        source: this.snapshotSource(ctx),
+        parts: message.parts,
+      });
+      await this.sendSessionReply(session, ctx, '🧭 Session is under managed control; your message was queued for its manager.');
+      return;
     }
 
     if (session.busy) {

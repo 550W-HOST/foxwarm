@@ -5,9 +5,10 @@ import path from 'path';
 import { STATE_DIR, getAgentDir } from './config';
 import { logger } from './common';
 import * as llm from './llm';
+import * as managedSessions from './managedSessions';
 import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
-import type { Session } from './types';
+import type { Message, MessagePart, Session } from './types';
 
 type ToolArgs = Record<string, any>;
 
@@ -380,6 +381,83 @@ async function requestModelWithoutContext(prompt: string, session: Session): Pro
   return { text: result.text || '' };
 }
 
+function getToolScriptSession(ctx: ToolContext, functionName: string): Session {
+  if (!ctx.session) {
+    throw new Error(`${functionName} requires a session context.`);
+  }
+  return ctx.session;
+}
+
+function getNamedArg(positionalArgs: any[], kwargs: Record<string, any>, positionalIndex: number, names: string[]): any {
+  if (positionalArgs.length > positionalIndex) {
+    return positionalArgs[positionalIndex];
+  }
+  for (const name of names) {
+    if (kwargs[name] !== undefined) {
+      return kwargs[name];
+    }
+  }
+  return undefined;
+}
+
+function requireStringArg(value: any, label: string): string {
+  const normalized = normalizeMontyValue(value);
+  if (typeof normalized !== 'string' || !normalized.trim()) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+  return normalized.trim();
+}
+
+function parseOptionalExpectedRevision(value: any): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const normalized = normalizeMontyValue(value);
+  if (typeof normalized !== 'number' || !Number.isFinite(normalized)) {
+    throw new Error('expected_revision must be a finite number.');
+  }
+  return normalized;
+}
+
+function normalizeManagedSessionStepInput(positionalArgs: any[], kwargs: Record<string, any>): { parts?: MessagePart[]; message?: Message } {
+  const rawParts = kwargs.parts;
+  if (rawParts !== undefined) {
+    const normalizedParts = normalizeMontyValue(rawParts);
+    if (!Array.isArray(normalizedParts)) {
+      throw new Error('session_step parts must be an array of message-part objects.');
+    }
+    return {
+      parts: normalizedParts.map((part: any) => ({ ...part })),
+    };
+  }
+
+  const rawMessage = kwargs.message !== undefined ? kwargs.message : kwargs.text;
+  if (rawMessage === undefined && positionalArgs.length > 3) {
+    const positionalMessage = normalizeMontyValue(positionalArgs[3]);
+    if (typeof positionalMessage === 'string') {
+      return { parts: [{ text: positionalMessage }] };
+    }
+  }
+  if (rawMessage === undefined) {
+    return {};
+  }
+
+  const normalizedMessage = normalizeMontyValue(rawMessage);
+  if (typeof normalizedMessage === 'string') {
+    return { parts: [{ text: normalizedMessage }] };
+  }
+  if (isPlainObject(normalizedMessage) && Array.isArray((normalizedMessage as any).parts)) {
+    return {
+      message: {
+        role: typeof (normalizedMessage as any).role === 'string' ? (normalizedMessage as any).role : 'user',
+        parts: (normalizedMessage as any).parts.map((part: any) => ({ ...part })),
+      },
+    };
+  }
+
+  throw new Error('session_step message must be a string or a message object with a parts array.');
+}
+
 async function executeScriptHostCall(
   functionName: string,
   positionalArgs: any[],
@@ -406,6 +484,62 @@ async function executeScriptHostCall(
       throw new Error('request_model_without_context requires a session context.');
     }
     return normalizeMontyValue(await requestModelWithoutContext(prompt, session));
+  }
+
+  if (functionName === 'open_managed_session') {
+    const ownerSession = getToolScriptSession(ctx, functionName);
+    const targetSessionId = requireStringArg(
+      getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
+      'session_id',
+    );
+    return normalizeMontyValue(await managedSessions.openManagedSession({
+      sessionId: targetSessionId,
+      ownerSessionId: ownerSession.id,
+    }));
+  }
+
+  if (functionName === 'session_step') {
+    const ownerSession = getToolScriptSession(ctx, functionName);
+    const targetSessionId = requireStringArg(
+      getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
+      'session_id',
+    );
+    const leaseId = requireStringArg(
+      getNamedArg(positionalArgs, kwargs, 1, ['lease_id', 'leaseId']),
+      'lease_id',
+    );
+    const expectedRevision = parseOptionalExpectedRevision(
+      getNamedArg(positionalArgs, kwargs, 2, ['expected_revision', 'expectedRevision']),
+    );
+    const normalizedInput = normalizeManagedSessionStepInput(positionalArgs, kwargs);
+    return normalizeMontyValue(await managedSessions.managedSessionStep({
+      sessionId: targetSessionId,
+      ownerSessionId: ownerSession.id,
+      leaseId,
+      expectedRevision,
+      ...normalizedInput,
+    }));
+  }
+
+  if (functionName === 'release_managed_session') {
+    const ownerSession = getToolScriptSession(ctx, functionName);
+    const targetSessionId = requireStringArg(
+      getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
+      'session_id',
+    );
+    const leaseId = requireStringArg(
+      getNamedArg(positionalArgs, kwargs, 1, ['lease_id', 'leaseId']),
+      'lease_id',
+    );
+    const expectedRevision = parseOptionalExpectedRevision(
+      getNamedArg(positionalArgs, kwargs, 2, ['expected_revision', 'expectedRevision']),
+    );
+    return normalizeMontyValue(await managedSessions.releaseManagedSession({
+      sessionId: targetSessionId,
+      ownerSessionId: ownerSession.id,
+      leaseId,
+      expectedRevision,
+    }));
   }
 
   throw new Error(`Unsupported ToolScript host function: ${functionName}`);

@@ -10,6 +10,7 @@ import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
+import { cloneQueueItem, getManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
 import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getSessionArchiveImagesDir, getSessionArchiveLogPath } from './config';
 import * as sessionAgentOps from './session/agentOps';
@@ -192,7 +193,7 @@ export async function getExistingSession(sessionId: string): Promise<Session | n
 export type ChannelMode = sessionChannels.ChannelMode;
 
 // Callback to trigger agent turn
-let onSessionTriggered: ((sessionId: string) => void) | null = null;
+let onSessionTriggered: ((sessionId: string) => void | Promise<void>) | null = null;
 
 // Callback when history is updated (for SSE broadcasting)
 let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = null;
@@ -1291,8 +1292,12 @@ export function getAllAttachments(): Map<string, sessionChannels.ChannelConfig> 
 /**
  * Set callback to be called when a session event is queued to an idle session
  */
-export function setSessionTriggerCallback(onTrigger: (sessionId: string) => void): void {
+export function setSessionTriggerCallback(onTrigger: (sessionId: string) => void | Promise<void>): void {
   onSessionTriggered = onTrigger;
+}
+
+export async function triggerSessionProcessing(sessionId: string): Promise<void> {
+  await Promise.resolve(onSessionTriggered?.(sessionId));
 }
 
 function isQueuedSystemEventItem(
@@ -1322,12 +1327,27 @@ export function hasTrailingQueuedSystemEvent(
 
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
   const session = await getSession(sessionId);
+  const managedBeforeEnqueue = !!getManagedSessionState(session);
+
+  if (shouldRouteQueueItemToManagedInbox(session, item)) {
+    const managed = getManagedSessionState(session);
+    if (!managed) {
+      throw new Error(`Managed session metadata missing for session \`${sessionId}\`.`);
+    }
+
+    managed.pendingInbox.push(cloneQueueItem(item));
+    managed.lastInboxAt = Date.now();
+    managed.revision += 1;
+    setManagedSessionState(session, managed);
+    await saveSession(sessionId);
+    return;
+  }
 
   session.queue.push(item);
   await saveSession(sessionId);
 
-  if (!session.busy) {
-    onSessionTriggered?.(sessionId);
+  if (!managedBeforeEnqueue && !session.busy) {
+    void onSessionTriggered?.(sessionId);
   }
 }
 

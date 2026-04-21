@@ -1,0 +1,227 @@
+import { Message, MessagePart, QueueItem } from './types';
+import * as sessionManager from './sessionManager';
+import {
+  buildManagedSessionLeaseId,
+  cloneQueueItem,
+  getManagedSessionState,
+  ManagedSessionState,
+  setManagedSessionState,
+} from './session/managedState';
+
+const activeManagedSteps = new Set<string>();
+
+export type OpenManagedSessionResult = {
+  sessionId: string;
+  ownerSessionId: string;
+  leaseId: string;
+  revision: number;
+  pendingInboxCount: number;
+};
+
+export type ManagedSessionStepResult = {
+  sessionId: string;
+  ownerSessionId: string;
+  leaseId: string;
+  revision: number;
+  consumedPendingInboxCount: number;
+  pendingInboxCount: number;
+  queueLength: number;
+  newMessages: Message[];
+};
+
+function cloneQueueItems(items: QueueItem[]): QueueItem[] {
+  return items.map(cloneQueueItem);
+}
+
+function requireOwnedManagedState(sessionId: string, state: ManagedSessionState | undefined, ownerSessionId: string, leaseId: string): ManagedSessionState {
+  if (!state) {
+    throw new Error(`Session \`${sessionId}\` is not under managed control.`);
+  }
+  if (state.ownerSessionId !== ownerSessionId) {
+    throw new Error(`Session \`${sessionId}\` is managed by another owner session.`);
+  }
+  if (state.leaseId !== leaseId) {
+    throw new Error(`Lease mismatch for managed session \`${sessionId}\`.`);
+  }
+  return state;
+}
+
+function prependQueueItems(sessionQueue: QueueItem[], items: QueueItem[]): QueueItem[] {
+  if (items.length === 0) {
+    return sessionQueue;
+  }
+  return [...cloneQueueItems(items), ...sessionQueue];
+}
+
+function buildManagerQueueItems(args: { parts?: MessagePart[] | null; message?: Message | null }): QueueItem[] {
+  if (args.message) {
+    return [{
+      type: 'intersession',
+      message: structuredClone(args.message),
+    }];
+  }
+
+  if (args.parts?.length) {
+    return [{
+      type: 'intersession',
+      parts: args.parts.map(part => ({ ...part })),
+    }];
+  }
+
+  return [];
+}
+
+function getQueueItemsEligibleForManagedInbox(queue: QueueItem[]): { intercepted: QueueItem[]; retained: QueueItem[] } {
+  const intercepted: QueueItem[] = [];
+  const retained: QueueItem[] = [];
+
+  for (const item of queue || []) {
+    if (item.type === 'compact' || item.type === 'compact-commit') {
+      retained.push(item);
+      continue;
+    }
+    intercepted.push(cloneQueueItem(item));
+  }
+
+  return { intercepted, retained };
+}
+
+export function isManagedSessionBusyForStep(sessionId: string): boolean {
+  return activeManagedSteps.has(sessionId);
+}
+
+export async function openManagedSession(args: { sessionId: string; ownerSessionId: string }): Promise<OpenManagedSessionResult> {
+  const session = await sessionManager.getSession(args.sessionId);
+  const existing = getManagedSessionState(session);
+  if (existing) {
+    throw new Error(`Session \`${args.sessionId}\` is already under managed control.`);
+  }
+  if (session.busy) {
+    throw new Error(`Session \`${args.sessionId}\` is busy and cannot be managed right now.`);
+  }
+
+  const { intercepted, retained } = getQueueItemsEligibleForManagedInbox(session.queue || []);
+  session.queue = retained;
+
+  const state: ManagedSessionState = {
+    ownerSessionId: args.ownerSessionId,
+    leaseId: buildManagedSessionLeaseId(),
+    revision: 1,
+    pendingInbox: intercepted,
+    openedAt: Date.now(),
+  };
+  setManagedSessionState(session, state);
+  await sessionManager.saveSession(session.id);
+
+  return {
+    sessionId: session.id,
+    ownerSessionId: state.ownerSessionId,
+    leaseId: state.leaseId,
+    revision: state.revision,
+    pendingInboxCount: state.pendingInbox.length,
+  };
+}
+
+export async function managedSessionStep(args: {
+  sessionId: string;
+  ownerSessionId: string;
+  leaseId: string;
+  expectedRevision?: number;
+  parts?: MessagePart[] | null;
+  message?: Message | null;
+}): Promise<ManagedSessionStepResult> {
+  const session = await sessionManager.getSession(args.sessionId);
+  const managed = requireOwnedManagedState(args.sessionId, getManagedSessionState(session), args.ownerSessionId, args.leaseId);
+
+  if (typeof args.expectedRevision === 'number' && managed.revision !== args.expectedRevision) {
+    throw new Error(`Managed session revision mismatch for \`${args.sessionId}\`: expected ${args.expectedRevision}, got ${managed.revision}.`);
+  }
+  if (session.busy) {
+    throw new Error(`Session \`${args.sessionId}\` is already busy.`);
+  }
+  if (activeManagedSteps.has(args.sessionId)) {
+    throw new Error(`Managed step already in progress for session \`${args.sessionId}\`.`);
+  }
+
+  const queuedFromManager = buildManagerQueueItems({ parts: args.parts, message: args.message });
+  const consumedPendingInbox = cloneQueueItems(managed.pendingInbox);
+  const hasWork = consumedPendingInbox.length > 0 || queuedFromManager.length > 0 || session.queue.length > 0;
+  const historyStart = session.history.length;
+
+  if (!hasWork) {
+    return {
+      sessionId: session.id,
+      ownerSessionId: managed.ownerSessionId,
+      leaseId: managed.leaseId,
+      revision: managed.revision,
+      consumedPendingInboxCount: 0,
+      pendingInboxCount: managed.pendingInbox.length,
+      queueLength: session.queue.length,
+      newMessages: [],
+    };
+  }
+
+  managed.pendingInbox = [];
+  managed.lastStepAt = Date.now();
+  managed.revision += 1;
+  setManagedSessionState(session, managed);
+  session.queue = prependQueueItems(session.queue || [], [...consumedPendingInbox, ...queuedFromManager]);
+  await sessionManager.saveSession(session.id);
+
+  activeManagedSteps.add(args.sessionId);
+  try {
+    await sessionManager.triggerSessionProcessing(session.id);
+  } finally {
+    activeManagedSteps.delete(args.sessionId);
+  }
+
+  const updated = await sessionManager.getSession(session.id);
+  const updatedManaged = requireOwnedManagedState(args.sessionId, getManagedSessionState(updated), args.ownerSessionId, args.leaseId);
+
+  return {
+    sessionId: updated.id,
+    ownerSessionId: updatedManaged.ownerSessionId,
+    leaseId: updatedManaged.leaseId,
+    revision: updatedManaged.revision,
+    consumedPendingInboxCount: consumedPendingInbox.length,
+    pendingInboxCount: updatedManaged.pendingInbox.length,
+    queueLength: updated.queue.length,
+    newMessages: updated.history.slice(historyStart),
+  };
+}
+
+export async function releaseManagedSession(args: {
+  sessionId: string;
+  ownerSessionId: string;
+  leaseId: string;
+  expectedRevision?: number;
+}): Promise<{ sessionId: string; releasedPendingInboxCount: number }> {
+  const session = await sessionManager.getSession(args.sessionId);
+  const managed = requireOwnedManagedState(args.sessionId, getManagedSessionState(session), args.ownerSessionId, args.leaseId);
+
+  if (typeof args.expectedRevision === 'number' && managed.revision !== args.expectedRevision) {
+    throw new Error(`Managed session revision mismatch for \`${args.sessionId}\`: expected ${args.expectedRevision}, got ${managed.revision}.`);
+  }
+  if (session.busy || activeManagedSteps.has(args.sessionId)) {
+    throw new Error(`Managed session \`${args.sessionId}\` is currently busy.`);
+  }
+
+  const pending = cloneQueueItems(managed.pendingInbox);
+  setManagedSessionState(session, null);
+  session.queue = prependQueueItems(session.queue || [], pending);
+  await sessionManager.saveSession(session.id);
+
+  if (!session.busy && session.queue.length > 0) {
+    await sessionManager.triggerSessionProcessing(session.id);
+  }
+
+  return {
+    sessionId: session.id,
+    releasedPendingInboxCount: pending.length,
+  };
+}
+
+export async function getManagedSessionStateForTests(sessionId: string): Promise<ManagedSessionState | undefined> {
+  const session = await sessionManager.getSession(sessionId);
+  return getManagedSessionState(session);
+}
