@@ -5,16 +5,16 @@
 # - service name (foxwarm-test)
 # - ports (3002:3001 → 3003:3001, etc.)
 
-name: foxwarm-test  # Change this for multi-test environments
+name: foxwarm-toolscript-phase1-test
 
 services:
-  foxwarm-test:  # Change this service name for multi-test environments
+  foxwarm-toolscript-phase1:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: foxwarm-test
+    container_name: foxwarm-toolscript-phase1-test
     ports:
-      - "3002:3001"  # Change external port for multi-test environments
+      - "3003:3001"
     volumes:
       - ..:/app
       - ./state:/app/state
