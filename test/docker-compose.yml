@@ -5,18 +5,19 @@
 # - service name (foxwarm-test)
 # - ports (3002:3001 → 3003:3001, etc.)
 
-name: foxwarm-toolscript-phase1-test
+name: foxwarm-toolscript-managed-session-test
 
 services:
-  foxwarm-toolscript-phase1:
+  foxwarm-toolscript-managed-session:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: foxwarm-toolscript-phase1-test
+    container_name: foxwarm-toolscript-managed-session-test
     ports:
-      - "3003:3001"
+      - "3004:3001"
     volumes:
       - ..:/app
+      - /home/ldmbot/temp-worktrees/foxwarm-toolscript-phase1/node_modules:/app/node_modules
       - ./state:/app/state
       - ./agents:/app/agents
       - ./.env:/app/.env:ro
