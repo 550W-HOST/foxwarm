@@ -1382,6 +1382,34 @@ async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSe
   await queueSessionSystemEvent(managed.ownerSessionId, wakeupMessage, 'background');
 }
 
+async function maybeResumeManagedSessionControllerRun(session: Session, managed: ManagedSessionState): Promise<void> {
+  if (!managed.controllerRunId || !managed.pendingInbox.length) {
+    return;
+  }
+  try {
+    const toolscript = require('./toolscript') as {
+      resumeBackgroundToolScriptRunForManagedSession?: (args: {
+        runId: string;
+        sessionId: string;
+        leaseId?: string;
+        revision?: number;
+        pendingInboxCount?: number;
+        wakeReason?: string;
+      }) => Promise<any>;
+    };
+    await toolscript.resumeBackgroundToolScriptRunForManagedSession?.({
+      runId: managed.controllerRunId,
+      sessionId: session.id,
+      leaseId: managed.leaseId,
+      revision: managed.revision,
+      pendingInboxCount: managed.pendingInbox.length,
+      wakeReason: 'managed-inbox',
+    });
+  } catch (error: any) {
+    logger.warn({ err: error, sessionId: session.id, controllerRunId: managed.controllerRunId }, 'Failed to resume managed-session ToolScript controller run');
+  }
+}
+
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
   const session = await getSession(sessionId);
   await reclaimManagedSessionIfStale(session);
@@ -1400,6 +1428,7 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
     setManagedSessionState(session, managed);
     await saveSession(sessionId);
     await maybeWakeManagedSessionOwner(session, managed);
+    await maybeResumeManagedSessionControllerRun(session, managed);
     return;
   }
 
@@ -1854,6 +1883,7 @@ export async function resumeBusySessions(): Promise<void> {
       const managed = getManagedSessionState(session);
       if (managed) {
         await maybeWakeManagedSessionOwner(session, managed);
+        await maybeResumeManagedSessionControllerRun(session, managed);
       }
       logger.info({ sessionId }, 'Managed session inbox wakeup processed after restart');
     } catch (e) {

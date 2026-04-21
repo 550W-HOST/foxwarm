@@ -17,36 +17,76 @@ type ToolContext = {
   session?: Session;
   broadcast?: (text: string, options?: any) => Promise<void>;
   runtimeNodeId?: string;
+  toolScriptRunId?: string;
 };
 
-type ToolScriptRunStatus = 'paused_for_agent' | 'completed' | 'failed';
+type ToolScriptRunMode = 'foreground' | 'background';
+type ToolScriptRunStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
+type ToolScriptWaitingReason = 'agent' | 'managed_event';
+
+type ToolScriptManagedLeaseRef = {
+  sessionId: string;
+  leaseId: string;
+  controllerRunId?: string;
+};
+
+type ToolScriptWaitingState = {
+  reason: ToolScriptWaitingReason;
+  waitingSince: number;
+  continuationId?: string;
+  question?: string;
+  managedEvent?: {
+    sessionId: string;
+    leaseId: string;
+    expectedRevision?: number;
+    runMode?: 'idle' | 'tool';
+    inboxOrder?: 'before' | 'after' | 'ignore';
+  };
+};
 
 type ToolScriptRunRecord = {
   runId: string;
-  sessionId: string;
+  mode: ToolScriptRunMode;
+  status: ToolScriptRunStatus;
+  ownerSessionId: string;
   agentName: string;
   filePath: string;
   scriptPath: string;
   scriptName: string;
-  status: ToolScriptRunStatus;
-  continuationId?: string;
-  pendingQuestion?: string;
   snapshotBase64?: string;
   stdout: string;
   executedTools: string[];
+  waiting?: ToolScriptWaitingState;
+  relatedManagedSessions?: ToolScriptManagedLeaseRef[];
   lastResult?: any;
   error?: string;
   createdAt: number;
   updatedAt: number;
+  startedAt: number;
+  completedAt?: number;
+  cancelledAt?: number;
+  lastWakeReason?: string;
+  lastResumeAt?: number;
 };
 
 type ToolScriptResult = {
   status: ToolScriptRunStatus;
   runId: string;
-  continuationId?: string;
-  question?: string;
+  mode: ToolScriptRunMode;
+  ownerSessionId: string;
+  scriptPath: string;
+  filePath: string;
   stdout: string;
   executedTools: string[];
+  waitingReason?: ToolScriptWaitingReason;
+  waitingFor?: any;
+  continuationId?: string;
+  question?: string;
+  relatedManagedSessions?: ToolScriptManagedLeaseRef[];
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  cancelledAt?: number;
   result?: any;
   error?: string;
 };
@@ -73,6 +113,7 @@ const DEFAULT_SCRIPT_LIMITS = {
 };
 
 let montyModulePromise: Promise<MontyModule> | null = null;
+const activeBackgroundRuns = new Set<string>();
 
 function nativeImport<T = any>(specifier: string): Promise<T> {
   return Function('s', 'return import(s)')(specifier) as Promise<T>;
@@ -128,6 +169,28 @@ async function loadRun(runId: string): Promise<ToolScriptRunRecord | null> {
   } catch (error: any) {
     if (error?.code === 'ENOENT') {
       return null;
+    }
+    throw error;
+  }
+}
+
+async function listRuns(): Promise<ToolScriptRunRecord[]> {
+  try {
+    const entries = await fs.readdir(TOOLSCRIPT_RUNS_DIR);
+    const records = await Promise.all(entries
+      .filter(name => name.endsWith('.json'))
+      .map(async (name) => {
+        try {
+          return await fs.readJson(path.join(TOOLSCRIPT_RUNS_DIR, name)) as ToolScriptRunRecord;
+        } catch {
+          return null;
+        }
+      }));
+    return records.filter((record): record is ToolScriptRunRecord => !!record)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') {
+      return [];
     }
     throw error;
   }
@@ -330,17 +393,72 @@ function printCallbackFor(state: RuntimeState) {
   };
 }
 
+function buildWaitingFor(run: ToolScriptRunRecord): any {
+  if (!run.waiting) {
+    return undefined;
+  }
+  if (run.waiting.reason === 'agent') {
+    return {
+      continuationId: run.waiting.continuationId,
+      question: run.waiting.question,
+    };
+  }
+  if (run.waiting.reason === 'managed_event') {
+    return run.waiting.managedEvent;
+  }
+  return undefined;
+}
+
 function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
   return {
     status: run.status,
     runId: run.runId,
-    continuationId: run.continuationId,
-    question: run.pendingQuestion,
+    mode: run.mode,
+    ownerSessionId: run.ownerSessionId,
+    scriptPath: run.scriptPath,
+    filePath: run.filePath,
     stdout: run.stdout,
     executedTools: [...run.executedTools],
+    ...(run.waiting?.reason ? { waitingReason: run.waiting.reason } : {}),
+    ...(buildWaitingFor(run) !== undefined ? { waitingFor: buildWaitingFor(run) } : {}),
+    ...(run.waiting?.continuationId ? { continuationId: run.waiting.continuationId } : {}),
+    ...(run.waiting?.question ? { question: run.waiting.question } : {}),
+    ...(run.relatedManagedSessions?.length ? { relatedManagedSessions: structuredClone(run.relatedManagedSessions) } : {}),
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    ...(run.completedAt ? { completedAt: run.completedAt } : {}),
+    ...(run.cancelledAt ? { cancelledAt: run.cancelledAt } : {}),
     ...(run.lastResult !== undefined ? { result: run.lastResult } : {}),
     ...(run.error ? { error: run.error } : {}),
   };
+}
+
+function markRunWaiting(record: ToolScriptRunRecord, waiting: ToolScriptWaitingState, runtimeState: RuntimeState): void {
+  record.status = 'waiting';
+  record.waiting = waiting;
+  record.stdout = currentStdout(runtimeState);
+  record.executedTools = [...runtimeState.executedTools];
+  record.snapshotBase64 = record.snapshotBase64;
+  record.error = undefined;
+  record.updatedAt = Date.now();
+}
+
+function upsertManagedLeaseRef(record: ToolScriptRunRecord, ref: ToolScriptManagedLeaseRef): void {
+  const list = record.relatedManagedSessions || [];
+  const idx = list.findIndex(entry => entry.sessionId === ref.sessionId && entry.leaseId === ref.leaseId);
+  if (idx >= 0) {
+    list[idx] = { ...list[idx], ...ref };
+  } else {
+    list.push(ref);
+  }
+  record.relatedManagedSessions = list;
+}
+
+function removeManagedLeaseRef(record: ToolScriptRunRecord, sessionId: string, leaseId: string): void {
+  if (!record.relatedManagedSessions?.length) {
+    return;
+  }
+  record.relatedManagedSessions = record.relatedManagedSessions.filter(ref => !(ref.sessionId === sessionId && ref.leaseId === leaseId));
 }
 
 function normalizeErrorMessage(error: any): string {
@@ -441,6 +559,20 @@ function parseManagedSessionInboxOrder(value: any): 'before' | 'after' | 'ignore
   throw new Error('inbox_order must be one of: before, after, ignore.');
 }
 
+function parseToolScriptRunMode(value: any): ToolScriptRunMode {
+  if (value === undefined || value === null || value === '') {
+    return 'foreground';
+  }
+  const normalized = normalizeMontyValue(value);
+  if (normalized === true || normalized === 'background') {
+    return 'background';
+  }
+  if (normalized === false || normalized === 'foreground') {
+    return 'foreground';
+  }
+  throw new Error('mode must be one of: foreground, background.');
+}
+
 function validateManagedSessionInputParts(parts: MessagePart[]): MessagePart[] {
   return parts.map((part: any) => {
     const normalizedPart = { ...part };
@@ -528,6 +660,7 @@ async function executeScriptHostCall(
     return normalizeMontyValue(await managedSessions.openManagedSession({
       sessionId: targetSessionId,
       ownerSessionId: ownerSession.id,
+      ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
     }));
   }
 
@@ -556,6 +689,7 @@ async function executeScriptHostCall(
       ownerSessionId: ownerSession.id,
       leaseId,
       expectedRevision,
+      ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
       ...(runMode ? { runMode } : {}),
       ...(inboxOrder ? { inboxOrder } : {}),
       ...normalizedInput,
@@ -580,7 +714,36 @@ async function executeScriptHostCall(
       ownerSessionId: ownerSession.id,
       leaseId,
       expectedRevision,
+      ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
     }));
+  }
+
+  if (functionName === 'wait_for_managed_event') {
+    const targetSessionId = requireStringArg(
+      getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
+      'session_id',
+    );
+    const leaseId = requireStringArg(
+      getNamedArg(positionalArgs, kwargs, 1, ['lease_id', 'leaseId']),
+      'lease_id',
+    );
+    const expectedRevision = parseOptionalExpectedRevision(
+      getNamedArg(positionalArgs, kwargs, 2, ['expected_revision', 'expectedRevision']),
+    );
+    const runMode = parseManagedSessionRunMode(
+      getNamedArg(positionalArgs, kwargs, 3, ['run_mode', 'runMode']),
+    );
+    const inboxOrder = parseManagedSessionInboxOrder(
+      getNamedArg(positionalArgs, kwargs, 4, ['inbox_order', 'inboxOrder']),
+    );
+    return {
+      __toolscriptWaitForManagedEvent: true,
+      sessionId: targetSessionId,
+      leaseId,
+      ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+      ...(runMode ? { runMode } : {}),
+      ...(inboxOrder ? { inboxOrder } : {}),
+    };
   }
 
   throw new Error(`Unsupported ToolScript host function: ${functionName}`);
@@ -599,14 +762,14 @@ async function advanceExecution(args: {
   while (true) {
     if (progress instanceof monty.MontyComplete) {
       record.status = 'completed';
+      record.waiting = undefined;
       record.stdout = currentStdout(runtimeState);
       record.executedTools = [...runtimeState.executedTools];
-      record.continuationId = undefined;
-      record.pendingQuestion = undefined;
       record.snapshotBase64 = undefined;
       record.lastResult = normalizeMontyValue(progress.output);
       record.error = undefined;
       record.updatedAt = Date.now();
+      record.completedAt = record.updatedAt;
       await saveRun(record);
       return buildBaseResult(record);
     }
@@ -627,20 +790,55 @@ async function advanceExecution(args: {
     if (functionName === 'ask_agent') {
       const questionValue = positionalArgs.length > 0 ? positionalArgs[0] : kwargs.question;
       const question = formatQuestion(questionValue);
-      record.status = 'paused_for_agent';
-      record.stdout = currentStdout(runtimeState);
-      record.executedTools = [...runtimeState.executedTools];
-      record.pendingQuestion = question;
-      record.continuationId = newContinuationId();
       record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
-      record.error = undefined;
-      record.updatedAt = Date.now();
+      markRunWaiting(record, {
+        reason: 'agent',
+        waitingSince: Date.now(),
+        question,
+        continuationId: newContinuationId(),
+      }, runtimeState);
       await saveRun(record);
       return buildBaseResult(record);
     }
 
     try {
       const result = await executeScriptHostCall(functionName, positionalArgs, kwargs, runtimeState, ctx);
+      if (functionName === 'open_managed_session' && result && typeof result === 'object' && (result as any).sessionId && (result as any).leaseId) {
+        upsertManagedLeaseRef(record, {
+          sessionId: String((result as any).sessionId),
+          leaseId: String((result as any).leaseId),
+          ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+        });
+      }
+      if (functionName === 'release_managed_session' && result && typeof result === 'object' && (result as any).sessionId) {
+        const leaseId = kwargs.lease_id ?? kwargs.leaseId ?? positionalArgs[1];
+        if (typeof leaseId === 'string') {
+          removeManagedLeaseRef(record, String((result as any).sessionId), leaseId);
+        }
+      }
+      if (result && typeof result === 'object' && (result as any).__toolscriptWaitForManagedEvent) {
+        record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+        markRunWaiting(record, {
+          reason: 'managed_event',
+          waitingSince: Date.now(),
+          managedEvent: {
+            sessionId: String((result as any).sessionId),
+            leaseId: String((result as any).leaseId),
+            ...(typeof (result as any).expectedRevision === 'number' ? { expectedRevision: (result as any).expectedRevision } : {}),
+            ...((result as any).runMode ? { runMode: (result as any).runMode } : {}),
+            ...((result as any).inboxOrder ? { inboxOrder: (result as any).inboxOrder } : {}),
+          },
+        }, runtimeState);
+        if ((result as any).sessionId && (result as any).leaseId) {
+          upsertManagedLeaseRef(record, {
+            sessionId: String((result as any).sessionId),
+            leaseId: String((result as any).leaseId),
+            ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+          });
+        }
+        await saveRun(record);
+        return buildBaseResult(record);
+      }
       progress = progress.resume({ returnValue: result });
     } catch (error: any) {
       progress = progress.resume({
@@ -680,47 +878,99 @@ async function readScriptSource(filePath: string, ctx: ToolContext, session: Ses
   return { scriptPath, code };
 }
 
-export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
-  const { sessionId, session } = await requireSessionContext(ctx);
-  const { filePath } = args || {};
-  const { scriptPath, code } = await readScriptSource(filePath, ctx, session);
-  const monty = await importMonty();
-  const runtimeState = createRuntimeState('', []);
-  const runId = newRunId();
-  const scriptName = path.basename(scriptPath) || 'script.py';
-
-  const record: ToolScriptRunRecord = {
-    runId,
-    sessionId,
-    agentName: session.agent || 'main',
-    filePath,
-    scriptPath,
-    scriptName,
-    status: 'completed',
+function createRunRecord(args: {
+  runId: string;
+  mode: ToolScriptRunMode;
+  session: Session;
+  filePath: string;
+  scriptPath: string;
+}): ToolScriptRunRecord {
+  const now = Date.now();
+  return {
+    runId: args.runId,
+    mode: args.mode,
+    status: 'running',
+    ownerSessionId: args.session.id,
+    agentName: args.session.agent || 'main',
+    filePath: args.filePath,
+    scriptPath: args.scriptPath,
+    scriptName: path.basename(args.scriptPath) || 'script.py',
     stdout: '',
     executedTools: [],
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    relatedManagedSessions: [],
+    createdAt: now,
+    updatedAt: now,
+    startedAt: now,
   };
+}
 
+async function failRun(record: ToolScriptRunRecord, runtimeState: RuntimeState, error: any, logMessage: string): Promise<ToolScriptResult> {
+  record.status = 'failed';
+  record.waiting = undefined;
+  record.stdout = currentStdout(runtimeState);
+  record.executedTools = [...runtimeState.executedTools];
+  record.snapshotBase64 = undefined;
+  record.error = normalizeErrorMessage(error);
+  record.updatedAt = Date.now();
+  await saveRun(record);
+  logger.warn({ err: error, runId: record.runId, filePath: record.scriptPath }, logMessage);
+  return buildBaseResult(record);
+}
+
+async function startRun(record: ToolScriptRunRecord, code: string, scriptArgs: any, ctx: ToolContext): Promise<ToolScriptResult> {
+  const monty = await importMonty();
+  const runtimeState = createRuntimeState(record.stdout, record.executedTools);
   try {
-    const runner = new monty.Monty(code, { scriptName, inputs: ['args'] });
+    const runner = new monty.Monty(code, { scriptName: record.scriptName, inputs: ['args'] });
     const progress = runner.start({
-      inputs: { args: normalizeMontyValue(args?.args || {}) },
+      inputs: { args: normalizeMontyValue(scriptArgs || {}) },
       limits: DEFAULT_SCRIPT_LIMITS,
       printCallback: printCallbackFor(runtimeState),
     });
-    return await advanceExecution({ progress, record, runtimeState, ctx: { ...ctx, sessionId, session }, monty });
+    return await advanceExecution({ progress, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
   } catch (error: any) {
-    record.status = 'failed';
-    record.stdout = currentStdout(runtimeState);
-    record.executedTools = [...runtimeState.executedTools];
-    record.error = normalizeErrorMessage(error);
-    record.updatedAt = Date.now();
-    await saveRun(record);
-    logger.warn({ err: error, runId, filePath: scriptPath }, 'ToolScript run failed during startup');
-    return buildBaseResult(record);
+    return await failRun(record, runtimeState, error, 'ToolScript run failed during startup');
   }
+}
+
+async function resumeRun(record: ToolScriptRunRecord, resumeValue: any, ctx: ToolContext, logMessage: string): Promise<ToolScriptResult> {
+  const monty = await importMonty();
+  const runtimeState = createRuntimeState(record.stdout, record.executedTools);
+  try {
+    if (!record.snapshotBase64) {
+      throw new Error(`ToolScript run \`${record.runId}\` has no resumable snapshot.`);
+    }
+    record.status = 'running';
+    record.lastResumeAt = Date.now();
+    record.updatedAt = record.lastResumeAt;
+    const snapshot = monty.MontySnapshot.load(Buffer.from(record.snapshotBase64, 'base64'), {
+      printCallback: printCallbackFor(runtimeState),
+    });
+    const resumed = snapshot.resume({ returnValue: normalizeMontyValue(resumeValue) });
+    return await advanceExecution({ progress: resumed, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
+  } catch (error: any) {
+    return await failRun(record, runtimeState, error, logMessage);
+  }
+}
+
+function ensureRunOwnedBySession(record: ToolScriptRunRecord, sessionId: string): void {
+  if (record.ownerSessionId !== sessionId) {
+    throw new Error('ToolScript runs may only be accessed from their owning session.');
+  }
+}
+
+export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
+  const { sessionId, session } = await requireSessionContext(ctx);
+  const { filePath } = args || {};
+  const mode = parseToolScriptRunMode(args?.mode ?? args?.runMode ?? args?.background);
+  const { scriptPath, code } = await readScriptSource(filePath, ctx, session);
+  const runId = newRunId();
+  const record = createRunRecord({ runId, mode, session, filePath, scriptPath });
+  return await startRun(record, code, args?.args || {}, { ...ctx, sessionId, session, toolScriptRunId: runId });
+}
+
+export async function tool_start_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
+  return await tool_run_script({ ...args, mode: args?.mode || 'background' }, ctx);
 }
 
 export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
@@ -738,37 +988,114 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
   if (!record) {
     throw new Error(`ToolScript run \`${runId}\` not found.`);
   }
-  if (record.sessionId !== sessionId) {
-    throw new Error('ToolScript runs may only be continued from their owning session.');
-  }
-  if (record.status !== 'paused_for_agent' || !record.snapshotBase64) {
+  ensureRunOwnedBySession(record, sessionId);
+  if (record.status !== 'waiting' || record.waiting?.reason !== 'agent' || !record.snapshotBase64) {
     throw new Error(`ToolScript run \`${runId}\` is not waiting for continue_script.`);
   }
-  if (record.continuationId !== continuationId) {
+  if (record.waiting?.continuationId !== continuationId) {
     throw new Error('continuationId does not match the pending ToolScript continuation.');
   }
+  return await resumeRun(record, args?.input, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed');
+}
 
-  const monty = await importMonty();
-  const runtimeState = createRuntimeState(record.stdout, record.executedTools);
+export async function tool_list_toolscript_runs(args: ToolArgs, ctx: ToolContext): Promise<{ runs: ToolScriptResult[] }> {
+  const { sessionId } = await requireSessionContext(ctx);
+  const limit = typeof args?.limit === 'number' && Number.isFinite(args.limit)
+    ? Math.max(1, Math.min(200, Math.trunc(args.limit)))
+    : 20;
+  const statusFilter = typeof args?.status === 'string' && args.status.trim() ? args.status.trim() : undefined;
+  const records = await listRuns();
+  return {
+    runs: records
+      .filter(record => record.ownerSessionId === sessionId)
+      .filter(record => !statusFilter || record.status === statusFilter)
+      .slice(0, limit)
+      .map(buildBaseResult),
+  };
+}
 
-  try {
-    const snapshot = monty.MontySnapshot.load(Buffer.from(record.snapshotBase64, 'base64'), {
-      printCallback: printCallbackFor(runtimeState),
-    });
-    const resumed = snapshot.resume({ returnValue: normalizeMontyValue(args?.input) });
-    return await advanceExecution({ progress: resumed, record, runtimeState, ctx: { ...ctx, sessionId, session }, monty });
-  } catch (error: any) {
-    record.status = 'failed';
-    record.stdout = currentStdout(runtimeState);
-    record.executedTools = [...runtimeState.executedTools];
-    record.continuationId = undefined;
-    record.pendingQuestion = undefined;
-    record.snapshotBase64 = undefined;
-    record.error = normalizeErrorMessage(error);
-    record.updatedAt = Date.now();
-    await saveRun(record);
-    logger.warn({ err: error, runId }, 'ToolScript continue failed');
+export async function tool_get_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
+  const { sessionId } = await requireSessionContext(ctx);
+  const runId = requireStringArg(args?.runId, 'runId');
+  const record = await loadRun(runId);
+  if (!record) {
+    throw new Error(`ToolScript run \`${runId}\` not found.`);
+  }
+  ensureRunOwnedBySession(record, sessionId);
+  return buildBaseResult(record);
+}
+
+export async function tool_cancel_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
+  const { sessionId } = await requireSessionContext(ctx);
+  const runId = requireStringArg(args?.runId, 'runId');
+  const record = await loadRun(runId);
+  if (!record) {
+    throw new Error(`ToolScript run \`${runId}\` not found.`);
+  }
+  ensureRunOwnedBySession(record, sessionId);
+  if (record.status === 'completed' || record.status === 'failed' || record.status === 'cancelled') {
     return buildBaseResult(record);
+  }
+
+  for (const ref of record.relatedManagedSessions || []) {
+    try {
+      await managedSessions.releaseManagedSession({
+        sessionId: ref.sessionId,
+        ownerSessionId: record.ownerSessionId,
+        leaseId: ref.leaseId,
+        ...(record.runId ? { controllerRunId: record.runId } : {}),
+      });
+    } catch (error: any) {
+      logger.warn({ err: error, runId: record.runId, managedSessionId: ref.sessionId }, 'Failed to release managed session during ToolScript cancel');
+    }
+  }
+
+  activeBackgroundRuns.delete(record.runId);
+  record.status = 'cancelled';
+  record.waiting = undefined;
+  record.snapshotBase64 = undefined;
+  record.cancelledAt = Date.now();
+  record.updatedAt = record.cancelledAt;
+  await saveRun(record);
+  return buildBaseResult(record);
+}
+
+export async function resumeBackgroundToolScriptRunForManagedSession(args: {
+  runId: string;
+  sessionId: string;
+  leaseId?: string;
+  revision?: number;
+  pendingInboxCount?: number;
+  wakeReason?: string;
+}): Promise<ToolScriptResult | null> {
+  const record = await loadRun(args.runId);
+  if (!record || record.mode !== 'background' || record.status !== 'waiting' || record.waiting?.reason !== 'managed_event') {
+    return null;
+  }
+  const managedWait = record.waiting.managedEvent;
+  if (!managedWait || managedWait.sessionId !== args.sessionId) {
+    return null;
+  }
+  if (managedWait.leaseId && args.leaseId && managedWait.leaseId !== args.leaseId) {
+    return null;
+  }
+  if (activeBackgroundRuns.has(record.runId)) {
+    return null;
+  }
+  activeBackgroundRuns.add(record.runId);
+  try {
+    record.lastWakeReason = args.wakeReason || 'managed-event';
+    const ownerSession = await sessionManager.getSession(record.ownerSessionId);
+    return await resumeRun(record, {
+      type: 'managed_event',
+      sessionId: args.sessionId,
+      leaseId: managedWait.leaseId,
+      ...(typeof args.revision === 'number' ? { revision: args.revision } : {}),
+      ...(typeof args.pendingInboxCount === 'number' ? { pendingInboxCount: args.pendingInboxCount } : {}),
+      wakeReason: args.wakeReason || 'managed-event',
+    }, { sessionId: record.ownerSessionId, session: ownerSession, toolScriptRunId: record.runId }, 'ToolScript background resume failed');
+  } finally {
+    activeBackgroundRuns.delete(record.runId);
   }
 }
 

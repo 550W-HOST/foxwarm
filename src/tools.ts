@@ -28,7 +28,11 @@ import { COMPACT_PLAN_TOOL_DEFINITION } from './session/compactPlan';
 import { cropImageById, resolveImageById } from './toolImages';
 import {
     tool_run_script,
+    tool_start_toolscript_run,
     tool_continue_script,
+    tool_list_toolscript_runs,
+    tool_get_toolscript_run,
+    tool_cancel_toolscript_run,
 } from './toolscript';
 import {
     tool_create_child_session,
@@ -93,7 +97,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'create_timer', 'list_timers', 'delete_timer',
     'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
     'search_tools', 'call_tool',
-    'run_script', 'continue_script',
+    'run_script', 'start_toolscript_run', 'continue_script', 'list_toolscript_runs', 'get_toolscript_run', 'cancel_toolscript_run',
     'change_current_node',
     'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
@@ -1614,7 +1618,11 @@ export const list_mcp_servers = tool_list_mcp_servers;
 export const search_tools = tool_search_tools;
 export const call_tool = tool_call_tool;
 export const run_script = tool_run_script;
+export const start_toolscript_run = tool_start_toolscript_run;
 export const continue_script = tool_continue_script;
+export const list_toolscript_runs = tool_list_toolscript_runs;
+export const get_toolscript_run = tool_get_toolscript_run;
+export const cancel_toolscript_run = tool_cancel_toolscript_run;
 
 // New tools for nodes
 export const list_nodes = async (args: ToolArgs) => {
@@ -2354,12 +2362,27 @@ export const definitions = [
         {
             name: 'run_script',
             defaultInject: true,
-            description: 'Run a ToolScript Python file from the current agent workspace. The script may call print(...), call_tool(...), ask_agent(...), and request_model_without_context(...). If the script pauses at ask_agent, this tool returns a continuationId for continue_script.',
+            description: 'Start a ToolScript run from the current agent workspace. Every script execution becomes a persisted ToolScript run with a runId, mode, status, waiting metadata, stdout, and executed tool summary. Supports foreground (default) and background modes.',
             parameters: {
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
-                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.' }
+                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.' },
+                    mode: { type: 'string', enum: ['foreground', 'background'], description: 'Run mode. foreground is the default. background runs are intended for persistent controller-style scripts.' }
+                },
+                required: ['filePath']
+            }
+        },
+        {
+            name: 'start_toolscript_run',
+            defaultInject: true,
+            description: 'Explicit background-oriented ToolScript run starter. Equivalent to run_script(..., mode="background") but with a clearer controller-run intent.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
+                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.' },
+                    mode: { type: 'string', enum: ['foreground', 'background'], description: 'Optional explicit mode override. Defaults to background for this tool.' }
                 },
                 required: ['filePath']
             }
@@ -2367,7 +2390,7 @@ export const definitions = [
         {
             name: 'continue_script',
             defaultInject: true,
-            description: 'Resume a paused ToolScript run created by run_script. Use the returned continuationId from the paused ask_agent result and provide the agent answer in `input`.',
+            description: 'Resume a waiting ToolScript run created by run_script/start_toolscript_run. Most commonly used when a run is waiting for ask_agent continuation input.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -2376,6 +2399,42 @@ export const definitions = [
                     input: { description: 'Value returned to the paused ask_agent(...) call inside the script.' }
                 },
                 required: ['runId', 'continuationId']
+            }
+        },
+        {
+            name: 'list_toolscript_runs',
+            defaultInject: true,
+            description: 'List ToolScript runs owned by the current session. Returns structured run summaries including status, mode, waiting metadata, managed-session refs, timestamps, and tool/stdout summaries.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    limit: { type: 'number', description: 'Maximum number of runs to return. Default 20, max 200.' },
+                    status: { type: 'string', enum: ['running', 'waiting', 'completed', 'failed', 'cancelled'], description: 'Optional status filter.' }
+                }
+            }
+        },
+        {
+            name: 'get_toolscript_run',
+            defaultInject: true,
+            description: 'Get a single ToolScript run with structured metadata including waiting reason, managed-session relations, timestamps, stdout, and tool summary.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    runId: { type: 'string', description: 'ToolScript run identifier.' }
+                },
+                required: ['runId']
+            }
+        },
+        {
+            name: 'cancel_toolscript_run',
+            defaultInject: true,
+            description: 'Cancel an active/waiting ToolScript run owned by the current session. Best-effort releases managed-session leases tracked by the run before marking it cancelled.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    runId: { type: 'string', description: 'ToolScript run identifier.' }
+                },
+                required: ['runId']
             }
         },
         {

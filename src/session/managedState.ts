@@ -4,6 +4,7 @@ import { QueueItem, Session } from '../types';
 export type ManagedSessionState = {
   ownerSessionId: string;
   leaseId: string;
+  controllerRunId?: string;
   revision: number;
   pendingInbox: QueueItem[];
   openedAt: number;
@@ -56,6 +57,7 @@ export function getManagedSessionState(session?: Session | null): ManagedSession
   return {
     ownerSessionId,
     leaseId,
+    ...(typeof raw.controllerRunId === 'string' && raw.controllerRunId.trim() ? { controllerRunId: raw.controllerRunId.trim() } : {}),
     revision,
     pendingInbox,
     openedAt: typeof raw.openedAt === 'number' ? raw.openedAt : Date.now(),
@@ -96,6 +98,7 @@ export function setManagedSessionState(session: Session, state: ManagedSessionSt
   session.meta.managedSession = {
     ownerSessionId: state.ownerSessionId,
     leaseId: state.leaseId,
+    ...(state.controllerRunId ? { controllerRunId: state.controllerRunId } : {}),
     revision: state.revision,
     pendingInbox: state.pendingInbox.map(cloneQueueItem),
     openedAt: state.openedAt,

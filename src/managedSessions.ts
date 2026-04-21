@@ -15,6 +15,7 @@ const activeManagedSteps = new Set<string>();
 export type OpenManagedSessionResult = {
   sessionId: string;
   ownerSessionId: string;
+  controllerRunId?: string;
   leaseId: string;
   revision: number;
   pendingInboxCount: number;
@@ -23,6 +24,7 @@ export type OpenManagedSessionResult = {
 export type ManagedSessionStepResult = {
   sessionId: string;
   ownerSessionId: string;
+  controllerRunId?: string;
   leaseId: string;
   revision: number;
   runMode: 'idle' | 'tool';
@@ -99,7 +101,7 @@ export function isManagedSessionBusyForStep(sessionId: string): boolean {
   return activeManagedSteps.has(sessionId);
 }
 
-export async function openManagedSession(args: { sessionId: string; ownerSessionId: string }): Promise<OpenManagedSessionResult> {
+export async function openManagedSession(args: { sessionId: string; ownerSessionId: string; controllerRunId?: string }): Promise<OpenManagedSessionResult> {
   const { targetSession: session } = await resolvePermittedSessionTarget({
     getExistingSession: sessionManager.getExistingSession,
     getAgentMetadata: sessionManager.getAgentMetadata,
@@ -130,6 +132,7 @@ export async function openManagedSession(args: { sessionId: string; ownerSession
   const state: ManagedSessionState = {
     ownerSessionId: args.ownerSessionId,
     leaseId: buildManagedSessionLeaseId(),
+    ...(args.controllerRunId ? { controllerRunId: args.controllerRunId } : {}),
     revision: 1,
     pendingInbox: intercepted,
     openedAt: Date.now(),
@@ -141,6 +144,7 @@ export async function openManagedSession(args: { sessionId: string; ownerSession
   return {
     sessionId: session.id,
     ownerSessionId: state.ownerSessionId,
+    ...(state.controllerRunId ? { controllerRunId: state.controllerRunId } : {}),
     leaseId: state.leaseId,
     revision: state.revision,
     pendingInboxCount: state.pendingInbox.length,
@@ -150,6 +154,7 @@ export async function openManagedSession(args: { sessionId: string; ownerSession
 export async function managedSessionStep(args: {
   sessionId: string;
   ownerSessionId: string;
+  controllerRunId?: string;
   leaseId: string;
   expectedRevision?: number;
   runMode?: 'idle' | 'tool';
@@ -162,6 +167,9 @@ export async function managedSessionStep(args: {
     getAgentMetadata: sessionManager.getAgentMetadata,
   }, args.sessionId, args.ownerSessionId);
   const managed = requireOwnedManagedState(args.sessionId, getManagedSessionState(session), args.ownerSessionId, args.leaseId);
+  if (args.controllerRunId && managed.controllerRunId && managed.controllerRunId !== args.controllerRunId) {
+    throw new Error(`Managed session \`${args.sessionId}\` is controlled by another ToolScript run.`);
+  }
   const runMode = args.runMode || 'idle';
   const inboxOrder = args.inboxOrder || 'before';
 
@@ -184,6 +192,7 @@ export async function managedSessionStep(args: {
     return {
       sessionId: session.id,
       ownerSessionId: managed.ownerSessionId,
+      ...(managed.controllerRunId ? { controllerRunId: managed.controllerRunId } : {}),
       leaseId: managed.leaseId,
       revision: managed.revision,
       runMode,
@@ -242,6 +251,7 @@ export async function managedSessionStep(args: {
   return {
     sessionId: updated.id,
     ownerSessionId: updatedManaged.ownerSessionId,
+    ...(updatedManaged.controllerRunId ? { controllerRunId: updatedManaged.controllerRunId } : {}),
     leaseId: updatedManaged.leaseId,
     revision: updatedManaged.revision,
     runMode,
@@ -257,6 +267,7 @@ export async function managedSessionStep(args: {
 export async function releaseManagedSession(args: {
   sessionId: string;
   ownerSessionId: string;
+  controllerRunId?: string;
   leaseId: string;
   expectedRevision?: number;
 }): Promise<{ sessionId: string; releasedPendingInboxCount: number }> {
@@ -265,6 +276,9 @@ export async function releaseManagedSession(args: {
     getAgentMetadata: sessionManager.getAgentMetadata,
   }, args.sessionId, args.ownerSessionId);
   const managed = requireOwnedManagedState(args.sessionId, getManagedSessionState(session), args.ownerSessionId, args.leaseId);
+  if (args.controllerRunId && managed.controllerRunId && managed.controllerRunId !== args.controllerRunId) {
+    throw new Error(`Managed session \`${args.sessionId}\` is controlled by another ToolScript run.`);
+  }
 
   if (typeof args.expectedRevision === 'number' && managed.revision !== args.expectedRevision) {
     throw new Error(`Managed session revision mismatch for \`${args.sessionId}\`: expected ${args.expectedRevision}, got ${managed.revision}.`);

@@ -7,8 +7,9 @@ import { executeTools } from './llm';
 import * as llm from './llm';
 import { MessageRouter } from './messageRouter';
 import * as sessionManager from './sessionManager';
+import * as managedSessions from './managedSessions';
 import { getAgentDir } from './config';
-import { tool_continue_script, tool_run_script, getToolScriptRunForTests, resetToolScriptRunsForTests } from './toolscript';
+import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, getToolScriptRunForTests, resetToolScriptRunsForTests } from './toolscript';
 import type { Session } from './types';
 
 function makeId(prefix: string): string {
@@ -69,7 +70,8 @@ test('run_script pauses at ask_agent and continue_script resumes from persisted 
 
   try {
     const paused = await tool_run_script({ filePath: scriptName }, { sessionId, session });
-    assert.equal(paused.status, 'paused_for_agent');
+    assert.equal(paused.status, 'waiting');
+    assert.equal(paused.waitingReason, 'agent');
     assert.equal(paused.question, 'What now?');
     assert.ok(paused.runId);
     assert.ok(paused.continuationId);
@@ -77,8 +79,9 @@ test('run_script pauses at ask_agent and continue_script resumes from persisted 
     assert.deepEqual(paused.executedTools, []);
 
     const persisted = await getToolScriptRunForTests(paused.runId);
-    assert.equal(persisted?.status, 'paused_for_agent');
-    assert.equal(persisted?.pendingQuestion, 'What now?');
+    assert.equal(persisted?.status, 'waiting');
+    assert.equal(persisted?.waiting?.reason, 'agent');
+    assert.equal(persisted?.waiting?.question, 'What now?');
     assert.ok(persisted?.snapshotBase64);
 
     const completed = await tool_continue_script({
@@ -187,6 +190,98 @@ test('ToolScript manager host functions can open, step, and release a managed ch
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(childId).catch(() => false);
     await sessionManager.deleteSession(parentId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('background ToolScript controller run can wait for managed inbox events and resume itself', async () => {
+  await resetToolScriptRunsForTests();
+  const router = new MessageRouter();
+  const originalChat = llm.chat;
+  const parentId = makeId('toolscript_bg_parent');
+  const childId = makeId('toolscript_bg_child');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, [
+    `lease = open_managed_session("${childId}")`,
+    `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
+    `step = session_step("${childId}", lease["leaseId"], event["revision"], message="controller woke")`,
+    `release_managed_session("${childId}", lease["leaseId"], step["revision"])`,
+    'step',
+  ].join('\n'));
+
+  sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
+  (llm as any).chat = async (parts: any, activeSession: Session) => {
+    if (parts?.length) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
+    await sessionManager.appendSessionMessage(activeSession, {
+      role: 'model',
+      parts: [{ text: `bg child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` }],
+    });
+    return { text: 'ok' };
+  };
+
+  const parent = await sessionManager.getSession(parentId);
+  await sessionManager.getSession(childId);
+
+  try {
+    const started = await tool_start_toolscript_run({ filePath: scriptName }, { sessionId: parentId, session: parent });
+    assert.equal(started.mode, 'background');
+    assert.equal(started.status, 'waiting');
+    assert.equal(started.waitingReason, 'managed_event');
+    assert.equal(started.relatedManagedSessions?.[0]?.sessionId, childId);
+
+    const managedState = await managedSessions.getManagedSessionStateForTests(childId);
+    assert.equal(managedState?.controllerRunId, started.runId);
+
+    await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'outside event' }], 'background');
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    const completed = await getToolScriptRunForTests(started.runId);
+    assert.equal(completed?.status, 'completed');
+    assert.equal(completed?.lastResult?.yieldReason, 'idle');
+
+    const child = await sessionManager.getSession(childId);
+    assert.match(child.history[child.history.length - 1]?.parts?.[0]?.text || '', /controller woke/);
+    assert.equal(await managedSessions.getManagedSessionStateForTests(childId), undefined);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.setSessionTriggerCallback(() => {});
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('list/get/cancel ToolScript run tools return structured run data', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_run_tools');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, 'answer = ask_agent("Need input")\nanswer');
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const started = await tool_start_toolscript_run({ filePath: scriptName }, { sessionId, session });
+    assert.equal(started.status, 'waiting');
+    assert.equal(started.waitingReason, 'agent');
+    assert.equal(started.mode, 'background');
+
+    const listed = await tool_list_toolscript_runs({ limit: 10 }, { sessionId, session });
+    assert.equal(listed.runs.length, 1);
+    assert.equal(listed.runs[0]?.runId, started.runId);
+    assert.equal(listed.runs[0]?.waitingReason, 'agent');
+
+    const fetched = await tool_get_toolscript_run({ runId: started.runId }, { sessionId, session });
+    assert.equal(fetched.runId, started.runId);
+    assert.equal(fetched.question, 'Need input');
+
+    const cancelled = await tool_cancel_toolscript_run({ runId: started.runId }, { sessionId, session });
+    assert.equal(cancelled.status, 'cancelled');
+    assert.ok(cancelled.cancelledAt);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
   }
 });
