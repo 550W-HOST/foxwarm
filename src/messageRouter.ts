@@ -8,7 +8,7 @@ import { ChannelContext, ChannelMessage, getChannelId, getChannelType, getConver
 import { formatAuthorizationInspection, inspectChannelAuthorizationFromContext } from './channelAuth';
 import { getAgentDir, getChannelConfigById, readAppConfigFile } from './config';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
-import { isManagedSessionActive } from './session/managedState';
+import { getManagedSessionState, isManagedSessionActive, setManagedSessionState } from './session/managedState';
 import { maybeBuildTodoEndTurnReminderMessage } from './session/todo';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
@@ -813,6 +813,7 @@ export class MessageRouter {
       if (options.sendTyping && options.sourceCtx) {
         await options.sourceCtx.sendTyping();
       }
+      let managedStepYieldReason: 'tool' | null = null;
       let parts = options.message
         ? null
         : this.prepareTurnParts(
@@ -894,6 +895,18 @@ export class MessageRouter {
 
         await this.appendToolMessage(session, toolResultMsg.parts);
 
+        const managedStateAfterTools = getManagedSessionState(session);
+        if (managedStateAfterTools?.currentStep?.runMode === 'tool') {
+          managedStateAfterTools.lastStepResult = {
+            stepId: managedStateAfterTools.currentStep.stepId,
+            yieldReason: 'tool',
+            yieldedAt: Date.now(),
+          };
+          setManagedSessionState(session, managedStateAfterTools);
+          managedStepYieldReason = 'tool';
+          break;
+        }
+
         subconsciousToolRoundCount += 1;
         subconsciousAwardedMessages = await this.maybeRecordSubconsciousProgress(
           session,
@@ -947,6 +960,16 @@ export class MessageRouter {
         session.stats.lastUsage = usage;
       }
 
+      const managedStateAfterTurn = getManagedSessionState(session);
+      if (managedStateAfterTurn?.currentStep && !managedStepYieldReason) {
+        managedStateAfterTurn.lastStepResult = {
+          stepId: managedStateAfterTurn.currentStep.stepId,
+          yieldReason: 'idle',
+          yieldedAt: Date.now(),
+        };
+        setManagedSessionState(session, managedStateAfterTurn);
+      }
+
       await this.maybeQueueChildReminder(session);
       await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted);
       await this.maybeAppendTodoEndTurnReminder(session);
@@ -975,7 +998,7 @@ export class MessageRouter {
         options.source,
       );
     } finally {
-      if (await this.continueWithQueuedWork(session)) {
+      if (!getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
         return;
       }
 

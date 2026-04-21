@@ -23,11 +23,18 @@ export type ManagedSessionStepResult = {
   ownerSessionId: string;
   leaseId: string;
   revision: number;
+  runMode: 'idle' | 'tool';
+  inboxOrder: 'before' | 'after' | 'ignore';
+  yieldReason: 'idle' | 'tool' | 'no-work';
   consumedPendingInboxCount: number;
   pendingInboxCount: number;
   queueLength: number;
   newMessages: Message[];
 };
+
+function buildManagedStepId(): string {
+  return buildManagedSessionLeaseId().replace(/^msl_/, 'mss_');
+}
 
 function cloneQueueItems(items: QueueItem[]): QueueItem[] {
   return items.map(cloneQueueItem);
@@ -127,11 +134,15 @@ export async function managedSessionStep(args: {
   ownerSessionId: string;
   leaseId: string;
   expectedRevision?: number;
+  runMode?: 'idle' | 'tool';
+  inboxOrder?: 'before' | 'after' | 'ignore';
   parts?: MessagePart[] | null;
   message?: Message | null;
 }): Promise<ManagedSessionStepResult> {
   const session = await sessionManager.getSession(args.sessionId);
   const managed = requireOwnedManagedState(args.sessionId, getManagedSessionState(session), args.ownerSessionId, args.leaseId);
+  const runMode = args.runMode || 'idle';
+  const inboxOrder = args.inboxOrder || 'before';
 
   if (typeof args.expectedRevision === 'number' && managed.revision !== args.expectedRevision) {
     throw new Error(`Managed session revision mismatch for \`${args.sessionId}\`: expected ${args.expectedRevision}, got ${managed.revision}.`);
@@ -144,7 +155,7 @@ export async function managedSessionStep(args: {
   }
 
   const queuedFromManager = buildManagerQueueItems({ parts: args.parts, message: args.message });
-  const consumedPendingInbox = cloneQueueItems(managed.pendingInbox);
+  const consumedPendingInbox = inboxOrder === 'ignore' ? [] : cloneQueueItems(managed.pendingInbox);
   const hasWork = consumedPendingInbox.length > 0 || queuedFromManager.length > 0 || session.queue.length > 0;
   const historyStart = session.history.length;
 
@@ -154,6 +165,9 @@ export async function managedSessionStep(args: {
       ownerSessionId: managed.ownerSessionId,
       leaseId: managed.leaseId,
       revision: managed.revision,
+      runMode,
+      inboxOrder,
+      yieldReason: 'no-work',
       consumedPendingInboxCount: 0,
       pendingInboxCount: managed.pendingInbox.length,
       queueLength: session.queue.length,
@@ -161,28 +175,55 @@ export async function managedSessionStep(args: {
     };
   }
 
-  managed.pendingInbox = [];
+  if (inboxOrder !== 'ignore') {
+    managed.pendingInbox = [];
+  }
   managed.lastStepAt = Date.now();
   managed.revision += 1;
+  const stepId = buildManagedStepId();
+  managed.currentStep = {
+    stepId,
+    runMode,
+  };
+  managed.lastStepResult = undefined;
   setManagedSessionState(session, managed);
-  session.queue = prependQueueItems(session.queue || [], [...consumedPendingInbox, ...queuedFromManager]);
+  const stepQueueItems = inboxOrder === 'after'
+    ? [...queuedFromManager, ...consumedPendingInbox]
+    : [...consumedPendingInbox, ...queuedFromManager];
+  session.queue = prependQueueItems(session.queue || [], stepQueueItems);
   await sessionManager.saveSession(session.id);
 
   activeManagedSteps.add(args.sessionId);
+  let runnerError: any = null;
   try {
     await sessionManager.triggerSessionProcessing(session.id);
+  } catch (error: any) {
+    runnerError = error;
   } finally {
     activeManagedSteps.delete(args.sessionId);
   }
 
   const updated = await sessionManager.getSession(session.id);
   const updatedManaged = requireOwnedManagedState(args.sessionId, getManagedSessionState(updated), args.ownerSessionId, args.leaseId);
+  const yieldReason = updatedManaged.lastStepResult?.stepId === stepId
+    ? updatedManaged.lastStepResult.yieldReason
+    : 'idle';
+  updatedManaged.currentStep = undefined;
+  setManagedSessionState(updated, updatedManaged);
+  await sessionManager.saveSession(updated.id);
+
+  if (runnerError) {
+    throw runnerError;
+  }
 
   return {
     sessionId: updated.id,
     ownerSessionId: updatedManaged.ownerSessionId,
     leaseId: updatedManaged.leaseId,
     revision: updatedManaged.revision,
+    runMode,
+    inboxOrder,
+    yieldReason,
     consumedPendingInboxCount: consumedPendingInbox.length,
     pendingInboxCount: updatedManaged.pendingInbox.length,
     queueLength: updated.queue.length,

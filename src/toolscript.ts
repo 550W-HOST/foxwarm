@@ -419,6 +419,28 @@ function parseOptionalExpectedRevision(value: any): number | undefined {
   return normalized;
 }
 
+function parseManagedSessionRunMode(value: any): 'idle' | 'tool' | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const normalized = normalizeMontyValue(value);
+  if (normalized === 'idle' || normalized === 'tool') {
+    return normalized;
+  }
+  throw new Error('run_mode must be one of: idle, tool.');
+}
+
+function parseManagedSessionInboxOrder(value: any): 'before' | 'after' | 'ignore' | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const normalized = normalizeMontyValue(value);
+  if (normalized === 'before' || normalized === 'after' || normalized === 'ignore') {
+    return normalized;
+  }
+  throw new Error('inbox_order must be one of: before, after, ignore.');
+}
+
 function normalizeManagedSessionStepInput(positionalArgs: any[], kwargs: Record<string, any>): { parts?: MessagePart[]; message?: Message } {
   const rawParts = kwargs.parts;
   if (rawParts !== undefined) {
@@ -432,12 +454,6 @@ function normalizeManagedSessionStepInput(positionalArgs: any[], kwargs: Record<
   }
 
   const rawMessage = kwargs.message !== undefined ? kwargs.message : kwargs.text;
-  if (rawMessage === undefined && positionalArgs.length > 3) {
-    const positionalMessage = normalizeMontyValue(positionalArgs[3]);
-    if (typeof positionalMessage === 'string') {
-      return { parts: [{ text: positionalMessage }] };
-    }
-  }
   if (rawMessage === undefined) {
     return {};
   }
@@ -511,12 +527,20 @@ async function executeScriptHostCall(
     const expectedRevision = parseOptionalExpectedRevision(
       getNamedArg(positionalArgs, kwargs, 2, ['expected_revision', 'expectedRevision']),
     );
+    const runMode = parseManagedSessionRunMode(
+      getNamedArg(positionalArgs, kwargs, 3, ['run_mode', 'runMode']),
+    );
+    const inboxOrder = parseManagedSessionInboxOrder(
+      getNamedArg(positionalArgs, kwargs, 4, ['inbox_order', 'inboxOrder']),
+    );
     const normalizedInput = normalizeManagedSessionStepInput(positionalArgs, kwargs);
     return normalizeMontyValue(await managedSessions.managedSessionStep({
       sessionId: targetSessionId,
       ownerSessionId: ownerSession.id,
       leaseId,
       expectedRevision,
+      ...(runMode ? { runMode } : {}),
+      ...(inboxOrder ? { inboxOrder } : {}),
       ...normalizedInput,
     }));
   }

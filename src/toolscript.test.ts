@@ -149,7 +149,7 @@ test('ToolScript manager host functions can open, step, and release a managed ch
   const scriptName = `${makeId('script')}.py`;
   await writeScript(scriptName, [
     `lease = open_managed_session("${childId}")`,
-    `step = session_step("${childId}", lease["leaseId"], lease["revision"], message="managed hello")`,
+    `step = session_step("${childId}", lease["leaseId"], lease["revision"], run_mode="idle", inbox_order="before", message="managed hello")`,
     `release_managed_session("${childId}", lease["leaseId"], step["revision"])`,
     'step',
   ].join('\n'));
@@ -172,6 +172,9 @@ test('ToolScript manager host functions can open, step, and release a managed ch
   try {
     const result = await tool_run_script({ filePath: scriptName }, { sessionId: parentId, session: parent });
     assert.equal(result.status, 'completed');
+    assert.equal(result.result?.runMode, 'idle');
+    assert.equal(result.result?.inboxOrder, 'before');
+    assert.equal(result.result?.yieldReason, 'idle');
     assert.equal(result.result?.consumedPendingInboxCount, 0);
     assert.equal(result.result?.pendingInboxCount, 0);
     assert.equal(result.result?.newMessages?.length, 2);
