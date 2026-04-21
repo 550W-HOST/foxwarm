@@ -298,6 +298,153 @@ test('background ToolScript controller run can wait for managed inbox events and
   }
 });
 
+test('background ToolScript step_and_release controller run survives a managed child tool loop', async () => {
+  await resetToolScriptRunsForTests();
+  const router = new MessageRouter();
+  const originalChat = llm.chat;
+  const parentId = makeId('toolscript_bg_toolloop_parent');
+  const childId = makeId('toolscript_bg_toolloop_child');
+  const scriptName = `${makeId('script')}.py`;
+  let childChatCalls = 0;
+  await writeScript(scriptName, [
+    `lease = open_managed_session("${childId}")`,
+    `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
+    `result = step_and_release_managed_session("${childId}", lease["leaseId"], event["revision"], run_mode="idle", inbox_order="before", message="controller woke")`,
+    'result',
+  ].join('\n'));
+
+  sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
+  (llm as any).chat = async (parts: any, activeSession: Session) => {
+    if (parts?.length) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
+    childChatCalls += 1;
+    if (childChatCalls === 1) {
+      const toolCall = {
+        id: 'toolscript_bg_toolloop_call_1',
+        name: 'get_session_messages',
+        args: {
+          sessionId: activeSession.id,
+          start: 0,
+          count: 20,
+          previewLength: 200,
+        },
+      };
+      await sessionManager.appendSessionMessage(activeSession, {
+        role: 'model',
+        parts: [{ functionCall: toolCall }],
+      });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+
+    await sessionManager.appendSessionMessage(activeSession, {
+      role: 'model',
+      parts: [{ text: `bg toolloop handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` }],
+    });
+    return { text: 'ok' };
+  };
+
+  const parent = await sessionManager.getSession(parentId);
+  await sessionManager.getSession(childId);
+
+  try {
+    const started = await tool_start_toolscript_run({ filePath: scriptName }, { sessionId: parentId, session: parent });
+    assert.equal(started.status, 'waiting');
+    assert.equal(started.waitingReason, 'managed_event');
+
+    await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'outside event' }], 'background');
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    const completed = await getToolScriptRunForTests(started.runId);
+    assert.equal(completed?.status, 'completed');
+    assert.equal(completed?.lastResult?.yieldReason, 'idle');
+    assert.equal(completed?.lastResult?.releasedPendingInboxCount, 0);
+    assert.equal(childChatCalls, 2);
+    assert.equal(await managedSessions.getManagedSessionStateForTests(childId), undefined);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.setSessionTriggerCallback(() => {});
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('background ToolScript step_and_release controller run survives multiple managed child tool rounds', async () => {
+  await resetToolScriptRunsForTests();
+  const router = new MessageRouter();
+  const originalChat = llm.chat;
+  const parentId = makeId('toolscript_bg_multitool_parent');
+  const childId = makeId('toolscript_bg_multitool_child');
+  const scriptName = `${makeId('script')}.py`;
+  let childChatCalls = 0;
+  await writeScript(scriptName, [
+    `lease = open_managed_session("${childId}")`,
+    `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
+    `result = step_and_release_managed_session("${childId}", lease["leaseId"], event["revision"], run_mode="idle", inbox_order="before", message="controller woke")`,
+    'result',
+  ].join('\n'));
+
+  sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
+  (llm as any).chat = async (parts: any, activeSession: Session) => {
+    if (parts?.length) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
+    childChatCalls += 1;
+    if (childChatCalls === 1) {
+      const toolCall = {
+        id: 'toolscript_bg_multitool_call_1',
+        name: 'get_session_messages',
+        args: { sessionId: activeSession.id, start: 0, count: 20, previewLength: 200 },
+      };
+      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    if (childChatCalls === 2) {
+      const toolCall = {
+        id: 'toolscript_bg_multitool_call_2',
+        name: 'list_toolscript_runs',
+        args: { limit: 20, status: 'running' },
+      };
+      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+
+    await sessionManager.appendSessionMessage(activeSession, {
+      role: 'model',
+      parts: [{ text: `bg multitool handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` }],
+    });
+    return { text: 'ok' };
+  };
+
+  const parent = await sessionManager.getSession(parentId);
+  await sessionManager.getSession(childId);
+
+  try {
+    const started = await tool_start_toolscript_run({ filePath: scriptName }, { sessionId: parentId, session: parent });
+    assert.equal(started.status, 'waiting');
+    assert.equal(started.waitingReason, 'managed_event');
+
+    await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'outside event' }], 'background');
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    const completed = await getToolScriptRunForTests(started.runId);
+    assert.equal(completed?.status, 'completed');
+    assert.equal(completed?.lastResult?.yieldReason, 'idle');
+    assert.equal(completed?.lastResult?.releasedPendingInboxCount, 0);
+    assert.equal(childChatCalls, 3);
+    assert.equal(await managedSessions.getManagedSessionStateForTests(childId), undefined);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.setSessionTriggerCallback(() => {});
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
 test('list/get/cancel ToolScript run tools return structured run data', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_run_tools');

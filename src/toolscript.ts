@@ -119,6 +119,113 @@ function nativeImport<T = any>(specifier: string): Promise<T> {
   return Function('s', 'return import(s)')(specifier) as Promise<T>;
 }
 
+function findMatchingCallParen(source: string, openParenIndex: number): number {
+  let depth = 1;
+  let inQuote: 'single' | 'double' | null = null;
+  let escaped = false;
+
+  for (let i = openParenIndex + 1; i < source.length; i += 1) {
+    const ch = source[i];
+    if (inQuote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if ((inQuote === 'single' && ch === '\'') || (inQuote === 'double' && ch === '"')) {
+        inQuote = null;
+      }
+      continue;
+    }
+
+    if (ch === '\'') {
+      inQuote = 'single';
+      continue;
+    }
+    if (ch === '"') {
+      inQuote = 'double';
+      continue;
+    }
+    if (ch === '(') {
+      depth += 1;
+      continue;
+    }
+    if (ch === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function rewriteStepAndReleaseHelperCalls(code: string): string {
+  const helperToken = 'step_and_release_managed_session(';
+  let cursor = 0;
+  let rewritten = '';
+  let counter = 0;
+
+  while (cursor < code.length) {
+    const idx = code.indexOf(helperToken, cursor);
+    if (idx === -1) {
+      rewritten += code.slice(cursor);
+      break;
+    }
+
+    const lineStart = code.lastIndexOf('\n', idx) + 1;
+    const prefix = code.slice(lineStart, idx);
+    const match = prefix.match(/^([ \t]*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*$/);
+    if (!match) {
+      rewritten += code.slice(cursor, idx + helperToken.length);
+      cursor = idx + helperToken.length;
+      continue;
+    }
+
+    const openParenIndex = idx + helperToken.length - 1;
+    const closeParenIndex = findMatchingCallParen(code, openParenIndex);
+    if (closeParenIndex === -1) {
+      throw new Error('Unclosed step_and_release_managed_session(...) call.');
+    }
+
+    const lineEndIndex = code.indexOf('\n', closeParenIndex);
+    const lineEnd = lineEndIndex === -1 ? code.length : lineEndIndex;
+    const trailing = code.slice(closeParenIndex + 1, lineEnd);
+    if (trailing.trim()) {
+      rewritten += code.slice(cursor, idx + helperToken.length);
+      cursor = idx + helperToken.length;
+      continue;
+    }
+
+    const indent = match[1];
+    const resultVar = match[2];
+    const argsText = code.slice(openParenIndex + 1, closeParenIndex);
+    const stepVar = `__toolscript_step_${counter}`;
+    const releaseVar = `__toolscript_release_${counter}`;
+    counter += 1;
+
+    rewritten += code.slice(cursor, lineStart);
+    rewritten += `${indent}${stepVar} = session_step(${argsText})\n`;
+    rewritten += `${indent}${releaseVar} = release_managed_session(${stepVar}["sessionId"], ${stepVar}["leaseId"], ${stepVar}["revision"])\n`;
+    rewritten += `${indent}${stepVar}["releasedPendingInboxCount"] = ${releaseVar}["releasedPendingInboxCount"]\n`;
+    rewritten += `${indent}${resultVar} = ${stepVar}`;
+    if (lineEndIndex !== -1) {
+      rewritten += '\n';
+    }
+    cursor = lineEndIndex === -1 ? code.length : lineEndIndex + 1;
+  }
+
+  return rewritten;
+}
+
+function buildToolScriptSource(code: string): string {
+  return rewriteStepAndReleaseHelperCalls(code);
+}
+
 async function importMonty(): Promise<MontyModule> {
   if (!montyModulePromise) {
     montyModulePromise = nativeImport<MontyModule>('@pydantic/monty');
@@ -499,50 +606,6 @@ async function requestModelWithoutContext(prompt: string, session: Session): Pro
   return { text: result.text || '' };
 }
 
-async function stepAndReleaseManagedSession(args: {
-  sessionId: string;
-  ownerSessionId: string;
-  controllerRunId?: string;
-  leaseId: string;
-  expectedRevision?: number;
-  runMode?: 'idle' | 'tool';
-  inboxOrder?: 'before' | 'after' | 'ignore';
-  parts?: MessagePart[];
-  message?: Message;
-  includeMessages?: boolean;
-}): Promise<Record<string, any>> {
-  const stepResult = await managedSessions.managedSessionStep({
-    sessionId: args.sessionId,
-    ownerSessionId: args.ownerSessionId,
-    ...(args.controllerRunId ? { controllerRunId: args.controllerRunId } : {}),
-    leaseId: args.leaseId,
-    ...(typeof args.expectedRevision === 'number' ? { expectedRevision: args.expectedRevision } : {}),
-    ...(args.runMode ? { runMode: args.runMode } : {}),
-    ...(args.inboxOrder ? { inboxOrder: args.inboxOrder } : {}),
-    ...(args.parts ? { parts: args.parts } : {}),
-    ...(args.message ? { message: args.message } : {}),
-  });
-
-  const releaseResult = await managedSessions.releaseManagedSession({
-    sessionId: args.sessionId,
-    ownerSessionId: args.ownerSessionId,
-    ...(args.controllerRunId ? { controllerRunId: args.controllerRunId } : {}),
-    leaseId: args.leaseId,
-    expectedRevision: stepResult.revision,
-  });
-
-  return {
-    ...stepResult,
-    releasedPendingInboxCount: releaseResult.releasedPendingInboxCount,
-    ...(args.includeMessages
-      ? {}
-      : {
-          newMessagesCount: stepResult.newMessages.length,
-          newMessages: [] as Message[],
-        }),
-  };
-}
-
 function getToolScriptSession(ctx: ToolContext, functionName: string): Session {
   if (!ctx.session) {
     throw new Error(`${functionName} requires a session context.`);
@@ -785,43 +848,6 @@ async function executeScriptHostCall(
     }));
   }
 
-  if (functionName === 'step_and_release_managed_session') {
-    const ownerSession = getToolScriptSession(ctx, functionName);
-    const targetSessionId = requireStringArg(
-      getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
-      'session_id',
-    );
-    const leaseId = requireStringArg(
-      getNamedArg(positionalArgs, kwargs, 1, ['lease_id', 'leaseId']),
-      'lease_id',
-    );
-    const expectedRevision = parseOptionalExpectedRevision(
-      getNamedArg(positionalArgs, kwargs, 2, ['expected_revision', 'expectedRevision']),
-    );
-    const runMode = parseManagedSessionRunMode(
-      getNamedArg(positionalArgs, kwargs, 3, ['run_mode', 'runMode']),
-    );
-    const inboxOrder = parseManagedSessionInboxOrder(
-      getNamedArg(positionalArgs, kwargs, 4, ['inbox_order', 'inboxOrder']),
-    );
-    const includeMessages = parseOptionalBoolean(
-      getNamedArg(positionalArgs, kwargs, 5, ['include_messages', 'includeMessages']),
-      'include_messages',
-    );
-    const normalizedInput = normalizeManagedSessionStepInput(positionalArgs, kwargs);
-    return normalizeMontyValue(await stepAndReleaseManagedSession({
-      sessionId: targetSessionId,
-      ownerSessionId: ownerSession.id,
-      ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
-      leaseId,
-      ...(typeof expectedRevision === 'number' ? { expectedRevision } : {}),
-      ...(runMode ? { runMode } : {}),
-      ...(inboxOrder ? { inboxOrder } : {}),
-      ...(includeMessages !== undefined ? { includeMessages } : {}),
-      ...normalizedInput,
-    }));
-  }
-
   if (functionName === 'wait_for_managed_event') {
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
@@ -1025,7 +1051,7 @@ async function startRun(record: ToolScriptRunRecord, code: string, scriptArgs: a
   const monty = await importMonty();
   const runtimeState = createRuntimeState(record.stdout, record.executedTools);
   try {
-    const runner = new monty.Monty(code, { scriptName: record.scriptName, inputs: ['args'] });
+    const runner = new monty.Monty(buildToolScriptSource(code), { scriptName: record.scriptName, inputs: ['args'] });
     const progress = runner.start({
       inputs: { args: normalizeMontyValue(scriptArgs || {}) },
       limits: DEFAULT_SCRIPT_LIMITS,
