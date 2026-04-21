@@ -1,6 +1,6 @@
 ---
 name: agent_management
-description: Use for Foxwarm agent management tasks: creating agents, editing agent memory, refreshing snapshots, understanding agent vs session boundaries, changing isolation/inheritance, and safely migrating or cleaning up agents.
+description: "Use for Foxwarm agent management tasks: creating agents, editing agent memory, refreshing snapshots, understanding agent vs session boundaries, changing isolation/inheritance, and safely migrating or cleaning up agents."
 ---
 
 # agent_management

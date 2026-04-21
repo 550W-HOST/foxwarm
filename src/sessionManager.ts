@@ -1382,9 +1382,9 @@ async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSe
   await queueSessionSystemEvent(managed.ownerSessionId, wakeupMessage, 'background');
 }
 
-async function maybeResumeManagedSessionControllerRun(session: Session, managed: ManagedSessionState): Promise<void> {
+async function maybeResumeManagedSessionControllerRun(session: Session, managed: ManagedSessionState): Promise<boolean> {
   if (!managed.controllerRunId || !managed.pendingInbox.length) {
-    return;
+    return false;
   }
   try {
     const toolscript = require('./toolscript') as {
@@ -1397,7 +1397,7 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
         wakeReason?: string;
       }) => Promise<any>;
     };
-    await toolscript.resumeBackgroundToolScriptRunForManagedSession?.({
+    const resumed = await toolscript.resumeBackgroundToolScriptRunForManagedSession?.({
       runId: managed.controllerRunId,
       sessionId: session.id,
       leaseId: managed.leaseId,
@@ -1405,8 +1405,10 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
       pendingInboxCount: managed.pendingInbox.length,
       wakeReason: 'managed-inbox',
     });
+    return !!resumed;
   } catch (error: any) {
     logger.warn({ err: error, sessionId: session.id, controllerRunId: managed.controllerRunId }, 'Failed to resume managed-session ToolScript controller run');
+    return false;
   }
 }
 
@@ -1427,8 +1429,10 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
     managed.revision += 1;
     setManagedSessionState(session, managed);
     await saveSession(sessionId);
-    await maybeWakeManagedSessionOwner(session, managed);
-    await maybeResumeManagedSessionControllerRun(session, managed);
+    const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
+    if (!resumedControllerRun) {
+      await maybeWakeManagedSessionOwner(session, managed);
+    }
     return;
   }
 
@@ -1882,8 +1886,10 @@ export async function resumeBusySessions(): Promise<void> {
 
       const managed = getManagedSessionState(session);
       if (managed) {
-        await maybeWakeManagedSessionOwner(session, managed);
-        await maybeResumeManagedSessionControllerRun(session, managed);
+        const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
+        if (!resumedControllerRun) {
+          await maybeWakeManagedSessionOwner(session, managed);
+        }
       }
       logger.info({ sessionId }, 'Managed session inbox wakeup processed after restart');
     } catch (e) {

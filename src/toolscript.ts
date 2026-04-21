@@ -559,6 +559,17 @@ function parseManagedSessionInboxOrder(value: any): 'before' | 'after' | 'ignore
   throw new Error('inbox_order must be one of: before, after, ignore.');
 }
 
+function parseOptionalBoolean(value: any, label: string): boolean | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const normalized = normalizeMontyValue(value);
+  if (typeof normalized === 'boolean') {
+    return normalized;
+  }
+  throw new Error(`${label} must be a boolean.`);
+}
+
 function parseToolScriptRunMode(value: any): ToolScriptRunMode {
   if (value === undefined || value === null || value === '') {
     return 'foreground';
@@ -683,8 +694,12 @@ async function executeScriptHostCall(
     const inboxOrder = parseManagedSessionInboxOrder(
       getNamedArg(positionalArgs, kwargs, 4, ['inbox_order', 'inboxOrder']),
     );
+    const includeMessages = parseOptionalBoolean(
+      getNamedArg(positionalArgs, kwargs, 5, ['include_messages', 'includeMessages']),
+      'include_messages',
+    );
     const normalizedInput = normalizeManagedSessionStepInput(positionalArgs, kwargs);
-    return normalizeMontyValue(await managedSessions.managedSessionStep({
+    const stepResult = await managedSessions.managedSessionStep({
       sessionId: targetSessionId,
       ownerSessionId: ownerSession.id,
       leaseId,
@@ -693,7 +708,15 @@ async function executeScriptHostCall(
       ...(runMode ? { runMode } : {}),
       ...(inboxOrder ? { inboxOrder } : {}),
       ...normalizedInput,
-    }));
+    });
+    const safeStepResult: Record<string, any> = includeMessages
+      ? stepResult as any
+      : {
+          ...stepResult,
+          newMessagesCount: stepResult.newMessages.length,
+          newMessages: [] as Message[],
+        };
+    return normalizeMontyValue(safeStepResult);
   }
 
   if (functionName === 'release_managed_session') {
@@ -943,6 +966,7 @@ async function resumeRun(record: ToolScriptRunRecord, resumeValue: any, ctx: Too
     record.status = 'running';
     record.lastResumeAt = Date.now();
     record.updatedAt = record.lastResumeAt;
+    await saveRun(record);
     const snapshot = monty.MontySnapshot.load(Buffer.from(record.snapshotBase64, 'base64'), {
       printCallback: printCallbackFor(runtimeState),
     });

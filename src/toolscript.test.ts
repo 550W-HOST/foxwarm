@@ -180,6 +180,50 @@ test('ToolScript manager host functions can open, step, and release a managed ch
     assert.equal(result.result?.yieldReason, 'idle');
     assert.equal(result.result?.consumedPendingInboxCount, 0);
     assert.equal(result.result?.pendingInboxCount, 0);
+    assert.equal(result.result?.newMessagesCount, 2);
+    assert.equal(result.result?.newMessages?.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.setSessionTriggerCallback(() => {});
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('ToolScript session_step can optionally include full newMessages payload', async () => {
+  await resetToolScriptRunsForTests();
+  const router = new MessageRouter();
+  const originalChat = llm.chat;
+  const parentId = makeId('toolscript_manager_include_parent');
+  const childId = makeId('toolscript_manager_include_child');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, [
+    `lease = open_managed_session("${childId}")`,
+    `step = session_step("${childId}", lease["leaseId"], lease["revision"], run_mode="idle", inbox_order="before", include_messages=True, message="managed hello")`,
+    `release_managed_session("${childId}", lease["leaseId"], step["revision"])`,
+    'step',
+  ].join('\n'));
+
+  sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
+  (llm as any).chat = async (parts: any, activeSession: Session) => {
+    if (parts?.length) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
+    await sessionManager.appendSessionMessage(activeSession, {
+      role: 'model',
+      parts: [{ text: `child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` }],
+    });
+    return { text: `child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` };
+  };
+
+  const parent = await sessionManager.getSession(parentId);
+  await sessionManager.getSession(childId);
+
+  try {
+    const result = await tool_run_script({ filePath: scriptName }, { sessionId: parentId, session: parent });
+    assert.equal(result.status, 'completed');
     assert.equal(result.result?.newMessages?.length, 2);
     assert.equal(result.result?.newMessages?.[0]?.role, 'user');
     assert.equal(result.result?.newMessages?.[1]?.role, 'model');
