@@ -129,7 +129,7 @@ async function main() {
       'Before guessing APIs, inspect the relevant ToolScript skill docs with load_skill, then read the canonical example path mentioned in that skill.',
       `Then create a ToolScript file named \`${automationScriptName}\` in the current agent folder.`,
       'Prefer using any helper mentioned in the skill/example if it fits. Avoid repo-wide grep unless the skill/example is still insufficient.',
-      'The script should search builtin tools for "read file", print the top tool name, read `skills/toolscript_automation/SKILL.md`, print a short excerpt, ask_agent("Reply with a short label"), and return a dict with the label and tool count.',
+      'The script should use a small known tool flow: list files under `examples/toolscript`, print the count, read `skills/toolscript_automation/SKILL.md`, print a short excerpt, ask_agent("Reply with a short label"), and return a dict with the label and file count.',
       'After writing the file, run it with run_script, continue it with input `TRIAL_OK`, and then briefly report whether it worked.',
       'Keep the final reply concise.',
     ].join(' ');

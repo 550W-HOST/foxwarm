@@ -14,10 +14,6 @@ Before grepping tests, read:
 - `examples/toolscript/automation_basic.py`
 - `examples/toolscript/README.md`
 
-Small helper worth knowing immediately:
-
-- `find_tool(...)`
-
 Typical fit:
 
 - repeatable tool sequences
@@ -29,6 +25,7 @@ Typical fit:
 
 Prefer ToolScript over a normal tool loop when:
 
+- you already know the main tools you want to call
 - you expect the same flow to be reused
 - the flow needs several tool calls with some local logic between them
 - you want `print(...)` output and a final structured result
@@ -40,6 +37,16 @@ Prefer a normal tool loop when:
 - the task is short and one-off
 - there is no benefit in saving a script file
 - simple direct reasoning plus one or two tool calls is enough
+
+## Recommended real workflow
+
+The intended workflow is:
+
+1. use normal tool calls in the agent loop to explore/verify the tool path
+2. once you know the tools and argument shapes you want, write the ToolScript file
+3. use ToolScript to encode that known flow into a reusable script
+
+In practice, agents often try the relevant tools directly first, then turn the stable flow into a script.
 
 ## Main tool entry points
 
@@ -81,37 +88,8 @@ Inside the script, you can currently use:
 
 - `print(...)`
 - `call_tool(...)`
-- `find_tool(...)`
 - `ask_agent(...)`
 - `request_model_without_context(...)`
-
-### `find_tool(...)`
-
-Use this as a small helper when you want the common pattern:
-
-- search tools
-- pick the first result
-- keep a structured record of what matched
-
-Example:
-
-```python
-found = find_tool("read file")
-tool = found["tool"]
-print(tool["name"])
-```
-
-Return shape is roughly:
-
-```python
-{
-    "tool": {...} or None,
-    "count": 3,
-    "tools": [...],
-}
-```
-
-Use `call_tool("search_tools", ...)` directly if you need full custom search behavior; use `find_tool(...)` for the common happy path.
 
 ### `call_tool(...)`
 
@@ -120,11 +98,11 @@ Use this to call builtin/MCP/node tools from the script.
 Examples:
 
 ```python
-tools = call_tool("search_tools", {
-    "query": "read file",
-    "sources": ["builtin"],
-    "limit": 3,
-    "includeSchema": False,
+files = call_tool("list_files", {
+    "dirPath": "examples/toolscript",
+    "recursive": False,
+    "includeHidden": False,
+    "limit": 20,
 })
 
 content = call_tool("read", {"filePath": "README.md"})
@@ -135,6 +113,7 @@ Notes:
 - the wrapper accepts either a tool name + args, or a fuller descriptor
 - nested internal tool calls are executed for real
 - those nested calls do **not** spam the outer session history the way ordinary model tool loops do
+- `call_tool(...)` works best once you already know the tools and argument shapes you want in the scripted flow
 
 ### `ask_agent(...)`
 
@@ -181,8 +160,13 @@ Notes:
 ```python
 print("starting automation")
 
-tool_search = find_tool("read file")
-print(tool_search)
+files = call_tool("list_files", {
+    "dirPath": "examples/toolscript",
+    "recursive": False,
+    "includeHidden": False,
+    "limit": 20,
+})
+print(files)
 
 doc = call_tool("read", {"filePath": "skills/toolscript_automation/SKILL.md"})
 print(doc[:200])
@@ -191,7 +175,7 @@ label = ask_agent("Give this run a short label")
 
 {
     "label": label,
-    "found": tool_search,
+    "exampleFileCount": files.get("count", 0),
 }
 ```
 
@@ -223,9 +207,10 @@ After `run_script(...)` or `start_toolscript_run(...)`, inspect:
 When asked to automate a task with ToolScript, a strong pattern is:
 
 1. inspect/load this skill
-2. inspect the canonical example file if the task is similar
-3. draft the script file
-4. briefly sanity-check the script
-5. run it with `run_script(...)` or `start_toolscript_run(...)`
-6. inspect the structured run result
-7. if it is waiting for agent input, resume with `continue_script(...)`
+2. use normal tool calls first if you still need to verify which tools/args are correct
+3. inspect the canonical example file if the task is similar
+4. draft the script file for the now-known tool flow
+5. briefly sanity-check the script
+6. run it with `run_script(...)` or `start_toolscript_run(...)`
+7. inspect the structured run result
+8. if it is waiting for agent input, resume with `continue_script(...)`

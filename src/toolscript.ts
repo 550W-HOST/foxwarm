@@ -499,32 +499,6 @@ async function requestModelWithoutContext(prompt: string, session: Session): Pro
   return { text: result.text || '' };
 }
 
-async function findToolForScript(args: {
-  query: string;
-  sources?: string[];
-  limit?: number;
-  includeSchema?: boolean;
-}, ctx: ToolContext): Promise<{ tool: any | null; count: number; tools: any[] }> {
-  const toolsModule = require('./tools');
-  const result = await toolsModule.call_tool({
-    name: 'search_tools',
-    source: 'builtin',
-    args: {
-      query: args.query,
-      sources: Array.isArray(args.sources) && args.sources.length > 0 ? args.sources : ['builtin'],
-      limit: typeof args.limit === 'number' && Number.isFinite(args.limit) ? args.limit : 5,
-      includeSchema: args.includeSchema === true,
-    },
-  }, ctx);
-  const normalized = normalizeMontyValue(result);
-  const tools = Array.isArray(normalized?.tools) ? normalized.tools : [];
-  return {
-    tool: tools[0] || null,
-    count: typeof normalized?.count === 'number' ? normalized.count : tools.length,
-    tools,
-  };
-}
-
 async function stepAndReleaseManagedSession(args: {
   sessionId: string;
   ownerSessionId: string;
@@ -640,17 +614,6 @@ function parseOptionalBoolean(value: any, label: string): boolean | undefined {
   throw new Error(`${label} must be a boolean.`);
 }
 
-function parseOptionalStringArray(value: any, label: string): string[] | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  const normalized = normalizeMontyValue(value);
-  if (!Array.isArray(normalized) || normalized.some(item => typeof item !== 'string')) {
-    throw new Error(`${label} must be an array of strings.`);
-  }
-  return normalized.map(item => item.trim()).filter(Boolean);
-}
-
 function parseToolScriptRunMode(value: any): ToolScriptRunMode {
   if (value === undefined || value === null || value === '') {
     return 'foreground';
@@ -741,26 +704,6 @@ async function executeScriptHostCall(
       throw new Error('request_model_without_context requires a session context.');
     }
     return normalizeMontyValue(await requestModelWithoutContext(prompt, session));
-  }
-
-  if (functionName === 'find_tool') {
-    const query = requireStringArg(
-      getNamedArg(positionalArgs, kwargs, 0, ['query']),
-      'query',
-    );
-    const sources = parseOptionalStringArray(
-      getNamedArg(positionalArgs, kwargs, 1, ['sources']),
-      'sources',
-    );
-    const includeSchema = parseOptionalBoolean(
-      getNamedArg(positionalArgs, kwargs, 2, ['include_schema', 'includeSchema']),
-      'include_schema',
-    );
-    return normalizeMontyValue(await findToolForScript({
-      query,
-      ...(sources ? { sources } : {}),
-      ...(includeSchema !== undefined ? { includeSchema } : {}),
-    }, ctx));
   }
 
   if (functionName === 'open_managed_session') {

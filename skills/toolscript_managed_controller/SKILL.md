@@ -18,6 +18,8 @@ Small helper worth knowing immediately:
 
 - `step_and_release_managed_session(...)`
 
+As with normal ToolScript automation, first verify the target session and the surrounding tool/runtime flow in the regular agent loop, then encode the known controller flow into a script.
+
 This is the skill for:
 
 - opening managed control of a child/related session
