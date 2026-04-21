@@ -101,27 +101,24 @@ test('run_script pauses at ask_agent and continue_script resumes from persisted 
   }
 });
 
-test('request_model_without_context uses an empty transient session and no tools', async () => {
+test('request_model_without_context uses direct low-level llm request with no tools or persistent context', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_model');
   const scriptName = `${makeId('script')}.py`;
   await writeScript(scriptName, 'request_model_without_context("ping")');
 
   const session = await sessionManager.getSession(sessionId);
-  const originalChat = llm.chat;
-  let captured: { historyLength?: number; snapshot?: string; toolDefinitionsLength?: number; inputText?: string } = {};
+  session.model = 'anthropic/claude-sonnet-4-5';
+  const originalRequestLlmOnce = (llm as any).requestLlmOnce;
+  let captured: { model?: string; systemPrompt?: string; toolDefinitionsLength?: number; inputText?: string } = {};
 
-  (llm as any).chat = async (parts: any, transientSession: any, _iteration: number, options: any) => {
+  (llm as any).requestLlmOnce = async (options: any) => {
     captured = {
-      historyLength: transientSession.history.length,
-      snapshot: transientSession.persistentMemorySnapshot,
+      model: options.model,
+      systemPrompt: options.systemPrompt,
       toolDefinitionsLength: Array.isArray(options?.toolDefinitions) ? options.toolDefinitions.length : -1,
-      inputText: Array.isArray(parts) ? parts.map((part: any) => part.text || '').join('\n') : '',
+      inputText: Array.isArray(options?.contents) ? options.contents.flatMap((msg: any) => msg.parts || []).map((part: any) => part.text || '').join('\n') : '',
     };
-    if (options?.appendMessage) {
-      await options.appendMessage({ role: 'user', parts });
-      await options.appendMessage({ role: 'model', parts: [{ text: 'pong' }] });
-    }
     return { text: 'pong', toolCalls: [] as any[] };
   };
 
@@ -129,12 +126,12 @@ test('request_model_without_context uses an empty transient session and no tools
     const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
     assert.equal(result.status, 'completed');
     assert.deepEqual(result.result, { text: 'pong' });
-    assert.equal(captured.historyLength, 0);
-    assert.equal((captured.snapshot || '').trim(), '');
+    assert.equal(captured.model, 'anthropic/claude-sonnet-4-5');
+    assert.equal(captured.systemPrompt, '');
     assert.equal(captured.toolDefinitionsLength, 0);
     assert.equal(captured.inputText, 'ping');
   } finally {
-    (llm as any).chat = originalChat;
+    (llm as any).requestLlmOnce = originalRequestLlmOnce;
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);

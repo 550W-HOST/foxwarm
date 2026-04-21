@@ -363,42 +363,16 @@ function normalizeErrorMessage(error: any): string {
   return String(error);
 }
 
-function buildTransientSession(session: Session): Session {
-  return {
-    id: `${session.id}__toolscript_transient`,
-    agent: session.agent,
-    history: [],
-    persistentMemorySnapshot: ' ',
-    stats: {
-      totalCachedTokens: 0,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      lastUsage: null,
-    },
-    busy: false,
-    queue: [],
-    meta: { lastMessageTime: Date.now() },
-    currentNode: session.currentNode,
-    cwd: session.cwd,
-    model: session.model,
-    childModelDefault: session.childModelDefault,
-    verbose: false,
-    vectorIndexPosition: 0,
-    nextMessageSeq: 1,
-  };
-}
-
 async function requestModelWithoutContext(prompt: string, session: Session): Promise<{ text: string }> {
-  const transientSession = buildTransientSession(session);
-  const transientHistory: any[] = [];
-  const result = await llm.chat([
-    { text: prompt },
-  ], transientSession, 0, {
+  const result = await llm.requestLlmOnce({
+    contents: [{
+      role: 'user',
+      parts: [{ text: prompt }],
+    }],
+    systemPrompt: '',
+    model: session.model,
+    sessionId: session.id,
     toolDefinitions: [],
-    appendMessage: async (message) => {
-      transientHistory.push(message);
-      transientSession.history.push(message);
-    },
     notifySessionEvents: false,
     registerAbortController: false,
   });
