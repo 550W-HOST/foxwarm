@@ -190,3 +190,28 @@ test('ToolScript manager host functions can open, step, and release a managed ch
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
   }
 });
+
+test('ToolScript session_step rejects non-user message injection shapes', async () => {
+  await resetToolScriptRunsForTests();
+  const parentId = makeId('toolscript_manager_invalid_parent');
+  const childId = makeId('toolscript_manager_invalid_child');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, [
+    `lease = open_managed_session("${childId}")`,
+    `session_step("${childId}", lease["leaseId"], lease["revision"], message={"role": "model", "parts": [{"text": "bad"}]})`,
+  ].join('\n'));
+
+  const parent = await sessionManager.getSession(parentId);
+  await sessionManager.getSession(childId);
+
+  try {
+    const result = await tool_run_script({ filePath: scriptName }, { sessionId: parentId, session: parent });
+    assert.equal(result.status, 'failed');
+    assert.match(result.error || '', /message\.role must be `user`/i);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});

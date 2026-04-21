@@ -1,9 +1,11 @@
 import { Message, MessagePart, QueueItem } from './types';
 import * as sessionManager from './sessionManager';
+import { resolvePermittedSessionTarget } from './session/relations';
 import {
   buildManagedSessionLeaseId,
   cloneQueueItem,
   getManagedSessionState,
+  isManagedSessionLeaseExpired,
   ManagedSessionState,
   setManagedSessionState,
 } from './session/managedState';
@@ -98,9 +100,24 @@ export function isManagedSessionBusyForStep(sessionId: string): boolean {
 }
 
 export async function openManagedSession(args: { sessionId: string; ownerSessionId: string }): Promise<OpenManagedSessionResult> {
-  const session = await sessionManager.getSession(args.sessionId);
+  const { targetSession: session } = await resolvePermittedSessionTarget({
+    getExistingSession: sessionManager.getExistingSession,
+    getAgentMetadata: sessionManager.getAgentMetadata,
+  }, args.sessionId, args.ownerSessionId);
+  if (session.id === args.ownerSessionId) {
+    throw new Error('A session cannot manage itself. Create or use a child/linked session instead.');
+  }
   const existing = getManagedSessionState(session);
-  if (existing) {
+  if (existing && !session.busy) {
+    const existingOwner = await sessionManager.getExistingSession(existing.ownerSessionId);
+    if (!existingOwner || isManagedSessionLeaseExpired(existing)) {
+      session.queue = [...cloneQueueItems(existing.pendingInbox), ...(session.queue || [])];
+      setManagedSessionState(session, null);
+      await sessionManager.saveSession(session.id);
+    }
+  }
+  const refreshedExisting = getManagedSessionState(session);
+  if (refreshedExisting) {
     throw new Error(`Session \`${args.sessionId}\` is already under managed control.`);
   }
   if (session.busy) {
@@ -116,6 +133,7 @@ export async function openManagedSession(args: { sessionId: string; ownerSession
     revision: 1,
     pendingInbox: intercepted,
     openedAt: Date.now(),
+    leaseTouchedAt: Date.now(),
   };
   setManagedSessionState(session, state);
   await sessionManager.saveSession(session.id);
@@ -139,7 +157,10 @@ export async function managedSessionStep(args: {
   parts?: MessagePart[] | null;
   message?: Message | null;
 }): Promise<ManagedSessionStepResult> {
-  const session = await sessionManager.getSession(args.sessionId);
+  const { targetSession: session } = await resolvePermittedSessionTarget({
+    getExistingSession: sessionManager.getExistingSession,
+    getAgentMetadata: sessionManager.getAgentMetadata,
+  }, args.sessionId, args.ownerSessionId);
   const managed = requireOwnedManagedState(args.sessionId, getManagedSessionState(session), args.ownerSessionId, args.leaseId);
   const runMode = args.runMode || 'idle';
   const inboxOrder = args.inboxOrder || 'before';
@@ -157,7 +178,7 @@ export async function managedSessionStep(args: {
   const queuedFromManager = buildManagerQueueItems({ parts: args.parts, message: args.message });
   const consumedPendingInbox = inboxOrder === 'ignore' ? [] : cloneQueueItems(managed.pendingInbox);
   const hasWork = consumedPendingInbox.length > 0 || queuedFromManager.length > 0 || session.queue.length > 0;
-  const historyStart = session.history.length;
+  const nextSeqStart = session.nextMessageSeq || 1;
 
   if (!hasWork) {
     return {
@@ -179,6 +200,7 @@ export async function managedSessionStep(args: {
     managed.pendingInbox = [];
   }
   managed.lastStepAt = Date.now();
+  managed.leaseTouchedAt = managed.lastStepAt;
   managed.revision += 1;
   const stepId = buildManagedStepId();
   managed.currentStep = {
@@ -209,6 +231,7 @@ export async function managedSessionStep(args: {
     ? updatedManaged.lastStepResult.yieldReason
     : 'idle';
   updatedManaged.currentStep = undefined;
+  updatedManaged.leaseTouchedAt = Date.now();
   setManagedSessionState(updated, updatedManaged);
   await sessionManager.saveSession(updated.id);
 
@@ -227,7 +250,7 @@ export async function managedSessionStep(args: {
     consumedPendingInboxCount: consumedPendingInbox.length,
     pendingInboxCount: updatedManaged.pendingInbox.length,
     queueLength: updated.queue.length,
-    newMessages: updated.history.slice(historyStart),
+    newMessages: updated.history.filter((message) => (message.__meta?.seq || 0) >= nextSeqStart),
   };
 }
 
@@ -237,7 +260,10 @@ export async function releaseManagedSession(args: {
   leaseId: string;
   expectedRevision?: number;
 }): Promise<{ sessionId: string; releasedPendingInboxCount: number }> {
-  const session = await sessionManager.getSession(args.sessionId);
+  const { targetSession: session } = await resolvePermittedSessionTarget({
+    getExistingSession: sessionManager.getExistingSession,
+    getAgentMetadata: sessionManager.getAgentMetadata,
+  }, args.sessionId, args.ownerSessionId);
   const managed = requireOwnedManagedState(args.sessionId, getManagedSessionState(session), args.ownerSessionId, args.leaseId);
 
   if (typeof args.expectedRevision === 'number' && managed.revision !== args.expectedRevision) {

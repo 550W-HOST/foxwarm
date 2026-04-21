@@ -441,6 +441,19 @@ function parseManagedSessionInboxOrder(value: any): 'before' | 'after' | 'ignore
   throw new Error('inbox_order must be one of: before, after, ignore.');
 }
 
+function validateManagedSessionInputParts(parts: MessagePart[]): MessagePart[] {
+  return parts.map((part: any) => {
+    const normalizedPart = { ...part };
+    if (normalizedPart.functionCall || normalizedPart.functionResponse) {
+      throw new Error('session_step only accepts user-style input parts; functionCall/functionResponse parts are not allowed.');
+    }
+    if (normalizedPart.thinking || normalizedPart.providerMeta) {
+      throw new Error('session_step only accepts plain user-style input parts; thinking/providerMeta parts are not allowed.');
+    }
+    return normalizedPart;
+  });
+}
+
 function normalizeManagedSessionStepInput(positionalArgs: any[], kwargs: Record<string, any>): { parts?: MessagePart[]; message?: Message } {
   const rawParts = kwargs.parts;
   if (rawParts !== undefined) {
@@ -449,7 +462,7 @@ function normalizeManagedSessionStepInput(positionalArgs: any[], kwargs: Record<
       throw new Error('session_step parts must be an array of message-part objects.');
     }
     return {
-      parts: normalizedParts.map((part: any) => ({ ...part })),
+      parts: validateManagedSessionInputParts(normalizedParts),
     };
   }
 
@@ -463,10 +476,14 @@ function normalizeManagedSessionStepInput(positionalArgs: any[], kwargs: Record<
     return { parts: [{ text: normalizedMessage }] };
   }
   if (isPlainObject(normalizedMessage) && Array.isArray((normalizedMessage as any).parts)) {
+    const role = typeof (normalizedMessage as any).role === 'string' ? (normalizedMessage as any).role : 'user';
+    if (role !== 'user') {
+      throw new Error('session_step message.role must be `user` when passing a full message object.');
+    }
     return {
       message: {
-        role: typeof (normalizedMessage as any).role === 'string' ? (normalizedMessage as any).role : 'user',
-        parts: (normalizedMessage as any).parts.map((part: any) => ({ ...part })),
+        role,
+        parts: validateManagedSessionInputParts((normalizedMessage as any).parts),
       },
     };
   }

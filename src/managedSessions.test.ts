@@ -108,6 +108,7 @@ test('message router queues direct user messages into managed inbox instead of a
   const channelId = `managed-router-${Date.now()}`;
   const conversationId = `conv-${Math.random().toString(36).slice(2, 7)}`;
   const sessionId = sessionManager.attachChannel(channelId, conversationId);
+  const ownerSessionId = `managed-router-owner-${Date.now()}`;
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     await appendStubUserMessage(activeSession, parts);
@@ -116,10 +117,11 @@ test('message router queues direct user messages into managed inbox instead of a
   };
 
   try {
+    await sessionManager.createEmptySession(ownerSessionId);
     const session = await sessionManager.getSession(sessionId);
     const lease = await managedSessions.openManagedSession({
       sessionId,
-      ownerSessionId: 'manager-owner',
+      ownerSessionId,
     });
 
     const replies: string[] = [];
@@ -154,6 +156,7 @@ test('message router queues direct user messages into managed inbox instead of a
     (llm as any).chat = originalChat;
     sessionManager.detachChannel(channelId, conversationId);
     await sessionManager.deleteSession(sessionId).catch(() => false);
+    await sessionManager.deleteSession(ownerSessionId).catch(() => false);
   }
 });
 
@@ -253,6 +256,92 @@ test('managed session step can yield after the first tool batch', async () => {
   } finally {
     (llm as any).chat = originalChat;
     sessionManager.setSessionTriggerCallback(() => {});
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
+  }
+});
+
+test('managed session respects isolated/direct-link permission boundaries', async () => {
+  await sessionManager.loadSessions();
+  const isolatedAgent = `managed_iso_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const ownerId = `managed_iso_owner_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const targetId = `managed_iso_target_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  try {
+    await sessionManager.setAgentMetadata(isolatedAgent, { isolated: true, isolatedNode: 'sandbox-docker' } as any);
+    const owner = await sessionManager.getSession(ownerId);
+    owner.agent = isolatedAgent;
+    await sessionManager.saveSession(ownerId);
+    await sessionManager.createEmptySession(targetId);
+
+    await assert.rejects(
+      managedSessions.openManagedSession({ sessionId: targetId, ownerSessionId: ownerId }),
+      /isolated/i,
+    );
+  } finally {
+    await sessionManager.setAgentMetadata(isolatedAgent, { isolated: false } as any).catch(() => {});
+    await sessionManager.deleteSession(targetId).catch(() => false);
+    await sessionManager.deleteSession(ownerId).catch(() => false);
+  }
+});
+
+test('managed session notifies owner on inbox arrival and stale leases are reclaimed', async () => {
+  await sessionManager.loadSessions();
+  const parentId = `managed_recovery_parent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const childId = `managed_recovery_child_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  try {
+    await sessionManager.createEmptySession(parentId);
+    await sessionManager.createEmptySession(childId);
+
+    const lease = await managedSessions.openManagedSession({ sessionId: childId, ownerSessionId: parentId });
+    await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'wake owner' }], 'background');
+
+    const ownerAfterWake = await sessionManager.getSession(parentId);
+    assert.match(ownerAfterWake.queue[0]?.parts?.[0]?.system || '', /Managed session/);
+
+    await sessionManager.deleteSession(parentId).catch(() => false);
+
+    await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'stale should recover' }], 'background');
+
+    const recoveredChild = await sessionManager.getSession(childId);
+    const managedState = await managedSessions.getManagedSessionStateForTests(childId);
+    assert.equal(managedState, undefined);
+    assert.equal(recoveredChild.queue.length, 2);
+    assert.deepEqual(
+      recoveredChild.queue.map(item => item.parts?.[0]?.text).filter(Boolean),
+      ['wake owner', 'stale should recover'],
+    );
+  } finally {
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
+  }
+});
+
+test('resumeBusySessions re-notifies manager when pending managed inbox survived restart', async () => {
+  await sessionManager.loadSessions();
+  const parentId = `managed_restart_parent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const childId = `managed_restart_child_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  try {
+    await sessionManager.createEmptySession(parentId);
+    await sessionManager.createEmptySession(childId);
+    await managedSessions.openManagedSession({ sessionId: childId, ownerSessionId: parentId });
+    await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'persisted inbox' }], 'background');
+
+    const owner = await sessionManager.getSession(parentId);
+    owner.queue = [];
+    await sessionManager.saveSession(parentId);
+
+    const child = await sessionManager.getSession(childId);
+    child.meta.managedSession.lastOwnerWakeupAt = undefined;
+    await sessionManager.saveSession(childId);
+
+    await sessionManager.resumeBusySessions();
+
+    const ownerAfterResume = await sessionManager.getSession(parentId);
+    assert.match(ownerAfterResume.queue[0]?.parts?.[0]?.system || '', /Managed session/);
+  } finally {
     await sessionManager.deleteSession(childId).catch(() => false);
     await sessionManager.deleteSession(parentId).catch(() => false);
   }

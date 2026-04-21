@@ -7,8 +7,10 @@ export type ManagedSessionState = {
   revision: number;
   pendingInbox: QueueItem[];
   openedAt: number;
+  leaseTouchedAt: number;
   lastStepAt?: number;
   lastInboxAt?: number;
+  lastOwnerWakeupAt?: number;
   currentStep?: {
     stepId: string;
     runMode: 'idle' | 'tool';
@@ -19,6 +21,8 @@ export type ManagedSessionState = {
     yieldedAt: number;
   };
 };
+
+export const MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000;
 
 function isQueueItemLike(value: any): value is QueueItem {
   return !!value && typeof value === 'object' && typeof value.type === 'string';
@@ -55,8 +59,10 @@ export function getManagedSessionState(session?: Session | null): ManagedSession
     revision,
     pendingInbox,
     openedAt: typeof raw.openedAt === 'number' ? raw.openedAt : Date.now(),
+    leaseTouchedAt: typeof raw.leaseTouchedAt === 'number' ? raw.leaseTouchedAt : (typeof raw.openedAt === 'number' ? raw.openedAt : Date.now()),
     ...(typeof raw.lastStepAt === 'number' ? { lastStepAt: raw.lastStepAt } : {}),
     ...(typeof raw.lastInboxAt === 'number' ? { lastInboxAt: raw.lastInboxAt } : {}),
+    ...(typeof raw.lastOwnerWakeupAt === 'number' ? { lastOwnerWakeupAt: raw.lastOwnerWakeupAt } : {}),
     ...(raw.currentStep && typeof raw.currentStep === 'object' && typeof raw.currentStep.stepId === 'string' && (raw.currentStep.runMode === 'idle' || raw.currentStep.runMode === 'tool')
       ? {
           currentStep: {
@@ -93,8 +99,10 @@ export function setManagedSessionState(session: Session, state: ManagedSessionSt
     revision: state.revision,
     pendingInbox: state.pendingInbox.map(cloneQueueItem),
     openedAt: state.openedAt,
+    leaseTouchedAt: state.leaseTouchedAt,
     ...(state.lastStepAt !== undefined ? { lastStepAt: state.lastStepAt } : {}),
     ...(state.lastInboxAt !== undefined ? { lastInboxAt: state.lastInboxAt } : {}),
+    ...(state.lastOwnerWakeupAt !== undefined ? { lastOwnerWakeupAt: state.lastOwnerWakeupAt } : {}),
     ...(state.currentStep ? { currentStep: { ...state.currentStep } } : {}),
     ...(state.lastStepResult ? { lastStepResult: { ...state.lastStepResult } } : {}),
   };
@@ -110,4 +118,17 @@ export function shouldRouteQueueItemToManagedInbox(session: Session | null | und
   }
 
   return item.type !== 'compact' && item.type !== 'compact-commit';
+}
+
+export function getManagedSessionLastTouchedAt(state: ManagedSessionState): number {
+  return Math.max(
+    state.leaseTouchedAt || 0,
+    state.lastStepAt || 0,
+    state.lastInboxAt || 0,
+    state.openedAt || 0,
+  );
+}
+
+export function isManagedSessionLeaseExpired(state: ManagedSessionState, now = Date.now(), ttlMs = MANAGED_SESSION_LEASE_TTL_MS): boolean {
+  return now - getManagedSessionLastTouchedAt(state) > ttlMs;
 }
