@@ -426,11 +426,26 @@ function buildCallToolWrapperArgs(positionalArgs: any[], kwargs: Record<string, 
   }
 
   if (isPlainObject(first)) {
+    if (normalizedPositionals.length > 2) {
+      throw new Error('call_tool supports at most two positional arguments when using a descriptor object: descriptor and args object.');
+    }
+
     const descriptor = first;
+    const positionalToolArgs = normalizedPositionals.length >= 2 && normalizedPositionals[1] !== undefined
+      ? normalizeMontyValue(normalizedPositionals[1])
+      : {};
+    if (positionalToolArgs !== undefined && !isPlainObject(positionalToolArgs)) {
+      throw new Error('call_tool positional args object must be a mapping/object.');
+    }
+
     const { metadata, toolArgs } = splitMetadataAndToolArgs(descriptor);
     const { metadata: kwMetadata, toolArgs: kwToolArgs } = splitMetadataAndToolArgs(normalizedKwargs);
-    const explicitArgs = kwMetadata.args !== undefined ? kwMetadata.args : metadata.args;
-    if (explicitArgs !== undefined && !isPlainObject(explicitArgs)) {
+    const descriptorArgs = metadata.args;
+    const kwExplicitArgs = kwMetadata.args;
+    if (descriptorArgs !== undefined && !isPlainObject(descriptorArgs)) {
+      throw new Error('call_tool args must be an object.');
+    }
+    if (kwExplicitArgs !== undefined && !isPlainObject(kwExplicitArgs)) {
       throw new Error('call_tool args must be an object.');
     }
 
@@ -447,8 +462,10 @@ function buildCallToolWrapperArgs(positionalArgs: any[], kwargs: Record<string, 
       ...(kwMetadata.nodeId !== undefined ? { nodeId: kwMetadata.nodeId } : {}),
       args: {
         ...toolArgs,
-        ...(isPlainObject(explicitArgs) ? explicitArgs : {}),
+        ...(isPlainObject(positionalToolArgs) ? positionalToolArgs : {}),
+        ...(isPlainObject(descriptorArgs) ? descriptorArgs : {}),
         ...kwToolArgs,
+        ...(isPlainObject(kwExplicitArgs) ? kwExplicitArgs : {}),
       },
     };
   }

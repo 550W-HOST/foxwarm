@@ -95,25 +95,51 @@ Inside the script, you can currently use:
 
 Use this to call builtin/MCP/node tools from the script.
 
+The main shape is the same unified descriptor style used by the normal model-facing `call_tool` tool.
+
 Examples:
 
 ```python
-files = call_tool("list_files", {
-    "dirPath": "examples/toolscript",
-    "recursive": False,
-    "includeHidden": False,
-    "limit": 20,
+files = call_tool({
+    "toolId": "builtin:list_files",
+    "args": {
+        "dirPath": "examples/toolscript",
+        "recursive": False,
+        "includeHidden": False,
+        "limit": 20,
+    },
 })
 
-content = call_tool("read", {"filePath": "README.md"})
+content = call_tool({
+    "toolId": "builtin:read",
+    "args": {"filePath": "README.md"},
+})
+
+repos = call_tool({
+    "source": "mcp",
+    "server": "github",
+    "name": "search_repos",
+    "args": {"query": "foxwarm"},
+})
+
+remote_result = call_tool({
+    "source": "node",
+    "nodeId": "some-node",
+    "name": "android_screenshot",
+    "args": {"inline": True},
+})
 ```
 
 Notes:
 
 - the wrapper accepts either a tool name + args, or a fuller descriptor
+- the unified descriptor object is the preferred mental model
+- builtin / MCP / node tools all go through the same bridge to the existing unified `call_tool` wrapper
+- normal session / node / isolation permissions still apply through that bridge
 - nested internal tool calls are executed for real
 - those nested calls do **not** spam the outer session history the way ordinary model tool loops do
 - `call_tool(...)` works best once you already know the tools and argument shapes you want in the scripted flow
+- the string shorthand still works for simple builtin cases, for example `call_tool("read", {"filePath": "README.md"})`
 
 ### `ask_agent(...)`
 
@@ -160,15 +186,21 @@ Notes:
 ```python
 print("starting automation")
 
-files = call_tool("list_files", {
-    "dirPath": "examples/toolscript",
-    "recursive": False,
-    "includeHidden": False,
-    "limit": 20,
+files = call_tool({
+    "toolId": "builtin:list_files",
+    "args": {
+        "dirPath": "examples/toolscript",
+        "recursive": False,
+        "includeHidden": False,
+        "limit": 20,
+    },
 })
 print(files)
 
-doc = call_tool("read", {"filePath": "README.md"})
+doc = call_tool({
+    "toolId": "builtin:read",
+    "args": {"filePath": "README.md"},
+})
 print(doc[:200])
 
 label = ask_agent("Give this run a short label")

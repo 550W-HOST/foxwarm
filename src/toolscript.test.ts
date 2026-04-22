@@ -8,6 +8,7 @@ import * as llm from './llm';
 import { MessageRouter } from './messageRouter';
 import * as sessionManager from './sessionManager';
 import * as managedSessions from './managedSessions';
+import * as tools from './tools';
 import { getAgentDir } from './config';
 import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, getToolScriptRunForTests, resetToolScriptRunsForTests } from './toolscript';
 import type { Session } from './types';
@@ -48,6 +49,107 @@ test('run_script executes internal call_tool without surfacing nested tool histo
     assert.equal(response?.stdout, 'hello\n');
     assert.deepEqual(response?.executedTools, ['search_tools']);
     assert.equal(response?.result?.count, 1);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script supports unified call_tool descriptor shape for builtin tools', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_exec_unified');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, [
+    'print("hello")',
+    'call_tool({"toolId": "builtin:search_tools", "args": {"query": "read", "sources": ["builtin"], "limit": 1, "includeSchema": False}})',
+  ].join('\n'));
+
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const toolMessage = await executeTools(
+      [{ id: 'run-script-2', name: 'run_script', args: { filePath: scriptName } }],
+      { sessionId, session },
+      session,
+    );
+
+    const response = toolMessage.parts[0].functionResponse?.response;
+    assert.equal(response?.status, 'completed');
+    assert.equal(response?.stdout, 'hello\n');
+    assert.deepEqual(response?.executedTools, ['search_tools']);
+    assert.equal(response?.result?.count, 1);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script passes unified MCP and node call_tool descriptors through to tools.call_tool', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_exec_external');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, [
+    'mcp_result = call_tool({"source": "mcp", "server": "github", "name": "search_repos", "args": {"query": "foxwarm"}})',
+    'node_result = call_tool({"source": "node", "nodeId": "sandbox-docker", "name": "android_screenshot", "args": {"inline": True}})',
+    '{"mcp": mcp_result, "node": node_result}',
+  ].join('\n'));
+
+  const session = await sessionManager.getSession(sessionId);
+  const originalCallTool = (tools as any).call_tool;
+  const captured: any[] = [];
+  (tools as any).call_tool = async (args: any) => {
+    captured.push(structuredClone(args));
+    if (args.source === 'mcp') {
+      return { ok: 'mcp' };
+    }
+    if (args.source === 'node') {
+      return { ok: 'node' };
+    }
+    throw new Error(`unexpected source: ${String(args.source)}`);
+  };
+
+  try {
+    const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.executedTools, ['search_repos', 'android_screenshot']);
+    assert.deepEqual(result.result, { mcp: { ok: 'mcp' }, node: { ok: 'node' } });
+    assert.equal(captured.length, 2);
+    assert.deepEqual(captured[0], {
+      source: 'mcp',
+      server: 'github',
+      name: 'search_repos',
+      args: { query: 'foxwarm' },
+    });
+    assert.deepEqual(captured[1], {
+      source: 'node',
+      nodeId: 'sandbox-docker',
+      name: 'android_screenshot',
+      args: { inline: true },
+    });
+  } finally {
+    (tools as any).call_tool = originalCallTool;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script keeps shorthand call_tool string form for backward compatibility', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_exec_shorthand');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, `call_tool("read", {"filePath": "${scriptName}"})`);
+
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
+    assert.equal(result.status, 'completed');
+    assert.equal(typeof result.result, 'string');
+    assert.match(result.result, /call_tool\("read"/i);
+    assert.deepEqual(result.executedTools, ['read']);
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
