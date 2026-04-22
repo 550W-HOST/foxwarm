@@ -2362,13 +2362,14 @@ export const definitions = [
         {
             name: 'run_script',
             defaultInject: true,
-            description: 'Start a ToolScript run from the current agent workspace. Every script execution becomes a persisted ToolScript run with a runId, mode, status, waiting metadata, stdout, and executed tool summary. Supports foreground (default) and background modes.',
+            description: 'Start a ToolScript run from the current agent workspace. Every script execution becomes a persisted ToolScript run with a runId, mode, status, waiting metadata, stdout, and executed tool summary. Supports foreground (default) and background modes. Also supports a per-slice timeout budget (default 30s); when that timeout is hit at a safe checkpoint, the run pauses in a continue-able timeout state instead of failing immediately.',
             parameters: {
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
                     args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.' },
-                    mode: { type: 'string', enum: ['foreground', 'background'], description: 'Run mode. foreground is the default. background runs are intended for persistent controller-style scripts.' }
+                    mode: { type: 'string', enum: ['foreground', 'background'], description: 'Run mode. foreground is the default. background runs are intended for persistent controller-style scripts.' },
+                    timeoutSecs: { type: 'number', description: 'Optional ToolScript execution timeout budget for this run slice in seconds. Default 30. When exceeded at a safe checkpoint, the run pauses with waitingReason="timeout" and can be resumed with continue_script.' }
                 },
                 required: ['filePath']
             }
@@ -2382,7 +2383,8 @@ export const definitions = [
                 properties: {
                     filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
                     args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.' },
-                    mode: { type: 'string', enum: ['foreground', 'background'], description: 'Optional explicit mode override. Defaults to background for this tool.' }
+                    mode: { type: 'string', enum: ['foreground', 'background'], description: 'Optional explicit mode override. Defaults to background for this tool.' },
+                    timeoutSecs: { type: 'number', description: 'Optional ToolScript execution timeout budget for this run slice in seconds. Default 30. When exceeded at a safe checkpoint, the run pauses with waitingReason="timeout" and can be resumed with continue_script.' }
                 },
                 required: ['filePath']
             }
@@ -2390,13 +2392,14 @@ export const definitions = [
         {
             name: 'continue_script',
             defaultInject: true,
-            description: 'Resume a waiting ToolScript run created by run_script/start_toolscript_run. Most commonly used when a run is waiting for ask_agent continuation input.',
+            description: 'Resume a waiting ToolScript run created by run_script/start_toolscript_run. Used both for ask_agent continuations and for timeout-paused runs that explicitly report they can continue.',
             parameters: {
                 type: 'object',
                 properties: {
                     runId: { type: 'string', description: 'ToolScript run identifier returned by run_script.' },
-                    continuationId: { type: 'string', description: 'Continuation identifier returned when the script paused at ask_agent.' },
-                    input: { description: 'Value returned to the paused ask_agent(...) call inside the script.' }
+                    continuationId: { type: 'string', description: 'Continuation identifier returned when the script paused at ask_agent or timeout.' },
+                    input: { description: 'Value returned to the paused ask_agent(...) call inside the script. Ignored for timeout-paused runs.' },
+                    timeoutSecs: { type: 'number', description: 'Optional timeout budget for the resumed run slice in seconds. Default is to reuse the prior run timeout value.' }
                 },
                 required: ['runId', 'continuationId']
             }

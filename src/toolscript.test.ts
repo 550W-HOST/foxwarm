@@ -238,6 +238,48 @@ test('run_script pauses at ask_agent and continue_script resumes from persisted 
   }
 });
 
+test('run_script pauses on timeout checkpoints and continue_script can resume execution', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_timeout');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain([
+    'print("before timeout")',
+    'call_tool({"toolId": "builtin:exec", "args": {"command": "sleep 1", "timeout": 3}})',
+    'print("after timeout")',
+    'return {"ok": True}',
+  ].join('\n')));
+
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const paused = await tool_run_script({ filePath: scriptName, timeoutSecs: 0.5 }, { sessionId, session });
+    assert.equal(paused.status, 'waiting');
+    assert.equal(paused.waitingReason, 'timeout');
+    assert.equal(paused.timeoutSecs, 0.5);
+    assert.ok(paused.continuationId);
+    assert.equal(paused.waitingFor?.canContinue, true);
+    assert.match(paused.waitingFor?.hint || '', /continue_script/i);
+    assert.equal(paused.waitingFor?.pausedAtFunctionName, 'call_tool');
+    assert.equal(paused.waitingFor?.pausedAtSummaryName, 'exec');
+    assert.equal(paused.stdout, 'before timeout\n');
+    assert.deepEqual(paused.executedTools, ['exec']);
+
+    const completed = await tool_continue_script({
+      runId: paused.runId,
+      continuationId: paused.continuationId,
+    }, { sessionId, session });
+
+    assert.equal(completed.status, 'completed');
+    assert.deepEqual(completed.result, { ok: true });
+    assert.equal(completed.stdout, 'before timeout\nafter timeout\n');
+    assert.deepEqual(completed.executedTools, ['exec']);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
 test('request_model_without_context uses direct low-level llm request with no tools or persistent context', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_model');

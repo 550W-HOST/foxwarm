@@ -65,11 +65,13 @@ Current ToolScript run tools:
 - `run_script({filePath, args?, mode?})`
   - starts a ToolScript run
   - default mode is `foreground`
+  - default timeout budget is `30s` per run/continue slice unless you pass `timeoutSecs`
 - `start_toolscript_run({filePath, args?, mode?})`
   - clearer background-oriented entry point
   - defaults to `background`
 - `continue_script({runId, continuationId, input})`
   - resumes a run that is waiting for `ask_agent(...)`
+  - also resumes a run paused at `waitingReason="timeout"`
 - `list_toolscript_runs({limit?, status?})`
 - `get_toolscript_run({runId})`
 - `cancel_toolscript_run({runId})`
@@ -248,6 +250,7 @@ After `run_script(...)` or `start_toolscript_run(...)`, inspect:
   - final returned value if completed
 - `waitingReason` / `waitingFor`
   - why the run stopped and what it needs next
+  - if `waitingReason="timeout"`, the run paused at a safe checkpoint and the result should tell you that `continue_script(...)` can keep executing it
 
 ## Current limitations / cautions
 

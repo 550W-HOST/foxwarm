@@ -22,7 +22,18 @@ type ToolContext = {
 
 type ToolScriptRunMode = 'foreground' | 'background';
 type ToolScriptRunStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
-type ToolScriptWaitingReason = 'agent' | 'managed_event';
+type ToolScriptWaitingReason = 'agent' | 'managed_event' | 'timeout';
+
+type ToolScriptPendingResume = {
+  mode: 'return';
+  value: any;
+} | {
+  mode: 'exception';
+  exception: {
+    type: string;
+    message: string;
+  };
+};
 
 type ToolScriptManagedLeaseRef = {
   sessionId: string;
@@ -52,6 +63,14 @@ type ToolScriptWaitingState = {
     runMode?: 'idle' | 'tool';
     inboxOrder?: 'before' | 'after' | 'ignore';
   };
+  timeout?: {
+    continuationId: string;
+    timeoutSecs: number;
+    elapsedMs: number;
+    pausedAtFunctionName?: string;
+    pausedAtSummaryName?: string;
+    pendingResume: ToolScriptPendingResume;
+  };
 };
 
 type ToolScriptRunRecord = {
@@ -70,6 +89,7 @@ type ToolScriptRunRecord = {
   relatedManagedSessions?: ToolScriptManagedLeaseRef[];
   hostCallCount?: number;
   lastHostCall?: ToolScriptHostCallInfo;
+  timeoutSecs?: number;
   lastResult?: any;
   error?: string;
   createdAt: number;
@@ -97,6 +117,7 @@ type ToolScriptResult = {
   relatedManagedSessions?: ToolScriptManagedLeaseRef[];
   hostCallCount?: number;
   lastHostCall?: ToolScriptHostCallInfo;
+  timeoutSecs?: number;
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
@@ -121,9 +142,9 @@ type MontyModule = {
 
 const TOOLSCRIPT_RUNS_DIR = path.join(STATE_DIR, 'toolscript-runs');
 const METADATA_KEYS = new Set(['toolId', 'source', 'name', 'server', 'nodeId', 'args']);
+const DEFAULT_TOOLSCRIPT_TIMEOUT_SECS = 30;
 const DEFAULT_SCRIPT_LIMITS = {
   maxAllocations: 200000,
-  maxDurationSecs: 15,
   maxMemory: 64 * 1024 * 1024,
   maxRecursionDepth: 200,
 };
@@ -246,6 +267,32 @@ function buildToolScriptSource(code: string): string {
   return `${rewritten.trimEnd()}\n\nmain(args)\n`;
 }
 
+function parseTimeoutSecs(value: any, fallback = DEFAULT_TOOLSCRIPT_TIMEOUT_SECS): number {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+  const normalized = normalizeMontyValue(value);
+  if (typeof normalized !== 'number' || !Number.isFinite(normalized) || normalized <= 0) {
+    throw new Error('timeoutSecs must be a positive number.');
+  }
+  return normalized;
+}
+
+function buildMontyLimits(timeoutSecs: number): Record<string, any> {
+  return {
+    ...DEFAULT_SCRIPT_LIMITS,
+    maxDurationSecs: timeoutSecs,
+  };
+}
+
+function getSliceStartedAt(record: ToolScriptRunRecord): number {
+  return record.lastResumeAt || record.startedAt;
+}
+
+function getElapsedSliceMs(record: ToolScriptRunRecord): number {
+  return Math.max(0, Date.now() - getSliceStartedAt(record));
+}
+
 function currentStdoutTail(state: RuntimeState, limit = 200): string {
   const stdout = currentStdout(state);
   return stdout.length <= limit ? stdout : stdout.slice(-limit);
@@ -257,9 +304,10 @@ function formatRuntimeContext(record: ToolScriptRunRecord, runtimeState: Runtime
     `- script: ${record.scriptName}`,
     `- mode: ${record.mode}`,
     `- elapsedMs: ${Date.now() - record.startedAt}`,
+    `- sliceElapsedMs: ${getElapsedSliceMs(record)}`,
     `- hostCallCount: ${runtimeState.hostCallCount}`,
     `- executedTools: ${runtimeState.executedTools.length ? runtimeState.executedTools.join(', ') : '(none)'}`,
-    `- limits: maxDurationSecs=${DEFAULT_SCRIPT_LIMITS.maxDurationSecs}, maxAllocations=${DEFAULT_SCRIPT_LIMITS.maxAllocations}, maxMemory=${DEFAULT_SCRIPT_LIMITS.maxMemory}, maxRecursionDepth=${DEFAULT_SCRIPT_LIMITS.maxRecursionDepth}`,
+    `- limits: maxDurationSecs=${record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS}, maxAllocations=${DEFAULT_SCRIPT_LIMITS.maxAllocations}, maxMemory=${DEFAULT_SCRIPT_LIMITS.maxMemory}, maxRecursionDepth=${DEFAULT_SCRIPT_LIMITS.maxRecursionDepth}`,
   ];
 
   if (runtimeState.lastHostCall) {
@@ -586,6 +634,18 @@ function buildWaitingFor(run: ToolScriptRunRecord): any {
   if (run.waiting.reason === 'managed_event') {
     return run.waiting.managedEvent;
   }
+  if (run.waiting.reason === 'timeout') {
+    return run.waiting.timeout
+      ? {
+          timeoutSecs: run.waiting.timeout.timeoutSecs,
+          elapsedMs: run.waiting.timeout.elapsedMs,
+          ...(run.waiting.timeout.pausedAtFunctionName ? { pausedAtFunctionName: run.waiting.timeout.pausedAtFunctionName } : {}),
+          ...(run.waiting.timeout.pausedAtSummaryName ? { pausedAtSummaryName: run.waiting.timeout.pausedAtSummaryName } : {}),
+          canContinue: true,
+          hint: 'ToolScript paused at a timeout checkpoint. Use continue_script(...) to keep executing.',
+        }
+      : { canContinue: true, hint: 'ToolScript paused at a timeout checkpoint. Use continue_script(...) to keep executing.' };
+  }
   return undefined;
 }
 
@@ -606,6 +666,7 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
     ...(run.relatedManagedSessions?.length ? { relatedManagedSessions: structuredClone(run.relatedManagedSessions) } : {}),
     ...(typeof run.hostCallCount === 'number' ? { hostCallCount: run.hostCallCount } : {}),
     ...(run.lastHostCall ? { lastHostCall: structuredClone(run.lastHostCall) } : {}),
+    ...(typeof run.timeoutSecs === 'number' ? { timeoutSecs: run.timeoutSecs } : {}),
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),
@@ -625,6 +686,28 @@ function markRunWaiting(record: ToolScriptRunRecord, waiting: ToolScriptWaitingS
   record.snapshotBase64 = record.snapshotBase64;
   record.error = undefined;
   record.updatedAt = Date.now();
+}
+
+function shouldPauseForTimeout(record: ToolScriptRunRecord): boolean {
+  const timeoutSecs = record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS;
+  return getElapsedSliceMs(record) >= timeoutSecs * 1000;
+}
+
+function buildTimeoutWaitingState(record: ToolScriptRunRecord, runtimeState: RuntimeState, pendingResume: ToolScriptPendingResume): ToolScriptWaitingState {
+  const continuationId = newContinuationId();
+  return {
+    reason: 'timeout',
+    waitingSince: Date.now(),
+    continuationId,
+    timeout: {
+      continuationId,
+      timeoutSecs: record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS,
+      elapsedMs: getElapsedSliceMs(record),
+      ...(runtimeState.lastHostCall?.functionName ? { pausedAtFunctionName: runtimeState.lastHostCall.functionName } : {}),
+      ...(runtimeState.lastHostCall?.summaryName ? { pausedAtSummaryName: runtimeState.lastHostCall.summaryName } : {}),
+      pendingResume,
+    },
+  };
 }
 
 function upsertManagedLeaseRef(record: ToolScriptRunRecord, ref: ToolScriptManagedLeaseRef): void {
@@ -1130,8 +1213,29 @@ async function advanceExecution(args: {
         await saveRun(record);
         return buildBaseResult(record);
       }
+      if (shouldPauseForTimeout(record)) {
+        record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+        markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
+          mode: 'return',
+          value: normalizeMontyValue(result),
+        }), runtimeState);
+        await saveRun(record);
+        return buildBaseResult(record);
+      }
       progress = progress.resume({ returnValue: result });
     } catch (error: any) {
+      if (shouldPauseForTimeout(record)) {
+        record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+        markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
+          mode: 'exception',
+          exception: {
+            type: 'RuntimeError',
+            message: error?.message || String(error),
+          },
+        }), runtimeState);
+        await saveRun(record);
+        return buildBaseResult(record);
+      }
       progress = progress.resume({
         exception: {
           type: 'RuntimeError',
@@ -1175,6 +1279,7 @@ function createRunRecord(args: {
   session: Session;
   filePath: string;
   scriptPath: string;
+  timeoutSecs: number;
 }): ToolScriptRunRecord {
   const now = Date.now();
   return {
@@ -1190,6 +1295,7 @@ function createRunRecord(args: {
     executedTools: [],
     relatedManagedSessions: [],
     hostCallCount: 0,
+    timeoutSecs: args.timeoutSecs,
     createdAt: now,
     updatedAt: now,
     startedAt: now,
@@ -1225,7 +1331,7 @@ async function startRun(record: ToolScriptRunRecord, code: string, scriptArgs: a
     const runner = new monty.Monty(buildToolScriptSource(code), { scriptName: record.scriptName, inputs: ['args'] });
     const progress = runner.start({
       inputs: { args: normalizeMontyValue(scriptArgs || {}) },
-      limits: DEFAULT_SCRIPT_LIMITS,
+      limits: buildMontyLimits(record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS),
       printCallback: printCallbackFor(runtimeState),
     });
     return await advanceExecution({ progress, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
@@ -1248,7 +1354,9 @@ async function resumeRun(record: ToolScriptRunRecord, resumeValue: any, ctx: Too
     const snapshot = monty.MontySnapshot.load(Buffer.from(record.snapshotBase64, 'base64'), {
       printCallback: printCallbackFor(runtimeState),
     });
-    const resumed = snapshot.resume({ returnValue: normalizeMontyValue(resumeValue) });
+    const resumed = resumeValue && typeof resumeValue === 'object' && (resumeValue as any).__toolscriptResumeException
+      ? snapshot.resume({ exception: normalizeMontyValue((resumeValue as any).__toolscriptResumeException) })
+      : snapshot.resume({ returnValue: normalizeMontyValue(resumeValue) });
     return await advanceExecution({ progress: resumed, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
   } catch (error: any) {
     return await failRun(record, runtimeState, error, logMessage);
@@ -1265,9 +1373,10 @@ export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise
   const { sessionId, session } = await requireSessionContext(ctx);
   const { filePath } = args || {};
   const mode = parseToolScriptRunMode(args?.mode ?? args?.runMode ?? args?.background);
+  const timeoutSecs = parseTimeoutSecs(args?.timeoutSecs);
   const { scriptPath, code } = await readScriptSource(filePath, ctx, session);
   const runId = newRunId();
-  const record = createRunRecord({ runId, mode, session, filePath, scriptPath });
+  const record = createRunRecord({ runId, mode, session, filePath, scriptPath, timeoutSecs });
   return await startRun(record, code, args?.args || {}, { ...ctx, sessionId, session, toolScriptRunId: runId });
 }
 
@@ -1291,13 +1400,31 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
     throw new Error(`ToolScript run \`${runId}\` not found.`);
   }
   ensureRunOwnedBySession(record, sessionId);
-  if (record.status !== 'waiting' || record.waiting?.reason !== 'agent' || !record.snapshotBase64) {
+  if (record.status !== 'waiting' || !record.snapshotBase64 || !record.waiting || (record.waiting.reason !== 'agent' && record.waiting.reason !== 'timeout')) {
     throw new Error(`ToolScript run \`${runId}\` is not waiting for continue_script.`);
   }
   if (record.waiting?.continuationId !== continuationId) {
     throw new Error('continuationId does not match the pending ToolScript continuation.');
   }
-  return await resumeRun(record, args?.input, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed');
+
+  record.timeoutSecs = parseTimeoutSecs(args?.timeoutSecs, record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS);
+
+  if (record.waiting.reason === 'agent') {
+    return await resumeRun(record, args?.input, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed');
+  }
+
+  if (record.waiting.reason === 'timeout') {
+    const pendingResume = record.waiting.timeout?.pendingResume;
+    if (!pendingResume) {
+      throw new Error(`ToolScript run \`${runId}\` is waiting on timeout but has no pending resume payload.`);
+    }
+    if (pendingResume.mode === 'return') {
+      return await resumeRun(record, pendingResume.value, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed');
+    }
+    return await resumeRun(record, { __toolscriptResumeException: pendingResume.exception }, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed');
+  }
+
+  throw new Error(`ToolScript run \`${runId}\` is not waiting for continue_script.`);
 }
 
 export async function tool_list_toolscript_runs(args: ToolArgs, ctx: ToolContext): Promise<{ runs: ToolScriptResult[] }> {
