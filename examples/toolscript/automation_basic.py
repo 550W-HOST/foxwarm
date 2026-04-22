@@ -9,7 +9,7 @@ files = call_tool("list_files", {
 count = files.get("count", 0) if isinstance(files, dict) else 0
 print(f"example file count: {count}")
 
-doc = call_tool("read", {"filePath": "skills/toolscript_automation/SKILL.md"})
+doc = call_tool("read", {"filePath": "README.md"})
 excerpt = doc[:160].replace("\n", " ") if isinstance(doc, str) else str(doc)[:160]
 print(f"excerpt: {excerpt}")
 

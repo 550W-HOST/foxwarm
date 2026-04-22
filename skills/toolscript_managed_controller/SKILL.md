@@ -20,6 +20,22 @@ Small helper worth knowing immediately:
 
 As with normal ToolScript automation, first verify the target session and the surrounding tool/runtime flow in the regular agent loop, then encode the known controller flow into a script.
 
+## Default first path
+
+For a first controller script, use this as the default path:
+
+1. start the script as a **background** ToolScript run
+2. `open_managed_session(...)`
+3. `wait_for_managed_event(...)`
+4. `step_and_release_managed_session(...)`
+
+Recommended defaults for that first step:
+
+- `run_mode="idle"`
+- `inbox_order="before"`
+- process one event
+- release immediately after that step
+
 This is the skill for:
 
 - opening managed control of a child/related session
@@ -32,23 +48,9 @@ This is the skill for:
 
 If your task is “wait for one managed event, step once, then release”, start by copying the managed controller example.
 
-## Core idea
+## Canonical example
 
-A managed session is a session whose normal inbound work is temporarily diverted into a **managed inbox** instead of auto-running immediately.
-
-A ToolScript controller can then:
-
-1. `open_managed_session(...)`
-2. `wait_for_managed_event(...)`
-3. `session_step(...)`
-4. repeat or `release_managed_session(...)`
-
-The intended modern direction is:
-
-- `ownerSessionId` = permission / ownership anchor
-- `controllerRunId` = actual background ToolScript run holding the controller role
-
-So think in terms of **controller runs**, not only “one foreground session babysitting another”.
+If your task is “wait for one managed event, step once, then release”, start by copying the managed controller example.
 
 ## Main host functions inside ToolScript
 
@@ -91,6 +93,8 @@ When this happens in a background ToolScript run:
 
 Runs one controlled step of the managed session.
 
+This is the lower-level primitive. For the most common first-time pattern, prefer `step_and_release_managed_session(...)`.
+
 Important arguments:
 
 - `session_id`
@@ -118,7 +122,7 @@ Pending inbox work is replayed back into the normal queue when appropriate.
 
 ### `step_and_release_managed_session(...)`
 
-Use this helper for the very common pattern:
+Use this helper as the default first choice for the very common pattern:
 
 - step once
 - then immediately release the lease
@@ -142,13 +146,15 @@ It returns the `session_step(...)` result plus:
 
 By default the helper keeps the result light. If you really need the full `newMessages` payload, pass `include_messages=True`.
 
+For most first scripts, this is the main entry you want after `wait_for_managed_event(...)`.
+
 ## `runMode`, `inboxOrder`, `yieldReason`
 
 ### `runMode`
 
 Currently supported:
 
-- `idle`
+- `idle` *(default recommendation)*
   - run to idle
 - `tool`
   - stop after the first completed tool batch
@@ -157,7 +163,7 @@ Currently supported:
 
 Currently supported:
 
-- `before`
+- `before` *(default recommendation)*
   - pending inbox first, then manager input
 - `after`
   - manager input first, then pending inbox
@@ -212,6 +218,17 @@ Why:
 - the managed child can wake the controller run later
 - the controller run becomes the more natural runtime holder of the lease
 
+## Mental model
+
+A managed session is a session whose normal inbound work is temporarily diverted into a **managed inbox** instead of auto-running immediately.
+
+Useful implementation notes:
+
+- `ownerSessionId` is the permission / ownership anchor
+- `controllerRunId` is the background ToolScript run currently holding the controller role
+
+So in normal use, think in terms of **one controller run handling one managed session for one step or small sequence**, then releasing it.
+
 ## Important current constraints
 
 - this is still a low-level primitive layer, not a polished high-level manager DSL
@@ -229,15 +246,4 @@ Why:
 
 ## Practical advice for agents
 
-When you use these primitives, do not jump straight into a huge loop.
-
-Prefer this sequence:
-
-1. identify the exact target session
-2. open the lease
-3. wait for one event
-4. step once with a very small action
-5. inspect the structured result
-6. only then expand into a loop or a richer controller
-
-That makes it much easier to debug revisions, inbox ordering, and stopping behavior.
+If the first small step works cleanly, then expand into a richer controller. That keeps revisions, inbox ordering, and stopping behavior much easier to understand.

@@ -14,16 +14,9 @@ Before grepping tests, read:
 - `examples/toolscript/automation_basic.py`
 - `examples/toolscript/README.md`
 
-Typical fit:
+## When to use ToolScript
 
-- repeatable tool sequences
-- multi-step automation with light branching
-- a task where you want a reusable script file, not only a one-time answer
-- situations where you want tool calls to happen **inside ToolScript** without polluting the outer session history with nested tool-call chatter
-
-## When ToolScript is a good choice
-
-Prefer ToolScript over a normal tool loop when:
+Prefer ToolScript when:
 
 - you already know the main tools you want to call
 - you expect the same flow to be reused
@@ -32,21 +25,28 @@ Prefer ToolScript over a normal tool loop when:
 - you want to pause at `ask_agent(...)` and resume later with `continue_script(...)`
 - you want to run the same script in foreground now or background later with the same run model
 
+Typical fit:
+
+- repeatable tool sequences
+- multi-step automation with light branching
+- a task where you want a reusable script file, not only a one-time answer
+- situations where you want tool calls to happen **inside ToolScript** without polluting the outer session history with nested tool-call chatter
+
 Prefer a normal tool loop when:
 
 - the task is short and one-off
 - there is no benefit in saving a script file
 - simple direct reasoning plus one or two tool calls is enough
 
-## Recommended real workflow
+## Recommended workflow
 
-The intended workflow is:
+In practice, a good default flow is:
 
 1. use normal tool calls in the agent loop to explore/verify the tool path
 2. once you know the tools and argument shapes you want, write the ToolScript file
-3. use ToolScript to encode that known flow into a reusable script
-
-In practice, agents often try the relevant tools directly first, then turn the stable flow into a script.
+3. if the task is close to the canonical example, copy/adapt it instead of starting from a blank file
+4. run the script with `run_script(...)` or `start_toolscript_run(...)`
+5. inspect the structured run result and resume with `continue_script(...)` if needed
 
 ## Main tool entry points
 
@@ -66,7 +66,7 @@ Current ToolScript run tools:
 
 All of these return **structured run data**, not only plain text.
 
-## Canonical examples
+## Canonical example
 
 If your task is close to the basic automation pattern, copy/adapt `automation_basic.py` first.
 
@@ -168,7 +168,7 @@ files = call_tool("list_files", {
 })
 print(files)
 
-doc = call_tool("read", {"filePath": "skills/toolscript_automation/SKILL.md"})
+doc = call_tool("read", {"filePath": "README.md"})
 print(doc[:200])
 
 label = ask_agent("Give this run a short label")
@@ -201,16 +201,3 @@ After `run_script(...)` or `start_toolscript_run(...)`, inspect:
 - ToolScript is powerful enough to automate mistakes quickly; still reason about side effects before running scripts
 - script files are real workspace files; inspect them like normal source
 - if you only need a one-shot answer, writing a script may be overkill
-
-## Good agent workflow
-
-When asked to automate a task with ToolScript, a strong pattern is:
-
-1. inspect/load this skill
-2. use normal tool calls first if you still need to verify which tools/args are correct
-3. inspect the canonical example file if the task is similar
-4. draft the script file for the now-known tool flow
-5. briefly sanity-check the script
-6. run it with `run_script(...)` or `start_toolscript_run(...)`
-7. inspect the structured run result
-8. if it is waiting for agent input, resume with `continue_script(...)`
