@@ -20,6 +20,14 @@ Small helper worth knowing immediately:
 
 As with normal ToolScript automation, first verify the target session and the surrounding tool/runtime flow in the regular agent loop, then encode the known controller flow into a script.
 
+ToolScript scripts should use an explicit entrypoint:
+
+```python
+def main(args):
+    ...
+    return {...}
+```
+
 ## Default first path
 
 For a first controller script, use this as the default path:
@@ -130,14 +138,19 @@ Use this helper as the default first choice for the very common pattern:
 Example:
 
 ```python
-result = step_and_release_managed_session(
-    child_id,
-    lease["leaseId"],
-    event["revision"],
-    run_mode="idle",
-    inbox_order="before",
-    message="Controller handled this request.",
-)
+def main(args):
+    child_id = args["child_session_id"]
+    lease = open_managed_session(child_id)
+    event = wait_for_managed_event(child_id, lease["leaseId"], lease["revision"])
+    result = step_and_release_managed_session(
+        child_id,
+        lease["leaseId"],
+        event["revision"],
+        run_mode="idle",
+        inbox_order="before",
+        message="Controller handled this request.",
+    )
+    return result
 ```
 
 It returns the `session_step(...)` result plus:
@@ -183,26 +196,27 @@ Use this to understand **why the step stopped**.
 ## Minimal controller example
 
 ```python
-child_id = args["child_session_id"]
+def main(args):
+    child_id = args["child_session_id"]
 
-lease = open_managed_session(child_id)
+    lease = open_managed_session(child_id)
 
-event = wait_for_managed_event(
-    child_id,
-    lease["leaseId"],
-    lease["revision"],
-)
+    event = wait_for_managed_event(
+        child_id,
+        lease["leaseId"],
+        lease["revision"],
+    )
 
-result = step_and_release_managed_session(
-    child_id,
-    lease["leaseId"],
-    event["revision"],
-    run_mode="idle",
-    inbox_order="before",
-    message="Controller processed your request.",
-)
+    result = step_and_release_managed_session(
+        child_id,
+        lease["leaseId"],
+        event["revision"],
+        run_mode="idle",
+        inbox_order="before",
+        message="Controller processed your request.",
+    )
 
-result
+    return result
 ```
 
 ## Typical outer run pattern

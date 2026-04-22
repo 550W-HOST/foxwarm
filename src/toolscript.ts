@@ -30,6 +30,16 @@ type ToolScriptManagedLeaseRef = {
   controllerRunId?: string;
 };
 
+type ToolScriptHostCallInfo = {
+  functionName: string;
+  summaryName?: string;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  error?: string;
+};
+
 type ToolScriptWaitingState = {
   reason: ToolScriptWaitingReason;
   waitingSince: number;
@@ -58,6 +68,8 @@ type ToolScriptRunRecord = {
   executedTools: string[];
   waiting?: ToolScriptWaitingState;
   relatedManagedSessions?: ToolScriptManagedLeaseRef[];
+  hostCallCount?: number;
+  lastHostCall?: ToolScriptHostCallInfo;
   lastResult?: any;
   error?: string;
   createdAt: number;
@@ -83,6 +95,8 @@ type ToolScriptResult = {
   continuationId?: string;
   question?: string;
   relatedManagedSessions?: ToolScriptManagedLeaseRef[];
+  hostCallCount?: number;
+  lastHostCall?: ToolScriptHostCallInfo;
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
@@ -94,6 +108,8 @@ type ToolScriptResult = {
 type RuntimeState = {
   stdoutParts: string[];
   executedTools: string[];
+  hostCallCount: number;
+  lastHostCall?: ToolScriptHostCallInfo;
 };
 
 type MontyModule = {
@@ -223,7 +239,46 @@ function rewriteStepAndReleaseHelperCalls(code: string): string {
 }
 
 function buildToolScriptSource(code: string): string {
-  return rewriteStepAndReleaseHelperCalls(code);
+  const rewritten = rewriteStepAndReleaseHelperCalls(code);
+  if (!/^\s*def\s+main\s*\(\s*args\b/m.test(rewritten)) {
+    throw new Error('ToolScript scripts must define `def main(args):` and return a result explicitly.');
+  }
+  return `${rewritten.trimEnd()}\n\nmain(args)\n`;
+}
+
+function currentStdoutTail(state: RuntimeState, limit = 200): string {
+  const stdout = currentStdout(state);
+  return stdout.length <= limit ? stdout : stdout.slice(-limit);
+}
+
+function formatRuntimeContext(record: ToolScriptRunRecord, runtimeState: RuntimeState): string {
+  const lines = [
+    `ToolScript context:`,
+    `- script: ${record.scriptName}`,
+    `- mode: ${record.mode}`,
+    `- elapsedMs: ${Date.now() - record.startedAt}`,
+    `- hostCallCount: ${runtimeState.hostCallCount}`,
+    `- executedTools: ${runtimeState.executedTools.length ? runtimeState.executedTools.join(', ') : '(none)'}`,
+    `- limits: maxDurationSecs=${DEFAULT_SCRIPT_LIMITS.maxDurationSecs}, maxAllocations=${DEFAULT_SCRIPT_LIMITS.maxAllocations}, maxMemory=${DEFAULT_SCRIPT_LIMITS.maxMemory}, maxRecursionDepth=${DEFAULT_SCRIPT_LIMITS.maxRecursionDepth}`,
+  ];
+
+  if (runtimeState.lastHostCall) {
+    lines.push(`- lastHostCall: ${runtimeState.lastHostCall.functionName}${runtimeState.lastHostCall.summaryName ? ` (${runtimeState.lastHostCall.summaryName})` : ''}`);
+    lines.push(`- lastHostCallStatus: ${runtimeState.lastHostCall.status}`);
+    if (typeof runtimeState.lastHostCall.durationMs === 'number') {
+      lines.push(`- lastHostCallDurationMs: ${runtimeState.lastHostCall.durationMs}`);
+    }
+    if (runtimeState.lastHostCall.error) {
+      lines.push(`- lastHostCallError: ${runtimeState.lastHostCall.error}`);
+    }
+  }
+
+  const stdoutTail = currentStdoutTail(runtimeState);
+  if (stdoutTail) {
+    lines.push(`- stdoutTail: ${JSON.stringify(stdoutTail)}`);
+  }
+
+  return lines.join('\n');
 }
 
 async function importMonty(): Promise<MontyModule> {
@@ -504,6 +559,7 @@ function createRuntimeState(stdout: string, executedTools: string[]): RuntimeSta
   return {
     stdoutParts: stdout ? [stdout] : [],
     executedTools: [...executedTools],
+    hostCallCount: 0,
   };
 }
 
@@ -548,6 +604,8 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
     ...(run.waiting?.continuationId ? { continuationId: run.waiting.continuationId } : {}),
     ...(run.waiting?.question ? { question: run.waiting.question } : {}),
     ...(run.relatedManagedSessions?.length ? { relatedManagedSessions: structuredClone(run.relatedManagedSessions) } : {}),
+    ...(typeof run.hostCallCount === 'number' ? { hostCallCount: run.hostCallCount } : {}),
+    ...(run.lastHostCall ? { lastHostCall: structuredClone(run.lastHostCall) } : {}),
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),
@@ -562,6 +620,8 @@ function markRunWaiting(record: ToolScriptRunRecord, waiting: ToolScriptWaitingS
   record.waiting = waiting;
   record.stdout = currentStdout(runtimeState);
   record.executedTools = [...runtimeState.executedTools];
+  record.hostCallCount = runtimeState.hostCallCount;
+  record.lastHostCall = runtimeState.lastHostCall ? structuredClone(runtimeState.lastHostCall) : undefined;
   record.snapshotBase64 = record.snapshotBase64;
   record.error = undefined;
   record.updatedAt = Date.now();
@@ -585,25 +645,42 @@ function removeManagedLeaseRef(record: ToolScriptRunRecord, sessionId: string, l
   record.relatedManagedSessions = record.relatedManagedSessions.filter(ref => !(ref.sessionId === sessionId && ref.leaseId === leaseId));
 }
 
-function normalizeErrorMessage(error: any): string {
+function normalizeErrorMessage(error: any, record?: ToolScriptRunRecord, runtimeState?: RuntimeState): string {
+  const augmentWithContext = (message: string): string => {
+    if (!record || !runtimeState) {
+      return message;
+    }
+    return `${message}\n\n${formatRuntimeContext(record, runtimeState)}`;
+  };
+
   if (!error) {
-    return 'Unknown ToolScript error';
+    return augmentWithContext('Unknown ToolScript error');
   }
   if (typeof error === 'string') {
-    return error;
+    if (/Snapshot has already been resumed/i.test(error)) {
+      return augmentWithContext(`${error}\n\nThis usually indicates a ToolScript runtime/snapshot lifecycle failure rather than a literal double-resume in user code. Repeated host calls and resource-limit exhaustion are common triggers.`);
+    }
+    return augmentWithContext(error);
   }
   if (typeof error?.display === 'function') {
     try {
-      return String(error.display('traceback'));
+      const displayText = String(error.display('traceback'));
+      if (/Snapshot has already been resumed/i.test(displayText)) {
+        return augmentWithContext(`${displayText}\n\nThis usually indicates a ToolScript runtime/snapshot lifecycle failure rather than a literal double-resume in user code. Repeated host calls and resource-limit exhaustion are common triggers.`);
+      }
+      return augmentWithContext(displayText);
     } catch {}
   }
   if (typeof error?.message === 'string' && error.message) {
-    return error.message;
+    if (/Snapshot has already been resumed/i.test(error.message)) {
+      return augmentWithContext(`${error.message}\n\nThis usually indicates a ToolScript runtime/snapshot lifecycle failure rather than a literal double-resume in user code. Repeated host calls and resource-limit exhaustion are common triggers.`);
+    }
+    return augmentWithContext(error.message);
   }
   if (typeof error?.toString === 'function') {
-    return String(error.toString());
+    return augmentWithContext(String(error.toString()));
   }
-  return String(error);
+  return augmentWithContext(String(error));
 }
 
 async function requestModelWithoutContext(prompt: string, session: Session): Promise<{ text: string }> {
@@ -765,13 +842,44 @@ async function executeScriptHostCall(
   state: RuntimeState,
   ctx: ToolContext,
 ): Promise<any> {
+  const startHostCall = (summaryName?: string) => {
+    state.hostCallCount += 1;
+    state.lastHostCall = {
+      functionName,
+      ...(summaryName ? { summaryName } : {}),
+      status: 'running',
+      startedAt: Date.now(),
+    };
+  };
+
+  const finishHostCall = (status: 'completed' | 'failed', error?: any) => {
+    if (!state.lastHostCall || state.lastHostCall.functionName !== functionName) {
+      return;
+    }
+    const completedAt = Date.now();
+    state.lastHostCall = {
+      ...state.lastHostCall,
+      status,
+      completedAt,
+      durationMs: completedAt - state.lastHostCall.startedAt,
+      ...(error ? { error: normalizeErrorMessage(error) } : {}),
+    };
+  };
+
   if (functionName === 'call_tool') {
     const wrapperArgs = buildCallToolWrapperArgs(positionalArgs, kwargs);
     const summaryName = buildToolSummaryName(wrapperArgs);
     const toolsModule = require('./tools');
-    const result = await toolsModule.call_tool(wrapperArgs, ctx);
-    state.executedTools.push(summaryName);
-    return normalizeMontyValue(result);
+    startHostCall(summaryName);
+    try {
+      const result = await toolsModule.call_tool(wrapperArgs, ctx);
+      state.executedTools.push(summaryName);
+      finishHostCall('completed');
+      return normalizeMontyValue(result);
+    } catch (error: any) {
+      finishHostCall('failed', error);
+      throw error;
+    }
   }
 
   if (functionName === 'request_model_without_context') {
@@ -783,7 +891,15 @@ async function executeScriptHostCall(
     if (!session) {
       throw new Error('request_model_without_context requires a session context.');
     }
-    return normalizeMontyValue(await requestModelWithoutContext(prompt, session));
+    startHostCall();
+    try {
+      const result = await requestModelWithoutContext(prompt, session);
+      finishHostCall('completed');
+      return normalizeMontyValue(result);
+    } catch (error: any) {
+      finishHostCall('failed', error);
+      throw error;
+    }
   }
 
   if (functionName === 'open_managed_session') {
@@ -792,11 +908,19 @@ async function executeScriptHostCall(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
       'session_id',
     );
-    return normalizeMontyValue(await managedSessions.openManagedSession({
-      sessionId: targetSessionId,
-      ownerSessionId: ownerSession.id,
-      ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
-    }));
+    startHostCall(targetSessionId);
+    try {
+      const result = await managedSessions.openManagedSession({
+        sessionId: targetSessionId,
+        ownerSessionId: ownerSession.id,
+        ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+      });
+      finishHostCall('completed');
+      return normalizeMontyValue(result);
+    } catch (error: any) {
+      finishHostCall('failed', error);
+      throw error;
+    }
   }
 
   if (functionName === 'session_step') {
@@ -823,24 +947,31 @@ async function executeScriptHostCall(
       'include_messages',
     );
     const normalizedInput = normalizeManagedSessionStepInput(positionalArgs, kwargs);
-    const stepResult = await managedSessions.managedSessionStep({
-      sessionId: targetSessionId,
-      ownerSessionId: ownerSession.id,
-      leaseId,
-      expectedRevision,
-      ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
-      ...(runMode ? { runMode } : {}),
-      ...(inboxOrder ? { inboxOrder } : {}),
-      ...normalizedInput,
-    });
-    const safeStepResult: Record<string, any> = includeMessages
-      ? stepResult as any
-      : {
-          ...stepResult,
-          newMessagesCount: stepResult.newMessages.length,
-          newMessages: [] as Message[],
-        };
-    return normalizeMontyValue(safeStepResult);
+    startHostCall(targetSessionId);
+    try {
+      const stepResult = await managedSessions.managedSessionStep({
+        sessionId: targetSessionId,
+        ownerSessionId: ownerSession.id,
+        leaseId,
+        expectedRevision,
+        ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+        ...(runMode ? { runMode } : {}),
+        ...(inboxOrder ? { inboxOrder } : {}),
+        ...normalizedInput,
+      });
+      const safeStepResult: Record<string, any> = includeMessages
+        ? stepResult as any
+        : {
+            ...stepResult,
+            newMessagesCount: stepResult.newMessages.length,
+            newMessages: [] as Message[],
+          };
+      finishHostCall('completed');
+      return normalizeMontyValue(safeStepResult);
+    } catch (error: any) {
+      finishHostCall('failed', error);
+      throw error;
+    }
   }
 
   if (functionName === 'release_managed_session') {
@@ -856,13 +987,21 @@ async function executeScriptHostCall(
     const expectedRevision = parseOptionalExpectedRevision(
       getNamedArg(positionalArgs, kwargs, 2, ['expected_revision', 'expectedRevision']),
     );
-    return normalizeMontyValue(await managedSessions.releaseManagedSession({
-      sessionId: targetSessionId,
-      ownerSessionId: ownerSession.id,
-      leaseId,
-      expectedRevision,
-      ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
-    }));
+    startHostCall(targetSessionId);
+    try {
+      const result = await managedSessions.releaseManagedSession({
+        sessionId: targetSessionId,
+        ownerSessionId: ownerSession.id,
+        leaseId,
+        expectedRevision,
+        ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+      });
+      finishHostCall('completed');
+      return normalizeMontyValue(result);
+    } catch (error: any) {
+      finishHostCall('failed', error);
+      throw error;
+    }
   }
 
   if (functionName === 'wait_for_managed_event') {
@@ -883,7 +1022,8 @@ async function executeScriptHostCall(
     const inboxOrder = parseManagedSessionInboxOrder(
       getNamedArg(positionalArgs, kwargs, 4, ['inbox_order', 'inboxOrder']),
     );
-    return {
+    startHostCall(targetSessionId);
+    const result = {
       __toolscriptWaitForManagedEvent: true,
       sessionId: targetSessionId,
       leaseId,
@@ -891,6 +1031,8 @@ async function executeScriptHostCall(
       ...(runMode ? { runMode } : {}),
       ...(inboxOrder ? { inboxOrder } : {}),
     };
+    finishHostCall('completed');
+    return result;
   }
 
   throw new Error(`Unsupported ToolScript host function: ${functionName}`);
@@ -912,6 +1054,8 @@ async function advanceExecution(args: {
       record.waiting = undefined;
       record.stdout = currentStdout(runtimeState);
       record.executedTools = [...runtimeState.executedTools];
+      record.hostCallCount = runtimeState.hostCallCount;
+      record.lastHostCall = runtimeState.lastHostCall ? structuredClone(runtimeState.lastHostCall) : undefined;
       record.snapshotBase64 = undefined;
       record.lastResult = normalizeMontyValue(progress.output);
       record.error = undefined;
@@ -1045,6 +1189,7 @@ function createRunRecord(args: {
     stdout: '',
     executedTools: [],
     relatedManagedSessions: [],
+    hostCallCount: 0,
     createdAt: now,
     updatedAt: now,
     startedAt: now,
@@ -1056,11 +1201,20 @@ async function failRun(record: ToolScriptRunRecord, runtimeState: RuntimeState, 
   record.waiting = undefined;
   record.stdout = currentStdout(runtimeState);
   record.executedTools = [...runtimeState.executedTools];
+  record.hostCallCount = runtimeState.hostCallCount;
+  record.lastHostCall = runtimeState.lastHostCall ? structuredClone(runtimeState.lastHostCall) : undefined;
   record.snapshotBase64 = undefined;
-  record.error = normalizeErrorMessage(error);
+  record.error = normalizeErrorMessage(error, record, runtimeState);
   record.updatedAt = Date.now();
   await saveRun(record);
-  logger.warn({ err: error, runId: record.runId, filePath: record.scriptPath }, logMessage);
+  logger.warn({
+    err: error,
+    runId: record.runId,
+    filePath: record.scriptPath,
+    hostCallCount: runtimeState.hostCallCount,
+    lastHostCall: runtimeState.lastHostCall,
+    executedTools: runtimeState.executedTools,
+  }, logMessage);
   return buildBaseResult(record);
 }
 

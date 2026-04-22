@@ -11,3 +11,11 @@ Files:
 
 These examples intentionally stay small and avoid product-specific business logic.
 They focus on the common case where you already know the tool flow you want to encode into a reusable script.
+
+Each example uses the current explicit ToolScript entrypoint shape:
+
+```python
+def main(args):
+    ...
+    return {...}
+```

@@ -25,14 +25,22 @@ async function writeScript(fileName: string, content: string): Promise<string> {
   return fullPath;
 }
 
+function asMain(body: string): string {
+  return [
+    'def main(args):',
+    ...body.split('\n').map(line => line ? `    ${line}` : ''),
+    '',
+  ].join('\n');
+}
+
 test('run_script executes internal call_tool without surfacing nested tool history entries', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_exec');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, [
+  await writeScript(scriptName, asMain([
     'print("hello")',
-    'call_tool("search_tools", {"query": "read", "sources": ["builtin"], "limit": 1, "includeSchema": False})',
-  ].join('\n'));
+    'return call_tool("search_tools", {"query": "read", "sources": ["builtin"], "limit": 1, "includeSchema": False})',
+  ].join('\n')));
 
   const session = await sessionManager.getSession(sessionId);
 
@@ -48,7 +56,29 @@ test('run_script executes internal call_tool without surfacing nested tool histo
     assert.equal(response?.status, 'completed');
     assert.equal(response?.stdout, 'hello\n');
     assert.deepEqual(response?.executedTools, ['search_tools']);
+    assert.equal(response?.hostCallCount, 1);
+    assert.equal(response?.lastHostCall?.functionName, 'call_tool');
+    assert.equal(response?.lastHostCall?.summaryName, 'search_tools');
     assert.equal(response?.result?.count, 1);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script requires an explicit main(args) entrypoint', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_no_main');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, 'print("legacy")\n{"ok": True}');
+
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
+    assert.equal(result.status, 'failed');
+    assert.match(result.error || '', /def main\(args\):/i);
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -60,10 +90,10 @@ test('run_script supports unified call_tool descriptor shape for builtin tools',
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_exec_unified');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, [
+  await writeScript(scriptName, asMain([
     'print("hello")',
-    'call_tool({"toolId": "builtin:search_tools", "args": {"query": "read", "sources": ["builtin"], "limit": 1, "includeSchema": False}})',
-  ].join('\n'));
+    'return call_tool({"toolId": "builtin:search_tools", "args": {"query": "read", "sources": ["builtin"], "limit": 1, "includeSchema": False}})',
+  ].join('\n')));
 
   const session = await sessionManager.getSession(sessionId);
 
@@ -90,11 +120,11 @@ test('run_script passes unified MCP and node call_tool descriptors through to to
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_exec_external');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, [
+  await writeScript(scriptName, asMain([
     'mcp_result = call_tool({"source": "mcp", "server": "github", "name": "search_repos", "args": {"query": "foxwarm"}})',
     'node_result = call_tool({"source": "node", "nodeId": "sandbox-docker", "name": "android_screenshot", "args": {"inline": True}})',
-    '{"mcp": mcp_result, "node": node_result}',
-  ].join('\n'));
+    'return {"mcp": mcp_result, "node": node_result}',
+  ].join('\n')));
 
   const session = await sessionManager.getSession(sessionId);
   const originalCallTool = (tools as any).call_tool;
@@ -140,7 +170,7 @@ test('run_script keeps shorthand call_tool string form for backward compatibilit
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_exec_shorthand');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, `call_tool("read", {"filePath": "${scriptName}"})`);
+  await writeScript(scriptName, asMain(`return call_tool("read", {"filePath": "${scriptName}"})`));
 
   const session = await sessionManager.getSession(sessionId);
 
@@ -161,12 +191,12 @@ test('run_script pauses at ask_agent and continue_script resumes from persisted 
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_pause');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, [
+  await writeScript(scriptName, asMain([
     'print("before")',
     'answer = ask_agent("What now?")',
     'print(answer)',
-    'answer',
-  ].join('\n'));
+    'return answer',
+  ].join('\n')));
 
   const session = await sessionManager.getSession(sessionId);
 
@@ -212,7 +242,7 @@ test('request_model_without_context uses direct low-level llm request with no to
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_model');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, 'request_model_without_context("ping")');
+  await writeScript(scriptName, asMain('return request_model_without_context("ping")'));
 
   const session = await sessionManager.getSession(sessionId);
   session.model = 'anthropic/claude-sonnet-4-5';
@@ -252,12 +282,12 @@ test('ToolScript manager host functions can open, step, and release a managed ch
   const parentId = makeId('toolscript_manager_parent');
   const childId = makeId('toolscript_manager_child');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, [
+  await writeScript(scriptName, asMain([
     `lease = open_managed_session("${childId}")`,
     `step = session_step("${childId}", lease["leaseId"], lease["revision"], run_mode="idle", inbox_order="before", message="managed hello")`,
     `release_managed_session("${childId}", lease["leaseId"], step["revision"])`,
-    'step',
-  ].join('\n'));
+    'return step',
+  ].join('\n')));
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
   (llm as any).chat = async (parts: any, activeSession: Session) => {
@@ -301,12 +331,12 @@ test('ToolScript session_step can optionally include full newMessages payload', 
   const parentId = makeId('toolscript_manager_include_parent');
   const childId = makeId('toolscript_manager_include_child');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, [
+  await writeScript(scriptName, asMain([
     `lease = open_managed_session("${childId}")`,
     `step = session_step("${childId}", lease["leaseId"], lease["revision"], run_mode="idle", inbox_order="before", include_messages=True, message="managed hello")`,
     `release_managed_session("${childId}", lease["leaseId"], step["revision"])`,
-    'step',
-  ].join('\n'));
+    'return step',
+  ].join('\n')));
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
   (llm as any).chat = async (parts: any, activeSession: Session) => {
@@ -347,12 +377,12 @@ test('background ToolScript controller run can wait for managed inbox events and
   const parentId = makeId('toolscript_bg_parent');
   const childId = makeId('toolscript_bg_child');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, [
+  await writeScript(scriptName, asMain([
     `lease = open_managed_session("${childId}")`,
     `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
     `result = step_and_release_managed_session("${childId}", lease["leaseId"], event["revision"], message="controller woke")`,
-    'result',
-  ].join('\n'));
+    'return result',
+  ].join('\n')));
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
   (llm as any).chat = async (parts: any, activeSession: Session) => {
@@ -408,12 +438,12 @@ test('background ToolScript step_and_release controller run survives a managed c
   const childId = makeId('toolscript_bg_toolloop_child');
   const scriptName = `${makeId('script')}.py`;
   let childChatCalls = 0;
-  await writeScript(scriptName, [
+  await writeScript(scriptName, asMain([
     `lease = open_managed_session("${childId}")`,
     `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
     `result = step_and_release_managed_session("${childId}", lease["leaseId"], event["revision"], run_mode="idle", inbox_order="before", message="controller woke")`,
-    'result',
-  ].join('\n'));
+    'return result',
+  ].join('\n')));
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
   (llm as any).chat = async (parts: any, activeSession: Session) => {
@@ -481,12 +511,12 @@ test('background ToolScript step_and_release controller run survives multiple ma
   const childId = makeId('toolscript_bg_multitool_child');
   const scriptName = `${makeId('script')}.py`;
   let childChatCalls = 0;
-  await writeScript(scriptName, [
+  await writeScript(scriptName, asMain([
     `lease = open_managed_session("${childId}")`,
     `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
     `result = step_and_release_managed_session("${childId}", lease["leaseId"], event["revision"], run_mode="idle", inbox_order="before", message="controller woke")`,
-    'result',
-  ].join('\n'));
+    'return result',
+  ].join('\n')));
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
   (llm as any).chat = async (parts: any, activeSession: Session) => {
@@ -551,7 +581,7 @@ test('list/get/cancel ToolScript run tools return structured run data', async ()
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_run_tools');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, 'answer = ask_agent("Need input")\nanswer');
+  await writeScript(scriptName, asMain('answer = ask_agent("Need input")\nreturn answer'));
   const session = await sessionManager.getSession(sessionId);
 
   try {
@@ -584,10 +614,10 @@ test('ToolScript session_step rejects non-user message injection shapes', async 
   const parentId = makeId('toolscript_manager_invalid_parent');
   const childId = makeId('toolscript_manager_invalid_child');
   const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, [
+  await writeScript(scriptName, asMain([
     `lease = open_managed_session("${childId}")`,
-    `session_step("${childId}", lease["leaseId"], lease["revision"], message={"role": "model", "parts": [{"text": "bad"}]})`,
-  ].join('\n'));
+    `return session_step("${childId}", lease["leaseId"], lease["revision"], message={"role": "model", "parts": [{"text": "bad"}]})`,
+  ].join('\n')));
 
   const parent = await sessionManager.getSession(parentId);
   await sessionManager.getSession(childId);
@@ -596,6 +626,9 @@ test('ToolScript session_step rejects non-user message injection shapes', async 
     const result = await tool_run_script({ filePath: scriptName }, { sessionId: parentId, session: parent });
     assert.equal(result.status, 'failed');
     assert.match(result.error || '', /message\.role must be `user`/i);
+    assert.match(result.error || '', /ToolScript context:/);
+    assert.equal(result.hostCallCount, 1);
+    assert.equal(result.lastHostCall?.functionName, 'open_managed_session');
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(childId).catch(() => false);

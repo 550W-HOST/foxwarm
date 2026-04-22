@@ -43,10 +43,20 @@ Prefer a normal tool loop when:
 In practice, a good default flow is:
 
 1. use normal tool calls in the agent loop to explore/verify the tool path
-2. once you know the tools and argument shapes you want, write the ToolScript file
+2. once you know the tools and argument shapes you want, write the ToolScript file with an explicit `def main(args): ...` entrypoint
 3. if the task is close to the canonical example, copy/adapt it instead of starting from a blank file
 4. run the script with `run_script(...)` or `start_toolscript_run(...)`
 5. inspect the structured run result and resume with `continue_script(...)` if needed
+
+ToolScript scripts should now use an explicit entrypoint:
+
+```python
+def main(args):
+    ...
+    return {...}
+```
+
+Do not rely on the last expression in the file becoming the result.
 
 ## Main tool entry points
 
@@ -100,34 +110,42 @@ The main shape is the same unified descriptor style used by the normal model-fac
 Examples:
 
 ```python
-files = call_tool({
-    "toolId": "builtin:list_files",
-    "args": {
-        "dirPath": "examples/toolscript",
-        "recursive": False,
-        "includeHidden": False,
-        "limit": 20,
-    },
-})
+def main(args):
+    files = call_tool({
+        "toolId": "builtin:list_files",
+        "args": {
+            "dirPath": "examples/toolscript",
+            "recursive": False,
+            "includeHidden": False,
+            "limit": 20,
+        },
+    })
 
-content = call_tool({
-    "toolId": "builtin:read",
-    "args": {"filePath": "README.md"},
-})
+    content = call_tool({
+        "toolId": "builtin:read",
+        "args": {"filePath": "README.md"},
+    })
 
-repos = call_tool({
-    "source": "mcp",
-    "server": "github",
-    "name": "search_repos",
-    "args": {"query": "foxwarm"},
-})
+    repos = call_tool({
+        "source": "mcp",
+        "server": "github",
+        "name": "search_repos",
+        "args": {"query": "foxwarm"},
+    })
 
-remote_result = call_tool({
-    "source": "node",
-    "nodeId": "some-node",
-    "name": "android_screenshot",
-    "args": {"inline": True},
-})
+    remote_result = call_tool({
+        "source": "node",
+        "nodeId": "some-node",
+        "name": "android_screenshot",
+        "args": {"inline": True},
+    })
+
+    return {
+        "fileCount": files.get("count", 0),
+        "contentPreview": content[:80],
+        "repos": repos,
+        "remoteResult": remote_result,
+    }
 ```
 
 Notes:
@@ -148,8 +166,10 @@ Use this when the script should stop and wait for agent input.
 Example:
 
 ```python
-decision = ask_agent("Continue with deployment draft? Reply yes or no.")
-print(f"decision={decision}")
+def main(args):
+    decision = ask_agent("Continue with deployment draft? Reply yes or no.")
+    print(f"decision={decision}")
+    return {"decision": decision}
 ```
 
 When the run pauses:
@@ -171,8 +191,10 @@ Use this for a low-context helper model call when you want a small local transfo
 Example:
 
 ```python
-summary = request_model_without_context("Summarize this in one sentence: ...")
-print(summary["text"])
+def main(args):
+    summary = request_model_without_context("Summarize this in one sentence: ...")
+    print(summary["text"])
+    return summary
 ```
 
 Notes:
@@ -184,31 +206,32 @@ Notes:
 ## Minimal example script
 
 ```python
-print("starting automation")
+def main(args):
+    print("starting automation")
 
-files = call_tool({
-    "toolId": "builtin:list_files",
-    "args": {
-        "dirPath": "examples/toolscript",
-        "recursive": False,
-        "includeHidden": False,
-        "limit": 20,
-    },
-})
-print(files)
+    files = call_tool({
+        "toolId": "builtin:list_files",
+        "args": {
+            "dirPath": "examples/toolscript",
+            "recursive": False,
+            "includeHidden": False,
+            "limit": 20,
+        },
+    })
+    print(files)
 
-doc = call_tool({
-    "toolId": "builtin:read",
-    "args": {"filePath": "README.md"},
-})
-print(doc[:200])
+    doc = call_tool({
+        "toolId": "builtin:read",
+        "args": {"filePath": "README.md"},
+    })
+    print(doc[:200])
 
-label = ask_agent("Give this run a short label")
+    label = ask_agent("Give this run a short label")
 
-{
-    "label": label,
-    "exampleFileCount": files.get("count", 0),
-}
+    return {
+        "label": label,
+        "exampleFileCount": files.get("count", 0),
+    }
 ```
 
 ## How to interpret ToolScript run results
