@@ -751,9 +751,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     'edit_memory',
     'delete_memory',
     'apply_patch_memory',
-    'get_archived_messages',
-    'get_archived_blocks',
-    'get_context_archive',
   ]);
 
   while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {

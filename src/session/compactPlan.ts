@@ -67,49 +67,6 @@ const COMPACT_FLOW_MEMORY_TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ['input'],
     },
   },
-  {
-    name: 'get_archived_messages',
-    description: 'Inspect archived raw messages while compacting if you need details from compacted history.',
-    parameters: {
-      type: 'object',
-      properties: {
-        sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
-        startSeq: { type: 'number', description: 'Optional inclusive starting seq number' },
-        endSeq: { type: 'number', description: 'Optional inclusive ending seq number' },
-        previewLength: { type: 'number', description: 'Maximum preview length per archived message (default: 1000)' },
-      },
-    },
-  },
-  {
-    name: 'get_archived_blocks',
-    description: 'Inspect archived layered-context blocks while compacting if you need earlier block summaries.',
-    parameters: {
-      type: 'object',
-      properties: {
-        sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
-        startId: { type: 'number', description: 'Optional inclusive starting block id' },
-        endId: { type: 'number', description: 'Optional inclusive ending block id' },
-        previewLength: { type: 'number', description: 'Maximum preview length per block summary (default: 1000)' },
-      },
-    },
-  },
-  {
-    name: 'get_context_archive',
-    description: 'Unified archived-context inspection helper. Use this during compaction when you are not sure whether you need raw messages, layered blocks, or both.',
-    parameters: {
-      type: 'object',
-      properties: {
-        sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
-        startSeq: { type: 'number', description: 'Optional inclusive starting raw message seq' },
-        endSeq: { type: 'number', description: 'Optional inclusive ending raw message seq' },
-        startId: { type: 'number', description: 'Optional inclusive starting block id' },
-        endId: { type: 'number', description: 'Optional inclusive ending block id' },
-        includeMessages: { type: 'boolean', description: 'Include archived raw messages (default: auto)' },
-        includeBlocks: { type: 'boolean', description: 'Include archived layered blocks (default: auto)' },
-        previewLength: { type: 'number', description: 'Maximum preview length per returned item (default: 1000)' },
-      },
-    },
-  },
 ];
 
 export type CompactCandidateItem =
@@ -341,7 +298,7 @@ export function buildCompactPromptText(options: {
     '- Mention when an earlier plan or decision was superseded by a later one if that matters for future work.',
     `- You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including helper-tool rounds and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,
     '- If durable project/user/workflow/rule facts should outlive this session, you may use edit_memory/apply_patch_memory before submitting the final plan.',
-    `- You may use only these helper tools during compaction: read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, get_context_archive, get_archived_messages, get_archived_blocks, and call ${COMPACT_PLAN_TOOL_NAME} to finish the compaction.`,
+    `- You may use only these helper tools during compaction: read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, and call ${COMPACT_PLAN_TOOL_NAME} to finish the compaction.`,
     '',
     ...(guidance ? ['Additional guidance from compaction requester:', guidance, ''] : []),
   );
@@ -529,7 +486,7 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
   return [
     'COMPACT PLAN INVALID.',
     error.message,
-    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, get_context_archive, get_archived_messages, and get_archived_blocks if you truly need them.`,
+    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory, write_memory, edit_memory, delete_memory, and apply_patch_memory if needed.`,
   ].join(' ');
 }
 

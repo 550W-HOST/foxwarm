@@ -26,8 +26,56 @@ interface ToolContext {
 
 type ToolArgs = Record<string, any>;
 
+const ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT = 20_000;
+
 function buildEndTurnResult(_reason?: string) {
   return { output: 'ok', __toolLoopControl: { stopCurrentTurn: true } };
+}
+
+function normalizePositivePreviewLength(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
+}
+
+function calculatePreviewRequestChars(itemCount: number, previewLength: number): number {
+  const normalizedCount = Math.max(0, Math.floor(itemCount));
+  if (normalizedCount <= 1) {
+    return 0;
+  }
+  return normalizedCount * previewLength;
+}
+
+function assertPreviewRequestWithinLimit(
+  toolName: string,
+  segments: Array<{ label: string; count: number; previewLength: number }>,
+): void {
+  const evaluatedSegments = segments
+    .map(segment => {
+      const count = Math.max(0, Math.floor(segment.count));
+      const previewLength = Math.max(0, Math.floor(segment.previewLength));
+      return {
+        ...segment,
+        count,
+        previewLength,
+        requestedChars: calculatePreviewRequestChars(count, previewLength),
+      };
+    })
+    .filter(segment => segment.count > 0);
+
+  const totalRequestedChars = evaluatedSegments.reduce((sum, segment) => sum + segment.requestedChars, 0);
+  if (totalRequestedChars <= ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT) {
+    return;
+  }
+
+  const detailText = evaluatedSegments
+    .map(segment => `${segment.label}: ${segment.count} × ${segment.previewLength}${segment.count <= 1 ? ' (single-item request exempt)' : ` = ${segment.requestedChars}`}`)
+    .join('; ');
+
+  throw new Error(
+    `Request too large for ${toolName}: requested preview budget is ${totalRequestedChars} characters, exceeding the ${ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT}-character limit. `
+    + `First narrow the range or locate the relevant message/block position, then request fuller content. ${detailText}`,
+  );
 }
 
 function getSubconsciousPrimarySessionId(ctx?: ToolContext): string | undefined {
@@ -586,7 +634,8 @@ export async function tool_load_skill(args: ToolArgs, ctx?: ToolContext) {
 
 export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'get_session_messages');
-  const { sessionId, start, count, previewLength = 100 } = args;
+  const { sessionId, start, count } = args;
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 100);
 
   assertAllowedSubconsciousTarget(ctx, sessionId, 'get_session_messages');
 
@@ -615,6 +664,10 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
   actualStart = Math.max(0, Math.min(actualStart, totalMessages));
   actualCount = Math.min(actualCount, totalMessages - actualStart);
 
+  assertPreviewRequestWithinLimit('get_session_messages', [
+    { label: 'messages', count: actualCount, previewLength },
+  ]);
+
   const messages = await sessionManager.getSessionMessages(sessionId, actualStart, actualCount);
 
   if (messages.length === 0) {
@@ -628,7 +681,7 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
   const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
   await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
   assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_archived_messages');
-  const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
 
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
@@ -646,6 +699,10 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
     return `No archived messages matched for session \`${targetSessionId}\`.${availableRange}`;
   }
 
+  assertPreviewRequestWithinLimit('get_archived_messages', [
+    { label: 'archived messages', count: result.records.length, previewLength },
+  ]);
+
   return formatArchivedMessagePreview(targetSessionId, result.records, {
     totalMatched: result.totalMatched,
     startSeq: result.requestedRange.startSeq,
@@ -658,7 +715,7 @@ export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext
   const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
   await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
   assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_archived_blocks');
-  const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
 
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
@@ -668,6 +725,10 @@ export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext
     startId: typeof args.startId === 'number' ? args.startId : undefined,
     endId: typeof args.endId === 'number' ? args.endId : undefined,
   });
+
+  assertPreviewRequestWithinLimit('get_archived_blocks', [
+    { label: 'archived blocks', count: result.records.length, previewLength },
+  ]);
 
   return formatArchivedBlockPreview(targetSessionId, result.records, {
     totalMatched: result.totalMatched,
@@ -686,7 +747,7 @@ export async function tool_get_context_archive(args: ToolArgs, ctx?: ToolContext
   await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
   assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_context_archive');
 
-  const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
   const hasMessageRange = typeof args.startSeq === 'number' || typeof args.endSeq === 'number';
   const hasBlockRange = typeof args.startId === 'number' || typeof args.endId === 'number';
   const includeMessages = typeof args.includeMessages === 'boolean'
@@ -697,6 +758,7 @@ export async function tool_get_context_archive(args: ToolArgs, ctx?: ToolContext
     : (!hasMessageRange || hasBlockRange);
 
   const sections: string[] = [];
+  const previewSegments: Array<{ label: string; count: number; previewLength: number }> = [];
 
   if (includeMessages) {
     const messageResult = await sessionManager.getArchivedMessages(targetSessionId, {
@@ -706,6 +768,8 @@ export async function tool_get_context_archive(args: ToolArgs, ctx?: ToolContext
     const messageRecords = (!hasMessageRange && !hasBlockRange)
       ? messageResult.records.slice(-10)
       : messageResult.records;
+
+    previewSegments.push({ label: 'archived messages', count: messageRecords.length, previewLength });
 
     sections.push(formatArchivedMessagePreview(targetSessionId, messageRecords, {
       totalMatched: messageResult.totalMatched,
@@ -723,6 +787,8 @@ export async function tool_get_context_archive(args: ToolArgs, ctx?: ToolContext
       ? blockResult.records.slice(-10)
       : blockResult.records;
 
+    previewSegments.push({ label: 'archived blocks', count: blockRecords.length, previewLength });
+
     sections.push(formatArchivedBlockPreview(targetSessionId, blockRecords, {
       totalMatched: blockResult.totalMatched,
       startId: blockResult.requestedRange.startId,
@@ -733,6 +799,8 @@ export async function tool_get_context_archive(args: ToolArgs, ctx?: ToolContext
   if (sections.length === 0) {
     throw new Error('get_context_archive requires includeMessages and/or includeBlocks to be true.');
   }
+
+  assertPreviewRequestWithinLimit('get_context_archive', previewSegments);
 
   return formatCombinedArchivedContextPreview(sections);
 }
