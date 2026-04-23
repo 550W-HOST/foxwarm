@@ -90,6 +90,23 @@ function getPromptCacheKey(session: Session): string {
     return crypto.createHash('md5').update(`session_${sessionId}`).digest('hex');
 }
 
+function getPromptCacheKeyForSessionId(sessionId?: string): string {
+    const normalizedSessionId = sessionId || 'default';
+    return crypto.createHash('md5').update(`session_${normalizedSessionId}`).digest('hex');
+}
+
+type RequestLlmOnceOptions = {
+    contents: Message[];
+    systemPrompt: string;
+    model?: string;
+    sessionId?: string;
+    promptCacheKey?: string;
+    iteration?: number;
+    toolDefinitions?: ToolDefinition[];
+    notifySessionEvents?: boolean;
+    registerAbortController?: boolean;
+};
+
 export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-completions' | null {
     if (providerType === 'openai' || providerType === 'openai-responses') {
         return 'responses';
@@ -869,17 +886,53 @@ export async function chat(
     
     // Convert to appropriate format based on provider
     const contentsForLlm = session.history.map(({ __meta, ...msg }: Message) => msg);
-    const fixedContents = fixToolCalls(contentsForLlm);
-    
+    const availableToolDefinitions = options?.toolDefinitions
+        ?? (isSubconsciousSession(session)
+            ? tools.modelFacingDefinitions.filter(def => SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(def.name))
+            : tools.modelFacingDefinitions);
+    const result = await requestLlmOnce({
+        contents: contentsForLlm,
+        systemPrompt,
+        model: session.model,
+        sessionId: session.id,
+        promptCacheKey: getPromptCacheKey(session),
+        iteration,
+        toolDefinitions: availableToolDefinitions,
+        notifySessionEvents: options?.notifySessionEvents,
+        registerAbortController: options?.registerAbortController,
+    });
+
+    if (result.usage) {
+        logger.info(`Token Usage: Cached: ${result.usage.cachedTokens || 0} | Input: ${result.usage.inputTokens} | Output: ${result.usage.outputTokens} | Calls: ${(result.toolCalls || []).length}`);
+
+        // Update session accumulated usage stats
+        session.stats.totalInputTokens += result.usage.inputTokens || 0;
+        session.stats.totalCachedTokens += result.usage.cachedTokens || 0;
+        session.stats.totalOutputTokens += result.usage.outputTokens || 0;
+    }
+
+    // Add assistant message to history
+    if (result.allParts && result.allParts.length > 0) {
+        const assistantMsg: Message = {
+            role: 'model',
+            parts: result.allParts
+        };
+        await appendMessage(assistantMsg);
+    }
+
+    return result;
+}
+
+export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
+    const fixedContents = fixToolCalls(options.contents || []);
     let messages, url, headers, data;
 
-    const { modelEntry, currentKey: modelKey } = resolveModelConfig(session.model);
-
+    const { modelEntry, currentKey: modelKey } = resolveModelConfig(options.model);
     const providerType = modelEntry?.providerType || 'openai';
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
     const modelName = modelEntry?.model || '';
-    const promptCacheKey = getPromptCacheKey(session);
+    const promptCacheKey = options.promptCacheKey || getPromptCacheKeyForSessionId(options.sessionId);
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
@@ -888,14 +941,11 @@ export async function chat(
         throw new Error('Model config has no baseUrl');
     }
 
+    const iteration = options.iteration || 0;
     logger.info(`Requesting LLM (${modelKey}, type ${providerType}, iteration ${iteration})...`);
 
     const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
-    const availableToolDefinitions = options?.toolDefinitions
-        ?? (isSubconsciousSession(session)
-            ? tools.modelFacingDefinitions.filter(def => SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(def.name))
-            : tools.modelFacingDefinitions);
-
+    const availableToolDefinitions = options.toolDefinitions ?? [];
     const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh' :
                          THINKING_BUDGET >= 4000 ? 'high' :
                          THINKING_BUDGET >= 2000 ? 'medium' :
@@ -911,14 +961,14 @@ export async function chat(
             'user-agent': 'codex-tui/0.118.0 (Debian 13.0.0; x86_64) xterm.js_6.1.0-beta.191_ (codex-tui; 0.118.0)',
             'originator': 'codex-tui',
             'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
-                crypto.createHash('md5').update(`turn_id_${session.id}_${Date.now()}`).digest('hex')
+                crypto.createHash('md5').update(`turn_id_${options.sessionId || 'default'}_${Date.now()}`).digest('hex')
             }","sandbox":"seccomp"}`,
-            'x-client-request-id': crypto.createHash('md5').update(`req_id_${session.id}_${Date.now()}`).digest('hex'),
+            'x-client-request-id': crypto.createHash('md5').update(`req_id_${options.sessionId || 'default'}_${Date.now()}`).digest('hex'),
         };
 
         data = {
             model: modelName,
-            instructions: systemPrompt,
+            instructions: options.systemPrompt,
             input: [
                 ...messages
             ],
@@ -940,7 +990,6 @@ export async function chat(
             stream: true,
         };
     } else if (useOpenAIChatCompletionsApi) {
-        // OpenAI format
         messages = convertToOpenAIFormatProvider(fixedContents);
         url = `${baseUrl}/chat/completions`;
         headers = {
@@ -957,7 +1006,7 @@ export async function chat(
             stream: true,
             stream_options: { include_usage: true },
             messages: [
-                { role: 'system', content: systemPrompt },
+                { role: 'system', content: options.systemPrompt },
                 ...messages
             ],
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
@@ -970,7 +1019,6 @@ export async function chat(
             })) : undefined
         };
     } else {
-        // Anthropic format
         messages = convertToAnthropicFormat(fixedContents, modelEntry);
         url = `${baseUrl}/v1/messages`;
         headers = {
@@ -985,7 +1033,7 @@ export async function chat(
             model: modelName,
             max_tokens: MAX_OUTPUT,
             thinking: THINKING_BUDGET ? { type: "enabled", budget_tokens: THINKING_BUDGET } : undefined,
-            system: systemPrompt,
+            system: options.systemPrompt,
             messages: messages,
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
                 name: fd.name,
@@ -1008,27 +1056,29 @@ export async function chat(
                 : ((data.reasoning as any)?.summary || 'auto'),
         };
     }
-    
+
     const logFiles = await logRequest(data, iteration);
     const responseAttempts: any[] = [];
     const returnWithLoggedFailure = async (text: string): Promise<ChatResult> => {
         await moveInteractionLogsToErrorDir(logFiles);
-        return appendTerminalModelTextAndReturn(text);
+        return {
+            text,
+            allParts: [{ text }],
+        };
     };
-    
-    // Make API call with retries
+
     let response: AxiosResponse;
     let resp: any;
     const maxRetries = 3;
     const abortController = new AbortController();
-    const shouldRegisterAbortController = options?.registerAbortController !== false;
-    const shouldNotifySessionEvents = options?.notifySessionEvents !== false;
+    const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
+    const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
 
     if (shouldRegisterAbortController) {
-        sessionManager.registerSessionAbortController(session.id, abortController);
+        sessionManager.registerSessionAbortController(options.sessionId!, abortController);
     }
     if (shouldNotifySessionEvents) {
-        sessionManager.notifySessionEvent(session.id, { type: 'reasoning-summary-reset' });
+        sessionManager.notifySessionEvent(options.sessionId!, { type: 'reasoning-summary-reset' });
     }
 
     try {
@@ -1036,7 +1086,7 @@ export async function chat(
             try {
                 response = await axios.post(url, data, {
                     headers: { ...headers, ...modelEntry.extraHeaders },
-                    timeout: 180000, // 3 minutes
+                    timeout: 180000,
                     validateStatus: () => true,
                     signal: abortController.signal,
                     ...(useStreamingApi ? { responseType: 'stream' as const } : {}),
@@ -1056,7 +1106,7 @@ export async function chat(
                             body: errorBody
                         }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
                         if (attempt === maxRetries) {
-                            return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts`);
+                            return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts`);
                         }
                         await sleepWithSignal(5000, abortController.signal);
                         continue;
@@ -1066,7 +1116,7 @@ export async function chat(
                         resp = await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, {
                             onReasoningSummary: shouldNotifySessionEvents
                                 ? (text) => {
-                                    sessionManager.notifySessionEvent(session.id, {
+                                    sessionManager.notifySessionEvent(options.sessionId!, {
                                         type: 'reasoning-summary',
                                         text,
                                     });
@@ -1135,11 +1185,10 @@ export async function chat(
         }
     } finally {
         if (shouldRegisterAbortController) {
-            sessionManager.clearSessionAbortController(session.id, abortController);
+            sessionManager.clearSessionAbortController(options.sessionId!, abortController);
         }
     }
-    
-    // Extract response content blocks and tool calls
+
     let responseText = '';
     const allParts: Message['parts'] = [];
 
@@ -1197,24 +1246,26 @@ export async function chat(
             }
         }
     } else if (useOpenAIChatCompletionsApi) {
-        // Parse OpenAI response
         const choice = resp.choices?.[0];
         if (!choice) {
-            return appendTerminalModelTextAndReturn('Error: No response from OpenAI API');
+            return {
+                text: 'Error: No response from OpenAI API',
+                allParts: [{ text: 'Error: No response from OpenAI API' }],
+            };
         }
-        
+
         const message = choice.message;
-        
+
         if (message.reasoning_content) {
             logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
             allParts.push({ thinking: message.reasoning_content });
         }
-        
+
         if (message.content) {
             responseText = message.content;
             allParts.push({ text: message.content });
         }
-        
+
         if (message.tool_calls) {
             for (const toolCall of message.tool_calls) {
                 if (toolCall.type === 'function') {
@@ -1222,18 +1273,17 @@ export async function chat(
                     if (parsedArgs.argsParseError) {
                         logger.warn({ providerType, callId: toolCall.id, toolName: toolCall.function.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI chat tool arguments; converting to structured tool error');
                     }
-                    allParts.push({ 
-                        functionCall: { 
-                            id: toolCall.id, 
-                            name: toolCall.function.name, 
+                    allParts.push({
+                        functionCall: {
+                            id: toolCall.id,
+                            name: toolCall.function.name,
                             ...parsedArgs,
-                        } 
+                        }
                     });
                 }
             }
         }
     } else {
-        // Parse Anthropic response
         if (resp.content) {
             for (const rawBlock of resp.content) {
                 const block = rawBlock as AnthropicContentBlock;
@@ -1262,8 +1312,7 @@ export async function chat(
             }
         }
     }
-    
-    // Log token usage
+
     let usage: TokenUsage = null;
     if (useOpenAIResponsesApi) {
         const cached = resp.usage?.input_tokens_details?.cached_tokens || 0;
@@ -1288,29 +1337,10 @@ export async function chat(
 
     const toolCalls = allParts.filter(x => x.functionCall).map(x => x.functionCall);
 
-    if (usage) {
-        logger.info(`Token Usage: Cached: ${usage.cachedTokens || 0} | Input: ${usage.inputTokens} | Output: ${usage.outputTokens} | Calls: ${toolCalls.length}`);
-        
-        // Update session accumulated usage stats
-        session.stats.totalInputTokens += usage.inputTokens || 0;
-        session.stats.totalCachedTokens += usage.cachedTokens || 0;
-        session.stats.totalOutputTokens += usage.outputTokens || 0;
-    }
-
-    // Add assistant message to history
-    if (allParts.length > 0) {
-        const assistantMsg: Message = {
-            role: 'model',
-            parts: allParts
-        };
-        await appendMessage(assistantMsg);
-    }
-
-    // Return response with tool calls (if any)
-    return { 
-        text: responseText, 
+    return {
+        text: responseText,
         usage,
         toolCalls,
-        allParts: allParts.length > 0 ? allParts : undefined
+        allParts: allParts.length > 0 ? allParts : undefined,
     };
 }
