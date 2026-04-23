@@ -50,7 +50,9 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /B#9 L1 raw#3-#9/);
   assert.match(prompt, /resolved discussion/);
   assert.match(prompt, /Preserve decisions/i);
-  assert.match(prompt, /get_context_archive/);
+  assert.doesNotMatch(prompt, /get_context_archive/);
+  assert.doesNotMatch(prompt, /get_archived_messages/);
+  assert.doesNotMatch(prompt, /get_archived_blocks/);
   assert.match(prompt, /read_memory/);
   assert.match(prompt, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
   assert.match(prompt, /apply_patch_memory/);
@@ -112,11 +114,19 @@ test('buildCompactFlowToolDefinitions exposes only compact-safe helper tools plu
     'edit_memory',
     'delete_memory',
     'apply_patch_memory',
-    'get_archived_messages',
-    'get_archived_blocks',
-    'get_context_archive',
     COMPACT_PLAN_TOOL_NAME,
   ]);
+});
+
+test('buildCompactPlanValidationFeedback no longer suggests archive inspection helpers during compaction', () => {
+  const feedback = buildCompactPlanValidationFeedback(new CompactPlanValidationError({
+    createBlockErrors: ['bad compact range'],
+  }));
+
+  assert.match(feedback, /apply_patch_memory/);
+  assert.doesNotMatch(feedback, /get_context_archive/);
+  assert.doesNotMatch(feedback, /get_archived_messages/);
+  assert.doesNotMatch(feedback, /get_archived_blocks/);
 });
 
 test('validateCompactPlanArgs accepts layered message and block range creation', () => {
