@@ -110,7 +110,7 @@ export async function updateChildSessionParentIds(
   return updatedChildIds;
 }
 
-function isDirectSessionLink(a: Session | undefined, b: Session | undefined): boolean {
+export function isDirectSessionLink(a: Session | undefined, b: Session | undefined): boolean {
   if (!a || !b) return false;
   if (a.id === b.id) return true;
   if (a.parentSessionId === b.id || b.parentSessionId === a.id) return true;
@@ -147,25 +147,35 @@ async function checkIsolatedPermission(
   return targetSession;
 }
 
+export async function resolvePermittedSessionTarget(
+  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getAgentMetadata'>,
+  targetSessionId: string,
+  fromSessionId?: string,
+): Promise<{ sourceSession?: Session; targetSession: Session }> {
+  const sourceSession = fromSessionId ? await deps.getExistingSession(fromSessionId) : undefined;
+  if (fromSessionId && !sourceSession) {
+    throw new Error(`Session "${fromSessionId}" not found.`);
+  }
+
+  const targetSession = await checkIsolatedPermission(deps, sourceSession, targetSessionId);
+
+  const sourceAgentMeta = sourceSession ? deps.getAgentMetadata(sourceSession.agent || 'main') : undefined;
+  const targetAgentMeta = deps.getAgentMetadata(targetSession.agent || 'main');
+
+  if ((sourceAgentMeta?.isolated || targetAgentMeta.isolated) && sourceSession && !isDirectSessionLink(sourceSession, targetSession)) {
+    throw new Error('Isolated sessions can only communicate with themselves or their direct parent/child sessions.');
+  }
+
+  return { sourceSession, targetSession };
+}
+
 export async function sendToSession(
   deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getAgentMetadata' | 'enqueueSessionItem'>,
   targetSessionId: string,
   message: string,
   fromSessionId?: string
 ): Promise<void> {
-  const fromSession = fromSessionId ? await deps.getExistingSession(fromSessionId) : undefined;
-  if (fromSessionId && !fromSession) {
-    throw new Error(`Session "${fromSessionId}" not found.`);
-  }
-
-  const targetSession = await checkIsolatedPermission(deps, fromSession, targetSessionId);
-
-  const sourceAgentMeta = fromSession ? deps.getAgentMetadata(fromSession.agent || 'main') : undefined;
-  const targetAgentMeta = deps.getAgentMetadata(targetSession.agent || 'main');
-
-  if ((sourceAgentMeta?.isolated || targetAgentMeta.isolated) && fromSession && !isDirectSessionLink(fromSession, targetSession)) {
-    throw new Error('Isolated sessions can only communicate with themselves or their direct parent/child sessions.');
-  }
+  const { sourceSession: fromSession, targetSession } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
 
   const replyTarget = fromSessionId || 'unknown-session';
   const prefix = fromSessionId

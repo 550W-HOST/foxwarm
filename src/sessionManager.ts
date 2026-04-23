@@ -10,6 +10,7 @@ import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
+import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
 import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getSessionArchiveImagesDir, getSessionArchiveLogPath } from './config';
 import * as sessionAgentOps from './session/agentOps';
@@ -33,6 +34,7 @@ const SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES = 4;
 const SUBCONSCIOUS_RECENT_WINDOW_MESSAGES = 12;
 const SUBCONSCIOUS_MIN_COMPACT_THRESHOLD_TOKENS = 4000;
 const SUBCONSCIOUS_COMPACT_THRESHOLD_FRACTION = 0.35;
+const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
 
 type SubconsciousPrimaryMeta = {
   enabled?: boolean;
@@ -192,7 +194,7 @@ export async function getExistingSession(sessionId: string): Promise<Session | n
 export type ChannelMode = sessionChannels.ChannelMode;
 
 // Callback to trigger agent turn
-let onSessionTriggered: ((sessionId: string) => void) | null = null;
+let onSessionTriggered: ((sessionId: string) => void | Promise<void>) | null = null;
 
 // Callback when history is updated (for SSE broadcasting)
 let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = null;
@@ -1291,8 +1293,12 @@ export function getAllAttachments(): Map<string, sessionChannels.ChannelConfig> 
 /**
  * Set callback to be called when a session event is queued to an idle session
  */
-export function setSessionTriggerCallback(onTrigger: (sessionId: string) => void): void {
+export function setSessionTriggerCallback(onTrigger: (sessionId: string) => void | Promise<void>): void {
   onSessionTriggered = onTrigger;
+}
+
+export async function triggerSessionProcessing(sessionId: string): Promise<void> {
+  await Promise.resolve(onSessionTriggered?.(sessionId));
 }
 
 function isQueuedSystemEventItem(
@@ -1320,14 +1326,121 @@ export function hasTrailingQueuedSystemEvent(
   return isQueuedSystemEventItem(queue[queue.length - 1], message, type);
 }
 
+function buildManagedInboxWakeupMessage(managedSessionId: string, pendingCount: number): string {
+  return `Managed session \`${managedSessionId}\` has ${pendingCount} pending inbox item(s). Use session_step(...) to process them or release_managed_session(...) to hand control back.`;
+}
+
+async function reclaimManagedSessionIfStale(session: Session): Promise<boolean> {
+  const managed = getManagedSessionState(session);
+  if (!managed) {
+    return false;
+  }
+
+  const ownerSession = await getExistingSession(managed.ownerSessionId);
+  const ownerMissing = !ownerSession;
+  const expired = isManagedSessionLeaseExpired(managed);
+
+  if ((!ownerMissing && !expired) || session.busy) {
+    return false;
+  }
+
+  const restoredPending = managed.pendingInbox.map(cloneQueueItem);
+  setManagedSessionState(session, null);
+  session.queue = [...restoredPending, ...(session.queue || [])];
+  await saveSession(session.id);
+  return true;
+}
+
+async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSessionState): Promise<void> {
+  if (!managed.pendingInbox.length) {
+    return;
+  }
+
+  const ownerSession = await getExistingSession(managed.ownerSessionId);
+  if (!ownerSession) {
+    return;
+  }
+
+  const now = Date.now();
+  if (managed.lastOwnerWakeupAt && now - managed.lastOwnerWakeupAt < MANAGED_OWNER_WAKEUP_COOLDOWN_MS) {
+    return;
+  }
+
+  const wakeupMessage = buildManagedInboxWakeupMessage(session.id, managed.pendingInbox.length);
+  if (hasTrailingQueuedSystemEvent(ownerSession.queue, wakeupMessage, 'background')) {
+    managed.lastOwnerWakeupAt = now;
+    managed.leaseTouchedAt = now;
+    setManagedSessionState(session, managed);
+    await saveSession(session.id);
+    return;
+  }
+
+  managed.lastOwnerWakeupAt = now;
+  managed.leaseTouchedAt = now;
+  setManagedSessionState(session, managed);
+  await saveSession(session.id);
+  await queueSessionSystemEvent(managed.ownerSessionId, wakeupMessage, 'background');
+}
+
+async function maybeResumeManagedSessionControllerRun(session: Session, managed: ManagedSessionState): Promise<boolean> {
+  if (!managed.controllerRunId || !managed.pendingInbox.length) {
+    return false;
+  }
+  try {
+    const toolscript = require('./toolscript') as {
+      resumeBackgroundToolScriptRunForManagedSession?: (args: {
+        runId: string;
+        sessionId: string;
+        leaseId?: string;
+        revision?: number;
+        pendingInboxCount?: number;
+        wakeReason?: string;
+      }) => Promise<any>;
+    };
+    const resumed = await toolscript.resumeBackgroundToolScriptRunForManagedSession?.({
+      runId: managed.controllerRunId,
+      sessionId: session.id,
+      leaseId: managed.leaseId,
+      revision: managed.revision,
+      pendingInboxCount: managed.pendingInbox.length,
+      wakeReason: 'managed-inbox',
+    });
+    return !!resumed;
+  } catch (error: any) {
+    logger.warn({ err: error, sessionId: session.id, controllerRunId: managed.controllerRunId }, 'Failed to resume managed-session ToolScript controller run');
+    return false;
+  }
+}
+
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
   const session = await getSession(sessionId);
+  await reclaimManagedSessionIfStale(session);
+  const managedBeforeEnqueue = !!getManagedSessionState(session);
+
+  if (shouldRouteQueueItemToManagedInbox(session, item)) {
+    const managed = getManagedSessionState(session);
+    if (!managed) {
+      throw new Error(`Managed session metadata missing for session \`${sessionId}\`.`);
+    }
+
+    managed.pendingInbox.push(cloneQueueItem(item));
+    managed.lastInboxAt = Date.now();
+    managed.leaseTouchedAt = managed.lastInboxAt;
+    managed.revision += 1;
+    setManagedSessionState(session, managed);
+    await saveSession(sessionId);
+    const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
+    if (!resumedControllerRun) {
+      await maybeWakeManagedSessionOwner(session, managed);
+    }
+    return;
+  }
 
   session.queue.push(item);
   await saveSession(sessionId);
 
-  if (!session.busy) {
-    onSessionTriggered?.(sessionId);
+  if (!managedBeforeEnqueue && !session.busy) {
+    void onSessionTriggered?.(sessionId);
   }
 }
 
@@ -1351,7 +1464,7 @@ export async function requestSessionCompaction(
     };
   }
 
-  const startedImmediately = !session.busy && session.queue.length === 0;
+  const startedImmediately = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
   await enqueueSessionItem(sessionId, {
     type: 'compact',
     keepPercent: options.keepPercent,
@@ -1705,6 +1818,7 @@ export async function retrySession(sessionId: string): Promise<void> {
 export async function resumeBusySessions(): Promise<void> {
   const busySessionIds: string[] = [];
   const queuedSessionIds: string[] = [];
+  const managedPendingSessionIds: string[] = [];
 
   // Check metadata for busy or queued sessions (no need to load history files)
   for (const [sessionId, session] of sessions.entries()) {
@@ -1716,14 +1830,19 @@ export async function resumeBusySessions(): Promise<void> {
     if ((session.queue?.length || 0) > 0) {
       queuedSessionIds.push(sessionId);
     }
+
+    const managed = getManagedSessionState(session as Session);
+    if (managed?.pendingInbox?.length) {
+      managedPendingSessionIds.push(sessionId);
+    }
   }
 
-  if (busySessionIds.length === 0 && queuedSessionIds.length === 0) {
-    logger.info({ busyCount: 0, queuedCount: 0, busySessions: busySessionIds, queuedSessions: queuedSessionIds }, 'Resuming sessions after restart');
+  if (busySessionIds.length === 0 && queuedSessionIds.length === 0 && managedPendingSessionIds.length === 0) {
+    logger.info({ busyCount: 0, queuedCount: 0, managedPendingCount: 0, busySessions: busySessionIds, queuedSessions: queuedSessionIds, managedPendingSessions: managedPendingSessionIds }, 'Resuming sessions after restart');
     return;
   }
 
-  logger.info({ busyCount: busySessionIds.length, queuedCount: queuedSessionIds.length, busySessions: busySessionIds, queuedSessions: queuedSessionIds }, 'Resuming sessions after restart');
+  logger.info({ busyCount: busySessionIds.length, queuedCount: queuedSessionIds.length, managedPendingCount: managedPendingSessionIds.length, busySessions: busySessionIds, queuedSessions: queuedSessionIds, managedPendingSessions: managedPendingSessionIds }, 'Resuming sessions after restart');
 
   for (const sessionId of busySessionIds) {
     try {
@@ -1752,6 +1871,29 @@ export async function resumeBusySessions(): Promise<void> {
       logger.info({ sessionId }, 'Queued session resumed');
     } catch (e) {
       logger.error({ err: e, sessionId }, 'Failed to resume queued session');
+    }
+  }
+
+  for (const sessionId of managedPendingSessionIds) {
+    try {
+      const session = await getSession(sessionId);
+      if (await reclaimManagedSessionIfStale(session)) {
+        if (!session.busy && session.queue.length > 0) {
+          onSessionTriggered?.(sessionId);
+        }
+        continue;
+      }
+
+      const managed = getManagedSessionState(session);
+      if (managed) {
+        const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
+        if (!resumedControllerRun) {
+          await maybeWakeManagedSessionOwner(session, managed);
+        }
+      }
+      logger.info({ sessionId }, 'Managed session inbox wakeup processed after restart');
+    } catch (e) {
+      logger.error({ err: e, sessionId }, 'Failed to process managed session inbox after restart');
     }
   }
 }
