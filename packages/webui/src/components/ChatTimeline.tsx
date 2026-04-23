@@ -433,8 +433,9 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
   }
 
   if (call.name === 'exec') {
-    const preview = call.args.command.length > 200 ? `${call.args.command.substring(0, 200)}...` : call.args.command
-    return <span className="truncate font-mono" title={call.args.command}>{preview}</span>
+    const cmd = call.args?.command ?? ''
+    const preview = cmd.length > 200 ? `${cmd.substring(0, 200)}...` : cmd
+    return <span className="truncate font-mono" title={cmd}>{preview}</span>
   }
 
   if (call.name === 'send_to_session') {
@@ -531,7 +532,8 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
   }
 
   if (call.name === 'exec') {
-    return <div className="break-all">{call.args.command}</div>
+    const cmd = call.args?.command ?? ''
+    return <div className="break-all">{cmd}</div>
   }
 
   if (call.name === 'send_to_session') {
@@ -904,15 +906,16 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
     }
 
     if (call.name === 'exec') {
-      const preview = call.args.command.length > 200 ? `${call.args.command.substring(0, 200)}...` : call.args.command
+      const cmd = call.args?.command ?? ''
+      const preview = cmd.length > 200 ? `${cmd.substring(0, 200)}...` : cmd
       return (
         <div className="space-y-1">
           {expanded ? (
             <>
               <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
-              <div className="break-all">{call.args.command}</div>
+              <div className="break-all">{cmd}</div>
             </>
-          ) : renderInlineToolSummary(call.name, <div className="truncate font-mono" title={call.args.command}>{preview}</div>)}
+          ) : renderInlineToolSummary(call.name, <div className="truncate font-mono" title={cmd}>{preview}</div>)}
         </div>
       )
     }
