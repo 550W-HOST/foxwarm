@@ -9,7 +9,7 @@ import fs from 'fs-extra';
 import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
 import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
-import { Channel, ChannelContext, ChannelMessage } from '../channel';
+import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
@@ -1422,6 +1422,22 @@ export class WebUIChannel implements Channel {
         isInstantNotification: true // Mark as instant notification (like compact messages)
       }
     });
+  }
+
+  async sendFile(channelUserId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+    // WebUI does not need a channel-side binary push: the tool result includes
+    // the local fullPath, and WebUI renders tool results with download/open
+    // affordances. Implementing this as a successful no-op prevents generic
+    // session delivery from reporting that WebUI "does not support file
+    // sending", which incorrectly suggests to agents that WebUI users cannot
+    // access the file.
+    logger.debug({
+      sessionId: channelUserId,
+      fileName: file.name,
+      filePath: file.path,
+      sizeBytes: file.sizeBytes,
+      caption: options?.caption,
+    }, 'WebUI sendFile noop called');
   }
 
   async sendTyping(channelUserId: string): Promise<void> {
