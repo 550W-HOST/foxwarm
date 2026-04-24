@@ -212,13 +212,6 @@ async function readResolvedPath(fullPath: string, displayPath: string, startLine
         content = lines.slice(start, end).join('\n');
     }
 
-    const tokens = estimateTokenCount(content);
-    if (tokens > 10000) {
-        const shortNotice = `[TOO LONG (~${tokens} tokens)]`;
-        const fullNotice = `${shortNotice} TRUNCATED. Showing first 10000 chars only.`;
-        return `${shortNotice}\n\n${content.slice(0, 10000)}\n\n${fullNotice}`;
-    }
-
     return content;
 }
 

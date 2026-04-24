@@ -23,6 +23,7 @@ import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
+import { guardToolOutputForModel } from './toolOutputGuard';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -809,6 +810,13 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
 
         result = extractToolLoopControl(result);
         result = await consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
+        result = await guardToolOutputForModel(result, {
+            sessionId,
+            session,
+            toolName: call.name,
+            toolUseId: toolId,
+            nodeId: executionNode,
+        });
 
         batchHasError = batchHasError || hasToolResponseError(result);
         
