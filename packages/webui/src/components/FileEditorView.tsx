@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowLeft, Download, FileText, Save, SquareTerminal } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { MAX_INLINE_FILE_BYTES, buildWorkspaceDownloadUrl, formatSize, formatTimestamp, triggerBrowserDownload } from './workspaceShared'
+
+const MonacoFileEditor = lazy(() => import('./MonacoFileEditor'))
 
 interface FileEditorViewProps {
   nodeId: string
@@ -217,12 +219,9 @@ export default function FileEditorView({ nodeId, filePath, onBack, onOpenTermina
             </div>
           </div>
         ) : (
-          <textarea
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            className="h-full w-full resize-none rounded-xl border border-gray-300 bg-white p-4 font-mono text-sm text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 dark:focus:border-blue-500 dark:focus:ring-blue-900"
-            spellCheck={false}
-          />
+          <Suspense fallback={<div className="flex h-full items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white text-sm text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">Loading editor…</div>}>
+            <MonacoFileEditor value={content} onChange={setContent} filePath={filePath} />
+          </Suspense>
         )}
       </div>
     </div>

@@ -612,16 +612,20 @@ const parsePatchUpdateSection = (lines: string[], filePath: string): PatchPrevie
     }
 
     const hunkLines: string[] = []
-    let sawChange = false
 
     while (i < lines.length) {
       const line = lines[i]
 
-      if (line.startsWith('@@') && hunkLines.length > 0 && sawChange) {
+      if (line.startsWith('@@')) {
         break
       }
 
-      if (line.trim() === '' && sawChange) {
+      if (line === '*** End of File') {
+        i++
+        break
+      }
+
+      if (line.trim() === '') {
         let j = i + 1
         while (j < lines.length && lines[j].trim() === '') j++
         if (j >= lines.length || lines[j].startsWith('@@')) {
@@ -630,16 +634,12 @@ const parsePatchUpdateSection = (lines: string[], filePath: string): PatchPrevie
         }
       }
 
-      if (line.startsWith('-') || line.startsWith('+')) {
-        sawChange = true
-      }
-
       hunkLines.push(line)
       i++
     }
 
-    if (!sawChange) {
-      throw new Error(`Invalid apply_patch input for ${filePath}: update hunk must include at least one changed line.`)
+    if (anchors.length === 0 && hunkLines.length === 0) {
+      throw new Error(`Invalid apply_patch input for ${filePath}: empty update hunk.`)
     }
 
     hunks.push({ anchors, lines: hunkLines })
@@ -738,8 +738,9 @@ export const buildPatchHunkSnippets = (hunk: PatchPreviewHunk): { oldText: strin
       continue
     }
 
-    oldLines.push(line)
-    newLines.push(line)
+    const contextLine = line.startsWith(' ') ? line.slice(1) : line
+    oldLines.push(contextLine)
+    newLines.push(contextLine)
   }
 
   return {

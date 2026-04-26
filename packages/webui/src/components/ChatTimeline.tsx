@@ -33,6 +33,7 @@ import {
   type ViewMode,
 } from './chatShared'
 import { formatToolResponsePayload } from '../../../shared/src/toolResponseFormatting'
+import { SyntaxHighlightedText } from './SyntaxHighlightedText'
 import { buildWorkspaceDownloadUrl, triggerBrowserDownload } from './workspaceShared'
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatToolResponsePayload(resp.response)
@@ -480,7 +481,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     return hasLegacyDiff ? (
       <div className="space-y-2">
         <div className="text-xs text-gray-600 dark:text-gray-300">{call.args.filePath}</div>
-        <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} />
+        <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} filePath={call.args.filePath} />
       </div>
     ) : (
       <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{JSON.stringify(call.args, null, 2)}</pre>
@@ -505,7 +506,11 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
                           {hunk.anchors.length > 0 && (
                             <div className="mb-1 text-[11px] text-gray-500 dark:text-gray-400">{hunk.anchors.map((anchor, anchorIdx) => <div key={anchorIdx}>@@ {anchor}</div>)}</div>
                           )}
-                          <DiffPreview oldText={snippets.oldText} newText={snippets.newText} diffViewMode={diffViewMode} />
+                          {snippets.oldText || snippets.newText ? (
+                            <DiffPreview oldText={snippets.oldText} newText={snippets.newText} diffViewMode={diffViewMode} filePath={operation.filePath} />
+                          ) : (
+                            <div className="rounded border border-gray-300 bg-gray-50 px-2 py-1 font-mono text-[11px] text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">anchor-only hunk</div>
+                          )}
                         </div>
                       )
                     })}
@@ -517,7 +522,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
               return (
                 <div key={operationIdx} className="space-y-1">
                   <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">Add {operation.filePath}</div>
-                  <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} />
+                  <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} filePath={operation.filePath} />
                 </div>
               )
             }
@@ -597,7 +602,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : preview}</div>
 }
 
-const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }: { oldText: string; newText: string; diffViewMode: 'unified' | 'split' }) {
+const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode, filePath }: { oldText: string; newText: string; diffViewMode: 'unified' | 'split'; filePath?: string }) {
   const lineChanges = useMemo(() => Diff.diffLines(oldText, newText), [oldText, newText])
   const diffOldScrollRefs = useRef<HTMLDivElement | null>(null)
   const diffNewScrollRefs = useRef<HTMLDivElement | null>(null)
@@ -643,26 +648,26 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }
         elements.push(
           <div key={i} className="bg-orange-100 dark:bg-orange-900/40 pl-2">
             {charDiff.map((part, j) => part.removed
-              ? <span key={j} className="bg-orange-200/60 dark:bg-orange-700/60 text-orange-900 dark:text-orange-200">{part.value}</span>
-              : !part.added ? <span key={j} className="text-gray-900 dark:text-gray-100">{part.value}</span> : null)}
+              ? <span key={j} className="bg-orange-200/60 dark:bg-orange-700/60 text-orange-900 dark:text-orange-200"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+              : !part.added ? <span key={j} className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
           </div>
         )
         elements.push(
           <div key={i + 1} className="bg-blue-100 dark:bg-blue-900/40 pl-2">
             {charDiff.map((part, j) => part.added
-              ? <span key={j} className="bg-blue-200/60 dark:bg-blue-700/60 text-blue-900 dark:text-blue-200">{part.value}</span>
-              : !part.removed ? <span key={j} className="text-gray-900 dark:text-gray-100">{part.value}</span> : null)}
+              ? <span key={j} className="bg-blue-200/60 dark:bg-blue-700/60 text-blue-900 dark:text-blue-200"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+              : !part.removed ? <span key={j} className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
           </div>
         )
         i += 2
       } else if (change.removed) {
-        elements.push(<div key={i} className="bg-orange-100 dark:bg-orange-900/40 pl-2"><span className="text-gray-900 dark:text-gray-100">{change.value}</span></div>)
+        elements.push(<div key={i} className="bg-orange-100 dark:bg-orange-900/40 pl-2"><span className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={change.value} filePath={filePath} /></span></div>)
         i++
       } else if (change.added) {
-        elements.push(<div key={i} className="bg-blue-100 dark:bg-blue-900/40 pl-2"><span className="text-gray-900 dark:text-gray-100">{change.value}</span></div>)
+        elements.push(<div key={i} className="bg-blue-100 dark:bg-blue-900/40 pl-2"><span className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={change.value} filePath={filePath} /></span></div>)
         i++
       } else {
-        elements.push(<div key={i} className="pl-2"><span className="text-gray-900 dark:text-gray-100">{change.value}</span></div>)
+        elements.push(<div key={i} className="pl-2"><span className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={change.value} filePath={filePath} /></span></div>)
         i++
       }
     }
@@ -693,23 +698,23 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }
           oldElements.push(
             <div key={`${i}-old-${lineIdx}`} className="bg-orange-100 dark:bg-orange-900/40 block">
               {charDiff.map((part, j) => part.removed
-                ? <span key={j} className="bg-orange-200/60 dark:bg-orange-700/60 text-orange-900 dark:text-orange-200">{part.value}</span>
-                : !part.added ? <span key={j} className="text-gray-900 dark:text-gray-100">{part.value}</span> : null)}
+                ? <span key={j} className="bg-orange-200/60 dark:bg-orange-700/60 text-orange-900 dark:text-orange-200"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+                : !part.added ? <span key={j} className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
             </div>
           )
           newElements.push(
             <div key={`${i}-new-${lineIdx}`} className="bg-blue-100 dark:bg-blue-900/40 block">
               {charDiff.map((part, j) => part.added
-                ? <span key={j} className="bg-blue-200/60 dark:bg-blue-700/60 text-blue-900 dark:text-blue-200">{part.value}</span>
-                : !part.removed ? <span key={j} className="text-gray-900 dark:text-gray-100">{part.value}</span> : null)}
+                ? <span key={j} className="bg-blue-200/60 dark:bg-blue-700/60 text-blue-900 dark:text-blue-200"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+                : !part.removed ? <span key={j} className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
             </div>
           )
         } else if (removedLine !== undefined) {
-          oldElements.push(<div key={`${i}-old-${lineIdx}`} className="bg-orange-100 dark:bg-orange-900/40 text-gray-900 dark:text-gray-100 block">{removedLine || '\u00A0'}</div>)
+          oldElements.push(<div key={`${i}-old-${lineIdx}`} className="bg-orange-100 dark:bg-orange-900/40 text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={removedLine || '\u00A0'} filePath={filePath} /></div>)
           newElements.push(<div key={`${i}-new-pad-${lineIdx}`} className="bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 select-none block">&nbsp;</div>)
         } else if (addedLine !== undefined) {
           oldElements.push(<div key={`${i}-old-pad-${lineIdx}`} className="bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 select-none block">&nbsp;</div>)
-          newElements.push(<div key={`${i}-new-${lineIdx}`} className="bg-blue-100 dark:bg-blue-900/40 text-gray-900 dark:text-gray-100 block">{addedLine || '\u00A0'}</div>)
+          newElements.push(<div key={`${i}-new-${lineIdx}`} className="bg-blue-100 dark:bg-blue-900/40 text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={addedLine || '\u00A0'} filePath={filePath} /></div>)
         }
       }
 
@@ -717,7 +722,7 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }
     } else if (change.removed) {
       const actualLines = change.value.endsWith('\n') ? change.value.split('\n').slice(0, -1) : change.value.split('\n')
       actualLines.forEach((line, lineIdx) => {
-        oldElements.push(<div key={`${i}-${lineIdx}`} className="bg-orange-100 dark:bg-orange-900/40 text-gray-900 dark:text-gray-100 block">{line || '\u00A0'}</div>)
+        oldElements.push(<div key={`${i}-${lineIdx}`} className="bg-orange-100 dark:bg-orange-900/40 text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={line || '\u00A0'} filePath={filePath} /></div>)
         newElements.push(<div key={`${i}-pad-${lineIdx}`} className="bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 select-none block">&nbsp;</div>)
       })
       i++
@@ -725,12 +730,12 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }
       const actualLines = change.value.endsWith('\n') ? change.value.split('\n').slice(0, -1) : change.value.split('\n')
       actualLines.forEach((line, lineIdx) => {
         oldElements.push(<div key={`${i}-pad-${lineIdx}`} className="bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 select-none block">&nbsp;</div>)
-        newElements.push(<div key={`${i}-${lineIdx}`} className="bg-blue-100 dark:bg-blue-900/40 text-gray-900 dark:text-gray-100 block">{line || '\u00A0'}</div>)
+        newElements.push(<div key={`${i}-${lineIdx}`} className="bg-blue-100 dark:bg-blue-900/40 text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={line || '\u00A0'} filePath={filePath} /></div>)
       })
       i++
     } else {
-      oldElements.push(<div key={i} className="text-gray-900 dark:text-gray-100 block">{change.value}</div>)
-      newElements.push(<div key={i} className="text-gray-900 dark:text-gray-100 block">{change.value}</div>)
+      oldElements.push(<div key={i} className="text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={change.value} filePath={filePath} /></div>)
+      newElements.push(<div key={i} className="text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={change.value} filePath={filePath} /></div>)
       i++
     }
   }
@@ -822,7 +827,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
           {expanded && (
             <div>
               <div className="mt-2" onClick={(e) => e.stopPropagation()}>
-                {hasLegacyDiff ? <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} /> : (
+                {hasLegacyDiff ? <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} filePath={call.args.filePath} /> : (
                   <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{JSON.stringify(call.args, null, 2)}</pre>
                 )}
               </div>
@@ -864,7 +869,11 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
                                 {hunk.anchors.length > 0 && (
                                   <div className="mb-1 text-[11px] text-gray-500 dark:text-gray-400">{hunk.anchors.map((anchor, anchorIdx) => <div key={anchorIdx}>@@ {anchor}</div>)}</div>
                                 )}
-                                <DiffPreview oldText={snippets.oldText} newText={snippets.newText} diffViewMode={diffViewMode} />
+                                {snippets.oldText || snippets.newText ? (
+                                  <DiffPreview oldText={snippets.oldText} newText={snippets.newText} diffViewMode={diffViewMode} filePath={operation.filePath} />
+                                ) : (
+                                  <div className="rounded border border-gray-300 bg-gray-50 px-2 py-1 font-mono text-[11px] text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">anchor-only hunk</div>
+                                )}
                               </div>
                             )
                           })}
@@ -876,7 +885,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
                     return (
                       <div key={operationIdx} className="space-y-1">
                         <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">Add {operation.filePath}</div>
-                        <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} />
+                        <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} filePath={operation.filePath} />
                       </div>
                     )
                   }
