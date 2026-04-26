@@ -209,7 +209,7 @@ curl -fsSL "http://127.0.0.1:3001/node/run.sh" | bash -s -- \
   --node-id=my-node
 ```
 
-## Interactive Linux bootstrap
+## cli-node TUI Linux bootstrap
 
 Use this when every tool call should require local confirmation:
 
@@ -217,7 +217,7 @@ Use this when every tool call should require local confirmation:
 BASE_URL=http://YOUR_MASTER:3001
 curl -fsSL "$BASE_URL/node/run-interactive.sh" | bash -s -- \
   --pairing=YOUR_PAIRING_TOKEN \
-  --node-id=my-interactive-node
+  --node-id=my-cli-node
 ```
 
 Optional extras:

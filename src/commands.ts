@@ -288,7 +288,7 @@ function buildNodePairHelp(token: string): string {
     'Notes:',
     '- `/node/run.sh` = bare-metal bootstrap; runs in foreground by default, use `-d` to detach',
     '- `/node/run-docker.sh` = Docker bootstrap; starts containers and follows logs by default, use `-d` to skip log following',
-    '- `/node/run-interactive.sh` = interactive approval mode for every tool call',
+    '- `/node/run-interactive.sh` = cli-node TUI mode (tool approvals plus bound-session chat)',
     '- `/node/docker-compose.yaml` = inspect/customize the self-contained compose template first',
     '- `/node` = list current node, approved nodes, and pending approvals',
     '- `/node approve` / `/node reject` = act on pending approvals',

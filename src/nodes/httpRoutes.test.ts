@@ -45,4 +45,5 @@ test('renderNodeTemplateText injects request-derived base url placeholder', () =
 
 test('node source bundle includes shared package artifacts required by runtime', () => {
   assert.equal(NODE_SOURCE_FILES.includes('packages/shared'), true);
+  assert.equal(NODE_SOURCE_FILES.includes('packages/cli-node'), true);
 });

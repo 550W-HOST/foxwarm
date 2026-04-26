@@ -22,3 +22,7 @@ node_modules
 /test/node-client-state
 /test/sandbox-workspace-node
 /test/.temp
+
+# CLI node package build output
+/packages/cli-node/dist
+/packages/cli-node/node_modules

@@ -18,7 +18,7 @@ Usage:
     --pairing=PAIRING_TOKEN \
     --node-id=macbook
 
-Interactive node client — every tool call requires your confirmation.
+cli-node TUI — connect to Foxwarm, confirm tool calls, and talk to bound sessions.
 
 The script defaults `--host` from the URL used to fetch `/node/run-interactive.sh`.
 Pass `--host=...` only when the node should connect to a different reachable master URL.
@@ -93,7 +93,7 @@ curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$ABS_SOURCE_DIR"
 echo "Installing dependencies ..."
 (cd "$ABS_SOURCE_DIR" && npm ci)
 
-if [ -f "$ABS_SOURCE_DIR/lib/nodes/interactive-client.js" ] && [ -f "$ABS_SOURCE_DIR/packages/shared/dist/toolResponseFormatting.js" ]; then
+if [ -f "$ABS_SOURCE_DIR/packages/cli-node/dist/tui.js" ] && [ -f "$ABS_SOURCE_DIR/packages/shared/dist/toolResponseFormatting.js" ]; then
   echo "Using prebuilt node bundle from source archive."
 else
   echo "Building ..."
@@ -101,13 +101,13 @@ else
 fi
 
 # ─── Verify build ───
-if [ ! -f "$ABS_SOURCE_DIR/lib/nodes/interactive-client.js" ]; then
-  echo "Error: interactive-client.js not found after build" >&2
+if [ ! -f "$ABS_SOURCE_DIR/packages/cli-node/dist/tui.js" ]; then
+  echo "Error: cli-node TUI not found after build" >&2
   exit 1
 fi
 
 # ─── Build command ───
-CMD="node '$ABS_SOURCE_DIR/lib/nodes/interactive-client.js' --host '$HOST' --id '$NODE_ID'"
+CMD="node '$ABS_SOURCE_DIR/packages/cli-node/dist/tui.js' --host '$HOST' --id '$NODE_ID'"
 
 if [ -n "$PAIRING" ]; then
   CMD="$CMD --token '$PAIRING'"

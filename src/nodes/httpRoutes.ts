@@ -19,6 +19,7 @@ export const NODE_SOURCE_FILES = [
   'package-lock.json',
   'tsconfig.json',
   'packages/shared',
+  'packages/cli-node',
   'src',
   'lib',
   'templates',
@@ -91,6 +92,7 @@ function addTextRoute(httpServer: HttpServer, routePath: string, filePath: strin
 export function registerNodeHttpRoutes(httpServer: HttpServer): void {
   addTextRoute(httpServer, '/node/run.sh', NODE_RUN_SH_PATH, 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/run-docker.sh', NODE_RUN_DOCKER_SH_PATH, 'text/x-shellscript; charset=utf-8');
+  addTextRoute(httpServer, '/node/run-cli-node.sh', NODE_RUN_INTERACTIVE_SH_PATH, 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/run-interactive.sh', NODE_RUN_INTERACTIVE_SH_PATH, 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/run.ps1', NODE_RUN_PS1_PATH, 'text/plain; charset=utf-8');
   addTextRoute(httpServer, '/node/docker-compose.yaml', NODE_DOCKER_COMPOSE_PATH, 'text/yaml; charset=utf-8');
