@@ -122,7 +122,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
 
     # source.tar.gz includes pre-built lib/ and packages/shared/dist; only build if missing
-    $clientJs = Join-Path $SourceDir "lib\nodes\client.js"
+    $clientJs = Join-Path $SourceDir "packages\cli-node\dist\client.js"
     $sharedDist = Join-Path $SourceDir "packages\shared\dist\toolResponseFormatting.js"
     if (-not (Test-Path $clientJs) -or -not (Test-Path $sharedDist)) {
         Write-Host "Building ..."
@@ -137,9 +137,9 @@ try {
 
 # ─── Determine entry point ───
 if ($Interactive) {
-    $entryPoint = Join-Path $SourceDir "lib\nodes\interactive-client.js"
+    $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\tui.js"
 } else {
-    $entryPoint = Join-Path $SourceDir "lib\nodes\client.js"
+    $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\client.js"
 }
 
 if (-not (Test-Path $entryPoint)) {

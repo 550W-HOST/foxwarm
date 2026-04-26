@@ -93,7 +93,7 @@ export function buildNodeBootstrapInfo(options: NodeBootstrapInfoOptions): NodeB
   --node-id=my-node`,
       interactive: `curl -fsSL "$BASE_URL/node/run-interactive.sh" | bash -s -- \\
   --pairing=${options.pairingToken} \\
-  --node-id=my-interactive-node`,
+  --node-id=my-cli-node`,
       explicitHostOverride: `curl -fsSL "http://127.0.0.1:${HTTP_PORT}/node/run.sh" | bash -s -- \\
   --host="$BASE_URL" \\
   --pairing=${options.pairingToken} \\

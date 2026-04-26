@@ -65,7 +65,7 @@ By default, the bare-metal script also:
 - runs `npm ci`
 - uses the prebuilt bundle from the archive when available
 - runs `npm run build` only if required artifacts are missing
-- starts `node lib/nodes/client.js` in the **foreground**
+- starts `node packages/cli-node/dist/client.js` in the **foreground**
 
 If you want background mode instead:
 
@@ -94,14 +94,14 @@ curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
   --prepare-only
 ```
 
-## Interactive bootstrap script
+## cli-node TUI bootstrap script
 
 Use this when every tool call should require local confirmation:
 
 ```bash
 curl -fsSL "$BASE_URL/node/run-interactive.sh" | bash -s -- \
   --pairing="$(cat test/state/node_token)" \
-  --node-id=my-interactive-node
+  --node-id=my-cli-node
 ```
 
 Optional extras:

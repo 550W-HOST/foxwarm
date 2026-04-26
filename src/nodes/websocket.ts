@@ -240,6 +240,7 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
           if (!data.sessionId || typeof data.message !== 'string') {
             ws.send(JSON.stringify({
               type: 'error',
+              requestId: data.requestId,
               error: 'Invalid session_event message: missing sessionId or message'
             }));
             break;
@@ -250,7 +251,53 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
             data.message,
             data.eventType === 'trigger' || data.eventType === 'onboot' ? data.eventType : 'background'
           );
+          if (data.requestId) {
+            ws.send(JSON.stringify({ type: 'session_event_accepted', requestId: data.requestId }));
+          }
           break;
+        case 'session_list_request': {
+          const requestId = String(data.requestId || '');
+          try {
+            const sessions = await nodesManager.listSessionsForNode(nodeId || authenticatedNodeId || 'unknown-node');
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: true, result: { sessions } }));
+          } catch (err: any) {
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: false, error: err?.message || String(err) }));
+          }
+          break;
+        }
+        case 'session_history_request': {
+          const requestId = String(data.requestId || '');
+          try {
+            const result = await nodesManager.getSessionHistoryForNode(
+              nodeId || authenticatedNodeId || 'unknown-node',
+              String(data.sessionId || ''),
+              typeof data.count === 'number' ? data.count : 30
+            );
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: true, result }));
+          } catch (err: any) {
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: false, error: err?.message || String(err) }));
+          }
+          break;
+        }
+        case 'session_send_message': {
+          const requestId = String(data.requestId || '');
+          if (!data.sessionId || typeof data.message !== 'string') {
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: false, error: 'Invalid session_send_message: missing sessionId or message' }));
+            break;
+          }
+          try {
+            await nodesManager.handleSessionUserMessage(
+              nodeId || authenticatedNodeId || 'unknown-node',
+              String(data.sessionId),
+              data.message,
+              data.eventType === 'background' || data.eventType === 'onboot' ? data.eventType : 'trigger'
+            );
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: true, result: { accepted: true } }));
+          } catch (err: any) {
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: false, error: err?.message || String(err) }));
+          }
+          break;
+        }
         case 'list_nodes': {
           const nodes = nodesManager.listNodes();
           ws.send(JSON.stringify({ type: 'nodes_list', nodes }));

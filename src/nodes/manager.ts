@@ -511,10 +511,97 @@ export class NodesManager {
     throw new Error(`Node "${nodeId}" cannot send session events to "${sessionId}" because the session is not assigned to that node or its isolated agent.`);
   }
 
+  private nodeCanAccessSession(nodeId: string, session: any): boolean {
+    if (session.currentNode === nodeId) {
+      return true;
+    }
+
+    const agentName = session.agent || 'main';
+    return sessionManager.isAgentIsolated(agentName) && sessionManager.getAgentIsolationNode(agentName) === nodeId;
+  }
+
+  private async assertNodeCanAccessSession(nodeId: string, sessionId: string, action: string): Promise<any> {
+    const session = await sessionManager.getExistingSession(sessionId);
+    if (!session) {
+      throw new Error(`Target session "${sessionId}" not found.`);
+    }
+
+    if (this.nodeCanAccessSession(nodeId, session)) {
+      return session;
+    }
+
+    throw new Error(`Node "${nodeId}" cannot ${action} session "${sessionId}" because the session is not assigned to that node or its isolated agent.`);
+  }
+
+  private summarizeSession(session: any) {
+    return {
+      id: session.id,
+      displayName: session.displayName,
+      messageCount: session.meta?.messageCount || session.history?.length || 0,
+      lastMessageTime: session.meta?.lastMessageTime || null,
+      currentNode: session.currentNode,
+      cwd: session.cwd,
+      busy: session.busy,
+      queueLength: session.queue?.length || 0,
+    };
+  }
+
+  private messagePartToText(part: any): string {
+    if (!part || typeof part !== 'object') {
+      return String(part ?? '');
+    }
+    if (typeof part.text === 'string') return part.text;
+    if (typeof part.system === 'string') return `[SYSTEM] ${part.system}`;
+    if (part.inlineData) return `[inline data: ${part.inlineData.mimeType || 'unknown'}]`;
+    if (part.functionCall) return `[tool call: ${part.functionCall.name || 'unknown'} ${JSON.stringify(part.functionCall.args || {})}]`;
+    if (part.functionResponse) return `[tool response: ${part.functionResponse.name || 'unknown'} ${JSON.stringify(part.functionResponse.response || {})}]`;
+    return JSON.stringify(part);
+  }
+
+  private serializeSessionMessage(message: any, index: number) {
+    const parts = Array.isArray(message.parts) ? message.parts : [];
+    return {
+      index,
+      role: message.role || 'unknown',
+      text: parts.map((part: any) => this.messagePartToText(part)).filter(Boolean).join('\n'),
+      timestamp: message.__meta?.timestamp,
+    };
+  }
+
+  async listSessionsForNode(nodeId: string) {
+    const summaries = [];
+    for (const item of sessionManager.listSessions()) {
+      const session = await sessionManager.getExistingSession(item.id);
+      if (session && this.nodeCanAccessSession(nodeId, session)) {
+        summaries.push(this.summarizeSession(session));
+      }
+    }
+    return summaries;
+  }
+
+  async getSessionHistoryForNode(nodeId: string, sessionId: string, count = 30) {
+    const session = await this.assertNodeCanAccessSession(nodeId, sessionId, 'read history for');
+    const totalMessages = session.history?.length || 0;
+    const safeCount = Math.max(1, Math.min(100, Number(count) || 30));
+    const start = Math.max(0, totalMessages - safeCount);
+    const messages = await sessionManager.getSessionMessages(session.id, start, safeCount);
+    return {
+      session: this.summarizeSession(session),
+      totalMessages,
+      messages: messages.map((message, offset) => this.serializeSessionMessage(message, start + offset)),
+    };
+  }
+
   async handleSessionEvent(nodeId: string, sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
     await this.assertNodeOwnsSessionForEvent(nodeId, sessionId);
     await sessionManager.queueSessionSystemEvent(sessionId, message, type);
     logger.info({ nodeId, sessionId, type }, 'Session event received from remote node');
+  }
+
+  async handleSessionUserMessage(nodeId: string, sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'trigger'): Promise<void> {
+    await this.assertNodeCanAccessSession(nodeId, sessionId, 'send messages to');
+    await sessionManager.queueSessionEvent(sessionId, message, type);
+    logger.info({ nodeId, sessionId, type }, 'Session user message received from remote node');
   }
 
   /**

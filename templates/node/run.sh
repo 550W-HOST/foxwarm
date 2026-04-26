@@ -99,7 +99,7 @@ EOF
 echo "Installing dependencies in $ABS_SOURCE_DIR ..."
 (cd "$ABS_SOURCE_DIR" && npm ci)
 
-if [ -f "$ABS_SOURCE_DIR/lib/nodes/client.js" ] && [ -f "$ABS_SOURCE_DIR/packages/shared/dist/toolResponseFormatting.js" ]; then
+if [ -f "$ABS_SOURCE_DIR/packages/cli-node/dist/client.js" ] && [ -f "$ABS_SOURCE_DIR/packages/shared/dist/toolResponseFormatting.js" ]; then
   echo "Using prebuilt node bundle from source archive."
 else
   echo "Building node client in $ABS_SOURCE_DIR ..."
@@ -115,18 +115,18 @@ echo "Log file: $ABS_STATE_DIR/logs/node.log"
 start_foreground() {
   cd "$ABS_SOURCE_DIR"
   if [ -n "$PAIRING" ]; then
-    exec node lib/nodes/client.js --host "$HOST" --id "$NODE_ID" --token "$PAIRING" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
+    exec node packages/cli-node/dist/client.js --host "$HOST" --id "$NODE_ID" --token "$PAIRING" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
   fi
-  exec node lib/nodes/client.js --host "$HOST" --id "$NODE_ID" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
+  exec node packages/cli-node/dist/client.js --host "$HOST" --id "$NODE_ID" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
 }
 
 start_detached() {
   (
     cd "$ABS_SOURCE_DIR"
     if [ -n "$PAIRING" ]; then
-      nohup node lib/nodes/client.js --host "$HOST" --id "$NODE_ID" --token "$PAIRING" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json" >> "$ABS_STATE_DIR/logs/node.log" 2>&1 &
+      nohup node packages/cli-node/dist/client.js --host "$HOST" --id "$NODE_ID" --token "$PAIRING" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json" >> "$ABS_STATE_DIR/logs/node.log" 2>&1 &
     else
-      nohup node lib/nodes/client.js --host "$HOST" --id "$NODE_ID" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json" >> "$ABS_STATE_DIR/logs/node.log" 2>&1 &
+      nohup node packages/cli-node/dist/client.js --host "$HOST" --id "$NODE_ID" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json" >> "$ABS_STATE_DIR/logs/node.log" 2>&1 &
     fi
     echo $! > "$ABS_STATE_DIR/node.pid"
   )
@@ -138,7 +138,7 @@ if [ "$PREPARE_ONLY" = "1" ]; then
 Preparation complete. Node process was not started because --prepare-only was used.
 
 Start later with:
-  cd '$ABS_SOURCE_DIR' && node lib/nodes/client.js --host '$HOST' --id '$NODE_ID' ${PAIRING:+--token '$PAIRING'} --credentials-file '$ABS_STATE_DIR/state/node_credentials.json'
+  cd '$ABS_SOURCE_DIR' && node packages/cli-node/dist/client.js --host '$HOST' --id '$NODE_ID' ${PAIRING:+--token '$PAIRING'} --credentials-file '$ABS_STATE_DIR/state/node_credentials.json'
 
 If this is the first run, approve the pending pairing after startup:
   /node
