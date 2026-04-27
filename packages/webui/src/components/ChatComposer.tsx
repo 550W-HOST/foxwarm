@@ -102,8 +102,14 @@ function ModelSelector({
     if (!rect) return
     const width = Math.min(420, Math.max(320, Math.min(window.innerWidth - 16, rect.width + 150)))
     const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
-    const maxHeight = Math.min(360, Math.max(220, window.innerHeight - 24))
-    const top = Math.max(8, rect.top - maxHeight - 8)
+    const preferredMaxHeight = Math.min(360, Math.max(220, window.innerHeight - 24))
+    const spaceAbove = Math.max(0, rect.top - 12)
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 12)
+    const openAbove = spaceAbove >= 180 || spaceAbove >= spaceBelow
+    const maxHeight = Math.max(180, Math.min(preferredMaxHeight, openAbove ? spaceAbove : spaceBelow || preferredMaxHeight))
+    const top = openAbove
+      ? Math.max(8, rect.top - maxHeight - 8)
+      : Math.min(window.innerHeight - maxHeight - 8, rect.bottom + 8)
     setPopupStyle({ left, top, width, maxHeight })
   }, [])
 
@@ -113,21 +119,22 @@ function ModelSelector({
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node
-      if (!rootRef.current?.contains(target)) {
-        setOpen(false)
+      if (rootRef.current?.contains(target) || buttonRef.current?.contains(target)) {
+        return
       }
+      setOpen(false)
     }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false)
     }
     const handleReposition = () => updatePopupPosition()
 
-    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('mousedown', handlePointerDown, true)
     document.addEventListener('keydown', handleKeyDown)
     window.addEventListener('resize', handleReposition)
     window.addEventListener('scroll', handleReposition, true)
     return () => {
-      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('mousedown', handlePointerDown, true)
       document.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('resize', handleReposition)
       window.removeEventListener('scroll', handleReposition, true)
@@ -203,8 +210,12 @@ function ModelSelector({
       >
         <span className="shrink-0 text-gray-500 dark:text-gray-400">Model</span>
         <span className="min-w-0 truncate" title={currentModelKey || defaultModelKey || 'model'}>{currentModelKey || defaultModelKey || 'model'}</span>
-        <span className="hidden shrink-0 text-gray-400 dark:text-gray-500 sm:inline">/</span>
-        <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault || `follow ${effectiveChildModelKey || currentModelKey || ''}`}>{childModelDefault ? `child ${childModelDefault}` : 'child follow'}</span>
+        {childModelDefault && (
+          <>
+            <span className="hidden shrink-0 text-gray-400 dark:text-gray-500 sm:inline">/</span>
+            <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault}>child {childModelDefault}</span>
+          </>
+        )}
         {busy && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
         {error && <span className="shrink-0 text-red-500 dark:text-red-300">!</span>}
       </button>
