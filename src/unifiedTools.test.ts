@@ -359,6 +359,7 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(modelFacingDefinitions.some(def => def.name === 'get_context_archive'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_crop'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_write_to_file'), true);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'submit_compact_plan'), true);
 });
 
 test('defaultInject metadata is the single source of truth for default model injection', () => {

@@ -6,69 +6,6 @@ export const COMPACT_FLOW_MAX_ROUNDS = 15;
 export const DEFAULT_PREVIEW_CHAR_LIMIT = 80;
 export const COMPACT_LEVEL_TOKEN_THRESHOLD = 2000;
 const EDGE_PREVIEW_CHAR_LIMIT = 300;
-const COMPACT_FLOW_MEMORY_TOOL_DEFINITIONS: ToolDefinition[] = [
-  {
-    name: 'read_memory',
-    description: 'Read a file from the current agent memory/ directory while compacting. Use this to check durable memory before deciding whether to update it.',
-    parameters: {
-      type: 'object',
-      properties: {
-        filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
-        startLine: { type: 'number', description: 'Starting line number (1-indexed, optional)' },
-        endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional)' },
-      },
-      required: ['filePath'],
-    },
-  },
-  {
-    name: 'write_memory',
-    description: 'Create a new file under the current agent memory/ directory while compacting. Use only for durable memory worth preserving beyond this session.',
-    parameters: {
-      type: 'object',
-      properties: {
-        filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
-        content: { type: 'string', description: 'File contents to create.' },
-      },
-      required: ['filePath', 'content'],
-    },
-  },
-  {
-    name: 'edit_memory',
-    description: 'Edit an existing file under the current agent memory/ directory while compacting. Use this only to preserve durable workflow/project/user facts.',
-    parameters: {
-      type: 'object',
-      properties: {
-        filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
-        oldText: { type: 'string', description: 'The exact text to find' },
-        newText: { type: 'string', description: 'The text to replace it with' },
-      },
-      required: ['filePath', 'oldText', 'newText'],
-    },
-  },
-  {
-    name: 'delete_memory',
-    description: 'Delete a memory file while compacting if it is clearly obsolete durable memory.',
-    parameters: {
-      type: 'object',
-      properties: {
-        filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
-      },
-      required: ['filePath'],
-    },
-  },
-  {
-    name: 'apply_patch_memory',
-    description: 'Apply an apply_patch-style patch only within the current agent memory/ directory while compacting. Use memory-relative paths in patch headers.',
-    parameters: {
-      type: 'object',
-      properties: {
-        input: { type: 'string', description: 'The apply_patch command text to execute against files under the current agent memory/ directory.' },
-      },
-      required: ['input'],
-    },
-  },
-];
-
 export type CompactCandidateItem =
   | {
       kind: 'message';
@@ -118,6 +55,7 @@ export class CompactPlanValidationError extends Error {
 
 export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   name: COMPACT_PLAN_TOOL_NAME,
+  defaultInject: true, // Keep compact/normal tool schemas stable for prompt-cache/KV-cache hits.
   description: 'Submit layered-context block creation plan for older context items. Create one or more continuous same-level summary blocks; unmentioned older items stay verbatim in working history.',
   parameters: {
     type: 'object',
@@ -130,13 +68,6 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
     required: ['createBlocksJson'],
   },
 };
-
-export function buildCompactFlowToolDefinitions(): ToolDefinition[] {
-  return [
-    ...COMPACT_FLOW_MEMORY_TOOL_DEFINITIONS,
-    COMPACT_PLAN_TOOL_DEFINITION,
-  ];
-}
 
 export function formatSeqRange(startSeq?: number, endSeq?: number): string {
   if (typeof startSeq === 'number' && typeof endSeq === 'number') {

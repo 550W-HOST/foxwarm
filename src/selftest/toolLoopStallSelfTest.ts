@@ -7,7 +7,7 @@ import { MessageRouter } from '../messageRouter';
 import * as sessionManager from '../sessionManager';
 import * as llm from '../llm';
 import * as vector from '../vector';
-import { buildCompactFlowToolDefinitions, COMPACT_FLOW_MAX_ROUNDS } from '../session/compactPlan';
+import { COMPACT_FLOW_MAX_ROUNDS } from '../session/compactPlan';
 import { MessagePart, Session } from '../types';
 import { tool_get_archived_messages } from '../toolsSessionAgent';
 
@@ -103,7 +103,6 @@ async function main(): Promise<void> {
 
   const router = new MessageRouter();
   const createdSessionIds: string[] = [];
-  const compactToolNames = buildCompactFlowToolDefinitions().map(def => def.name);
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-tool-loop-selftest-'));
 
   try {
@@ -383,7 +382,7 @@ async function main(): Promise<void> {
           assert.match(systemText, /COMPACTION STARTED/);
           assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
           assert.match(systemText, /M#1/);
-          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), compactToolNames);
+          assert.strictEqual(options?.toolDefinitions, undefined);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in compact prompt');
           compactMessageRange = {
@@ -405,7 +404,7 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
           assert.match(systemText, /createBlocks must contain at least one block/);
-          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), compactToolNames);
+          assert.strictEqual(options?.toolDefinitions, undefined);
           assert(compactMessageRange, 'expected compact message range to be captured from initial prompt');
           const toolCall = {
             id: 'compact-plan',
@@ -610,7 +609,7 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
           assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
-          assert.deepStrictEqual(options?.toolDefinitions?.map(def => def.name), compactToolNames);
+          assert.strictEqual(options?.toolDefinitions, undefined);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in auto compact prompt');
           autoCompactMessageRange = {

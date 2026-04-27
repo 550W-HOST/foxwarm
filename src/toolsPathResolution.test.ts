@@ -4,10 +4,11 @@ import fs from 'fs-extra';
 import path from 'path';
 import { getAgentDir, getAgentMemoryDir } from './config';
 import * as sessionManager from './sessionManager';
-import { read, write, edit, apply_patch, apply_patch_memory, definitions, submit_compact_plan, search_memory, search_vector } from './tools';
+import { read, write, edit, apply_patch, apply_patch_memory, definitions, modelFacingDefinitions, submit_compact_plan, search_memory, search_vector } from './tools';
 
 test('submit_compact_plan is present in regular tool definitions and guarded outside compact flow', async () => {
   assert.ok(definitions.some(def => def.name === 'submit_compact_plan'));
+  assert.ok(modelFacingDefinitions.some(def => def.name === 'submit_compact_plan'));
   const result = await submit_compact_plan();
   assert.match(String(result), /only valid inside the dedicated compact planning flow/i);
 });

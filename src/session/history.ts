@@ -7,7 +7,6 @@ import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqR
 import {
   buildBlockCandidateItem,
   buildCompactPlanValidationFeedback,
-  buildCompactFlowToolDefinitions,
   buildCompactPromptText,
   buildMessageCandidateItem,
   COMPACT_FLOW_MAX_ROUNDS,
@@ -744,7 +743,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   let compactPlan: CompactPlan | null = null;
   let compactRoundsUsed = 0;
   let invalidCompactPlanAttempts = 0;
-  const compactToolDefinitions = buildCompactFlowToolDefinitions();
   const compactHelperToolNames = new Set([
     'read_memory',
     'write_memory',
@@ -756,7 +754,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
     compactRoundsUsed += 1;
     const result = await llm.chat(nextPromptParts, transientSession, invalidCompactPlanAttempts, {
-      toolDefinitions: compactToolDefinitions,
       appendMessage: async (message) => {
         await appendTransientSessionMessage(transientSession, message);
         mirrorTemporaryCompactMessage(deps, sessionId, message);
@@ -771,9 +768,18 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
 
     const onlyPlanCall = result.toolCalls.length === 1 && result.toolCalls[0].name === COMPACT_PLAN_TOOL_NAME;
     if (!onlyPlanCall) {
-      const invalidToolName = result.toolCalls.find(call => !compactHelperToolNames.has(call.name))?.name;
+      const invalidToolName = result.toolCalls.find(call => call.name === COMPACT_PLAN_TOOL_NAME || !compactHelperToolNames.has(call.name))?.name;
       if (invalidToolName) {
-        throw new Error(`Compaction failed because the model called unexpected tool \`${invalidToolName}\` instead of finishing with ${COMPACT_PLAN_TOOL_NAME}.`);
+        logger.warn({ sessionId, invalidToolName, compactRoundsUsed }, 'Layered compact flow rejected a non-helper tool call; retrying with feedback');
+        nextPromptParts = [{
+          system: [
+            'COMPACT TOOL CALL INVALID.',
+            `During this dedicated compaction phase, do not call \`${invalidToolName}\`.`,
+            `You may inspect or update durable memory only with these helper tools before submitting the final plan: ${[...compactHelperToolNames].join(', ')}.`,
+            `When ready, call exactly one ${COMPACT_PLAN_TOOL_NAME} tool call by itself. Do not combine ${COMPACT_PLAN_TOOL_NAME} with any other tool call.`,
+          ].join(' '),
+        }];
+        continue;
       }
 
       const toolResultMessage = await llm.executeTools(result.toolCalls, {

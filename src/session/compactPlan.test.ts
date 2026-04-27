@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import {
   buildBlockCandidateItem,
   buildCompactPlanValidationFeedback,
-  buildCompactFlowToolDefinitions,
   buildCompactPromptText,
   buildMessageCandidateItem,
   COMPACT_LEVEL_TOKEN_THRESHOLD,
   COMPACT_FLOW_MAX_ROUNDS,
+  COMPACT_PLAN_TOOL_DEFINITION,
   COMPACT_PLAN_TOOL_NAME,
   CompactPlanValidationError,
   filterCompactCandidateItemsByLevel,
@@ -105,17 +105,8 @@ test('filterCompactCandidateItemsByLevel does not let an unsupported single bloc
   assert.deepStrictEqual([...allowedLevels].sort((a, b) => a - b), []);
 });
 
-test('buildCompactFlowToolDefinitions exposes only compact-safe helper tools plus plan submission', () => {
-  const defs = buildCompactFlowToolDefinitions();
-  const names = defs.map(def => def.name);
-  assert.deepStrictEqual(names, [
-    'read_memory',
-    'write_memory',
-    'edit_memory',
-    'delete_memory',
-    'apply_patch_memory',
-    COMPACT_PLAN_TOOL_NAME,
-  ]);
+test('submit compact plan opts into the normal model-facing tool schema', () => {
+  assert.equal(COMPACT_PLAN_TOOL_DEFINITION.defaultInject, true);
 });
 
 test('buildCompactPlanValidationFeedback no longer suggests archive inspection helpers during compaction', () => {
