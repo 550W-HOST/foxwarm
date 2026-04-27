@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ArrowUp, Mic, Paperclip, Plus, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import {
@@ -110,7 +111,7 @@ function ModelSelector({
     const top = openAbove
       ? Math.max(8, rect.top - maxHeight - 8)
       : Math.min(window.innerHeight - maxHeight - 8, rect.bottom + 8)
-    setPopupStyle({ left, top, width, maxHeight })
+    setPopupStyle({ position: 'fixed', left, top, width, maxHeight })
   }, [])
 
   useEffect(() => {
@@ -119,7 +120,11 @@ function ModelSelector({
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node
-      if (rootRef.current?.contains(target) || buttonRef.current?.contains(target)) {
+      if (
+        rootRef.current?.contains(target)
+        || buttonRef.current?.contains(target)
+        || (target instanceof Element && target.closest('[data-model-selector-popup="true"]'))
+      ) {
         return
       }
       setOpen(false)
@@ -173,9 +178,6 @@ function ModelSelector({
         title={row.title}
       >
         <div className="truncate font-medium">{row.label}</div>
-        {row.defaultRow && (
-          <div className="truncate text-[11px] text-gray-400 dark:text-gray-500">current: default · child: follow</div>
-        )}
       </button>
       <button
         type="button"
@@ -220,19 +222,20 @@ function ModelSelector({
         {error && <span className="shrink-0 text-red-500 dark:text-red-300">!</span>}
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
-          className="fixed z-[80] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
+          className="z-[1000] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
           style={popupStyle}
           role="dialog"
           aria-label="Model selection"
+          data-model-selector-popup="true"
         >
           <div className="grid grid-cols-[minmax(0,1fr)_4.5rem_4rem] border-b border-gray-200 bg-gray-50 px-0 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
             <div className="px-3 py-2">Model id</div>
             <div className="px-2 py-2 text-center">Current</div>
             <div className="px-2 py-2 text-center">Child</div>
           </div>
-          <div className="max-h-[inherit] overflow-y-auto">
+          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 78 : 42) : undefined }}>
             {renderRow({
               key: null,
               label: 'default / follow',
@@ -250,7 +253,8 @@ function ModelSelector({
             }))}
           </div>
           {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
