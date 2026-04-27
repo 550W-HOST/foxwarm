@@ -7,6 +7,7 @@ const tokenClass = {
   number: 'text-blue-700 dark:text-blue-300',
   keyword: 'text-purple-700 dark:text-purple-300 font-semibold',
   literal: 'text-sky-700 dark:text-sky-300 font-semibold',
+  heading: 'text-gray-950 dark:text-gray-100 font-semibold',
   tag: 'text-rose-700 dark:text-rose-300',
   attr: 'text-amber-700 dark:text-amber-300',
   property: 'text-cyan-700 dark:text-cyan-300',
@@ -58,6 +59,7 @@ function buildCodeRegex(language: SimpleLanguage): RegExp | null {
 }
 
 function classifyToken(language: SimpleLanguage, value: string): TokenKind {
+  if (language === 'markdown' && /^\s{0,3}#{1,6}\s/.test(value)) return 'heading'
   if (value.startsWith('//') || value.startsWith('#') || value.startsWith('/*') || value.startsWith('<!--')) return 'comment'
   if (value.startsWith('"') || value.startsWith("'") || value.startsWith('`')) {
     if (language === 'json' && /"$/.test(value)) return 'property'
