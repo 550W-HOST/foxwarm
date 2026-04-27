@@ -1,4 +1,4 @@
-import { PanelLeftClose, PanelLeftOpen, Plus, Workflow } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Plus, Settings, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 import CreateTabButton from './CreateTabButton'
@@ -7,13 +7,14 @@ import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 interface SidebarProps {
   sessions: Session[]
   currentSession: string
-  currentView: 'session' | 'agents'
+  currentView: 'session' | 'agents' | 'setup'
   currentSessionRecord?: Session
   themeMode: 'auto' | 'light' | 'dark'
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
+  onSelectSetup: () => void
   onCreateWorkspaceTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateSession: () => void
@@ -31,6 +32,7 @@ export default function Sidebar({
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
+  onSelectSetup,
   onCreateWorkspaceTab,
   onCreateTerminalTab,
   onCreateSession,
@@ -42,6 +44,9 @@ export default function Sidebar({
   const sessionLabel = currentSessionRecord?.displayName || currentSession || 'main'
 
   const agentsBtnClass = currentView === 'agents'
+    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
+    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
+  const setupBtnClass = currentView === 'setup'
     ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
     : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
 
@@ -82,6 +87,13 @@ export default function Sidebar({
               title="Create new session"
             >
               <Plus className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onSelectSetup}
+              className={`inline-flex items-center justify-center rounded-lg px-2 transition-colors ${setupBtnClass}`}
+              title="Open setup"
+            >
+              <Settings className="w-4 h-4" />
             </button>
           </div>
           <CreateTabButton

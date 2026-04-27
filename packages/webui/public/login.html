@@ -102,21 +102,22 @@
     const tokenInput = document.getElementById('token');
     const errorDiv = document.getElementById('error');
 
-    // Check for token in URL hash (#token=xxx)
-    const hash = window.location.hash;
-    if (hash.startsWith('#token=')) {
-      const urlToken = decodeURIComponent(hash.substring(7));
-      if (urlToken) {
-        tokenInput.value = urlToken;
-        form.dispatchEvent(new Event('submit'));
-      }
-    }
-
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const token = tokenInput.value.trim();
       
       try {
+        const authRes = await fetch('./api/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        });
+        if (!authRes.ok) {
+          errorDiv.style.display = 'block';
+          errorDiv.textContent = 'Invalid token. Find the token in state/token or startup logs.';
+          return;
+        }
+
         const cookiePath = window.location.pathname.replace(/[^/]+$/, '');
         document.cookie = `foxwarm_token=${encodeURIComponent(token)}; path=${cookiePath}; max-age=31536000; SameSite=Strict`;
         document.cookie = `alphabot_token=; path=${cookiePath}; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict`;
@@ -128,6 +129,16 @@
         errorDiv.textContent = 'Connection error';
       }
     });
+
+    // Check for token in URL hash (#token=xxx) after the submit handler is ready.
+    const hash = window.location.hash;
+    if (hash.startsWith('#token=')) {
+      const urlToken = decodeURIComponent(hash.substring(7));
+      if (urlToken) {
+        tokenInput.value = urlToken;
+        form.dispatchEvent(new Event('submit'));
+      }
+    }
   </script>
 </body>
 </html>

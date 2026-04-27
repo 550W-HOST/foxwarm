@@ -12,10 +12,11 @@ import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
-type AppView = 'session' | 'agents'
+type AppView = 'session' | 'agents' | 'setup'
 
 type RouteState =
   | { view: 'agents' }
+  | { view: 'setup' }
   | { view: 'tab'; tabId: string | null }
 
 type TerminalRegistryRecord = {
@@ -31,6 +32,7 @@ type TerminalRegistryRecord = {
 const LIGHT_THEME_COLOR = '#f3f4f6'
 const DARK_THEME_COLOR = '#111827'
 const ARCHITECTURE_HASH = 'agents'
+const SETUP_HASH = 'setup'
 const TAB_HASH_PREFIX = 'tab/'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
@@ -39,6 +41,7 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
 const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
+const SetupView = lazy(() => import('./components/SetupView'))
 const TerminalView = lazy(() => import('./components/TerminalView'))
 const WorkspaceView = lazy(() => import('./components/WorkspaceView'))
 const FileEditorView = lazy(() => import('./components/FileEditorView'))
@@ -89,6 +92,10 @@ function getHashState(): RouteState {
 
   if (hash === ARCHITECTURE_HASH || hash === '__architecture__' || hash === 'architecture') {
     return { view: 'agents' }
+  }
+
+  if (hash === SETUP_HASH || hash === 'oobe') {
+    return { view: 'setup' }
   }
 
   if (hash.startsWith(TAB_HASH_PREFIX)) {
@@ -203,6 +210,7 @@ function App() {
 
   const [sessions, setSessions] = useState<Session[]>([])
   const [route, setRoute] = useState<RouteState>(initialRoute)
+  const [setupOobe, setSetupOobe] = useState(false)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[]>([])
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [showSessionList, setShowSessionList] = useState<boolean>(() => !window.location.hash)
@@ -263,7 +271,7 @@ function App() {
     ? focusedActiveTab.sessionId
     : focusedActiveTab?.contextSessionId || loadStoredLastVisitedSession()
   const currentContextSessionRecord = sessions.find((session) => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
-  const currentView: AppView = route.view === 'agents' ? 'agents' : 'session'
+  const currentView: AppView = route.view === 'agents' ? 'agents' : route.view === 'setup' ? 'setup' : 'session'
   const busyCount = useMemo(() => sessions.filter((session) => session.busy).length, [sessions])
 
   useEffect(() => {
@@ -305,7 +313,8 @@ function App() {
 
   useEffect(() => {
     const handleHashChange = () => {
-      setRoute(getHashState())
+      const nextRoute = getHashState()
+      setRoute(setupOobe && nextRoute.view !== 'setup' ? { view: 'setup' } : nextRoute)
       if (isMobile) {
         setShowSessionList(!window.location.hash)
       }
@@ -313,7 +322,14 @@ function App() {
 
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
-  }, [isMobile])
+  }, [isMobile, setupOobe])
+
+  useEffect(() => {
+    if (setupOobe && route.view !== 'setup') {
+      setRoute({ view: 'setup' })
+      window.location.hash = SETUP_HASH
+    }
+  }, [setupOobe, route.view])
 
   const fetchSessions = async () => {
     try {
@@ -324,6 +340,22 @@ function App() {
       }
     } catch (error) {
       console.error('Failed to fetch sessions:', error)
+    }
+  }
+
+  const fetchSetupStatus = async () => {
+    try {
+      const res = await fetch(`${API_BASE_PATH}/setup/status`)
+      if (!res.ok) return
+      const data = await res.json()
+      const isOobe = !!data?.oobe
+      setSetupOobe(isOobe)
+      if (isOobe && route.view !== 'setup') {
+        setRoute({ view: 'setup' })
+        window.location.hash = SETUP_HASH
+      }
+    } catch (error) {
+      console.error('Failed to fetch setup status:', error)
     }
   }
 
@@ -382,6 +414,7 @@ function App() {
 
   useEffect(() => {
     void fetchSessions()
+    void fetchSetupStatus()
     void fetchActiveTerminals()
     connectGlobalSSE()
     return () => {
@@ -903,6 +936,20 @@ function App() {
     setRoute(getHashState())
   }
 
+  const openSetupView = () => {
+    setRoute({ view: 'setup' })
+    window.location.hash = SETUP_HASH
+    if (isMobile) {
+      setShowSessionList(false)
+    }
+  }
+
+  const closeSetupView = () => {
+    const fallbackTabId = focusedActiveTabId || loadStoredLastActiveTabId()
+    setRoute({ view: 'tab', tabId: fallbackTabId })
+    setTabHash(fallbackTabId)
+  }
+
   useEffect(() => {
     if (route.view !== 'tab' || !route.tabId || tabsById[route.tabId]) {
       return
@@ -1250,6 +1297,16 @@ function App() {
   )
 
   if (isMobile) {
+    if (route.view === 'setup') {
+      return (
+        <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
+          <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
+            <SetupView forced={setupOobe} onClose={setupOobe ? undefined : handleBackToList} onSetupChanged={() => { void fetchSetupStatus() }} />
+          </Suspense>
+        </div>
+      )
+    }
+
     if (showSessionList) {
       return (
         <SessionList
@@ -1266,6 +1323,7 @@ function App() {
             window.location.hash = ARCHITECTURE_HASH
             setShowSessionList(false)
           }}
+          onSelectSetup={openSetupView}
           onCreateWorkspaceTab={(options) => openWorkspaceTab(currentContextSessionId, options)}
           onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
           onCreateSession={handleCreateSession}
@@ -1311,6 +1369,7 @@ function App() {
               setRoute({ view: 'agents' })
               window.location.hash = ARCHITECTURE_HASH
             }}
+            onSelectSetup={openSetupView}
             onCreateWorkspaceTab={(options) => openWorkspaceTab(currentContextSessionId, options)}
             onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
             onCreateSession={handleCreateSession}
@@ -1347,6 +1406,7 @@ function App() {
                   setRoute({ view: 'agents' })
                   window.location.hash = ARCHITECTURE_HASH
                 }}
+                onSelectSetup={openSetupView}
                 onCreateWorkspaceTab={(options) => openWorkspaceTab(currentContextSessionId, options)}
                 onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
                 onCreateSession={handleCreateSession}
@@ -1361,7 +1421,11 @@ function App() {
         </>
       )}
       <div className="flex-1 h-full min-h-0 overflow-hidden">
-        {route.view === 'agents' ? (
+        {route.view === 'setup' ? (
+          <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
+            <SetupView forced={setupOobe} onClose={setupOobe ? undefined : closeSetupView} onSetupChanged={() => { void fetchSetupStatus() }} />
+          </Suspense>
+        ) : route.view === 'agents' ? (
           <Suspense fallback={<LazyViewFallback label="Loading architecture…" />}>
             <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} />
           </Suspense>

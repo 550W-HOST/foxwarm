@@ -1,134 +1,186 @@
 # Foxwarm 🦊
 
-Foxwarm is a lightweight, extensible AI assistant framework for development-oriented workflows. It combines multi-channel chat, long-term memory, tool calling, agent/session separation, and optional multi-node execution in a small TypeScript codebase.
+Foxwarm is a lightweight, extensible AI assistant framework for development-oriented workflows. It combines WebUI chat, long-term memory, tool calling, agents/sessions, skills, channels, and optional remote nodes in a small TypeScript codebase.
 
 ## Features
 
-- **Multi-Channel Support**: Telegram, Matrix, WeChat Work, and WebUI
-- **Agents, Sessions, and Skills**: Separate long-lived knowledge from runtime conversation threads
-- **Persistent Memory**: Long-term context storage with LanceDB-based retrieval
-- **Tool Calling**: File operations, shell commands, browsing, session management, and more
-- **Queue + Compaction**: Serialized session work with manual/history compaction support
+- **WebUI + Channels**: WebUI, Telegram, Matrix, WeChat Work, Weixin, and external trigger support
+- **Agents, Sessions, and Skills**: Separate long-lived memory/workspaces from runnable conversation threads
+- **Tool Calling**: File operations, shell commands, browser/node tools, session management, and more
+- **Persistent Memory**: Agent memory files plus LanceDB-based searchable history
+- **Nodes**: Optional remote/browser/CLI/sandbox tool hosts
+- **Queue + Compaction**: Serialized session work and context compaction for long-running conversations
 
-## Quick Start
+## Quick Start: one-line install
+
+The recommended first-time path is the installer script. It clones Foxwarm, builds it, starts it in the normal tmux mode, prints a WebUI URL with token, and attaches to the tmux session.
+
+### Linux / macOS / WSL
+
+```bash
+curl -fsSL https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.sh | bash
+```
+
+Until the script is hosted publicly, run it from a checkout:
+
+```bash
+git clone https://github.com/550W-HOST/foxwarm.git foxwarm
+cd foxwarm
+./install-foxwarm.sh
+```
+
+Useful environment overrides:
+
+```bash
+FOXWARM_DIR="$HOME/foxwarm" \
+FOXWARM_BRANCH=main \
+FOXWARM_REPO=https://github.com/550W-HOST/foxwarm.git \
+curl -fsSL https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.sh | bash
+```
+
+The installer expects Node.js 20+ and npm. If `tmux` is missing, it tries to install it with common package managers (`apt`, `pacman`, `dnf`, `yum`, `zypper`, `brew`).
+
+After startup, the installer prints a URL like:
+
+```text
+http://localhost:3001/#token=...
+```
+
+It then attaches to tmux. Detach without stopping Foxwarm with:
+
+```text
+Ctrl-b then d
+```
+
+### Windows PowerShell
+
+```powershell
+irm https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.ps1 | iex
+```
+
+Until hosted publicly, run from a checkout:
+
+```powershell
+git clone https://github.com/550W-HOST/foxwarm.git foxwarm
+cd foxwarm
+.\install-foxwarm.ps1
+```
+
+The Windows script checks for Git and Node.js/npm, builds Foxwarm, starts it in a new PowerShell window, and opens the WebUI token URL when available.
+
+## Manual install / development start
+
+Use this path if you are developing Foxwarm itself.
 
 ### Prerequisites
 
 - Node.js 20+ and npm
-- (Optional) Ollama for embeddings
-- (Optional) Chromium for browsing features
+- (Optional) Ollama for embeddings / vector memory
+- (Optional) Chromium or a browser node for browsing features
+- (Optional) tmux for the normal background start mode
 
-### Installation
+### Install and build
 
 ```bash
-# Clone the repository
-git clone <your-repo-url> foxwarm
+git clone https://github.com/550W-HOST/foxwarm.git foxwarm
 cd foxwarm
-
-# Create local config files
-cp .env.example .env
-mkdir -p state
-cp templates/models.example.yaml state/models.yaml
-
-# Install + build backend and WebUI in one step
 npm run build-all
 ```
 
-Then edit `state/models.yaml` and choose the models you actually want to use.
+Do **not** copy `templates/models.example.yaml` into `state/models.yaml` for first-time setup unless you want to configure it manually. If `state/models.yaml` is missing, WebUI enters OOBE and helps create it.
 
-### Running Foxwarm
+### Start
 
-**Option 1: Direct run (foreground)**
+Foreground:
+
 ```bash
 npm run start:notmux
 ```
 
-**Option 2: Background run with tmux**
+Normal tmux mode:
+
 ```bash
 npm start
+```
 
-# Attach to the running process
+Then open `http://localhost:3001` and log in with the token from:
+
+```bash
+cat state/token
+```
+
+Other tmux helpers:
+
+```bash
 tmux attach -t foxwarm
-
-# Restart
 npm run restart
-
-# Stop
 npm run stop
 ```
 
-Logs are written to:
+Logs are written under:
 
-```bash
-tail -f state/logs/foxwarm.log
+```text
+state/logs/
 ```
 
-### Running with Docker Compose
+## Docker Compose
+
+Docker Compose is still supported, but the recommended first-time UX is the installer + WebUI OOBE.
 
 ```bash
-cp .env.example .env
 mkdir -p state agents skills
-cp templates/models.example.yaml state/models.yaml
-
 docker compose up -d --build
 ```
 
-Then open `http://localhost:3001` and use the token from `state/token` to log in.
+Open `http://localhost:3001` and use the token from `state/token` or container logs. The compose file mounts `state/`, `agents/`, and `skills/` so configuration and memory persist across rebuilds.
 
-Useful commands:
+> Note: `.env` may still be useful for Docker Compose variables or legacy migration, but it is no longer the primary Foxwarm application configuration path for new users.
 
-```bash
-docker compose logs -f
-docker compose down
+## First Run / OOBE Setup
+
+Foxwarm enters **OOBE** (first-time setup) when:
+
+```text
+state/models.yaml
 ```
 
-The bundled `docker-compose.yml` mounts `state/`, `agents/`, and `skills/` from the host so your config, logs, and agent data persist across rebuilds. By default it also points `OLLAMA_BASE_URL` at `http://host.docker.internal:11434`; change that in `.env` if your embedding service runs elsewhere.
+does not exist.
 
-## First Run
+After logging into WebUI, the OOBE page cannot be closed until models are configured. Once models are saved, you can use WebUI or any configured channel to ask the agent how to explore Foxwarm.
 
-On first startup, Foxwarm will:
+OOBE/Setup supports:
 
-1. Create or load runtime state in `state/`
-2. Load or create the main agent in `agents/main`
-3. Load model definitions from `state/models.yaml`
-   - if missing, it falls back to `templates/models.example.yaml`
-4. Load session metadata and agent memory
-5. Load or generate runtime auth tokens:
-   - `state/token`
-   - `state/node_token`
-6. Start configured channels (Telegram / Matrix / WeChat Work / WebUI)
-7. Run `ONBOOT.md` if present and show `BOOTSTRAP.md` guidance for first-time setup
+1. **Models** — creates `state/models.yaml`
+2. **Channels** — edits `state/config.yaml` and hot-reloads managed channels
+
+You can later return to the same page from the WebUI setup/settings button.
 
 ## Configuration
 
-Foxwarm configuration has four main entry points:
+Foxwarm's current primary configuration files are:
 
-1. `.env` — app-level settings, ports, feature flags, and channel tokens
-2. `state/models.yaml` — available models and default model key
+1. `state/config.yaml` — app settings and channels
+2. `state/models.yaml` — model providers, model list, and default model
 3. `agents/<agent>/memory/` — long-term memory for each agent
-4. `skills/<skill>/` — reusable skill memory packs that can be attached to agents
+4. `skills/<skill>/` — reusable skill documents
+5. `state/token` and `state/node_token` — WebUI and node pairing tokens
 
-### Models Configuration
+### Legacy `.env`
 
-The runtime resolves model definitions in this order:
+`.env` is legacy/compatibility configuration. On startup, if `state/config.yaml` does not exist and `.env` does, Foxwarm can migrate legacy settings into `state/config.yaml`.
 
-1. `MODELS_CONFIG_PATH` (if set)
-2. `state/models.yaml`
-3. `templates/models.example.yaml`
+For new installs, prefer WebUI Setup or direct edits to:
 
-Foxwarm's public setup flow is **YAML-first**: put each provider entry's connection settings and model list directly in `state/models.yaml`.
+```text
+state/config.yaml
+state/models.yaml
+```
+
+## Models (`state/models.yaml`)
+
+The WebUI OOBE page can create a basic model config. You can also edit `state/models.yaml` manually.
 
 Preferred schema:
-- root `providers:`
-- each provider entry uses `providerType:` and `models:`
-- `models:` is a list of either string ids or objects with `id`
-
-Backward compatibility:
-- root legacy `models:` is still accepted
-- entry legacy `model:` is still accepted
-- legacy `provider:` is still accepted as an alias of `providerType:`
-
-Example:
 
 ```yaml
 default: openai/gpt-5.2-codex
@@ -137,136 +189,161 @@ providers:
     providerType: openai-completions
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
-    contextLimit: 200000
-    extraFields:
-      reasoning:
-        effort: medium
     models:
       - gpt-5.2-codex
-      - id: gpt-5.3-codex
-        contextLimit: 400000
-        extraHeaders:
-          x-model: gpt-5.3-codex
-        extraFields:
-          reasoning:
-            effort: high
-      - gpt-5.4
-
-  anthropic:
-    providerType: anthropic
-    baseUrl: https://api.anthropic.com
-    apiKey: your-anthropic-key
-    models:
-      - claude-sonnet-4-5
-      - claude-sonnet-4-6
-      - claude-sonnet-4-5-thinking
-      - claude-sonnet-4-6-thinking
+      - gpt-5.3-codex
 ```
 
-Provider routing semantics:
+Provider notes:
 
-- `openai` -> OpenAI Responses API (`/responses`)
-- `openai-responses` -> OpenAI Responses API (`/responses`)
-- `openai-completions` -> legacy chat/completions API (`/chat/completions`)
+- `openai-completions` uses `/chat/completions`
+- `openai` and `openai-responses` use `/responses`
+- `anthropic` uses Anthropic-compatible requests
+- OpenAI-compatible local gateways can be configured by changing `baseUrl`, `apiKey`, and model ids
 
-Merge / precedence rules:
+The runtime resolves model definitions in this order:
 
-- `contextLimit`: model item > provider entry > app-level global fallback
-- `extraHeaders`: provider entry defaults shallow-merged with model item override
-- `extraFields`: provider entry defaults deep-merged with model item override
+1. `MODELS_CONFIG_PATH` if set
+2. `state/models.yaml`
+3. `templates/models.example.yaml` fallback
 
-You can also replace those provider entries with a local OpenAI-compatible endpoint if you want to use your own hosted model.
+The template fallback is mainly a fallback for development and diagnostics; OOBE treats missing `state/models.yaml` as first-time setup.
 
-### Embeddings
+## Channels (`state/config.yaml`) and hot reload
 
-Vector memory uses Ollama for embeddings. The current embedding model is:
+Channels are configured under `channels:` in `state/config.yaml`.
+
+Example Telegram channel:
+
+```yaml
+channels:
+  telegram:
+    type: telegram
+    enabled: true
+    botToken: "123456:telegram-token"
+    mainAttachUser: "your-telegram-user-id"
+    allowedUsers:
+      - "your-telegram-user-id"
+```
+
+Example Weixin channel:
+
+```yaml
+channels:
+  weixin:
+    type: weixin
+    enabled: true
+    baseUrl: "https://ilinkai.weixin.qq.com"
+    token: "token-from-login"
+    allowAllUsers: false
+```
+
+WebUI Setup can edit channels and then reload them without restarting Foxwarm. The reload flow stops registered managed channels and starts the enabled/configured channels again.
+
+Managed channel types currently include:
+
+- `telegram`
+- `matrix`
+- `wework`
+- `weixin`
+
+Slash-command alternatives are available for runtime inspection and manual control:
 
 ```text
-qwen3-embedding:0.6b
+/channel status
+/channel start <channel-id>
+/channel stop <channel-id>
+/channel restart <channel-id>
 ```
-
-If you want retrieval / vector memory features, make sure that model is available in your Ollama environment.
-
-### Server and Channels
-
-Common settings live in `.env`, for example:
-
-- `HTTP_PORT` — WebUI + trigger server port (default `3001`)
-- `ENABLE_WEBUI`
-- `ENABLE_TRIGGER`
-- Telegram / Matrix / WeChat Work channel tokens if you want those integrations
 
 ## Core Concepts
 
 ### Agent
-A long-lived workspace + memory container.
+
+A long-lived workspace + memory container. Agent memory lives under:
+
+```text
+agents/<agent>/memory/
+```
 
 ### Session
-A runnable conversation thread bound to exactly one agent.
+
+A runnable conversation thread bound to an agent. A single agent can have many sessions.
 
 ### Skill
-A reusable memory/capability pack attached explicitly to an agent.
 
-Foxwarm can also ship bundled optional skills under `skills/`. For example, `skills/ask_gemini/` provides an external-info lookup helper backed by Gemini; it requires a Gemini API key via `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `~/.secrets/gemini_api_key`.
+A reusable instruction/documentation pack under `skills/<skill>/`. The bundled `about-foxwarm` skill explains Foxwarm concepts after models are configured.
 
-### `agent.inherit`
-Shared-memory composition between agents. It is **not** a reporting hierarchy.
+### Tool
+
+An action the assistant can call, such as file operations, shell commands, memory search, session management, or node operations.
+
+### Node
+
+An execution host for tools. `master` is the default local node; remote/browser/CLI/sandbox nodes can be paired and approved.
+
+## Node quick start
+
+From a running Foxwarm WebUI or chat command, inspect node pairing help:
+
+```text
+/node pair-help
+```
+
+Detailed docs are in:
+
+```text
+docs/node-client.md
+```
 
 ## Common Commands
 
-- `/session` — list, create, fork, move, archive, isolate, index
-- `/agent` — list, create, inherit, delete
-- `/model` — inspect or switch the current model
-- `/skill` — list, attach, detach, inspect skills
-- `/node` — list or switch the current execution node
-- `/compact` / `/compress` — compact session history
-
-## Channels
-
-Foxwarm supports multiple channels at the same time:
-
-- **Telegram**
-- **Matrix**
-- **WeChat Work**
-- **WebUI**
-
-All channels share the same agents, sessions, and memory backend.
+```text
+/session     list, create, fork, move, archive, isolate, index
+/agent       list, create, inherit, delete
+/model       inspect or switch the current model
+/skill       list, attach, detach, inspect skills
+/node        list/switch nodes, approve pairings, show pair-help
+/channel     inspect and reload channel runtime state
+/compact     compact session history
+```
 
 ## Project Structure
 
 ```text
 foxwarm/
-├── src/                  # TypeScript source
+├── src/                  # TypeScript backend source
 ├── lib/                  # Compiled JavaScript
-├── agents/               # Agent workspaces and memory
-├── skills/               # Optional skill definitions
-├── state/                # Runtime state (tokens, logs, models, sessions, db)
-├── templates/            # Tracked starter templates
 ├── packages/webui/       # Browser frontend
-├── test/                 # Local test environment
+├── packages/browser-node/# Browser node extension
+├── packages/cli-node/    # CLI / interactive node client
+├── agents/               # Agent workspaces and memory (runtime data)
+├── skills/               # Skill definitions
+├── state/                # Runtime state, config, tokens, sessions, logs, db
+├── templates/            # Starter templates
 ├── scripts/              # Start/restart/stop helpers
-└── docs/                 # Documentation
+├── docs/                 # Detailed documentation
+└── examples/             # Examples, including ToolScript
 ```
 
 ## Documentation
 
+- [Architecture](docs/architecture.md)
 - [Session Management](docs/session-management.md)
 - [Multi-Agent Guide](docs/multi-agent.md)
-- [Architecture](docs/architecture.md)
-- [Development](docs/development.md)
+- [Node Client](docs/node-client.md)
 - [Vector Memory](docs/vector-memory.md)
+- [Development](docs/development.md)
+- [ToolScript examples](examples/toolscript/README.md)
 
 ## Development
 
 ```bash
-# Watch mode
-npm run dev
-
-# Backend-only build
-npm run build
-
-# Backend + WebUI install/build
-npm run build-all
+npm run build        # backend/shared/cli-node build
+npm run build-all    # install + build backend and WebUI
+npm run dev          # TypeScript watch mode
+npm run start:notmux # build + foreground backend start
+npm start            # build + tmux start
 ```
 
 ## License

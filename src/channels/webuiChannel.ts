@@ -6,6 +6,7 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs-extra';
+import yaml from 'js-yaml';
 import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
 import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
@@ -13,9 +14,10 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
-import { BASE_DIR, resolveModelConfig } from '../config';
+import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig, writeAppConfigFile } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
+import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
@@ -29,6 +31,98 @@ type WorkspaceNodeEntry = {
 };
 
 const MAX_INLINE_FILE_BYTES = 1024 * 1024;
+const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
+
+function isPlaceholderSecret(value: unknown): boolean {
+  return typeof value !== 'string' || MODEL_PLACEHOLDER_RE.test(value.trim());
+}
+
+function readYamlFileIfExists(filePath: string): any {
+  if (!fs.existsSync(filePath)) {
+    return undefined;
+  }
+  return yaml.load(fs.readFileSync(filePath, 'utf8')) || {};
+}
+
+function dumpYaml(value: unknown): string {
+  return yaml.dump(value, { noRefs: true, lineWidth: 120 });
+}
+
+function getModelsSetupDiagnostics() {
+  const exists = fs.existsSync(DEFAULT_MODELS_CONFIG_PATH);
+  const raw = exists ? readYamlFileIfExists(DEFAULT_MODELS_CONFIG_PATH) : undefined;
+  const providers = raw?.providers || raw?.models || {};
+  const providerEntries = providers && typeof providers === 'object' && !Array.isArray(providers) ? Object.entries(providers as Record<string, ProviderConfigEntry>) : [];
+  const providerCount = providerEntries.length;
+  const placeholderProviders = providerEntries
+    .filter(([, entry]) => isPlaceholderSecret((entry as ProviderConfigEntry).apiKey))
+    .map(([key]) => key);
+
+  return {
+    path: DEFAULT_MODELS_CONFIG_PATH,
+    templatePath: MODELS_CONFIG_TEMPLATE_PATH,
+    exists,
+    providerCount,
+    defaultModel: typeof raw?.default === 'string' ? raw.default : null,
+    hasPlaceholderSecrets: placeholderProviders.length > 0,
+    placeholderProviders,
+    oobe: !exists,
+  };
+}
+
+function buildProviderConfigFromSetup(body: any): { default: string; providers: Record<string, ProviderConfigEntry> } {
+  const providerKey = String(body?.providerKey || body?.provider || 'openai').trim() || 'openai';
+  const providerType = String(body?.providerType || 'openai-completions').trim() || 'openai-completions';
+  const baseUrl = String(body?.baseUrl || '').trim();
+  const apiKey = String(body?.apiKey || '').trim();
+  const modelLines = String(body?.models || body?.model || '')
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (!apiKey) {
+    throw new Error('apiKey is required.');
+  }
+  if (modelLines.length === 0) {
+    throw new Error('At least one model id is required.');
+  }
+
+  const defaultModelId = String(body?.defaultModel || modelLines[0]).trim() || modelLines[0];
+  const defaultKey = modelLines.length === 1 ? providerKey : `${providerKey}/${defaultModelId}`;
+  const provider: ProviderConfigEntry = {
+    providerType,
+    baseUrl: baseUrl || undefined,
+    apiKey,
+    models: modelLines,
+  };
+
+  return {
+    default: defaultKey,
+    providers: {
+      [providerKey]: provider,
+    },
+  };
+}
+
+function parseChannelsYaml(rawYaml: unknown): AppConfig['channels'] {
+  const text = typeof rawYaml === 'string' ? rawYaml.trim() : '';
+  if (!text) {
+    return {};
+  }
+  const parsed = yaml.load(text) as any;
+  if (!parsed) {
+    return {};
+  }
+  const channels = parsed.channels && typeof parsed.channels === 'object' ? parsed.channels : parsed;
+  if (!channels || typeof channels !== 'object' || Array.isArray(channels)) {
+    throw new Error('channels config must be a YAML object or an object under `channels:`.');
+  }
+  return channels;
+}
+
+function sanitizeChannelConfigForSetup(config: AppConfig): Record<string, any> {
+  return config.channels || {};
+}
 
 function buildWebUiModelStatus(session: { model?: string; childModelDefault?: string }) {
   const { defaultKey, currentKey } = resolveModelConfig(session.model);
@@ -408,6 +502,85 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get models');
             res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/status',
+        method: 'GET',
+        handler: async (_req: express.Request, res: express.Response) => {
+          try {
+            const models = getModelsSetupDiagnostics();
+            const appConfig = readAppConfigFile();
+            const channels = sanitizeChannelConfigForSetup(appConfig);
+            res.json({
+              oobe: models.oobe,
+              models,
+              config: {
+                appConfigPath: APP_CONFIG_PATH,
+                channelsYaml: dumpYaml(channels),
+                channelCount: Object.keys(channels).length,
+              },
+              channels: listChannelRuntimeStatuses(),
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get setup status');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/models',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const config = req.body?.yaml
+              ? (yaml.load(String(req.body.yaml)) as any)
+              : buildProviderConfigFromSetup(req.body);
+
+            if (!config || typeof config !== 'object' || Array.isArray(config)) {
+              throw new Error('models config must be a YAML object.');
+            }
+
+            fs.ensureDirSync(path.dirname(DEFAULT_MODELS_CONFIG_PATH));
+            fs.writeFileSync(DEFAULT_MODELS_CONFIG_PATH, dumpYaml(config), 'utf8');
+
+            // Validate by resolving the newly written config.
+            const payload = buildWebUiModelsPayload();
+            res.json({ success: true, models: getModelsSetupDiagnostics(), payload });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to save models setup');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/channels',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const nextChannels = req.body?.channels && typeof req.body.channels === 'object'
+              ? req.body.channels
+              : parseChannelsYaml(req.body?.yaml);
+            const current = readAppConfigFile();
+            const next: AppConfig = {
+              ...current,
+              channels: nextChannels,
+            };
+            writeAppConfigFile(next);
+            const reload = await reloadManagedChannels();
+            res.json({
+              success: true,
+              configPath: APP_CONFIG_PATH,
+              channelsYaml: dumpYaml(next.channels || {}),
+              reload,
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to save channels setup');
+            res.status(400).json({ error: e.message });
           }
         },
       });
