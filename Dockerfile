@@ -61,7 +61,9 @@ COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build /app/packages/webui/dist ./packages/webui/dist
 COPY --from=build /app/packages/webui/public ./packages/webui/public
 
-RUN mkdir -p state agents skills
+RUN mkdir -p /data
+
+ENV FOXWARM_DATA_DIR=/data
 
 EXPOSE 3001
 

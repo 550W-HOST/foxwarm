@@ -1,7 +1,7 @@
 #!/bin/bash
 # Restart foxwarm - creates session if needed, uses dedicated window
 
-SESSION="foxwarm"
+SESSION="${FOXWARM_TMUX_SESSION:-foxwarm}"
 WINDOW_NAME="foxwarm"
 # Get foxwarm root directory (parent of scripts dir)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -12,10 +12,16 @@ echo "Building foxwarm..."
 cd "$FOXWARM_DIR"
 npm run build-all || exit 1
 
+START_CMD="cd $(printf '%q' "$FOXWARM_DIR") && "
+if [ -n "${FOXWARM_DATA_DIR:-}" ]; then
+    START_CMD+="FOXWARM_DATA_DIR=$(printf '%q' "$FOXWARM_DATA_DIR") "
+fi
+START_CMD+="node lib/index.js"
+
 # Check if session exists
-if ! tmux has-session -t $SESSION 2>/dev/null; then
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
     # Try to create new session
-    if ! tmux new-session -d -s $SESSION -n $WINDOW_NAME -c "$FOXWARM_DIR" 2>/dev/null; then
+    if ! tmux new-session -d -s "$SESSION" -n "$WINDOW_NAME" -c "$FOXWARM_DIR" 2>/dev/null; then
         echo "Error: Failed to create tmux session. Are you inside a tmux session?"
         echo "If you're in tmux, you can create the session from outside tmux first."
         exit 1
@@ -24,13 +30,13 @@ if ! tmux has-session -t $SESSION 2>/dev/null; then
 fi
 
 # Check if the window exists
-if ! tmux list-windows -t $SESSION 2>/dev/null | grep -q "$WINDOW_NAME"; then
-    tmux new-window -t $SESSION -n $WINDOW_NAME -c "$FOXWARM_DIR"
+if ! tmux list-windows -t "$SESSION" 2>/dev/null | grep -q "$WINDOW_NAME"; then
+    tmux new-window -t "$SESSION" -n "$WINDOW_NAME" -c "$FOXWARM_DIR"
 fi
 
 # Send Ctrl+C and restart command.
 # NOTICE: this script might be exec-ed by the bot. After C-c, this script will be killed too, but tmux keeps running.
 # NOTICE: So `C-c` in the same line with `node lib/index.js` ensuring the bot will be killed and restart by the bash in tmux.
-tmux send-keys -t $SESSION:$WINDOW_NAME C-c "cd $FOXWARM_DIR && node lib/index.js" Enter
+tmux send-keys -t "$SESSION:$WINDOW_NAME" C-c "$START_CMD" Enter
 
 echo "Restart command sent to $FOXWARM_DIR"

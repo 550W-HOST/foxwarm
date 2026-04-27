@@ -100,12 +100,15 @@ type RequestLlmOnceOptions = {
     contents: Message[];
     systemPrompt: string;
     model?: string;
+    modelEntryOverride?: ModelConfigEntry;
     sessionId?: string;
     promptCacheKey?: string;
     iteration?: number;
     toolDefinitions?: ToolDefinition[];
     notifySessionEvents?: boolean;
     registerAbortController?: boolean;
+    maxRetries?: number;
+    timeoutMs?: number;
 };
 
 export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-completions' | null {
@@ -935,7 +938,11 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     const fixedContents = fixToolCalls(options.contents || []);
     let messages, url, headers, data;
 
-    const { modelEntry, currentKey: modelKey } = resolveModelConfig(options.model);
+    const resolvedModel = resolveModelConfig(options.model);
+    const modelEntry = options.modelEntryOverride || resolvedModel.modelEntry;
+    const modelKey = options.modelEntryOverride
+        ? `${options.modelEntryOverride.providerKey || 'setup'}/${options.modelEntryOverride.model || 'model'}`
+        : resolvedModel.currentKey;
     const providerType = modelEntry?.providerType || 'openai';
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
@@ -965,7 +972,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         url = `${baseUrl}/responses`;
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
+            ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
             'user-agent': 'codex-tui/0.118.0 (Debian 13.0.0; x86_64) xterm.js_6.1.0-beta.191_ (codex-tui; 0.118.0)',
             'originator': 'codex-tui',
             'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
@@ -1002,7 +1009,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         url = `${baseUrl}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
+            ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
             'user-agent': 'foxwarm/1.0',
         };
 
@@ -1031,7 +1038,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         url = `${baseUrl}/v1/messages`;
         headers = {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey,
+            ...(apiKey ? { 'x-api-key': apiKey } : {}),
             'anthropic-version': '2023-06-01',
             'anthropic-beta': 'interleaved-thinking-2025-05-14',
             'user-agent': 'foxwarm/1.0',
@@ -1077,7 +1084,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
 
     let response: AxiosResponse;
     let resp: any;
-    const maxRetries = 3;
+    const maxRetries = Math.max(1, options.maxRetries ?? 3);
     const abortController = new AbortController();
     const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
     const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
@@ -1093,8 +1100,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 response = await axios.post(url, data, {
-                    headers: { ...headers, ...modelEntry.extraHeaders },
-                    timeout: 180000,
+                    headers: { ...headers, ...(modelEntry.extraHeaders || {}) },
+                    timeout: options.timeoutMs ?? 180000,
                     validateStatus: () => true,
                     signal: abortController.signal,
                     ...(useStreamingApi ? { responseType: 'stream' as const } : {}),

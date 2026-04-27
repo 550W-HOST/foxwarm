@@ -75,11 +75,17 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
   const [providerType, setProviderType] = useState('openai-completions')
   const [baseUrl, setBaseUrl] = useState('https://api.openai.com/v1')
   const [apiKey, setApiKey] = useState('')
-  const [models, setModels] = useState('gpt-5.2-codex')
+  const [models, setModels] = useState('gpt-5.2-codex\ngpt-5.3-codex\ngpt-5.4\ngpt-5.5')
   const [defaultModel, setDefaultModel] = useState('gpt-5.2-codex')
   const [channelsYaml, setChannelsYaml] = useState(DEFAULT_CHANNELS_YAML)
   const [savingModels, setSavingModels] = useState(false)
   const [savingChannels, setSavingChannels] = useState(false)
+  const [testingModel, setTestingModel] = useState(false)
+  const [modelTestResult, setModelTestResult] = useState<string | null>(null)
+  const [weixinBusy, setWeixinBusy] = useState(false)
+  const [weixinSessionKey, setWeixinSessionKey] = useState('')
+  const [weixinQrUrl, setWeixinQrUrl] = useState('')
+  const [weixinMessage, setWeixinMessage] = useState<string | null>(null)
 
   const modelConfigured = !!status?.models.exists
   const channelAvailable = (status?.channels || []).some((channel) => channel.running) || true // WebUI itself is available when this page is open.
@@ -129,6 +135,26 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
     }
   }
 
+  const testModels = async () => {
+    setTestingModel(true)
+    setModelTestResult(null)
+    setError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/setup/models/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerKey, providerType, baseUrl, apiKey, models, defaultModel, testModel: defaultModel }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `Model test failed (${res.status})`)
+      setModelTestResult(`Success: ${String(data.text || '').trim() || '(empty response)'}`)
+    } catch (err) {
+      setModelTestResult(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setTestingModel(false)
+    }
+  }
+
   const saveChannels = async () => {
     setSavingChannels(true)
     setMessage(null)
@@ -149,6 +175,52 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setSavingChannels(false)
+    }
+  }
+
+  const startWeixinLogin = async () => {
+    setWeixinBusy(true)
+    setWeixinMessage(null)
+    setError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/setup/weixin/login/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `Failed to start Weixin login (${res.status})`)
+      setWeixinSessionKey(data.sessionKey || '')
+      setWeixinQrUrl(data.qrcodeUrl || '')
+      setWeixinMessage(data.message || 'Scan the QR code with Weixin, then click Check login.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setWeixinBusy(false)
+    }
+  }
+
+  const waitWeixinLogin = async () => {
+    if (!weixinSessionKey) return
+    setWeixinBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/setup/weixin/login/wait`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionKey: weixinSessionKey }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `Failed to check Weixin login (${res.status})`)
+      setWeixinMessage(data.connected ? `Connected as ${data.userId || 'Weixin user'}. Channel config saved and reloaded.` : (data.message || 'Not connected yet.'))
+      if (data.connected) {
+        await loadStatus()
+        onSetupChanged?.()
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setWeixinBusy(false)
     }
   }
 
@@ -225,7 +297,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Base URL
                 <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
               </label>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">API key
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">API key <span className="font-normal text-gray-400">(optional for local gateways)</span>
                 <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
               </label>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Models (comma or newline separated)
@@ -237,8 +309,29 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
             </div>
             <div className="mt-4 flex items-center gap-2">
               <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
+              <button disabled={testingModel} onClick={() => void testModels()} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">{testingModel ? 'Testing…' : 'Test model'}</button>
               {forced && !canLeave && <span className="text-sm text-amber-600 dark:text-amber-300">Required for first-time setup.</span>}
             </div>
+            {modelTestResult && <div className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700 dark:bg-gray-950 dark:text-gray-200">{modelTestResult}</div>}
+          </section>
+
+          <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <h2 className="text-base font-semibold text-gray-900 dark:text-white">Weixin login</h2>
+            <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Start Weixin pairing from WebUI, scan the QR code, then check login. On success, Setup writes the Weixin channel into <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/config.yaml</code> and hot-reloads channels.</p>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <button disabled={weixinBusy} onClick={() => void startWeixinLogin()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{weixinBusy ? 'Working…' : 'Start Weixin login'}</button>
+              <button disabled={weixinBusy || !weixinSessionKey} onClick={() => void waitWeixinLogin()} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">Check login</button>
+            </div>
+            {weixinMessage && <div className="mt-3 text-sm text-gray-600 dark:text-gray-300">{weixinMessage}</div>}
+            {weixinQrUrl && (
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-start">
+                <img src={weixinQrUrl} alt="Weixin login QR code" className="h-56 w-56 rounded-lg border border-gray-200 bg-white object-contain p-2 dark:border-gray-700" />
+                <div className="min-w-0 text-xs text-gray-500 dark:text-gray-400">
+                  <div>sessionKey: <code>{weixinSessionKey}</code></div>
+                  <a className="break-all text-blue-600 underline dark:text-blue-300" href={weixinQrUrl} target="_blank" rel="noreferrer">Open QR image</a>
+                </div>
+              </div>
+            )}
           </section>
 
           <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">

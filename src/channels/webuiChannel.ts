@@ -18,6 +18,8 @@ import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODEL
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
+import { requestLlmOnce } from '../llm';
+import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from '../weixin/api';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
@@ -34,7 +36,7 @@ const MAX_INLINE_FILE_BYTES = 1024 * 1024;
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 
 function isPlaceholderSecret(value: unknown): boolean {
-  return typeof value !== 'string' || MODEL_PLACEHOLDER_RE.test(value.trim());
+  return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
 }
 
 function readYamlFileIfExists(filePath: string): any {
@@ -80,9 +82,6 @@ function buildProviderConfigFromSetup(body: any): { default: string; providers: 
     .map((item) => item.trim())
     .filter(Boolean);
 
-  if (!apiKey) {
-    throw new Error('apiKey is required.');
-  }
   if (modelLines.length === 0) {
     throw new Error('At least one model id is required.');
   }
@@ -92,7 +91,7 @@ function buildProviderConfigFromSetup(body: any): { default: string; providers: 
   const provider: ProviderConfigEntry = {
     providerType,
     baseUrl: baseUrl || undefined,
-    apiKey,
+    ...(apiKey ? { apiKey } : {}),
     models: modelLines,
   };
 
@@ -122,6 +121,24 @@ function parseChannelsYaml(rawYaml: unknown): AppConfig['channels'] {
 
 function sanitizeChannelConfigForSetup(config: AppConfig): Record<string, any> {
   return config.channels || {};
+}
+
+function getWeixinSetupConfig(body: any = {}) {
+  const appConfig = readAppConfigFile();
+  const rawChannels = appConfig.channels || {};
+  const requestedChannelId = typeof body.channelId === 'string' && body.channelId.trim() ? body.channelId.trim() : undefined;
+  const channelId = requestedChannelId
+    || Object.entries(rawChannels).find(([id, config]: [string, any]) => (config?.type || id) === 'weixin')?.[0]
+    || 'weixin';
+  const existing = (rawChannels as any)[channelId] || {};
+  return {
+    appConfig,
+    channelId,
+    existing,
+    baseUrl: body.baseUrl?.trim?.() || existing.baseUrl || DEFAULT_WEIXIN_BASE_URL,
+    routeTag: body.routeTag?.trim?.() || existing.routeTag || undefined,
+    botType: body.botType?.trim?.() || existing.loginBotType || DEFAULT_WEIXIN_LOGIN_BOT_TYPE,
+  };
 }
 
 function buildWebUiModelStatus(session: { model?: string; childModelDefault?: string }) {
@@ -558,6 +575,48 @@ export class WebUIChannel implements Channel {
       });
 
       httpServerInstance.addRoute({
+        path: '/api/setup/models/test',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const transientConfig = buildProviderConfigFromSetup(req.body);
+            const config = transientConfig.providers[Object.keys(transientConfig.providers)[0]];
+            const model = typeof req.body?.testModel === 'string' && req.body.testModel.trim()
+              ? req.body.testModel.trim()
+              : (Array.isArray(config.models) ? (typeof config.models[0] === 'string' ? config.models[0] : config.models[0]?.id) : '');
+            if (!model) {
+              throw new Error('A model id is required for test.');
+            }
+
+            const modelConfig = {
+              ...config,
+              model,
+              providerKey: Object.keys(transientConfig.providers)[0],
+              extraFields: config.extraFields || {},
+              extraHeaders: config.extraHeaders || {},
+            } as any;
+            const result = await requestLlmOnce({
+              contents: [{ role: 'user', parts: [{ text: 'Please reply ok' }] }],
+              systemPrompt: '',
+              modelEntryOverride: modelConfig,
+              sessionId: 'setup-model-test',
+              promptCacheKey: 'setup-model-test',
+              iteration: 0,
+              toolDefinitions: [],
+              notifySessionEvents: false,
+              registerAbortController: false,
+              maxRetries: 1,
+              timeoutMs: 30000,
+            });
+            res.json({ success: true, text: result.text, usage: result.usage || null });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to test models setup');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
         path: '/api/setup/channels',
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
@@ -580,6 +639,68 @@ export class WebUIChannel implements Channel {
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to save channels setup');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/weixin/login/start',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const setup = getWeixinSetupConfig(req.body || {});
+            const result = await startWeixinQrLogin({
+              baseUrl: setup.baseUrl,
+              botType: setup.botType,
+              routeTag: setup.routeTag,
+              force: req.body?.force === true,
+            });
+            res.json({ success: true, channelId: setup.channelId, baseUrl: setup.baseUrl, routeTag: setup.routeTag || null, botType: setup.botType, ...result });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to start Weixin setup login');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/weixin/login/wait',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionKey = typeof req.body?.sessionKey === 'string' ? req.body.sessionKey.trim() : '';
+            if (!sessionKey) {
+              throw new Error('sessionKey is required.');
+            }
+            const setup = getWeixinSetupConfig(req.body || {});
+            const result = await waitForWeixinQrLogin({ sessionKey, baseUrl: setup.baseUrl, routeTag: setup.routeTag, timeoutMs: 5000 });
+            if (result.connected && result.botToken) {
+              const current = readAppConfigFile();
+              const existingChannels = current.channels || {};
+              const previous = (existingChannels as any)[setup.channelId] || {};
+              const next: AppConfig = {
+                ...current,
+                channels: {
+                  ...existingChannels,
+                  [setup.channelId]: {
+                    ...previous,
+                    type: previous.type || (setup.channelId === 'weixin' ? undefined : 'weixin'),
+                    enabled: true,
+                    baseUrl: result.baseUrl || setup.baseUrl,
+                    token: result.botToken,
+                    routeTag: setup.routeTag,
+                    allowedUsers: result.userId ? Array.from(new Set([...(previous.allowedUsers || []), result.userId])) : previous.allowedUsers,
+                  },
+                },
+              };
+              writeAppConfigFile(next);
+              const reload = await reloadManagedChannels();
+              return res.json({ success: true, channelId: setup.channelId, connected: true, userId: result.userId || null, message: result.message, reload });
+            }
+            res.json({ success: true, channelId: setup.channelId, connected: false, message: result.message });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed while waiting for Weixin setup login');
             res.status(400).json({ error: e.message });
           }
         },

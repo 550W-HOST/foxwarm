@@ -13,7 +13,7 @@ Foxwarm is a lightweight, extensible AI assistant framework for development-orie
 
 ## Quick Start: one-line install
 
-The recommended first-time path is the installer script. It clones Foxwarm, builds it, starts it in the normal tmux mode, prints a WebUI URL with token, and attaches to the tmux session.
+The recommended first-time path is the installer script. It clones Foxwarm into `./foxwarm`, stores runtime data/config in `./foxwarm-data`, builds the app, starts it in the normal tmux mode, and prints a WebUI URL with token.
 
 ### Linux / macOS / WSL
 
@@ -29,16 +29,26 @@ cd foxwarm
 ./install-foxwarm.sh
 ```
 
-Useful environment overrides:
+Prerequisites: Git, Node.js 20+, npm, and tmux. The installer validates these and prints clear instructions if anything is missing; it does not install system packages for you.
+
+Useful overrides:
 
 ```bash
-FOXWARM_DIR="$HOME/foxwarm" \
+# CLI flags
+curl -fsSL https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.sh | bash -s -- \
+  --dir "$PWD/foxwarm" \
+  --data-dir "$PWD/foxwarm-data"
+
+# Environment variables
+FOXWARM_DIR="$PWD/foxwarm" \
+FOXWARM_DATA_DIR="$PWD/foxwarm-data" \
+FOXWARM_TMUX_SESSION=foxwarm \
 FOXWARM_BRANCH=main \
 FOXWARM_REPO=https://github.com/550W-HOST/foxwarm.git \
 curl -fsSL https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.sh | bash
 ```
 
-The installer expects Node.js 20+ and npm. If `tmux` is missing, it tries to install it with common package managers (`apt`, `pacman`, `dnf`, `yum`, `zypper`, `brew`).
+The data directory contains `state/`, `agents/`, `skills/`, tokens, logs, models, sessions, and channel config. Back up `foxwarm-data/` to preserve your Foxwarm runtime state.
 
 After startup, the installer prints a URL like:
 
@@ -46,10 +56,23 @@ After startup, the installer prints a URL like:
 http://localhost:3001/#token=...
 ```
 
-It then attaches to tmux. Detach without stopping Foxwarm with:
+The installer does not auto-attach. To view the running console/logs:
+
+```bash
+tmux attach -t foxwarm
+```
+
+Detach without stopping Foxwarm:
 
 ```text
 Ctrl-b then d
+```
+
+Stop later:
+
+```bash
+cd foxwarm
+FOXWARM_DATA_DIR="$PWD/../foxwarm-data" npm run stop
 ```
 
 ### Windows PowerShell
@@ -66,7 +89,19 @@ cd foxwarm
 .\install-foxwarm.ps1
 ```
 
-The Windows script checks for Git and Node.js/npm, builds Foxwarm, starts it in a new PowerShell window, and opens the WebUI token URL when available.
+The Windows script checks for Git and Node.js 20+/npm, builds Foxwarm, stores data in `./foxwarm-data` by default, starts Foxwarm in a new PowerShell window, and opens the WebUI token URL when available.
+
+If local script execution is blocked, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1
+```
+
+Optional parameters:
+
+```powershell
+.\install-foxwarm.ps1 -InstallDir .\foxwarm -DataDir .\foxwarm-data -BranchName main
+```
 
 ## Manual install / development start
 
@@ -74,10 +109,11 @@ Use this path if you are developing Foxwarm itself.
 
 ### Prerequisites
 
+- Git
 - Node.js 20+ and npm
+- tmux for the normal background start mode
 - (Optional) Ollama for embeddings / vector memory
 - (Optional) Chromium or a browser node for browsing features
-- (Optional) tmux for the normal background start mode
 
 ### Install and build
 
@@ -87,7 +123,14 @@ cd foxwarm
 npm run build-all
 ```
 
-Do **not** copy `templates/models.example.yaml` into `state/models.yaml` for first-time setup unless you want to configure it manually. If `state/models.yaml` is missing, WebUI enters OOBE and helps create it.
+For a clean manual install with an external data directory:
+
+```bash
+mkdir -p ../foxwarm-data
+export FOXWARM_DATA_DIR="$PWD/../foxwarm-data"
+```
+
+Do **not** copy `templates/models.example.yaml` into `$FOXWARM_DATA_DIR/state/models.yaml` for first-time setup unless you want to configure it manually. If `state/models.yaml` is missing in the data directory, WebUI enters OOBE and helps create it.
 
 ### Start
 
@@ -106,7 +149,7 @@ npm start
 Then open `http://localhost:3001` and log in with the token from:
 
 ```bash
-cat state/token
+cat "$FOXWARM_DATA_DIR/state/token"
 ```
 
 Other tmux helpers:
@@ -120,7 +163,7 @@ npm run stop
 Logs are written under:
 
 ```text
-state/logs/
+$FOXWARM_DATA_DIR/state/logs/
 ```
 
 ## Docker Compose
@@ -128,13 +171,19 @@ state/logs/
 Docker Compose is still supported, but the recommended first-time UX is the installer + WebUI OOBE.
 
 ```bash
-mkdir -p state agents skills
+mkdir -p foxwarm-data/state foxwarm-data/agents foxwarm-data/skills
 docker compose up -d --build
 ```
 
-Open `http://localhost:3001` and use the token from `state/token` or container logs. The compose file mounts `state/`, `agents/`, and `skills/` so configuration and memory persist across rebuilds.
+Open `http://localhost:3001` and use the token from:
 
-> Note: `.env` may still be useful for Docker Compose variables or legacy migration, but it is no longer the primary Foxwarm application configuration path for new users.
+```bash
+cat foxwarm-data/state/token
+```
+
+The compose file mounts `./foxwarm-data` to `/data` and sets `FOXWARM_DATA_DIR=/data`, so configuration and memory persist outside the program image.
+
+Compose starts in OOBE by default when `foxwarm-data/state/models.yaml` is missing. To skip OOBE, create `foxwarm-data/state/models.yaml` before starting, and optionally create `foxwarm-data/state/config.yaml` for app/channel settings such as a custom HTTP port.
 
 ## First Run / OOBE Setup
 
@@ -150,14 +199,15 @@ After logging into WebUI, the OOBE page cannot be closed until models are config
 
 OOBE/Setup supports:
 
-1. **Models** — creates `state/models.yaml`
+1. **Models** — creates `state/models.yaml`; includes a **Test model** button that sends `Please reply ok` without writing conversation history
 2. **Channels** — edits `state/config.yaml` and hot-reloads managed channels
+3. **Weixin login** — starts QR login in WebUI, shows the QR image, saves the resulting token into channel config, and hot-reloads channels
 
 You can later return to the same page from the WebUI setup/settings button.
 
 ## Configuration
 
-Foxwarm's current primary configuration files are:
+Foxwarm's current primary configuration files live inside the data directory:
 
 1. `state/config.yaml` — app settings and channels
 2. `state/models.yaml` — model providers, model list, and default model
@@ -165,15 +215,17 @@ Foxwarm's current primary configuration files are:
 4. `skills/<skill>/` — reusable skill documents
 5. `state/token` and `state/node_token` — WebUI and node pairing tokens
 
-### Legacy `.env`
+For installer-based setup, these paths are under `./foxwarm-data/` by default. For Docker Compose, they are under `./foxwarm-data/` on the host and `/data/` in the container.
 
-`.env` is legacy/compatibility configuration. On startup, if `state/config.yaml` does not exist and `.env` does, Foxwarm can migrate legacy settings into `state/config.yaml`.
+Example `state/config.yaml` app settings:
 
-For new installs, prefer WebUI Setup or direct edits to:
-
-```text
-state/config.yaml
-state/models.yaml
+```yaml
+bot:
+  httpPort: 3001
+  enableWebUI: true
+  enableTrigger: true
+llm:
+  ollamaBaseUrl: http://localhost:11434
 ```
 
 ## Models (`state/models.yaml`)
@@ -192,6 +244,8 @@ providers:
     models:
       - gpt-5.2-codex
       - gpt-5.3-codex
+      - gpt-5.4
+      - gpt-5.5
 ```
 
 Provider notes:
@@ -199,7 +253,7 @@ Provider notes:
 - `openai-completions` uses `/chat/completions`
 - `openai` and `openai-responses` use `/responses`
 - `anthropic` uses Anthropic-compatible requests
-- OpenAI-compatible local gateways can be configured by changing `baseUrl`, `apiKey`, and model ids
+- OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
 
 The runtime resolves model definitions in this order:
 
@@ -237,6 +291,8 @@ channels:
     token: "token-from-login"
     allowAllUsers: false
 ```
+
+You can configure Weixin from WebUI Setup without manually editing the token: click **Start Weixin login**, scan the QR code, then click **Check login**. On success, Setup writes the token to `state/config.yaml` and hot-reloads channels.
 
 WebUI Setup can edit channels and then reload them without restarting Foxwarm. The reload flow stops registered managed channels and starts the enabled/configured channels again.
 

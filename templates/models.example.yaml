@@ -2,7 +2,7 @@
 # If `state/models.yaml` is missing, the app falls back to this template.
 #
 # Recommended public setup: keep provider connection settings directly in this YAML.
-# `.env` is mainly for app-level settings such as ports, feature flags, and channel tokens.
+# App/channel configuration lives in state/config.yaml.
 
 default: openai/gpt-5.2-codex
 providers:
@@ -29,6 +29,7 @@ providers:
           reasoning:
             effort: high
       - gpt-5.4
+      - gpt-5.5
 
   # `openai` and `openai-responses` both use the newer Responses API.
   # Use `openai-completions` when you explicitly need the older /chat/completions API.
