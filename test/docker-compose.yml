@@ -14,7 +14,7 @@ services:
       dockerfile: Dockerfile
     container_name: foxwarm-toolscript-managed-session-test
     ports:
-      - "3004:3001"
+      - "3002:3001" # TODO: before merging to main, remember to revisit/revert this test-env-only port tweak.
     volumes:
       - ..:/app
       - /home/ldmbot/temp-worktrees/foxwarm-toolscript-phase1/node_modules:/app/node_modules
