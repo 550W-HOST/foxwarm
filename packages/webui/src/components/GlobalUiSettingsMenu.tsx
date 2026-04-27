@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, Settings } from 'lucide-react'
-import type { SendKeyMode } from './chatShared'
+import { Settings } from 'lucide-react'
 import ReloadAppButton from './ReloadAppButton'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
@@ -8,11 +7,9 @@ type ThemeMode = 'auto' | 'light' | 'dark'
 interface GlobalUiSettingsMenuProps {
   themeMode: ThemeMode
   onThemeChange: (mode: ThemeMode) => void
-  sendKeyMode: SendKeyMode
-  onSendKeyModeChange: (mode: SendKeyMode) => void
 }
 
-export default function GlobalUiSettingsMenu({ themeMode, onThemeChange, sendKeyMode, onSendKeyModeChange }: GlobalUiSettingsMenuProps) {
+export default function GlobalUiSettingsMenu({ themeMode, onThemeChange }: GlobalUiSettingsMenuProps) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
 
@@ -69,36 +66,6 @@ export default function GlobalUiSettingsMenu({ themeMode, onThemeChange, sendKey
                   {mode}
                 </button>
               ))}
-            </div>
-          </div>
-
-          <div className="px-4 py-3">
-            <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Send key</div>
-            <div className="grid grid-cols-2 gap-1">
-              <button
-                type="button"
-                onClick={() => {
-                  onSendKeyModeChange('mod-enter')
-                  setOpen(false)
-                }}
-                className={`rounded px-2 py-1 text-xs ${sendKeyMode === 'mod-enter' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'}`}
-              >
-                Ctrl/Cmd+Enter
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  onSendKeyModeChange('enter')
-                  setOpen(false)
-                }}
-                className={`rounded px-2 py-1 text-xs ${sendKeyMode === 'enter' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'}`}
-              >
-                Enter
-              </button>
-            </div>
-            <div className="mt-2 flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400">
-              <Check className="h-3.5 w-3.5 shrink-0" />
-              <span>{sendKeyMode === 'enter' ? 'Enter sends; modifiers insert a new line.' : 'Ctrl/Cmd+Enter sends; Enter inserts a new line.'}</span>
             </div>
           </div>
 

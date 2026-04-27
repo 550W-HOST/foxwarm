@@ -3,7 +3,6 @@ import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 import CreateTabButton from './CreateTabButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
-import type { SendKeyMode } from './chatShared'
 
 interface SessionListProps {
   sessions: Session[]
@@ -12,8 +11,6 @@ interface SessionListProps {
   currentSessionRecord?: Session
   themeMode: 'auto' | 'light' | 'dark'
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
-  sendKeyMode: SendKeyMode
-  onSendKeyModeChange: (mode: SendKeyMode) => void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
@@ -29,8 +26,6 @@ export default function SessionList({
   currentSessionRecord,
   themeMode,
   onThemeChange,
-  sendKeyMode,
-  onSendKeyModeChange,
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
@@ -54,8 +49,6 @@ export default function SessionList({
           <GlobalUiSettingsMenu
             themeMode={themeMode}
             onThemeChange={onThemeChange}
-            sendKeyMode={sendKeyMode}
-            onSendKeyModeChange={onSendKeyModeChange}
           />
         </div>
 

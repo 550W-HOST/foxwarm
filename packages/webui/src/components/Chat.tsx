@@ -2,11 +2,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Copy, FolderOpen, Menu, MessageSquareText, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
+import type { ModelOption } from './ChatComposer'
 import ChatTimeline from './ChatTimeline'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
-import type { Message, MessagePart, SendKeyMode, SessionStreamEvent } from './chatShared'
+import type { Message, MessagePart, SessionStreamEvent } from './chatShared'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
@@ -70,8 +71,6 @@ interface ChatProps {
   sessionId: string
   sessionDisplayName?: string
   onBack?: () => void
-  sendKeyMode: SendKeyMode
-  onToggleSendKeyMode: () => void
   onOpenWorkspace?: () => void
   onOpenTerminal?: () => void
   onDraftEdited?: (draftText: string) => void
@@ -96,6 +95,11 @@ type SessionListRecord = {
   displayName?: string | null
   archived?: boolean
   currentNode?: string
+  model?: string | null
+  modelKey?: string
+  defaultModelKey?: string
+  childModelDefault?: string | null
+  effectiveChildModelKey?: string
   isolated?: boolean
 }
 
@@ -122,7 +126,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKeyMode, onToggleSendKeyMode, onOpenWorkspace, onOpenTerminal, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenWorkspace, onOpenTerminal, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -144,6 +148,9 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
   const [debugInfoCopied, setDebugInfoCopied] = useState(false)
   const [processingReasoningSummary, setProcessingReasoningSummary] = useState('')
   const [asrAvailable, setAsrAvailable] = useState(false)
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  const [modelBusy, setModelBusy] = useState(false)
+  const [modelError, setModelError] = useState<string | null>(null)
   const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
   const [resolvedSessionFilePath, setResolvedSessionFilePath] = useState<string | null>(null)
   const [sessionFilePayload, setSessionFilePayload] = useState<SessionFilePayload | null>(null)
@@ -196,6 +203,32 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
     }
 
     fetchAsrStatus()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchModels = async () => {
+      try {
+        const res = await fetch(`${API_BASE_PATH}/models`)
+        if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
+        const data = await res.json()
+        if (!cancelled) {
+          setModelOptions(Array.isArray(data.models) ? data.models : [])
+        }
+      } catch (error) {
+        console.error('Failed to fetch models:', error)
+        if (!cancelled) {
+          setModelError(error instanceof Error ? error.message : 'Failed to load models')
+          setModelOptions([])
+        }
+      }
+    }
+
+    fetchModels()
     return () => {
       cancelled = true
     }
@@ -466,6 +499,48 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
     }
   }, [sessionId])
 
+  const updateSessionModel = useCallback(async (model: string | null) => {
+    setModelBusy(true)
+    setModelError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(model ? { model } : { clear: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || `Failed to update model (${res.status})`)
+      await refreshSessionDebugData()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update model'
+      setModelError(message)
+      throw error
+    } finally {
+      setModelBusy(false)
+    }
+  }, [refreshSessionDebugData, sessionId])
+
+  const updateChildModel = useCallback(async (model: string | null) => {
+    setModelBusy(true)
+    setModelError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/child-model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(model ? { model } : { clear: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || `Failed to update child default model (${res.status})`)
+      await refreshSessionDebugData()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update child default model'
+      setModelError(message)
+      throw error
+    } finally {
+      setModelBusy(false)
+    }
+  }, [refreshSessionDebugData, sessionId])
+
   useEffect(() => {
     fetchHistory()
     connectSSE()
@@ -601,9 +676,10 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
       sessionBusy,
       sessionQueueLength,
       verbose,
-      sendKeyMode,
+      sendKeyBehavior: 'Ctrl/Cmd+Enter sends; Enter inserts a new line.',
       loading,
       asrAvailable,
+      modelBusy,
       processingReasoningSummary,
     },
   }), [
@@ -611,10 +687,10 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
     connectionState,
     loading,
     messages,
+    modelBusy,
     processingReasoningSummary,
     reconnectCountdown,
     resolvedSessionFilePath,
-    sendKeyMode,
     sessionBusy,
     sessionDisplayName,
     sessionFilePayload,
@@ -1007,8 +1083,16 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
         sessionMissing={sessionMissing}
         loading={loading}
         asrAvailable={asrAvailable}
-        sendKeyMode={sendKeyMode}
-        onToggleSendKeyMode={onToggleSendKeyMode}
+        modelOptions={modelOptions}
+        currentModelKey={sessionRecord?.modelKey}
+        sessionModel={sessionRecord?.model || null}
+        defaultModelKey={sessionRecord?.defaultModelKey}
+        childModelDefault={sessionRecord?.childModelDefault || null}
+        effectiveChildModelKey={sessionRecord?.effectiveChildModelKey}
+        modelBusy={modelBusy}
+        modelError={modelError}
+        onChangeModel={updateSessionModel}
+        onChangeChildModel={updateChildModel}
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
         onTranscribeAudio={handleTranscribeAudio}
@@ -1076,7 +1160,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, sendKey
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&
   prev.sessionDisplayName === next.sessionDisplayName &&
-  prev.sendKeyMode === next.sendKeyMode &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   prev.onOpenWorkspace === next.onOpenWorkspace &&
   prev.onOpenTerminal === next.onOpenTerminal

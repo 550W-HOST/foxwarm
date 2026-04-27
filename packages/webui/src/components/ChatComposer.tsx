@@ -5,18 +5,32 @@ import {
   applySlashCommandSuggestion,
   getSlashCommandCompletion,
   resizeTextarea,
-  type SendKeyMode,
   type SlashCommandOption,
   type SlashCommandSuggestion,
 } from './chatShared'
+
+export type ModelOption = {
+  key: string
+  label: string
+  isDefault?: boolean
+  contextLimit?: number | null
+}
 
 interface ChatComposerProps {
   sessionId: string
   sessionMissing: boolean
   loading: boolean
   asrAvailable: boolean
-  sendKeyMode: SendKeyMode
-  onToggleSendKeyMode: () => void
+  modelOptions: ModelOption[]
+  currentModelKey?: string
+  sessionModel?: string | null
+  defaultModelKey?: string
+  childModelDefault?: string | null
+  effectiveChildModelKey?: string
+  modelBusy?: boolean
+  modelError?: string | null
+  onChangeModel: (model: string | null) => Promise<void>
+  onChangeChildModel: (model: string | null) => Promise<void>
   onHeightChange?: (height: number) => void
   onSend: (payload: { text: string; attachments: File[] }) => Promise<boolean>
   onTranscribeAudio: (file: File, context: string) => Promise<{
@@ -49,13 +63,89 @@ function persistDraft(sessionId: string, value: string) {
   }
 }
 
+function formatModelLabel(option: ModelOption, defaultModelKey?: string) {
+  return `${option.label}${option.key === defaultModelKey || option.isDefault ? ' · default' : ''}`
+}
+
+function ModelSelector({
+  options,
+  currentModelKey,
+  sessionModel,
+  defaultModelKey,
+  childModelDefault,
+  effectiveChildModelKey,
+  busy,
+  error,
+  onChangeModel,
+  onChangeChildModel,
+}: {
+  options: ModelOption[]
+  currentModelKey?: string
+  sessionModel?: string | null
+  defaultModelKey?: string
+  childModelDefault?: string | null
+  effectiveChildModelKey?: string
+  busy: boolean
+  error?: string | null
+  onChangeModel: (model: string | null) => Promise<void>
+  onChangeChildModel: (model: string | null) => Promise<void>
+}) {
+  const currentValue = sessionModel || '__default__'
+  const childValue = childModelDefault || '__default__'
+
+  return (
+    <div className="inline-flex min-w-0 shrink-0 items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-1 text-[12px] shadow-sm dark:border-gray-700 dark:bg-gray-800" title={error || undefined}>
+      <label className="flex min-w-0 items-center gap-1">
+        <span className="shrink-0 text-gray-500 dark:text-gray-400">Model</span>
+        <select
+          value={currentValue}
+          disabled={busy || options.length === 0}
+          onChange={(event) => { void onChangeModel(event.target.value === '__default__' ? null : event.target.value).catch(() => {}) }}
+          className="max-w-[11rem] rounded-md border border-transparent bg-gray-50 px-1.5 py-1 text-[12px] text-gray-700 outline-none transition hover:border-gray-300 disabled:opacity-60 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-gray-600"
+          aria-label="Session model"
+        >
+          <option value="__default__">Default ({defaultModelKey || currentModelKey || 'model'})</option>
+          {options.map((option) => (
+            <option key={option.key} value={option.key}>{formatModelLabel(option, defaultModelKey)}</option>
+          ))}
+        </select>
+      </label>
+      <label className="flex min-w-0 items-center gap-1">
+        <span className="shrink-0 text-gray-400 dark:text-gray-500">Child</span>
+        <select
+          value={childValue}
+          disabled={busy || options.length === 0}
+          onChange={(event) => { void onChangeChildModel(event.target.value === '__default__' ? null : event.target.value).catch(() => {}) }}
+          className="max-w-[10rem] rounded-md border border-transparent bg-gray-50 px-1.5 py-1 text-[12px] text-gray-700 outline-none transition hover:border-gray-300 disabled:opacity-60 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-gray-600"
+          aria-label="Child default model"
+        >
+          <option value="__default__">Follow ({effectiveChildModelKey || currentModelKey || 'model'})</option>
+          {options.map((option) => (
+            <option key={option.key} value={option.key}>{formatModelLabel(option, defaultModelKey)}</option>
+          ))}
+        </select>
+      </label>
+      {busy && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
+      {error && <span className="max-w-[8rem] truncate text-red-500 dark:text-red-300">{error}</span>}
+    </div>
+  )
+}
+
 const ChatComposer = memo(function ChatComposer({
   sessionId,
   sessionMissing,
   loading,
   asrAvailable,
-  sendKeyMode,
-  onToggleSendKeyMode,
+  modelOptions,
+  currentModelKey,
+  sessionModel,
+  defaultModelKey,
+  childModelDefault,
+  effectiveChildModelKey,
+  modelBusy = false,
+  modelError,
+  onChangeModel,
+  onChangeChildModel,
   onHeightChange,
   onSend,
   onTranscribeAudio,
@@ -343,19 +433,11 @@ const ChatComposer = memo(function ChatComposer({
       return
     }
 
-    if (sendKeyMode === 'mod-enter') {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault()
-        void handleSubmit()
-      }
-      return
-    }
-
-    if (!e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (e.ctrlKey || e.metaKey) {
       e.preventDefault()
       void handleSubmit()
     }
-  }, [applySlashCommand, handleSubmit, highlightedCommandIndex, input, sendKeyMode, showSlashCommandMenu, slashCommandSuggestions])
+  }, [applySlashCommand, handleSubmit, highlightedCommandIndex, input, showSlashCommandMenu, slashCommandSuggestions])
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextValue = e.target.value
@@ -975,14 +1057,18 @@ const ChatComposer = memo(function ChatComposer({
                 </div>
               </>
             )}
-            <button
-              type="button"
-              onClick={onToggleSendKeyMode}
-              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-gray-600 transition hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
-              title="Toggle send key"
-            >
-              <span>{sendKeyMode === 'enter' ? 'Enter to send' : 'Ctrl/Cmd+Enter'}</span>
-            </button>
+            <ModelSelector
+              options={modelOptions}
+              currentModelKey={currentModelKey}
+              sessionModel={sessionModel}
+              defaultModelKey={defaultModelKey}
+              childModelDefault={childModelDefault}
+              effectiveChildModelKey={effectiveChildModelKey}
+              busy={modelBusy}
+              error={modelError}
+              onChangeModel={onChangeModel}
+              onChangeChildModel={onChangeChildModel}
+            />
           </div>
           <button
             type="submit"

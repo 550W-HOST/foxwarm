@@ -19,6 +19,11 @@ export interface Session {
   archived?: boolean
   currentNode?: string
   cwd?: string | null
+  model?: string | null
+  modelKey?: string
+  defaultModelKey?: string
+  childModelDefault?: string | null
+  effectiveChildModelKey?: string
   isolated?: boolean
   tokenUsage?: {
     cachedTokens: number

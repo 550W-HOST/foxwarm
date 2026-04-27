@@ -13,7 +13,7 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
-import { BASE_DIR } from '../config';
+import { BASE_DIR, resolveModelConfig } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
@@ -29,6 +29,57 @@ type WorkspaceNodeEntry = {
 };
 
 const MAX_INLINE_FILE_BYTES = 1024 * 1024;
+
+function buildWebUiModelStatus(session: { model?: string; childModelDefault?: string }) {
+  const { defaultKey, currentKey } = resolveModelConfig(session.model);
+  const { currentKey: effectiveChildModelKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session));
+  return {
+    model: typeof session.model === 'string' && session.model.trim() ? session.model.trim() : null,
+    modelKey: currentKey,
+    defaultModelKey: defaultKey,
+    childModelDefault: typeof session.childModelDefault === 'string' && session.childModelDefault.trim() ? session.childModelDefault.trim() : null,
+    effectiveChildModelKey,
+  };
+}
+
+function buildWebUiModelsPayload(currentModel?: string) {
+  const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(currentModel);
+  const displayModels = modelsConfig.displayModels || Object.keys(modelsConfig.models || {});
+  return {
+    defaultKey,
+    currentKey,
+    models: displayModels.map((key) => {
+      const entry = modelsConfig.models[key];
+      return {
+        key,
+        label: key,
+        isDefault: key === defaultKey,
+        contextLimit: entry?.contextLimit || null,
+      };
+    }),
+  };
+}
+
+function normalizeWebUiModelSelection(value: unknown): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new Error('model must be a string, null, or omitted with clear=true.');
+  }
+
+  const normalized = value.trim();
+  if (!normalized || normalized === 'default' || normalized === 'unset' || normalized === 'clear') {
+    return undefined;
+  }
+
+  const { modelsConfig } = resolveModelConfig(undefined);
+  if (!modelsConfig.models[normalized]) {
+    throw new Error(`Unknown model \`${normalized}\`.`);
+  }
+
+  return normalized;
+}
 
 function createWorkspaceFileTooLargeError(filePath: string, size: number, maxSize: number): Error & { code: string; path: string; size: number; maxSize: number } {
   const error = new Error(`File too large to open in WebUI editor (${size} bytes > ${maxSize} bytes). Please download it instead.`) as Error & {
@@ -347,6 +398,20 @@ export class WebUIChannel implements Channel {
         },
       });
 
+      httpServerInstance.addRoute({
+        path: '/api/models',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const currentModel = typeof req.query.current === 'string' ? req.query.current : undefined;
+            res.json(buildWebUiModelsPayload(currentModel));
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get models');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
       // Get all sessions
       httpServerInstance.addRoute({
         path: '/api/sessions',
@@ -384,7 +449,7 @@ export class WebUIChannel implements Channel {
                 archived: session.archived || false,
                 currentNode: session.currentNode || 'master',
                 cwd: session.cwd || null,
-                childModelDefault: session.childModelDefault || null,
+                ...buildWebUiModelStatus(session),
                 isolated: sessionManager.isSessionEffectivelyIsolated(session),
                 tokenUsage: {
                   cachedTokens: session.stats?.totalCachedTokens || 0,
@@ -446,6 +511,57 @@ export class WebUIChannel implements Channel {
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session cwd');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/model',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
+            const session = await sessionManager.getExistingSession(sessionId);
+            if (!session) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
+
+            const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
+            if (model !== undefined) {
+              session.model = model;
+            } else {
+              delete session.model;
+            }
+
+            await sessionManager.saveSession(session.id);
+            this.broadcastSessionListUpdate();
+            res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(session) });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to update session model');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/child-model',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
+            const session = await sessionManager.getExistingSession(sessionId);
+            if (!session) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
+
+            const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
+            await sessionManager.setSessionChildModelDefault(session.id, model);
+            const updated = await sessionManager.getExistingSession(session.id) || session;
+            this.broadcastSessionListUpdate();
+            res.json({ success: true, sessionId: updated.id, ...buildWebUiModelStatus(updated) });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to update session child model');
             res.status(400).json({ error: e.message });
           }
         },

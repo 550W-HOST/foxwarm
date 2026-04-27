@@ -5,7 +5,6 @@ import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
-import type { SendKeyMode } from './components/chatShared'
 import type { Session } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { useWorkbenchStore } from './workbench/store'
@@ -211,10 +210,6 @@ function App() {
     const saved = localStorage.getItem('themeMode')
     return saved === 'auto' || saved === 'light' || saved === 'dark' ? saved : 'auto'
   })
-  const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>(() => {
-    const saved = localStorage.getItem('sendKeyMode')
-    return saved === 'enter' || saved === 'mod-enter' ? saved : 'mod-enter'
-  })
   const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => {
     if (window.matchMedia) {
       return window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -283,10 +278,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem('themeMode', themeMode)
   }, [themeMode])
-
-  useEffect(() => {
-    localStorage.setItem('sendKeyMode', sendKeyMode)
-  }, [sendKeyMode])
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth))
@@ -961,8 +952,6 @@ function App() {
           sessionId={tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
-          sendKeyMode={sendKeyMode}
-          onToggleSendKeyMode={() => setSendKeyMode((current) => current === 'enter' ? 'mod-enter' : 'enter')}
           onOpenWorkspace={() => openWorkspaceTab(tab.sessionId)}
           onOpenTerminal={() => openTerminalTab(tab.sessionId, { sourcePaneId })}
           onDraftEdited={() => handleChatDraftEdited(tab.id)}
@@ -1270,8 +1259,6 @@ function App() {
           currentSessionRecord={currentContextSessionRecord}
           themeMode={themeMode}
           onThemeChange={setThemeMode}
-          sendKeyMode={sendKeyMode}
-          onSendKeyModeChange={setSendKeyMode}
           onSelectSession={openChatTab}
           onKeepSession={openKeptChatTab}
           onSelectArchitecture={() => {
@@ -1318,8 +1305,6 @@ function App() {
             currentSessionRecord={currentContextSessionRecord}
             themeMode={themeMode}
             onThemeChange={setThemeMode}
-            sendKeyMode={sendKeyMode}
-            onSendKeyModeChange={setSendKeyMode}
             onSelectSession={openChatTab}
             onKeepSession={openKeptChatTab}
             onSelectArchitecture={() => {
@@ -1356,8 +1341,6 @@ function App() {
                 currentSessionRecord={currentContextSessionRecord}
                 themeMode={themeMode}
                 onThemeChange={setThemeMode}
-                sendKeyMode={sendKeyMode}
-                onSendKeyModeChange={setSendKeyMode}
                 onSelectSession={openChatTab}
                 onKeepSession={openKeptChatTab}
                 onSelectArchitecture={() => {

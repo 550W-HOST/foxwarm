@@ -61,8 +61,6 @@ export interface SlashCommandCompletion {
   trailingSpace: boolean
 }
 
-export type SendKeyMode = 'mod-enter' | 'enter'
-
 export type ViewMode = 'rendered' | 'raw' | 'json'
 
 export type ToolViewMode = 'default' | 'json'
