@@ -156,115 +156,11 @@ function nativeImport<T = any>(specifier: string): Promise<T> {
   return Function('s', 'return import(s)')(specifier) as Promise<T>;
 }
 
-function findMatchingCallParen(source: string, openParenIndex: number): number {
-  let depth = 1;
-  let inQuote: 'single' | 'double' | null = null;
-  let escaped = false;
-
-  for (let i = openParenIndex + 1; i < source.length; i += 1) {
-    const ch = source[i];
-    if (inQuote) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (ch === '\\') {
-        escaped = true;
-        continue;
-      }
-      if ((inQuote === 'single' && ch === '\'') || (inQuote === 'double' && ch === '"')) {
-        inQuote = null;
-      }
-      continue;
-    }
-
-    if (ch === '\'') {
-      inQuote = 'single';
-      continue;
-    }
-    if (ch === '"') {
-      inQuote = 'double';
-      continue;
-    }
-    if (ch === '(') {
-      depth += 1;
-      continue;
-    }
-    if (ch === ')') {
-      depth -= 1;
-      if (depth === 0) {
-        return i;
-      }
-    }
-  }
-
-  return -1;
-}
-
-function rewriteStepAndReleaseHelperCalls(code: string): string {
-  const helperToken = 'step_and_release_managed_session(';
-  let cursor = 0;
-  let rewritten = '';
-  let counter = 0;
-
-  while (cursor < code.length) {
-    const idx = code.indexOf(helperToken, cursor);
-    if (idx === -1) {
-      rewritten += code.slice(cursor);
-      break;
-    }
-
-    const lineStart = code.lastIndexOf('\n', idx) + 1;
-    const prefix = code.slice(lineStart, idx);
-    const match = prefix.match(/^([ \t]*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*$/);
-    if (!match) {
-      rewritten += code.slice(cursor, idx + helperToken.length);
-      cursor = idx + helperToken.length;
-      continue;
-    }
-
-    const openParenIndex = idx + helperToken.length - 1;
-    const closeParenIndex = findMatchingCallParen(code, openParenIndex);
-    if (closeParenIndex === -1) {
-      throw new Error('Unclosed step_and_release_managed_session(...) call.');
-    }
-
-    const lineEndIndex = code.indexOf('\n', closeParenIndex);
-    const lineEnd = lineEndIndex === -1 ? code.length : lineEndIndex;
-    const trailing = code.slice(closeParenIndex + 1, lineEnd);
-    if (trailing.trim()) {
-      rewritten += code.slice(cursor, idx + helperToken.length);
-      cursor = idx + helperToken.length;
-      continue;
-    }
-
-    const indent = match[1];
-    const resultVar = match[2];
-    const argsText = code.slice(openParenIndex + 1, closeParenIndex);
-    const stepVar = `__toolscript_step_${counter}`;
-    const releaseVar = `__toolscript_release_${counter}`;
-    counter += 1;
-
-    rewritten += code.slice(cursor, lineStart);
-    rewritten += `${indent}${stepVar} = session_step(${argsText})\n`;
-    rewritten += `${indent}${releaseVar} = release_managed_session(${stepVar}["sessionId"], ${stepVar}["leaseId"], ${stepVar}["revision"])\n`;
-    rewritten += `${indent}${stepVar}["releasedPendingInboxCount"] = ${releaseVar}["releasedPendingInboxCount"]\n`;
-    rewritten += `${indent}${resultVar} = ${stepVar}`;
-    if (lineEndIndex !== -1) {
-      rewritten += '\n';
-    }
-    cursor = lineEndIndex === -1 ? code.length : lineEndIndex + 1;
-  }
-
-  return rewritten;
-}
-
 function buildToolScriptSource(code: string): string {
-  const rewritten = rewriteStepAndReleaseHelperCalls(code);
-  if (!/^\s*def\s+main\s*\(\s*args\b/m.test(rewritten)) {
+  if (!/^\s*def\s+main\s*\(\s*args\b/m.test(code)) {
     throw new Error('ToolScript scripts must define `def main(args):` and return a result explicitly.');
   }
-  return `${rewritten.trimEnd()}\n\nmain(args)\n`;
+  return `${code.trimEnd()}\n\nmain(args)\n`;
 }
 
 function parseTimeoutSecs(value: any, fallback = DEFAULT_TOOLSCRIPT_TIMEOUT_SECS): number {

@@ -422,7 +422,10 @@ test('background ToolScript controller run can wait for managed inbox events and
   await writeScript(scriptName, asMain([
     `lease = open_managed_session("${childId}")`,
     `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
-    `result = step_and_release_managed_session("${childId}", lease["leaseId"], event["revision"], message="controller woke")`,
+    `step = session_step("${childId}", lease["leaseId"], event["revision"], message="controller woke")`,
+    `release = release_managed_session(step["sessionId"], step["leaseId"], step["revision"])`,
+    `step["releasedPendingInboxCount"] = release["releasedPendingInboxCount"]`,
+    `result = step`,
     'return result',
   ].join('\n')));
 
@@ -472,7 +475,7 @@ test('background ToolScript controller run can wait for managed inbox events and
   }
 });
 
-test('background ToolScript step_and_release controller run survives a managed child tool loop', async () => {
+test('background ToolScript explicit step/release controller run survives a managed child tool loop', async () => {
   await resetToolScriptRunsForTests();
   const router = new MessageRouter();
   const originalChat = llm.chat;
@@ -483,7 +486,10 @@ test('background ToolScript step_and_release controller run survives a managed c
   await writeScript(scriptName, asMain([
     `lease = open_managed_session("${childId}")`,
     `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
-    `result = step_and_release_managed_session("${childId}", lease["leaseId"], event["revision"], run_mode="idle", inbox_order="before", message="controller woke")`,
+    `step = session_step("${childId}", lease["leaseId"], event["revision"], run_mode="idle", inbox_order="before", message="controller woke")`,
+    `release = release_managed_session(step["sessionId"], step["leaseId"], step["revision"])`,
+    `step["releasedPendingInboxCount"] = release["releasedPendingInboxCount"]`,
+    `result = step`,
     'return result',
   ].join('\n')));
 
@@ -545,7 +551,7 @@ test('background ToolScript step_and_release controller run survives a managed c
   }
 });
 
-test('background ToolScript step_and_release controller run survives multiple managed child tool rounds', async () => {
+test('background ToolScript explicit step/release controller run survives multiple managed child tool rounds', async () => {
   await resetToolScriptRunsForTests();
   const router = new MessageRouter();
   const originalChat = llm.chat;
@@ -556,7 +562,10 @@ test('background ToolScript step_and_release controller run survives multiple ma
   await writeScript(scriptName, asMain([
     `lease = open_managed_session("${childId}")`,
     `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
-    `result = step_and_release_managed_session("${childId}", lease["leaseId"], event["revision"], run_mode="idle", inbox_order="before", message="controller woke")`,
+    `step = session_step("${childId}", lease["leaseId"], event["revision"], run_mode="idle", inbox_order="before", message="controller woke")`,
+    `release = release_managed_session(step["sessionId"], step["leaseId"], step["revision"])`,
+    `step["releasedPendingInboxCount"] = release["releasedPendingInboxCount"]`,
+    `result = step`,
     'return result',
   ].join('\n')));
 

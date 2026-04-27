@@ -9,7 +9,7 @@ def main(args):
         lease["revision"],
     )
 
-    result = step_and_release_managed_session(
+    result = session_step(
         target_session_id,
         lease["leaseId"],
         event["revision"],
@@ -17,6 +17,12 @@ def main(args):
         inbox_order="before",
         message="Controller handled this request.",
     )
+    release = release_managed_session(
+        result["sessionId"],
+        result["leaseId"],
+        result["revision"],
+    )
+    result["releasedPendingInboxCount"] = release["releasedPendingInboxCount"]
 
     return {
         "targetSessionId": target_session_id,

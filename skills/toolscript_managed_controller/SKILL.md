@@ -14,10 +14,6 @@ Before grepping tests, read:
 - `examples/toolscript/managed_controller_basic.py`
 - `examples/toolscript/README.md`
 
-Small helper worth knowing immediately:
-
-- `step_and_release_managed_session(...)`
-
 As with normal ToolScript automation, first verify the target session and the surrounding tool/runtime flow in the regular agent loop, then encode the known controller flow into a script.
 
 ToolScript scripts should use an explicit entrypoint:
@@ -35,7 +31,8 @@ For a first controller script, use this as the default path:
 1. start the script as a **background** ToolScript run
 2. `open_managed_session(...)`
 3. `wait_for_managed_event(...)`
-4. `step_and_release_managed_session(...)`
+4. `session_step(...)`
+5. `release_managed_session(...)`
 
 Recommended defaults for that first step:
 
@@ -101,7 +98,7 @@ When this happens in a background ToolScript run:
 
 Runs one controlled step of the managed session.
 
-This is the lower-level primitive. For the most common first-time pattern, prefer `step_and_release_managed_session(...)`.
+For the common first-time pattern, call `release_managed_session(...)` immediately after a successful step so the target session is not left under managed control.
 
 Important arguments:
 
@@ -128,38 +125,7 @@ Releases the lease and returns queued control to the session itself.
 
 Pending inbox work is replayed back into the normal queue when appropriate.
 
-### `step_and_release_managed_session(...)`
-
-Use this helper as the default first choice for the very common pattern:
-
-- step once
-- then immediately release the lease
-
-Example:
-
-```python
-def main(args):
-    child_id = args["child_session_id"]
-    lease = open_managed_session(child_id)
-    event = wait_for_managed_event(child_id, lease["leaseId"], lease["revision"])
-    result = step_and_release_managed_session(
-        child_id,
-        lease["leaseId"],
-        event["revision"],
-        run_mode="idle",
-        inbox_order="before",
-        message="Controller handled this request.",
-    )
-    return result
-```
-
-It returns the `session_step(...)` result plus:
-
-- `releasedPendingInboxCount`
-
-By default the helper keeps the result light. If you really need the full `newMessages` payload, pass `include_messages=True`.
-
-For most first scripts, this is the main entry you want after `wait_for_managed_event(...)`.
+For most first scripts, the main pattern after `wait_for_managed_event(...)` is: run `session_step(...)`, then call `release_managed_session(...)` with the **step result's** `sessionId`, `leaseId`, and `revision`.
 
 ## `runMode`, `inboxOrder`, `yieldReason`
 
@@ -207,7 +173,7 @@ def main(args):
         lease["revision"],
     )
 
-    result = step_and_release_managed_session(
+    result = session_step(
         child_id,
         lease["leaseId"],
         event["revision"],
@@ -215,6 +181,12 @@ def main(args):
         inbox_order="before",
         message="Controller processed your request.",
     )
+    release = release_managed_session(
+        result["sessionId"],
+        result["leaseId"],
+        result["revision"],
+    )
+    result["releasedPendingInboxCount"] = release["releasedPendingInboxCount"]
 
     return result
 ```
