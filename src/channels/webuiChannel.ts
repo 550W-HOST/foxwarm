@@ -53,9 +53,11 @@ function dumpYaml(value: unknown): string {
 function getModelsSetupDiagnostics() {
   const exists = fs.existsSync(DEFAULT_MODELS_CONFIG_PATH);
   const raw = exists ? readYamlFileIfExists(DEFAULT_MODELS_CONFIG_PATH) : undefined;
+  const rawYaml = exists ? fs.readFileSync(DEFAULT_MODELS_CONFIG_PATH, 'utf8') : '';
   const providers = raw?.providers || raw?.models || {};
   const providerEntries = providers && typeof providers === 'object' && !Array.isArray(providers) ? Object.entries(providers as Record<string, ProviderConfigEntry>) : [];
   const providerCount = providerEntries.length;
+  const defaultModel = typeof raw?.default === 'string' ? raw.default : null;
   const placeholderProviders = providerEntries
     .filter(([, entry]) => isPlaceholderSecret((entry as ProviderConfigEntry).apiKey))
     .map(([key]) => key);
@@ -65,7 +67,24 @@ function getModelsSetupDiagnostics() {
     templatePath: MODELS_CONFIG_TEMPLATE_PATH,
     exists,
     providerCount,
-    defaultModel: typeof raw?.default === 'string' ? raw.default : null,
+    defaultModel,
+    rawYaml,
+    providers: providerEntries.map(([key, entry]) => {
+      const rawModels = Array.isArray(entry.models) ? entry.models : Array.isArray(entry.model) ? entry.model : (entry.model ? [entry.model] : []);
+      const models = rawModels
+        .map((item: any) => typeof item === 'string' ? item : item?.id)
+        .filter((item: any) => typeof item === 'string' && item.trim())
+        .join('\n');
+      const defaultPrefix = `${key}/`;
+      return {
+        id: key,
+        providerType: entry.providerType || entry.provider || 'openai-completions',
+        baseUrl: entry.baseUrl || '',
+        apiKey: entry.apiKey || '',
+        models,
+        defaultModel: defaultModel?.startsWith(defaultPrefix) ? defaultModel.slice(defaultPrefix.length) : '',
+      };
+    }),
     hasPlaceholderSecrets: placeholderProviders.length > 0,
     placeholderProviders,
     oobe: !exists,

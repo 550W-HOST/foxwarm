@@ -1,4 +1,4 @@
-import { Plus, Settings, Workflow } from 'lucide-react'
+import { Plus, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 import CreateTabButton from './CreateTabButton'
@@ -42,10 +42,6 @@ export default function SessionList({
   const agentsBtnClass = currentView === 'agents'
     ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
     : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700'
-  const setupBtnClass = currentView === 'setup'
-    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
-    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700'
-
   return (
     <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 bg-gray-100 dark:bg-gray-900 flex flex-col">
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
@@ -54,6 +50,8 @@ export default function SessionList({
           <GlobalUiSettingsMenu
             themeMode={themeMode}
             onThemeChange={onThemeChange}
+            onOpenSetup={onSelectSetup}
+            setupActive={currentView === 'setup'}
           />
         </div>
 
@@ -71,13 +69,6 @@ export default function SessionList({
             title="Create new session"
           >
             <Plus className="w-4 h-4" />
-          </button>
-          <button
-            onClick={onSelectSetup}
-            className={`inline-flex items-center justify-center rounded-lg px-2 text-sm font-medium transition-colors ${setupBtnClass}`}
-            title="Open setup"
-          >
-            <Settings className="w-4 h-4" />
           </button>
         </div>
 

@@ -187,7 +187,7 @@ export default function FileEditorView({ nodeId, filePath, onBack, onOpenTermina
         )}
       </div>
 
-      <div className="min-h-0 flex-1 p-4">
+      <div className="min-h-0 flex-1">
         {loading ? (
           <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white text-sm text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">
             Loading file…
@@ -219,7 +219,7 @@ export default function FileEditorView({ nodeId, filePath, onBack, onOpenTermina
             </div>
           </div>
         ) : (
-          <Suspense fallback={<div className="flex h-full items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white text-sm text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">Loading editor…</div>}>
+          <Suspense fallback={<div className="flex h-full items-center justify-center bg-white text-sm text-gray-500 dark:bg-gray-900 dark:text-gray-400">Loading editor…</div>}>
             <MonacoFileEditor value={content} onChange={setContent} filePath={filePath} />
           </Suspense>
         )}

@@ -111,5 +111,5 @@ export default function MonacoFileEditor({ value, filePath, onChange, readOnly =
     }
   }, [value])
 
-  return <div ref={containerRef} className="h-full min-h-0 w-full overflow-hidden rounded-xl border border-gray-300 dark:border-gray-600" />
+  return <div ref={containerRef} className="h-full min-h-0 w-full overflow-hidden" />
 }

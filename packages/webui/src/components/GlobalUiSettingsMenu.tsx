@@ -7,9 +7,11 @@ type ThemeMode = 'auto' | 'light' | 'dark'
 interface GlobalUiSettingsMenuProps {
   themeMode: ThemeMode
   onThemeChange: (mode: ThemeMode) => void
+  onOpenSetup?: () => void
+  setupActive?: boolean
 }
 
-export default function GlobalUiSettingsMenu({ themeMode, onThemeChange }: GlobalUiSettingsMenuProps) {
+export default function GlobalUiSettingsMenu({ themeMode, onThemeChange, onOpenSetup, setupActive = false }: GlobalUiSettingsMenuProps) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
 
@@ -71,6 +73,19 @@ export default function GlobalUiSettingsMenu({ themeMode, onThemeChange }: Globa
 
           <div className="border-t border-gray-200 px-4 py-3 dark:border-gray-700">
             <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Application</div>
+            {onOpenSetup && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenSetup()
+                  setOpen(false)
+                }}
+                className={`mb-3 flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs ${setupActive ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'}`}
+              >
+                <span>Open setup</span>
+                {setupActive && <span className="text-[10px] uppercase tracking-wide">active</span>}
+              </button>
+            )}
             <div className="flex items-center gap-3">
               <div className="min-w-0 flex-1 text-left text-xs text-gray-600 dark:text-gray-300">Clear cache and reload</div>
               <ReloadAppButton />
