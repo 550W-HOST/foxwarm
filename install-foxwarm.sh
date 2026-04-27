@@ -2,6 +2,7 @@
 set -euo pipefail
 
 FOXWARM_REPO="${FOXWARM_REPO:-https://github.com/550W-HOST/foxwarm.git}"
+CALL_DIR="$PWD"
 SCRIPT_ARGS=("$@")
 for ((i=0; i<${#SCRIPT_ARGS[@]}; i++)); do
   case "${SCRIPT_ARGS[$i]}" in
@@ -41,12 +42,23 @@ EOF
   esac
 done
 
+absolute_path_from_call_dir() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    ~) printf '%s\n' "$HOME" ;;
+    ~/*) printf '%s/%s\n' "$HOME" "${1#~/}" ;;
+    *) printf '%s/%s\n' "$CALL_DIR" "$1" ;;
+  esac
+}
+
 if [ -z "${FOXWARM_DIR:-}" ] && [ -f "package.json" ] && grep -q '"name": "foxwarm"' package.json 2>/dev/null; then
   FOXWARM_DIR="$PWD"
 else
   FOXWARM_DIR="${FOXWARM_DIR:-$PWD/foxwarm}"
 fi
 FOXWARM_DATA_DIR="${FOXWARM_DATA_DIR:-$(dirname "$FOXWARM_DIR")/foxwarm-data}"
+FOXWARM_DIR="$(absolute_path_from_call_dir "$FOXWARM_DIR")"
+FOXWARM_DATA_DIR="$(absolute_path_from_call_dir "$FOXWARM_DATA_DIR")"
 if [ -z "${FOXWARM_BRANCH:-}" ] && [ -d "$FOXWARM_DIR/.git" ]; then
   FOXWARM_BRANCH="$(git -C "$FOXWARM_DIR" branch --show-current 2>/dev/null || true)"
 fi

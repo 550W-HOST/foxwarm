@@ -1,6 +1,7 @@
 node_modules
 /lib
 /state
+/data_dir
 /workspace
 /agents
 /.env
