@@ -38,6 +38,14 @@ import { buildWorkspaceDownloadUrl, triggerBrowserDownload } from './workspaceSh
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatToolResponsePayload(resp.response)
 
+const getMessageStableKey = (msg: Message, idx: number): string => {
+  const meta = msg.__meta || {}
+  if (meta.synthetic) return `synthetic-${String(meta.synthetic)}`
+  if (meta.id) return `id-${String(meta.id)}`
+  if (meta.timestamp !== undefined) return `ts-${String(meta.timestamp)}`
+  return `idx-${idx}`
+}
+
 const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionResponse): { url: string; fileName?: string } | null => {
   if (resp.name !== 'send_file') {
     return null
@@ -1286,7 +1294,7 @@ const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg, hasPrecedingC
 })
 
 interface MessageRowProps {
-  idx: number
+  messageKey: string
   msg: Message
   prevMsg: Message | null
   nextMsg: Message | null
@@ -1301,7 +1309,7 @@ interface MessageRowProps {
 }
 
 const MessageRow = memo(function MessageRow({
-  idx,
+  messageKey,
   msg,
   prevMsg,
   nextMsg,
@@ -1356,7 +1364,7 @@ const MessageRow = memo(function MessageRow({
         } overflow-x-hidden`}
       >
         {systemLikeMessage ? (
-          <SystemLikeMessageCard msg={msg} messageKey={`msg-${idx}`} />
+          <SystemLikeMessageCard msg={msg} messageKey={messageKey} />
         ) : msg.role === 'user' ? (
           <div className="flex flex-col">
             {textLikeParts.map((part, partIdx) => (
@@ -1366,7 +1374,7 @@ const MessageRow = memo(function MessageRow({
                   : <CollapsibleUserText text={part.text || ''} />}
               </div>
             ))}
-            <ImageParts imageParts={imageParts} keyPrefix={`user-${idx}`} />
+            <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />
           </div>
         ) : (
           <div className="flex flex-col">
@@ -1382,7 +1390,7 @@ const MessageRow = memo(function MessageRow({
               }
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
             })}
-            <ImageParts imageParts={imageParts} keyPrefix={`message-${idx}`} />
+            <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {!verbose && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
               <div
                 className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
@@ -1393,7 +1401,7 @@ const MessageRow = memo(function MessageRow({
                 </div>
               </div>
             )}
-            {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={`msg-${idx}`} /> : <ToolCallsBlock msg={msg} />)}
+            {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} /> : <ToolCallsBlock msg={msg} />)}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup ? null : <ToolResponsesBlock msg={msg} hasPrecedingCallMsg={hasPrecedingCallMsg} />)}
           </div>
         )}
@@ -1402,6 +1410,7 @@ const MessageRow = memo(function MessageRow({
   )
 }, (prev, next) => (
   prev.msg === next.msg &&
+  prev.messageKey === next.messageKey &&
   prev.prevMsg === next.prevMsg &&
   prev.nextMsg === next.nextMsg &&
   prev.isMobile === next.isMobile &&
@@ -1417,6 +1426,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
 
   const toolGroupMeta = useMemo(() => {
+    const messageKeys = messages.map((msg, idx) => getMessageStableKey(msg, idx))
     const hasTextContent = (msg: Message) => msg.parts.some((p) => (p.text && p.text.trim()) || (p.system && String(p.system).trim()))
     const hasToolCalls = (msg: Message) => msg.parts.some((p) => p.functionCall)
     const hasToolResponses = (msg: Message) => msg.parts.some((p) => p.functionResponse)
@@ -1535,7 +1545,8 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
         const prevMsg = messages[idx - 1]
         return prevMsg?.role === 'model' && prevMsg.parts.some(p => p.functionCall)
       }),
-      groupKeyByIndex: startIdxByIndex.map((startIdx) => `${startIdx}-toolgroup`),
+      messageKeyByIndex: messageKeys,
+      groupKeyByIndex: startIdxByIndex.map((startIdx) => `${messageKeys[startIdx] || `idx-${startIdx}`}-toolgroup`),
       summaryTagItemsKeyByIndex: startIdxByIndex.map((startIdx) => summaryTagItemsKeyByStart.get(startIdx) || ''),
       keepExpandedByIndex: startIdxByIndex.map((startIdx) => keepExpandedByStart.get(startIdx) || false),
       shouldRenderSummary: startIdxByIndex.map((startIdx, idx) => idx === startIdx && (summaryTagItemsByStart.get(startIdx)?.length || 0) > 0),
@@ -1558,10 +1569,11 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
         }
 
         const groupKey = toolGroupMeta.groupKeyByIndex[idx]
+        const messageKey = toolGroupMeta.messageKeyByIndex[idx]
         return (
           <MessageRow
-            key={msg.__meta?.timestamp ?? idx}
-            idx={idx}
+            key={messageKey}
+            messageKey={messageKey}
             msg={msg}
             prevMsg={idx > 0 ? messages[idx - 1] : null}
             nextMsg={idx < messages.length - 1 ? messages[idx + 1] : null}
