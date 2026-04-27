@@ -108,10 +108,23 @@ function ModelSelector({
     const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 12)
     const openAbove = spaceAbove >= 180 || spaceAbove >= spaceBelow
     const maxHeight = Math.max(180, Math.min(preferredMaxHeight, openAbove ? spaceAbove : spaceBelow || preferredMaxHeight))
-    const top = openAbove
-      ? Math.max(8, rect.top - maxHeight - 8)
-      : Math.min(window.innerHeight - maxHeight - 8, rect.bottom + 8)
-    setPopupStyle({ position: 'fixed', left, top, width, maxHeight })
+    if (openAbove) {
+      setPopupStyle({
+        position: 'fixed',
+        left,
+        bottom: Math.max(8, window.innerHeight - rect.top + 8),
+        width,
+        maxHeight,
+      })
+    } else {
+      setPopupStyle({
+        position: 'fixed',
+        left,
+        top: Math.min(window.innerHeight - maxHeight - 8, rect.bottom + 8),
+        width,
+        maxHeight,
+      })
+    }
   }, [])
 
   useEffect(() => {
@@ -206,7 +219,7 @@ function ModelSelector({
         ref={buttonRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="inline-flex h-8 max-w-[19rem] shrink-0 items-center gap-2 rounded-full border border-gray-200 bg-white px-3 text-[12px] font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+        className="inline-flex h-8 max-w-[19rem] shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
         aria-haspopup="dialog"
         aria-expanded={open}
       >
