@@ -90,43 +90,157 @@ function ModelSelector({
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
 }) {
-  const currentValue = sessionModel || '__default__'
-  const childValue = childModelDefault || '__default__'
+  const [open, setOpen] = useState(false)
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({})
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const currentIsDefault = !sessionModel
+  const childFollows = !childModelDefault
+
+  const updatePopupPosition = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const width = Math.min(420, Math.max(320, Math.min(window.innerWidth - 16, rect.width + 150)))
+    const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
+    const maxHeight = Math.min(360, Math.max(220, window.innerHeight - 24))
+    const top = Math.max(8, rect.top - maxHeight - 8)
+    setPopupStyle({ left, top, width, maxHeight })
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    updatePopupPosition()
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (!rootRef.current?.contains(target)) {
+        setOpen(false)
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    const handleReposition = () => updatePopupPosition()
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('resize', handleReposition)
+    window.addEventListener('scroll', handleReposition, true)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('resize', handleReposition)
+      window.removeEventListener('scroll', handleReposition, true)
+    }
+  }, [open, updatePopupPosition])
+
+  const applyCurrentModel = useCallback((model: string | null) => {
+    if (busy) return
+    void onChangeModel(model).catch(() => {})
+  }, [busy, onChangeModel])
+
+  const applyChildModel = useCallback((model: string | null) => {
+    if (busy) return
+    void onChangeChildModel(model).catch(() => {})
+  }, [busy, onChangeChildModel])
+
+  const renderCheckbox = (checked: boolean, label: string) => (
+    <span
+      aria-label={label}
+      className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[12px] font-semibold ${checked ? 'border-blue-500 bg-blue-500 text-white' : 'border-gray-300 bg-white text-transparent dark:border-gray-600 dark:bg-gray-900'}`}
+    >
+      ✓
+    </span>
+  )
+
+  const renderRow = (row: { key: string | null; label: string; title: string; currentChecked: boolean; childChecked: boolean; defaultRow?: boolean }) => (
+    <div
+      key={row.key || '__default__'}
+      className="grid grid-cols-[minmax(0,1fr)_4.5rem_4rem] items-stretch border-t border-gray-100 text-xs first:border-t-0 dark:border-gray-800"
+    >
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => applyCurrentModel(row.key)}
+        className={`min-w-0 px-3 py-2 text-left transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-blue-950/30 ${row.currentChecked ? 'text-blue-700 dark:text-blue-200' : 'text-gray-700 dark:text-gray-200'}`}
+        title={row.title}
+      >
+        <div className="truncate font-medium">{row.label}</div>
+        {row.defaultRow && (
+          <div className="truncate text-[11px] text-gray-400 dark:text-gray-500">current: default · child: follow</div>
+        )}
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => applyCurrentModel(row.key)}
+        className="flex items-center justify-center transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-blue-950/30"
+        title={`Use ${row.label} as current session model`}
+      >
+        {renderCheckbox(row.currentChecked, 'current model selected')}
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => applyChildModel(row.key)}
+        className="flex items-center justify-center transition hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-purple-950/30"
+        title={`Use ${row.label} as child default model`}
+      >
+        {renderCheckbox(row.childChecked, 'child default selected')}
+      </button>
+    </div>
+  )
 
   return (
-    <div className="inline-flex min-w-0 shrink-0 items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-1 text-[12px] shadow-sm dark:border-gray-700 dark:bg-gray-800" title={error || undefined}>
-      <label className="flex min-w-0 items-center gap-1">
+    <div ref={rootRef} className="relative inline-flex min-w-0 shrink-0" title={error || undefined}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="inline-flex h-8 max-w-[19rem] shrink-0 items-center gap-2 rounded-full border border-gray-200 bg-white px-3 text-[12px] font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+      >
         <span className="shrink-0 text-gray-500 dark:text-gray-400">Model</span>
-        <select
-          value={currentValue}
-          disabled={busy || options.length === 0}
-          onChange={(event) => { void onChangeModel(event.target.value === '__default__' ? null : event.target.value).catch(() => {}) }}
-          className="max-w-[11rem] rounded-md border border-transparent bg-gray-50 px-1.5 py-1 text-[12px] text-gray-700 outline-none transition hover:border-gray-300 disabled:opacity-60 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-gray-600"
-          aria-label="Session model"
+        <span className="min-w-0 truncate" title={currentModelKey || defaultModelKey || 'model'}>{currentModelKey || defaultModelKey || 'model'}</span>
+        <span className="hidden shrink-0 text-gray-400 dark:text-gray-500 sm:inline">/</span>
+        <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault || `follow ${effectiveChildModelKey || currentModelKey || ''}`}>{childModelDefault ? `child ${childModelDefault}` : 'child follow'}</span>
+        {busy && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
+        {error && <span className="shrink-0 text-red-500 dark:text-red-300">!</span>}
+      </button>
+
+      {open && (
+        <div
+          className="fixed z-[80] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
+          style={popupStyle}
+          role="dialog"
+          aria-label="Model selection"
         >
-          <option value="__default__">Default ({defaultModelKey || currentModelKey || 'model'})</option>
-          {options.map((option) => (
-            <option key={option.key} value={option.key}>{formatModelLabel(option, defaultModelKey)}</option>
-          ))}
-        </select>
-      </label>
-      <label className="flex min-w-0 items-center gap-1">
-        <span className="shrink-0 text-gray-400 dark:text-gray-500">Child</span>
-        <select
-          value={childValue}
-          disabled={busy || options.length === 0}
-          onChange={(event) => { void onChangeChildModel(event.target.value === '__default__' ? null : event.target.value).catch(() => {}) }}
-          className="max-w-[10rem] rounded-md border border-transparent bg-gray-50 px-1.5 py-1 text-[12px] text-gray-700 outline-none transition hover:border-gray-300 disabled:opacity-60 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-gray-600"
-          aria-label="Child default model"
-        >
-          <option value="__default__">Follow ({effectiveChildModelKey || currentModelKey || 'model'})</option>
-          {options.map((option) => (
-            <option key={option.key} value={option.key}>{formatModelLabel(option, defaultModelKey)}</option>
-          ))}
-        </select>
-      </label>
-      {busy && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
-      {error && <span className="max-w-[8rem] truncate text-red-500 dark:text-red-300">{error}</span>}
+          <div className="grid grid-cols-[minmax(0,1fr)_4.5rem_4rem] border-b border-gray-200 bg-gray-50 px-0 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
+            <div className="px-3 py-2">Model id</div>
+            <div className="px-2 py-2 text-center">Current</div>
+            <div className="px-2 py-2 text-center">Child</div>
+          </div>
+          <div className="max-h-[inherit] overflow-y-auto">
+            {renderRow({
+              key: null,
+              label: 'default / follow',
+              title: `Current default: ${defaultModelKey || currentModelKey || 'model'}; child follows: ${effectiveChildModelKey || currentModelKey || 'model'}`,
+              currentChecked: currentIsDefault,
+              childChecked: childFollows,
+              defaultRow: true,
+            })}
+            {options.map((option) => renderRow({
+              key: option.key,
+              label: formatModelLabel(option, defaultModelKey),
+              title: option.key,
+              currentChecked: sessionModel === option.key,
+              childChecked: childModelDefault === option.key,
+            }))}
+          </div>
+          {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
+        </div>
+      )}
     </div>
   )
 }
