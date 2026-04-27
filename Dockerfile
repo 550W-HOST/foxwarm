@@ -11,6 +11,7 @@ RUN npm ci && npm --prefix packages/webui ci
 COPY tsconfig.json ./
 COPY src ./src
 COPY templates ./templates
+COPY skills ./skills
 COPY packages/shared ./packages/shared
 COPY packages/webui ./packages/webui
 
@@ -57,6 +58,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/lib ./lib
 COPY --from=build /app/templates ./templates
+COPY --from=build /app/skills ./skills
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build /app/packages/webui/dist ./packages/webui/dist
 COPY --from=build /app/packages/webui/public ./packages/webui/public

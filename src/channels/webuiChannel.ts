@@ -14,7 +14,7 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
-import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig, writeAppConfigFile } from '../config';
+import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, loadModelsConfigFromObject, readAppConfigFile, resolveModelConfig, writeAppConfigFile } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
@@ -481,7 +481,8 @@ export class WebUIChannel implements Channel {
           } else {
             res.status(401).json({ error: 'Invalid token' });
           }
-        }
+        },
+        noAuth: true,
       });
 
       // Get available slash commands for WebUI autocomplete
@@ -561,6 +562,10 @@ export class WebUIChannel implements Channel {
               throw new Error('models config must be a YAML object.');
             }
 
+            // Validate before writing, so a bad setup payload does not create a
+            // broken state/models.yaml and accidentally leave OOBE mode.
+            loadModelsConfigFromObject(config);
+
             fs.ensureDirSync(path.dirname(DEFAULT_MODELS_CONFIG_PATH));
             fs.writeFileSync(DEFAULT_MODELS_CONFIG_PATH, dumpYaml(config), 'utf8');
 
@@ -608,6 +613,9 @@ export class WebUIChannel implements Channel {
               maxRetries: 1,
               timeoutMs: 30000,
             });
+            if (/^\s*Error:/i.test(result.text || '')) {
+              return res.status(400).json({ success: false, error: result.text });
+            }
             res.json({ success: true, text: result.text, usage: result.usage || null });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to test models setup');

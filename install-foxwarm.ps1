@@ -18,6 +18,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $Repo = if ($env:FOXWARM_REPO) { $env:FOXWARM_REPO } else { 'https://github.com/550W-HOST/foxwarm.git' }
+$CallDir = (Get-Location).Path
 if ($InstallDir) {
   $Dir = $InstallDir
 } elseif ($env:FOXWARM_DIR) {
@@ -28,6 +29,8 @@ if ($InstallDir) {
   $Dir = Join-Path (Get-Location).Path 'foxwarm'
 }
 $DataDir = if ($DataDir) { $DataDir } elseif ($env:FOXWARM_DATA_DIR) { $env:FOXWARM_DATA_DIR } else { Join-Path (Split-Path $Dir) 'foxwarm-data' }
+$Dir = [System.IO.Path]::GetFullPath((Join-Path $CallDir $Dir))
+$DataDir = [System.IO.Path]::GetFullPath((Join-Path $CallDir $DataDir))
 if ($BranchName) {
   $Branch = $BranchName
 } elseif ($env:FOXWARM_BRANCH) {
@@ -79,7 +82,8 @@ if (Test-Path (Join-Path $Dir '.git')) {
 }
 
 Set-Location $Dir
-New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'state'),(Join-Path $DataDir 'agents'),(Join-Path $DataDir 'skills') | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'state'),(Join-Path $DataDir 'agents') | Out-Null
+Set-Content -Path (Join-Path $Dir 'data_dir') -Value $DataDir -NoNewline
 
 Write-Step 'Installing dependencies and building Foxwarm. This can take a few minutes.'
 npm run build-all
@@ -90,10 +94,13 @@ Start-Process powershell -ArgumentList @('-NoExit', '-ExecutionPolicy', 'Bypass'
 
 $TokenFile = Join-Path $DataDir 'state\token'
 $Token = $null
-for ($i = 0; $i -lt 40; $i++) {
+for ($i = 0; $i -lt 240; $i++) {
   if (Test-Path $TokenFile) {
     $Token = (Get-Content $TokenFile -Raw).Trim()
     if ($Token) { break }
+  }
+  if (($i -gt 0) -and ($i % 20 -eq 0)) {
+    Write-Warning 'Still waiting for token. Check the Foxwarm PowerShell window for startup progress.'
   }
   Start-Sleep -Milliseconds 500
 }

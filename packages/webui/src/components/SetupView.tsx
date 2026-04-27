@@ -65,6 +65,16 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
   )
 }
 
+function normalizeWeixinQrSrc(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (/^data:image\//i.test(trimmed) || /^https?:\/\//i.test(trimmed)) return trimmed
+  if (/^[A-Za-z0-9+/=\s]+$/.test(trimmed) && trimmed.replace(/\s/g, '').length > 80) {
+    return `data:image/png;base64,${trimmed.replace(/\s/g, '')}`
+  }
+  return null
+}
+
 export default function SetupView({ forced = false, onClose, onSetupChanged }: SetupViewProps) {
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -191,8 +201,12 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Failed to start Weixin login (${res.status})`)
       setWeixinSessionKey(data.sessionKey || '')
-      setWeixinQrUrl(data.qrcodeUrl || '')
-      setWeixinMessage(data.message || 'Scan the QR code with Weixin, then click Check login.')
+      const rawQr = data.qrcodeUrl || ''
+      const normalizedQr = normalizeWeixinQrSrc(rawQr)
+      setWeixinQrUrl(normalizedQr || '')
+      setWeixinMessage(normalizedQr
+        ? (data.message || 'Scan the QR code with Weixin, then click Check login.')
+        : `Login started, but the QR payload was not a displayable image URL/data URL. Copy/open this value manually: ${rawQr}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {

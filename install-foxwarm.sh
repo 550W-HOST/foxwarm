@@ -86,7 +86,9 @@ checkout_repo() {
 
 start_foxwarm() {
   cd "$FOXWARM_DIR"
-  mkdir -p "$FOXWARM_DATA_DIR/state" "$FOXWARM_DATA_DIR/agents" "$FOXWARM_DATA_DIR/skills"
+  mkdir -p "$FOXWARM_DATA_DIR/state" "$FOXWARM_DATA_DIR/agents"
+  FOXWARM_DATA_DIR="$(cd "$FOXWARM_DATA_DIR" && pwd -P)"
+  printf '%s\n' "$FOXWARM_DATA_DIR" > "$FOXWARM_DIR/data_dir"
   export FOXWARM_DATA_DIR
 
   if tmux has-session -t "$FOXWARM_TMUX_SESSION" 2>/dev/null; then
@@ -101,10 +103,13 @@ start_foxwarm() {
 wait_for_token() {
   local token_file="$FOXWARM_DATA_DIR/state/token"
   local i
-  for i in $(seq 1 40); do
+  for i in $(seq 1 240); do
     if [ -s "$token_file" ]; then
       cat "$token_file"
       return 0
+    fi
+    if [ $((i % 20)) -eq 0 ]; then
+      warn "Still waiting for token. You can inspect startup with: tmux attach -t '$FOXWARM_TMUX_SESSION'"
     fi
     sleep 0.5
   done

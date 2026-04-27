@@ -1,5 +1,5 @@
 # First-time setup:
-#   mkdir -p foxwarm-data/state foxwarm-data/agents foxwarm-data/skills
+#   mkdir -p foxwarm-data/state foxwarm-data/agents
 #   docker compose up -d --build
 # Then open http://localhost:3001 and finish WebUI OOBE.
 # To skip OOBE, create foxwarm-data/state/models.yaml before starting.
