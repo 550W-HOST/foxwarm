@@ -15,7 +15,7 @@ async function hardReloadApp() {
   window.location.reload()
 }
 
-export default function ReloadAppButton() {
+export default function ReloadAppButton({ className, children }: { className?: string; children?: React.ReactNode }) {
   const [reloading, setReloading] = useState(false)
 
   return (
@@ -26,12 +26,12 @@ export default function ReloadAppButton() {
         setReloading(true)
         void hardReloadApp()
       }}
-      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 disabled:cursor-wait disabled:opacity-70 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+      className={className || 'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 disabled:cursor-wait disabled:opacity-70 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'}
       title="Reload app and clear service-worker/cache state first"
       aria-label="Reload app"
       disabled={reloading}
     >
-      <RefreshCw className={`h-4 w-4 ${reloading ? 'animate-spin' : ''}`} />
+      {children || <RefreshCw className={`h-4 w-4 ${reloading ? 'animate-spin' : ''}`} />}
     </button>
   )
 }

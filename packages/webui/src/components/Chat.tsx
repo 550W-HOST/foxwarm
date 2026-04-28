@@ -73,6 +73,7 @@ interface ChatProps {
   onBack?: () => void
   onOpenWorkspace?: () => void
   onOpenTerminal?: () => void
+  sendKeyMode?: 'modEnter' | 'enter'
   onDraftEdited?: (draftText: string) => void
 }
 
@@ -126,7 +127,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenWorkspace, onOpenTerminal, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenWorkspace, onOpenTerminal, sendKeyMode = 'modEnter', onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -676,7 +677,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       sessionBusy,
       sessionQueueLength,
       verbose,
-      sendKeyBehavior: 'Ctrl/Cmd+Enter sends; Enter inserts a new line.',
+      sendKeyBehavior: sendKeyMode === 'enter' ? 'Enter sends; Shift+Enter inserts a new line.' : 'Ctrl/Cmd+Enter sends; Enter inserts a new line.',
       loading,
       asrAvailable,
       modelBusy,
@@ -1093,6 +1094,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
         modelError={modelError}
         onChangeModel={updateSessionModel}
         onChangeChildModel={updateChildModel}
+        sendKeyMode={sendKeyMode}
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
         onTranscribeAudio={handleTranscribeAudio}

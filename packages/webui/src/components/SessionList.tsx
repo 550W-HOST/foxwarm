@@ -11,6 +11,8 @@ interface SessionListProps {
   currentSessionRecord?: Session
   themeMode: 'auto' | 'light' | 'dark'
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
+  sendKeyMode: 'modEnter' | 'enter'
+  onSendKeyModeChange: (mode: 'modEnter' | 'enter') => void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
@@ -27,6 +29,8 @@ export default function SessionList({
   currentSessionRecord,
   themeMode,
   onThemeChange,
+  sendKeyMode,
+  onSendKeyModeChange,
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
@@ -50,6 +54,8 @@ export default function SessionList({
           <GlobalUiSettingsMenu
             themeMode={themeMode}
             onThemeChange={onThemeChange}
+            sendKeyMode={sendKeyMode}
+            onSendKeyModeChange={onSendKeyModeChange}
             onOpenSetup={onSelectSetup}
             setupActive={currentView === 'setup'}
           />

@@ -13,6 +13,7 @@ import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, 
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 type AppView = 'session' | 'agents' | 'setup'
+type SendKeyMode = 'modEnter' | 'enter'
 
 type RouteState =
   | { view: 'agents' }
@@ -38,6 +39,7 @@ const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
+const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
 const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
@@ -229,6 +231,10 @@ function App() {
     return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
   })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
+  const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>(() => {
+    const saved = localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY)
+    return saved === 'enter' || saved === 'modEnter' ? saved : 'modEnter'
+  })
   const [sidebarPeekVisible, setSidebarPeekVisible] = useState(false)
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
@@ -297,6 +303,10 @@ function App() {
       setSidebarPeekVisible(false)
     }
   }, [sidebarCollapsed])
+
+  useEffect(() => {
+    localStorage.setItem(SEND_KEY_MODE_STORAGE_KEY, sendKeyMode)
+  }, [sendKeyMode])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
@@ -1001,6 +1011,7 @@ function App() {
           onBack={onBack}
           onOpenWorkspace={() => openWorkspaceTab(tab.sessionId)}
           onOpenTerminal={() => openTerminalTab(tab.sessionId, { sourcePaneId })}
+          sendKeyMode={sendKeyMode}
           onDraftEdited={() => handleChatDraftEdited(tab.id)}
         />
       )
@@ -1316,6 +1327,8 @@ function App() {
           currentSessionRecord={currentContextSessionRecord}
           themeMode={themeMode}
           onThemeChange={setThemeMode}
+          sendKeyMode={sendKeyMode}
+          onSendKeyModeChange={setSendKeyMode}
           onSelectSession={openChatTab}
           onKeepSession={openKeptChatTab}
           onSelectArchitecture={() => {
@@ -1363,6 +1376,8 @@ function App() {
             currentSessionRecord={currentContextSessionRecord}
             themeMode={themeMode}
             onThemeChange={setThemeMode}
+            sendKeyMode={sendKeyMode}
+            onSendKeyModeChange={setSendKeyMode}
             onSelectSession={openChatTab}
             onKeepSession={openKeptChatTab}
             onSelectArchitecture={() => {
@@ -1400,6 +1415,8 @@ function App() {
                 currentSessionRecord={currentContextSessionRecord}
                 themeMode={themeMode}
                 onThemeChange={setThemeMode}
+                sendKeyMode={sendKeyMode}
+                onSendKeyModeChange={setSendKeyMode}
                 onSelectSession={openChatTab}
                 onKeepSession={openKeptChatTab}
                 onSelectArchitecture={() => {

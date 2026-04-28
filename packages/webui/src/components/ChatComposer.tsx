@@ -32,6 +32,7 @@ interface ChatComposerProps {
   modelError?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
+  sendKeyMode?: 'modEnter' | 'enter'
   onHeightChange?: (height: number) => void
   onSend: (payload: { text: string; attachments: File[] }) => Promise<boolean>
   onTranscribeAudio: (file: File, context: string) => Promise<{
@@ -288,6 +289,7 @@ const ChatComposer = memo(function ChatComposer({
   modelError,
   onChangeModel,
   onChangeChildModel,
+  sendKeyMode = 'modEnter',
   onHeightChange,
   onSend,
   onTranscribeAudio,
@@ -575,11 +577,11 @@ const ChatComposer = memo(function ChatComposer({
       return
     }
 
-    if (e.ctrlKey || e.metaKey) {
+    if (e.ctrlKey || e.metaKey || (sendKeyMode === 'enter' && !e.shiftKey)) {
       e.preventDefault()
       void handleSubmit()
     }
-  }, [applySlashCommand, handleSubmit, highlightedCommandIndex, input, showSlashCommandMenu, slashCommandSuggestions])
+  }, [applySlashCommand, handleSubmit, highlightedCommandIndex, input, sendKeyMode, showSlashCommandMenu, slashCommandSuggestions])
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextValue = e.target.value
