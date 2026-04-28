@@ -440,7 +440,7 @@ export default function WorkbenchTabs({
           />
         </div>
         {toolbar && (
-          <div className="flex shrink-0 items-center gap-1 pb-2">
+          <div className="flex shrink-0 items-center gap-1">
             {toolbar}
           </div>
         )}
