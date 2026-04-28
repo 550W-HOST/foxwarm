@@ -24,11 +24,16 @@ import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseF
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
 import { guardToolOutputForModel } from './toolOutputGuard';
+import { sanitizeLoneSurrogatesInPayload } from './utils/unicode';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
     responsePath: string;
 };
+
+export function sanitizeProviderRequestPayload<T>(payload: T) {
+    return sanitizeLoneSurrogatesInPayload(payload);
+}
 
 function maybeCompressLlmRequestBody(data: any, modelEntry: ModelConfigEntry) {
     if (!modelEntry.requestCompression) {
@@ -1070,6 +1075,19 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 ? extraReasoning.summary
                 : ((data.reasoning as any)?.summary || 'auto'),
         };
+    }
+
+    const sanitizedRequestPayload = sanitizeProviderRequestPayload(data);
+    if (sanitizedRequestPayload.replacementCount > 0) {
+        data = sanitizedRequestPayload.value;
+        logger.warn({
+            replacementCount: sanitizedRequestPayload.replacementCount,
+            paths: sanitizedRequestPayload.paths.slice(0, 20),
+            omittedPathCount: Math.max(0, sanitizedRequestPayload.paths.length - 20),
+            providerType,
+            modelKey,
+            sessionId: options.sessionId,
+        }, 'Sanitized lone surrogate code units from provider request payload');
     }
 
     const logFiles = await logRequest(data, iteration);

@@ -1,5 +1,6 @@
 import { Message, MessagePart } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
+import { truncateUnicodeSafe } from './unicode';
 
 export const DEFAULT_TOOL_CONTENT_CHAR_LIMIT = 200;
 
@@ -30,7 +31,7 @@ function truncateText(text: string, maxChars: number): string {
     return text;
   }
 
-  return `${text.slice(0, maxChars)}...`;
+  return truncateUnicodeSafe(text, maxChars, '...');
 }
 
 function formatMultilineText(text: string, continuationPrefix: string = '> '): string {
@@ -178,5 +179,5 @@ export function formatMessagePreviewText(
     return preview;
   }
 
-  return `${preview.slice(0, previewLength)}...`;
+  return truncateUnicodeSafe(preview, previewLength, '...');
 }

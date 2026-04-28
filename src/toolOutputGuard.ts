@@ -6,6 +6,7 @@ import { getAgentDir } from './config';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
 import { formatStructuredValue, formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
+import { takeUnicodeSafe, takeUnicodeSafeEnd, truncateUnicodeSafe } from './utils/unicode';
 
 export const TOOL_OUTPUT_GUARD_CHAR_LIMIT = 40000;
 const TOOL_OUTPUT_GUARD_EXCERPT_LIMIT = 30000;
@@ -123,7 +124,7 @@ function buildExcerpt(text: string, maxChars: number): string {
   const available = Math.max(0, maxChars - marker.length);
   const headLength = Math.ceil(available * 0.62);
   const tailLength = Math.max(0, available - headLength);
-  return `${text.slice(0, headLength)}${marker}${tailLength > 0 ? text.slice(-tailLength) : ''}`;
+  return `${takeUnicodeSafe(text, headLength)}${marker}${tailLength > 0 ? takeUnicodeSafeEnd(text, tailLength) : ''}`;
 }
 
 function buildReadHint(saved: SavedToolOutput): string {
@@ -179,7 +180,7 @@ function truncatePreservedError(value: unknown, saved: SavedToolOutput): unknown
     return value;
   }
 
-  return `[TOOL ERROR OUTPUT TOO LONG] The original error content was included in the full saved tool output at ${saved.relativePath} on node ${saved.nodeId}. ${text.slice(0, 1200)}...`;
+  return `[TOOL ERROR OUTPUT TOO LONG] The original error content was included in the full saved tool output at ${saved.relativePath} on node ${saved.nodeId}. ${truncateUnicodeSafe(text, 1200, '...')}`;
 }
 
 function buildStageBSummary(originalResult: any, saved: SavedToolOutput, excerpt: string): Record<string, any> {

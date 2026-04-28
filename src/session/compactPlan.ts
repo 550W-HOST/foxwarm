@@ -1,5 +1,6 @@
 import { ToolDefinition } from '../types';
 import { estimateTokenCount } from '../tokenCount';
+import { truncateUnicodeSafeWithEllipsis } from '../utils/unicode';
 
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
 export const COMPACT_FLOW_MAX_ROUNDS = 15;
@@ -80,8 +81,7 @@ export function formatSeqRange(startSeq?: number, endSeq?: number): string {
 
 export function trimPreview(text: string, limit: number = DEFAULT_PREVIEW_CHAR_LIMIT): string {
   const normalized = text.trim().replace(/\s+/g, ' ');
-  if (normalized.length <= limit) return normalized;
-  return `${normalized.slice(0, limit - 1)}…`;
+  return truncateUnicodeSafeWithEllipsis(normalized, limit, '…');
 }
 
 export function buildMessageCandidateItem(startSeq: number, endSeq: number, preview: string, estimatedTokens: number = estimateTokenCount(preview)): CompactCandidateItem {

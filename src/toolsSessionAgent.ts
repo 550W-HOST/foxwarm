@@ -14,6 +14,7 @@ import { clearSessionTodo, normalizeTodoText, resolveSessionTodoRemindEvery, res
 import { formatArchiveBlockTimeRange } from './session/layeredContext';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
+import { truncateUnicodeSafe } from './utils/unicode';
 import { requireNotIsolated, checkArchivedReadPermission, checkChannelPermission, checkPathAccess, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
 
@@ -252,7 +253,7 @@ function formatArchivedBlockPreview(
   for (const record of records) {
     const locality = record.inherited ? `[inherited from ${record.sourceSessionId || 'unknown'}] ` : '[local] ';
     const prefix = `${locality}[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`}${formatArchiveBlockTimeRange(record)} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
-    result += `${formatPrefixedMultilineText(prefix, (record.summary || '').slice(0, previewLength) || '[empty summary]')}
+    result += `${formatPrefixedMultilineText(prefix, truncateUnicodeSafe(record.summary || '', previewLength) || '[empty summary]')}
 `;
   }
   return result;

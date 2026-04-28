@@ -2,7 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
 
-import { requestLlmOnce } from './llm';
+import { requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { containsLoneSurrogate } from './utils/unicode';
+
+test('sanitizeProviderRequestPayload replaces lone surrogates in nested provider payloads', () => {
+  const payload = {
+    input: [
+      { content: [{ text: `bad ${'\uD83E'} text` }] },
+      { content: [{ text: 'valid 🦊 emoji' }] },
+    ],
+    inlineData: 'QUJDREVGRw==',
+  };
+
+  const result = sanitizeProviderRequestPayload(payload);
+
+  assert.equal(result.replacementCount, 1);
+  assert.deepEqual(result.paths, ['$.input[0].content[0].text']);
+  assert.equal(containsLoneSurrogate(result.value.input[0].content[0].text), false);
+  assert.equal(result.value.input[0].content[0].text, 'bad � text');
+  assert.equal(result.value.input[1].content[0].text, 'valid 🦊 emoji');
+  assert.equal(result.value.inlineData, 'QUJDREVGRw==');
+});
 
 test('requestLlmOnce can make a direct provider-specific request without a session object', async () => {
   const originalPost = axios.post;

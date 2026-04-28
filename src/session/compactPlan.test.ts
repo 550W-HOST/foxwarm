@@ -12,8 +12,10 @@ import {
   CompactPlanValidationError,
   filterCompactCandidateItemsByLevel,
   selectCompactCandidateTargetLevels,
+  trimPreview,
   validateCompactPlanArgs,
 } from './compactPlan';
+import { containsLoneSurrogate } from '../utils/unicode';
 
 const messageCandidates = [
   buildMessageCandidateItem(1, 1, 'first request'),
@@ -58,6 +60,27 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /apply_patch_memory/);
   assert.match(prompt, /leave it uncompressed by simply omitting it from createBlocksJson/i);
   assert.match(prompt, /single block may be summarized only when it is a stranded island/i);
+});
+
+test('trimPreview and compact prompt rendering do not split surrogate pairs at emoji boundaries', () => {
+  const clipped = trimPreview('# Foxwarm 🦊 extra', 12);
+  assert.equal(containsLoneSurrogate(clipped), false);
+  assert.doesNotMatch(JSON.stringify(clipped), /\\ud83e(?!\\udd8a)/i);
+
+  const boundaryPreview = `${'x'.repeat(78)}🦊 trailing text`;
+  const prompt = buildCompactPromptText({
+    forcedKeptCount: 0,
+    candidateItems: [
+      buildMessageCandidateItem(1, 1, 'edge start'),
+      buildMessageCandidateItem(2, 2, 'edge start 2'),
+      buildMessageCandidateItem(3, 3, boundaryPreview),
+      buildMessageCandidateItem(4, 4, 'edge end 1'),
+      buildMessageCandidateItem(5, 5, 'edge end 2'),
+    ],
+  });
+
+  assert.equal(containsLoneSurrogate(prompt), false);
+  assert.doesNotMatch(JSON.stringify(prompt), /\\ud83e(?!\\udd8a)/i);
 });
 
 test('filterCompactCandidateItemsByLevel removes levels at or below 2k tokens and block-only levels with fewer than two blocks', () => {
