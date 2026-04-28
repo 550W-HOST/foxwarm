@@ -211,6 +211,55 @@ test('search_tools and call_tool cover MCP tools with schema-preserving structur
   }
 });
 
+test('search_tools keeps MCP results from healthy servers when another MCP server fails', async () => {
+  const originalListServers = mcpClient.listServers;
+  const originalListTools = mcpClient.listTools;
+
+  try {
+    (mcpClient as any).listServers = async () => ([
+      { name: 'healthy', enabled: true, transport: 'stdio', argsCount: 0, envKeys: [] as string[], headerKeys: [] as string[], hasToken: false },
+      { name: 'broken', enabled: true, transport: 'stdio', argsCount: 0, envKeys: [] as string[], headerKeys: [] as string[], hasToken: false },
+    ]);
+    (mcpClient as any).listTools = async (server?: string) => {
+      if (server === 'broken') {
+        throw new Error('missing token');
+      }
+      return {
+        tools: [
+          {
+            name: 'healthy_tool',
+            description: 'A tool from a healthy MCP server',
+            inputSchema: { type: 'object', properties: {} },
+          },
+        ],
+      };
+    };
+
+    const result: any = await search_tools({ sources: ['mcp'], includeSchema: false }, {
+      sessionId: 'main',
+      session: { agent: 'main' },
+    } as any);
+
+    assert.equal(result.count, 1);
+    assert.equal(result.tools[0].server, 'healthy');
+    assert.equal(result.tools[0].name, 'healthy_tool');
+    assert.ok(result.warnings?.some((warning: string) => /broken/.test(warning) && /missing token/.test(warning)));
+  } finally {
+    (mcpClient as any).listServers = originalListServers;
+    (mcpClient as any).listTools = originalListTools;
+  }
+});
+
+test('call_tool requires an MCP server when not using an MCP toolId', async () => {
+  await assert.rejects(
+    () => call_tool({ source: 'mcp', name: 'search_repos', args: {} }, {
+      sessionId: 'main',
+      session: { agent: 'main' },
+    } as any),
+    /requires server/i,
+  );
+});
+
 test('search_tools and call_tool cover remote node tools', async () => {
   const originalListNodesWithTools = nodesManager.listNodesWithTools;
   const originalExecuteNodeTool = nodesManager.executeNodeTool;

@@ -1206,7 +1206,7 @@ async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: 
         }));
 }
 
-async function collectMcpUnifiedSearchResults(query: string, includeSchema: boolean, serverFilter: string | undefined, ctx?: ToolContext) {
+async function collectMcpUnifiedSearchResults(query: string, includeSchema: boolean, serverFilter: string | undefined, ctx?: ToolContext, warnings?: string[]) {
     if (ctx?.sessionId) {
         await checkToolPermission('search_mcp_tools', ctx.sessionId, 'master', { server: serverFilter, query });
     }
@@ -1219,7 +1219,14 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
 
     const results: Array<Record<string, any>> = [];
     for (const serverName of servers) {
-        const tools = await mcpClient.listTools(serverName);
+        let tools: any;
+        try {
+            tools = await mcpClient.listTools(serverName);
+        } catch (e: any) {
+            warnings?.push(`MCP server ${serverName}: ${e?.message || String(e)}`);
+            continue;
+        }
+
         const items = Array.isArray((tools as any)?.tools)
             ? (tools as any).tools
             : (Array.isArray(tools) ? tools as any[] : []);
@@ -1292,7 +1299,7 @@ async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
 
     if (sources.includes('mcp')) {
         try {
-            collected.push(...await collectMcpUnifiedSearchResults(query, includeSchema, server, ctx));
+            collected.push(...await collectMcpUnifiedSearchResults(query, includeSchema, server, ctx, warnings));
         } catch (e: any) {
             warnings.push(e?.message || String(e));
         }
@@ -1368,6 +1375,9 @@ async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
     }
 
     if (ref.source === 'mcp') {
+        if (!ref.server) {
+            throw new Error('call_tool for MCP source requires server unless toolId includes it.');
+        }
         if (!ctx?.sessionId) {
             throw new Error('call_tool for MCP requires session context.');
         }
@@ -2324,7 +2334,7 @@ export const definitions = [
                         description: 'Optional source filter. Defaults to builtin + mcp + node.',
                         items: { type: 'string', enum: ['builtin', 'mcp', 'node'] }
                     },
-                    server: { type: 'string', description: 'Optional MCP server name filter.' },
+                    server: { type: 'string', description: 'Optional MCP server filter; if omitted while searching MCP tools, all enabled MCP servers are searched.' },
                     nodeId: { type: 'string', description: 'Optional remote node id filter. For source=`node`, omitted means use the current node instead of listing tools from every node.' },
                     limit: { type: 'number', description: 'Maximum number of results to return (default: 20, max: 200).' },
                     includeSchema: { type: 'boolean', description: 'If true (default), include each tool\'s input schema in results.' }
@@ -2341,7 +2351,7 @@ export const definitions = [
                     toolId: { type: 'string', description: 'Preferred unified tool identifier returned by search_tools (for example builtin:read, mcp:server/tool, node:node-id/tool).' },
                     source: { type: 'string', enum: ['builtin', 'mcp', 'node'], description: 'Explicit source when not using toolId.' },
                     name: { type: 'string', description: 'Tool name when not using toolId.' },
-                    server: { type: 'string', description: 'MCP server name for source=mcp.' },
+                    server: { type: 'string', description: 'MCP server name; required when source=\"mcp\" and toolId is not provided.' },
                     nodeId: { type: 'string', description: 'Remote node id for source=node.' },
                     args: { type: 'object', description: 'Required wrapper object containing the target tool arguments. Example: for builtin read, use `args: { filePath: "README.md" }`.' }
                 },
