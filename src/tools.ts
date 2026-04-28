@@ -1911,7 +1911,6 @@ export const definitions = [
         },
         {
             name: 'get_memory_context',
-            defaultInject: true,
             description: 'Retrieve messages around a specific point in time to see conversation flow.',
             parameters: {
                 type: 'object',
@@ -2100,7 +2099,6 @@ export const definitions = [
         },
         {
             name: 'delete_session',
-            defaultInject: true,
             description: 'Delete a session permanently. Cannot delete current session.',
             parameters: {
                 type: 'object',
@@ -2173,7 +2171,6 @@ export const definitions = [
         },
         {
             name: 'stop_session',
-            defaultInject: true,
             description: 'Stop a running session. Sets a flag that will stop tool call recursion after the current tool completes.',
             parameters: {
                 type: 'object',
@@ -2186,7 +2183,6 @@ export const definitions = [
         COMPACT_PLAN_TOOL_DEFINITION,
         {
             name: 'compact_session',
-            defaultInject: true,
             description: 'Request a compaction flow for the current session or another idle session. This does not return compact candidates directly. Instead, the target session enters a dedicated compaction planning flow where the model must call submit_compact_plan. Use summary only as optional extra guidance for the compaction prompt, not as the final compacted summary.',
             parameters: {
                 type: 'object',
@@ -2399,7 +2395,6 @@ export const definitions = [
         },
         {
             name: 'list_toolscript_runs',
-            defaultInject: true,
             description: 'List ToolScript runs owned by the current session. Returns structured run summaries including status, mode, waiting metadata, managed-session refs, timestamps, and tool/stdout summaries.',
             parameters: {
                 type: 'object',
@@ -2411,7 +2406,6 @@ export const definitions = [
         },
         {
             name: 'get_toolscript_run',
-            defaultInject: true,
             description: 'Get a single ToolScript run with structured metadata including waiting reason, managed-session relations, timestamps, stdout, and tool summary.',
             parameters: {
                 type: 'object',
@@ -2423,7 +2417,6 @@ export const definitions = [
         },
         {
             name: 'cancel_toolscript_run',
-            defaultInject: true,
             description: 'Cancel an active/waiting ToolScript run owned by the current session. Best-effort releases managed-session leases tracked by the run before marking it cancelled.',
             parameters: {
                 type: 'object',
