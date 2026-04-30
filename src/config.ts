@@ -439,7 +439,7 @@ export const WEBUI_PORT = HTTP_PORT; // For backward compatibility
 
 // Context and compaction settings
 export const CONTEXT_LIMIT = APP_CONFIG.llm?.contextLimit || 122880; // 120K tokens
-export const COMPACT_PERCENT = APP_CONFIG.llm?.compactPercent || 0.2;
+export const COMPACT_PERCENT = APP_CONFIG.llm?.compactPercent || 0.3;
 
 // TODO: move to models config
 export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 16384;
