@@ -545,7 +545,43 @@ function buildWaitingFor(run: ToolScriptRunRecord): any {
   return undefined;
 }
 
+function extractAndCleanInlineData(lastResult: any): { inlineDataFields: { inlineData?: any; inlineDataItems?: any[] }; cleanedResult: any } {
+  if (!lastResult || typeof lastResult !== 'object' || Array.isArray(lastResult)) {
+    return { inlineDataFields: {}, cleanedResult: lastResult };
+  }
+  const inlineDataFields: { inlineData?: any; inlineDataItems?: any[] } = {};
+  let hasInlineData = false;
+  if (lastResult.inlineData && typeof lastResult.inlineData === 'object' && typeof lastResult.inlineData.data === 'string') {
+    inlineDataFields.inlineData = lastResult.inlineData;
+    hasInlineData = true;
+  }
+  if (Array.isArray(lastResult.inlineDataItems) && lastResult.inlineDataItems.length > 0) {
+    inlineDataFields.inlineDataItems = lastResult.inlineDataItems;
+    hasInlineData = true;
+  }
+  if (!hasInlineData) {
+    return { inlineDataFields, cleanedResult: lastResult };
+  }
+  // Strip inlineData from result and replace with a placeholder so the base64 blob
+  // does not bloat the text representation seen by the model.
+  const { inlineData, inlineDataItems, ...rest } = lastResult;
+  if (inlineData) {
+    rest.inlineData = `[image promoted, mimeType=${inlineData.mimeType || 'unknown'}]`;
+  }
+  if (inlineDataItems) {
+    rest.inlineDataItems = `[${inlineDataItems.length} image(s) promoted]`;
+  }
+  return { inlineDataFields, cleanedResult: rest };
+}
+
 function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
+  // Promote inlineData / inlineDataItems from lastResult to the top-level result
+  // so that the tool-result image pipeline (normalizeToolResultImages) can pick them up.
+  // The cleaned result replaces raw base64 blobs with short placeholders.
+  const { inlineDataFields, cleanedResult } = run.lastResult !== undefined
+    ? extractAndCleanInlineData(run.lastResult)
+    : { inlineDataFields: {}, cleanedResult: undefined };
+
   return {
     status: run.status,
     runId: run.runId,
@@ -567,8 +603,9 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
     updatedAt: run.updatedAt,
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),
     ...(run.cancelledAt ? { cancelledAt: run.cancelledAt } : {}),
-    ...(run.lastResult !== undefined ? { result: run.lastResult } : {}),
+    ...(cleanedResult !== undefined ? { result: cleanedResult } : {}),
     ...(run.error ? { error: run.error } : {}),
+    ...inlineDataFields,
   };
 }
 
