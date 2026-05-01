@@ -26,6 +26,7 @@ import {
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from './applyPatch';
 import { COMPACT_PLAN_TOOL_DEFINITION } from './session/compactPlan';
 import { cropImageById, resolveImageById } from './toolImages';
+import { requireStringMapObject, resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
 import {
     tool_run_script,
     tool_start_toolscript_run,
@@ -1360,15 +1361,10 @@ async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
         throw new Error('call_tool requires a tool name.');
     }
 
-    if (!Object.prototype.hasOwnProperty.call(args || {}, 'args')) {
-        throw new Error('call_tool requires args (wrapped target tool arguments object).');
-    }
-
-    if (!args?.args || typeof args.args !== 'object' || Array.isArray(args.args)) {
-        throw new Error('call_tool args must be an object containing the target tool arguments.');
-    }
-
-    const toolArgs = args.args;
+    const toolArgs = resolveObjectArgWithJsonFallback(args, 'args', 'argsJson', {
+        required: true,
+        label: 'call_tool args',
+    })!;
 
     if (ref.source === 'builtin') {
         return await executeBuiltinToolViaUnifiedCall(ref.name, toolArgs, ctx);
@@ -1463,7 +1459,15 @@ async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
 }
 
 async function tool_mcp_config(args: ToolArgs) {
-    const { name, url, command, args: commandArgs, env, cwd, stderr, token, headers, description, enable, transport, type } = args;
+    const { name, url, command, args: commandArgs, cwd, stderr, token, description, enable, transport, type } = args;
+    const env = requireStringMapObject(
+        resolveObjectArgWithJsonFallback(args, 'env', 'envJson', { label: 'mcp_config env' }),
+        'mcp_config envJson',
+    );
+    const headers = requireStringMapObject(
+        resolveObjectArgWithJsonFallback(args, 'headers', 'headersJson', { label: 'mcp_config headers' }),
+        'mcp_config headersJson',
+    );
     const resolvedTransport = transport || type || 'auto';
     if (!name) {
         throw new Error('mcp_config requires name');
@@ -2344,7 +2348,7 @@ export const definitions = [
         {
             name: 'call_tool',
             defaultInject: true,
-            description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. Always put the target tool arguments inside the required `args` object. Example using toolId: `{toolId:"builtin:read", args:{filePath:"README.md"}}`. Example using explicit MCP fields: `{source:"mcp", server:"github", name:"search_repos", args:{query:"foxwarm"}}`. Example using explicit node fields: `{source:"node", nodeId:"android-node", name:"android_screenshot", args:{inline:true}}`.',
+            description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. Put the target tool arguments inside `args` when visible, or use `argsJson` as a JSON object string fallback when the provider hides free-form object fields. Example using toolId: `{toolId:"builtin:read", args:{filePath:"README.md"}}` or `{toolId:"builtin:read", argsJson:"{\\"filePath\\":\\"README.md\\"}"}`. Example using explicit MCP fields: `{source:"mcp", server:"github", name:"search_repos", args:{query:"foxwarm"}}`. Example using explicit node fields: `{source:"node", nodeId:"android-node", name:"android_screenshot", args:{inline:true}}`.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -2353,9 +2357,9 @@ export const definitions = [
                     name: { type: 'string', description: 'Tool name when not using toolId.' },
                     server: { type: 'string', description: 'MCP server name; required when source=\"mcp\" and toolId is not provided.' },
                     nodeId: { type: 'string', description: 'Remote node id for source=node.' },
-                    args: { type: 'object', description: 'Required wrapper object containing the target tool arguments. Example: for builtin read, use `args: { filePath: "README.md" }`.', additionalProperties: true }
-                },
-                required: ['args']
+                    args: { type: 'object', description: 'Wrapper object containing the target tool arguments. Example: for builtin read, use `args: { filePath: "README.md" }`. Prefer this when visible.', additionalProperties: true },
+                    argsJson: { type: 'string', description: 'JSON object string fallback for target tool arguments, for providers that do not expose free-form object fields. Example: `{"filePath":"README.md"}`. Used when `args` is not available.' }
+                }
             }
         },
         {
@@ -2366,7 +2370,8 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
-                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.', additionalProperties: true },
+                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable. Prefer this when visible.', additionalProperties: true },
+                    argsJson: { type: 'string', description: 'JSON object string fallback exposed to the script as the `args` input variable, for providers that do not expose free-form object fields. Example: `{"key":"value"}`. Used when `args` is not available.' },
                     mode: { type: 'string', enum: ['foreground', 'background'], description: 'Run mode. foreground is the default. background runs are intended for persistent controller-style scripts.' },
                     timeoutSecs: { type: 'number', description: 'Optional ToolScript execution timeout budget for this run slice in seconds. Default 30. When exceeded at a safe checkpoint, the run pauses with waitingReason="timeout" and can be resumed with continue_script.' }
                 },
@@ -2381,7 +2386,8 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
-                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.', additionalProperties: true },
+                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable. Prefer this when visible.', additionalProperties: true },
+                    argsJson: { type: 'string', description: 'JSON object string fallback exposed to the script as the `args` input variable, for providers that do not expose free-form object fields. Example: `{"key":"value"}`. Used when `args` is not available.' },
                     mode: { type: 'string', enum: ['foreground', 'background'], description: 'Optional explicit mode override. Defaults to background for this tool.' },
                     timeoutSecs: { type: 'number', description: 'Optional ToolScript execution timeout budget for this run slice in seconds. Default 30. When exceeded at a safe checkpoint, the run pauses with waitingReason="timeout" and can be resumed with continue_script.' }
                 },
@@ -2474,11 +2480,13 @@ export const definitions = [
                     url: { type: 'string', description: 'Standard MCP server endpoint URL. Use the /mcp endpoint for streamable-http or auto, or the SSE endpoint for sse.' },
                     command: { type: 'string', description: 'Executable to run when transport=stdio.' },
                     args: { type: 'array', items: { type: 'string' }, description: 'Command line arguments for stdio transport.' },
-                    env: { type: 'object', description: 'Extra environment variables for stdio transport.', additionalProperties: { type: 'string' } },
+                    env: { type: 'object', description: 'Extra environment variables for stdio transport. Prefer this when visible.', additionalProperties: { type: 'string' } },
+                    envJson: { type: 'string', description: 'JSON object string fallback for extra environment variables, for providers that do not expose string-map object fields. Values must be strings. Example: `{"API_KEY":"..."}`. Used when `env` is not available.' },
                     cwd: { type: 'string', description: 'Working directory for stdio transport.' },
                     stderr: { type: 'string', description: 'How to handle stdio server stderr: inherit, pipe, or ignore.' },
                     token: { type: 'string', description: 'Optional bearer token (sets Authorization: Bearer <token>)' },
-                    headers: { type: 'object', description: 'Custom HTTP headers as key-value pairs. Overrides token header if both specified.', additionalProperties: { type: 'string' } },
+                    headers: { type: 'object', description: 'Custom HTTP headers as key-value pairs. Overrides token header if both specified. Prefer this when visible.', additionalProperties: { type: 'string' } },
+                    headersJson: { type: 'string', description: 'JSON object string fallback for custom HTTP headers, for providers that do not expose string-map object fields. Values must be strings. Example: `{"X-API-Key":"..."}`. Used when `headers` is not available.' },
                     transport: { type: 'string', description: 'Transport type: streamable-http, sse, stdio, or auto. Defaults to auto.' },
                     type: { type: 'string', description: 'Alias for transport (same supported values: streamable-http, sse, stdio, auto).' },
                     description: { type: 'string', description: 'Optional description' },

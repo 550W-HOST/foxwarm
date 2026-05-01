@@ -86,6 +86,60 @@ test('run_script requires an explicit main(args) entrypoint', async () => {
   }
 });
 
+test('run_script and start_toolscript_run schemas expose argsJson fallback', () => {
+  const runDef = tools.definitions.find((item: any) => item.name === 'run_script');
+  const startDef = tools.definitions.find((item: any) => item.name === 'start_toolscript_run');
+  assert.ok(runDef);
+  assert.ok(startDef);
+  assert.equal(runDef?.parameters?.properties?.args?.type, 'object');
+  assert.equal(runDef?.parameters?.properties?.argsJson?.type, 'string');
+  assert.equal(startDef?.parameters?.properties?.args?.type, 'object');
+  assert.equal(startDef?.parameters?.properties?.argsJson?.type, 'string');
+});
+
+test('run_script parses argsJson into main(args)', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_args_json');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain('return {"name": args["name"], "count": args["count"]}'));
+
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const result = await tool_run_script({
+      filePath: scriptName,
+      argsJson: JSON.stringify({ name: 'fox', count: 2 }),
+    }, { sessionId, session });
+
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.result, { name: 'fox', count: 2 });
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script rejects invalid argsJson with a clear error', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_bad_args_json');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain('return args'));
+
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    await assert.rejects(
+      () => tool_run_script({ filePath: scriptName, argsJson: '{not json}' }, { sessionId, session }),
+      /argsJson must be a JSON object string/i,
+    );
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
 test('run_script supports unified call_tool descriptor shape for builtin tools', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_exec_unified');

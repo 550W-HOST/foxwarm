@@ -5,6 +5,7 @@ import { nodesManager } from './nodes/manager';
 import {
   call_tool,
   definitions,
+  mcp_config,
   modelFacingDefinitions,
   search_tools,
 } from './tools';
@@ -119,14 +120,88 @@ test('call_tool rejects missing args wrapper with a caller-level error', async (
         session: { agent: 'main', currentNode: 'master' },
       } as any,
     ),
-    /call_tool requires args/i,
+    /call_tool args requires args .* argsJson/i,
   );
 });
 
-test('call_tool schema marks args as required', () => {
+test('call_tool schema exposes argsJson fallback', () => {
   const def = definitions.find((item) => item.name === 'call_tool');
   assert.ok(def);
-  assert.deepEqual(def?.parameters?.required, ['args']);
+  assert.equal(def?.parameters?.properties?.args?.type, 'object');
+  assert.equal(def?.parameters?.properties?.argsJson?.type, 'string');
+  assert.notEqual(def?.parameters?.required?.includes('args'), true);
+});
+
+test('call_tool parses argsJson fallback for target tool arguments', async () => {
+  const result: any = await call_tool(
+    {
+      toolId: 'builtin:search_tools',
+      argsJson: JSON.stringify({ query: 'read', sources: ['builtin'], limit: 1, includeSchema: false }),
+    },
+    {} as any,
+  );
+
+  assert.equal(result.count, 1);
+  assert.equal(result.tools[0].source, 'builtin');
+});
+
+test('call_tool rejects invalid argsJson with a clear error', async () => {
+  await assert.rejects(
+    () => call_tool(
+      {
+        toolId: 'builtin:search_tools',
+        argsJson: '{not json}',
+      },
+      {} as any,
+    ),
+    /argsJson must be a JSON object string/i,
+  );
+});
+
+test('mcp_config schema exposes envJson and headersJson fallbacks', () => {
+  const def = definitions.find((item) => item.name === 'mcp_config');
+  assert.ok(def);
+  assert.equal(def?.parameters?.properties?.env?.type, 'object');
+  assert.equal(def?.parameters?.properties?.envJson?.type, 'string');
+  assert.equal(def?.parameters?.properties?.headers?.type, 'object');
+  assert.equal(def?.parameters?.properties?.headersJson?.type, 'string');
+});
+
+test('mcp_config parses envJson and headersJson string-map fallbacks', async () => {
+  const originalUpsertServer = mcpClient.upsertServer;
+  const captured: any[] = [];
+  (mcpClient as any).upsertServer = async (name: string, config: any) => {
+    captured.push({ name, config });
+  };
+
+  try {
+    const result = await mcp_config({
+      name: 'json-fallback-test',
+      command: 'node',
+      transport: 'stdio',
+      envJson: JSON.stringify({ API_KEY: 'secret' }),
+      headersJson: JSON.stringify({ 'X-Test': 'ok' }),
+    });
+
+    assert.match(String(result), /json-fallback-test/);
+    assert.equal(captured.length, 1);
+    assert.deepEqual(captured[0].config.env, { API_KEY: 'secret' });
+    assert.deepEqual(captured[0].config.headers, { 'X-Test': 'ok' });
+  } finally {
+    (mcpClient as any).upsertServer = originalUpsertServer;
+  }
+});
+
+test('mcp_config rejects non-string values from envJson', async () => {
+  await assert.rejects(
+    () => mcp_config({
+      name: 'bad-json-fallback-test',
+      command: 'node',
+      transport: 'stdio',
+      envJson: JSON.stringify({ PORT: 3000 }),
+    }),
+    /envJson must be a JSON object string with string values/i,
+  );
 });
 
 test('search_tools and call_tool cover MCP tools with schema-preserving structured results', async () => {
@@ -372,10 +447,11 @@ test('search_tools and call_tool descriptions include usage guidance and example
   assert.match(String(searchDef?.description), /example search_tools calls/i);
   assert.match(String((searchDef?.parameters?.properties as any)?.nodeId?.description), /current node/i);
 
-  assert.match(String(callDef?.description), /always put the target tool arguments inside the required `args` object/i);
+  assert.match(String(callDef?.description), /argsJson.*JSON object string fallback/i);
   assert.match(String(callDef?.description), /builtin:read/i);
   assert.match(String(callDef?.description), /source:\"mcp\"/i);
-  assert.match(String((callDef?.parameters?.properties as any)?.args?.description), /required wrapper object/i);
+  assert.match(String((callDef?.parameters?.properties as any)?.args?.description), /wrapper object/i);
+  assert.match(String((callDef?.parameters?.properties as any)?.argsJson?.description), /providers that do not expose free-form object fields/i);
 });
 
 test('default model-facing tool definitions exclude hidden browser and legacy wrapper tools', () => {

@@ -8,6 +8,7 @@ import * as llm from './llm';
 import * as managedSessions from './managedSessions';
 import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
+import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
 import type { Message, MessagePart, Session } from './types';
 
 type ToolArgs = Record<string, any>;
@@ -1307,10 +1308,11 @@ export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise
   const { filePath } = args || {};
   const mode = parseToolScriptRunMode(args?.mode ?? args?.runMode ?? args?.background);
   const timeoutSecs = parseTimeoutSecs(args?.timeoutSecs);
+  const scriptArgs = resolveObjectArgWithJsonFallback(args, 'args', 'argsJson', { label: 'run_script args' }) || {};
   const { scriptPath, code } = await readScriptSource(filePath, ctx, session);
   const runId = newRunId();
   const record = createRunRecord({ runId, mode, session, filePath, scriptPath, timeoutSecs });
-  return await startRun(record, code, args?.args || {}, { ...ctx, sessionId, session, toolScriptRunId: runId });
+  return await startRun(record, code, scriptArgs, { ...ctx, sessionId, session, toolScriptRunId: runId });
 }
 
 export async function tool_start_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
