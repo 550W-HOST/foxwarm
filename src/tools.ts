@@ -2353,7 +2353,7 @@ export const definitions = [
                     name: { type: 'string', description: 'Tool name when not using toolId.' },
                     server: { type: 'string', description: 'MCP server name; required when source=\"mcp\" and toolId is not provided.' },
                     nodeId: { type: 'string', description: 'Remote node id for source=node.' },
-                    args: { type: 'object', description: 'Required wrapper object containing the target tool arguments. Example: for builtin read, use `args: { filePath: "README.md" }`.' }
+                    args: { type: 'object', description: 'Required wrapper object containing the target tool arguments. Example: for builtin read, use `args: { filePath: "README.md" }`.', additionalProperties: true }
                 },
                 required: ['args']
             }
@@ -2366,7 +2366,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
-                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.' },
+                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.', additionalProperties: true },
                     mode: { type: 'string', enum: ['foreground', 'background'], description: 'Run mode. foreground is the default. background runs are intended for persistent controller-style scripts.' },
                     timeoutSecs: { type: 'number', description: 'Optional ToolScript execution timeout budget for this run slice in seconds. Default 30. When exceeded at a safe checkpoint, the run pauses with waitingReason="timeout" and can be resumed with continue_script.' }
                 },
@@ -2381,7 +2381,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
-                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.' },
+                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable.', additionalProperties: true },
                     mode: { type: 'string', enum: ['foreground', 'background'], description: 'Optional explicit mode override. Defaults to background for this tool.' },
                     timeoutSecs: { type: 'number', description: 'Optional ToolScript execution timeout budget for this run slice in seconds. Default 30. When exceeded at a safe checkpoint, the run pauses with waitingReason="timeout" and can be resumed with continue_script.' }
                 },
@@ -2474,11 +2474,11 @@ export const definitions = [
                     url: { type: 'string', description: 'Standard MCP server endpoint URL. Use the /mcp endpoint for streamable-http or auto, or the SSE endpoint for sse.' },
                     command: { type: 'string', description: 'Executable to run when transport=stdio.' },
                     args: { type: 'array', items: { type: 'string' }, description: 'Command line arguments for stdio transport.' },
-                    env: { type: 'object', description: 'Extra environment variables for stdio transport.' },
+                    env: { type: 'object', description: 'Extra environment variables for stdio transport.', additionalProperties: { type: 'string' } },
                     cwd: { type: 'string', description: 'Working directory for stdio transport.' },
                     stderr: { type: 'string', description: 'How to handle stdio server stderr: inherit, pipe, or ignore.' },
                     token: { type: 'string', description: 'Optional bearer token (sets Authorization: Bearer <token>)' },
-                    headers: { type: 'object', description: 'Custom HTTP headers as key-value pairs. Overrides token header if both specified.' },
+                    headers: { type: 'object', description: 'Custom HTTP headers as key-value pairs. Overrides token header if both specified.', additionalProperties: { type: 'string' } },
                     transport: { type: 'string', description: 'Transport type: streamable-http, sse, stdio, or auto. Defaults to auto.' },
                     type: { type: 'string', description: 'Alias for transport (same supported values: streamable-http, sse, stdio, auto).' },
                     description: { type: 'string', description: 'Optional description' },
