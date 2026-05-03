@@ -87,6 +87,52 @@ test('exec tool passes timeout through to waitForExecCompletion and background r
   }
 });
 
+test('persistent exec expands cwd ~ using local home directory', async () => {
+  let execId: string | null = null;
+
+  try {
+    const entry = await startPersistentExec({
+      command: 'pwd',
+      agentName: 'main',
+      cwd: '~',
+    });
+    execId = entry.id;
+
+    const status = await waitForExecCompletion(entry.id, 5000);
+    assert.ok(status, 'exec should finish during test timeout');
+    const result = await buildForegroundExecResult(entry, status);
+    assert.equal(result.trim(), os.homedir());
+  } finally {
+    if (execId) {
+      await finalizeForegroundExec(execId).catch(() => {});
+    }
+  }
+});
+
+test('persistent exec rejects missing cwd with a friendly cwd-focused error and does not create it', async () => {
+  const missing = path.join(os.tmpdir(), `foxwarm-missing-local-cwd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  await fs.remove(missing).catch(() => {});
+
+  await assert.rejects(
+    () => startPersistentExec({
+      command: 'pwd',
+      agentName: 'main',
+      cwd: missing,
+    }),
+    (err: any) => {
+      const message = String(err?.message || err);
+      assert.match(message, /working directory is invalid/i);
+      assert.match(message, /Source: explicit/i);
+      assert.match(message, /Raw cwd/i);
+      assert.match(message, /Resolved cwd/i);
+      assert.match(message, /not a missing `\/bin\/sh`/i);
+      return true;
+    },
+  );
+
+  assert.equal(await fs.pathExists(missing), false, 'missing cwd should not be auto-created');
+});
+
 test('background exec timeout result uses short header, body, then full footer notice with pid and log path', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-timeout-'));
   const logPath = path.join(tempDir, 'command.log');
@@ -150,6 +196,7 @@ test('persistent exec log files use compact time-and-pid filenames under the dat
   let execId: string | null = null;
 
   try {
+    await fs.ensureDir(agentDir);
     const entry = await startPersistentExec({
       command: 'echo compact-log-name-test',
       agentName,

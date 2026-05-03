@@ -26,6 +26,10 @@
     "./nodeCapabilities": {
       "types": "./dist/nodeCapabilities.d.ts",
       "default": "./dist/nodeCapabilities.js"
+    },
+    "./tokenCount": {
+      "types": "./dist/tokenCount.d.ts",
+      "default": "./dist/tokenCount.js"
     }
   },
   "dependencies": {

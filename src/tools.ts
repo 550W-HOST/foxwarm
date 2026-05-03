@@ -10,7 +10,7 @@ import { checkPathAccess, checkToolPermission } from './isolatedCheck';
 import * as mcpClient from './mcpClient';
 import { browserManager } from './browser';
 import { logger } from './common';
-import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from './execTimeout';
+import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from '../packages/shared/dist/persistentExec';
 import { nodesManager } from './nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from './nodes/bootstrapInfo';
 import {
@@ -244,22 +244,6 @@ async function deleteResolvedPath(fullPath: string, displayPath: string) {
     }
 
     await fs.remove(fullPath);
-}
-
-function resolveExecCwd(cwdValue: unknown, ctx: ToolContext, agentName: string): string | undefined {
-    if (typeof cwdValue !== 'string' || cwdValue.trim().length === 0) {
-        return undefined;
-    }
-
-    const raw = cwdValue.trim();
-    if (path.isAbsolute(raw)) {
-        return raw;
-    }
-
-    const base = (typeof ctx.session?.cwd === 'string' && ctx.session.cwd.trim().length > 0)
-        ? ctx.session.cwd.trim()
-        : getAgentDir(agentName);
-    return path.resolve(base, raw);
 }
 
 function resolveExecTimeoutSeconds(timeoutValue: unknown): number {
@@ -662,13 +646,13 @@ async function tool_exec(args: ToolArgs, ctx: ToolContext) {
 
     const agentName = ctx.session?.agent || 'main';
     const nodeId = ctx.runtimeNodeId || 'master';
-    const execCwd = resolveExecCwd(cwd, ctx, agentName) || ctx.session?.cwd || undefined;
     const execEntry = await startPersistentExec({
         command,
         sessionId: ctx.sessionId,
         agentName,
         nodeId,
-        cwd: execCwd,
+        cwd,
+        sessionCwd: ctx.session?.cwd,
     });
 
     const status = await waitForExecCompletion(execEntry.id, timeoutSeconds * 1000);
@@ -1649,6 +1633,28 @@ export const list_nodes = async (args: ToolArgs) => {
   return result;
 };
 
+async function resolveDefaultCwdForNode(nodeId: string, sessionId: string, agentName: string): Promise<string> {
+  if (nodeId === 'master') {
+    return getAgentDir(agentName);
+  }
+
+  const node = nodesManager.getNode(nodeId);
+  if (node?.tools?.has('get_default_cwd')) {
+    try {
+      const result = await nodesManager.executeTool(nodeId, 'get_default_cwd', {}, sessionId);
+      const text = typeof result === 'string'
+        ? result
+        : (typeof (result as any)?.output === 'string' ? (result as any).output : String(result ?? ''));
+      const cwd = text.trim();
+      if (cwd) return cwd;
+    } catch (e) {
+      logger.warn({ err: e, nodeId, sessionId }, 'Failed to query node default cwd after current node change');
+    }
+  }
+
+  return 'node process cwd (run `pwd` to inspect)';
+}
+
 export const change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
   const { nodeId } = args;
   
@@ -1665,9 +1671,11 @@ export const change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
   
   // Also update session's currentNode
   session.currentNode = nodeId;
+  delete session.cwd;
   await sessionManager.saveSession(ctx.sessionId);
+  const defaultCwd = await resolveDefaultCwdForNode(nodeId, ctx.sessionId, session.agent || 'main');
   
-  return `Current node changed to \`${nodeId}\``;
+  return `Current node changed to \`${nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${defaultCwd}\`.`;
 };
 
 export const node_bootstrap_info = async (args: ToolArgs = {}) => {

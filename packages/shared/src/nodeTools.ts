@@ -1,9 +1,9 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
-import { spawn } from 'child_process';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from './applyPatch';
-import { detectTransferMimeType, resolveNodePath } from './nodeFileTransfer';
+import { detectTransferMimeType, getNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
+import { PersistentExecManager, DEFAULT_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, type ExecStatus, type RunningExecEntry } from './persistentExec';
 
 export interface NodeToolContext {
   sessionId?: string;
@@ -14,11 +14,7 @@ export interface NodeToolContext {
 }
 
 type ToolArgs = Record<string, any>;
-const DEFAULT_EXEC_TIMEOUT_SECONDS = 15;
-const MIN_EXEC_TIMEOUT_SECONDS = 1;
-const MAX_EXEC_TIMEOUT_SECONDS = 60;
 const INLINE_OUTPUT_LIMIT = 10_000;
-const BACKGROUND_OUTPUT_LIMIT = 20_000;
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -116,57 +112,57 @@ function resolveExecTimeoutSeconds(timeoutValue: unknown): number {
   return timeoutValue;
 }
 
-function truncateOutput(output: string, limit: number): string {
-  if (output.length <= limit) return output;
-  const half = Math.floor(limit / 2);
-  return `${output.slice(0, half)}\n\n[...truncated ${output.length - limit} chars...]\n\n${output.slice(-half)}`;
+const sessionEventDispatchers = new Map<string, NonNullable<NodeToolContext['queueSystemEvent']>>();
+const execManagers = new Map<string, PersistentExecManager>();
+
+function getExecManager(agentName: string): PersistentExecManager {
+  const existing = execManagers.get(agentName);
+  if (existing) return existing;
+  const execTempDir = path.join(getNodeAgentDir(agentName), '.temp', 'exec');
+  const manager = new PersistentExecManager({
+    getDefaultCwd: () => process.cwd(),
+    getExecTempDir: () => execTempDir,
+    registryPath: path.join(execTempDir, 'running-exec.json'),
+    nodeId: process.env.FOXWARM_NODE_ID || 'remote-node',
+    completionDispatcher: async (entry: RunningExecEntry, _status: ExecStatus, message: string) => {
+      const dispatcher = entry.sessionId ? sessionEventDispatchers.get(entry.sessionId) : undefined;
+      if (dispatcher) await dispatcher(message, 'background');
+    },
+  });
+  execManagers.set(agentName, manager);
+  return manager;
 }
 
-function formatExecResult(code: number | null, signal: NodeJS.Signals | null, stdout: string, stderr: string): string {
-  const sections: string[] = [];
-  if (stdout) sections.push(stdout.trimEnd());
-  if (stderr) sections.push(`[stderr]\n${stderr.trimEnd()}`);
-  sections.push(`\n[exit ${code === null ? `signal ${signal || 'unknown'}` : code}]`);
-  return truncateOutput(sections.filter(Boolean).join('\n'), INLINE_OUTPUT_LIMIT);
+export async function get_default_cwd() {
+  return process.cwd();
 }
 
 export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
   const command = String(args.command || '');
   if (!command.trim()) throw new Error('exec requires command');
   const timeoutSeconds = resolveExecTimeoutSeconds(args.timeout);
-  const cwd = typeof args.cwd === 'string' && args.cwd.trim()
-    ? (path.isAbsolute(args.cwd.trim()) ? args.cwd.trim() : path.resolve(ctx.session?.cwd || process.cwd(), args.cwd.trim()))
-    : (ctx.session?.cwd || process.cwd());
-  const id = `exec_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-
-  return await new Promise<string>((resolve) => {
-    const child = spawn(command, { cwd, shell: true, env: process.env });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    child.stdout?.on('data', chunk => { stdout += chunk.toString(); });
-    child.stderr?.on('data', chunk => { stderr += chunk.toString(); });
-    child.on('error', err => {
-      if (!settled) {
-        settled = true;
-        resolve(`[${id}] failed to start: ${err.message}`);
-      }
-    });
-    child.on('close', (code, signal) => {
-      const result = formatExecResult(code, signal, stdout, stderr);
-      if (settled) {
-        void ctx.queueSystemEvent?.(`[${id}] completed in background:\n${truncateOutput(result, BACKGROUND_OUTPUT_LIMIT)}`, 'background');
-        return;
-      }
-      settled = true;
-      resolve(result);
-    });
-    setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      resolve(`[Process running longer than ${timeoutSeconds}s] Switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification (unless working on other tasks in parallel).\nexecId: ${id}`);
-    }, timeoutSeconds * 1000).unref?.();
+  const agentName = ctx.session?.agent || 'main';
+  if (ctx.sessionId && ctx.queueSystemEvent) sessionEventDispatchers.set(ctx.sessionId, ctx.queueSystemEvent);
+  const manager = getExecManager(agentName);
+  await manager.initialize();
+  const entry = await manager.startPersistentExec({
+    command,
+    sessionId: ctx.sessionId,
+    agentName,
+    nodeId: ctx.runtimeNodeId || ctx.session?.currentNode || process.env.FOXWARM_NODE_ID || 'remote-node',
+    cwd: args.cwd,
+    sessionCwd: ctx.session?.cwd,
   });
+  const status = await manager.waitForExecCompletion(entry.id, timeoutSeconds * 1000);
+  if (status) {
+    try {
+      return await manager.buildForegroundExecResult(entry, status);
+    } finally {
+      await manager.finalizeForegroundExec(entry.id);
+    }
+  }
+  await manager.markExecForBackgroundNotification(entry.id);
+  return await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds);
 }
 
 class SharedBrowserManager {
@@ -240,4 +236,4 @@ export async function browse_get(args: ToolArgs) { return browser.get(String(arg
 export async function browse_close(args: ToolArgs) { return browser.close(String(args.tabId || '')); }
 export async function browse_interact(args: ToolArgs) { return browser.interact(String(args.tabId || ''), String(args.action || ''), args.params || {}); }
 
-export const nodeTools = { read, write, edit, apply_patch, exec, browse_open, browse_list, browse_get, browse_close, browse_interact };
+export const nodeTools = { read, write, edit, apply_patch, exec, get_default_cwd, browse_open, browse_list, browse_get, browse_close, browse_interact };

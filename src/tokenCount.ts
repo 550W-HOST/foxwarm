@@ -1,5 +1,8 @@
 import { MessagePart, Message, InlineData } from './types';
 import { stringifyFunctionCallArgs } from './toolCallArgs';
+import { estimateTokenCount } from '../packages/shared/dist/tokenCount';
+
+export { estimateTokenCount };
 
 export interface TokenEstimateSummary {
     tokens: number;
@@ -52,28 +55,6 @@ function sanitizeValueForTokenEstimate(value: unknown): { sanitized: unknown; im
         sanitized: Object.fromEntries(sanitizedEntries),
         imageCount,
     };
-}
-
-/**
- * Estimate token count based on codepoint values
- * - ASCII characters (< 128): 0.33 tokens each
- * - Other characters: 1 token each
- * - Result is rounded up
- */
-export function estimateTokenCount(text: string): number {
-    if (!text) return 0;
-    
-    let count = 0;
-    for (let i = 0; i < text.length; i++) {
-        const code = text.charCodeAt(i);
-        if (code < 128) {
-            count += 0.33;
-        } else {
-            count += 1;
-        }
-    }
-    
-    return Math.ceil(count);
 }
 
 /**

@@ -1,3 +1,0 @@
-export const DEFAULT_EXEC_TIMEOUT_SECONDS = 15;
-export const MIN_EXEC_TIMEOUT_SECONDS = 1;
-export const MAX_EXEC_TIMEOUT_SECONDS = 60;

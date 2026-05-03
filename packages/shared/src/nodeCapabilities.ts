@@ -62,6 +62,15 @@ export const CLI_NODE_CAPABILITIES = {
       },
     },
     {
+      name: 'get_default_cwd',
+      description: 'Return the node process working directory used as the default cwd for exec when no session cwd or explicit cwd is set.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+    {
       name: 'browse_open',
       description: 'Open a new browser tab and navigate to URL. Returns tab ID for future operations.',
       parameters: {
