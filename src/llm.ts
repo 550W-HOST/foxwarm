@@ -351,12 +351,13 @@ export async function buildSessionSystemPromptSnapshot(options: {
         .join('\n\n');
 }
 
-function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string; message: string; rawArgsText?: string } } {
+function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string; message: string } } {
+    // Do NOT send rawArgsText in the tool response — the call's arguments
+    // already carry it, so no need to duplicate.
     return {
         error: {
             type: 'invalid_tool_arguments',
             message: call.argsParseError || 'Invalid tool arguments JSON',
-            ...(typeof call.rawArgsText === 'string' ? { rawArgsText: call.rawArgsText } : {}),
         }
     };
 }

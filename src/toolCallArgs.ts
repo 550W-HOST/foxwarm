@@ -1,6 +1,13 @@
 import { FunctionCall } from './types';
 
-export function stringifyFunctionCallArgs(functionCall?: Pick<FunctionCall, 'args' | 'rawArgsText'> | null): string {
+export function stringifyFunctionCallArgs(functionCall?: Pick<FunctionCall, 'args' | 'rawArgsText' | 'argsParseError'> | null): string {
+  // If args parsing failed, send a safe JSON object that includes the error
+  // and the raw text so the LLM can see what went wrong. Never send broken
+  // JSON directly — it causes a 400 parse error on the provider side.
+  if (functionCall?.argsParseError) {
+    return JSON.stringify({ error: functionCall.argsParseError, rawArgsText: functionCall.rawArgsText || undefined });
+  }
+
   if (typeof functionCall?.rawArgsText === 'string') {
     return functionCall.rawArgsText;
   }
@@ -8,7 +15,7 @@ export function stringifyFunctionCallArgs(functionCall?: Pick<FunctionCall, 'arg
   try {
     return JSON.stringify(functionCall?.args || {});
   } catch {
-    return '[unserializable args]';
+    return JSON.stringify({ error: 'unserializable args' });
   }
 }
 
