@@ -9,7 +9,7 @@ import * as llm from '../llm';
 import * as vector from '../vector';
 import { COMPACT_FLOW_MAX_ROUNDS } from '../session/compactPlan';
 import { MessagePart, Session } from '../types';
-import { tool_get_archived_messages } from '../toolsSessionAgent';
+import { tool_get_archived_messages, tool_set_goal } from '../toolsSessionAgent';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -344,6 +344,8 @@ async function main(): Promise<void> {
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
 
+      await tool_set_goal({ goal: 'Keep the session goal alive across compaction.', remindEvery: 99 }, { sessionId, session });
+
       await sessionManager.appendSessionMessage(session, {
         role: 'user',
         parts: [{ text: LARGE_COMPACT_TEXT }],
@@ -380,6 +382,8 @@ async function main(): Promise<void> {
         if (llmCallCount === 2) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
+          assert.doesNotMatch(systemText, /Current session goal\/context/);
+          assert.doesNotMatch(systemText, /Keep the session goal alive across compaction/);
           assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
           assert.match(systemText, /M#1/);
           assert.strictEqual(options?.toolDefinitions, undefined);
@@ -441,6 +445,14 @@ async function main(): Promise<void> {
       const finalSession = await sessionManager.getSession(sessionId);
       assert.strictEqual(llmCallCount, 4);
       assert.strictEqual(finalSession.busy, false);
+      assert.strictEqual(finalSession.goalState?.goal, 'Keep the session goal alive across compaction.');
+      const compactCompletion = finalSession.history.find(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed')));
+      const compactCompletionSystem = compactCompletion?.parts.find(part => typeof part.system === 'string')?.system || '';
+      assert.match(compactCompletionSystem, /Session goal reminder:/);
+      assert.match(compactCompletionSystem, /Keep the session goal alive across compaction/);
+      assert.strictEqual(compactCompletion?.__meta?.goalReminder, true);
+      assert.strictEqual(finalSession.goalState?.anchorSeq, compactCompletion?.__meta?.seq);
+      assert.strictEqual(finalSession.history.filter(msg => msg.__meta?.goalReminder === true).length, 1);
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('layered compact summary'))));
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed'))));
@@ -541,6 +553,7 @@ async function main(): Promise<void> {
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('async compact summary'))));
       assert(finalSession.history.some(msg => msg.parts.some(part => (part.text || '').includes('tail message appended after async compact job started'))));
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed.'))));
+      assert(!finalSession.history.some(msg => msg.parts.some(part => (part.system || '').includes('Session goal reminder:'))));
     });
 
     await test('get_archived_messages reads archived session history by seq range', async () => {

@@ -10,7 +10,7 @@ import { getAgentDir, resolveModelConfig } from './config';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
 import { AGENTS_DIR, COMPACT_PERCENT } from './config';
-import { clearSessionTodo, normalizeTodoText, resolveSessionTodoRemindEvery, resolveSessionTodoRemindOnTurnEnd, setSessionTodo } from './session/todo';
+import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, resolveSessionGoalRemindOnTurnEnd, setSessionGoal } from './session/goal';
 import { formatArchiveBlockTimeRange } from './session/layeredContext';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
@@ -875,7 +875,7 @@ export async function tool_update_session_snapshot(args: ToolArgs, ctx: ToolCont
   return `Session \`${result.sessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``;
 }
 
-export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
+export async function tool_set_goal(args: ToolArgs, ctx: ToolContext) {
   const targetId = ctx?.sessionId;
   if (!targetId) {
     throw new Error('Current session context is required.');
@@ -885,25 +885,25 @@ export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
   const clear = args.clear === true;
 
   if (clear) {
-    const cleared = clearSessionTodo(session);
+    const cleared = clearSessionGoal(session);
     await sessionManager.saveSession(session.id);
     return cleared
       ? 'ok'
       : 'ok';
   }
 
-  const todo = normalizeTodoText(args.todo);
-  if (!todo) {
-    const cleared = clearSessionTodo(session);
+  const goal = normalizeGoalText(args.goal);
+  if (!goal) {
+    const cleared = clearSessionGoal(session);
     await sessionManager.saveSession(session.id);
     return cleared
       ? 'ok'
       : 'ok';
   }
 
-  const remindEvery = resolveSessionTodoRemindEvery(session, args.remindEvery);
-  const remindOnTurnEnd = resolveSessionTodoRemindOnTurnEnd(session, args.remindOnTurnEnd);
-  setSessionTodo(session, todo, remindEvery, remindOnTurnEnd);
+  const remindEvery = resolveSessionGoalRemindEvery(session, args.remindEvery);
+  const remindOnTurnEnd = resolveSessionGoalRemindOnTurnEnd(session, args.remindOnTurnEnd);
+  setSessionGoal(session, goal, remindEvery, remindOnTurnEnd);
   await sessionManager.saveSession(session.id);
 
   return 'ok';

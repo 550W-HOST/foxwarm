@@ -10,7 +10,7 @@ import { getAgentDir, getChannelConfigById, readAppConfigFile } from './config';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
 import { getManagedSessionState, isManagedSessionActive, setManagedSessionState } from './session/managedState';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
-import { maybeBuildTodoEndTurnReminderMessage } from './session/todo';
+import { maybeBuildGoalEndTurnReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { Message, MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
@@ -655,12 +655,12 @@ export class MessageRouter {
     }
   }
 
-  private async maybeAppendTodoEndTurnReminder(session: Session): Promise<void> {
+  private async maybeAppendGoalEndTurnReminder(session: Session): Promise<void> {
     if (session.queue.some(item => item.type !== 'background')) {
       return;
     }
 
-    const reminder = maybeBuildTodoEndTurnReminderMessage(session);
+    const reminder = maybeBuildGoalEndTurnReminderMessage(session);
     if (!reminder) {
       return;
     }
@@ -975,7 +975,7 @@ export class MessageRouter {
 
       await this.maybeQueueChildReminder(session);
       await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted);
-      await this.maybeAppendTodoEndTurnReminder(session);
+      await this.maybeAppendGoalEndTurnReminder(session);
       await this.maybeRecordSubconsciousProgress(
         session,
         subconsciousIncomingParts,
@@ -991,7 +991,7 @@ export class MessageRouter {
       await this.appendTerminalModelMessage(session, errorText);
       await this.maybeQueueChildReminder(session);
       await this.sendSessionError(session, options.sourceCtx, e);
-      await this.maybeAppendTodoEndTurnReminder(session);
+      await this.maybeAppendGoalEndTurnReminder(session);
       await this.maybeRecordSubconsciousProgress(
         session,
         subconsciousIncomingParts,

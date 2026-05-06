@@ -52,7 +52,7 @@ import {
     tool_get_context_archive,
     tool_delete_session,
     tool_update_session_name,
-    tool_set_todo,
+    tool_set_goal,
     tool_set_session_child_model,
     tool_set_session_compact_threshold,
     tool_update_session_snapshot,
@@ -93,7 +93,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
     'list_sessions', 'list_agents', 'list_skills', 'load_skill',
     'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
-    'update_session_name', 'set_todo', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
+    'update_session_name', 'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
     'compact_session',
     'create_timer', 'list_timers', 'delete_timer',
     'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
@@ -1586,7 +1586,7 @@ export const get_archived_blocks = tool_get_archived_blocks;
 export const get_context_archive = tool_get_context_archive;
 export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
-export const set_todo = tool_set_todo;
+export const set_goal = tool_set_goal;
 export const set_session_child_model = tool_set_session_child_model;
 export const set_session_compact_threshold = tool_set_session_compact_threshold;
 export const update_session_snapshot = tool_update_session_snapshot;
@@ -2144,16 +2144,16 @@ export const definitions = [
             }
         },
         {
-            name: 'set_todo',
+            name: 'set_goal',
             defaultInject: true,
-            description: 'Set or clear a todo reminder for the current session. Recommended workflow: briefly plan first, store only the active checklist here, update it as milestones complete, and clear it when done. Reminders are injected as system messages after enough later session messages have passed, including tool-loop progress.',
+            description: 'Set or clear the long-term goal reminder for the current session. The goal is preserved across session compaction so the session can retain its long-horizon objective even when older context is summarized.',
             parameters: {
                 type: 'object',
                 properties: {
-                    todo: { type: 'string', description: 'Markdown checklist text like `- [ ] first item`. Use empty string to clear.' },
-                    remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current todo setting or default to 10.' },
-                    remindOnTurnEnd: { type: 'boolean', description: 'Optional. Whether to inject todo reminders at the end of a turn when newer work happened. If omitted, reuse the current setting or default to true.' },
-                    clear: { type: 'boolean', description: 'If true, clear the current session todo reminder.' }
+                    goal: { type: 'string', description: 'Goal text. Use empty string to clear.' },
+                    remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current goal setting or default to 10.' },
+                    remindOnTurnEnd: { type: 'boolean', description: 'Optional. Whether to inject goal reminders at the end of a turn when newer work happened. If omitted, reuse the current setting or default to true.' },
+                    clear: { type: 'boolean', description: 'If true, clear the current session goal reminder.' }
                 }
             }
         },

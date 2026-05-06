@@ -83,8 +83,8 @@ export interface SessionStreamEvent {
   text?: string;
 }
 
-export interface SessionTodoState {
-  todo: string;
+export interface SessionGoalState {
+  goal: string;
   remindEvery: number;
   remindOnTurnEnd?: boolean;
   anchorSeq: number;
@@ -176,7 +176,7 @@ export interface Session {
   nextBlockId?: number; // Next per-session layered-context block id
   contextFrontier?: ContextFrontierItem[]; // Structured layered-context frontier; session.history is a rendered view
   parentSessionId?: string; // Parent session ID for child sessions
-  todoState?: SessionTodoState; // Session-local todo reminder configuration
+  goalState?: SessionGoalState; // Session-local goal reminder configuration
   compactThresholdTokens?: number; // Optional per-session auto-compact threshold override in tokens
   broadcast?: SessionReply; // Broadcast message to all attached channels
 }

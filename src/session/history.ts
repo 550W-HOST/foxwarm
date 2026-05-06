@@ -23,6 +23,7 @@ import {
 import { Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
+import { formatSessionGoalReminderText } from './goal';
 import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 
 const TOOL_NOISE_TOKEN_THRESHOLD = 200;
@@ -310,7 +311,7 @@ function cloneSessionForCompactJob(session: Session, historySnapshot: Message[],
     nextBlockId: session.nextBlockId,
     contextFrontier: structuredClone(frontierSnapshot),
     parentSessionId: session.parentSessionId,
-    todoState: session.todoState ? structuredClone(session.todoState) : undefined,
+    goalState: session.goalState ? structuredClone(session.goalState) : undefined,
     compactThresholdTokens: session.compactThresholdTokens,
   };
   (cloned as any).__compactJob = true;
@@ -664,15 +665,27 @@ async function finalizeCompaction(
     const skillList = compactedSkillNames.map(s => `\`${s}\``).join(', ');
     completionText += `\nNote: The following skill(s) were loaded via load_skill but their content was compacted away: ${skillList}. If you still need them, call load_skill again.`;
   }
+  const hasCompletionGoalReminder = !!session.goalState?.goal?.trim();
+  if (hasCompletionGoalReminder) {
+    completionText += `\n\n${formatSessionGoalReminderText(session.goalState.goal)}`;
+  }
 
   const completionMessage: Message = {
     role: 'user',
     parts: [{ system: completionText }],
-    __meta: { timestamp: Date.now() },
+    __meta: {
+      timestamp: Date.now(),
+      ...(hasCompletionGoalReminder ? { goalReminder: true, goalReminderKind: 'compact-completion' } : {}),
+    },
   };
   await appendMessagesToArchive(session, [completionMessage]);
   session.history.push(completionMessage);
-  ensureContextFrontier(session).push({ kind: 'message', seq: completionMessage.__meta!.seq! });
+  const completionSeq = completionMessage.__meta!.seq!;
+  ensureContextFrontier(session).push({ kind: 'message', seq: completionSeq });
+  if (hasCompletionGoalReminder && session.goalState) {
+    session.goalState.anchorSeq = completionSeq;
+    completionMessage.__meta!.goalAnchorSeq = completionSeq;
+  }
 
   session.vectorIndexPosition = 0;
   session.historyVersion = (session.historyVersion || 0) + 1;

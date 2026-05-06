@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from './sessionManager';
-import { tool_end_turn, tool_set_todo } from './toolsSessionAgent';
+import { tool_end_turn, tool_set_goal } from './toolsSessionAgent';
 import type { Session } from './types';
 
 function makeSessionId(prefix: string): string {
@@ -34,16 +34,16 @@ test('end_turn returns concise output without echoing reason text', async () => 
   assert.deepEqual(result.__toolLoopControl, { stopCurrentTurn: true });
 });
 
-test('set_todo returns concise output without echoing todo content or remindEvery', async () => {
+test('set_goal returns concise output without echoing goal content or remindEvery', async () => {
   await sessionManager.loadSessions();
-  const sessionId = makeSessionId('tool_result_todo');
+  const sessionId = makeSessionId('tool_result_goal');
   const session = await ensureSession(sessionId);
   try {
-    const updated = await tool_set_todo({ todo: '- [ ] ship feature', remindEvery: 7 }, { sessionId, session });
+    const updated = await tool_set_goal({ goal: 'Ship feature safely', remindEvery: 7 }, { sessionId, session });
     assert.equal(updated, 'ok');
     assert.doesNotMatch(String(updated), /ship feature|remindEvery|7/);
 
-    const cleared = await tool_set_todo({ clear: true }, { sessionId, session });
+    const cleared = await tool_set_goal({ clear: true }, { sessionId, session });
     assert.equal(cleared, 'ok');
   } finally {
     try {
@@ -54,20 +54,20 @@ test('set_todo returns concise output without echoing todo content or remindEver
   }
 });
 
-test('set_todo accepts omitted remindEvery and configurable remindOnTurnEnd', async () => {
+test('set_goal accepts omitted remindEvery and configurable remindOnTurnEnd', async () => {
   await sessionManager.loadSessions();
-  const sessionId = makeSessionId('tool_result_todo_optional');
+  const sessionId = makeSessionId('tool_result_goal_optional');
   const session = await ensureSession(sessionId);
   try {
-    const updated = await tool_set_todo({ todo: '- [ ] ship feature', remindOnTurnEnd: false }, { sessionId, session });
+    const updated = await tool_set_goal({ goal: 'Ship feature safely', remindOnTurnEnd: false }, { sessionId, session });
     assert.equal(updated, 'ok');
-    assert.equal(session.todoState?.remindEvery, 10);
-    assert.equal(session.todoState?.remindOnTurnEnd, false);
+    assert.equal(session.goalState?.remindEvery, 10);
+    assert.equal(session.goalState?.remindOnTurnEnd, false);
 
-    const second = await tool_set_todo({ todo: '- [ ] ship feature later' }, { sessionId, session });
+    const second = await tool_set_goal({ goal: 'Ship feature later' }, { sessionId, session });
     assert.equal(second, 'ok');
-    assert.equal(session.todoState?.remindEvery, 10);
-    assert.equal(session.todoState?.remindOnTurnEnd, false);
+    assert.equal(session.goalState?.remindEvery, 10);
+    assert.equal(session.goalState?.remindOnTurnEnd, false);
   } finally {
     try {
       await sessionManager.deleteSession(sessionId);

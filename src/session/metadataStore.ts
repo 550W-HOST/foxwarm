@@ -23,7 +23,7 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'busyStartedAt',
   'nextMessageSeq',
   'nextBlockId',
-  'todoState',
+  'goalState',
   'compactThresholdTokens',
 ] as const;
 
@@ -51,7 +51,7 @@ const SESSION_METADATA_FIELDS = [
   'nextMessageSeq',
   'nextBlockId',
   'parentSessionId',
-  'todoState',
+  'goalState',
   'compactThresholdTokens',
 ] as const;
 

@@ -51,6 +51,8 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /M#1/);
   assert.match(prompt, /B#9 L1 raw#3-#9/);
   assert.match(prompt, /resolved discussion/);
+  assert.doesNotMatch(prompt, /Current session goal\/context/);
+  assert.doesNotMatch(prompt, /Session goal reminder/);
   assert.match(prompt, /Preserve decisions/i);
   assert.doesNotMatch(prompt, /get_context_archive/);
   assert.doesNotMatch(prompt, /get_archived_messages/);

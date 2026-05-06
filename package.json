@@ -14,7 +14,7 @@
     "node": "npm run build && node packages/cli-node/dist/client.js",
     "dev": "tsc --watch",
     "selftest:apply-patch": "npm run build && node lib/selftest/applyPatchSelfTest.js",
-    "selftest:todo-reminder": "npm run build && node lib/selftest/todoReminderSelfTest.js",
+    "selftest:goal-reminder": "npm run build && node lib/selftest/goalReminderSelfTest.js",
     "selftest:tool-loop-stall": "npm run build && node lib/selftest/toolLoopStallSelfTest.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "cli-node": "npm run build && node packages/cli-node/dist/tui.js"

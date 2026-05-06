@@ -492,6 +492,15 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_crop'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_write_to_file'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'submit_compact_plan'), true);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'set_goal'), true);
+  assert.equal(definitions.some(def => def.name === 'set_todo'), false);
+});
+
+test('set_goal schema keeps goal optional so clear can omit it', () => {
+  const definition = definitions.find(def => def.name === 'set_goal');
+  assert.ok(definition);
+  assert.equal((definition.parameters?.properties as any)?.goal?.type, 'string');
+  assert.deepEqual(definition.parameters?.required, undefined);
 });
 
 test('defaultInject metadata is the single source of truth for default model injection', () => {

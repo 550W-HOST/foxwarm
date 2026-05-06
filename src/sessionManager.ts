@@ -22,7 +22,7 @@ import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetada
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
-import { maybeBuildTodoReminderMessage } from './session/todo';
+import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
 
 function systemPart(system: string): MessagePart {
@@ -1556,7 +1556,7 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
   appendMessagesToContextFrontier(session, messages);
 
   const messagesToNotify = [...messages];
-  const todoReminderMessage = maybeBuildTodoReminderMessage(session);
+  const goalReminderMessage = maybeBuildGoalReminderMessage(session);
 
   await saveSession(session.id);
 
@@ -1564,8 +1564,8 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
     notifyHistoryUpdate(session.id, message);
   }
 
-  if (todoReminderMessage) {
-    await queueSessionMessageEvent(session.id, todoReminderMessage, 'background');
+  if (goalReminderMessage) {
+    await queueSessionMessageEvent(session.id, goalReminderMessage, 'background');
   }
 }
 
