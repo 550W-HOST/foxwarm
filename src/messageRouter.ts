@@ -9,6 +9,7 @@ import { formatAuthorizationInspection, inspectChannelAuthorizationFromContext }
 import { getAgentDir, getChannelConfigById, readAppConfigFile } from './config';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
 import { getManagedSessionState, isManagedSessionActive, setManagedSessionState } from './session/managedState';
+import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildTodoEndTurnReminderMessage } from './session/todo';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
@@ -801,6 +802,8 @@ export class MessageRouter {
     if (!options.preclaimed) {
       await sessionManager.updateSessionBusyState(session, true);
     }
+
+    await maybeRefreshStaleSessionSnapshot(session, sessionManager.refreshSessionSnapshot);
 
     const broadcast = session.broadcast;
     const subconsciousIncomingParts: MessagePart[] = options.parts ? [...options.parts] : [];
