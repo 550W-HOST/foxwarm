@@ -66,7 +66,7 @@ if [ -z "$HOST" ]; then
   exit 1
 fi
 
-for cmd in curl tar node npm; do
+for cmd in curl tar node; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: $cmd is required" >&2
     exit 1
@@ -90,24 +90,31 @@ ABS_SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
 echo "Downloading node source from $HOST/node/source.tar.gz ..."
 curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$ABS_SOURCE_DIR"
 
-echo "Installing dependencies ..."
-(cd "$ABS_SOURCE_DIR" && npm ci)
-
-if [ -f "$ABS_SOURCE_DIR/packages/cli-node/dist/tui.js" ] && [ -f "$ABS_SOURCE_DIR/packages/shared/dist/toolResponseFormatting.js" ]; then
-  echo "Using prebuilt node bundle from source archive."
+NODE_TUI_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/tui.bundle.js"
+if [ -f "$NODE_TUI_ENTRYPOINT" ]; then
+  echo "Using bundled interactive node client from source archive; skipping npm install."
 else
-  echo "Building ..."
-  (cd "$ABS_SOURCE_DIR" && npm run build)
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "Error: npm is required only when the downloaded bundle is missing and a source build fallback is needed" >&2
+    exit 1
+  fi
+  echo "Bundled interactive node client not found; installing minimal package dependencies and building fallback ..."
+  (cd "$ABS_SOURCE_DIR/packages/shared" && npm ci && npm run build)
+  (cd "$ABS_SOURCE_DIR/packages/cli-node" && npm ci && npm run build)
+  NODE_TUI_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/tui.bundle.js"
 fi
 
 # ─── Verify build ───
-if [ ! -f "$ABS_SOURCE_DIR/packages/cli-node/dist/tui.js" ]; then
+if [ ! -f "$NODE_TUI_ENTRYPOINT" ]; then
+  NODE_TUI_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/tui.js"
+fi
+if [ ! -f "$NODE_TUI_ENTRYPOINT" ]; then
   echo "Error: cli-node TUI not found after build" >&2
   exit 1
 fi
 
 # ─── Build command ───
-CMD="node '$ABS_SOURCE_DIR/packages/cli-node/dist/tui.js' --host '$HOST' --id '$NODE_ID'"
+CMD="node '$NODE_TUI_ENTRYPOINT' --host '$HOST' --id '$NODE_ID'"
 
 if [ -n "$PAIRING" ]; then
   CMD="$CMD --token '$PAIRING'"

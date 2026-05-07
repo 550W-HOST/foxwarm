@@ -43,7 +43,11 @@ test('renderNodeTemplateText injects request-derived base url placeholder', () =
   assert.equal(rendered, 'HOST="http://192.168.1.50:3001"');
 });
 
-test('node source bundle includes shared package artifacts required by runtime', () => {
+test('node source bundle is limited to node-client packages and runtime launcher', () => {
   assert.equal(NODE_SOURCE_FILES.includes('packages/shared'), true);
   assert.equal(NODE_SOURCE_FILES.includes('packages/cli-node'), true);
+  assert.equal(NODE_SOURCE_FILES.includes('scripts/start-sandbox-node.sh'), true);
+  assert.equal(NODE_SOURCE_FILES.includes('package.json'), false);
+  assert.equal(NODE_SOURCE_FILES.includes('src'), false);
+  assert.equal(NODE_SOURCE_FILES.includes('lib'), false);
 });

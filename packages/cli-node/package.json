@@ -8,7 +8,7 @@
     "cli-node-client": "./dist/client.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json && node scripts/build-bundle.js"
   },
   "dependencies": {
     "@foxwarm/shared": "file:../shared",
@@ -26,6 +26,7 @@
     "@types/node": "^22.19.11",
     "@types/react": "^17.0.89",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.27.7",
     "typescript": "^5.9.3"
   }
 }

@@ -821,7 +821,14 @@ async function main() {
   });
 }
 
-if (require.main === module) {
+function isClientCliEntrypoint(): boolean {
+  const entryBase = process.argv[1] ? path.basename(process.argv[1]) : '';
+  return entryBase === 'client.js'
+    || entryBase === 'client.bundle.js'
+    || entryBase === 'cli-node-client';
+}
+
+if (require.main === module && isClientCliEntrypoint()) {
   main().catch(err => {
     logger.error({ err }, 'Node client failed');
     process.exit(1);

@@ -63,7 +63,7 @@ Parameters:
 }
 
 # ─── Validate prerequisites ───
-foreach ($cmd in @("node", "npm")) {
+foreach ($cmd in @("node")) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
         Write-Error "$cmd is required but not found in PATH"
         exit 1
@@ -114,37 +114,53 @@ Write-Host "Extracting source ..."
 tar -xzf $tarFile -C $SourceDir
 Remove-Item $tarFile -Force -ErrorAction SilentlyContinue
 
-# ─── Install & build ───
-Write-Host "Installing dependencies ..."
-Push-Location $SourceDir
-try {
-    & npm ci
-    if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
-
-    # source.tar.gz includes pre-built lib/ and packages/shared/dist; only build if missing
-    $clientJs = Join-Path $SourceDir "packages\cli-node\dist\client.js"
-    $sharedDist = Join-Path $SourceDir "packages\shared\dist\toolResponseFormatting.js"
-    if (-not (Test-Path $clientJs) -or -not (Test-Path $sharedDist)) {
-        Write-Host "Building ..."
-        & npm run build
-        if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
-    } else {
-        Write-Host "Using pre-built node bundle from source archive."
-    }
-} finally {
-    Pop-Location
-}
-
 # ─── Determine entry point ───
 if ($Interactive) {
-    $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\tui.js"
+    $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\tui.bundle.js"
 } else {
-    $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\client.js"
+    $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\client.bundle.js"
+}
+
+if (Test-Path $entryPoint) {
+    Write-Host "Using bundled node client from source archive; skipping npm install."
+} else {
+    if (-not (Get-Command "npm" -ErrorAction SilentlyContinue)) {
+        Write-Error "npm is required only when the downloaded bundle is missing and a source build fallback is needed"
+        exit 1
+    }
+
+    Write-Host "Bundled node client not found; installing minimal package dependencies and building fallback ..."
+    Push-Location (Join-Path $SourceDir "packages\shared")
+    try {
+        & npm ci
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed in packages/shared" }
+        & npm run build
+        if ($LASTEXITCODE -ne 0) { throw "npm run build failed in packages/shared" }
+    } finally {
+        Pop-Location
+    }
+
+    Push-Location (Join-Path $SourceDir "packages\cli-node")
+    try {
+        & npm ci
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed in packages/cli-node" }
+        & npm run build
+        if ($LASTEXITCODE -ne 0) { throw "npm run build failed in packages/cli-node" }
+    } finally {
+        Pop-Location
+    }
 }
 
 if (-not (Test-Path $entryPoint)) {
-    Write-Error "Entry point not found: $entryPoint"
-    exit 1
+    if ($Interactive) {
+        $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\tui.js"
+    } else {
+        $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\client.js"
+    }
+    if (-not (Test-Path $entryPoint)) {
+        Write-Error "Entry point not found: $entryPoint"
+        exit 1
+    }
 }
 
 # ─── Build arguments ───

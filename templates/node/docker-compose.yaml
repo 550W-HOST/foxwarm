@@ -48,8 +48,14 @@ services:
         RUN test -n "$NODE_SOURCE_URL"
         RUN curl -fsSL "$NODE_SOURCE_URL" | tar -xzf - -C /app
 
-        RUN npm ci \
-            && if [ ! -f /app/packages/cli-node/dist/client.js ] || [ ! -f /app/packages/shared/dist/toolResponseFormatting.js ]; then npm run build; else echo "Using prebuilt node bundle from source archive."; fi
+        RUN if [ -f /app/packages/cli-node/dist/client.bundle.js ]; then \
+              echo "Using bundled node client from source archive; skipping npm install."; \
+            else \
+              npm --prefix /app/packages/shared ci \
+              && npm --prefix /app/packages/shared run build \
+              && npm --prefix /app/packages/cli-node ci \
+              && npm --prefix /app/packages/cli-node run build; \
+            fi
         RUN chmod +x /app/scripts/start-sandbox-node.sh
 
         ENV NODE_ENV=production

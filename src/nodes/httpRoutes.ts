@@ -15,15 +15,14 @@ const NODE_DOCKER_COMPOSE_PATH = path.join(NODE_TEMPLATE_DIR, 'docker-compose.ya
 export const NODE_TEMPLATE_BASE_URL_PLACEHOLDER = '__FOXWARM_DEFAULT_BASE_URL__';
 
 export const NODE_SOURCE_FILES = [
-  'package.json',
-  'package-lock.json',
-  'tsconfig.json',
   'packages/shared',
   'packages/cli-node',
-  'src',
-  'lib',
-  'templates',
   'scripts/start-sandbox-node.sh',
+];
+
+const NODE_SOURCE_TAR_EXCLUDES = [
+  'packages/shared/node_modules',
+  'packages/cli-node/node_modules',
 ];
 
 async function ensureNodeTemplateFiles(): Promise<void> {
@@ -113,7 +112,7 @@ export function registerNodeHttpRoutes(httpServer: HttpServer): void {
       res.setHeader('Content-Type', 'application/gzip');
       res.setHeader('Content-Disposition', 'attachment; filename="foxwarm-node-source.tar.gz"');
 
-      const tar = spawn('tar', ['-czf', '-', ...NODE_SOURCE_FILES], {
+      const tar = spawn('tar', ['-czf', '-', ...NODE_SOURCE_TAR_EXCLUDES.map(relPath => `--exclude=${relPath}`), ...NODE_SOURCE_FILES], {
         cwd: BASE_DIR,
         stdio: ['ignore', 'pipe', 'pipe'],
       });

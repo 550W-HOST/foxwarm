@@ -59,7 +59,7 @@ if [ -z "$HOST" ]; then
   exit 1
 fi
 
-for cmd in curl tar node npm; do
+for cmd in curl tar node; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: $cmd is required for bare-metal node bootstrap" >&2
     exit 1
@@ -83,6 +83,7 @@ curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$SOURCE_DIR"
 
 ABS_STATE_DIR="$(cd "$STATE_DIR" && pwd)"
 ABS_SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
+NODE_CLIENT_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/client.bundle.js"
 
 cat > "$ENV_FILE" <<EOF
 NODE_HOST=$HOST
@@ -96,14 +97,21 @@ NODE_LOG_FILE=$ABS_STATE_DIR/logs/node.log
 NODE_PID_FILE=$ABS_STATE_DIR/node.pid
 EOF
 
-echo "Installing dependencies in $ABS_SOURCE_DIR ..."
-(cd "$ABS_SOURCE_DIR" && npm ci)
-
-if [ -f "$ABS_SOURCE_DIR/packages/cli-node/dist/client.js" ] && [ -f "$ABS_SOURCE_DIR/packages/shared/dist/toolResponseFormatting.js" ]; then
-  echo "Using prebuilt node bundle from source archive."
+if [ -f "$NODE_CLIENT_ENTRYPOINT" ]; then
+  echo "Using bundled node client from source archive; skipping npm install."
 else
-  echo "Building node client in $ABS_SOURCE_DIR ..."
-  (cd "$ABS_SOURCE_DIR" && npm run build)
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "Error: npm is required only when the downloaded bundle is missing and a source build fallback is needed" >&2
+    exit 1
+  fi
+  echo "Bundled node client not found; installing minimal package dependencies and building fallback in $ABS_SOURCE_DIR ..."
+  (cd "$ABS_SOURCE_DIR/packages/shared" && npm ci && npm run build)
+  (cd "$ABS_SOURCE_DIR/packages/cli-node" && npm ci && npm run build)
+  NODE_CLIENT_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/client.bundle.js"
+fi
+
+if [ ! -f "$NODE_CLIENT_ENTRYPOINT" ]; then
+  NODE_CLIENT_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/client.js"
 fi
 
 echo "Prepared env file: $ENV_FILE"
@@ -115,18 +123,18 @@ echo "Log file: $ABS_STATE_DIR/logs/node.log"
 start_foreground() {
   cd "$ABS_SOURCE_DIR"
   if [ -n "$PAIRING" ]; then
-    exec node packages/cli-node/dist/client.js --host "$HOST" --id "$NODE_ID" --token "$PAIRING" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
+    exec node "$NODE_CLIENT_ENTRYPOINT" --host "$HOST" --id "$NODE_ID" --token "$PAIRING" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
   fi
-  exec node packages/cli-node/dist/client.js --host "$HOST" --id "$NODE_ID" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
+  exec node "$NODE_CLIENT_ENTRYPOINT" --host "$HOST" --id "$NODE_ID" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
 }
 
 start_detached() {
   (
     cd "$ABS_SOURCE_DIR"
     if [ -n "$PAIRING" ]; then
-      nohup node packages/cli-node/dist/client.js --host "$HOST" --id "$NODE_ID" --token "$PAIRING" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json" >> "$ABS_STATE_DIR/logs/node.log" 2>&1 &
+      nohup node "$NODE_CLIENT_ENTRYPOINT" --host "$HOST" --id "$NODE_ID" --token "$PAIRING" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json" >> "$ABS_STATE_DIR/logs/node.log" 2>&1 &
     else
-      nohup node packages/cli-node/dist/client.js --host "$HOST" --id "$NODE_ID" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json" >> "$ABS_STATE_DIR/logs/node.log" 2>&1 &
+      nohup node "$NODE_CLIENT_ENTRYPOINT" --host "$HOST" --id "$NODE_ID" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json" >> "$ABS_STATE_DIR/logs/node.log" 2>&1 &
     fi
     echo $! > "$ABS_STATE_DIR/node.pid"
   )
@@ -138,7 +146,7 @@ if [ "$PREPARE_ONLY" = "1" ]; then
 Preparation complete. Node process was not started because --prepare-only was used.
 
 Start later with:
-  cd '$ABS_SOURCE_DIR' && node packages/cli-node/dist/client.js --host '$HOST' --id '$NODE_ID' ${PAIRING:+--token '$PAIRING'} --credentials-file '$ABS_STATE_DIR/state/node_credentials.json'
+  node '$NODE_CLIENT_ENTRYPOINT' --host '$HOST' --id '$NODE_ID' ${PAIRING:+--token '$PAIRING'} --credentials-file '$ABS_STATE_DIR/state/node_credentials.json'
 
 If this is the first run, approve the pending pairing after startup:
   /node
