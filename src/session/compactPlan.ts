@@ -225,6 +225,8 @@ export function buildCompactPromptText(options: {
     '- Blocks must not overlap source ranges across createBlocks.',
     '- Blocks must not separate seq/id range inside a candidate (can not separate a tool call and its response).',
     '- Keep each summary compact, factual, and continuation-oriented.',
+    '- Each block summary must be source-range-bound: summarize only the specified seq/id range it covers, including any user/inter-agent inputs, process, findings, and TODOs inside that range; do not borrow facts, later outcomes, or completions from force-kept items or any other outside range.',
+    '- For example, if force-kept later context completed a task but the block source range only contains the unfinished earlier work, the summary must describe the task as unfinished/TODO rather than completed, so the compacted timeline stays correct.',
     '- Preserve decisions, rationale that still matters, constraints, active tasks, blockers, unresolved questions, and concrete identifiers (paths, commits, branches, nodes, URLs, session IDs, config names).',
     '- Mention when an earlier plan or decision was superseded by a later one if that matters for future work.',
     `- You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including helper-tool rounds and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,

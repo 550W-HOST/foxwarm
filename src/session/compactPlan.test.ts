@@ -62,6 +62,10 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /apply_patch_memory/);
   assert.match(prompt, /leave it uncompressed by simply omitting it from createBlocksJson/i);
   assert.match(prompt, /single block may be summarized only when it is a stranded island/i);
+  assert.match(prompt, /source-range-bound/i);
+  assert.match(prompt, /user\/inter-agent inputs, process, findings, and TODOs inside that range/i);
+  assert.match(prompt, /do not borrow facts, later outcomes, or completions from force-kept items or any other outside range/i);
+  assert.match(prompt, /force-kept later context completed a task.*source range only contains the unfinished earlier work/is);
 });
 
 test('trimPreview and compact prompt rendering do not split surrogate pairs at emoji boundaries', () => {
