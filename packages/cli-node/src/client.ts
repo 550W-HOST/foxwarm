@@ -12,6 +12,7 @@ import WebSocket from 'ws';
 import { nodeTools } from '../../shared/dist/nodeTools';
 import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
 import { readNodeTransferFile, writeNodeTransferFile } from '../../shared/dist/nodeFileTransfer';
+import { createMasterWebSocketOptions, getMasterProxyInfo } from './masterProxy';
 
 type LogPayload = Record<string, any> | Error | any;
 const logger = {
@@ -386,10 +387,17 @@ export class NodeClient {
       ? this.host.replace(/^http/, 'ws') + `/node_ws?id=${encodeURIComponent(String(this.connectedNodeId))}&auth=${encodeURIComponent(String(this.authToken))}`
       : this.host.replace(/^http/, 'ws') + `/node_ws?token=${encodeURIComponent(String(this.pairingToken))}`;
 
-    logger.info({ host: this.host, nodeId: this.connectedNodeId, requestedName: this.requestedName, mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' }, 'Connecting to foxwarm master...');
+    const proxyInfo = getMasterProxyInfo(wsUrl);
+    logger.info({
+      host: this.host,
+      nodeId: this.connectedNodeId,
+      requestedName: this.requestedName,
+      mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing',
+      proxy: proxyInfo?.sanitizedProxyUrl,
+    }, 'Connecting to foxwarm master...');
     this.onStatus?.('connecting', { mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' });
 
-    this.ws = new WebSocket(wsUrl);
+    this.ws = new WebSocket(wsUrl, createMasterWebSocketOptions(wsUrl));
 
     this.ws.on('open', () => {
       logger.info({ nodeId: this.connectedNodeId, mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' }, 'Connected to foxwarm master');

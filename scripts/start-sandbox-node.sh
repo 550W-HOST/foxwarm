@@ -19,7 +19,7 @@ else
 fi
 
 echo "Waiting for foxwarm master at $NODE_MASTER_URL..."
-until curl --noproxy "*" -fsS "${NODE_MASTER_URL%/}/login.html" >/dev/null 2>&1; do
+until curl -fsS "${NODE_MASTER_URL%/}/login.html" >/dev/null 2>&1; do
   sleep 1
 done
 
