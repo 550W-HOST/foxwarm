@@ -137,8 +137,22 @@ function buildManagedExecScript(command: string): string {
       'Set-Content -LiteralPath $pathsTmp -Value $paths',
       'Move-Item -LiteralPath $pathsTmp -Destination $env:FOXWARM_EXEC_PATHS_PATH -Force',
       'Start-Transcript -LiteralPath $logPath -Append | Out-Null',
-      `cmd /c @"\n${command}\n"@`,
-      '$EXIT_CODE = $LASTEXITCODE',
+      '$global:LASTEXITCODE = $null',
+      '$foxwarmExecSucceeded = $true',
+      'try {',
+      '  & $env:FOXWARM_EXEC_COMMAND_PATH',
+      '  $foxwarmExecSucceeded = $?',
+      '} catch {',
+      '  Write-Error $_',
+      '  $foxwarmExecSucceeded = $false',
+      '}',
+      'if ($null -ne $global:LASTEXITCODE) {',
+      '  $EXIT_CODE = [int]$global:LASTEXITCODE',
+      '} elseif ($foxwarmExecSucceeded) {',
+      '  $EXIT_CODE = 0',
+      '} else {',
+      '  $EXIT_CODE = 1',
+      '}',
       '$cwdTmp = "$cwdPath.tmp.$PID"',
       '$statusTmp = "$statusPath.tmp.$PID"',
       '(Get-Location).Path | Set-Content -LiteralPath $cwdTmp -NoNewline',
@@ -371,7 +385,12 @@ export class PersistentExecManager {
 
     const execId = `exec_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     const scriptPath = `${path.join(tempDir, execId)}.command${process.platform === 'win32' ? '.ps1' : '.sh'}`;
+    const commandScriptPath = process.platform === 'win32' ? `${path.join(tempDir, execId)}.user.ps1` : undefined;
     const pathsPath = path.join(tempDir, `${execId}.paths.json`);
+
+    if (commandScriptPath) {
+      await fs.writeFile(commandScriptPath, `${command}${command.endsWith('\n') ? '' : '\n'}`);
+    }
 
     await fs.writeFile(
       scriptPath,
@@ -381,7 +400,7 @@ export class PersistentExecManager {
 
     const launcher = process.platform === 'win32'
       ? { command: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath] }
-      : { command: '/bin/sh', args: [scriptPath] };
+      : { command: '/bin/bash', args: [scriptPath] };
 
     const child: ChildProcess = spawn(launcher.command, launcher.args, {
       cwd: initialCwd,
@@ -392,6 +411,7 @@ export class PersistentExecManager {
         FOXWARM_EXEC_TIME_TOKEN: timeToken,
         FOXWARM_EXEC_PATHS_PATH: pathsPath,
         FOXWARM_EXEC_NODE_PATH: process.execPath,
+        ...(commandScriptPath ? { FOXWARM_EXEC_COMMAND_PATH: commandScriptPath } : {}),
       },
       stdio: 'ignore',
       detached: process.platform !== 'win32',
@@ -403,7 +423,7 @@ export class PersistentExecManager {
       child.once('spawn', () => resolve());
       child.once('error', (err: any) => {
         if (err?.code === 'ENOENT') {
-          reject(new Error(`Failed to start exec on node \`${nodeId}\`: ${err.message}. Working directory was validated as \`${initialCwd}\`; if you see \`spawn /bin/sh ENOENT\` with a different cwd, it is commonly a cwd issue rather than a missing shell.`));
+          reject(new Error(`Failed to start exec on node \`${nodeId}\`: ${err.message}. Working directory was validated as \`${initialCwd}\`; if you see \`spawn /bin/bash ENOENT\` with a different cwd, it is commonly a cwd issue rather than a missing shell.`));
           return;
         }
         reject(err);

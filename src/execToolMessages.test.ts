@@ -125,7 +125,7 @@ test('persistent exec rejects missing cwd with a friendly cwd-focused error and 
       assert.match(message, /Source: explicit/i);
       assert.match(message, /Raw cwd/i);
       assert.match(message, /Resolved cwd/i);
-      assert.match(message, /not a missing `\/bin\/sh`/i);
+      assert.match(message, /not a missing `\/bin\/bash`/i);
       return true;
     },
   );

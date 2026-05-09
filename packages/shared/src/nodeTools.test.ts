@@ -40,7 +40,7 @@ test('node exec rejects missing cwd with a friendly cwd-focused error', async ()
         assert.match(String(err?.message || err), /working directory is invalid/i);
         assert.match(String(err?.message || err), /Raw cwd/i);
         assert.match(String(err?.message || err), /Resolved cwd/i);
-        assert.match(String(err?.message || err), /not a missing `\/bin\/sh`/i);
+        assert.match(String(err?.message || err), /not a missing `\/bin\/bash`/i);
         return true;
       },
     );
