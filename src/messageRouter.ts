@@ -174,9 +174,6 @@ export class MessageRouter {
       && session.queue[0].type !== 'compact-commit'
       && !session.queue[0].message) {
       const item = session.queue.shift();
-      if (item && !sessionManager.shouldProcessQueuedItemForWait(session, item)) {
-        continue;
-      }
       if (!item?.parts) continue;
 
       if (item.source) {
@@ -203,9 +200,6 @@ export class MessageRouter {
       && session.queue[0].type !== 'compact-commit') {
       const item = session.queue.shift();
       if (!item) {
-        continue;
-      }
-      if (!sessionManager.shouldProcessQueuedItemForWait(session, item)) {
         continue;
       }
 
@@ -272,10 +266,6 @@ export class MessageRouter {
       if (!nextItem) {
         return false;
       }
-      if (!sessionManager.shouldProcessQueuedItemForWait(session, nextItem)) {
-        await sessionManager.saveSession(session.id);
-        return await this.continueWithQueuedWork(session);
-      }
 
       await this.processQueuedItem(session.id, session, nextItem);
       return true;
@@ -285,10 +275,6 @@ export class MessageRouter {
       const nextItem = session.queue.shift();
       if (!nextItem) {
         return false;
-      }
-      if (!sessionManager.shouldProcessQueuedItemForWait(session, nextItem)) {
-        await sessionManager.saveSession(session.id);
-        return await this.continueWithQueuedWork(session);
       }
 
       await this.processQueuedItem(session.id, session, nextItem);
@@ -315,10 +301,6 @@ export class MessageRouter {
     }
 
     session.queue.shift();
-    if (!sessionManager.shouldProcessQueuedItemForWait(session, nextItem)) {
-      await sessionManager.saveSession(session.id);
-      return 'continued';
-    }
 
     try {
       if (nextItem.type === 'compact-commit') {

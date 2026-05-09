@@ -39,8 +39,14 @@ function normalizeWaitTimeoutSeconds(value: unknown): number | undefined {
   }
 
   const timeoutSeconds = Number(value);
-  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-    throw new Error('timeoutSeconds must be a positive number.');
+  if (!Number.isFinite(timeoutSeconds)) {
+    throw new Error('timeoutSeconds must be a non-negative number.');
+  }
+  if (timeoutSeconds < 0) {
+    throw new Error('timeoutSeconds must be a non-negative number.');
+  }
+  if (timeoutSeconds === 0) {
+    return undefined;
   }
 
   return timeoutSeconds;
