@@ -5,6 +5,7 @@
 
 import fs from 'fs-extra';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
@@ -35,6 +36,13 @@ const SUBCONSCIOUS_RECENT_WINDOW_MESSAGES = 12;
 const SUBCONSCIOUS_MIN_COMPACT_THRESHOLD_TOKENS = 4000;
 const SUBCONSCIOUS_COMPACT_THRESHOLD_FRACTION = 0.35;
 const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
+
+export interface SessionWaitState {
+  id: string;
+  startedAt: number;
+  reason?: string;
+  timeoutSeconds?: number;
+}
 
 type SubconsciousPrimaryMeta = {
   enabled?: boolean;
@@ -76,6 +84,95 @@ function getSideSubconsciousMeta(session?: Session): SubconsciousSideMeta | unde
     return undefined;
   }
   return meta as SubconsciousSideMeta;
+}
+
+function getSessionWaitState(session?: Session): SessionWaitState | undefined {
+  const wait = session?.meta?.wait;
+  if (!wait || typeof wait !== 'object' || typeof wait.id !== 'string') {
+    return undefined;
+  }
+
+  return wait as SessionWaitState;
+}
+
+function clearSessionWaitState(session: Session): boolean {
+  if (!getSessionWaitState(session)) {
+    return false;
+  }
+
+  delete session.meta.wait;
+  return true;
+}
+
+function applyQueuedItemToWaitState(session: Session, item: QueueItem): boolean {
+  const wait = getSessionWaitState(session);
+  if (!wait) {
+    if (typeof item.waitTimeoutId === 'string') {
+      logger.info({ sessionId: session.id, waitId: item.waitTimeoutId }, 'Ignoring wait timeout event with no active wait state');
+      return false;
+    }
+
+    return true;
+  }
+
+  if (typeof item.waitTimeoutId === 'string') {
+    if (item.waitTimeoutId !== wait.id) {
+      logger.info({ sessionId: session.id, waitId: item.waitTimeoutId, activeWaitId: wait.id }, 'Ignoring stale wait timeout event');
+      return false;
+    }
+
+    clearSessionWaitState(session);
+    return true;
+  }
+
+  clearSessionWaitState(session);
+  logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type }, 'Cleared active wait state due to new session queue item');
+  return true;
+}
+
+export function shouldProcessQueuedItemForWait(session: Session, item: QueueItem): boolean {
+  return applyQueuedItemToWaitState(session, item);
+}
+
+export function clearSessionWaitForDirectTurn(session: Session, wakeType: string = 'direct-turn'): boolean {
+  const wait = getSessionWaitState(session);
+  if (!wait) {
+    return false;
+  }
+
+  clearSessionWaitState(session);
+  logger.debug({ sessionId: session.id, waitId: wait.id, wakeType }, 'Cleared active wait state due to direct session turn');
+  return true;
+}
+
+export async function startSessionWait(sessionId: string, options: {
+  reason?: string;
+  timeoutSeconds?: number;
+} = {}): Promise<SessionWaitState> {
+  const session = await getSession(sessionId);
+  const state: SessionWaitState = {
+    id: randomUUID(),
+    startedAt: Date.now(),
+  };
+
+  if (typeof options.reason === 'string' && options.reason.trim()) {
+    state.reason = options.reason.trim();
+  }
+  if (typeof options.timeoutSeconds === 'number' && Number.isFinite(options.timeoutSeconds) && options.timeoutSeconds > 0) {
+    state.timeoutSeconds = options.timeoutSeconds;
+  }
+
+  session.meta.wait = state;
+  await saveSession(session.id);
+  return state;
+}
+
+export async function queueSessionWaitTimeoutEvent(sessionId: string, waitId: string, message: string): Promise<void> {
+  await enqueueSessionItem(sessionId, {
+    type: 'background',
+    parts: buildSystemMessageParts(message),
+    waitTimeoutId: waitId,
+  });
 }
 
 function buildSubconsciousSessionId(primarySessionId: string): string {
@@ -1416,6 +1513,10 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
   const session = await getSession(sessionId);
   await reclaimManagedSessionIfStale(session);
   const managedBeforeEnqueue = !!getManagedSessionState(session);
+
+  if (!applyQueuedItemToWaitState(session, item)) {
+    return;
+  }
 
   if (shouldRouteQueueItemToManagedInbox(session, item)) {
     const managed = getManagedSessionState(session);

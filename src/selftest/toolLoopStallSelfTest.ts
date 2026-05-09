@@ -233,9 +233,9 @@ async function main(): Promise<void> {
       assert(parent && child);
     });
 
-    await test('send_to_session plus end_turn stops the current turn without an extra LLM round', async () => {
-      const parentId = makeSessionId('selftest_parent_endturn');
-      const childId = makeSessionId('selftest_child_endturn');
+    await test('send_to_session plus wait stops the current turn without an extra LLM round', async () => {
+      const parentId = makeSessionId('selftest_parent_wait');
+      const childId = makeSessionId('selftest_child_wait');
       createdSessionIds.push(parentId, childId);
       await ensureSession(parentId);
       await ensureSession(childId, parentId);
@@ -249,17 +249,17 @@ async function main(): Promise<void> {
           childCallCount += 1;
           if (childCallCount === 1) {
             const sendToolCall = {
-              id: 'child-report-endturn',
+              id: 'child-report-wait',
               name: 'send_to_session',
-              args: { sessionId: parentId, message: 'child-endturn-ok' },
+              args: { sessionId: parentId, message: 'child-wait-ok' },
             };
-            const endTurnCall = {
-              id: 'child-end-turn',
-              name: 'end_turn',
+            const waitCall = {
+              id: 'child-wait',
+              name: 'wait',
               args: {},
             };
-            await appendStubModelMessage(activeSession, [{ functionCall: sendToolCall }, { functionCall: endTurnCall }]);
-            return { text: '', toolCalls: [sendToolCall, endTurnCall] };
+            await appendStubModelMessage(activeSession, [{ functionCall: sendToolCall }, { functionCall: waitCall }]);
+            return { text: '', toolCalls: [sendToolCall, waitCall] };
           }
 
           throw new Error(`child session should not receive a second LLM call, got ${childCallCount}`);
@@ -267,11 +267,11 @@ async function main(): Promise<void> {
 
         if (activeSession.id === parentId) {
           parentCallCount += 1;
-          await appendStubModelMessage(activeSession, [{ text: 'parent received end-turn handoff' }]);
-          return { text: 'parent received end-turn handoff' };
+          await appendStubModelMessage(activeSession, [{ text: 'parent received wait handoff' }]);
+          return { text: 'parent received wait handoff' };
         }
 
-        throw new Error(`unexpected session in end-turn selftest: ${activeSession.id}`);
+        throw new Error(`unexpected session in wait selftest: ${activeSession.id}`);
       };
 
       await (router as any).runSessionTurn(childId, {
@@ -285,15 +285,15 @@ async function main(): Promise<void> {
       assert.strictEqual(parentAfterChildRun.queue.length, 1);
       assert.strictEqual(childAfter.history[childAfter.history.length - 1]?.role, 'tool');
       assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'send_to_session')));
-      assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'end_turn')));
+      assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'wait')));
 
       await router.processSessionQueue(parentId);
 
       const parentAfter = await sessionManager.getSession(parentId);
       assert.strictEqual(parentCallCount, 1);
       assert.strictEqual(parentAfter.queue.length, 0);
-      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes('child-endturn-ok'))));
-      assertLastModelText(parentAfter, 'parent received end-turn handoff');
+      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes('child-wait-ok'))));
+      assertLastModelText(parentAfter, 'parent received wait handoff');
     });
 
     await test('send_to_session keeps backward compatibility for hidden noFurtherAssistantReply', async () => {

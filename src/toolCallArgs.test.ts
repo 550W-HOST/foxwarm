@@ -50,7 +50,6 @@ test('executeTools turns malformed tool arguments into a structured tool error',
       error: {
         type: 'invalid_tool_arguments',
         message: 'Invalid tool arguments JSON: Unexpected end of JSON input',
-        rawArgsText: '{"filePath":',
       },
     },
   });
@@ -128,6 +127,34 @@ test('executeTools keeps end_turn behavior for successful send_to_session handof
   }
 });
 
+test('executeTools keeps wait behavior for successful send_to_session handoff batches', async () => {
+  const sourceSessionId = makeSessionId('tool_wait_handoff_source');
+  const targetSessionId = makeSessionId('tool_wait_handoff_target');
+
+  await sessionManager.getSession(sourceSessionId);
+  await sessionManager.getSession(targetSessionId);
+
+  const toolMessage = await executeTools(
+    [
+      { id: 'call_send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'handoff ok' } },
+      { id: 'call_wait', name: 'wait', args: {} },
+    ],
+    { sessionId: sourceSessionId, session: { agent: 'main' } },
+    { agent: 'main', verbose: false },
+  );
+
+  try {
+    assert.equal(hasStopCurrentTurn(toolMessage), true);
+    assert.equal(toolMessage.parts.length, 2);
+    assert.deepEqual(toolMessage.parts.map(part => part.functionResponse?.name), ['send_to_session', 'wait']);
+    assert.equal(toolMessage.parts[0].functionResponse?.response?.error, undefined);
+    assert.equal(toolMessage.parts[1].functionResponse?.response?.error, undefined);
+  } finally {
+    await sessionManager.deleteSession(sourceSessionId).catch(() => false);
+    await sessionManager.deleteSession(targetSessionId).catch(() => false);
+  }
+});
+
 test('executeTools suppresses end_turn when malformed tool arguments produce a structured error', async () => {
   const sessionId = makeSessionId('tool_end_turn_bad_args');
   const toolMessage = await executeTools(
@@ -152,7 +179,6 @@ test('executeTools suppresses end_turn when malformed tool arguments produce a s
     assert.deepEqual(toolMessage.parts[0].functionResponse?.response?.error, {
       type: 'invalid_tool_arguments',
       message: 'Invalid tool arguments JSON: Unexpected end of JSON input',
-      rawArgsText: '{"filePath":',
     });
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => false);

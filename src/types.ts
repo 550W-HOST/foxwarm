@@ -138,6 +138,7 @@ export interface QueueItem {
   source?: QueueSource;
   parts?: MessagePart[];
   message?: Message;
+  waitTimeoutId?: string;
   keepPercent?: number;
   compactGuidance?: string;
   completionMarker?: string;

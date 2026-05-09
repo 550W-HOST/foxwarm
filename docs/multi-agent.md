@@ -89,18 +89,23 @@ send_to_session({
 如果这次 handoff 就是你当前回合的最后一步，推荐在同一条 assistant 工具调用里紧跟一个：
 
 ```ts
-end_turn({})
+wait({})
 ```
 
 这样可以在发送 handoff 后直接结束当前回合，避免模型再补一段多余文本。
 
-### `end_turn`
+### `wait`
 
 ```ts
-{}
+{
+  reason?: string,
+  timeoutSeconds?: number,
+}
 ```
 
-用于在当前这一批工具调用完成后，立即结束当前 assistant turn。常见用法是和 `send_to_session(...)` / `create_child_session(...)` 搭配。
+用于在当前这一批工具调用完成后暂停当前 session，直到新消息或事件到达。常见用法是和 `send_to_session(...)` / `create_child_session(...)` 搭配。
+
+如果传入 `timeoutSeconds`，且这段时间内没有其它消息或事件唤醒 session，系统会用固定的 timeout system message 唤醒它。
 
 ## 常用命令
 

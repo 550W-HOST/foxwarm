@@ -20,6 +20,8 @@ export interface SessionTimer {
   at?: number;
   cron?: string;
   lastTriggeredAt?: number;
+  waitTimeoutId?: string;
+  waitTimeoutSeconds?: number;
 }
 
 export interface TimerView extends SessionTimer {
@@ -124,6 +126,13 @@ export function buildTimerTriggeredMessage(timer: SessionTimer, firedAt: Date = 
     : `${label} (id: ${timer.id})\n${currentTimeLine}`;
 }
 
+export function buildWaitTimeoutMessage(timer: Pick<SessionTimer, 'waitTimeoutSeconds'>): string {
+  const seconds = typeof timer.waitTimeoutSeconds === 'number' && Number.isFinite(timer.waitTimeoutSeconds)
+    ? timer.waitTimeoutSeconds
+    : 0;
+  return `[SYSTEM: wait timeout reached after ${seconds}s. No newer message or event triggered this session during the wait.]`;
+}
+
 function toTimerView(timer: SessionTimer): TimerView {
   return {
     ...timer,
@@ -156,6 +165,29 @@ async function fireTimer(timerId: string): Promise<void> {
     return;
   }
   const firedAt = new Date();
+
+  if (timer.waitTimeoutId) {
+    try {
+      const targetSession = await sessionManager.getExistingSession(timer.sessionId);
+      if (!targetSession) {
+        throw new Error(`Target session "${timer.sessionId}" not found.`);
+      }
+
+      await sessionManager.queueSessionWaitTimeoutEvent(
+        timer.sessionId,
+        timer.waitTimeoutId,
+        buildWaitTimeoutMessage(timer),
+      );
+    } catch (err) {
+      logger.error({ err, timerId, sessionId: timer.sessionId, waitTimeoutId: timer.waitTimeoutId }, 'Wait timeout delivery failed');
+    } finally {
+      cancelTimerJob(timer.id);
+      timers.delete(timer.id);
+      await saveTimers();
+    }
+    return;
+  }
+
   const message = buildTimerTriggeredMessage(timer, firedAt);
 
   try {
@@ -362,6 +394,8 @@ function validatePersistedTimer(raw: any): SessionTimer | null {
     currentNode: typeof raw.currentNode === 'string' ? raw.currentNode : undefined,
     model: typeof raw.model === 'string' ? raw.model : undefined,
     lastTriggeredAt: typeof raw.lastTriggeredAt === 'number' ? raw.lastTriggeredAt : undefined,
+    waitTimeoutId: typeof raw.waitTimeoutId === 'string' ? raw.waitTimeoutId : undefined,
+    waitTimeoutSeconds: typeof raw.waitTimeoutSeconds === 'number' ? raw.waitTimeoutSeconds : undefined,
   };
 
   if (typeof raw.at === 'number') {
@@ -473,9 +507,51 @@ export async function createTimer(args: {
   return toTimerView(timer);
 }
 
+export async function createWaitTimeoutTimer(args: {
+  sessionId: string;
+  waitId: string;
+  timeoutSeconds: number;
+}): Promise<TimerView> {
+  const targetSession = await sessionManager.getExistingSession(args.sessionId);
+  if (!targetSession) {
+    throw new Error(`Session \`${args.sessionId}\` not found.`);
+  }
+
+  if (typeof args.waitId !== 'string' || !args.waitId.trim()) {
+    throw new Error('waitId is required.');
+  }
+
+  const timeoutSeconds = Number(args.timeoutSeconds);
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new Error('timeoutSeconds must be a positive number.');
+  }
+
+  const timer: SessionTimer = {
+    id: generateTimerId(),
+    sessionId: args.sessionId,
+    message: '',
+    createdAt: Date.now(),
+    at: Date.now() + (timeoutSeconds * 1000),
+    waitTimeoutId: args.waitId,
+    waitTimeoutSeconds: timeoutSeconds,
+  };
+
+  timers.set(timer.id, timer);
+  try {
+    scheduleTimer(timer);
+    await saveTimers();
+  } catch (err) {
+    timers.delete(timer.id);
+    cancelTimerJob(timer.id);
+    throw err;
+  }
+
+  return toTimerView(timer);
+}
+
 export function listTimers(sessionId?: string): TimerView[] {
   return Array.from(timers.values())
-    .filter(timer => !sessionId || timer.sessionId === sessionId)
+    .filter(timer => !timer.waitTimeoutId && (!sessionId || timer.sessionId === sessionId))
     .map(toTimerView)
     .sort((a, b) => {
       const nextA = a.nextRunAt ?? Number.MAX_SAFE_INTEGER;

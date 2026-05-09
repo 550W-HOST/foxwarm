@@ -38,6 +38,7 @@ import {
 import {
     tool_create_child_session,
     tool_send_to_session,
+    tool_wait,
     tool_end_turn,
     tool_submit_compact_plan,
     tool_send_to_channel,
@@ -90,7 +91,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
     'copy_between_nodes',
     'image_crop', 'image_write_to_file',
-    'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
+    'create_child_session', 'send_to_session', 'wait', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
     'list_sessions', 'list_agents', 'list_skills', 'load_skill',
     'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
     'update_session_name', 'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
@@ -1572,6 +1573,7 @@ export const set_agent_inherit = tool_set_agent_inherit;
 export const set_agent_isolated = tool_set_agent_isolated;
 export const move_session = tool_move_session;
 export const send_to_session = tool_send_to_session;
+export const wait = tool_wait;
 export const end_turn = tool_end_turn;
 export const submit_compact_plan = tool_submit_compact_plan;
 export const send_to_channel = tool_send_to_channel;
@@ -1946,7 +1948,7 @@ export const definitions = [
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. If handing off to the child is your final step for this turn, call end_turn afterward in the same response.',
+            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. If handing off to the child is your final step for this turn, call wait afterward in the same response.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1961,7 +1963,7 @@ export const definitions = [
         {
             name: 'send_to_session',
             defaultInject: true,
-            description: 'Send a message to a specific agent/session. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call end_turn in parallel in the same response.',
+            description: 'Send a message to a specific agent/session. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call wait in parallel in the same response.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1972,13 +1974,25 @@ export const definitions = [
             }
         },
         {
-            name: 'end_turn',
+            name: 'wait',
             defaultInject: true,
-            description: 'End current session turn, in the other words, pause the current session running after the current batch of tool calls finishes, until a message/event triggers current session. Use this when you are waiting for system events / notifications, and feeling no tool calls and reply needed at this moment. Can be call in parallel with other tools for less LLM request count.',
+            description: 'Pause this session until a new message or event arrives. Use this only when you have no useful user-facing reply or tool work to do right now. If timeoutSeconds is provided, the session will be woken by a system message after that many seconds only if no other message/event woke it first.',
             parameters: {
                 type: 'object',
                 properties: {
-                    reason: { type: 'string', description: 'Optional short note for logs/debugging.' }
+                    reason: { type: 'string', description: 'Optional short note for logs/debugging.' },
+                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. If no newer message/event wakes the session first, a system message wakes it after this many seconds.' }
+                }
+            }
+        },
+        {
+            name: 'end_turn',
+            description: 'Legacy alias for wait. Hidden from default model-facing tools; retained so older sessions/tool calls keep working.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    reason: { type: 'string', description: 'Optional short note for logs/debugging.' },
+                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. Prefer wait(timeoutSeconds) in new calls.' }
                 }
             }
         },

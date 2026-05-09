@@ -33,6 +33,19 @@ function buildEndTurnResult(_reason?: string) {
   return { output: 'ok', __toolLoopControl: { stopCurrentTurn: true } };
 }
 
+function normalizeWaitTimeoutSeconds(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  const timeoutSeconds = Number(value);
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new Error('timeoutSeconds must be a positive number.');
+  }
+
+  return timeoutSeconds;
+}
+
 function normalizePositivePreviewLength(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -396,9 +409,32 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
     : output;
 }
 
-export async function tool_end_turn(args: ToolArgs) {
+export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   const { reason } = args || {};
+  const timeoutSeconds = normalizeWaitTimeoutSeconds(args?.timeoutSeconds);
+
+  if (ctx?.sessionId) {
+    const waitState = await sessionManager.startSessionWait(ctx.sessionId, {
+      reason: typeof reason === 'string' ? reason : undefined,
+      timeoutSeconds,
+    });
+
+    if (timeoutSeconds !== undefined) {
+      await timers.createWaitTimeoutTimer({
+        sessionId: ctx.sessionId,
+        waitId: waitState.id,
+        timeoutSeconds,
+      });
+    }
+  } else if (timeoutSeconds !== undefined) {
+    throw new Error('Cannot use wait timeout without session context.');
+  }
+
   return buildEndTurnResult(typeof reason === 'string' ? reason : undefined);
+}
+
+export async function tool_end_turn(args: ToolArgs, ctx?: ToolContext) {
+  return tool_wait(args, ctx);
 }
 
 export async function tool_submit_compact_plan() {

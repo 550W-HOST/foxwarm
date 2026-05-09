@@ -174,6 +174,9 @@ export class MessageRouter {
       && session.queue[0].type !== 'compact-commit'
       && !session.queue[0].message) {
       const item = session.queue.shift();
+      if (item && !sessionManager.shouldProcessQueuedItemForWait(session, item)) {
+        continue;
+      }
       if (!item?.parts) continue;
 
       if (item.source) {
@@ -200,6 +203,9 @@ export class MessageRouter {
       && session.queue[0].type !== 'compact-commit') {
       const item = session.queue.shift();
       if (!item) {
+        continue;
+      }
+      if (!sessionManager.shouldProcessQueuedItemForWait(session, item)) {
         continue;
       }
 
@@ -266,6 +272,10 @@ export class MessageRouter {
       if (!nextItem) {
         return false;
       }
+      if (!sessionManager.shouldProcessQueuedItemForWait(session, nextItem)) {
+        await sessionManager.saveSession(session.id);
+        return await this.continueWithQueuedWork(session);
+      }
 
       await this.processQueuedItem(session.id, session, nextItem);
       return true;
@@ -275,6 +285,10 @@ export class MessageRouter {
       const nextItem = session.queue.shift();
       if (!nextItem) {
         return false;
+      }
+      if (!sessionManager.shouldProcessQueuedItemForWait(session, nextItem)) {
+        await sessionManager.saveSession(session.id);
+        return await this.continueWithQueuedWork(session);
       }
 
       await this.processQueuedItem(session.id, session, nextItem);
@@ -301,6 +315,10 @@ export class MessageRouter {
     }
 
     session.queue.shift();
+    if (!sessionManager.shouldProcessQueuedItemForWait(session, nextItem)) {
+      await sessionManager.saveSession(session.id);
+      return 'continued';
+    }
 
     try {
       if (nextItem.type === 'compact-commit') {
@@ -586,7 +604,7 @@ export class MessageRouter {
 
     await sessionManager.queueSessionStructuredEvent(settings.sideSessionId, [
       {
-        system: `Subconscious trigger for primary session \`${session.id}\`. Review the recent context, optionally use your limited history/search tools, and only send a single short high-value hint back to the primary session if you find a meaningful recall, contradiction, or reminder. If there is nothing important, end with [NO_ACTION]. If you send a hint, use send_to_session({sessionId: \`${session.id}\`, message: \"[Subconscious] ...\"}) and then call end_turn({}) in the same response.`,
+        system: `Subconscious trigger for primary session \`${session.id}\`. Review the recent context, optionally use your limited history/search tools, and only send a single short high-value hint back to the primary session if you find a meaningful recall, contradiction, or reminder. If there is nothing important, end with [NO_ACTION]. If you send a hint, use send_to_session({sessionId: \`${session.id}\`, message: \"[Subconscious] ...\"}) and then call wait({}) in the same response.`,
       },
       {
         text: this.formatSubconsciousRecentContext(session),
@@ -799,6 +817,9 @@ export class MessageRouter {
     }
   ): Promise<void> {
     const session = options.session ?? await sessionManager.getSession(sessionId);
+    if (options.parts?.length || options.message) {
+      sessionManager.clearSessionWaitForDirectTurn(session, options.message ? 'direct-message-turn' : 'direct-parts-turn');
+    }
     if (!options.preclaimed) {
       await sessionManager.updateSessionBusyState(session, true);
     }

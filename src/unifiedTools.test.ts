@@ -470,6 +470,7 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
     'delete_session',
     'stop_session',
     'compact_session',
+    'end_turn',
     'list_toolscript_runs',
     'get_toolscript_run',
     'cancel_toolscript_run',
@@ -493,7 +494,22 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_write_to_file'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'submit_compact_plan'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'set_goal'), true);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'wait'), true);
   assert.equal(definitions.some(def => def.name === 'set_todo'), false);
+});
+
+test('wait is the model-facing pause tool and legacy end_turn is hidden', () => {
+  const waitDef = definitions.find(def => def.name === 'wait');
+  assert.ok(waitDef);
+  assert.equal(waitDef.defaultInject, true);
+  assert.equal((waitDef.parameters?.properties as any)?.reason?.type, 'string');
+  assert.equal((waitDef.parameters?.properties as any)?.timeoutSeconds?.type, 'number');
+  assert.equal(Object.prototype.hasOwnProperty.call(waitDef.parameters?.properties || {}, 'timeoutMessage'), false);
+
+  const legacyDef = definitions.find(def => def.name === 'end_turn');
+  assert.ok(legacyDef);
+  assert.equal(legacyDef.defaultInject, undefined);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'end_turn'), false);
 });
 
 test('set_goal schema keeps goal optional so clear can omit it', () => {

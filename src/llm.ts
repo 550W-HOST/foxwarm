@@ -391,6 +391,7 @@ const SUBCONSCIOUS_ALLOWED_TOOL_NAMES = new Set([
     'get_context_archive',
     'submit_compact_plan',
     'send_to_session',
+    'wait',
     'end_turn',
 ]);
 

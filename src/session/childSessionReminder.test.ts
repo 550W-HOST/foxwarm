@@ -30,14 +30,14 @@ test('only model messages suppress child reminder via no-action signal', () => {
   assert.equal(isModelNoActionSignal({ role: 'tool', parts: [{ text: NO_ACTION_MARKER }] }), false);
 });
 
-test('child instructions and reminders mention end_turn and the bracketed marker', () => {
+test('child instructions and reminders mention wait and the bracketed marker', () => {
   const completion = buildChildCompletionInstruction('parent/main');
   const reminder = buildChildReminder('parent/main');
 
   assert.match(completion, /\[NO_ACTION\]/);
   assert.match(reminder, /\[NO_ACTION\]/);
-  assert.match(completion, /end_turn\(\{\}\)/);
-  assert.match(reminder, /end_turn\(\{\}\)/);
+  assert.match(completion, /wait\(\{\}\)/);
+  assert.match(reminder, /wait\(\{\}\)/);
   assert.doesNotMatch(completion, /noFurtherAssistantReply/);
   assert.doesNotMatch(reminder, /noFurtherAssistantReply/);
   assert.doesNotMatch(reminder, /reply "NO_ACTION"/);

@@ -19,9 +19,9 @@ export function isModelNoActionSignal(message?: Pick<Message, 'role' | 'parts'> 
 }
 
 export function buildChildCompletionInstruction(parentSessionId: string): string {
-  return `When you finish, explicitly call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}). If that handoff is your final step, call send_to_session({...}) and end_turn({}) in parallel. If no parent reply is needed and you are not sending a handoff message, end your final message with \`${NO_ACTION_MARKER}\`.`;
+  return `When you finish, explicitly call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}). If that handoff is your final step, call send_to_session({...}) and wait({}) in parallel. If no parent reply is needed and you are not sending a handoff message, end your final message with \`${NO_ACTION_MARKER}\`.`;
 }
 
 export function buildChildReminder(parentSessionId: string): string {
-  return `Reminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}). If that handoff is your final step, call send_to_session({...}) and end_turn({}) in parallel. If no action is needed, say \`${NO_ACTION_MARKER}\`. Next time, you can end your final message with \`${NO_ACTION_MARKER}\` to prevent this reminder.`;
+  return `Reminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}). If that handoff is your final step, call send_to_session({...}) and wait({}) in parallel. If no action is needed, say \`${NO_ACTION_MARKER}\`. Next time, you can end your final message with \`${NO_ACTION_MARKER}\` to prevent this reminder.`;
 }
