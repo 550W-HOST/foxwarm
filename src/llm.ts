@@ -383,22 +383,6 @@ function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string
     return trimmed;
 }
 
-const SUBCONSCIOUS_ALLOWED_TOOL_NAMES = new Set([
-    'search_vector',
-    'search_memory',
-    'get_archived_messages',
-    'get_archived_blocks',
-    'get_context_archive',
-    'submit_compact_plan',
-    'send_to_session',
-    'wait',
-    'end_turn',
-]);
-
-function isSubconsciousSession(session?: Session): boolean {
-    return session?.meta?.subconscious?.kind === 'subconscious';
-}
-
 async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited'): Promise<string> {
     const agentMemoryDir = getAgentMemoryDir(agentName);
     if (!await fs.pathExists(agentMemoryDir)) {
@@ -756,8 +740,6 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         let result;
         if (call.argsParseError) {
             result = buildInvalidToolArgsResult(call);
-        } else if (isSubconsciousSession(session) && !SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(call.name)) {
-            result = { error: `Subconscious side sessions cannot use ${call.name}.` };
         }
         
         const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
@@ -905,9 +887,7 @@ export async function chat(
     // Convert to appropriate format based on provider
     const contentsForLlm = session.history.map(({ __meta, ...msg }: Message) => msg);
     const availableToolDefinitions = options?.toolDefinitions
-        ?? (isSubconsciousSession(session)
-            ? tools.modelFacingDefinitions.filter(def => SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(def.name))
-            : tools.modelFacingDefinitions);
+        ?? tools.modelFacingDefinitions;
     const result = await requestLlmOnce({
         contents: contentsForLlm,
         systemPrompt,

@@ -30,11 +30,6 @@ function systemPart(system: string): MessagePart {
   return { system };
 }
 
-const SUBCONSCIOUS_SESSION_KIND = 'subconscious';
-const SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES = 4;
-const SUBCONSCIOUS_RECENT_WINDOW_MESSAGES = 12;
-const SUBCONSCIOUS_MIN_COMPACT_THRESHOLD_TOKENS = 4000;
-const SUBCONSCIOUS_COMPACT_THRESHOLD_FRACTION = 0.35;
 const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
 
 export interface SessionWaitState {
@@ -42,48 +37,6 @@ export interface SessionWaitState {
   startedAt: number;
   reason?: string;
   timeoutSeconds?: number;
-}
-
-type SubconsciousPrimaryMeta = {
-  enabled?: boolean;
-  sideSessionId?: string;
-  pendingMessageCount?: number;
-  lastTriggeredAt?: number;
-  lastHintAt?: number;
-  triggerEveryMessages?: number;
-};
-
-type SubconsciousSideMeta = {
-  kind: typeof SUBCONSCIOUS_SESSION_KIND;
-  primarySessionId: string;
-  recentWindowMessages?: number;
-};
-
-function getPrimarySubconsciousMeta(session?: Session): SubconsciousPrimaryMeta | undefined {
-  const meta = session?.meta?.subconscious;
-  if (!meta || typeof meta !== 'object' || meta.kind === SUBCONSCIOUS_SESSION_KIND) {
-    return undefined;
-  }
-  return meta as SubconsciousPrimaryMeta;
-}
-
-function getOrCreatePrimarySubconsciousMeta(session: Session): SubconsciousPrimaryMeta {
-  const existing = getPrimarySubconsciousMeta(session);
-  if (existing) {
-    return existing;
-  }
-
-  const created: SubconsciousPrimaryMeta = {};
-  session.meta.subconscious = created;
-  return created;
-}
-
-function getSideSubconsciousMeta(session?: Session): SubconsciousSideMeta | undefined {
-  const meta = session?.meta?.subconscious;
-  if (!meta || typeof meta !== 'object' || meta.kind !== SUBCONSCIOUS_SESSION_KIND) {
-    return undefined;
-  }
-  return meta as SubconsciousSideMeta;
 }
 
 function getSessionWaitState(session?: Session): SessionWaitState | undefined {
@@ -173,10 +126,6 @@ export async function queueSessionWaitTimeoutEvent(sessionId: string, waitId: st
     parts: buildSystemMessageParts(message),
     waitTimeoutId: waitId,
   });
-}
-
-function buildSubconsciousSessionId(primarySessionId: string): string {
-  return `${primarySessionId}__subconscious`;
 }
 
 async function allocateForkSessionId(sourceSessionId: string, suffix?: string): Promise<string> {
@@ -790,201 +739,6 @@ export function getChannelsBySession(sessionId: string): Array<{ channelId: stri
 
 export function getChildSessionIds(parentSessionId: string): string[] {
   return sessionRelations.getChildSessionIds(sessions, parentSessionId);
-}
-
-export function isSubconsciousSession(session?: Session | null): boolean {
-  return !!getSideSubconsciousMeta(session || undefined);
-}
-
-export function getSubconsciousPrimarySessionId(session?: Session | null): string | undefined {
-  return getSideSubconsciousMeta(session || undefined)?.primarySessionId;
-}
-
-export function getSubconsciousStatus(session?: Session | null): {
-  enabled: boolean;
-  sideSessionId?: string;
-  pendingMessageCount: number;
-  lastTriggeredAt?: number;
-  lastHintAt?: number;
-  triggerEveryMessages: number;
-} {
-  const meta = getPrimarySubconsciousMeta(session || undefined);
-  return {
-    enabled: meta?.enabled === true,
-    sideSessionId: meta?.sideSessionId,
-    pendingMessageCount: meta?.pendingMessageCount || 0,
-    lastTriggeredAt: meta?.lastTriggeredAt,
-    lastHintAt: meta?.lastHintAt,
-    triggerEveryMessages: meta?.triggerEveryMessages || SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES,
-  };
-}
-
-export async function ensureSubconsciousSession(primarySessionId: string): Promise<{ sessionId: string; created: boolean; compactThresholdTokens: number; }> {
-  const primarySession = await getSession(primarySessionId);
-  if (isSubconsciousSession(primarySession)) {
-    throw new Error('Subconscious side sessions cannot create their own subconscious side session.');
-  }
-
-  const primaryMeta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  const requestedSessionId = primaryMeta.sideSessionId || buildSubconsciousSessionId(primarySessionId);
-  const existing = await getExistingSession(requestedSessionId);
-  const parentThreshold = getEffectiveCompactThresholdTokens(primarySession);
-  const compactThresholdTokens = Math.max(
-    SUBCONSCIOUS_MIN_COMPACT_THRESHOLD_TOKENS,
-    Math.floor(parentThreshold * SUBCONSCIOUS_COMPACT_THRESHOLD_FRACTION),
-  );
-
-  if (existing) {
-    existing.compactThresholdTokens = compactThresholdTokens;
-    existing.parentSessionId = primarySessionId;
-    existing.meta.subconscious = {
-      kind: SUBCONSCIOUS_SESSION_KIND,
-      primarySessionId,
-      recentWindowMessages: SUBCONSCIOUS_RECENT_WINDOW_MESSAGES,
-    };
-    primaryMeta.sideSessionId = existing.id;
-    await saveSession(existing.id);
-    await saveSession(primarySessionId);
-    return { sessionId: existing.id, created: false, compactThresholdTokens };
-  }
-
-  const agentName = primarySession.agent || 'main';
-  const snapshot = await llm.buildSessionSystemPromptSnapshot({
-    agentName,
-    systemPromptFiles: primarySession.systemPromptFiles,
-  });
-  const sideSession: Session = {
-    id: requestedSessionId,
-    agent: agentName,
-    history: [],
-    systemPromptFiles: primarySession.systemPromptFiles ? [...primarySession.systemPromptFiles] : undefined,
-    persistentMemorySnapshot: snapshot,
-    stats: {
-      totalCachedTokens: 0,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      lastUsage: null,
-    },
-    busy: false,
-    queue: [],
-    parentSessionId: primarySessionId,
-    meta: {
-      lastMessageTime: Date.now(),
-      subconscious: {
-        kind: SUBCONSCIOUS_SESSION_KIND,
-        primarySessionId,
-        recentWindowMessages: SUBCONSCIOUS_RECENT_WINDOW_MESSAGES,
-      },
-    },
-    vectorIndexPosition: 0,
-    nextMessageSeq: 1,
-    currentNode: 'master',
-    model: primarySession.model,
-    compactThresholdTokens,
-  };
-
-  sessions.set(requestedSessionId, sideSession);
-  primaryMeta.sideSessionId = requestedSessionId;
-
-  await appendSessionMessages(sideSession, [
-    {
-      role: 'user',
-      parts: [systemPart(
-        `You are the subconscious side session for primary session \`${primarySessionId}\`. `
-        + 'You are a restricted reflective worker, not a normal assistant thread. '
-        + 'Your job is to notice high-value memory recalls, contradictions, or reminders that may help the primary session. '
-        + 'You may only use the limited history/search tools available to you, and you may only send a brief hint back to the primary session via send_to_session when it is genuinely useful. '
-        + 'If there is no high-value hint, end with `[NO_ACTION]`. '
-        + 'If you do send a hint, keep it short and prefix it with `[Subconscious]`.'
-      )],
-      __meta: { timestamp: Date.now() },
-    },
-    {
-      role: 'model',
-      parts: [{ text: 'Understood. I will stay quiet unless I find a high-value reminder, recall, or correction for the primary session. [NO_ACTION]' }],
-      __meta: { timestamp: Date.now() },
-    },
-  ]);
-
-  await saveSession(primarySessionId);
-  return { sessionId: requestedSessionId, created: true, compactThresholdTokens };
-}
-
-export async function setSubconsciousEnabled(primarySessionId: string, enabled: boolean): Promise<{ sideSessionId: string; created: boolean; enabled: boolean; compactThresholdTokens: number; }> {
-  const primarySession = await getSession(primarySessionId);
-  if (isSubconsciousSession(primarySession)) {
-    throw new Error('Subconscious side sessions cannot manage subconscious settings.');
-  }
-
-  const ensured = await ensureSubconsciousSession(primarySessionId);
-  const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  meta.enabled = enabled;
-  meta.triggerEveryMessages = meta.triggerEveryMessages || SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES;
-  if (!enabled) {
-    meta.pendingMessageCount = 0;
-  }
-  await saveSession(primarySessionId);
-  return {
-    sideSessionId: ensured.sessionId,
-    created: ensured.created,
-    enabled,
-    compactThresholdTokens: ensured.compactThresholdTokens,
-  };
-}
-
-export function shouldIgnoreSubconsciousTriggerText(text: string | undefined, sideSessionId: string): boolean {
-  if (!text) return false;
-  return text.includes(`source_session_id: \`${sideSessionId}\``) || text.includes('[Subconscious]');
-}
-
-export function getSubconsciousTriggerSettings(session: Session): { enabled: boolean; sideSessionId?: string; triggerEveryMessages: number; pendingMessageCount: number; lastTriggeredAt?: number; } {
-  const status = getSubconsciousStatus(session);
-  return {
-    enabled: status.enabled,
-    sideSessionId: status.sideSessionId,
-    triggerEveryMessages: status.triggerEveryMessages,
-    pendingMessageCount: status.pendingMessageCount,
-    lastTriggeredAt: status.lastTriggeredAt,
-  };
-}
-
-export async function markSubconsciousTriggered(primarySessionId: string): Promise<void> {
-  const primarySession = await getSession(primarySessionId);
-  const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  meta.pendingMessageCount = 0;
-  meta.lastTriggeredAt = Date.now();
-  await saveSession(primarySessionId);
-}
-
-export async function incrementSubconsciousPending(primarySessionId: string, amount: number = 1): Promise<{ pendingMessageCount: number; sideSessionId?: string; triggerEveryMessages: number; lastTriggeredAt?: number; enabled: boolean; }> {
-  const primarySession = await getSession(primarySessionId);
-  const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  meta.pendingMessageCount = Math.max(0, (meta.pendingMessageCount || 0) + amount);
-  meta.triggerEveryMessages = meta.triggerEveryMessages || SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES;
-  await saveSession(primarySessionId);
-  return {
-    pendingMessageCount: meta.pendingMessageCount,
-    sideSessionId: meta.sideSessionId,
-    triggerEveryMessages: meta.triggerEveryMessages,
-    lastTriggeredAt: meta.lastTriggeredAt,
-    enabled: meta.enabled === true,
-  };
-}
-
-export async function noteSubconsciousHintDelivered(sideSessionId: string, primarySessionId: string): Promise<void> {
-  const sideSession = await getExistingSession(sideSessionId);
-  if (!isSubconsciousSession(sideSession) || getSubconsciousPrimarySessionId(sideSession) !== primarySessionId) {
-    return;
-  }
-
-  const primarySession = await getExistingSession(primarySessionId);
-  if (!primarySession) {
-    return;
-  }
-
-  const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  meta.lastHintAt = Date.now();
-  await saveSession(primarySessionId);
 }
 
 export function getChannelBySession(sessionId: string): { channelId: string; conversationId: string } | undefined {

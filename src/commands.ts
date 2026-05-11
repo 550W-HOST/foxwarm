@@ -1,5 +1,6 @@
 import fs from 'fs-extra'
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from './channel'
+import { logger } from './common'
 import { inspectChannelAuthorizationFromContext, formatAuthorizationInspection } from './channelAuth'
 import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses, restartManagedChannel, startManagedChannel, stopManagedChannel } from './channelRuntime'
 import { nodesManager } from './nodes/manager'
@@ -12,6 +13,7 @@ import { estimateSessionSummary } from './tokenCount'
 import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, getDefaultChannelIdByType, HTTP_PORT, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
+import { BTW_USAGE, runBtwRequest } from './btw'
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api'
 import { checkTimerPermission } from './isolatedCheck'
 import { ensureNodePairingToken } from './nodes/bootstrapInfo'
@@ -74,6 +76,10 @@ const TIMER_AUTOCOMPLETE: CommandAutocompleteNode[] = [
     usage: '/timer cron <expr> [--new-session] [--prefix <prefix>] [--agent <agent>] -- <message>',
     children: [placeholderNode('<expr>', 'Cron expression (5 or 6 fields)')],
   }),
+]
+
+const BTW_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  placeholderNode('<message>', 'Side/background question to answer without executing tools'),
 ]
 
 const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
@@ -653,6 +659,30 @@ export const COMMANDS: Record<string, CommandDef> = {
     },
     handler: handleCompactCommand,
   },
+  '/btw': {
+    description: 'Run a side/background model request without executing tools',
+    usage: BTW_USAGE,
+    requiresSession: true,
+    autocomplete: { children: BTW_AUTOCOMPLETE },
+    handler: async (ctx, args, sessionId) => {
+      if (!sessionId) {
+        ctx.reply('❌ No active session.')
+        return
+      }
+
+      const message = args.join(' ').trim()
+      if (!message) {
+        ctx.reply(BTW_USAGE)
+        return
+      }
+
+      void runBtwRequest(sessionId, message).catch((err: any) => {
+        logger.error({ err, sessionId }, 'BTW background request failed')
+      })
+
+      ctx.reply('📝 BTW request started. I’ll post the result here when it finishes.')
+    },
+  },
   '/timer': {
     description: 'Manage session timers: help, list, create, delete',
     requiresSession: true,
@@ -890,7 +920,6 @@ export const COMMANDS: Record<string, CommandDef> = {
         resp += '`/session rename <name>` - Rename session\n'
         resp += '`/session update-snapshot [session-id]` - Refresh session prompt snapshot\n'
         resp += '`/session compact-threshold [tokens|Nk|clear|unset]` - Get/set auto-compact threshold override for current session\n'
-        resp += '`/session subconscious <on|off|status>` - Manage the reflective subconscious side session for current session\n'
         resp += '`/session index` - Index messages to vector database\n'
         resp += '`/session move <new-session-id>|<existing-agent>/<new-session-id>` - Move/rename session\n'
         resp += '`/session parent <parent-session-id> [child-session-id]` - Set parent session\n'
@@ -1218,64 +1247,6 @@ export const COMMANDS: Record<string, CommandDef> = {
             ctx.reply(`❌ Compact threshold update failed: ${e.message}`)
           }
           break
-        }
-
-        case 'subconscious': {
-          if (!sessionId || !session) {
-            ctx.reply('❌ No active session.')
-            return
-          }
-          if (sessionManager.isSubconsciousSession(session)) {
-            ctx.reply(`🧠 This session is itself a subconscious side session for \`${sessionManager.getSubconsciousPrimarySessionId(session) || 'unknown'}\`.`)
-            return
-          }
-
-          const action = (subArgs[0] || 'status').toLowerCase()
-          if (action === 'status') {
-            const status = sessionManager.getSubconsciousStatus(session)
-            const lines = [
-              `🧠 Subconscious side session: ${status.enabled ? 'enabled' : 'disabled'}`,
-              `Side session: ${status.sideSessionId ? `\`${status.sideSessionId}\`` : 'not created'}`,
-              `Pending counted messages: ${status.pendingMessageCount}`,
-              `Trigger every: ${status.triggerEveryMessages} counted message(s)`,
-              'Cooldown: message-based via counted-message reset (no wall-clock cooldown)',
-            ]
-            if (typeof status.lastTriggeredAt === 'number') {
-              lines.push(`Last triggered: ${new Date(status.lastTriggeredAt).toISOString()}`)
-            }
-            if (typeof status.lastHintAt === 'number') {
-              lines.push(`Last hint sent: ${new Date(status.lastHintAt).toISOString()}`)
-            }
-
-            if (status.sideSessionId) {
-              const sideSession = await sessionManager.getExistingSession(status.sideSessionId)
-              if (sideSession) {
-                lines.push(`Side compact threshold: ${sideSession.compactThresholdTokens || sessionManager.getEffectiveCompactThresholdTokens(sideSession)} tokens`)
-              }
-            }
-
-            ctx.reply(lines.join('\n'))
-            return
-          }
-
-          if (action === 'on' || action === 'enable') {
-            const result = await sessionManager.setSubconsciousEnabled(sessionId, true)
-            ctx.reply([
-              `✅ Subconscious side session enabled.`,
-              `Side session: \`${result.sideSessionId}\`${result.created ? ' (created)' : ''}`,
-              `Side compact threshold: ${result.compactThresholdTokens} tokens`,
-            ].join('\n'))
-            return
-          }
-
-          if (action === 'off' || action === 'disable') {
-            const result = await sessionManager.setSubconsciousEnabled(sessionId, false)
-            ctx.reply(`✅ Subconscious side session disabled. Side session remains stored as \`${result.sideSessionId}\`.`)
-            return
-          }
-
-          ctx.reply('Usage: /session subconscious <on|off|status>')
-          return
         }
 
         case 'isolated': {

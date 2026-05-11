@@ -688,7 +688,6 @@ export async function resolveMemorySearchOptions(
     const session = await sessionManager.getSession(ctx.sessionId);
     const agentName = session.agent || 'main';
     const effectiveIsolated = sessionManager.isSessionEffectivelyIsolated(session);
-    const subconsciousPrimarySessionId = sessionManager.getSubconsciousPrimarySessionId(session);
 
     async function buildSessionScopedSearchOptions(targetSessionId: string, extraSessionIds: string[] = []) {
         const lineage = await getVectorSearchLineage(targetSessionId);
@@ -704,31 +703,6 @@ export async function resolveMemorySearchOptions(
 
         return {
             sessionIds: [targetSessionId, ...extraSessionIds],
-        };
-    }
-
-    if (subconsciousPrimarySessionId) {
-        if (request.targetAgentName && request.targetAgentName !== agentName) {
-            throw new Error('Subconscious side session can only search itself or its primary session.');
-        }
-
-        const allowedSessionIds = [subconsciousPrimarySessionId, session.id, ...(session.aliases || [])];
-        if (request.targetSessionId) {
-            if (!allowedSessionIds.includes(request.targetSessionId)) {
-                throw new Error('Subconscious side session can only search itself or its primary session.');
-            }
-
-            if (request.targetSessionId === session.id || (session.aliases || []).includes(request.targetSessionId)) {
-                return {
-                    searchOptions: await buildSessionScopedSearchOptions(session.id, session.aliases || []),
-                    effectiveScope: 'current-session',
-                };
-            }
-        }
-
-        return {
-            searchOptions: await buildSessionScopedSearchOptions(subconsciousPrimarySessionId),
-            effectiveScope: 'current-session',
         };
     }
 

@@ -98,23 +98,6 @@ function assertPreviewRequestWithinLimit(
   );
 }
 
-function getSubconsciousPrimarySessionId(ctx?: ToolContext): string | undefined {
-  return sessionManager.getSubconsciousPrimarySessionId(ctx?.session);
-}
-
-function assertAllowedSubconsciousTarget(ctx: ToolContext | undefined, targetSessionId: string | undefined, toolName: string): void {
-  const primarySessionId = getSubconsciousPrimarySessionId(ctx);
-  if (!primarySessionId) {
-    return;
-  }
-
-  const resolvedTargetSessionId = targetSessionId || ctx?.sessionId;
-  const selfSessionId = ctx?.sessionId;
-  if (!resolvedTargetSessionId || (resolvedTargetSessionId !== primarySessionId && resolvedTargetSessionId !== selfSessionId)) {
-    throw new Error(`Subconscious side sessions may only use ${toolName} with their primary session or themselves.`);
-  }
-}
-
 const MIME_TYPE_BY_EXT: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -400,15 +383,7 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
     throw new Error('sessionId is required');
   }
 
-  const subconsciousPrimarySessionId = getSubconsciousPrimarySessionId(ctx);
-  if (subconsciousPrimarySessionId && sessionId !== subconsciousPrimarySessionId) {
-    throw new Error('Subconscious side sessions may only send hints to their primary session.');
-  }
-
   await sessionManager.sendToSession(sessionId, message, fromSessionId);
-  if (subconsciousPrimarySessionId && fromSessionId) {
-    await sessionManager.noteSubconsciousHintDelivered(fromSessionId, sessionId);
-  }
   const output = `Message sent to session \`${sessionId}\``;
   return noFurtherAssistantReply
     ? { ...buildEndTurnResult(), output }
@@ -680,8 +655,6 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
   const { sessionId, start, count } = args;
   const previewLength = normalizePositivePreviewLength(args.previewLength, 100);
 
-  assertAllowedSubconsciousTarget(ctx, sessionId, 'get_session_messages');
-
   const session = await sessionManager.getExistingSession(sessionId);
   if (!session) {
     return `Session \`${sessionId}\` not found.`;
@@ -721,9 +694,8 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
 }
 
 export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolContext) {
-  const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
+  const targetSessionId = args.sessionId || ctx?.sessionId;
   await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
-  assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_archived_messages');
   const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
 
   if (!targetSessionId) {
@@ -755,9 +727,8 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
 
 
 export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext) {
-  const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
+  const targetSessionId = args.sessionId || ctx?.sessionId;
   await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
-  assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_archived_blocks');
   const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
 
   if (!targetSessionId) {
@@ -781,14 +752,13 @@ export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext
 }
 
 export async function tool_get_context_archive(args: ToolArgs, ctx?: ToolContext) {
-  const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
+  const targetSessionId = args.sessionId || ctx?.sessionId;
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
   }
 
   await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
   await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
-  assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_context_archive');
 
   const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
   const hasMessageRange = typeof args.startSeq === 'number' || typeof args.endSeq === 'number';

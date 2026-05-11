@@ -14,15 +14,7 @@ import { maybeBuildGoalEndTurnReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { Message, MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
-import { formatMessageText, formatPrefixedMultilineText } from './utils/messageFormat';
 import { formatLocalTimestamp } from './utils/localTime';
-
-const SUBCONSCIOUS_RETRY_BUSY_MS = 1500;
-
-type SubconsciousRetryTimer = {
-  timeout: NodeJS.Timeout;
-  dueAt: number;
-};
 
 function formatCurrentTimeForPrompt(date: Date): string {
   return formatLocalTimestamp(date);
@@ -76,7 +68,6 @@ export class MessageRouter {
   private authorizedUsers: Map<string, boolean> = new Map();
   private processingSessions: Set<string> = new Set();
   private commandHandler?: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>;
-  private subconsciousRetryTimers: Map<string, SubconsciousRetryTimer> = new Map();
 
   constructor(authorizedUsers?: Array<{ platform: string; userId: string }>) {
     if (authorizedUsers) {
@@ -190,7 +181,6 @@ export class MessageRouter {
   private async consumeLeadingQueuedTurnInputs(
     session: Session,
     pendingParts: MessagePart[] | null,
-    subconsciousIncomingParts: MessagePart[],
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
     let mergedParts = pendingParts;
     let consumedInput = false;
@@ -223,7 +213,6 @@ export class MessageRouter {
         ? this.prepareUserParts(item.parts, item.source)
         : [...item.parts];
 
-      subconsciousIncomingParts.push(...preparedParts);
       mergedParts = mergedParts?.length
         ? [...mergedParts, ...preparedParts]
         : preparedParts;
@@ -414,226 +403,8 @@ export class MessageRouter {
     });
   }
 
-  private isDirectUserMessageForSubconscious(message: any): boolean {
-    return !!message?.parts?.some((part: MessagePart) => typeof part.system === 'string'
-      && part.system.startsWith('The following message is a direct user message via channel;'));
-  }
-
-  private isIntersessionMessageForSubconscious(message: any): boolean {
-    return !!message?.parts?.some((part: MessagePart) => typeof part.text === 'string'
-      && part.text.startsWith('[SYSTEM: The following message is an inter-agent message from another session'));
-  }
-
-  private getReasoningPreviewForSubconscious(message: any): string | null {
-    if (message?.role !== 'model' || !Array.isArray(message?.parts)) {
-      return null;
-    }
-
-    for (const part of message.parts as MessagePart[]) {
-      const summaries = Array.isArray((part as any)?.providerMeta?.thinkingSummaries)
-        ? (part as any).providerMeta.thinkingSummaries.filter((entry: any) => typeof entry === 'string' && entry.trim().length > 0)
-        : [];
-      const rawThinking = typeof part.thinking === 'string' && part.thinking.trim().length > 0
-        ? part.thinking.trim()
-        : '';
-      const sourceText = summaries[0] || rawThinking;
-      if (!sourceText) {
-        continue;
-      }
-
-      const normalized = sourceText.replace(/\s+/g, ' ').trim();
-      if (!normalized) {
-        continue;
-      }
-
-      return normalized.length > 160 ? `${normalized.slice(0, 157)}…` : normalized;
-    }
-
-    return null;
-  }
-
-  private formatSubconsciousRecentContext(session: Session): string {
-    const sideSessionId = sessionManager.getSubconsciousStatus(session).sideSessionId;
-    const recent = session.history.slice(-12);
-    const lines = recent.map((message: any) => {
-      const seqLabel = typeof message?.__meta?.seq === 'number' ? `[#${message.__meta.seq}] ` : '';
-      const preserveFull = this.isDirectUserMessageForSubconscious(message)
-        || this.isIntersessionMessageForSubconscious(message);
-
-      const formatted = formatMessageText(message, {
-        includeRolePrefix: false,
-        skipThinking: true,
-        skipRagMemorySnippets: true,
-        toolCharLimit: preserveFull ? 4000 : 240,
-      }).trim();
-
-      const text = preserveFull
-        ? formatted
-        : (formatted.length > 320 ? `${formatted.slice(0, 317)}...` : formatted);
-      const reasoningPreview = this.getReasoningPreviewForSubconscious(message);
-      const decoratedText = reasoningPreview && !preserveFull
-        ? `${text}\n(reasoning preview: ${reasoningPreview})`
-        : text;
-
-      if (!decoratedText) {
-        return `${seqLabel}[${message.role}] [empty]`;
-      }
-
-      return formatPrefixedMultilineText(`${seqLabel}[${message.role}] `, decoratedText);
-    });
-
-    if (sideSessionId) {
-      return [
-        `Primary session: \`${session.id}\``,
-        `Bound subconscious side session: \`${sideSessionId}\``,
-        '',
-        'Recent primary-session context (recent real user inputs and inter-session task messages are kept in full; other messages may be truncated):',
-        ...lines,
-      ].join('\n');
-    }
-
-    return [
-      `Primary session: \`${session.id}\``,
-      '',
-      'Recent primary-session context (recent real user inputs and inter-session task messages are kept in full; other messages may be truncated):',
-      ...lines,
-    ].join('\n');
-  }
-
-  private countSubconsciousInputMessages(session: Session, incomingParts: MessagePart[], sourceCtx?: ChannelContext, source?: QueueSource): number {
-    const settings = sessionManager.getSubconsciousTriggerSettings(session);
-    if (!settings.enabled || !settings.sideSessionId) {
-      return 0;
-    }
-
-    let count = 0;
-
-    if (sourceCtx || source) {
-      count += 1;
-    }
-
-    for (const part of incomingParts) {
-      if (typeof part.system === 'string' && part.system.startsWith('The following message is a direct user message via channel;')) {
-        count += 1;
-        continue;
-      }
-
-      if (typeof part.text === 'string'
-        && part.text.startsWith('[SYSTEM: The following message is an inter-agent message from another session')
-        && !sessionManager.shouldIgnoreSubconsciousTriggerText(part.text, settings.sideSessionId!)) {
-        count += 1;
-      }
-    }
-
-    return count;
-  }
-
-  private clearSubconsciousRetry(primarySessionId: string): void {
-    const existing = this.subconsciousRetryTimers.get(primarySessionId);
-    if (!existing) {
-      return;
-    }
-
-    clearTimeout(existing.timeout);
-    this.subconsciousRetryTimers.delete(primarySessionId);
-  }
-
-  private scheduleSubconsciousRetry(primarySessionId: string, delayMs: number): void {
-    const normalizedDelay = Math.max(250, Math.floor(delayMs));
-    const dueAt = Date.now() + normalizedDelay;
-    const existing = this.subconsciousRetryTimers.get(primarySessionId);
-    if (existing && existing.dueAt <= dueAt) {
-      return;
-    }
-
-    if (existing) {
-      clearTimeout(existing.timeout);
-    }
-
-    const timeout = setTimeout(() => {
-      this.subconsciousRetryTimers.delete(primarySessionId);
-      this.processPendingSubconsciousTrigger(primarySessionId).catch(err => {
-        logger.error({ err, primarySessionId }, 'Failed subconscious retry trigger');
-      });
-    }, normalizedDelay);
-
-    this.subconsciousRetryTimers.set(primarySessionId, { timeout, dueAt });
-  }
-
-  private async processPendingSubconsciousTrigger(primarySessionId: string): Promise<boolean> {
-    const session = await sessionManager.getExistingSession(primarySessionId);
-    if (!session || sessionManager.isSubconsciousSession(session)) {
-      this.clearSubconsciousRetry(primarySessionId);
-      return false;
-    }
-
-    const settings = sessionManager.getSubconsciousTriggerSettings(session);
-    if (!settings.enabled || !settings.sideSessionId) {
-      this.clearSubconsciousRetry(primarySessionId);
-      return false;
-    }
-
-    if (settings.pendingMessageCount < settings.triggerEveryMessages) {
-      this.clearSubconsciousRetry(primarySessionId);
-      return false;
-    }
-
-    const sideSession = await sessionManager.getExistingSession(settings.sideSessionId);
-    if (!sideSession || sideSession.busy || sideSession.queue.length > 0) {
-      this.scheduleSubconsciousRetry(primarySessionId, SUBCONSCIOUS_RETRY_BUSY_MS);
-      return false;
-    }
-
-    await sessionManager.queueSessionStructuredEvent(settings.sideSessionId, [
-      {
-        system: `Subconscious trigger for primary session \`${session.id}\`. Review the recent context, optionally use your limited history/search tools, and only send a single short high-value hint back to the primary session if you find a meaningful recall, contradiction, or reminder. If there is nothing important, end with [NO_ACTION]. If you send a hint, use send_to_session({sessionId: \`${session.id}\`, message: \"[Subconscious] ...\"}) and then call wait({}) in the same response.`,
-      },
-      {
-        text: this.formatSubconsciousRecentContext(session),
-      },
-    ], 'background');
-
-    await sessionManager.markSubconsciousTriggered(session.id);
-    this.clearSubconsciousRetry(primarySessionId);
-    return true;
-  }
-
-  private async maybeRecordSubconsciousProgress(
-    session: Session,
-    incomingParts: MessagePart[],
-    toolRoundCount: number,
-    awardedMessages: number,
-    sourceCtx?: ChannelContext,
-    source?: QueueSource,
-  ): Promise<number> {
-    if (sessionManager.isSubconsciousSession(session)) {
-      return awardedMessages;
-    }
-
-    const settings = sessionManager.getSubconsciousTriggerSettings(session);
-    if (!settings.enabled || !settings.sideSessionId) {
-      this.clearSubconsciousRetry(session.id);
-      return awardedMessages;
-    }
-
-    const inputMessages = this.countSubconsciousInputMessages(session, incomingParts, sourceCtx, source);
-    const totalMessages = Math.min(
-      inputMessages + toolRoundCount,
-      settings.triggerEveryMessages,
-    );
-    const delta = totalMessages - awardedMessages;
-    if (delta <= 0) {
-      await this.processPendingSubconsciousTrigger(session.id);
-      return awardedMessages;
-    }
-
-    await sessionManager.incrementSubconsciousPending(session.id, delta);
-    await this.processPendingSubconsciousTrigger(session.id);
-    return totalMessages;
-  }
-
   private async maybeQueueChildReminder(session: Session): Promise<void> {
-    if (sessionManager.isSubconsciousSession(session) || !session.parentSessionId || session.history.length === 0) {
+    if (!session.parentSessionId || session.history.length === 0) {
       return;
     }
 
@@ -809,9 +580,6 @@ export class MessageRouter {
     await maybeRefreshStaleSessionSnapshot(session, sessionManager.refreshSessionSnapshot);
 
     const broadcast = session.broadcast;
-    const subconsciousIncomingParts: MessagePart[] = options.parts ? [...options.parts] : [];
-    let subconsciousAwardedMessages = 0;
-    let subconsciousToolRoundCount = 0;
 
     logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.message?.parts?.length ?? options.parts?.length ?? 0 }, 'Session turn processing');
 
@@ -844,7 +612,7 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, subconsciousIncomingParts);
+        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts);
         parts = queuedBeforeLlm.parts;
 
         if (session.stopping) {
@@ -913,16 +681,6 @@ export class MessageRouter {
           break;
         }
 
-        subconsciousToolRoundCount += 1;
-        subconsciousAwardedMessages = await this.maybeRecordSubconsciousProgress(
-          session,
-          subconsciousIncomingParts,
-          subconsciousToolRoundCount,
-          subconsciousAwardedMessages,
-          options.sourceCtx,
-          options.source,
-        );
-
         if ((toolResultMsg as any).__toolLoopControl?.stopCurrentTurn) {
           logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
           break;
@@ -937,7 +695,7 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, subconsciousIncomingParts);
+        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null);
         parts = queuedAfterTools.parts;
 
         if (result.usage) {
@@ -979,14 +737,6 @@ export class MessageRouter {
       await this.maybeQueueChildReminder(session);
       await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted);
       await this.maybeAppendGoalEndTurnReminder(session);
-      await this.maybeRecordSubconsciousProgress(
-        session,
-        subconsciousIncomingParts,
-        subconsciousToolRoundCount,
-        subconsciousAwardedMessages,
-        options.sourceCtx,
-        options.source,
-      );
       await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
     } catch (e: any) {
       logger.error(e, 'Error handling message');
@@ -995,14 +745,6 @@ export class MessageRouter {
       await this.maybeQueueChildReminder(session);
       await this.sendSessionError(session, options.sourceCtx, e);
       await this.maybeAppendGoalEndTurnReminder(session);
-      await this.maybeRecordSubconsciousProgress(
-        session,
-        subconsciousIncomingParts,
-        subconsciousToolRoundCount,
-        subconsciousAwardedMessages,
-        options.sourceCtx,
-        options.source,
-      );
     } finally {
       if (!getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
         return;
@@ -1011,13 +753,6 @@ export class MessageRouter {
       session.busy = false;
       session.busyStartedAt = undefined;
       await sessionManager.saveSession(session.id);
-
-      if (sessionManager.isSubconsciousSession(session)) {
-        const primarySessionId = sessionManager.getSubconsciousPrimarySessionId(session);
-        if (primarySessionId) {
-          await this.processPendingSubconsciousTrigger(primarySessionId);
-        }
-      }
     }
   }
 
