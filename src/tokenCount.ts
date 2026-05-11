@@ -1,6 +1,7 @@
 import { MessagePart, Message, InlineData } from './types';
 import { stringifyFunctionCallArgs } from './toolCallArgs';
 import { estimateTokenCount } from '../packages/shared/dist/tokenCount';
+import { isModelVisibleMessage } from './session/messageVisibility';
 
 export { estimateTokenCount };
 
@@ -124,6 +125,9 @@ export function estimateMessageTokens(message: Message): number {
 export function estimateSessionSummary(session: { history: Message[], persistentMemorySnapshot?: string }): TokenEstimateSummary {
     const total: TokenEstimateSummary = { tokens: 0, imageCount: 0 };
     for (const message of session.history) {
+        if (!isModelVisibleMessage(message)) {
+            continue;
+        }
         const messageSummary = estimateMessageSummary(message);
         total.tokens += messageSummary.tokens;
         total.imageCount += messageSummary.imageCount;
@@ -149,6 +153,9 @@ export function estimateSessionTokens(session: { history: Message[], persistentM
 export function estimateSessionRangeTokens(session: { history: Message[] }, startIndex: number = 0): number {
     let totalTokens = 0;
     for (let i = startIndex; i < session.history.length; i++) {
+        if (!isModelVisibleMessage(session.history[i])) {
+            continue;
+        }
         totalTokens += estimateMessageTokens(session.history[i]);
     }
     return totalTokens;

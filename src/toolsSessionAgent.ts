@@ -14,6 +14,7 @@ import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, res
 import { formatArchiveBlockTimeRange } from './session/layeredContext';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
+import { formatModelVisibilitySuffix } from './session/messageVisibility';
 import { truncateUnicodeSafe } from './utils/unicode';
 import { requireNotIsolated, checkArchivedReadPermission, checkChannelPermission, checkPathAccess, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
@@ -212,7 +213,7 @@ function formatArchivedMessagePreview(
     const originLabel = record.inherited
       ? `[inherited from ${record.sourceSessionId || 'unknown'}] `
       : '[local] ';
-    result += `${formatPrefixedMultilineText(`[#${record.seq}] ${originLabel}${roleEmoji} ${record.message.role}: `, preview)}\n`;
+    result += `${formatPrefixedMultilineText(`[#${record.seq}] ${originLabel}${roleEmoji} ${record.message.role}${formatModelVisibilitySuffix(record.message)}: `, preview)}\n`;
   }
   return result;
 }

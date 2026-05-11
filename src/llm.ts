@@ -25,6 +25,7 @@ import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
 import { guardToolOutputForModel } from './toolOutputGuard';
 import { sanitizeLoneSurrogatesInPayload } from './utils/unicode';
+import { isModelVisibleMessage } from './session/messageVisibility';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -885,7 +886,9 @@ export async function chat(
     }
     
     // Convert to appropriate format based on provider
-    const contentsForLlm = session.history.map(({ __meta, ...msg }: Message) => msg);
+    const contentsForLlm = session.history
+        .filter(isModelVisibleMessage)
+        .map(({ __meta, ...msg }: Message) => msg);
     const availableToolDefinitions = options?.toolDefinitions
         ?? tools.modelFacingDefinitions;
     const result = await requestLlmOnce({

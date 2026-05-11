@@ -17,6 +17,7 @@ import {
   readLocalArchiveBlocks as readLocalArchiveBlocksFromStore,
   writeArchiveBlocks,
 } from './archiveStore';
+import { isModelVisibleMessage } from './messageVisibility';
 
 const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
   'This session has been compacted.',
@@ -60,6 +61,10 @@ export function isIgnoredCompactLifecycleSystemText(text: string): boolean {
 }
 
 export function shouldIgnoreMessageInCompactCandidates(message: Message): boolean {
+  if (!isModelVisibleMessage(message)) {
+    return true;
+  }
+
   const parts = message.parts || [];
   const systemTexts = parts
     .map(part => typeof part.system === 'string' ? part.system.trim() : '')

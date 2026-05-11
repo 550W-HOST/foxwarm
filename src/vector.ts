@@ -6,6 +6,7 @@ import { estimateTokenCount } from './tokenCount';
 import { DB_DIR, OLLAMA_BASE_URL, SESSION_LOGS_DIR } from './config';
 import { logger } from './common';
 import { formatMessageText } from './utils/messageFormat';
+import { isModelVisibleMessage } from './session/messageVisibility';
 import {
     ArchiveBlockRecord,
     readLocalArchiveBlocksByIdRange,
@@ -196,6 +197,10 @@ function buildFilterPredicate(options?: SearchOptions): string | undefined {
 }
 
 function normalizeMessageText(message: Message): string {
+    if (!isModelVisibleMessage(message)) {
+        return '';
+    }
+
     return formatMessageText(message, {
         includeRolePrefix: true,
         skipEphemeralSystem: true,

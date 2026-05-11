@@ -1,11 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import axios from 'axios';
 import * as llm from './llm';
 import { runBtwRequest, BTW_USAGE } from './btw';
 import { COMMANDS } from './commands';
 import * as sessionManager from './sessionManager';
 import * as tools from './tools';
 import * as vector from './vector';
+import { resolveCompactionSplitIndex } from './session/history';
+import { createDisplayOnlyModelMessage } from './session/messageVisibility';
+import { estimateSessionSummary } from './tokenCount';
+import { formatSessionMessagesPreview } from './utils/messagePreview';
 import type { Message, MessagePart, Session } from './types';
 
 function makeId(prefix: string): string {
@@ -80,7 +85,7 @@ test('/btw command returns usage without a message', async () => {
   assert.deepEqual(replies, [BTW_USAGE]);
 });
 
-test('/btw command acks immediately and broadcasts async text result without mutating real history', async () => {
+test('/btw command acks immediately and writes async result as display-only history without mutating model-visible input', async () => {
   const originalChat = llm.chat;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   const sessionId = makeId('btw_async');
@@ -133,13 +138,18 @@ test('/btw command acks immediately and broadcasts async text result without mut
     });
 
     const after = await sessionManager.getSession(sessionId);
-    assert.equal(after.history.length, 1, 'BTW result should be broadcast without being appended to real history');
+    assert.equal(after.history.length, 2, 'BTW result should be persisted as a display-only history message');
     assert.deepEqual(after.history[0], originalFirstMessage);
+    assert.equal(after.history[1].role, 'model');
+    assert.equal(after.history[1].modelVisible, false);
+    assert.equal(after.history[1].__meta?.noticeType, 'btw');
+    assert.match(after.history[1].parts[0].text || '', /\[BTW result\]/);
+    assert.match(after.history[1].parts[0].text || '', /btw text answer/);
     assert.equal(broadcasts.length, 1);
     assert.match(broadcasts[0], /\[BTW result\]/);
     assert.match(broadcasts[0], /btw text answer/);
     assert.equal(after.history.some(message => message.role === 'user' && message.parts.some(part => part.text === 'side question')), false);
-    assert.equal(after.history.some(message => message.parts.some(part => part.text?.includes('btw text answer'))), false);
+    assert.match(formatSessionMessagesPreview(sessionId, after.history, 0, after.history.length), /model \[display-only\]:/);
     assert.deepEqual(tools.modelFacingDefinitions.map(def => def.name), toolNamesBefore);
   } finally {
     (llm as any).chat = originalChat;
@@ -187,7 +197,11 @@ test('/btw does not execute tool calls returned by the model', async () => {
 
     assert.equal(result.toolDenied, true);
     assert.equal(executeToolsCalled, false);
-    assert.deepEqual(updatedSession.history, originalHistory);
+    assert.equal(updatedSession.history.length, originalHistory.length + 1);
+    assert.deepEqual(updatedSession.history.slice(0, originalHistory.length), originalHistory);
+    assert.equal(updatedSession.history[updatedSession.history.length - 1].modelVisible, false);
+    assert.match(updatedSession.history[updatedSession.history.length - 1].parts[0].text || '', /BTW aborted/);
+    assert.match(updatedSession.history[updatedSession.history.length - 1].parts[0].text || '', /`exec`/);
     assert.equal(broadcasts.length, 1);
     assert.match(broadcasts[0], /BTW aborted/);
     assert.match(broadcasts[0], /`exec`/);
@@ -196,5 +210,72 @@ test('/btw does not execute tool calls returned by the model', async () => {
     (llm as any).executeTools = originalExecuteTools;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('display-only messages persist in history but are omitted from model-facing LLM input and token/vector estimates', async () => {
+  const originalPost = axios.post;
+  let capturedBody: any = null;
+
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBody = data;
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: {
+        content: [{ type: 'text', text: 'ok' }],
+        usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0 },
+      },
+    };
+  };
+
+  try {
+    const displayOnly = createDisplayOnlyModelMessage('hidden btw result', { noticeType: 'test' });
+    const ordinaryUser: Message = { role: 'user', parts: [{ text: 'visible ordinary user text' }] };
+    const ordinaryModel: Message = { role: 'model', parts: [{ text: 'visible ordinary model text' }] };
+    const session = {
+      id: makeId('btw_visibility'),
+      agent: 'main',
+      history: [ordinaryUser, displayOnly, ordinaryModel],
+      persistentMemorySnapshot: 'system prompt',
+      stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+      busy: false,
+      queue: [],
+      meta: { lastMessageTime: Date.now() },
+      model: 'anthropic/claude-sonnet-4-5',
+    } as Session;
+
+    await llm.chat(null, session, 0, {
+      appendMessage: async (message: Message) => { session.history.push(message); },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const providerPayload = JSON.stringify(capturedBody);
+    assert.match(providerPayload, /visible ordinary user text/);
+    assert.match(providerPayload, /visible ordinary model text/);
+    assert.doesNotMatch(providerPayload, /hidden btw result/);
+
+    const preview = formatSessionMessagesPreview(session.id, [ordinaryUser, displayOnly, ordinaryModel], 0, 3);
+    assert.match(preview, /hidden btw result/);
+    assert.match(preview, /model \[display-only\]:/);
+
+    const tokenSummary = estimateSessionSummary({ history: [ordinaryUser, displayOnly], persistentMemorySnapshot: '' });
+    const visibleOnlySummary = estimateSessionSummary({ history: [ordinaryUser], persistentMemorySnapshot: '' });
+    assert.deepEqual(tokenSummary, visibleOnlySummary);
+
+    const segments = vector.buildArchiveSegments([
+      { v: 1, kind: 'message', sessionId: session.id, agent: 'main', seq: 1, timestamp: Date.now(), role: 'model', message: displayOnly },
+      { v: 1, kind: 'message', sessionId: session.id, agent: 'main', seq: 2, timestamp: Date.now(), role: 'user', message: ordinaryUser },
+    ] as any);
+    assert.equal(JSON.stringify(segments).includes('hidden btw result'), false);
+    assert.equal(JSON.stringify(segments).includes('visible ordinary user text'), true);
+
+    assert.equal(resolveCompactionSplitIndex([ordinaryUser, displayOnly, ordinaryModel], 0), 1);
+    assert.equal(resolveCompactionSplitIndex([ordinaryUser, ordinaryModel], 0), 2);
+  } finally {
+    (axios as any).post = originalPost;
   }
 });

@@ -70,6 +70,13 @@ export type SessionReply = (text: string, options?: any) => MaybePromise<void>;
 
 export interface Message {
   role: 'user' | 'model' | 'tool';
+  /**
+   * Whether this persisted timeline message should be included in future
+   * model-facing context. Defaults to true for legacy/ordinary messages.
+   * Set false for display-only notices that should remain visible in history
+   * and archives without influencing later LLM calls or compaction prompts.
+   */
+  modelVisible?: boolean;
   parts: MessagePart[];
   __meta?: {
     timestamp?: number;

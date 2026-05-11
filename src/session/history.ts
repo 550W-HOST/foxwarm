@@ -25,6 +25,7 @@ import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { formatSessionGoalReminderText } from './goal';
 import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import { isModelVisibleMessage } from './messageVisibility';
 
 const TOOL_NOISE_TOKEN_THRESHOLD = 200;
 
@@ -407,7 +408,19 @@ export function isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(
 }
 
 export function resolveCompactionSplitIndex(history: Message[], keepPercent: number): number {
-  let splitIndex = Math.floor(history.length * (1 - keepPercent));
+  let splitIndex = keepPercent > 0
+    ? Math.floor(history.length * (1 - keepPercent))
+    : history.length;
+
+  // Display-only/non-model-facing messages must remain visible in the
+  // timeline but must not be summarized into model-facing compact blocks.
+  // Keep the earliest such message and everything after it verbatim.
+  for (let index = 0; index < splitIndex; index += 1) {
+    if (!isModelVisibleMessage(history[index])) {
+      splitIndex = index;
+      break;
+    }
+  }
 
   if (keepPercent > 0) {
     if (splitIndex < history.length && history[splitIndex].role === 'tool') {
@@ -420,8 +433,6 @@ export function resolveCompactionSplitIndex(history: Message[], keepPercent: num
         splitIndex = cursor;
       }
     }
-  } else {
-    splitIndex = history.length;
   }
 
   return splitIndex;

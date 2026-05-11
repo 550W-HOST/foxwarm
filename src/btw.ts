@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { logger } from './common';
 import * as llm from './llm';
 import * as sessionManager from './sessionManager';
+import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import type { ChatResult, FunctionCall, Message, MessagePart, Session } from './types';
 
 export const BTW_USAGE = 'Usage: /btw <message>';
@@ -96,14 +97,15 @@ function formatBtwError(error: any): string {
   return `⚠️ [BTW error]\n${message}`;
 }
 
-async function broadcastBtwResult(sessionId: string, payloadText: string): Promise<string> {
+async function appendBtwResult(sessionId: string, payloadText: string): Promise<string> {
   const session = await sessionManager.getSession(sessionId);
   const text = formatBtwPayload(payloadText);
+  await sessionManager.appendSessionMessage(session, createDisplayOnlyModelMessage(text, {
+    noticeType: 'btw',
+  }));
 
   if (session.broadcast) {
-    await session.broadcast(text);
-  } else {
-    logger.warn({ sessionId }, 'BTW result has no session broadcast target');
+    await session.broadcast(text, { excludePlatforms: ['webui'] });
   }
 
   return text;
@@ -140,7 +142,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
     payloadText = formatBtwError(error);
   }
 
-  const text = await broadcastBtwResult(sessionId, payloadText);
+  const text = await appendBtwResult(sessionId, payloadText);
   logger.info({ sessionId, requestId, toolDenied }, 'BTW background request finished');
   return { text, toolDenied };
 }
