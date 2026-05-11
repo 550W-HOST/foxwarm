@@ -15,6 +15,8 @@ export type CompactCandidateItem =
       endSeq: number;
       preview: string;
       estimatedTokens: number;
+      /** True when an unsummarizable timeline barrier exists before this candidate. */
+      barrierBefore?: boolean;
     }
   | {
       kind: 'block';
@@ -26,6 +28,8 @@ export type CompactCandidateItem =
       preview: string;
       estimatedTokens: number;
       allowSingleBlockCompact?: boolean;
+      /** True when an unsummarizable timeline barrier exists before this candidate. */
+      barrierBefore?: boolean;
     };
 
 export interface LayeredCreateBlockPlan {
@@ -313,6 +317,9 @@ function findMessageRange(candidateItems: CompactCandidateItem[], sourceStart: n
     if (item.kind !== 'message') {
       break;
     }
+    if (index > startIndex && item.barrierBefore) {
+      break;
+    }
     endIndex = index;
     if (item.endSeq === sourceEnd) {
       return [startIndex, endIndex];
@@ -344,6 +351,9 @@ function findBlockRange(candidateItems: CompactCandidateItem[], level: number, s
   let endIndex = startIndex - 1;
   for (let index = startIndex; index < candidateItems.length; index += 1) {
     const item = candidateItems[index];
+    if (index > startIndex && item.barrierBefore) {
+      break;
+    }
     if (item.kind !== 'block' || item.level !== childLevel || item.id !== expectedId) {
       break;
     }

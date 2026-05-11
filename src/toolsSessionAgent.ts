@@ -14,7 +14,7 @@ import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, res
 import { formatArchiveBlockTimeRange } from './session/layeredContext';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
-import { formatModelVisibilitySuffix } from './session/messageVisibility';
+import { formatModelVisibilitySuffix, redactDisplayOnlyMessageForModel } from './session/messageVisibility';
 import { truncateUnicodeSafe } from './utils/unicode';
 import { requireNotIsolated, checkArchivedReadPermission, checkChannelPermission, checkPathAccess, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
@@ -204,8 +204,9 @@ function formatArchivedMessagePreview(
 
   let result = `Archived messages for session \`${sessionId}\` - showing ${records.length} of ${meta.totalMatched} matched message(s)${rangeLabel}.\n\n`;
   for (const record of records) {
-    const roleEmoji = record.message.role === 'user' ? '👤' : record.message.role === 'model' ? '🤖' : '🔧';
-    const preview = formatMessagePreviewText(record.message, previewLength, {
+    const message = redactDisplayOnlyMessageForModel(record.message);
+    const roleEmoji = message.role === 'user' ? '👤' : message.role === 'model' ? '🤖' : '🔧';
+    const preview = formatMessagePreviewText(message, previewLength, {
       skipEphemeralSystem: true,
       skipRagMemorySnippets: true,
       skipThinking: true,
@@ -691,7 +692,9 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
     return `No messages found in session \`${sessionId}\` (total: ${totalMessages} messages).`;
   }
 
-  return formatSessionMessagesPreview(sessionId, messages, actualStart, totalMessages, previewLength);
+  return formatSessionMessagesPreview(sessionId, messages, actualStart, totalMessages, previewLength, {
+    hideDisplayOnlyContent: true,
+  });
 }
 
 export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolContext) {

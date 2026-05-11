@@ -412,16 +412,6 @@ export function resolveCompactionSplitIndex(history: Message[], keepPercent: num
     ? Math.floor(history.length * (1 - keepPercent))
     : history.length;
 
-  // Display-only/non-model-facing messages must remain visible in the
-  // timeline but must not be summarized into model-facing compact blocks.
-  // Keep the earliest such message and everything after it verbatim.
-  for (let index = 0; index < splitIndex; index += 1) {
-    if (!isModelVisibleMessage(history[index])) {
-      splitIndex = index;
-      break;
-    }
-  }
-
   if (keepPercent > 0) {
     if (splitIndex < history.length && history[splitIndex].role === 'tool') {
       let cursor = splitIndex;
@@ -457,6 +447,34 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
   const blockMap = new Map(blockRecords.map(record => [record.id, record]));
 
   const entries: LayeredCompactCandidateEntry[] = [];
+  let previousCandidateEndFrontierIndex = -1;
+
+  const hasDisplayOnlyBarrierBefore = (frontierStartIndex: number): boolean => {
+    if (previousCandidateEndFrontierIndex < 0) {
+      return false;
+    }
+
+    for (let gapIndex = previousCandidateEndFrontierIndex + 1; gapIndex < frontierStartIndex; gapIndex += 1) {
+      const gapItem = olderFrontier[gapIndex];
+      if (gapItem?.kind !== 'message') {
+        continue;
+      }
+      const gapRecord = messageMap.get(gapItem.seq);
+      if (gapRecord && !isModelVisibleMessage(gapRecord.message)) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const pushCandidateEntry = (entry: LayeredCompactCandidateEntry): void => {
+    if (hasDisplayOnlyBarrierBefore(entry.frontierStartIndex)) {
+      entry.item.barrierBefore = true;
+    }
+    entries.push(entry);
+    previousCandidateEndFrontierIndex = entry.frontierEndIndex;
+  };
 
   for (let frontierIndex = 0; frontierIndex < olderFrontier.length; frontierIndex += 1) {
     const item = olderFrontier[frontierIndex];
@@ -467,7 +485,7 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
         continue;
       }
 
-      entries.push({
+      pushCandidateEntry({
         item: buildBlockCandidateItem(
           record.id,
           record.level,
@@ -527,7 +545,7 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       }));
     }, 0);
 
-    entries.push({
+    pushCandidateEntry({
       item: buildMessageCandidateItem(item.seq, groupedRecords[groupedRecords.length - 1].seq, preview, estimatedTokens),
       frontierStartIndex: frontierIndex,
       frontierEndIndex: groupedEndFrontierIndex,

@@ -6,8 +6,10 @@ import { runBtwRequest, BTW_USAGE } from './btw';
 import { COMMANDS } from './commands';
 import * as sessionManager from './sessionManager';
 import * as tools from './tools';
+import * as toolsSessionAgent from './toolsSessionAgent';
 import * as vector from './vector';
 import { resolveCompactionSplitIndex } from './session/history';
+import { shouldIgnoreMessageInCompactCandidates } from './session/layeredContext';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { estimateSessionSummary } from './tokenCount';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
@@ -150,6 +152,15 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.match(broadcasts[0], /btw text answer/);
     assert.equal(after.history.some(message => message.role === 'user' && message.parts.some(part => part.text === 'side question')), false);
     assert.match(formatSessionMessagesPreview(sessionId, after.history, 0, after.history.length), /model \[display-only\]:/);
+
+    const toolPreview = await toolsSessionAgent.tool_get_session_messages({ sessionId }, { sessionId, session: after } as any);
+    assert.match(toolPreview, /model \[display-only\]: \[display-only message hidden\]/);
+    assert.doesNotMatch(toolPreview, /btw text answer/);
+
+    const archivePreview = await toolsSessionAgent.tool_get_context_archive({ sessionId, includeMessages: true, includeBlocks: false }, { sessionId, session: after } as any);
+    assert.match(archivePreview, /model \[display-only\]: \[display-only message hidden\]/);
+    assert.doesNotMatch(archivePreview, /btw text answer/);
+
     assert.deepEqual(tools.modelFacingDefinitions.map(def => def.name), toolNamesBefore);
   } finally {
     (llm as any).chat = originalChat;
@@ -273,7 +284,8 @@ test('display-only messages persist in history but are omitted from model-facing
     assert.equal(JSON.stringify(segments).includes('hidden btw result'), false);
     assert.equal(JSON.stringify(segments).includes('visible ordinary user text'), true);
 
-    assert.equal(resolveCompactionSplitIndex([ordinaryUser, displayOnly, ordinaryModel], 0), 1);
+    assert.equal(shouldIgnoreMessageInCompactCandidates(displayOnly), true);
+    assert.equal(resolveCompactionSplitIndex([ordinaryUser, displayOnly, ordinaryModel], 0), 3);
     assert.equal(resolveCompactionSplitIndex([ordinaryUser, ordinaryModel], 0), 2);
   } finally {
     (axios as any).post = originalPost;

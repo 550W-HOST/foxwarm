@@ -35,6 +35,16 @@ test('resolveCompactionSplitIndex still pairs legacy search_memory tool history'
   assert.equal(splitIndex, 1);
 });
 
+test('resolveCompactionSplitIndex does not make display-only messages a permanent compact barrier', () => {
+  const history: Message[] = [
+    msg('user', [{ text: 'older before notice' }]),
+    { role: 'model', modelVisible: false, parts: [{ text: 'display-only notice' }] },
+    msg('user', [{ text: 'ordinary message after notice' }]),
+  ];
+
+  assert.equal(resolveCompactionSplitIndex(history, 0), 3);
+});
+
 test('isSingleBlockCompactionStrandedBetweenHigherLevelBlocks recognizes a 3,3,2,3,3 island pattern', () => {
   const frontier: ContextFrontierItem[] = [
     block(1, 3),
