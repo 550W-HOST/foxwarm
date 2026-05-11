@@ -147,15 +147,30 @@ const formatUsageTitle = (usage: NormalizedTokenUsage) => {
   return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}`
 }
 
+const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'muted' | 'normal' | 'warning' }) => {
+  const colorClass = tone === 'warning'
+    ? 'text-orange-600 dark:text-orange-400'
+    : tone === 'muted'
+      ? 'text-slate-300 dark:text-slate-600'
+      : 'text-slate-500 dark:text-slate-400'
+
+  return (
+    <span className={`flex items-baseline justify-between gap-1.5 ${colorClass}`}>
+      <span className="text-[8px] uppercase tracking-wide opacity-80">{label}</span>
+      <span className="text-[10px] font-semibold tabular-nums">{formatTokenCount(value)}</span>
+    </span>
+  )
+}
+
 const ModelUsageBadge = memo(function ModelUsageBadge({ usage }: { usage: NormalizedTokenUsage }) {
-  const total = getUsageTotalTokens(usage)
   return (
     <span
-      className="inline-flex flex-col items-center rounded-md border border-slate-200 bg-white/85 px-1.5 py-1 font-mono text-[10px] leading-none text-slate-500 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85 dark:text-slate-400"
+      className="inline-flex min-w-[4.75rem] flex-col gap-0.5 rounded-md border border-slate-200 bg-white/85 px-1.5 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85"
       title={formatUsageTitle(usage)}
     >
-      <span className="font-semibold text-slate-600 dark:text-slate-300">{formatTokenCount(total)}</span>
-      <span className="mt-0.5 uppercase tracking-wide">tok</span>
+      <ModelUsageRow label="cached" value={usage.cachedTokens} tone="muted" />
+      <ModelUsageRow label="input" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
+      <ModelUsageRow label="output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
     </span>
   )
 })
