@@ -151,11 +151,20 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage }: { usage: Normal
   const total = getUsageTotalTokens(usage)
   return (
     <span
-      className="inline-flex items-center rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 font-mono text-[10px] leading-4 text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-400"
+      className="inline-flex flex-col items-center rounded-md border border-slate-200 bg-white/85 px-1.5 py-1 font-mono text-[10px] leading-none text-slate-500 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85 dark:text-slate-400"
       title={formatUsageTitle(usage)}
     >
-      {formatTokenCount(total)} tok
+      <span className="font-semibold text-slate-600 dark:text-slate-300">{formatTokenCount(total)}</span>
+      <span className="mt-0.5 uppercase tracking-wide">tok</span>
     </span>
+  )
+})
+
+const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile }: { usage: NormalizedTokenUsage; isMobile: boolean }) {
+  return (
+    <div className={`pointer-events-none absolute z-10 ${isMobile ? 'bottom-1 right-1' : 'bottom-0 right-0 translate-x-[calc(100%+0.5rem)]'}`}>
+      <ModelUsageBadge usage={usage} />
+    </div>
   )
 })
 
@@ -417,44 +426,6 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
       ) : (
         <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto pr-32">{jsonText}</pre>
       )}
-    </div>
-  )
-})
-
-const AssistantTextWithUsage = memo(function AssistantTextWithUsage({
-  text,
-  message,
-  usage,
-  isMobile,
-}: {
-  text: string
-  message: Message
-  usage: NormalizedTokenUsage | null
-  isMobile: boolean
-}) {
-  if (!usage) {
-    return <AssistantTextCard text={text} message={message} />
-  }
-
-  if (isMobile) {
-    return (
-      <div>
-        <AssistantTextCard text={text} message={message} />
-        <div className="mt-1 flex justify-end pr-1">
-          <ModelUsageBadge usage={usage} />
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex items-end gap-2">
-      <div className="min-w-0 flex-1">
-        <AssistantTextCard text={text} message={message} />
-      </div>
-      <div className="mb-1 shrink-0">
-        <ModelUsageBadge usage={usage} />
-      </div>
     </div>
   )
 })
@@ -1453,15 +1424,6 @@ const MessageRow = memo(function MessageRow({
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
   const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData), [msg.parts])
   const usage = useMemo(() => getModelMessageUsage(msg), [msg])
-  const lastTextPartIdx = useMemo(() => {
-    for (let i = textLikeParts.length - 1; i >= 0; i--) {
-      const part = textLikeParts[i]
-      if (part?.text && part.text.trim()) {
-        return i
-      }
-    }
-    return -1
-  }, [textLikeParts])
   const summaryTagItems = useMemo<ToolTagItem[]>(() => {
     if (!summaryTagItemsKey) return []
     try {
@@ -1499,7 +1461,7 @@ const MessageRow = memo(function MessageRow({
           !systemLikeMessage && msg.role === 'user'
             ? 'bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
             : ''
-        } overflow-x-hidden`}
+        } ${usage ? 'overflow-visible' : 'overflow-x-hidden'}`}
       >
         {systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} />
@@ -1515,7 +1477,7 @@ const MessageRow = memo(function MessageRow({
             <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />
           </div>
         ) : (
-          <div className="flex flex-col">
+          <div className={`flex flex-col ${usage ? 'relative' : ''}`}>
             {textLikeParts.map((part, partIdx) => {
               if (part.system) {
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
@@ -1526,15 +1488,7 @@ const MessageRow = memo(function MessageRow({
                 }
                 return <ReasoningSummaryCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
               }
-              return (
-                <AssistantTextWithUsage
-                  key={`assistant-text-${partIdx}`}
-                  text={part.text || ''}
-                  message={msg}
-                  usage={partIdx === lastTextPartIdx ? usage : null}
-                  isMobile={isMobile}
-                />
-              )
+              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {!verbose && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
@@ -1549,11 +1503,7 @@ const MessageRow = memo(function MessageRow({
             )}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} /> : <ToolCallsBlock msg={msg} />)}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup ? null : <ToolResponsesBlock msg={msg} hasPrecedingCallMsg={hasPrecedingCallMsg} />)}
-            {usage && lastTextPartIdx === -1 && (
-              <div className="mt-1 flex justify-end pr-1">
-                <ModelUsageBadge usage={usage} />
-              </div>
-            )}
+            {usage && <ModelUsageAnchor usage={usage} isMobile={isMobile} />}
           </div>
         )}
       </div>
