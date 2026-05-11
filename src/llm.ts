@@ -916,7 +916,8 @@ export async function chat(
     if (result.allParts && result.allParts.length > 0) {
         const assistantMsg: Message = {
             role: 'model',
-            parts: result.allParts
+            parts: result.allParts,
+            ...(result.usage ? { __meta: { usage: result.usage } } : {}),
         };
         await appendMessage(assistantMsg);
     }

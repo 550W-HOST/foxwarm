@@ -94,6 +94,71 @@ interface ChatTimelineProps {
   verbose: boolean
 }
 
+interface TokenUsage {
+  cachedTokens?: number | null
+  inputTokens?: number | null
+  outputTokens?: number | null
+  cachedContentTokenCount?: number | null
+  promptTokenCount?: number | null
+  candidatesTokenCount?: number | null
+}
+
+type NormalizedTokenUsage = {
+  cachedTokens: number
+  inputTokens: number
+  outputTokens: number
+}
+
+const toTokenCount = (value: unknown): number | null => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const normalizeMessageUsage = (value: unknown): NormalizedTokenUsage | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+
+  const raw = value as TokenUsage
+  const cached = toTokenCount(raw.cachedTokens) ?? toTokenCount(raw.cachedContentTokenCount)
+  const input = toTokenCount(raw.inputTokens) ?? toTokenCount(raw.promptTokenCount)
+  const output = toTokenCount(raw.outputTokens) ?? toTokenCount(raw.candidatesTokenCount)
+
+  if (cached === null && input === null && output === null) return null
+
+  return {
+    cachedTokens: cached ?? 0,
+    inputTokens: input ?? 0,
+    outputTokens: output ?? 0,
+  }
+}
+
+const getModelMessageUsage = (msg: Message) => msg.role === 'model' ? normalizeMessageUsage(msg.__meta?.usage) : null
+
+const getUsageTotalTokens = (usage: NormalizedTokenUsage) => (
+  usage.cachedTokens + usage.inputTokens + usage.outputTokens
+)
+
+const formatTokenCount = (count: number): string => {
+  if (count >= 1000000) return `${(count / 1000000).toFixed(count >= 10000000 ? 0 : 1)}M`
+  if (count >= 1000) return `${(count / 1000).toFixed(count >= 10000 ? 0 : 1)}K`
+  return String(count)
+}
+
+const formatUsageTitle = (usage: NormalizedTokenUsage) => {
+  const total = getUsageTotalTokens(usage)
+  return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}`
+}
+
+const ModelUsageBadge = memo(function ModelUsageBadge({ usage }: { usage: NormalizedTokenUsage }) {
+  const total = getUsageTotalTokens(usage)
+  return (
+    <span
+      className="inline-flex items-center rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 font-mono text-[10px] leading-4 text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-400"
+      title={formatUsageTitle(usage)}
+    >
+      {formatTokenCount(total)} tok
+    </span>
+  )
+})
+
 const MarkdownContent = memo(function MarkdownContent({ text, className }: { text: string; className: string }) {
   const html = useMemo(() => renderMarkdown(text), [text])
   return <div className={className} dangerouslySetInnerHTML={{ __html: html }} />
@@ -352,6 +417,44 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
       ) : (
         <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto pr-32">{jsonText}</pre>
       )}
+    </div>
+  )
+})
+
+const AssistantTextWithUsage = memo(function AssistantTextWithUsage({
+  text,
+  message,
+  usage,
+  isMobile,
+}: {
+  text: string
+  message: Message
+  usage: NormalizedTokenUsage | null
+  isMobile: boolean
+}) {
+  if (!usage) {
+    return <AssistantTextCard text={text} message={message} />
+  }
+
+  if (isMobile) {
+    return (
+      <div>
+        <AssistantTextCard text={text} message={message} />
+        <div className="mt-1 flex justify-end pr-1">
+          <ModelUsageBadge usage={usage} />
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-end gap-2">
+      <div className="min-w-0 flex-1">
+        <AssistantTextCard text={text} message={message} />
+      </div>
+      <div className="mb-1 shrink-0">
+        <ModelUsageBadge usage={usage} />
+      </div>
     </div>
   )
 })
@@ -768,12 +871,19 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode, 
   )
 })
 
-const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingContent }: { call: FunctionCall; callIdx: number; hasFollowingContent: boolean }) {
+const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingContent, modelMessage }: { call: FunctionCall; callIdx: number; hasFollowingContent: boolean; modelMessage?: Message }) {
   const [expanded, setExpanded] = useState(false)
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
     return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
   })
+
+  const setToolViewMode = useCallback((mode: ToolViewMode) => {
+    if (mode === 'json') {
+      setExpanded(true)
+    }
+    setViewMode(mode)
+  }, [])
 
   const setDiffMode = useCallback((mode: 'unified' | 'split') => {
     setDiffViewMode(mode)
@@ -783,12 +893,13 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
 
   const roundedClass = callIdx === 0 ? 'rounded-t' : ''
   const borderClass = hasFollowingContent ? 'border-b-0' : ''
+  const jsonText = useMemo(() => JSON.stringify(modelMessage ? { modelMessage, call } : call, null, 2), [call, modelMessage])
 
   const content = useMemo(() => {
     if (viewMode === 'json') {
       return (
         <pre className="whitespace-pre-wrap break-all cursor-text text-gray-600 dark:text-gray-300">
-          {JSON.stringify(call, null, 2)}
+          {jsonText}
         </pre>
       )
     }
@@ -965,7 +1076,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         ) : renderInlineToolSummary(call.name, <div className="truncate break-all">{preview}</div>, 'text-gray-700 dark:text-gray-200', getToolDisplayLabel(call))}
       </div>
     )
-  }, [call, callIdx, diffViewMode, expanded, viewMode])
+  }, [call, diffViewMode, expanded, jsonText, viewMode])
 
   return (
     <div className={`text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${roundedClass} p-2 ${borderClass} relative group`}>
@@ -974,12 +1085,12 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
           <>
             <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={viewMode !== 'json' && diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
             <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={viewMode !== 'json' && diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
-            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('json') }} active={viewMode === 'json'} title="JSON">JSON</MiniToggleButton>
+            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON">JSON</MiniToggleButton>
           </>
         ) : (
           <>
-            <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-            <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+            <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
+            <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
           </>
         )}
       </div>
@@ -995,6 +1106,13 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const responseStatus = getToolResponseStatus(resp)
   const isError = responseStatus === 'error'
+
+  const setToolViewMode = useCallback((mode: ToolViewMode) => {
+    if (mode === 'json') {
+      setExpanded(true)
+    }
+    setViewMode(mode)
+  }, [])
 
   const content = useMemo(() => {
     if (viewMode === 'json') {
@@ -1052,8 +1170,8 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
   return (
     <div className={`text-xs ${isError ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'} border ${roundedClass} ${roundedBottomClass} p-2 ${borderClass} relative group`}>
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>
       <div className={`font-mono cursor-pointer ${isError ? 'text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300' : 'text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300'}`} onClick={() => setExpanded(current => !current)}>
         <span className="inline-flex items-center gap-1.5">{isError ? <X size={12} /> : <Check size={12} />}<span>{resp.name}</span></span>
@@ -1067,16 +1185,25 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   call,
   responses,
   imageParts,
+  modelMessage,
 }: {
   call: FunctionCall
   responses: FunctionResponse[]
   imageParts: MessagePart[]
+  modelMessage: Message
 }) {
   const [expanded, setExpanded] = useState(false)
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
     return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
   })
+
+  const setToolViewMode = useCallback((mode: ToolViewMode) => {
+    if (mode === 'json') {
+      setExpanded(true)
+    }
+    setViewMode(mode)
+  }, [])
 
   const setDiffMode = useCallback((mode: 'unified' | 'split') => {
     setDiffViewMode(mode)
@@ -1112,14 +1239,14 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     return <div>Waiting for result…</div>
   }, [imageParts.length, responses])
 
-  const jsonText = useMemo(() => JSON.stringify({ call, responses, imageParts }, null, 2), [call, imageParts, responses])
+  const jsonText = useMemo(() => JSON.stringify({ modelMessage, call, responses, imageParts }, null, 2), [call, imageParts, modelMessage, responses])
   const baseTextClass = 'font-mono text-gray-700 dark:text-gray-300'
 
   return (
     <div className={`text-xs border rounded p-2 relative group cursor-pointer ${outerToneClass}`} onClick={() => setExpanded((current) => !current)}>
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>
 
       {viewMode === 'json' ? (
@@ -1233,9 +1360,10 @@ const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, 
                 call={call}
                 responses={responseEntries.map(({ resp }) => resp)}
                 imageParts={imageParts}
+                modelMessage={msg}
               />
             ) : (
-              <ToolCallItem call={call} callIdx={callIdx} hasFollowingContent={false} />
+              <ToolCallItem call={call} callIdx={callIdx} hasFollowingContent={false} modelMessage={msg} />
             )}
           </div>
         )
@@ -1269,7 +1397,7 @@ const ToolCallsBlock = memo(function ToolCallsBlock({ msg }: { msg: Message }) {
   return (
     <div>
       {functionCalls.map((call, callIdx) => (
-        <ToolCallItem key={`call-${call.id || callIdx}`} call={call} callIdx={callIdx} hasFollowingContent={callIdx < functionCalls.length - 1} />
+        <ToolCallItem key={`call-${call.id || callIdx}`} call={call} callIdx={callIdx} hasFollowingContent={callIdx < functionCalls.length - 1} modelMessage={msg} />
       ))}
     </div>
   )
@@ -1324,6 +1452,16 @@ const MessageRow = memo(function MessageRow({
 }: MessageRowProps) {
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
   const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData), [msg.parts])
+  const usage = useMemo(() => getModelMessageUsage(msg), [msg])
+  const lastTextPartIdx = useMemo(() => {
+    for (let i = textLikeParts.length - 1; i >= 0; i--) {
+      const part = textLikeParts[i]
+      if (part?.text && part.text.trim()) {
+        return i
+      }
+    }
+    return -1
+  }, [textLikeParts])
   const summaryTagItems = useMemo<ToolTagItem[]>(() => {
     if (!summaryTagItemsKey) return []
     try {
@@ -1388,7 +1526,15 @@ const MessageRow = memo(function MessageRow({
                 }
                 return <ReasoningSummaryCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
               }
-              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
+              return (
+                <AssistantTextWithUsage
+                  key={`assistant-text-${partIdx}`}
+                  text={part.text || ''}
+                  message={msg}
+                  usage={partIdx === lastTextPartIdx ? usage : null}
+                  isMobile={isMobile}
+                />
+              )
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {!verbose && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
@@ -1403,6 +1549,11 @@ const MessageRow = memo(function MessageRow({
             )}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} /> : <ToolCallsBlock msg={msg} />)}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup ? null : <ToolResponsesBlock msg={msg} hasPrecedingCallMsg={hasPrecedingCallMsg} />)}
+            {usage && lastTextPartIdx === -1 && (
+              <div className="mt-1 flex justify-end pr-1">
+                <ModelUsageBadge usage={usage} />
+              </div>
+            )}
           </div>
         )}
       </div>
