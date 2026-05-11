@@ -91,7 +91,8 @@ const ToolDownloadButton = memo(function ToolDownloadButton({ url, fileName }: {
 interface ChatTimelineProps {
   messages: Message[]
   isMobile: boolean
-  verbose: boolean
+  groupTools: boolean
+  showUsageBadge: boolean
 }
 
 interface TokenUsage {
@@ -142,43 +143,52 @@ const formatTokenCount = (count: number): string => {
   return String(count)
 }
 
-const formatUsageTitle = (usage: NormalizedTokenUsage) => {
+const formatUsageTitle = (usage: NormalizedTokenUsage, callCount?: number) => {
   const total = getUsageTotalTokens(usage)
-  return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}`
+  return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}${callCount ? ` • calls ${callCount}` : ''}`
 }
 
 const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'muted' | 'normal' | 'warning' }) => {
   const colorClass = tone === 'warning'
     ? 'text-orange-600 dark:text-orange-400'
     : tone === 'muted'
-      ? 'text-slate-300 dark:text-slate-600'
+      ? 'text-slate-400 dark:text-slate-500'
       : 'text-slate-500 dark:text-slate-400'
 
   return (
-    <span className={`flex items-baseline justify-between gap-1.5 ${colorClass}`}>
-      <span className="text-[8px] uppercase tracking-wide opacity-80">{label}</span>
+    <span className={`flex items-baseline justify-between gap-1 ${colorClass}`}>
+      <span className="text-[10px] uppercase tracking-wide opacity-80">{label}</span>
       <span className="text-[10px] font-semibold tabular-nums">{formatTokenCount(value)}</span>
     </span>
   )
 }
 
-const ModelUsageBadge = memo(function ModelUsageBadge({ usage }: { usage: NormalizedTokenUsage }) {
+const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount }: { usage: NormalizedTokenUsage; isMobile: boolean; callCount?: number }) {
   return (
     <span
-      className="inline-flex min-w-[4.75rem] flex-col gap-0.5 rounded-md border border-slate-200 bg-white/85 px-1.5 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85"
-      title={formatUsageTitle(usage)}
+      className={`${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center rounded-md border border-slate-200 bg-white/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85`}
+      title={formatUsageTitle(usage, callCount)}
     >
-      <ModelUsageRow label="cached" value={usage.cachedTokens} tone="muted" />
-      <ModelUsageRow label="input" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
-      <ModelUsageRow label="output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
+      {callCount ? <ModelUsageRow label="×" value={callCount} tone="normal" /> : null}
+      <ModelUsageRow label="C" value={usage.cachedTokens} tone="muted" />
+      <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
+      <ModelUsageRow label="O" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
     </span>
   )
 })
 
-const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile }: { usage: NormalizedTokenUsage; isMobile: boolean }) {
+const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callCount }: { usage: NormalizedTokenUsage; isMobile: boolean; callCount?: number }) {
+  if (isMobile) {
+    return (
+      <div className="pointer-events-none mb-2 mt-1 flex justify-end pr-1">
+        <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} />
+      </div>
+    )
+  }
+
   return (
-    <div className={`pointer-events-none absolute z-10 ${isMobile ? 'bottom-1 right-1' : 'bottom-0 right-0 translate-x-[calc(100%+0.5rem)]'}`}>
-      <ModelUsageBadge usage={usage} />
+    <div className="pointer-events-none absolute bottom-0 right-0 z-10 translate-x-[calc(100%+0.5rem)]">
+      <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} />
     </div>
   )
 })
@@ -1413,9 +1423,12 @@ interface MessageRowProps {
   prevMsg: Message | null
   nextMsg: Message | null
   isMobile: boolean
-  verbose: boolean
+  groupTools: boolean
+  showUsageBadge: boolean
   groupKey: string
   summaryTagItemsKey: string
+  groupUsage: NormalizedTokenUsage | null
+  groupUsageCallCount: number
   keepToolGroupExpanded: boolean
   showToolGroupSummary: boolean
   groupExpanded: boolean
@@ -1428,9 +1441,12 @@ const MessageRow = memo(function MessageRow({
   prevMsg,
   nextMsg,
   isMobile,
-  verbose,
+  groupTools,
+  showUsageBadge,
   groupKey,
   summaryTagItemsKey,
+  groupUsage,
+  groupUsageCallCount,
   keepToolGroupExpanded,
   showToolGroupSummary,
   groupExpanded,
@@ -1457,9 +1473,13 @@ const MessageRow = memo(function MessageRow({
     )
   }, [msg])
   const shouldSkipMargin = !systemLikeMessage && (msg.role === 'model' || msg.role === 'tool') && (prevMsg?.role === 'model' || prevMsg?.role === 'tool')
-  const isCollapsedToolGroup = !verbose && isInToolGroup && !groupExpanded && !keepToolGroupExpanded
+  const isCollapsedToolGroup = groupTools && isInToolGroup && !groupExpanded && !keepToolGroupExpanded
   const hasInterleavedToolGroup = !!(nextMsg && nextMsg.role === 'tool' && nextMsg.parts.some(p => p.functionResponse) && msg.parts.some(p => p.functionCall))
   const hasPrecedingCallMsg = !!(prevMsg?.role === 'model' && prevMsg.parts.some(p => p.functionCall))
+  const displayUsage = showUsageBadge
+    ? (isCollapsedToolGroup ? (showToolGroupSummary ? groupUsage : null) : usage)
+    : null
+  const displayUsageCallCount = isCollapsedToolGroup && showToolGroupSummary && groupUsageCallCount > 0 ? groupUsageCallCount : undefined
 
   return (
     <div className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${shouldSkipMargin ? '' : 'mt-4'}`}>
@@ -1476,7 +1496,7 @@ const MessageRow = memo(function MessageRow({
           !systemLikeMessage && msg.role === 'user'
             ? 'bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
             : ''
-        } ${usage ? 'overflow-visible' : 'overflow-x-hidden'}`}
+        } ${displayUsage && !isMobile ? 'overflow-visible' : 'overflow-x-hidden'}`}
       >
         {systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} />
@@ -1492,13 +1512,13 @@ const MessageRow = memo(function MessageRow({
             <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />
           </div>
         ) : (
-          <div className={`flex flex-col ${usage ? 'relative' : ''}`}>
+          <div className={`flex flex-col ${displayUsage && !isMobile ? 'relative' : ''}`}>
             {textLikeParts.map((part, partIdx) => {
               if (part.system) {
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }
               if (part.thinking) {
-                if (!verbose && !hasVisibleTextContent && isInToolGroup && !groupExpanded) {
+                if (groupTools && !hasVisibleTextContent && isInToolGroup && !groupExpanded) {
                   return null
                 }
                 return <ReasoningSummaryCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
@@ -1506,7 +1526,7 @@ const MessageRow = memo(function MessageRow({
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
-            {!verbose && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
+            {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
               <div
                 className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
                 onClick={() => onExpandGroup(groupKey)}
@@ -1518,7 +1538,7 @@ const MessageRow = memo(function MessageRow({
             )}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} /> : <ToolCallsBlock msg={msg} />)}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup ? null : <ToolResponsesBlock msg={msg} hasPrecedingCallMsg={hasPrecedingCallMsg} />)}
-            {usage && <ModelUsageAnchor usage={usage} isMobile={isMobile} />}
+            {displayUsage && <ModelUsageAnchor usage={displayUsage} isMobile={isMobile} callCount={displayUsageCallCount} />}
           </div>
         )}
       </div>
@@ -1530,15 +1550,18 @@ const MessageRow = memo(function MessageRow({
   prev.prevMsg === next.prevMsg &&
   prev.nextMsg === next.nextMsg &&
   prev.isMobile === next.isMobile &&
-  prev.verbose === next.verbose &&
+  prev.groupTools === next.groupTools &&
+  prev.showUsageBadge === next.showUsageBadge &&
   prev.groupKey === next.groupKey &&
   prev.summaryTagItemsKey === next.summaryTagItemsKey &&
+  prev.groupUsage === next.groupUsage &&
+  prev.groupUsageCallCount === next.groupUsageCallCount &&
   prev.keepToolGroupExpanded === next.keepToolGroupExpanded &&
   prev.showToolGroupSummary === next.showToolGroupSummary &&
   prev.groupExpanded === next.groupExpanded
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, groupTools, showUsageBadge }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
 
   const toolGroupMeta = useMemo(() => {
@@ -1642,15 +1665,44 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
       return items
     }
 
+    const getToolGroupUsage = (startIdx: number): { usage: NormalizedTokenUsage | null; callCount: number } => {
+      const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
+      let callCount = 0
+
+      for (let i = startIdx; i < messages.length; i++) {
+        if (shouldStopAtIdx(startIdx, i)) break
+        const m = messages[i]
+        if (m.role !== 'model' && m.role !== 'tool') break
+        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
+
+        if (m.role === 'model') {
+          const usage = getModelMessageUsage(m)
+          if (usage) {
+            total.cachedTokens += usage.cachedTokens
+            total.inputTokens += usage.inputTokens
+            total.outputTokens += usage.outputTokens
+            callCount++
+          }
+        }
+      }
+
+      return { usage: callCount > 0 ? total : null, callCount }
+    }
+
     const startIdxByIndex = messages.map((_, idx) => getToolGroupStartIdx(idx))
     const summaryTagItemsByStart = new Map<number, ToolTagItem[]>()
     const summaryTagItemsKeyByStart = new Map<number, string>()
+    const groupUsageByStart = new Map<number, NormalizedTokenUsage | null>()
+    const groupUsageCallCountByStart = new Map<number, number>()
     const keepExpandedByStart = new Map<number, boolean>()
     startIdxByIndex.forEach((startIdx) => {
       if (!summaryTagItemsKeyByStart.has(startIdx)) {
         const items = getToolGroupSummaryItems(startIdx)
+        const groupUsage = getToolGroupUsage(startIdx)
         summaryTagItemsByStart.set(startIdx, items)
         summaryTagItemsKeyByStart.set(startIdx, JSON.stringify(items))
+        groupUsageByStart.set(startIdx, groupUsage.usage)
+        groupUsageCallCountByStart.set(startIdx, groupUsage.callCount)
         keepExpandedByStart.set(startIdx, startIdx === finalStandaloneStartIdx)
       }
     })
@@ -1664,6 +1716,8 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
       messageKeyByIndex: messageKeys,
       groupKeyByIndex: startIdxByIndex.map((startIdx) => `${messageKeys[startIdx] || `idx-${startIdx}`}-toolgroup`),
       summaryTagItemsKeyByIndex: startIdxByIndex.map((startIdx) => summaryTagItemsKeyByStart.get(startIdx) || ''),
+      groupUsageByIndex: startIdxByIndex.map((startIdx) => groupUsageByStart.get(startIdx) || null),
+      groupUsageCallCountByIndex: startIdxByIndex.map((startIdx) => groupUsageCallCountByStart.get(startIdx) || 0),
       keepExpandedByIndex: startIdxByIndex.map((startIdx) => keepExpandedByStart.get(startIdx) || false),
       shouldRenderSummary: startIdxByIndex.map((startIdx, idx) => idx === startIdx && (summaryTagItemsByStart.get(startIdx)?.length || 0) > 0),
     }
@@ -1694,9 +1748,12 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
             prevMsg={idx > 0 ? messages[idx - 1] : null}
             nextMsg={idx < messages.length - 1 ? messages[idx + 1] : null}
             isMobile={isMobile}
-            verbose={verbose}
+            groupTools={groupTools}
+            showUsageBadge={showUsageBadge}
             groupKey={groupKey}
             summaryTagItemsKey={toolGroupMeta.summaryTagItemsKeyByIndex[idx]}
+            groupUsage={toolGroupMeta.groupUsageByIndex[idx]}
+            groupUsageCallCount={toolGroupMeta.groupUsageCallCountByIndex[idx]}
             keepToolGroupExpanded={toolGroupMeta.keepExpandedByIndex[idx]}
             showToolGroupSummary={toolGroupMeta.shouldRenderSummary[idx]}
             groupExpanded={expandedToolGroups.has(groupKey)}

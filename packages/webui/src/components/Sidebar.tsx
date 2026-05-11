@@ -13,6 +13,10 @@ interface SidebarProps {
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
   sendKeyMode: 'modEnter' | 'enter'
   onSendKeyModeChange: (mode: 'modEnter' | 'enter') => void
+  groupTools: boolean
+  onGroupToolsChange: (enabled: boolean) => void
+  showUsageBadge: boolean
+  onShowUsageBadgeChange: (enabled: boolean) => void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
@@ -33,6 +37,10 @@ export default function Sidebar({
   onThemeChange,
   sendKeyMode,
   onSendKeyModeChange,
+  groupTools,
+  onGroupToolsChange,
+  showUsageBadge,
+  onShowUsageBadgeChange,
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
@@ -69,6 +77,10 @@ export default function Sidebar({
               onThemeChange={onThemeChange}
               sendKeyMode={sendKeyMode}
               onSendKeyModeChange={onSendKeyModeChange}
+              groupTools={groupTools}
+              onGroupToolsChange={onGroupToolsChange}
+              showUsageBadge={showUsageBadge}
+              onShowUsageBadgeChange={onShowUsageBadgeChange}
               onOpenSetup={onSelectSetup}
               setupActive={currentView === 'setup'}
             />

@@ -10,11 +10,26 @@ interface GlobalUiSettingsMenuProps {
   onThemeChange: (mode: ThemeMode) => void
   sendKeyMode: SendKeyMode
   onSendKeyModeChange: (mode: SendKeyMode) => void
+  groupTools: boolean
+  onGroupToolsChange: (enabled: boolean) => void
+  showUsageBadge: boolean
+  onShowUsageBadgeChange: (enabled: boolean) => void
   onOpenSetup?: () => void
   setupActive?: boolean
 }
 
-export default function GlobalUiSettingsMenu({ themeMode, onThemeChange, sendKeyMode, onSendKeyModeChange, onOpenSetup, setupActive = false }: GlobalUiSettingsMenuProps) {
+export default function GlobalUiSettingsMenu({
+  themeMode,
+  onThemeChange,
+  sendKeyMode,
+  onSendKeyModeChange,
+  groupTools,
+  onGroupToolsChange,
+  showUsageBadge,
+  onShowUsageBadgeChange,
+  onOpenSetup,
+  setupActive = false,
+}: GlobalUiSettingsMenuProps) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
 
@@ -43,6 +58,7 @@ export default function GlobalUiSettingsMenu({ themeMode, onThemeChange, sendKey
 
   const menuButtonClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-wait disabled:opacity-70 dark:text-gray-300 dark:hover:bg-gray-700'
   const modifierLabel = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? 'Cmd' : 'Ctrl'
+  const toggleRowClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
 
   return (
     <div ref={rootRef} className="relative">
@@ -94,6 +110,32 @@ export default function GlobalUiSettingsMenu({ themeMode, onThemeChange, sendKey
                   {option.label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          <div className="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+            <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Chat</div>
+            <div className="space-y-1">
+              <button
+                type="button"
+                onClick={() => onGroupToolsChange(!groupTools)}
+                className={toggleRowClass}
+              >
+                <span>Group tools</span>
+                <span className={`ml-3 inline-flex h-4 w-7 items-center rounded-full transition ${groupTools ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
+                  <span className={`h-3 w-3 rounded-full bg-white transition ${groupTools ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onShowUsageBadgeChange(!showUsageBadge)}
+                className={toggleRowClass}
+              >
+                <span>Show usage badges</span>
+                <span className={`ml-3 inline-flex h-4 w-7 items-center rounded-full transition ${showUsageBadge ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
+                  <span className={`h-3 w-3 rounded-full bg-white transition ${showUsageBadge ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                </span>
+              </button>
             </div>
           </div>
 

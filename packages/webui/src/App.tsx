@@ -40,6 +40,8 @@ const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
 const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
+const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
+const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
 const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
@@ -235,6 +237,8 @@ function App() {
     const saved = localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY)
     return saved === 'enter' || saved === 'modEnter' ? saved : 'modEnter'
   })
+  const [groupTools, setGroupTools] = useState<boolean>(() => localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true')
+  const [showUsageBadge, setShowUsageBadge] = useState<boolean>(() => localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false')
   const [sidebarPeekVisible, setSidebarPeekVisible] = useState(false)
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
@@ -307,6 +311,14 @@ function App() {
   useEffect(() => {
     localStorage.setItem(SEND_KEY_MODE_STORAGE_KEY, sendKeyMode)
   }, [sendKeyMode])
+
+  useEffect(() => {
+    localStorage.setItem(GROUP_TOOLS_STORAGE_KEY, groupTools ? 'true' : 'false')
+  }, [groupTools])
+
+  useEffect(() => {
+    localStorage.setItem(SHOW_USAGE_BADGE_STORAGE_KEY, showUsageBadge ? 'true' : 'false')
+  }, [showUsageBadge])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
@@ -1012,6 +1024,8 @@ function App() {
           onOpenWorkspace={() => openWorkspaceTab(tab.sessionId)}
           onOpenTerminal={() => openTerminalTab(tab.sessionId, { sourcePaneId })}
           sendKeyMode={sendKeyMode}
+          groupTools={groupTools}
+          showUsageBadge={showUsageBadge}
           onDraftEdited={() => handleChatDraftEdited(tab.id)}
         />
       )
@@ -1329,6 +1343,10 @@ function App() {
           onThemeChange={setThemeMode}
           sendKeyMode={sendKeyMode}
           onSendKeyModeChange={setSendKeyMode}
+          groupTools={groupTools}
+          onGroupToolsChange={setGroupTools}
+          showUsageBadge={showUsageBadge}
+          onShowUsageBadgeChange={setShowUsageBadge}
           onSelectSession={openChatTab}
           onKeepSession={openKeptChatTab}
           onSelectArchitecture={() => {
@@ -1378,6 +1396,10 @@ function App() {
             onThemeChange={setThemeMode}
             sendKeyMode={sendKeyMode}
             onSendKeyModeChange={setSendKeyMode}
+            groupTools={groupTools}
+            onGroupToolsChange={setGroupTools}
+            showUsageBadge={showUsageBadge}
+            onShowUsageBadgeChange={setShowUsageBadge}
             onSelectSession={openChatTab}
             onKeepSession={openKeptChatTab}
             onSelectArchitecture={() => {
@@ -1417,6 +1439,10 @@ function App() {
                 onThemeChange={setThemeMode}
                 sendKeyMode={sendKeyMode}
                 onSendKeyModeChange={setSendKeyMode}
+                groupTools={groupTools}
+                onGroupToolsChange={setGroupTools}
+                showUsageBadge={showUsageBadge}
+                onShowUsageBadgeChange={setShowUsageBadge}
                 onSelectSession={openChatTab}
                 onKeepSession={openKeptChatTab}
                 onSelectArchitecture={() => {

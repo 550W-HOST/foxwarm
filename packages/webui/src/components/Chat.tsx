@@ -74,6 +74,8 @@ interface ChatProps {
   onOpenWorkspace?: () => void
   onOpenTerminal?: () => void
   sendKeyMode?: 'modEnter' | 'enter'
+  groupTools?: boolean
+  showUsageBadge?: boolean
   onDraftEdited?: (draftText: string) => void
 }
 
@@ -127,7 +129,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenWorkspace, onOpenTerminal, sendKeyMode = 'modEnter', onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenWorkspace, onOpenTerminal, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -138,10 +140,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [showScrollTopButton, setShowScrollTopButton] = useState(false)
-  const [verbose, setVerbose] = useState<boolean>(() => {
-    const saved = localStorage.getItem(`verbose_${sessionId}`)
-    return saved !== null ? saved === 'true' : true
-  })
   const [showMenu, setShowMenu] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
   const [debugInfoLoading, setDebugInfoLoading] = useState(false)
@@ -676,7 +674,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       sessionMissing,
       sessionBusy,
       sessionQueueLength,
-      verbose,
+      groupTools,
+      showUsageBadge,
       sendKeyBehavior: sendKeyMode === 'enter' ? 'Enter sends; Shift+Enter inserts a new line.' : 'Ctrl/Cmd+Enter sends; Enter inserts a new line.',
       loading,
       asrAvailable,
@@ -699,7 +698,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     sessionMissing,
     sessionQueueLength,
     sessionRecord,
-    verbose,
+    groupTools,
+    showUsageBadge,
   ])
 
   const debugInfoText = useMemo(() => JSON.stringify(debugInfoObject, null, 2), [debugInfoObject])
@@ -995,24 +995,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
               {showMenu && (
                 <div className="absolute right-0 mt-2 w-56 rounded-lg border border-gray-200 bg-white text-gray-900 shadow-lg z-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
                   <button
-                    onClick={() => {
-                      const newVerbose = !verbose
-                      setVerbose(newVerbose)
-                      localStorage.setItem(`verbose_${sessionId}`, String(newVerbose))
-                      setShowMenu(false)
-                    }}
-                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span>Verbose Mode</span>
-                      <span className="inline-flex min-w-4 items-center justify-center">
-                        {verbose ? <Check size={14} /> : null}
-                      </span>
-                    </div>
-                  </button>
-                  <button
                     onClick={handleOpenDebugInfo}
-                    className="w-full border-t border-gray-200 px-4 py-2 text-left text-sm hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-700"
+                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
                   >
                     debug info
                   </button>
@@ -1042,7 +1026,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
               Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
             </div>
           )}
-          <ChatTimeline messages={timelineMessages} isMobile={isMobile} verbose={verbose} />
+          <ChatTimeline messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} />
           <ProcessingStatus
             sessionBusy={sessionBusy}
             sessionQueueLength={sessionQueueLength}
