@@ -447,34 +447,6 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
   const blockMap = new Map(blockRecords.map(record => [record.id, record]));
 
   const entries: LayeredCompactCandidateEntry[] = [];
-  let previousCandidateEndFrontierIndex = -1;
-
-  const hasDisplayOnlyBarrierBefore = (frontierStartIndex: number): boolean => {
-    if (previousCandidateEndFrontierIndex < 0) {
-      return false;
-    }
-
-    for (let gapIndex = previousCandidateEndFrontierIndex + 1; gapIndex < frontierStartIndex; gapIndex += 1) {
-      const gapItem = olderFrontier[gapIndex];
-      if (gapItem?.kind !== 'message') {
-        continue;
-      }
-      const gapRecord = messageMap.get(gapItem.seq);
-      if (gapRecord && !isModelVisibleMessage(gapRecord.message)) {
-        return true;
-      }
-    }
-
-    return false;
-  };
-
-  const pushCandidateEntry = (entry: LayeredCompactCandidateEntry): void => {
-    if (hasDisplayOnlyBarrierBefore(entry.frontierStartIndex)) {
-      entry.item.barrierBefore = true;
-    }
-    entries.push(entry);
-    previousCandidateEndFrontierIndex = entry.frontierEndIndex;
-  };
 
   for (let frontierIndex = 0; frontierIndex < olderFrontier.length; frontierIndex += 1) {
     const item = olderFrontier[frontierIndex];
@@ -485,7 +457,7 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
         continue;
       }
 
-      pushCandidateEntry({
+      entries.push({
         item: buildBlockCandidateItem(
           record.id,
           record.level,
@@ -545,7 +517,7 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       }));
     }, 0);
 
-    pushCandidateEntry({
+    entries.push({
       item: buildMessageCandidateItem(item.seq, groupedRecords[groupedRecords.length - 1].seq, preview, estimatedTokens),
       frontierStartIndex: frontierIndex,
       frontierEndIndex: groupedEndFrontierIndex,
@@ -560,6 +532,31 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
 function filterLayeredCompactCandidateEntries(entries: LayeredCompactCandidateEntry[]): LayeredCompactCandidateEntry[] {
   const allowedLevels = selectCompactCandidateTargetLevels(entries.map(entry => entry.item));
   return entries.filter(entry => allowedLevels.has(getCandidateTargetLevel(entry.item)));
+}
+
+async function getDisplayOnlyMessageSeqsForFrontier(sessionId: string, frontier: ContextFrontierItem[]): Promise<Set<number>> {
+  const messageSeqs = frontier
+    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
+    .map(item => item.seq);
+
+  if (messageSeqs.length === 0) {
+    return new Set();
+  }
+
+  const records = await readArchiveMessagesBySeqRange(sessionId, Math.min(...messageSeqs), Math.max(...messageSeqs));
+  return new Set(records
+    .filter(record => !isModelVisibleMessage(record.message))
+    .map(record => record.seq));
+}
+
+async function filterDisplayOnlyMessageFrontierItems(sessionId: string, frontier: ContextFrontierItem[]): Promise<ContextFrontierItem[]> {
+  const displayOnlySeqs = await getDisplayOnlyMessageSeqsForFrontier(sessionId, frontier);
+
+  if (displayOnlySeqs.size === 0) {
+    return frontier;
+  }
+
+  return frontier.filter(item => item.kind !== 'message' || !displayOnlySeqs.has(item.seq));
 }
 
 function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> {
@@ -758,6 +755,21 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   if (candidateItems.length === 0) {
+    const droppedDisplayOnlyCount = (await getDisplayOnlyMessageSeqsForFrontier(sessionId, olderFrontier)).size;
+    if (droppedDisplayOnlyCount > 0) {
+      logger.info({ sessionId, splitIndex, droppedDisplayOnlyCount }, 'Compaction will drop display-only older messages without creating compact blocks');
+      return {
+        status: 'ready',
+        completionMarker,
+        completionBroadcastMessage,
+        snapshotFrontier: frontierSnapshot,
+        consumedFrontierCount: splitIndex,
+        operations: [],
+        createdBlocks: [],
+        replacedItemCount: droppedDisplayOnlyCount,
+      };
+    }
+
     logger.info({ sessionId, splitIndex }, 'Compaction skipped because no layered candidate items were produced');
     return {
       status: 'noop',
@@ -917,7 +929,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     const operation = result.operations[index];
     const createdRecord = createdRecords[index];
     if (cursor < operation.frontierStartIndex) {
-      rewrittenOlderFrontier.push(...olderFrontier.slice(cursor, operation.frontierStartIndex));
+      rewrittenOlderFrontier.push(...await filterDisplayOnlyMessageFrontierItems(sessionId, olderFrontier.slice(cursor, operation.frontierStartIndex)));
     }
     rewrittenOlderFrontier.push({
       kind: 'block',
@@ -929,7 +941,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     cursor = operation.frontierEndIndex + 1;
   }
   if (cursor < olderFrontier.length) {
-    rewrittenOlderFrontier.push(...olderFrontier.slice(cursor));
+    rewrittenOlderFrontier.push(...await filterDisplayOnlyMessageFrontierItems(sessionId, olderFrontier.slice(cursor)));
   }
 
   const newFrontier = [...rewrittenOlderFrontier, ...currentFrontier.slice(result.consumedFrontierCount)];

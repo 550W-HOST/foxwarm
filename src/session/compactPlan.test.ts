@@ -202,36 +202,26 @@ test('validateCompactPlanArgs accepts sparse raw seq ranges when ignored lifecyc
   assert.equal(plan.createBlocks[0].sourceEnd, 4);
 });
 
-test('validateCompactPlanArgs does not cross display-only barrier candidates', () => {
+test('validateCompactPlanArgs can span message candidates across a display-only gap', () => {
   const candidates = [
     buildMessageCandidateItem(1, 1, 'visible before display-only notice'),
-    { ...buildMessageCandidateItem(3, 3, 'visible after display-only notice'), barrierBefore: true },
+    buildMessageCandidateItem(3, 3, 'visible after display-only notice'),
     buildMessageCandidateItem(4, 4, 'another visible message after the notice'),
   ];
 
-  assert.throws(() => validateCompactPlanArgs({
+  const plan = validateCompactPlanArgs({
     createBlocksJson: JSON.stringify([{
       level: 1,
       sourceKind: 'message',
       sourceStart: 1,
       sourceEnd: 4,
-      summary: 'would incorrectly swallow display-only seq #2',
-    }]),
-  }, candidates), /does not match a continuous message range/i);
-
-  const afterBarrierPlan = validateCompactPlanArgs({
-    createBlocksJson: JSON.stringify([{
-      level: 1,
-      sourceKind: 'message',
-      sourceStart: 3,
-      sourceEnd: 4,
-      summary: 'safe summary after display-only seq #2',
+      summary: 'summary across model-visible messages while dropping display-only seq #2',
     }]),
   }, candidates);
 
-  assert.equal(afterBarrierPlan.createBlocks.length, 1);
-  assert.equal(afterBarrierPlan.createBlocks[0].sourceStart, 3);
-  assert.equal(afterBarrierPlan.createBlocks[0].sourceEnd, 4);
+  assert.equal(plan.createBlocks.length, 1);
+  assert.equal(plan.createBlocks[0].sourceStart, 1);
+  assert.equal(plan.createBlocks[0].sourceEnd, 4);
 });
 
 test('validateCompactPlanArgs treats grouped tool call/response candidates as atomic message ranges', () => {

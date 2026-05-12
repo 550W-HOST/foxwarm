@@ -291,3 +291,78 @@ test('display-only messages persist in history but are omitted from model-facing
     (axios as any).post = originalPost;
   }
 });
+
+test('manual compact drops display-only messages outside the force-kept range and can compact visible messages across them', async () => {
+  const originalChat = llm.chat;
+  const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
+  const sessionId = makeId('btw_compact_display_only');
+  let compactPrompt = '';
+
+  (vector as any).scheduleSessionArchiveIndex = async () => 0;
+
+  try {
+    await sessionManager.createSession(sessionId, {
+      id: sessionId,
+      agent: 'main',
+      history: [],
+      persistentMemorySnapshot: 'test system prompt',
+      stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+      busy: false,
+      queue: [],
+      meta: { lastMessageTime: Date.now() },
+      vectorIndexPosition: 0,
+      nextMessageSeq: 1,
+      currentNode: 'master',
+    });
+    const session = await sessionManager.getSession(sessionId);
+    await sessionManager.appendSessionMessage(session, createDisplayOnlyModelMessage('display only secret before compact range', { noticeType: 'test' }));
+    await sessionManager.appendSessionMessage(session, {
+      role: 'user',
+      parts: [{ text: `visible-before ${'alpha '.repeat(5000)}` }],
+    });
+    await sessionManager.appendSessionMessage(session, createDisplayOnlyModelMessage('display only secret inside compact range', { noticeType: 'test' }));
+    await sessionManager.appendSessionMessage(session, {
+      role: 'user',
+      parts: [{ text: `visible-after ${'omega '.repeat(5000)}` }],
+    });
+    await sessionManager.appendSessionMessage(session, createDisplayOnlyModelMessage('display only secret after compact range', { noticeType: 'test' }));
+
+    (llm as any).chat = async (parts: MessagePart[] | null) => {
+      compactPrompt = parts?.map(part => part.system || part.text || '').join('\n') || '';
+      const toolCall = {
+        id: 'compact_plan_1',
+        name: 'submit_compact_plan',
+        args: {
+          createBlocksJson: JSON.stringify([{
+            level: 1,
+            sourceKind: 'message',
+            sourceStart: 2,
+            sourceEnd: 4,
+            summary: 'summary of visible before and visible after; display-only notice omitted',
+          }]),
+        },
+      };
+      return { text: '', allParts: [{ functionCall: toolCall }], toolCalls: [toolCall] };
+    };
+
+    await sessionManager.processSessionCompactionRequest(sessionId, {
+      keepPercent: 0,
+      completionMarker: 'Compaction completed.',
+    }, 'await');
+
+    const compacted = await sessionManager.getSession(sessionId);
+    const rendered = JSON.stringify(compacted.history);
+    assert.doesNotMatch(compactPrompt, /display only secret before compact range/);
+    assert.doesNotMatch(compactPrompt, /display only secret inside compact range/);
+    assert.doesNotMatch(compactPrompt, /display only secret after compact range/);
+    assert.match(compactPrompt, /visible-before/);
+    assert.match(compactPrompt, /visible-after/);
+    assert.doesNotMatch(rendered, /display only secret/);
+    assert.match(rendered, /summary of visible before and visible after/);
+    assert.equal(compacted.history.some(message => message.modelVisible === false), false);
+  } finally {
+    (llm as any).chat = originalChat;
+    (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
