@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { useDraggable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
 import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2 } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
@@ -18,6 +19,11 @@ export interface Session {
   archived?: boolean
   currentNode?: string
   cwd?: string | null
+  model?: string | null
+  modelKey?: string
+  defaultModelKey?: string
+  childModelDefault?: string | null
+  effectiveChildModelKey?: string
   isolated?: boolean
   tokenUsage?: {
     cachedTokens: number
@@ -30,6 +36,7 @@ interface SessionListCoreProps {
   sessions: Session[]
   currentSession?: string  // Optional, for highlighting in sidebar
   onSelectSession: (sessionId: string) => void
+  onKeepSession?: (sessionId: string) => void
 }
 
 interface ContextMenuState {
@@ -90,7 +97,52 @@ const isFullyVisibleInContainer = (element: HTMLElement, container: HTMLElement)
   return elementRect.top >= containerRect.top && elementRect.bottom <= containerRect.bottom
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession }: SessionListCoreProps) {
+function DraggableSessionRow({
+  session,
+  children,
+  className,
+  onClick,
+  onDoubleClick,
+  onContextMenu,
+  setRowRef,
+}: {
+  session: Session
+  children: ReactNode
+  className: string
+  onClick: () => void
+  onDoubleClick: () => void
+  onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void
+  setRowRef: (node: HTMLDivElement | null) => void
+}) {
+  const title = session.displayName || session.id
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `session:${session.id}`,
+    data: {
+      type: 'session',
+      sessionId: session.id,
+      title,
+    },
+  })
+
+  return (
+    <div
+      ref={(node) => {
+        setNodeRef(node)
+        setRowRef(node)
+      }}
+      className={`${className} ${isDragging ? 'opacity-50' : ''}`}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
+      {...attributes}
+      {...listeners}
+    >
+      {children}
+    </div>
+  )
+}
+
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession }: SessionListCoreProps) {
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -163,6 +215,31 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
     return map
   }, [sessions, normalizedParentMap])
+
+  const descendantBusyCountMap = useMemo(() => {
+    const map = new Map<string, number>()
+
+    const countBusyDescendants = (sessionId: string): number => {
+      if (map.has(sessionId)) {
+        return map.get(sessionId) || 0
+      }
+
+      const children = childrenMap.get(sessionId) || []
+      const total = children.reduce((sum, child) => {
+        const childBusy = child.busy ? 1 : 0
+        return sum + childBusy + countBusyDescendants(child.id)
+      }, 0)
+
+      map.set(sessionId, total)
+      return total
+    }
+
+    for (const session of sessions) {
+      countBusyDescendants(session.id)
+    }
+
+    return map
+  }, [childrenMap, sessions])
 
   const rootSessions = useMemo(
     () => sessions.filter(session => !normalizedParentMap.get(session.id)).sort(sortSessions),
@@ -444,10 +521,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null) => {
     const children = childrenMap.get(session.id) || []
     const hasChildren = children.length > 0
+    const descendantBusyCount = descendantBusyCountMap.get(session.id) || 0
     const isExpanded = expandedSessions.has(session.id)
     const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
     const visibleChildren = children.slice(0, visibleCount)
     const hiddenCount = children.length - visibleChildren.length
+    const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
     const displayId = getDisplayId(session, parentSession)
@@ -458,37 +537,21 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       <div
         key={session.id}
       >
-        <div
-          ref={(node) => {
-            sessionRefs.current.set(session.id, node)
-          }}
+        <DraggableSessionRow
+          session={session}
           className={`flex items-center rounded cursor-pointer mt-1 ${
             isCurrentSession
               ? 'bg-blue-100 dark:bg-blue-900/30' 
               : 'hover:bg-gray-100 dark:hover:bg-gray-700'
           } ${session.archived ? 'opacity-70' : ''}`}
           onClick={() => onSelectSession(session.id)}
+          onDoubleClick={() => onKeepSession?.(session.id)}
           onContextMenu={(e) => handleContextMenu(e, session.id)}
+          setRowRef={(node) => {
+            sessionRefs.current.set(session.id, node)
+          }}
         >
-          {hasChildren && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                toggleExpand(session.id)
-              }}
-              className="self-stretch flex items-center px-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-              style={{ marginLeft: `${level * 16}px` }}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                {isExpanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </button>
-          )}
-          <div className="flex-1 min-w-0 py-3 pr-2" style={{ paddingLeft: hasChildren ? '0' : `${12 + level * 16}px` }}>
+          <div className="flex-1 min-w-0 py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
             <div className="font-medium truncate text-gray-900 dark:text-white text-sm">
               {session.displayName || displayId}
               {session.archived && (
@@ -521,16 +584,38 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 </>
               )}
               <span>{session.messageCount || 0} msgs</span>
-              {hasChildren && (
-                <>
-                  <span>•</span>
-                  <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
-                </>
-              )}
             </div>
             {session.cwd && (
               <div className="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500" title={session.cwd}>
                 cwd: {session.cwd}
+              </div>
+            )}
+            {hasChildren && (
+              <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    toggleExpand(session.id)
+                  }}
+                  className="inline-flex items-center rounded p-0.5 -ml-1 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  title={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+                  aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    {isExpanded ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    )}
+                  </svg>
+                </button>
+                <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
+                {descendantBusyCount > 0 && (
+                  <>
+                    <span>•</span>
+                    <span className="text-blue-600 dark:text-blue-300">{descendantBusyCount} busy</span>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -542,7 +627,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           >
             <MoreVertical className="w-4 h-4" />
           </button>
-        </div>
+        </DraggableSessionRow>
 
         {hasChildren && isExpanded && (
           <div>

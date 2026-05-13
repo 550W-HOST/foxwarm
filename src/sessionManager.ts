@@ -5,77 +5,127 @@
 
 import fs from 'fs-extra';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
+import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
 import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getSessionArchiveImagesDir, getSessionArchiveLogPath } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq } from './session/archive';
 import { appendMessagesToContextFrontier, copyLayeredContextFiles, ensureContextFrontier, loadSessionFrontier, moveLayeredContextFiles, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
-import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionsMetadataAtomically } from './session/metadataStore';
+import { ensureSessionBranch, renameSessionArchiveStore } from './session/archiveStore';
+import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
-import { maybeBuildTodoReminderMessage } from './session/todo';
+import { maybeBuildGoalReminderMessage } from './session/goal';
+import { buildSystemMessageParts } from './utils/systemMessageParts';
 
 function systemPart(system: string): MessagePart {
   return { system };
 }
 
-const SUBCONSCIOUS_SESSION_KIND = 'subconscious';
-const SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES = 4;
-const SUBCONSCIOUS_RECENT_WINDOW_MESSAGES = 12;
-const SUBCONSCIOUS_MIN_COMPACT_THRESHOLD_TOKENS = 4000;
-const SUBCONSCIOUS_COMPACT_THRESHOLD_FRACTION = 0.35;
+const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
 
-type SubconsciousPrimaryMeta = {
-  enabled?: boolean;
-  sideSessionId?: string;
-  pendingMessageCount?: number;
-  lastTriggeredAt?: number;
-  lastHintAt?: number;
-  triggerEveryMessages?: number;
-};
+export interface SessionWaitState {
+  id: string;
+  startedAt: number;
+  reason?: string;
+  timeoutSeconds?: number;
+}
 
-type SubconsciousSideMeta = {
-  kind: typeof SUBCONSCIOUS_SESSION_KIND;
-  primarySessionId: string;
-  recentWindowMessages?: number;
-};
-
-function getPrimarySubconsciousMeta(session?: Session): SubconsciousPrimaryMeta | undefined {
-  const meta = session?.meta?.subconscious;
-  if (!meta || typeof meta !== 'object' || meta.kind === SUBCONSCIOUS_SESSION_KIND) {
+function getSessionWaitState(session?: Session): SessionWaitState | undefined {
+  const wait = session?.meta?.wait;
+  if (!wait || typeof wait !== 'object' || typeof wait.id !== 'string') {
     return undefined;
   }
-  return meta as SubconsciousPrimaryMeta;
+
+  return wait as SessionWaitState;
 }
 
-function getOrCreatePrimarySubconsciousMeta(session: Session): SubconsciousPrimaryMeta {
-  const existing = getPrimarySubconsciousMeta(session);
-  if (existing) {
-    return existing;
+function clearSessionWaitState(session: Session): boolean {
+  if (!getSessionWaitState(session)) {
+    return false;
   }
 
-  const created: SubconsciousPrimaryMeta = {};
-  session.meta.subconscious = created;
-  return created;
+  delete session.meta.wait;
+  return true;
 }
 
-function getSideSubconsciousMeta(session?: Session): SubconsciousSideMeta | undefined {
-  const meta = session?.meta?.subconscious;
-  if (!meta || typeof meta !== 'object' || meta.kind !== SUBCONSCIOUS_SESSION_KIND) {
-    return undefined;
+function applyQueuedItemToWaitState(session: Session, item: QueueItem): boolean {
+  const wait = getSessionWaitState(session);
+  if (!wait) {
+    if (typeof item.waitTimeoutId === 'string') {
+      logger.info({ sessionId: session.id, waitId: item.waitTimeoutId }, 'Ignoring wait timeout event with no active wait state');
+      return false;
+    }
+
+    return true;
   }
-  return meta as SubconsciousSideMeta;
+
+  if (typeof item.waitTimeoutId === 'string') {
+    if (item.waitTimeoutId !== wait.id) {
+      logger.info({ sessionId: session.id, waitId: item.waitTimeoutId, activeWaitId: wait.id }, 'Ignoring stale wait timeout event');
+      return false;
+    }
+
+    clearSessionWaitState(session);
+    return true;
+  }
+
+  clearSessionWaitState(session);
+  logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type }, 'Cleared active wait state due to new session queue item');
+  return true;
 }
 
-function buildSubconsciousSessionId(primarySessionId: string): string {
-  return `${primarySessionId}__subconscious`;
+export function shouldProcessQueuedItemForWait(session: Session, item: QueueItem): boolean {
+  return applyQueuedItemToWaitState(session, item);
+}
+
+export function clearSessionWaitForDirectTurn(session: Session, wakeType: string = 'direct-turn'): boolean {
+  const wait = getSessionWaitState(session);
+  if (!wait) {
+    return false;
+  }
+
+  clearSessionWaitState(session);
+  logger.debug({ sessionId: session.id, waitId: wait.id, wakeType }, 'Cleared active wait state due to direct session turn');
+  return true;
+}
+
+export async function startSessionWait(sessionId: string, options: {
+  reason?: string;
+  timeoutSeconds?: number;
+} = {}): Promise<SessionWaitState> {
+  const session = await getSession(sessionId);
+  const state: SessionWaitState = {
+    id: randomUUID(),
+    startedAt: Date.now(),
+  };
+
+  if (typeof options.reason === 'string' && options.reason.trim()) {
+    state.reason = options.reason.trim();
+  }
+  if (typeof options.timeoutSeconds === 'number' && Number.isFinite(options.timeoutSeconds) && options.timeoutSeconds > 0) {
+    state.timeoutSeconds = options.timeoutSeconds;
+  }
+
+  session.meta.wait = state;
+  await saveSession(session.id);
+  return state;
+}
+
+export async function queueSessionWaitTimeoutEvent(sessionId: string, waitId: string, message: string): Promise<void> {
+  await enqueueSessionItem(sessionId, {
+    type: 'background',
+    parts: buildSystemMessageParts(message),
+    waitTimeoutId: waitId,
+  });
 }
 
 async function allocateForkSessionId(sourceSessionId: string, suffix?: string): Promise<string> {
@@ -190,7 +240,7 @@ export async function getExistingSession(sessionId: string): Promise<Session | n
 export type ChannelMode = sessionChannels.ChannelMode;
 
 // Callback to trigger agent turn
-let onSessionTriggered: ((sessionId: string) => void) | null = null;
+let onSessionTriggered: ((sessionId: string) => void | Promise<void>) | null = null;
 
 // Callback when history is updated (for SSE broadcasting)
 let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = null;
@@ -334,7 +384,10 @@ export async function getSession(sessionId: string): Promise<Session> {
     const historyFile = path.join(SESSIONS_DIR, `${realId}.json`);
     if (await fs.pathExists(historyFile)) {
       try {
-        const historyData = await fs.readJson(historyFile);
+        const historyData = await readSessionHistorySnapshot(realId);
+        if (!historyData) {
+          throw new Error('Session history file disappeared during read');
+        }
         session.history = historyData.history || [];
         if (historyData.persistentMemorySnapshot) {
           session.persistentMemorySnapshot = historyData.persistentMemorySnapshot;
@@ -363,7 +416,11 @@ export async function getSession(sessionId: string): Promise<Session> {
       session.agent = 'main';
     }
   }
-  if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent);
+  session.systemPromptFiles = llm.normalizeSystemPromptFiles(session.systemPromptFiles);
+  if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
+    agentName: session.agent,
+    systemPromptFiles: session.systemPromptFiles,
+  });
   if (!session.stats) session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
   if (session.stats.totalCachedTokens === null) session.stats.totalCachedTokens = 0;
   if (!session.queue) session.queue = [];
@@ -506,10 +563,6 @@ export async function setAgentMetadata(agentName: string, meta: sessionAgentMeta
   await sessionAgentMetadata.setAgentMetadata(agentName, meta);
 }
 
-export function getAgentSkills(agentName: string): string[] {
-  return sessionAgentMetadata.getAgentSkills(agentName);
-}
-
 export async function refreshSessionSnapshot(sessionId: string): Promise<{ sessionId: string; agentName: string }> {
   return sessionAgentMetadata.refreshSessionSnapshot(getAgentMetadataDeps(), sessionId);
 }
@@ -524,14 +577,6 @@ export async function setAgentInherit(agentName: string, inheritAgentName?: stri
 
 export async function setAgentIsolation(agentName: string, isolatedNode?: string): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
   return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, isolatedNode);
-}
-
-export async function attachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
-  return sessionAgentMetadata.attachAgentSkill(getAgentMetadataDeps(), agentName, skillName);
-}
-
-export async function detachAgentSkill(agentName: string, skillName: string): Promise<{ skills: string[]; affectedSessions: string[]; changed: boolean }> {
-  return sessionAgentMetadata.detachAgentSkill(getAgentMetadataDeps(), agentName, skillName);
 }
 
 export async function createAgentWithMainSession(options: {
@@ -559,9 +604,6 @@ export async function createAgentWithMainSession(options: {
   const normalizedIsolatedNode = isolatedNode && String(isolatedNode).trim() ? String(isolatedNode).trim() : undefined;
 
   if (normalizedInherit !== undefined) {
-    if (normalizedIsolatedNode) {
-      throw new Error('Isolated agent cannot also inherit shared memory.');
-    }
     validateAgentName(normalizedInherit);
     if (!await fs.pathExists(getAgentDir(normalizedInherit))) {
       throw new Error(`Inherited agent "${normalizedInherit}" does not exist.`);
@@ -585,6 +627,7 @@ export async function createSessionInAgent(options: {
   currentNode?: string;
   model?: string;
   parentSessionId?: string;
+  systemPromptFiles?: string[];
 }): Promise<{ sessionId: string }> {
   return sessionAgentOps.createSessionInAgent(options, getSessionAgentOpsDeps());
 }
@@ -613,12 +656,12 @@ export async function moveSessionToTarget(options: {
  * @param sessionId Optional session ID. If not provided, creates a new session
  * @returns The session ID
  */
-export function attachChannel(channelId: string, conversationId: string, sessionId?: string): string {
+export function attachChannel(channelId: string, conversationId: string, sessionId?: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): string {
   if (!sessionId) {
     sessionId = generateSessionId();
   }
 
-  return sessionChannels.attachChannel(channelId, conversationId, sessionId);
+  return sessionChannels.attachChannel(channelId, conversationId, sessionId, configUpdates);
 }
 
 export function getSessionByChannel(channelId: string, conversationId: string): string | undefined {
@@ -633,26 +676,43 @@ export function setChannelMode(channelId: string, conversationId: string, mode: 
   sessionChannels.setChannelMode(channelId, conversationId, mode);
 }
 
+export function getChannelDangerouslyAllowAllUsers(channelId: string, conversationId: string): boolean {
+  return sessionChannels.getChannelDangerouslyAllowAllUsers(channelId, conversationId);
+}
+
+export function setChannelDangerouslyAllowAllUsers(channelId: string, conversationId: string, value: boolean) {
+  sessionChannels.setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
+}
+
+// Legacy compatibility aliases
 export function getChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string): boolean {
-  return sessionChannels.getChannelDangerouslyAllowAllGroupMembers(channelId, conversationId);
+  return getChannelDangerouslyAllowAllUsers(channelId, conversationId);
 }
 
 export function setChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string, value: boolean) {
-  sessionChannels.setChannelDangerouslyAllowAllGroupMembers(channelId, conversationId, value);
+  setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
 }
 
 export function detachChannel(channelId: string, conversationId: string): void {
   sessionChannels.detachChannel(channelId, conversationId);
 }
 
+export async function sendToChannelTargetId(channelTargetId: string, message: string): Promise<void> {
+  await sessionChannels.sendToChannelTargetId(channelTargetId, message);
+}
+
 export async function sendToChannelById(channelId: string, message: string): Promise<void> {
-  await sessionChannels.sendToChannelById(channelId, message);
+  await sendToChannelTargetId(channelId, message);
 }
 
 export type FileDeliveryResult = sessionChannels.FileDeliveryResult;
 
+export async function sendFileToChannelTargetId(channelTargetId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+  await sessionChannels.sendFileToChannelTargetId(channelTargetId, file, options);
+}
+
 export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
-  await sessionChannels.sendFileToChannelById(channelId, file, options);
+  await sendFileToChannelTargetId(channelId, file, options);
 }
 
 export async function sendFileToSession(sessionId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<FileDeliveryResult> {
@@ -681,197 +741,6 @@ export function getChildSessionIds(parentSessionId: string): string[] {
   return sessionRelations.getChildSessionIds(sessions, parentSessionId);
 }
 
-export function isSubconsciousSession(session?: Session | null): boolean {
-  return !!getSideSubconsciousMeta(session || undefined);
-}
-
-export function getSubconsciousPrimarySessionId(session?: Session | null): string | undefined {
-  return getSideSubconsciousMeta(session || undefined)?.primarySessionId;
-}
-
-export function getSubconsciousStatus(session?: Session | null): {
-  enabled: boolean;
-  sideSessionId?: string;
-  pendingMessageCount: number;
-  lastTriggeredAt?: number;
-  lastHintAt?: number;
-  triggerEveryMessages: number;
-} {
-  const meta = getPrimarySubconsciousMeta(session || undefined);
-  return {
-    enabled: meta?.enabled === true,
-    sideSessionId: meta?.sideSessionId,
-    pendingMessageCount: meta?.pendingMessageCount || 0,
-    lastTriggeredAt: meta?.lastTriggeredAt,
-    lastHintAt: meta?.lastHintAt,
-    triggerEveryMessages: meta?.triggerEveryMessages || SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES,
-  };
-}
-
-export async function ensureSubconsciousSession(primarySessionId: string): Promise<{ sessionId: string; created: boolean; compactThresholdTokens: number; }> {
-  const primarySession = await getSession(primarySessionId);
-  if (isSubconsciousSession(primarySession)) {
-    throw new Error('Subconscious side sessions cannot create their own subconscious side session.');
-  }
-
-  const primaryMeta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  const requestedSessionId = primaryMeta.sideSessionId || buildSubconsciousSessionId(primarySessionId);
-  const existing = await getExistingSession(requestedSessionId);
-  const parentThreshold = getEffectiveCompactThresholdTokens(primarySession);
-  const compactThresholdTokens = Math.max(
-    SUBCONSCIOUS_MIN_COMPACT_THRESHOLD_TOKENS,
-    Math.floor(parentThreshold * SUBCONSCIOUS_COMPACT_THRESHOLD_FRACTION),
-  );
-
-  if (existing) {
-    existing.compactThresholdTokens = compactThresholdTokens;
-    existing.parentSessionId = primarySessionId;
-    existing.meta.subconscious = {
-      kind: SUBCONSCIOUS_SESSION_KIND,
-      primarySessionId,
-      recentWindowMessages: SUBCONSCIOUS_RECENT_WINDOW_MESSAGES,
-    };
-    primaryMeta.sideSessionId = existing.id;
-    await saveSession(existing.id);
-    await saveSession(primarySessionId);
-    return { sessionId: existing.id, created: false, compactThresholdTokens };
-  }
-
-  const agentName = primarySession.agent || 'main';
-  const snapshot = await llm.getPersistentMemory(agentName);
-  const sideSession: Session = {
-    id: requestedSessionId,
-    agent: agentName,
-    history: [],
-    persistentMemorySnapshot: snapshot,
-    stats: {
-      totalCachedTokens: 0,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      lastUsage: null,
-    },
-    busy: false,
-    queue: [],
-    parentSessionId: primarySessionId,
-    meta: {
-      lastMessageTime: Date.now(),
-      subconscious: {
-        kind: SUBCONSCIOUS_SESSION_KIND,
-        primarySessionId,
-        recentWindowMessages: SUBCONSCIOUS_RECENT_WINDOW_MESSAGES,
-      },
-    },
-    vectorIndexPosition: 0,
-    nextMessageSeq: 1,
-    currentNode: 'master',
-    model: primarySession.model,
-    compactThresholdTokens,
-  };
-
-  sessions.set(requestedSessionId, sideSession);
-  primaryMeta.sideSessionId = requestedSessionId;
-
-  await appendSessionMessages(sideSession, [
-    {
-      role: 'user',
-      parts: [systemPart(
-        `You are the subconscious side session for primary session \`${primarySessionId}\`. `
-        + 'You are a restricted reflective worker, not a normal assistant thread. '
-        + 'Your job is to notice high-value memory recalls, contradictions, or reminders that may help the primary session. '
-        + 'You may only use the limited history/search tools available to you, and you may only send a brief hint back to the primary session via send_to_session when it is genuinely useful. '
-        + 'If there is no high-value hint, end with `[NO_ACTION]`. '
-        + 'If you do send a hint, keep it short and prefix it with `[Subconscious]`.'
-      )],
-      __meta: { timestamp: Date.now() },
-    },
-    {
-      role: 'model',
-      parts: [{ text: 'Understood. I will stay quiet unless I find a high-value reminder, recall, or correction for the primary session. [NO_ACTION]' }],
-      __meta: { timestamp: Date.now() },
-    },
-  ]);
-
-  await saveSession(primarySessionId);
-  return { sessionId: requestedSessionId, created: true, compactThresholdTokens };
-}
-
-export async function setSubconsciousEnabled(primarySessionId: string, enabled: boolean): Promise<{ sideSessionId: string; created: boolean; enabled: boolean; compactThresholdTokens: number; }> {
-  const primarySession = await getSession(primarySessionId);
-  if (isSubconsciousSession(primarySession)) {
-    throw new Error('Subconscious side sessions cannot manage subconscious settings.');
-  }
-
-  const ensured = await ensureSubconsciousSession(primarySessionId);
-  const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  meta.enabled = enabled;
-  meta.triggerEveryMessages = meta.triggerEveryMessages || SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES;
-  if (!enabled) {
-    meta.pendingMessageCount = 0;
-  }
-  await saveSession(primarySessionId);
-  return {
-    sideSessionId: ensured.sessionId,
-    created: ensured.created,
-    enabled,
-    compactThresholdTokens: ensured.compactThresholdTokens,
-  };
-}
-
-export function shouldIgnoreSubconsciousTriggerText(text: string | undefined, sideSessionId: string): boolean {
-  if (!text) return false;
-  return text.includes(`source_session_id: \`${sideSessionId}\``) || text.includes('[Subconscious]');
-}
-
-export function getSubconsciousTriggerSettings(session: Session): { enabled: boolean; sideSessionId?: string; triggerEveryMessages: number; pendingMessageCount: number; lastTriggeredAt?: number; } {
-  const status = getSubconsciousStatus(session);
-  return {
-    enabled: status.enabled,
-    sideSessionId: status.sideSessionId,
-    triggerEveryMessages: status.triggerEveryMessages,
-    pendingMessageCount: status.pendingMessageCount,
-    lastTriggeredAt: status.lastTriggeredAt,
-  };
-}
-
-export async function markSubconsciousTriggered(primarySessionId: string): Promise<void> {
-  const primarySession = await getSession(primarySessionId);
-  const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  meta.pendingMessageCount = 0;
-  meta.lastTriggeredAt = Date.now();
-  await saveSession(primarySessionId);
-}
-
-export async function incrementSubconsciousPending(primarySessionId: string, amount: number = 1): Promise<{ pendingMessageCount: number; sideSessionId?: string; triggerEveryMessages: number; lastTriggeredAt?: number; enabled: boolean; }> {
-  const primarySession = await getSession(primarySessionId);
-  const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  meta.pendingMessageCount = Math.max(0, (meta.pendingMessageCount || 0) + amount);
-  meta.triggerEveryMessages = meta.triggerEveryMessages || SUBCONSCIOUS_TRIGGER_EVERY_MESSAGES;
-  await saveSession(primarySessionId);
-  return {
-    pendingMessageCount: meta.pendingMessageCount,
-    sideSessionId: meta.sideSessionId,
-    triggerEveryMessages: meta.triggerEveryMessages,
-    lastTriggeredAt: meta.lastTriggeredAt,
-    enabled: meta.enabled === true,
-  };
-}
-
-export async function noteSubconsciousHintDelivered(sideSessionId: string, primarySessionId: string): Promise<void> {
-  const sideSession = await getExistingSession(sideSessionId);
-  if (!isSubconsciousSession(sideSession) || getSubconsciousPrimarySessionId(sideSession) !== primarySessionId) {
-    return;
-  }
-
-  const primarySession = await getExistingSession(primarySessionId);
-  if (!primarySession) {
-    return;
-  }
-
-  const meta = getOrCreatePrimarySubconsciousMeta(primarySession);
-  meta.lastHintAt = Date.now();
-  await saveSession(primarySessionId);
-}
-
 export function getChannelBySession(sessionId: string): { channelId: string; conversationId: string } | undefined {
   return sessionChannels.getChannelBySession(sessionId, sessions.get(sessionId));
 }
@@ -883,13 +752,14 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
   const sourceSession = await getSession(sourceSessionId);
   const newSessionId = await allocateForkSessionId(sourceSessionId, suffix);
 
   const forkedSession: Session = {
     id: newSessionId,
     history: structuredClone(sourceSession.history),
+    systemPromptFiles: sourceSession.systemPromptFiles ? [...sourceSession.systemPromptFiles] : undefined,
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
     stats: {
       totalCachedTokens: 0,
@@ -908,7 +778,8 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
     verbose: sourceSession.verbose,
-    model: sourceSession.model
+    model: resolveSpawnedSessionModel(sourceSession, options?.model),
+    childModelDefault: sourceSession.childModelDefault,
   };
 
   const appendedForkMessages: Message[] = [];
@@ -932,7 +803,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 
       // Add tool responses for all tool calls
       appendedForkMessages.push({
-        role: 'user',
+        role: 'tool',
         parts: toolCalls.map((part, index) => ({
           functionResponse: {
             tool_use_id: part.functionCall!.id,
@@ -952,7 +823,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   // Add separator message
   appendedForkMessages.push({
     role: 'user',
-    parts: [systemPart('--- HISTORY ABOVE IS INHERITED FROM PARENT SESSION FOR REFERENCE ONLY --- FOLLOW THE INSTRUCTIONS BELOW')],
+    parts: [systemPart('**HISTORY ABOVE IS INHERITED FROM PARENT SESSION FOR REFERENCE ONLY. FOLLOW THE INSTRUCTIONS BELOW**')],
     __meta: { timestamp: Date.now() }
   });
 
@@ -977,22 +848,11 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 
   sessions.set(newSessionId, forkedSession);
 
-  const sourceArchiveLog = getSessionArchiveLogPath(sourceSessionId);
-  const targetArchiveLog = getSessionArchiveLogPath(newSessionId);
-  if (await fs.pathExists(sourceArchiveLog)) {
-    await fs.ensureDir(path.dirname(targetArchiveLog));
-    await fs.copy(sourceArchiveLog, targetArchiveLog, { overwrite: true });
-  }
-
-  const sourceArchiveImagesDir = getSessionArchiveImagesDir(sourceSessionId);
-  const targetArchiveImagesDir = getSessionArchiveImagesDir(newSessionId);
-  if (await fs.pathExists(sourceArchiveImagesDir)) {
-    await fs.ensureDir(path.dirname(targetArchiveImagesDir));
-    await fs.copy(sourceArchiveImagesDir, targetArchiveImagesDir, { overwrite: true });
-  }
-
-  await copyLayeredContextFiles(sourceSessionId, newSessionId);
-  await vector.copySessionArchiveIndexCheckpoint(sourceSessionId, newSessionId);
+  await ensureSessionBranch(newSessionId, {
+    parentSessionId: sourceSessionId,
+    forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
+    forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
+  });
   await appendSessionMessages(forkedSession, appendedForkMessages);
 
   logger.info({ sourceSessionId, newSessionId, isChildSession }, 'Session forked');
@@ -1007,7 +867,30 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
  * @param fork Whether to fork (inherit context) or create new
  * @returns New child session ID
  */
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = true, options?: { node?: string }): Promise<string> {
+export function resolveSpawnedSessionModel(
+  session?: Pick<Session, 'model' | 'childModelDefault'>,
+  explicitModel?: string,
+): string | undefined {
+  const normalizedExplicit = typeof explicitModel === 'string' && explicitModel.trim()
+    ? explicitModel.trim()
+    : undefined;
+  if (normalizedExplicit !== undefined) {
+    return normalizedExplicit;
+  }
+
+  const childDefault = typeof session?.childModelDefault === 'string' && session.childModelDefault.trim()
+    ? session.childModelDefault.trim()
+    : undefined;
+  if (childDefault !== undefined) {
+    return childDefault;
+  }
+
+  return typeof session?.model === 'string' && session.model.trim()
+    ? session.model.trim()
+    : undefined;
+}
+
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
   if (fork) {
     // Fork from parent (inherit context)
     return await forkSession(parentSessionId, suffix, true, options);
@@ -1017,11 +900,15 @@ export async function createChildSession(parentSessionId: string, suffix: string
     const childSessionId = `${parentSessionId}_${suffix}`;
 
     const agentName = parentSession.agent || 'main';
-    const snapshot = await llm.getPersistentMemory(agentName);
+    const snapshot = await llm.buildSessionSystemPromptSnapshot({
+      agentName,
+      systemPromptFiles: parentSession.systemPromptFiles,
+    });
     const newSession: Session = {
       id: childSessionId,
       agent: agentName,
       history: [],
+      systemPromptFiles: parentSession.systemPromptFiles ? [...parentSession.systemPromptFiles] : undefined,
       persistentMemorySnapshot: snapshot,
       stats: {
         totalCachedTokens: 0,
@@ -1036,7 +923,8 @@ export async function createChildSession(parentSessionId: string, suffix: string
       nextMessageSeq: 1,
       parentSessionId: parentSessionId,
       currentNode: options?.node || parentSession.currentNode || 'master',
-      model: parentSession.model
+      model: resolveSpawnedSessionModel(parentSession, options?.model),
+      childModelDefault: parentSession.childModelDefault,
     };
 
     const initialMessage: Message = {
@@ -1109,7 +997,7 @@ export async function saveSession(sessionId: string): Promise<void> {
     // Save history, persistentMemorySnapshot, parentSessionId, indexingState, historyVersion, displayName, currentNode, agent to separate file
     const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
     await fs.ensureDir(path.dirname(historyFile));
-    await fs.writeJson(historyFile, serializeSessionHistoryPayload(session), { spaces: 2 });
+    await writeSessionHistoryAtomically(sessionId, serializeSessionHistoryPayload(session));
     await saveSessionFrontier(session);
     
     // Save metadata (lightweight operation)
@@ -1117,12 +1005,13 @@ export async function saveSession(sessionId: string): Promise<void> {
 
     // Schedule archive-based vector indexing (non-blocking)
     const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
+    const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
     const lastMessage = session.history[session.history.length - 1];
     const latestMessageTokenEstimate = lastMessage?.__meta?.seq === latestSeqHint
       ? vector.estimateArchiveMessageTokenCount(lastMessage)
       : undefined;
 
-    vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate)
+    vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
       .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
     
     // Notify session list update
@@ -1191,6 +1080,7 @@ export async function loadSessions(): Promise<void> {
         busy: false,
         meta: { lastMessageTime: Date.now() },
         ...metadata,
+        systemPromptFiles: llm.normalizeSystemPromptFiles((metadata as any).systemPromptFiles),
         history: [], // Empty, will be loaded when getSession is called
         queue: metadata.queue || [],
       };
@@ -1254,18 +1144,158 @@ export function getAllAttachments(): Map<string, sessionChannels.ChannelConfig> 
 /**
  * Set callback to be called when a session event is queued to an idle session
  */
-export function setSessionTriggerCallback(onTrigger: (sessionId: string) => void): void {
+export function setSessionTriggerCallback(onTrigger: (sessionId: string) => void | Promise<void>): void {
   onSessionTriggered = onTrigger;
+}
+
+export async function triggerSessionProcessing(sessionId: string): Promise<void> {
+  await Promise.resolve(onSessionTriggered?.(sessionId));
+}
+
+function isQueuedSystemEventItem(
+  item: QueueItem | undefined,
+  message: string,
+  type: 'background' | 'trigger' | 'onboot',
+): boolean {
+  if (!item || item.type !== type || item.source || item.message || !item.parts || item.parts.length !== 1) {
+    return false;
+  }
+
+  const [part] = item.parts;
+  return typeof part?.system === 'string' && part.system === message;
+}
+
+export function hasTrailingQueuedSystemEvent(
+  queue: QueueItem[] | undefined,
+  message: string,
+  type: 'background' | 'trigger' | 'onboot',
+): boolean {
+  if (!queue?.length) {
+    return false;
+  }
+
+  return isQueuedSystemEventItem(queue[queue.length - 1], message, type);
+}
+
+function buildManagedInboxWakeupMessage(managedSessionId: string, pendingCount: number): string {
+  return `Managed session \`${managedSessionId}\` has ${pendingCount} pending inbox item(s). Use session_step(...) to process them or release_managed_session(...) to hand control back.`;
+}
+
+async function reclaimManagedSessionIfStale(session: Session): Promise<boolean> {
+  const managed = getManagedSessionState(session);
+  if (!managed) {
+    return false;
+  }
+
+  const ownerSession = await getExistingSession(managed.ownerSessionId);
+  const ownerMissing = !ownerSession;
+  const expired = isManagedSessionLeaseExpired(managed);
+
+  if ((!ownerMissing && !expired) || session.busy) {
+    return false;
+  }
+
+  const restoredPending = managed.pendingInbox.map(cloneQueueItem);
+  setManagedSessionState(session, null);
+  session.queue = [...restoredPending, ...(session.queue || [])];
+  await saveSession(session.id);
+  return true;
+}
+
+async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSessionState): Promise<void> {
+  if (!managed.pendingInbox.length) {
+    return;
+  }
+
+  const ownerSession = await getExistingSession(managed.ownerSessionId);
+  if (!ownerSession) {
+    return;
+  }
+
+  const now = Date.now();
+  if (managed.lastOwnerWakeupAt && now - managed.lastOwnerWakeupAt < MANAGED_OWNER_WAKEUP_COOLDOWN_MS) {
+    return;
+  }
+
+  const wakeupMessage = buildManagedInboxWakeupMessage(session.id, managed.pendingInbox.length);
+  if (hasTrailingQueuedSystemEvent(ownerSession.queue, wakeupMessage, 'background')) {
+    managed.lastOwnerWakeupAt = now;
+    managed.leaseTouchedAt = now;
+    setManagedSessionState(session, managed);
+    await saveSession(session.id);
+    return;
+  }
+
+  managed.lastOwnerWakeupAt = now;
+  managed.leaseTouchedAt = now;
+  setManagedSessionState(session, managed);
+  await saveSession(session.id);
+  await queueSessionSystemEvent(managed.ownerSessionId, wakeupMessage, 'background');
+}
+
+async function maybeResumeManagedSessionControllerRun(session: Session, managed: ManagedSessionState): Promise<boolean> {
+  if (!managed.controllerRunId || !managed.pendingInbox.length) {
+    return false;
+  }
+  try {
+    const toolscript = require('./toolscript') as {
+      resumeBackgroundToolScriptRunForManagedSession?: (args: {
+        runId: string;
+        sessionId: string;
+        leaseId?: string;
+        revision?: number;
+        pendingInboxCount?: number;
+        wakeReason?: string;
+      }) => Promise<any>;
+    };
+    const resumed = await toolscript.resumeBackgroundToolScriptRunForManagedSession?.({
+      runId: managed.controllerRunId,
+      sessionId: session.id,
+      leaseId: managed.leaseId,
+      revision: managed.revision,
+      pendingInboxCount: managed.pendingInbox.length,
+      wakeReason: 'managed-inbox',
+    });
+    return !!resumed;
+  } catch (error: any) {
+    logger.warn({ err: error, sessionId: session.id, controllerRunId: managed.controllerRunId }, 'Failed to resume managed-session ToolScript controller run');
+    return false;
+  }
 }
 
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
   const session = await getSession(sessionId);
+  await reclaimManagedSessionIfStale(session);
+  const managedBeforeEnqueue = !!getManagedSessionState(session);
+
+  if (!applyQueuedItemToWaitState(session, item)) {
+    return;
+  }
+
+  if (shouldRouteQueueItemToManagedInbox(session, item)) {
+    const managed = getManagedSessionState(session);
+    if (!managed) {
+      throw new Error(`Managed session metadata missing for session \`${sessionId}\`.`);
+    }
+
+    managed.pendingInbox.push(cloneQueueItem(item));
+    managed.lastInboxAt = Date.now();
+    managed.leaseTouchedAt = managed.lastInboxAt;
+    managed.revision += 1;
+    setManagedSessionState(session, managed);
+    await saveSession(sessionId);
+    const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
+    if (!resumedControllerRun) {
+      await maybeWakeManagedSessionOwner(session, managed);
+    }
+    return;
+  }
 
   session.queue.push(item);
   await saveSession(sessionId);
 
-  if (!session.busy) {
-    onSessionTriggered?.(sessionId);
+  if (!managedBeforeEnqueue && !session.busy) {
+    void onSessionTriggered?.(sessionId);
   }
 }
 
@@ -1289,7 +1319,7 @@ export async function requestSessionCompaction(
     };
   }
 
-  const startedImmediately = !session.busy && session.queue.length === 0;
+  const startedImmediately = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
   await enqueueSessionItem(sessionId, {
     type: 'compact',
     keepPercent: options.keepPercent,
@@ -1338,8 +1368,15 @@ export async function queueSessionStructuredEvent(sessionId: string, parts: Mess
   });
 }
 
+export async function queueSessionMessageEvent(sessionId: string, message: Message, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+  await enqueueSessionItem(sessionId, {
+    type,
+    message: structuredClone(message),
+  });
+}
+
 export async function queueSessionSystemEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
-  await queueSessionStructuredEvent(sessionId, [{ system: message }], type);
+  await queueSessionStructuredEvent(sessionId, buildSystemMessageParts(message), type);
 }
 
 /**
@@ -1373,19 +1410,17 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
   }
   appendMessagesToContextFrontier(session, messages);
 
-  const todoReminderMessage = maybeBuildTodoReminderMessage(session);
   const messagesToNotify = [...messages];
-  if (todoReminderMessage) {
-    await appendMessagesToArchive(session, [todoReminderMessage]);
-    session.history.push(todoReminderMessage);
-    appendMessagesToContextFrontier(session, [todoReminderMessage]);
-    messagesToNotify.push(todoReminderMessage);
-  }
+  const goalReminderMessage = maybeBuildGoalReminderMessage(session);
 
   await saveSession(session.id);
 
   for (const message of messagesToNotify) {
     notifyHistoryUpdate(session.id, message);
+  }
+
+  if (goalReminderMessage) {
+    await queueSessionMessageEvent(session.id, goalReminderMessage, 'background');
   }
 }
 
@@ -1494,6 +1529,37 @@ export function getDefaultCompactThresholdTokens(session: Pick<Session, 'model'>
 
 export function getEffectiveCompactThresholdTokens(session: Pick<Session, 'model' | 'compactThresholdTokens'>): number {
   return sessionHistory.getEffectiveCompactThresholdTokens(session);
+}
+
+export async function setSessionChildModelDefault(sessionId: string, childModelDefault?: string): Promise<{
+  sessionId: string;
+  childModelDefault?: string;
+  inherited: boolean;
+  effectiveModel?: string;
+}> {
+  const session = await getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
+
+  const normalized = typeof childModelDefault === 'string' && childModelDefault.trim()
+    ? childModelDefault.trim()
+    : undefined;
+
+  if (normalized !== undefined) {
+    session.childModelDefault = normalized;
+  } else {
+    delete session.childModelDefault;
+  }
+
+  await saveSession(session.id);
+
+  return {
+    sessionId: session.id,
+    childModelDefault: session.childModelDefault,
+    inherited: typeof session.childModelDefault !== 'string',
+    effectiveModel: resolveSpawnedSessionModel(session),
+  };
 }
 
 export async function setSessionCompactThreshold(sessionId: string, thresholdTokens?: number): Promise<{
@@ -1607,6 +1673,7 @@ export async function retrySession(sessionId: string): Promise<void> {
 export async function resumeBusySessions(): Promise<void> {
   const busySessionIds: string[] = [];
   const queuedSessionIds: string[] = [];
+  const managedPendingSessionIds: string[] = [];
 
   // Check metadata for busy or queued sessions (no need to load history files)
   for (const [sessionId, session] of sessions.entries()) {
@@ -1618,14 +1685,19 @@ export async function resumeBusySessions(): Promise<void> {
     if ((session.queue?.length || 0) > 0) {
       queuedSessionIds.push(sessionId);
     }
+
+    const managed = getManagedSessionState(session as Session);
+    if (managed?.pendingInbox?.length) {
+      managedPendingSessionIds.push(sessionId);
+    }
   }
 
-  if (busySessionIds.length === 0 && queuedSessionIds.length === 0) {
-    logger.info({ busyCount: 0, queuedCount: 0, busySessions: busySessionIds, queuedSessions: queuedSessionIds }, 'Resuming sessions after restart');
+  if (busySessionIds.length === 0 && queuedSessionIds.length === 0 && managedPendingSessionIds.length === 0) {
+    logger.info({ busyCount: 0, queuedCount: 0, managedPendingCount: 0, busySessions: busySessionIds, queuedSessions: queuedSessionIds, managedPendingSessions: managedPendingSessionIds }, 'Resuming sessions after restart');
     return;
   }
 
-  logger.info({ busyCount: busySessionIds.length, queuedCount: queuedSessionIds.length, busySessions: busySessionIds, queuedSessions: queuedSessionIds }, 'Resuming sessions after restart');
+  logger.info({ busyCount: busySessionIds.length, queuedCount: queuedSessionIds.length, managedPendingCount: managedPendingSessionIds.length, busySessions: busySessionIds, queuedSessions: queuedSessionIds, managedPendingSessions: managedPendingSessionIds }, 'Resuming sessions after restart');
 
   for (const sessionId of busySessionIds) {
     try {
@@ -1634,8 +1706,14 @@ export async function resumeBusySessions(): Promise<void> {
       // Reset busy flag and trigger
       session.busy = false;
       session.busyStartedAt = undefined;
-      // Will save session inside, no need to call saveSession() here.
-      await queueSessionSystemEvent(sessionId, 'session resumed after process restart');
+      const resumeMessage = 'session resumed after process restart';
+      if (hasTrailingQueuedSystemEvent(session.queue, resumeMessage, 'background')) {
+        await saveSession(sessionId);
+        onSessionTriggered?.(sessionId);
+      } else {
+        // Will save session inside, no need to call saveSession() here.
+        await queueSessionSystemEvent(sessionId, resumeMessage, 'background');
+      }
       logger.info({ sessionId }, 'Busy session resumed');
     } catch (e) {
       logger.error({ err: e, sessionId }, 'Failed to resume busy session');
@@ -1648,6 +1726,29 @@ export async function resumeBusySessions(): Promise<void> {
       logger.info({ sessionId }, 'Queued session resumed');
     } catch (e) {
       logger.error({ err: e, sessionId }, 'Failed to resume queued session');
+    }
+  }
+
+  for (const sessionId of managedPendingSessionIds) {
+    try {
+      const session = await getSession(sessionId);
+      if (await reclaimManagedSessionIfStale(session)) {
+        if (!session.busy && session.queue.length > 0) {
+          onSessionTriggered?.(sessionId);
+        }
+        continue;
+      }
+
+      const managed = getManagedSessionState(session);
+      if (managed) {
+        const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
+        if (!resumedControllerRun) {
+          await maybeWakeManagedSessionOwner(session, managed);
+        }
+      }
+      logger.info({ sessionId }, 'Managed session inbox wakeup processed after restart');
+    } catch (e) {
+      logger.error({ err: e, sessionId }, 'Failed to process managed session inbox after restart');
     }
   }
 }

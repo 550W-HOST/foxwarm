@@ -1,7 +1,6 @@
 import fs from 'fs-extra'
-import path from 'path'
-import crypto from 'crypto'
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from './channel'
+import { logger } from './common'
 import { inspectChannelAuthorizationFromContext, formatAuthorizationInspection } from './channelAuth'
 import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses, restartManagedChannel, startManagedChannel, stopManagedChannel } from './channelRuntime'
 import { nodesManager } from './nodes/manager'
@@ -10,12 +9,14 @@ import { Session } from './types'
 import * as sessionManager from './sessionManager'
 import * as skills from './skills'
 import * as tools from './tools'
-import { estimateSessionTokens } from './tokenCount'
-import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, getDefaultChannelIdByType, HTTP_PORT, NODE_TOKEN_FILE, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
+import { estimateSessionSummary } from './tokenCount'
+import { AGENTS_DIR, APP_CONFIG_PATH, CONTEXT_LIMIT, COMPACT_PERCENT, getAgentDir, getDefaultChannelIdByType, HTTP_PORT, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config'
 import { formatSessionMessagesPreview } from './utils/messagePreview'
 import * as timers from './timers'
+import { BTW_USAGE, runBtwRequest } from './btw'
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api'
 import { checkTimerPermission } from './isolatedCheck'
+import { ensureNodePairingToken } from './nodes/bootstrapInfo'
 
 export type CommandDef = {
   description: string
@@ -77,6 +78,10 @@ const TIMER_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   }),
 ]
 
+const BTW_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  placeholderNode('<message>', 'Side/background question to answer without executing tools'),
+]
+
 const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('list', 'List all sessions', {
     usage: '/session list [page]',
@@ -84,11 +89,29 @@ const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   }),
   literalNode('new', 'Create a new ad-hoc session'),
   literalNode('create', 'Create a session under an existing agent', {
-    usage: '/session create <agent> <session>',
+    usage: '/session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...',
     children: [
       placeholderNode('<agent>', 'Existing agent name', {
-        children: [placeholderNode('<session>', 'New session name')],
+        children: [placeholderNode('<session>', 'New session name', {
+          children: [
+            literalNode('--model', 'Explicit model for the new session', {
+              children: [placeholderNode('<model>', 'Model key or partial model name')],
+            }),
+            literalNode('--system-prompt-file', 'Add one file to the new session memory-source list', {
+              children: [placeholderNode('<path>', 'Agent-relative, absolute, or ~/ file path')],
+            }),
+          ],
+        })],
       }),
+    ],
+  }),
+  literalNode('child-model', 'Get/set the current session child default model', {
+    usage: '/session child-model [model|default|clear|unset]',
+    children: [
+      literalNode('default', 'Follow the current session model again'),
+      literalNode('clear', 'Alias of default'),
+      literalNode('unset', 'Alias of default'),
+      placeholderNode('[model]', 'Model key or partial model name'),
     ],
   }),
   literalNode('fork', 'Fork the current session'),
@@ -183,22 +206,6 @@ const AGENT_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 
 const SKILL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('list', 'List available skills'),
-  literalNode('attach', 'Attach a skill to an agent', {
-    usage: '/skill attach <agent> <skill>',
-    children: [
-      placeholderNode('<agent>', 'Target agent', {
-        children: [placeholderNode('<skill>', 'Skill name')],
-      }),
-    ],
-  }),
-  literalNode('detach', 'Detach a skill from an agent', {
-    usage: '/skill detach <agent> <skill>',
-    children: [
-      placeholderNode('<agent>', 'Target agent', {
-        children: [placeholderNode('<skill>', 'Skill name')],
-      }),
-    ],
-  }),
   literalNode('show', 'Show skill documents', {
     usage: '/skill show <skill>',
     children: [placeholderNode('<skill>', 'Skill name')],
@@ -206,72 +213,70 @@ const SKILL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 ]
 
 const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
-  literalNode('pair', 'Node pairing token, help, and pending requests', {
+  literalNode('list', 'List approved nodes, pending approvals, and current node status'),
+  literalNode('approve', 'Approve a pending node pairing request', {
+    usage: '/node approve <pending-id> [node-id]',
     children: [
-      literalNode('help', 'Show node pairing/bootstrap help'),
-      literalNode('list', 'List pending node pairing requests'),
-      literalNode('token', 'Show the current node pairing token'),
-      literalNode('approve', 'Approve a pending node pairing request', {
-        usage: '/node pair approve <pending-id> [node-id]',
-        children: [
-          placeholderNode('<pending-id>', 'Pending pairing id', {
-            children: [placeholderNode('[node-id]', 'Optional final node id')],
-          }),
-        ],
-      }),
-      literalNode('reject', 'Reject a pending node pairing request', {
-        usage: '/node pair reject <pending-id>',
-        children: [placeholderNode('<pending-id>', 'Pending pairing id')],
+      placeholderNode('<pending-id>', 'Pending pairing id', {
+        children: [placeholderNode('[node-id]', 'Optional final node id')],
       }),
     ],
   }),
-  literalNode('known', 'List approved nodes, including offline ones'),
+  literalNode('reject', 'Reject a pending node pairing request', {
+    usage: '/node reject <pending-id>',
+    children: [placeholderNode('<pending-id>', 'Pending pairing id')],
+  }),
+  literalNode('pair-help', 'Show node pairing/bootstrap help'),
   placeholderNode('<node-id>', 'Existing node id; omit it to list nodes'),
 ]
 
-async function ensureNodePairingToken(): Promise<string> {
-  try {
-    const token = await fs.readFile(NODE_TOKEN_FILE, 'utf8')
-    return token.trim()
-  } catch (err: any) {
-    if (err?.code === 'ENOENT') {
-      const token = crypto.randomBytes(32).toString('hex')
-      await fs.ensureDir(path.dirname(NODE_TOKEN_FILE))
-      await fs.writeFile(NODE_TOKEN_FILE, token)
-      return token
-    }
-    throw err
-  }
-}
-
 function buildNodePairHelp(token: string): string {
-  const baseUrl = `http://localhost:${HTTP_PORT}`
-
   return [
     '🧩 **Node Pairing / Bootstrap Help**',
     '',
     `Current pairing token: \`${token}\``,
     '',
-    'Use `/node pair token` if you only want the raw token for copying.',
+    'Use the pairing token below directly as `--pairing=...` when bootstrapping a node.',
     '',
-    `Default examples below use \`${baseUrl}\`. If the node runs on another machine or phone, replace \`localhost\` with a reachable host/IP/domain for this Foxwarm master.`,
+    'First choose a **reachable base URL** for this Foxwarm master from the node\'s point of view.',
+    'There is no single globally correct external URL that Foxwarm can always know in advance — it might be localhost, a LAN IP, a Docker host IP, or a reverse-proxy domain depending on where the node runs.',
+    '',
+    'If you fetch `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1` from that reachable URL, the downloaded script uses that same request URL as its default `--host`/`HostUrl` value.',
+    'Override `--host=...` only when the script was fetched through one address but the node should connect to another reachable address.',
+    '',
+    '**Pick a reachable URL first**',
+    '```bash',
+    'BASE_URL=http://YOUR_MASTER:3001',
+    '```',
     '',
     '**Bare metal (recommended Linux host bootstrap)**',
     '```bash',
-    `curl -fsSL ${baseUrl}/node/run.sh | bash -s -- \\\n  --host=${baseUrl} \\\n  --pairing=${token} \\\n  --node-id=my-node`,
+    `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --pairing=${token} \
+  --node-id=my-node`,
     '```',
     '',
     '**Docker bootstrap**',
     '```bash',
-    `curl -fsSL ${baseUrl}/node/run-docker.sh | bash -s -- \\\n  --host=${baseUrl} \\\n  --pairing=${token} \\\n  --node-id=my-node`,
+    `curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
+  --pairing=${token} \
+  --node-id=my-node`,
+    '```',
+    '',
+    '**Explicit host override example**',
+    '```bash',
+    `curl -fsSL "http://127.0.0.1:${HTTP_PORT}/node/run.sh" | bash -s -- \
+  --host=http://192.168.1.50:${HTTP_PORT} \
+  --pairing=${token} \
+  --node-id=my-node`,
     '```',
     '',
     '**Manual docker-compose template**',
     '```bash',
-    `curl -fsSL ${baseUrl}/node/docker-compose.yaml -o docker-compose.yaml`,
+    'curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml',
     'cat > .env <<\'EOF\'',
-    `NODE_HOST=${baseUrl}`,
-    `NODE_SOURCE_URL=${baseUrl}/node/source.tar.gz`,
+    'NODE_HOST=$BASE_URL',
+    'NODE_SOURCE_URL=$BASE_URL/node/source.tar.gz',
     `NODE_PAIRING_TOKEN=${token}`,
     'NODE_ID=my-node',
     'NODE_DATA_DIR=./data',
@@ -282,17 +287,66 @@ function buildNodePairHelp(token: string): string {
     '',
     '**Approve the pending node from Foxwarm**',
     '```text',
-    '/node pair list',
-    '/node pair approve <pending-id> my-node',
-    '/node known',
     '/node',
+    '/node approve <pending-id> my-node',
     '```',
     '',
     'Notes:',
-    '- `/node/run.sh` = bare-metal bootstrap',
-    '- `/node/run-docker.sh` = Docker bootstrap',
+    '- `/node/run.sh` = bare-metal bootstrap; runs in foreground by default, use `-d` to detach',
+    '- `/node/run-docker.sh` = Docker bootstrap; starts containers and follows logs by default, use `-d` to skip log following',
+    '- `/node/run-interactive.sh` = cli-node TUI mode (tool approvals plus bound-session chat)',
     '- `/node/docker-compose.yaml` = inspect/customize the self-contained compose template first',
+    '- `/node` = list current node, approved nodes, and pending approvals',
+    '- `/node approve` / `/node reject` = act on pending approvals',
+    '- agent/tool workflows can use the `node_bootstrap_info` tool for structured bootstrap info',
   ].join('\n')
+}
+
+async function buildNodeListReply(currentNode: string, boundNode?: string): Promise<string> {
+  const approved = await listApprovedNodes()
+  const pending = await listPendingPairings()
+
+  let reply = '📋 **Nodes**\n\n'
+  reply += `💡 Current node: \`${currentNode}\`\n`
+  if (boundNode) {
+    reply += `🔒 Runtime is bound by agent isolation to \`${boundNode}\`.\n`
+  }
+
+  reply += '\n**Approved Nodes**\n'
+  reply += currentNode === 'master' ? '- ✅ `master` (local)\n' : '- `master` (local)\n'
+
+  if (approved.length === 0) {
+    reply += '- (No approved remote nodes yet)\n'
+  } else {
+    for (const node of approved) {
+      const online = nodesManager.getNode(node.nodeId) ? 'online' : 'offline'
+      const requestedName = node.requestedName ? ` requested=\`${node.requestedName}\`` : ''
+      const lastSeen = node.lastSeenAt ? ` lastSeen=${new Date(node.lastSeenAt).toLocaleString()}` : ''
+      const currentMarker = currentNode === node.nodeId ? '✅ ' : ''
+      reply += `- ${currentMarker}\`${node.nodeId}\` [${node.nodeType}] ${online}${requestedName}${lastSeen}\n`
+    }
+  }
+
+  reply += '\n**Pending Approvals**\n'
+  if (pending.length === 0) {
+    reply += '- (No pending pairing requests)\n'
+  } else {
+    for (const entry of pending) {
+      const requestedName = entry.requestedName ? ` requested=\`${entry.requestedName}\`` : ''
+      const connected = entry.connected ? ' online' : ' offline'
+      const approvedMarker = entry.approvedNodeId ? ` approved→\`${entry.approvedNodeId}\`` : ''
+      reply += `- \`${entry.id}\` [${entry.nodeType}] code=\`${entry.pairCode}\`${requestedName}${connected}${approvedMarker}\n`
+    }
+  }
+
+  reply += '\nCommands:\n'
+  reply += '- `/node` or `/node list` — list nodes and pending approvals\n'
+  reply += '- `/node approve <pending-id> [node-id]` — approve a pending node\n'
+  reply += '- `/node reject <pending-id>` — reject a pending node\n'
+  reply += '- `/node pair-help` — show pairing/bootstrap help\n'
+  reply += '- `/node <node-id>` — switch current node\n'
+
+  return reply
 }
 
 const MESSAGES_AUTOCOMPLETE: CommandAutocompleteNode[] = [
@@ -305,6 +359,37 @@ const MODEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('default', 'Reset to the default model'),
   placeholderNode('<name>', 'Model name or partial model name'),
 ]
+
+function getDisplayModelKeys(currentModel?: string): string[] {
+  const { modelsConfig } = resolveModelConfig(currentModel)
+  return modelsConfig.displayModels || Object.keys(modelsConfig.models || {})
+}
+
+function resolveCommandModelSelection(input: string, currentModel?: string): { key?: string; error?: string } {
+  const target = input.trim()
+  const { modelsConfig } = resolveModelConfig(currentModel)
+  const modelKeys = getDisplayModelKeys(currentModel)
+
+  if (modelsConfig.models[target]) {
+    return { key: target }
+  }
+
+  const normalizedInput = target.toLowerCase()
+  const matches = modelKeys.filter(k => k.toLowerCase().includes(normalizedInput))
+
+  if (matches.length === 0) {
+    return { error: `❌ No models matching \`${target}\`. Use /model to list available models.` }
+  }
+
+  if (matches.length === 1) {
+    return { key: matches[0] }
+  }
+
+  let resp = `❌ Multiple models match \`${target}\`:\n\n`
+  resp += matches.map(k => `- \`${k}\``).join('\n')
+  resp += `\n\nPlease be more specific.`
+  return { error: resp }
+}
 
 const DELETE_MESSAGES_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   placeholderNode('<num>', 'Positive = oldest, negative = newest'),
@@ -332,11 +417,11 @@ const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   }),
   literalNode('mode', 'Set channel mode', {
     children: [
-      literalNode('push-only', 'Only accept direct/push-style messages'),
+      literalNode('send-only', 'Only allow direct sending via explicit tools, not normal session reply broadcasts'),
       literalNode('normal', 'Normal interactive mode'),
     ],
   }),
-  literalNode('dangerously-allow-all-group-members', 'Allow all group members to use commands', {
+  literalNode('dangerously-allow-all-users', 'Allow all users in this attached conversation to send normal messages', {
     children: [
       literalNode('yes', 'Enable allow-all mode'),
       literalNode('no', 'Disable allow-all mode'),
@@ -360,7 +445,7 @@ function formatChannelInfo(ctx: ChannelContext): string {
     ctx.username ? `- username: \`${ctx.username}\`` : undefined,
     `- attachedSession: \`${sessionId || '(none)'}\``,
     `- mode: \`${channelConfig?.mode || 'normal'}\``,
-    `- dangerouslyAllowAllGroupMembers: \`${channelConfig?.dangerouslyAllowAllGroupMembers ? 'yes' : 'no'}\``,
+    `- dangerouslyAllowAllUsers: \`${sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId) ? 'yes' : 'no'}\``,
     runtimeStatus ? `- runtime: \`${runtimeStatus.running ? 'running' : 'stopped'}\`` : undefined,
   ].filter(Boolean).join('\n')
 }
@@ -574,20 +659,29 @@ export const COMMANDS: Record<string, CommandDef> = {
     },
     handler: handleCompactCommand,
   },
-  '/compress': {
-    description: 'Alias of /compact. `args: [keep%]` or `/compress tools [keep%]`',
+  '/btw': {
+    description: 'Run a side/background model request without executing tools',
+    usage: BTW_USAGE,
     requiresSession: true,
-    autocomplete: {
-      children: [
-        placeholderNode('[keep%]', 'Optional keep percentage, e.g. 20 or 50'),
-        literalNode('tools', 'Compact oversized historical tool calls/results without running full history compaction', {
-          usage: '/compress tools [keep%]',
-          children: [placeholderNode('[keep%]', 'Optional keep percentage for recent messages left untouched')],
-        }),
-      ],
+    autocomplete: { children: BTW_AUTOCOMPLETE },
+    handler: async (ctx, args, sessionId) => {
+      if (!sessionId) {
+        ctx.reply('❌ No active session.')
+        return
+      }
+
+      const message = args.join(' ').trim()
+      if (!message) {
+        ctx.reply(BTW_USAGE)
+        return
+      }
+
+      void runBtwRequest(sessionId, message).catch((err: any) => {
+        logger.error({ err, sessionId }, 'BTW background request failed')
+      })
+
+      ctx.reply('📝 BTW request started. I’ll post the result here when it finishes.')
     },
-    handler: handleCompactCommand,
-    showInTelegram: false,
   },
   '/timer': {
     description: 'Manage session timers: help, list, create, delete',
@@ -771,7 +865,9 @@ export const COMMANDS: Record<string, CommandDef> = {
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
       const historyLen = session.history.length
-      const tokenCount = estimateSessionTokens(session)
+      const sessionSummary = estimateSessionSummary(session)
+      const tokenCount = sessionSummary.tokens
+      const imageCount = sessionSummary.imageCount
       const usage = session.stats.lastUsage
 
       let resp = `📊 *Foxwarm Status*\n`
@@ -779,9 +875,16 @@ export const COMMANDS: Record<string, CommandDef> = {
       resp += `\n*Channel:* ${getChannelId(ctx)}:${getConversationId(ctx)} (type=${getChannelType(ctx)})`
       resp += `\n- Messages: ${historyLen}`
       const { currentKey, contextLimit } = resolveModelConfig(session.model)
+      const { currentKey: spawnedModelKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session))
 
       resp += `\n- Model: ${currentKey}`
+      if (session.childModelDefault?.trim()) {
+        resp += `\n- Child default model: ${spawnedModelKey} (override: ${session.childModelDefault.trim()})`
+      }
       resp += `\n- Size: ~${(tokenCount / 1000).toFixed(1)}K tokens / ${(contextLimit / 1000).toFixed(1)}K tokens`
+      if (imageCount > 0) {
+        resp += `\n- Images: ${imageCount}`
+      }
       if (usage) {
         resp += `\n*Last Turn Usage: - Cached: ${usage.cachedTokens || 0} / Input: ${usage.inputTokens} / Output: ${usage.outputTokens}`
       }
@@ -809,14 +912,14 @@ export const COMMANDS: Record<string, CommandDef> = {
         let resp = '📋 *Session Commands*\n\n'
         resp += '`/session list` - List all sessions\n'
         resp += '`/session new` - Create new ad-hoc session\n'
-        resp += '`/session create <agent> <session>` - Create session under an existing agent\n'
+        resp += '`/session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...` - Create session under an existing agent\n'
+        resp += '`/session child-model [model|default|clear|unset]` - Get/set child default model for spawned sessions\n'
         resp += '`/session fork [suffix]` - Fork current session as a child session (default suffix: `fork`)\n'
         resp += '`/session delete <sessionId>` - Delete session\n'
         resp += '`/session clear` - Clear current session history\n'
         resp += '`/session rename <name>` - Rename session\n'
         resp += '`/session update-snapshot [session-id]` - Refresh session prompt snapshot\n'
         resp += '`/session compact-threshold [tokens|Nk|clear|unset]` - Get/set auto-compact threshold override for current session\n'
-        resp += '`/session subconscious <on|off|status>` - Manage the reflective subconscious side session for current session\n'
         resp += '`/session index` - Index messages to vector database\n'
         resp += '`/session move <new-session-id>|<existing-agent>/<new-session-id>` - Move/rename session\n'
         resp += '`/session parent <parent-session-id> [child-session-id]` - Set parent session\n'
@@ -891,28 +994,105 @@ export const COMMANDS: Record<string, CommandDef> = {
 
         case 'create': {
           if (subArgs.length < 2) {
-            ctx.reply('Usage: /session create <agent> <session>')
+            ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...')
             return
           }
 
           const agentName = subArgs[0]
           const newSessionName = subArgs[1]
+          const modelFlagIndex = subArgs.indexOf('--model')
+          let resolvedModel: string | undefined
+          const systemPromptFiles: string[] = []
+
+          if (modelFlagIndex >= 0) {
+            const requestedModel = subArgs[modelFlagIndex + 1]
+            if (!requestedModel) {
+              ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...')
+              return
+            }
+
+            const selection = resolveCommandModelSelection(requestedModel, session?.model)
+            if (selection.error) {
+              ctx.reply(selection.error)
+              return
+            }
+
+            resolvedModel = selection.key
+          }
+
+          for (let index = 2; index < subArgs.length; index += 1) {
+            if (subArgs[index] !== '--system-prompt-file') continue
+            const configuredFile = subArgs[index + 1]
+            if (!configuredFile) {
+              ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...')
+              return
+            }
+
+            systemPromptFiles.push(configuredFile)
+            index += 1
+          }
 
           try {
             const result = await sessionManager.createSessionInAgent({
               agentName,
               sessionName: newSessionName,
               currentNode: session?.currentNode,
-              model: session?.model,
+              systemPromptFiles: systemPromptFiles.length > 0 ? systemPromptFiles : undefined,
+              model: sessionManager.resolveSpawnedSessionModel(session, resolvedModel),
             })
 
             sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
             sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), result.sessionId)
-            ctx.reply(`✅ Created session \`${result.sessionId}\` under agent \`${agentName}\` and attached current channel.`)
+            const createdSession = await sessionManager.getSession(result.sessionId)
+            const { currentKey } = resolveModelConfig(createdSession.model)
+            ctx.reply(`✅ Created session \`${result.sessionId}\` under agent \`${agentName}\` and attached current channel.\nModel: \`${currentKey}\``)
           } catch (e: any) {
             ctx.reply(`❌ Session create failed: ${e.message}`)
           }
           break
+        }
+
+        case 'child-model': {
+          if (!sessionId || !session) {
+            ctx.reply('❌ No active session.')
+            return
+          }
+
+          if (subArgs.length === 0) {
+            const override = session.childModelDefault?.trim()
+              ? `\`${session.childModelDefault.trim()}\``
+              : 'follow current session model'
+            const { currentKey: currentSessionModel } = resolveModelConfig(session.model)
+            const { currentKey: effectiveSpawnModel } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session))
+            ctx.reply([
+              '🧒 *Child default model*',
+              '',
+              `- override: ${override}`,
+              `- current session model: \`${currentSessionModel}\``,
+              `- effective spawned-session model: \`${effectiveSpawnModel}\``,
+            ].join('\n'))
+            return
+          }
+
+          const target = subArgs[0].toLowerCase()
+          if (target === 'default' || target === 'clear' || target === 'unset') {
+            await sessionManager.setSessionChildModelDefault(sessionId)
+            delete session.childModelDefault
+            const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session))
+            ctx.reply(`✅ Child default model cleared. New child sessions will follow the current session model path (effective: \`${currentKey}\`).`)
+            return
+          }
+
+          const selection = resolveCommandModelSelection(subArgs[0], session.model)
+          if (selection.error) {
+            ctx.reply(selection.error)
+            return
+          }
+
+          await sessionManager.setSessionChildModelDefault(sessionId, selection.key)
+          session.childModelDefault = selection.key
+          ctx.reply(`✅ Child default model set to \`${selection.key}\`.`)
+          return
         }
 
         case 'fork': {
@@ -1067,64 +1247,6 @@ export const COMMANDS: Record<string, CommandDef> = {
             ctx.reply(`❌ Compact threshold update failed: ${e.message}`)
           }
           break
-        }
-
-        case 'subconscious': {
-          if (!sessionId || !session) {
-            ctx.reply('❌ No active session.')
-            return
-          }
-          if (sessionManager.isSubconsciousSession(session)) {
-            ctx.reply(`🧠 This session is itself a subconscious side session for \`${sessionManager.getSubconsciousPrimarySessionId(session) || 'unknown'}\`.`)
-            return
-          }
-
-          const action = (subArgs[0] || 'status').toLowerCase()
-          if (action === 'status') {
-            const status = sessionManager.getSubconsciousStatus(session)
-            const lines = [
-              `🧠 Subconscious side session: ${status.enabled ? 'enabled' : 'disabled'}`,
-              `Side session: ${status.sideSessionId ? `\`${status.sideSessionId}\`` : 'not created'}`,
-              `Pending counted messages: ${status.pendingMessageCount}`,
-              `Trigger every: ${status.triggerEveryMessages} counted message(s)`,
-              'Cooldown: message-based via counted-message reset (no wall-clock cooldown)',
-            ]
-            if (typeof status.lastTriggeredAt === 'number') {
-              lines.push(`Last triggered: ${new Date(status.lastTriggeredAt).toISOString()}`)
-            }
-            if (typeof status.lastHintAt === 'number') {
-              lines.push(`Last hint sent: ${new Date(status.lastHintAt).toISOString()}`)
-            }
-
-            if (status.sideSessionId) {
-              const sideSession = await sessionManager.getExistingSession(status.sideSessionId)
-              if (sideSession) {
-                lines.push(`Side compact threshold: ${sideSession.compactThresholdTokens || sessionManager.getEffectiveCompactThresholdTokens(sideSession)} tokens`)
-              }
-            }
-
-            ctx.reply(lines.join('\n'))
-            return
-          }
-
-          if (action === 'on' || action === 'enable') {
-            const result = await sessionManager.setSubconsciousEnabled(sessionId, true)
-            ctx.reply([
-              `✅ Subconscious side session enabled.`,
-              `Side session: \`${result.sideSessionId}\`${result.created ? ' (created)' : ''}`,
-              `Side compact threshold: ${result.compactThresholdTokens} tokens`,
-            ].join('\n'))
-            return
-          }
-
-          if (action === 'off' || action === 'disable') {
-            const result = await sessionManager.setSubconsciousEnabled(sessionId, false)
-            ctx.reply(`✅ Subconscious side session disabled. Side session remains stored as \`${result.sideSessionId}\`.`)
-            return
-          }
-
-          ctx.reply('Usage: /session subconscious <on|off|status>')
-          return
         }
 
         case 'isolated': {
@@ -1366,7 +1488,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           }
           
           const entries = await fs.readdir(agentsDir, { withFileTypes: true })
-          const agents: Array<{name: string, sessionCount: number, inherit?: string, skills?: string[], isolated?: boolean, isolatedNode?: string}> = []
+          const agents: Array<{name: string, sessionCount: number, inherit?: string, isolated?: boolean, isolatedNode?: string}> = []
           
           for (const entry of entries) {
             if (entry.isDirectory()) {
@@ -1378,7 +1500,6 @@ export const COMMANDS: Record<string, CommandDef> = {
                 name: agentName,
                 sessionCount: sessions.length,
                 inherit: sessionManager.getAgentMetadata(agentName).inherit,
-                skills: sessionManager.getAgentSkills(agentName),
                 isolated: sessionManager.getAgentMetadata(agentName).isolated,
                 isolatedNode: sessionManager.getAgentIsolationNode(agentName),
               })
@@ -1401,9 +1522,6 @@ export const COMMANDS: Record<string, CommandDef> = {
             }
             if (agent.isolated) {
               resp += ` - isolated${agent.isolatedNode ? ` on \`${agent.isolatedNode}\`` : ''}`
-            }
-            if (agent.skills && agent.skills.length > 0) {
-              resp += ` - skills: ${agent.skills.map(skill => `\`${skill}\``).join(', ')}`
             }
             resp += '\n'
           }
@@ -1558,7 +1676,7 @@ export const COMMANDS: Record<string, CommandDef> = {
   },
 
   '/skill': {
-    description: 'Manage skills: list, attach, detach, show',
+    description: 'Manage skills: list visible skills or show full skill documents',
     requiresSession: false,
     autocomplete: { children: SKILL_AUTOCOMPLETE },
     handler: async (ctx, args, _sessionId, session) => {
@@ -1569,8 +1687,6 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (!subcommand) {
         let resp = '🧩 *Skill Commands*\n\n'
         resp += '`/skill list` - List available skills\n'
-        resp += '`/skill attach <agent> <skill>` - Attach a skill to an agent\n'
-        resp += '`/skill detach <agent> <skill>` - Detach a skill from an agent\n'
         resp += '`/skill show <skill>` - Show skill documents\n'
         ctx.reply(resp)
         return
@@ -1600,57 +1716,9 @@ export const COMMANDS: Record<string, CommandDef> = {
           break
         }
 
-        case 'attach': {
-          if (subArgs.length < 2) {
-            ctx.reply('Usage: /skill attach <agent> <skill>')
-            return
-          }
-
-          const agentName = subArgs[0]
-          const skillName = subArgs[1]
-
-          try {
-            const result = await sessionManager.attachAgentSkill(agentName, skillName)
-            let resp = result.changed
-              ? `✅ Skill \`${skillName}\` attached to agent \`${agentName}\`.`
-              : `ℹ️ Agent \`${agentName}\` already has skill \`${skillName}\`.`
-            resp += result.skills.length > 0
-              ? `\nSkills: ${result.skills.map(skill => `\`${skill}\``).join(', ')}`
-              : '\nSkills: (none)'
-            if (result.affectedSessions.length > 0) {
-              resp += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`
-            }
-            ctx.reply(resp)
-          } catch (e: any) {
-            ctx.reply(`❌ Skill attach failed: ${e.message}`)
-          }
-          break
-        }
-
+        case 'attach':
         case 'detach': {
-          if (subArgs.length < 2) {
-            ctx.reply('Usage: /skill detach <agent> <skill>')
-            return
-          }
-
-          const agentName = subArgs[0]
-          const skillName = subArgs[1]
-
-          try {
-            const result = await sessionManager.detachAgentSkill(agentName, skillName)
-            let resp = result.changed
-              ? `✅ Skill \`${skillName}\` detached from agent \`${agentName}\`.`
-              : `ℹ️ Agent \`${agentName}\` does not have skill \`${skillName}\`.`
-            resp += result.skills.length > 0
-              ? `\nSkills: ${result.skills.map(skill => `\`${skill}\``).join(', ')}`
-              : '\nSkills: (none)'
-            if (result.affectedSessions.length > 0) {
-              resp += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`
-            }
-            ctx.reply(resp)
-          } catch (e: any) {
-            ctx.reply(`❌ Skill detach failed: ${e.message}`)
-          }
+          ctx.reply('❌ Skill attach/detach is no longer supported. Visible skills are cataloged automatically in session snapshots; use `/skill show <skill>` or the `load_skill` tool to load full instructions on demand.')
           break
         }
 
@@ -1738,150 +1806,65 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/node': {
-    description: 'List or switch node. `args: [node-id]`',
+    description: 'List nodes/pending approvals, approve/reject pairings, show pair-help, or switch node with `/node <node-id>`.',
     requiresSession: true,
     autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
       const boundNode = sessionManager.getAgentIsolationNode(session.agent || 'main')
 
-      if (args[0] === 'pair') {
-        const sub = args[1]
-
-        if (sub === 'token') {
-          try {
-            const token = await ensureNodePairingToken()
-            const baseUrl = `http://localhost:${HTTP_PORT}`
-            ctx.reply(
-              `🔑 **Current node pairing token**\n\n` +
-              `\`${token}\`\n\n` +
-              `Direct copy:\n` +
-              `\`--pairing=${token}\`\n\n` +
-              `Default local master URL: \`${baseUrl}\`\n` +
-              `If the node is on another machine/device, replace \`localhost\` with a reachable host/IP/domain.\n\n` +
-              `Pairing/bootstrap examples: \`/node pair help\``
-            )
-          } catch (e: any) {
-            ctx.reply(`❌ Failed to read node pairing token: ${e.message}`)
-          }
-          return
-        }
-
-        if (sub === 'help') {
-          try {
-            const token = await ensureNodePairingToken()
-            ctx.reply(buildNodePairHelp(token))
-          } catch (e: any) {
-            ctx.reply(`❌ Failed to build node pairing help: ${e.message}`)
-          }
-          return
-        }
-
-        if (!sub || sub === 'list') {
-          const pending = await listPendingPairings()
-          if (pending.length === 0) {
-            ctx.reply('📭 No pending node pairing requests.')
-            return
-          }
-
-          let reply = `📥 **Pending Node Pairings** (${pending.length})\n\n`
-          for (const entry of pending) {
-            const requestedName = entry.requestedName ? ` requested=\`${entry.requestedName}\`` : ''
-            const connected = entry.connected ? ' online' : ' offline'
-            reply += `- \`${entry.id}\` [${entry.nodeType}]${requestedName} code=\`${entry.pairCode}\`${connected}\n`
-          }
-          reply += '\nApprove: `/node pair approve <pending-id> [node-id]`\nReject: `/node pair reject <pending-id>`\nToken: `/node pair token`\nBootstrap help: `/node pair help`'
-          ctx.reply(reply)
-          return
-        }
-
-        if (sub === 'approve') {
-          const pendingId = args[2]
-          const requestedNodeId = args[3]
-          if (!pendingId) {
-            ctx.reply('Usage: `/node pair approve <pending-id> [node-id]`')
-            return
-          }
-
-          try {
-            const approved = await approvePendingPairing(pendingId, requestedNodeId)
-            ctx.reply(
-              `✅ Approved pending pairing \`${pendingId}\`\n\n` +
-              `Node id: \`${approved.nodeId}\`\n` +
-              `Requested name: \`${approved.pending.requestedName || '-'}\`\n` +
-              `Delivered live: \`${approved.deliveredLive ? 'yes' : 'no'}\`\n\n` +
-              `Per-node token (save securely):\n\`${approved.authToken}\``
-            )
-          } catch (e: any) {
-            ctx.reply(`❌ Failed to approve pairing: ${e.message}`)
-          }
-          return
-        }
-
-        if (sub === 'reject') {
-          const pendingId = args[2]
-          if (!pendingId) {
-            ctx.reply('Usage: `/node pair reject <pending-id>`')
-            return
-          }
-
-          try {
-            await rejectPendingPairing(pendingId)
-            ctx.reply(`✅ Rejected pending pairing \`${pendingId}\``)
-          } catch (e: any) {
-            ctx.reply(`❌ Failed to reject pairing: ${e.message}`)
-          }
-          return
-        }
-
-        ctx.reply('Usage: `/node pair help` | `/node pair token` | `/node pair list` | `/node pair approve <pending-id> [node-id]` | `/node pair reject <pending-id>`')
-        return
-      }
-
-      if (args[0] === 'known') {
-        const approved = await listApprovedNodes()
-        if (approved.length === 0) {
-          ctx.reply('📋 No approved nodes yet.')
-          return
-        }
-
-        let reply = `📋 **Approved Nodes** (${approved.length})\n\n`
-        for (const node of approved) {
-          const online = nodesManager.getNode(node.nodeId) ? 'online' : 'offline'
-          const requestedName = node.requestedName ? ` requested=\`${node.requestedName}\`` : ''
-          const lastSeen = node.lastSeenAt ? ` lastSeen=${new Date(node.lastSeenAt).toLocaleString()}` : ''
-          reply += `- \`${node.nodeId}\` [${node.nodeType}] ${online}${requestedName}${lastSeen}\n`
-        }
-        ctx.reply(reply)
-        return
-      }
-      
-      // No args: list nodes
-      if (args.length === 0) {
-        const nodes = nodesManager.listNodes()
-        const remoteNodes = nodes.filter(node => node.id !== 'master')
+      if (args.length === 0 || args[0] === 'list') {
         const currentNode = boundNode || session.currentNode || 'master'
+        ctx.reply(await buildNodeListReply(currentNode, boundNode))
+        return
+      }
 
-        let reply = `📋 **Available Nodes** (${remoteNodes.length + 1} total):\n\n`
+      if (args[0] === 'pair-help') {
+        try {
+          const token = await ensureNodePairingToken()
+          ctx.reply(buildNodePairHelp(token))
+        } catch (e: any) {
+          ctx.reply(`❌ Failed to build node pairing help: ${e.message}`)
+        }
+        return
+      }
 
-        reply += currentNode === 'master' ? '✅ ' : '  '
-        reply += '`master` (local)\n'
-
-        for (const node of remoteNodes) {
-          reply += currentNode === node.id ? '✅ ' : '  '
-          reply += `\`${node.id}\` - Last activity: ${new Date(node.lastActivity).toLocaleString()}\n`
+      if (args[0] === 'approve') {
+        const pendingId = args[1]
+        const requestedNodeId = args[2]
+        if (!pendingId) {
+          ctx.reply('Usage: `/node approve <pending-id> [node-id]`')
+          return
         }
 
-        if (remoteNodes.length === 0) {
-          reply += '\n(No remote nodes currently online)'
+        try {
+          const approved = await approvePendingPairing(pendingId, requestedNodeId)
+          ctx.reply(
+            `✅ Approved pending pairing \`${pendingId}\`\n\n` +
+            `Node id: \`${approved.nodeId}\`\n` +
+            `Requested name: \`${approved.pending.requestedName || '-'}\`\n` +
+            `Delivered live: \`${approved.deliveredLive ? 'yes' : 'no'}\`\n\n` +
+            `Per-node token (save securely):\n\`${approved.authToken}\``
+          )
+        } catch (e: any) {
+          ctx.reply(`❌ Failed to approve pairing: ${e.message}`)
+        }
+        return
+      }
+
+      if (args[0] === 'reject') {
+        const pendingId = args[1]
+        if (!pendingId) {
+          ctx.reply('Usage: `/node reject <pending-id>`')
+          return
         }
 
-        reply += `\n\n💡 Current node: \`${currentNode}\``
-        if (boundNode) {
-          reply += `\n🔒 Runtime is bound by agent isolation to \`${boundNode}\`.`
+        try {
+          await rejectPendingPairing(pendingId)
+          ctx.reply(`✅ Rejected pending pairing \`${pendingId}\``)
+        } catch (e: any) {
+          ctx.reply(`❌ Failed to reject pairing: ${e.message}`)
         }
-
-        ctx.reply(reply)
         return
       }
 
@@ -1953,7 +1936,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       }
 
       try {
-        const result = await tools.search_memory({
+        const result = await tools.search_vector({
           query,
           limit,
           sessionId: targetSessionId,
@@ -2032,8 +2015,8 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: MODEL_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
-      const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(session.model)
-      const modelKeys = modelsConfig.displayModels || Object.keys(modelsConfig.models || {})
+      const { defaultKey, currentKey } = resolveModelConfig(session.model)
+      const modelKeys = getDisplayModelKeys(session.model)
 
       if (args.length === 0) {
         let resp = `🤖 *Models*\n\n`
@@ -2056,35 +2039,15 @@ export const COMMANDS: Record<string, CommandDef> = {
         return
       }
 
-      // Try exact match first
-      if (modelsConfig.models[target]) {
-        session.model = target
-        await sessionManager.saveSession(sessionId)
-        ctx.reply(`✅ Model switched to \`${target}\`.`)
+      const resolved = resolveCommandModelSelection(target, session.model)
+      if (resolved.error) {
+        ctx.reply(resolved.error)
         return
       }
 
-      // Try partial match
-      const normalizedInput = target.toLowerCase()
-      const matches = modelKeys.filter(k => k.toLowerCase().includes(normalizedInput))
-
-      if (matches.length === 0) {
-        ctx.reply(`❌ No models matching \`${target}\`. Use /model to list available models.`)
-        return
-      }
-
-      if (matches.length === 1) {
-        session.model = matches[0]
-        await sessionManager.saveSession(sessionId)
-        ctx.reply(`✅ Model switched to \`${matches[0]}\`.`)
-        return
-      }
-
-      // Multiple matches
-      let resp = `❌ Multiple models match \`${target}\`:\n\n`
-      resp += matches.map(k => `- \`${k}\``).join('\n')
-      resp += `\n\nPlease be more specific.`
-      ctx.reply(resp)
+      session.model = resolved.key
+      await sessionManager.saveSession(sessionId)
+      ctx.reply(`✅ Model switched to \`${resolved.key}\`.`)
     }
   },
   '/delete-messages': {
@@ -2280,8 +2243,8 @@ export const COMMANDS: Record<string, CommandDef> = {
           '       /channel start <channel-id>',
           '       /channel stop <channel-id>',
           '       /channel restart <channel-id>',
-          '       /channel mode <push-only|normal>',
-          '       /channel dangerously-allow-all-group-members <yes|no>',
+          '       /channel mode <send-only|normal>',
+          '       /channel dangerously-allow-all-users <yes|no>',
         ].join('\n'))
         return
       }
@@ -2341,27 +2304,28 @@ export const COMMANDS: Record<string, CommandDef> = {
           // Show current mode
           const config = sessionManager.getChannelConfig(getChannelId(ctx), getConversationId(ctx))
           const currentMode = config?.mode || 'normal'
-          ctx.reply(`Current channel mode: *${currentMode}*\nUsage: /channel mode <push-only|normal>`)
+          ctx.reply(`Current channel mode: *${currentMode}*\nUsage: /channel mode <send-only|normal>`)
           return
         }
 
         const mode = args[1].toLowerCase()
-        if (mode !== 'push-only' && mode !== 'normal') {
-          ctx.reply('Invalid mode. Use: push-only or normal')
+        if (mode !== 'send-only' && mode !== 'push-only' && mode !== 'normal') {
+          ctx.reply('Invalid mode. Use: send-only or normal')
           return
         }
 
         try {
-          sessionManager.setChannelMode(getChannelId(ctx), getConversationId(ctx), mode === 'push-only' ? 'push-only' : undefined)
-          ctx.reply(`✅ Channel mode set to *${mode}*`)
+          const normalizedMode = mode === 'normal' ? undefined : 'send-only'
+          sessionManager.setChannelMode(getChannelId(ctx), getConversationId(ctx), normalizedMode)
+          ctx.reply(`✅ Channel mode set to *${normalizedMode || 'normal'}*`)
         } catch (e: any) {
           ctx.reply(`❌ Failed to set channel mode: ${e.message}`)
         }
-      } else if (subcommand === 'dangerously-allow-all-group-members') {
+      } else if (subcommand === 'dangerously-allow-all-users' || subcommand === 'dangerously-allow-all-group-members') {
         if (args.length < 2) {
           // Show current setting
-          const currentValue = sessionManager.getChannelDangerouslyAllowAllGroupMembers(getChannelId(ctx), getConversationId(ctx))
-          ctx.reply(`Current dangerouslyAllowAllGroupMembers: *${currentValue ? 'yes' : 'no'}*\nUsage: /channel dangerously-allow-all-group-members <yes|no>`)
+          const currentValue = sessionManager.getChannelDangerouslyAllowAllUsers(getChannelId(ctx), getConversationId(ctx))
+          ctx.reply(`Current dangerouslyAllowAllUsers: *${currentValue ? 'yes' : 'no'}*\nUsage: /channel dangerously-allow-all-users <yes|no>`)
           return
         }
 
@@ -2372,10 +2336,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
 
         try {
-          sessionManager.setChannelDangerouslyAllowAllGroupMembers(getChannelId(ctx), getConversationId(ctx), value === 'yes')
-          ctx.reply(`✅ dangerouslyAllowAllGroupMembers set to *${value}*`)
+          sessionManager.setChannelDangerouslyAllowAllUsers(getChannelId(ctx), getConversationId(ctx), value === 'yes')
+          ctx.reply(`✅ dangerouslyAllowAllUsers set to *${value}*`)
         } catch (e: any) {
-          ctx.reply(`❌ Failed to set dangerouslyAllowAllGroupMembers: ${e.message}`)
+          ctx.reply(`❌ Failed to set dangerouslyAllowAllUsers: ${e.message}`)
         }
       } else {
         ctx.reply([
@@ -2386,8 +2350,8 @@ export const COMMANDS: Record<string, CommandDef> = {
           '/channel start <channel-id>',
           '/channel stop <channel-id>',
           '/channel restart <channel-id>',
-          '/channel mode <push-only|normal>',
-          '/channel dangerously-allow-all-group-members <yes|no>',
+          '/channel mode <send-only|normal>',
+          '/channel dangerously-allow-all-users <yes|no>',
         ].join('\n'))
       }
     }

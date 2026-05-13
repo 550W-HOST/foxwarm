@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from './sessionManager';
-import { tool_end_turn, tool_set_todo } from './toolsSessionAgent';
+import { tool_end_turn, tool_set_goal, tool_wait } from './toolsSessionAgent';
 import type { Session } from './types';
 
 function makeSessionId(prefix: string): string {
@@ -28,23 +28,52 @@ async function ensureSession(id: string): Promise<Session> {
   return existing;
 }
 
-test('end_turn returns concise output without echoing reason text', async () => {
-  const result = await tool_end_turn({ reason: 'because the handoff is complete' });
+test('wait returns concise output without echoing reason text', async () => {
+  const result = await tool_wait({ reason: 'because the handoff is complete' });
   assert.equal(result.output, 'ok');
   assert.deepEqual(result.__toolLoopControl, { stopCurrentTurn: true });
 });
 
-test('set_todo returns concise output without echoing todo content or remindEvery', async () => {
+test('legacy end_turn alias returns concise output without echoing reason text', async () => {
+  const result = await tool_end_turn({ reason: 'because the legacy handoff is complete' });
+  assert.equal(result.output, 'ok');
+  assert.deepEqual(result.__toolLoopControl, { stopCurrentTurn: true });
+});
+
+test('set_goal returns concise output without echoing goal content or remindEvery', async () => {
   await sessionManager.loadSessions();
-  const sessionId = makeSessionId('tool_result_todo');
+  const sessionId = makeSessionId('tool_result_goal');
   const session = await ensureSession(sessionId);
   try {
-    const updated = await tool_set_todo({ todo: '- [ ] ship feature', remindEvery: 7 }, { sessionId, session });
+    const updated = await tool_set_goal({ goal: 'Ship feature safely', remindEvery: 7 }, { sessionId, session });
     assert.equal(updated, 'ok');
     assert.doesNotMatch(String(updated), /ship feature|remindEvery|7/);
 
-    const cleared = await tool_set_todo({ clear: true }, { sessionId, session });
+    const cleared = await tool_set_goal({ clear: true }, { sessionId, session });
     assert.equal(cleared, 'ok');
+  } finally {
+    try {
+      await sessionManager.deleteSession(sessionId);
+    } catch {
+      // ignore cleanup failures in test
+    }
+  }
+});
+
+test('set_goal accepts omitted remindEvery and configurable remindOnTurnEnd', async () => {
+  await sessionManager.loadSessions();
+  const sessionId = makeSessionId('tool_result_goal_optional');
+  const session = await ensureSession(sessionId);
+  try {
+    const updated = await tool_set_goal({ goal: 'Ship feature safely', remindOnTurnEnd: false }, { sessionId, session });
+    assert.equal(updated, 'ok');
+    assert.equal(session.goalState?.remindEvery, 10);
+    assert.equal(session.goalState?.remindOnTurnEnd, false);
+
+    const second = await tool_set_goal({ goal: 'Ship feature later' }, { sessionId, session });
+    assert.equal(second, 'ok');
+    assert.equal(session.goalState?.remindEvery, 10);
+    assert.equal(session.goalState?.remindOnTurnEnd, false);
   } finally {
     try {
       await sessionManager.deleteSession(sessionId);

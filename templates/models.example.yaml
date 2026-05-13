@@ -2,28 +2,43 @@
 # If `state/models.yaml` is missing, the app falls back to this template.
 #
 # Recommended public setup: keep provider connection settings directly in this YAML.
-# `.env` is mainly for app-level settings such as ports, feature flags, and channel tokens.
+# App/channel configuration lives in state/config.yaml.
 
 default: openai/gpt-5.2-codex
-models:
+providers:
   openai:
-    provider: openai
+    providerType: openai-completions
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
     # Optional: disable background compact jobs for this model entry.
     # asyncCompact: false
-    # Optional: enable compressed request bodies for this model provider entry.
+    # Optional: enable compressed request bodies for this provider entry.
     # requestCompression: gzip  # or: br
-    model:
+    # Optional provider-level defaults for all models in this entry.
+    # contextLimit: 200000
+    # extraHeaders:
+    #   x-provider-default: enabled
+    # extraFields:
+    #   reasoning:
+    #     effort: medium
+    models:
       - gpt-5.2-codex
-      - gpt-5.3-codex
+      - id: gpt-5.3-codex
+        contextLimit: 400000
+        extraFields:
+          reasoning:
+            effort: high
       - gpt-5.4
+      - gpt-5.5
+
+  # `openai` and `openai-responses` both use the newer Responses API.
+  # Use `openai-completions` when you explicitly need the older /chat/completions API.
 
   anthropic:
-    provider: anthropic
+    providerType: anthropic
     baseUrl: https://api.anthropic.com
     apiKey: your-anthropic-key
-    model:
+    models:
       - claude-sonnet-4-5
       - claude-sonnet-4-6
       - claude-sonnet-4-5-thinking

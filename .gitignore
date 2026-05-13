@@ -1,6 +1,7 @@
-/node_modules/
+node_modules
 /lib
 /state
+/data_dir
 /workspace
 /agents
 /.env
@@ -11,6 +12,9 @@
 /packages/webui/node_modules
 /packages/webui/dist
 
+# Shared package build output
+/packages/shared/dist
+
 # Test environment
 /test/.env
 /test/state
@@ -19,3 +23,7 @@
 /test/node-client-state
 /test/sandbox-workspace-node
 /test/.temp
+
+# CLI node package build output
+/packages/cli-node/dist
+/packages/cli-node/node_modules

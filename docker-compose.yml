@@ -1,7 +1,8 @@
 # First-time setup:
-#   cp .env.example .env
-#   mkdir -p state agents skills
-#   cp templates/models.example.yaml state/models.yaml
+#   mkdir -p foxwarm-data/state foxwarm-data/agents
+#   docker compose up -d --build
+# Then open http://localhost:3001 and finish WebUI OOBE.
+# To skip OOBE, create foxwarm-data/state/models.yaml before starting.
 
 name: foxwarm
 
@@ -13,25 +14,13 @@ services:
     container_name: foxwarm
     restart: unless-stopped
     init: true
-    env_file: .env
     environment:
       NODE_ENV: production
-      HTTP_PORT: 3001
-      ENABLE_WEBUI: ${ENABLE_WEBUI:-true}
-      ENABLE_TRIGGER: ${ENABLE_TRIGGER:-true}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      FOXWARM_DATA_DIR: /data
     ports:
-      - "${HTTP_PORT:-3001}:3001"
+      - "3001:3001"
     volumes:
-      - type: bind
-        source: ./.env
-        target: /app/.env
-        read_only: true
-        bind:
-          create_host_path: false
-      - ./state:/app/state
-      - ./agents:/app/agents
-      - ./skills:/app/skills
+      - ./foxwarm-data:/data
     extra_hosts:
       - host.docker.internal:host-gateway
     stop_grace_period: 10s
@@ -52,12 +41,12 @@ services:
     environment:
       NODE_URL: "http://foxwarm:3001"
       NODE_ID: "sandbox-node"
-      NODE_TOKEN_FILE: "/app/state/node_token"
+      NODE_TOKEN_FILE: "/data/state/node_token"
       NO_PROXY: "localhost,127.0.0.1,foxwarm,host.docker.internal"
       no_proxy: "localhost,127.0.0.1,foxwarm,host.docker.internal"
       WORKSPACE: "/workspace"
     volumes:
-      - ./state:/app/state:ro
+      - ./foxwarm-data:/data:ro
       - ./sandbox-workspace:/workspace
     extra_hosts:
       - host.docker.internal:host-gateway

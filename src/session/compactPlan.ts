@@ -1,8 +1,12 @@
 import { ToolDefinition } from '../types';
+import { estimateTokenCount } from '../tokenCount';
+import { truncateUnicodeSafeWithEllipsis } from '../utils/unicode';
 
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
-const DEFAULT_PREVIEW_CHAR_LIMIT = 80;
-
+export const COMPACT_FLOW_MAX_ROUNDS = 15;
+export const DEFAULT_PREVIEW_CHAR_LIMIT = 80;
+export const COMPACT_LEVEL_TOKEN_THRESHOLD = 2000;
+const EDGE_PREVIEW_CHAR_LIMIT = 300;
 export type CompactCandidateItem =
   | {
       kind: 'message';
@@ -10,6 +14,7 @@ export type CompactCandidateItem =
       startSeq: number;
       endSeq: number;
       preview: string;
+      estimatedTokens: number;
     }
   | {
       kind: 'block';
@@ -19,6 +24,8 @@ export type CompactCandidateItem =
       rawStartSeq: number;
       rawEndSeq: number;
       preview: string;
+      estimatedTokens: number;
+      allowSingleBlockCompact?: boolean;
     };
 
 export interface LayeredCreateBlockPlan {
@@ -49,6 +56,7 @@ export class CompactPlanValidationError extends Error {
 
 export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   name: COMPACT_PLAN_TOOL_NAME,
+  defaultInject: true, // Keep compact/normal tool schemas stable for prompt-cache/KV-cache hits.
   description: 'Submit layered-context block creation plan for older context items. Create one or more continuous same-level summary blocks; unmentioned older items stay verbatim in working history.',
   parameters: {
     type: 'object',
@@ -71,23 +79,31 @@ export function formatSeqRange(startSeq?: number, endSeq?: number): string {
   return '(seq unavailable)';
 }
 
-function trimPreview(text: string, limit: number = DEFAULT_PREVIEW_CHAR_LIMIT): string {
+export function trimPreview(text: string, limit: number = DEFAULT_PREVIEW_CHAR_LIMIT): string {
   const normalized = text.trim().replace(/\s+/g, ' ');
-  if (normalized.length <= limit) return normalized;
-  return `${normalized.slice(0, limit - 1)}…`;
+  return truncateUnicodeSafeWithEllipsis(normalized, limit, '…');
 }
 
-export function buildMessageCandidateItem(startSeq: number, endSeq: number, preview: string): CompactCandidateItem {
+export function buildMessageCandidateItem(startSeq: number, endSeq: number, preview: string, estimatedTokens: number = estimateTokenCount(preview)): CompactCandidateItem {
   return {
     kind: 'message',
     key: startSeq === endSeq ? `M#${startSeq}` : `M#${startSeq}-#${endSeq}`,
     startSeq,
     endSeq,
-    preview: trimPreview(preview),
+    preview,
+    estimatedTokens,
   };
 }
 
-export function buildBlockCandidateItem(id: number, level: number, rawStartSeq: number, rawEndSeq: number, summary: string): CompactCandidateItem {
+export function buildBlockCandidateItem(
+  id: number,
+  level: number,
+  rawStartSeq: number,
+  rawEndSeq: number,
+  summary: string,
+  estimatedTokens: number = estimateTokenCount(summary),
+  allowSingleBlockCompact: boolean = false,
+): CompactCandidateItem {
   return {
     kind: 'block',
     key: `B#${id}`,
@@ -95,8 +111,71 @@ export function buildBlockCandidateItem(id: number, level: number, rawStartSeq: 
     level,
     rawStartSeq,
     rawEndSeq,
-    preview: trimPreview(summary),
+    preview: summary,
+    estimatedTokens,
+    allowSingleBlockCompact,
   };
+}
+
+interface CandidateGroup {
+  targetLevel: number;
+  items: CompactCandidateItem[];
+}
+
+export function getCandidateTargetLevel(item: CompactCandidateItem): number {
+  return item.kind === 'message' ? 1 : item.level + 1;
+}
+
+export function selectCompactCandidateTargetLevels(items: CompactCandidateItem[]): Set<number> {
+  const groups = new Map<number, CompactCandidateItem[]>();
+
+  for (const item of items) {
+    const targetLevel = getCandidateTargetLevel(item);
+    const current = groups.get(targetLevel) || [];
+    current.push(item);
+    groups.set(targetLevel, current);
+  }
+
+  const allowedLevels = new Set<number>();
+  for (const [targetLevel, groupItems] of groups.entries()) {
+    const totalEstimatedTokens = groupItems.reduce((sum, item) => sum + Math.max(0, item.estimatedTokens || 0), 0);
+
+    if (totalEstimatedTokens <= COMPACT_LEVEL_TOKEN_THRESHOLD) {
+      continue;
+    }
+
+    if (targetLevel > 1 && groupItems.length < 2) {
+      const onlyItem = groupItems[0];
+      if (!onlyItem || onlyItem.kind !== 'block' || onlyItem.allowSingleBlockCompact !== true) {
+        continue;
+      }
+    }
+
+    allowedLevels.add(targetLevel);
+  }
+
+  return allowedLevels;
+}
+
+export function filterCompactCandidateItemsByLevel(items: CompactCandidateItem[]): CompactCandidateItem[] {
+  const allowedLevels = selectCompactCandidateTargetLevels(items);
+  return items.filter(item => allowedLevels.has(getCandidateTargetLevel(item)));
+}
+
+function groupCandidatesByTargetLevel(items: CompactCandidateItem[]): CandidateGroup[] {
+  const groups: CandidateGroup[] = [];
+  let currentGroup: CandidateGroup | null = null;
+
+  for (const item of items) {
+    const targetLevel = getCandidateTargetLevel(item);
+    if (!currentGroup || currentGroup.targetLevel !== targetLevel) {
+      currentGroup = { targetLevel, items: [] };
+      groups.push(currentGroup);
+    }
+    currentGroup.items.push(item);
+  }
+
+  return groups;
 }
 
 export function buildCompactPromptText(options: {
@@ -109,30 +188,53 @@ export function buildCompactPromptText(options: {
   const { forcedKeptCount, forcedKeptStartSeq, forcedKeptEndSeq, candidateItems, guidance } = options;
   const lines: string[] = [
     'COMPACTION STARTED: stop any previous task and focus only on layered-context compaction.',
-    `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. Do not replace them.`,
-    `Review the older candidate items below and respond by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
-    'Rules:',
-    '- Pass the plan via createBlocksJson as a JSON array string.',
-    '- createBlocksJson may include one or more new blocks.',
-    '- A block must summarize a continuous range of same-kind candidate items only.',
-    '- Level 1 blocks summarize raw messages (sourceKind=message).',
-    '- Higher-level blocks summarize existing blocks from the immediately lower level (sourceKind=block and level = child level + 1).',
-    '- Items not covered by createBlocks stay verbatim in working history.',
-    '- Do not overlap source ranges across createBlocks.',
-    '- Keep each summary compact and factual.',
-    '',
-    ...(guidance ? ['Additional requester guidance:', guidance, ''] : []),
-    'Older compaction candidates:',
+    `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. No need to summarize/replace them.`,
   ];
 
-  for (const item of candidateItems) {
-    if (item.kind === 'message') {
-      lines.push(`- ${item.key} ${item.preview || '[empty message]'}`);
-      continue;
-    }
+  // Group consecutive candidates by target summary level and render with group headers
+  const groups = groupCandidatesByTargetLevel(candidateItems);
 
-    lines.push(`- ${item.key} L${item.level} raw${formatSeqRange(item.rawStartSeq, item.rawEndSeq)} ${item.preview || '[empty block]'}`);
+  for (const group of groups) {
+    lines.push(`Items below can be optionally summarized into L${group.targetLevel} blocks:`);
+
+    const count = group.items.length;
+    for (let i = 0; i < count; i++) {
+      const item = group.items[i];
+      const isEdge = i < 2 || i >= count - 2;
+      const limit = isEdge ? EDGE_PREVIEW_CHAR_LIMIT : DEFAULT_PREVIEW_CHAR_LIMIT;
+
+      if (item.kind === 'message') {
+        const preview = trimPreview(item.preview, limit) || '[empty message]';
+        lines.push(`- ${item.key} ${preview}`);
+      } else {
+        const preview = trimPreview(item.preview, limit) || '[empty block]';
+        lines.push(`- ${item.key} L${item.level} raw${formatSeqRange(item.rawStartSeq, item.rawEndSeq)} ${preview}`);
+      }
+    }
   }
+
+  lines.push(
+    `Review the older candidate items above and finish by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
+    'Rules:',
+    '- Pass the plan via createBlocksJson as a JSON array string.',
+    '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
+    '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim.',
+    '- If a block/message still seems useful, you can leave it uncompressed by simply omitting it from createBlocksJson.',
+    '- A single block may be summarized only when it is a stranded island immediately surrounded on both sides by higher-level blocks; otherwise block sources must span at least two blocks.',
+    '- Blocks must have same kind and same level of source.',
+    '- Blocks must not overlap source ranges across createBlocks.',
+    '- Blocks must not separate seq/id range inside a candidate (can not separate a tool call and its response).',
+    '- Keep each summary compact, factual, and continuation-oriented.',
+    '- Each block summary must be source-range-bound: summarize only the specified seq/id range it covers, including any user/inter-agent inputs, process, findings, and TODOs inside that range; do not borrow facts, later outcomes, or completions from force-kept items or any other outside range.',
+    '- For example, if force-kept later context completed a task but the block source range only contains the unfinished earlier work, the summary must describe the task as unfinished/TODO rather than completed, so the compacted timeline stays correct.',
+    '- Preserve decisions, rationale that still matters, constraints, active tasks, blockers, unresolved questions, and concrete identifiers (paths, commits, branches, nodes, URLs, session IDs, config names).',
+    '- Mention when an earlier plan or decision was superseded by a later one if that matters for future work.',
+    `- You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including helper-tool rounds and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,
+    '- If durable project/user/workflow/rule facts should outlive this session, you may use edit_memory/apply_patch_memory before submitting the final plan.',
+    `- You may use only these helper tools during compaction: read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, and call ${COMPACT_PLAN_TOOL_NAME} to finish the compaction.`,
+    '',
+    ...(guidance ? ['Additional guidance from compaction requester:', guidance, ''] : []),
+  );
 
   return lines.join('\n');
 }
@@ -197,7 +299,6 @@ function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPla
     if (sourceKind === 'block' && Number.isInteger(level) && level < 2) {
       details.createBlockErrors.push(`createBlocks[${index}] uses sourceKind=block so level must be >= 2.`);
     }
-
     return [{ level, sourceKind, sourceStart, sourceEnd, summary } as LayeredCreateBlockPlan];
   });
 }
@@ -222,6 +323,19 @@ function findMessageRange(candidateItems: CompactCandidateItem[], sourceStart: n
 }
 
 function findBlockRange(candidateItems: CompactCandidateItem[], level: number, sourceStart: number, sourceEnd: number): [number, number] | null {
+  if (sourceStart === sourceEnd) {
+    const childLevel = level - 1;
+    const singleIndex = candidateItems.findIndex(item => item.kind === 'block' && item.id === sourceStart && item.level === childLevel);
+    if (singleIndex < 0) {
+      return null;
+    }
+    const singleItem = candidateItems[singleIndex];
+    if (singleItem.kind !== 'block' || singleItem.allowSingleBlockCompact !== true) {
+      return null;
+    }
+    return [singleIndex, singleIndex];
+  }
+
   const childLevel = level - 1;
   const startIndex = candidateItems.findIndex(item => item.kind === 'block' && item.id === sourceStart && item.level === childLevel);
   if (startIndex < 0) return null;
@@ -265,6 +379,11 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
       : findBlockRange(candidateItems, block.level, block.sourceStart, block.sourceEnd);
 
     if (!range) {
+      if (block.sourceKind === 'block' && block.sourceStart === block.sourceEnd) {
+        details.createBlockErrors.push(`createBlocks[${index}] uses a single block source, which is allowed only for a stranded block immediately surrounded by higher-level blocks.`);
+        return;
+      }
+
       const unitLabel = block.sourceKind === 'message' ? 'seq' : 'block id';
       details.createBlockErrors.push(`createBlocks[${index}] does not match a continuous ${block.sourceKind} range in current older context for ${unitLabel} ${block.sourceStart}-${block.sourceEnd}.`);
       return;
@@ -296,12 +415,11 @@ export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateI
   };
 }
 
-export function buildCompactPlanValidationFeedback(error: CompactPlanValidationError, attemptsRemaining: number): string {
+export function buildCompactPlanValidationFeedback(error: CompactPlanValidationError): string {
   return [
     'COMPACT PLAN INVALID.',
     error.message,
-    `Attempts remaining after this feedback: ${attemptsRemaining}.`,
-    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. Do not switch back to normal conversation and do not call any other tool.`,
+    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory, write_memory, edit_memory, delete_memory, and apply_patch_memory if needed.`,
   ].join(' ');
 }
 

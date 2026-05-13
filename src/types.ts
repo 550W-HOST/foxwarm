@@ -2,6 +2,7 @@
 export interface MessagePart {
   text?: string;
   system?: string;
+  systemPayload?: boolean;
   thinking?: string;
   providerMeta?: {
     thinkingSummaries?: string[]; // OpenAI Responses
@@ -10,7 +11,10 @@ export interface MessagePart {
   };
   functionCall?: FunctionCall;
   functionResponse?: FunctionResponse;
+  toolUseId?: string;
   inlineData?: InlineData;  // Internal format - always use this
+  inlineDataRef?: InlineDataRef;
+  imageMeta?: ImageMeta;
   [key: string]: any;  // Allow additional properties for flexibility
 }
 
@@ -18,6 +22,8 @@ export interface FunctionCall {
   id: string;
   name: string;
   args: Record<string, any>;
+  rawArgsText?: string;
+  argsParseError?: string;
 }
 
 export interface FunctionResponse {
@@ -39,11 +45,38 @@ export interface InlineData {
   data: string;
 }
 
+export interface InlineDataRef {
+  imageId: string;
+  format: string;
+  path: string;
+  mimeType: string;
+  byteLength: number;
+  sha256: string;
+  width?: number;
+  height?: number;
+}
+
+export interface ImageMeta {
+  imageId: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  sizeBytes?: number;
+  sha256?: string;
+}
+
 export type MaybePromise<T> = T | Promise<T>;
 export type SessionReply = (text: string, options?: any) => MaybePromise<void>;
 
 export interface Message {
   role: 'user' | 'model' | 'tool';
+  /**
+   * Whether this persisted timeline message should be included in future
+   * model-facing context. Defaults to true for legacy/ordinary messages.
+   * Set false for display-only notices that should remain visible in history
+   * and archives without influencing later LLM calls or compaction prompts.
+   */
+  modelVisible?: boolean;
   parts: MessagePart[];
   __meta?: {
     timestamp?: number;
@@ -57,9 +90,10 @@ export interface SessionStreamEvent {
   text?: string;
 }
 
-export interface SessionTodoState {
-  todo: string;
+export interface SessionGoalState {
+  goal: string;
   remindEvery: number;
+  remindOnTurnEnd?: boolean;
   anchorSeq: number;
   updatedAt: number;
 }
@@ -88,20 +122,20 @@ export interface SessionMeta {
   lastMessageTime: number;
   messageCount?: number; // Cached message count for quick access
   lastChannel?: {
-    channelId: string;
-    channelType?: string;
-    channelUserId: string;
-    conversationId?: string;
+    channelId: string; // Configured channel instance id
+    channelType?: string; // Adapter/platform type
+    channelUserId: string; // Legacy alias of conversationId
+    conversationId?: string; // Preferred channel-side conversation target id
   };
   [key: string]: any;
 }
 
 export interface QueueSource {
-  platform: string;
-  channelId?: string;
-  channelType?: string;
-  channelUserId: string;
-  conversationId?: string;
+  platform: string; // Legacy alias of channelType
+  channelId?: string; // Configured channel instance id
+  channelType?: string; // Adapter/platform type
+  channelUserId: string; // Legacy alias of conversationId
+  conversationId?: string; // Preferred channel-side conversation target id
   username?: string;
   senderId?: string;
 }
@@ -110,6 +144,8 @@ export interface QueueItem {
   type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact' | 'compact-commit';
   source?: QueueSource;
   parts?: MessagePart[];
+  message?: Message;
+  waitTimeoutId?: string;
   keepPercent?: number;
   compactGuidance?: string;
   completionMarker?: string;
@@ -126,6 +162,7 @@ export interface Session {
   agent?: string; // Agent name (default: 'main')
   aliases?: string[]; // Alternative session IDs that resolve to this session
   history: Message[];
+  systemPromptFiles?: string[]; // Optional file list overriding the memory-file portion of snapshot composition
   persistentMemorySnapshot: string;
   stats: SessionStats;
   busy: boolean;
@@ -138,6 +175,7 @@ export interface Session {
   currentNode?: string; // Current node ID for tool execution (default: 'master')
   cwd?: string; // Default working directory for exec/terminal-style operations on currentNode
   model?: string; // Model key for this session (default: global)
+  childModelDefault?: string; // Default model override for child/new sessions spawned from this session; undefined => follow session.model
   verbose?: boolean; // Whether to broadcast tool call info (default: false)
   vectorIndexPosition?: number; // Track last indexed message position
   indexingState?: IndexingState; // Track ongoing indexing operation
@@ -146,7 +184,7 @@ export interface Session {
   nextBlockId?: number; // Next per-session layered-context block id
   contextFrontier?: ContextFrontierItem[]; // Structured layered-context frontier; session.history is a rendered view
   parentSessionId?: string; // Parent session ID for child sessions
-  todoState?: SessionTodoState; // Session-local todo reminder configuration
+  goalState?: SessionGoalState; // Session-local goal reminder configuration
   compactThresholdTokens?: number; // Optional per-session auto-compact threshold override in tokens
   broadcast?: SessionReply; // Broadcast message to all attached channels
 }
@@ -202,6 +240,7 @@ export interface AnthropicContentBlock {
 export interface ToolDefinition {
   name: string;
   description: string;
+  defaultInject?: boolean;
   parameters: {
     type: string;
     properties: Record<string, any>;

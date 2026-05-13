@@ -103,7 +103,7 @@ Android node now follows the same pairing-based flow as the shared node client:
 
 1. connect with the pairing token
 2. create a pending pairing request
-3. approve it from foxwarm with `/node pair approve ...`
+3. approve it from foxwarm with `/node approve ...`
 4. store per-node credentials locally
 5. reconnect with `?id=...&auth=...`
 
@@ -130,8 +130,8 @@ Sending pair request...
 Then approve it from foxwarm:
 
 ```text
-/node pair list
-/node pair approve <pending-id> android-e2e
+/node
+/node approve <pending-id> android-e2e
 ```
 
 After approval, the node stores credentials in `node_credentials.json` and reconnects automatically. A successful post-approval log looks like:

@@ -1,10 +1,11 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
-import path from 'path';
 import schedule, { Job } from 'node-schedule';
 import { TIMERS_FILE, getAgentDir } from './config';
 import { logger } from './common';
 import * as sessionManager from './sessionManager';
+import { DiskJsonData } from './utils/diskJsonData';
+import { formatLocalTimestamp } from './utils/localTime';
 
 export interface SessionTimer {
   id: string;
@@ -19,6 +20,8 @@ export interface SessionTimer {
   at?: number;
   cron?: string;
   lastTriggeredAt?: number;
+  waitTimeoutId?: string;
+  waitTimeoutSeconds?: number;
 }
 
 export interface TimerView extends SessionTimer {
@@ -29,6 +32,41 @@ export interface TimerView extends SessionTimer {
 const timers = new Map<string, SessionTimer>();
 const jobs = new Map<string, Job>();
 let initialized = false;
+
+function normalizeTimersPayload(raw: any, filePath: string): { timers: any[] } {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid timers payload in ${filePath}`);
+  }
+
+  return {
+    timers: Array.isArray(raw.timers) ? raw.timers : [],
+  };
+}
+
+export function createTimersStore(filePath: string = TIMERS_FILE): DiskJsonData<{ timers: any[] }> {
+  return new DiskJsonData<{ timers: any[] }>(filePath, {
+    backup: false,
+    normalizeLoadedData: normalizeTimersPayload,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read timers candidate');
+    },
+  });
+}
+
+let timersStore = createTimersStore();
+
+export function setTimersStoreForTests(store: DiskJsonData<{ timers: any[] }> | null): void {
+  timersStore = store || createTimersStore();
+  cancelAllJobs();
+  timers.clear();
+  initialized = false;
+}
+
+export function resetTimersForTests(): void {
+  cancelAllJobs();
+  timers.clear();
+  initialized = false;
+}
 
 function generateTimerId(): string {
   return crypto.randomBytes(4).toString('hex');
@@ -80,6 +118,21 @@ function getNextRunAt(timer: SessionTimer): number | null {
   return timer.at > Date.now() ? timer.at : null;
 }
 
+export function buildTimerTriggeredMessage(timer: SessionTimer, firedAt: Date = new Date()): string {
+  const label = isCronTimer(timer) ? 'Scheduled timer fired' : 'Timer fired';
+  const currentTimeLine = `Current time: ${formatLocalTimestamp(firedAt)}`;
+  return timer.message
+    ? `${label} (id: ${timer.id})\n${currentTimeLine}\n${timer.message}`
+    : `${label} (id: ${timer.id})\n${currentTimeLine}`;
+}
+
+export function buildWaitTimeoutMessage(timer: Pick<SessionTimer, 'waitTimeoutSeconds'>): string {
+  const seconds = typeof timer.waitTimeoutSeconds === 'number' && Number.isFinite(timer.waitTimeoutSeconds)
+    ? timer.waitTimeoutSeconds
+    : 0;
+  return `[SYSTEM: wait timeout reached after ${seconds}s. No newer message or event triggered this session during the wait.]`;
+}
+
 function toTimerView(timer: SessionTimer): TimerView {
   return {
     ...timer,
@@ -89,18 +142,7 @@ function toTimerView(timer: SessionTimer): TimerView {
 }
 
 async function saveTimers(): Promise<void> {
-  await fs.ensureDir(path.dirname(TIMERS_FILE));
-  const tempPath = `${TIMERS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-
-  try {
-    await fs.writeJson(tempPath, {
-      timers: Array.from(timers.values()),
-    }, { spaces: 2 });
-    await fs.rename(tempPath, TIMERS_FILE);
-  } catch (err) {
-    await fs.remove(tempPath).catch(() => {});
-    throw err;
-  }
+  await timersStore.write({ timers: Array.from(timers.values()) });
 }
 
 function cancelTimerJob(timerId: string): void {
@@ -122,8 +164,31 @@ async function fireTimer(timerId: string): Promise<void> {
   if (!timer) {
     return;
   }
+  const firedAt = new Date();
 
-  const label = isCronTimer(timer) ? 'Scheduled timer fired' : 'Timer fired';
+  if (timer.waitTimeoutId) {
+    try {
+      const targetSession = await sessionManager.getExistingSession(timer.sessionId);
+      if (!targetSession) {
+        throw new Error(`Target session "${timer.sessionId}" not found.`);
+      }
+
+      await sessionManager.queueSessionWaitTimeoutEvent(
+        timer.sessionId,
+        timer.waitTimeoutId,
+        buildWaitTimeoutMessage(timer),
+      );
+    } catch (err) {
+      logger.error({ err, timerId, sessionId: timer.sessionId, waitTimeoutId: timer.waitTimeoutId }, 'Wait timeout delivery failed');
+    } finally {
+      cancelTimerJob(timer.id);
+      timers.delete(timer.id);
+      await saveTimers();
+    }
+    return;
+  }
+
+  const message = buildTimerTriggeredMessage(timer, firedAt);
 
   try {
     if (timer.newSession) {
@@ -143,7 +208,7 @@ async function fireTimer(timerId: string): Promise<void> {
 
       await sessionManager.queueSessionSystemEvent(
         sessionId,
-        `${label} (id: ${timer.id})\n${timer.message}`,
+        message,
         'background'
       );
     } else {
@@ -154,7 +219,7 @@ async function fireTimer(timerId: string): Promise<void> {
 
       await sessionManager.queueSessionSystemEvent(
         timer.sessionId,
-        `${label} (id: ${timer.id})\n${timer.message}`,
+        message,
         'background'
       );
     }
@@ -169,7 +234,7 @@ async function fireTimer(timerId: string): Promise<void> {
     return;
   }
 
-  timer.lastTriggeredAt = Date.now();
+  timer.lastTriggeredAt = firedAt.getTime();
 
   if (isCronTimer(timer)) {
     await saveTimers();
@@ -329,6 +394,8 @@ function validatePersistedTimer(raw: any): SessionTimer | null {
     currentNode: typeof raw.currentNode === 'string' ? raw.currentNode : undefined,
     model: typeof raw.model === 'string' ? raw.model : undefined,
     lastTriggeredAt: typeof raw.lastTriggeredAt === 'number' ? raw.lastTriggeredAt : undefined,
+    waitTimeoutId: typeof raw.waitTimeoutId === 'string' ? raw.waitTimeoutId : undefined,
+    waitTimeoutSeconds: typeof raw.waitTimeoutSeconds === 'number' ? raw.waitTimeoutSeconds : undefined,
   };
 
   if (typeof raw.at === 'number') {
@@ -351,9 +418,10 @@ export async function initializeTimers(): Promise<void> {
   cancelAllJobs();
   timers.clear();
 
-  if (await fs.pathExists(TIMERS_FILE)) {
+  const loaded = await timersStore.loadFirstAvailable();
+  if (loaded) {
     try {
-      const data = await fs.readJson(TIMERS_FILE);
+      const data = loaded.data;
       const rawTimers = Array.isArray(data?.timers) ? data.timers : [];
       for (const rawTimer of rawTimers) {
         const timer = validatePersistedTimer(rawTimer);
@@ -362,6 +430,10 @@ export async function initializeTimers(): Promise<void> {
           continue;
         }
         timers.set(timer.id, timer);
+      }
+      if (loaded.source !== timersStore.filePath) {
+        logger.warn({ source: loaded.source }, 'Recovering timers from fallback source');
+        await timersStore.write({ timers: Array.from(timers.values()) });
       }
     } catch (err) {
       logger.error({ err }, 'Failed to load timers');
@@ -435,9 +507,51 @@ export async function createTimer(args: {
   return toTimerView(timer);
 }
 
+export async function createWaitTimeoutTimer(args: {
+  sessionId: string;
+  waitId: string;
+  timeoutSeconds: number;
+}): Promise<TimerView> {
+  const targetSession = await sessionManager.getExistingSession(args.sessionId);
+  if (!targetSession) {
+    throw new Error(`Session \`${args.sessionId}\` not found.`);
+  }
+
+  if (typeof args.waitId !== 'string' || !args.waitId.trim()) {
+    throw new Error('waitId is required.');
+  }
+
+  const timeoutSeconds = Number(args.timeoutSeconds);
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new Error('timeoutSeconds must be a positive number.');
+  }
+
+  const timer: SessionTimer = {
+    id: generateTimerId(),
+    sessionId: args.sessionId,
+    message: '',
+    createdAt: Date.now(),
+    at: Date.now() + (timeoutSeconds * 1000),
+    waitTimeoutId: args.waitId,
+    waitTimeoutSeconds: timeoutSeconds,
+  };
+
+  timers.set(timer.id, timer);
+  try {
+    scheduleTimer(timer);
+    await saveTimers();
+  } catch (err) {
+    timers.delete(timer.id);
+    cancelTimerJob(timer.id);
+    throw err;
+  }
+
+  return toTimerView(timer);
+}
+
 export function listTimers(sessionId?: string): TimerView[] {
   return Array.from(timers.values())
-    .filter(timer => !sessionId || timer.sessionId === sessionId)
+    .filter(timer => !timer.waitTimeoutId && (!sessionId || timer.sessionId === sessionId))
     .map(toTimerView)
     .sort((a, b) => {
       const nextA = a.nextRunAt ?? Number.MAX_SAFE_INTEGER;

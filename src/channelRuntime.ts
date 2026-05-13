@@ -2,6 +2,10 @@ import { Channel, ChannelContext, ChannelMessage, getChannelInstance, listRegist
 import { logger } from './common';
 import { getChannelConfigById, getNormalizedChannelConfigs, readAppConfigFile } from './config';
 import { WeixinChannel } from './channels/weixinChannel';
+import { TelegramChannel } from './channels/telegramChannel';
+import { MatrixChannel } from './channels/matrixChannel';
+import { WeWorkWebhookChannel } from './channels/weworkChannel';
+import * as sessionManager from './sessionManager';
 
 export type ChannelRuntimeStatus = {
   channelId: string;
@@ -25,6 +29,115 @@ type ManagedChannelFactory = {
 const managedFactories = new Map<string, ManagedChannelFactory>();
 const lastChannelErrors = new Map<string, string>();
 let runtimeMessageHandler: ((ctx: ChannelContext, message: ChannelMessage) => Promise<void>) | undefined;
+let runtimeCommandHandler: ((ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>) | undefined;
+
+function requireRuntimeMessageHandler(): (ctx: ChannelContext, message: ChannelMessage) => Promise<void> {
+  if (!runtimeMessageHandler) {
+    throw new Error('Channel runtime is not initialized with a message handler');
+  }
+  return runtimeMessageHandler;
+}
+
+function buildTelegramFactory(channelId: string): ManagedChannelFactory {
+  return {
+    channelId,
+    type: 'telegram',
+    create: async () => {
+      const entry = getChannelConfigById(channelId, readAppConfigFile());
+      const config = (entry?.config || {}) as any;
+      const botToken = config.botToken?.trim();
+      if (!botToken) {
+        throw new Error(`Telegram botToken is missing for channel \`${channelId}\` in state/config.yaml`);
+      }
+      const channel = new TelegramChannel(botToken, channelId);
+      channel.onMessage(requireRuntimeMessageHandler());
+      if (runtimeCommandHandler) {
+        channel.onCommand?.(runtimeCommandHandler);
+      }
+      return channel;
+    },
+    describe: () => {
+      const entry = getChannelConfigById(channelId, readAppConfigFile());
+      const config = (entry?.config || {}) as any;
+      return {
+        configured: Boolean(config.botToken?.trim()),
+        enabled: config.enabled !== false,
+        details: [
+          `botToken=${config.botToken?.trim() ? 'configured' : 'missing'}`,
+          `mainAttachUser=${config.mainAttachUser?.trim() || 'unset'}`,
+          `allowedUsers=${Array.isArray(config.allowedUsers) ? config.allowedUsers.length : 0}`,
+        ],
+      };
+    },
+  };
+}
+
+function buildMatrixFactory(channelId: string): ManagedChannelFactory {
+  return {
+    channelId,
+    type: 'matrix',
+    create: async () => {
+      const entry = getChannelConfigById(channelId, readAppConfigFile());
+      const config = (entry?.config || {}) as any;
+      if (!config.homeserver?.trim() || !config.accessToken?.trim() || !config.botUserId?.trim()) {
+        throw new Error(`Matrix homeserver/accessToken/botUserId are required for channel \`${channelId}\` in state/config.yaml`);
+      }
+      const channel = new MatrixChannel(config.homeserver, config.accessToken, config.botUserId, channelId);
+      channel.onMessage(requireRuntimeMessageHandler());
+      return channel;
+    },
+    describe: () => {
+      const entry = getChannelConfigById(channelId, readAppConfigFile());
+      const config = (entry?.config || {}) as any;
+      return {
+        configured: Boolean(config.homeserver?.trim() && config.accessToken?.trim() && config.botUserId?.trim()),
+        enabled: config.enabled !== false,
+        details: [
+          `homeserver=${config.homeserver?.trim() || 'missing'}`,
+          `accessToken=${config.accessToken?.trim() ? 'configured' : 'missing'}`,
+          `botUserId=${config.botUserId?.trim() || 'missing'}`,
+        ],
+      };
+    },
+  };
+}
+
+function buildWeWorkFactory(channelId: string): ManagedChannelFactory {
+  return {
+    channelId,
+    type: 'wework',
+    create: async () => {
+      const entry = getChannelConfigById(channelId, readAppConfigFile());
+      const config = (entry?.config || {}) as any;
+      if (!config.webhookUrl?.trim()) {
+        throw new Error(`WeChat Work webhookUrl is missing for channel \`${channelId}\` in state/config.yaml`);
+      }
+      const channel = new WeWorkWebhookChannel({
+        name: channelId,
+        webhookUrl: config.webhookUrl,
+        token: config.token,
+        encodingAESKey: config.encodingAESKey,
+        listenPort: config.listenPort,
+        listenPath: config.listenPath,
+      });
+      channel.onMessage(requireRuntimeMessageHandler());
+      return channel;
+    },
+    describe: () => {
+      const entry = getChannelConfigById(channelId, readAppConfigFile());
+      const config = (entry?.config || {}) as any;
+      return {
+        configured: Boolean(config.webhookUrl?.trim()),
+        enabled: config.enabled !== false,
+        details: [
+          `webhookUrl=${config.webhookUrl?.trim() ? 'configured' : 'missing'}`,
+          `token=${config.token?.trim() ? 'configured' : 'unset'}`,
+          `listenPath=${config.listenPath?.trim() || 'default'}`,
+        ],
+      };
+    },
+  };
+}
 
 function buildWeixinFactory(channelId: string): ManagedChannelFactory {
   return {
@@ -37,16 +150,13 @@ function buildWeixinFactory(channelId: string): ManagedChannelFactory {
       if (!token) {
         throw new Error(`Weixin token is missing for channel \`${channelId}\` in state/config.yaml`);
       }
-      if (!runtimeMessageHandler) {
-        throw new Error('Channel runtime is not initialized with a message handler');
-      }
       const channel = new WeixinChannel({
         baseUrl: config.baseUrl || 'https://ilinkai.weixin.qq.com',
         token,
         routeTag: config.routeTag,
         longPollTimeoutMs: config.longPollTimeoutMs,
       }, channelId);
-      channel.onMessage(runtimeMessageHandler);
+      channel.onMessage(requireRuntimeMessageHandler());
       return channel;
     },
     describe: () => {
@@ -69,7 +179,13 @@ function buildWeixinFactory(channelId: string): ManagedChannelFactory {
 function rebuildFactories(): void {
   managedFactories.clear();
   for (const entry of getNormalizedChannelConfigs(readAppConfigFile())) {
-    if (entry.type === 'weixin') {
+    if (entry.type === 'telegram') {
+      managedFactories.set(entry.id, buildTelegramFactory(entry.id));
+    } else if (entry.type === 'matrix') {
+      managedFactories.set(entry.id, buildMatrixFactory(entry.id));
+    } else if (entry.type === 'wework') {
+      managedFactories.set(entry.id, buildWeWorkFactory(entry.id));
+    } else if (entry.type === 'weixin') {
       managedFactories.set(entry.id, buildWeixinFactory(entry.id));
     }
   }
@@ -79,8 +195,12 @@ function ensureFactories(): void {
   rebuildFactories();
 }
 
-export function initializeChannelRuntime(handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>): void {
+export function initializeChannelRuntime(
+  handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>,
+  commandHandler?: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>,
+): void {
   runtimeMessageHandler = handler;
+  runtimeCommandHandler = commandHandler;
   ensureFactories();
 }
 
@@ -108,6 +228,13 @@ export async function startManagedChannel(channelId: string): Promise<{ started:
   try {
     await channel.start();
     registerChannel(channelId, channel);
+    const configEntry = getChannelConfigById(channelId, readAppConfigFile());
+    const config = (configEntry?.config || {}) as any;
+    if (factory.type === 'telegram' && config.mainAttachUser) {
+      sessionManager.attachChannel(channelId, config.mainAttachUser, 'main');
+    } else if (factory.type === 'matrix' && config.botUserId) {
+      sessionManager.attachChannel(channelId, config.botUserId, 'main');
+    }
     lastChannelErrors.delete(channelId);
     logger.info({ channelId, type: factory.type }, 'Managed channel started');
     return {
@@ -119,6 +246,65 @@ export async function startManagedChannel(channelId: string): Promise<{ started:
     lastChannelErrors.set(channelId, message);
     throw err;
   }
+}
+
+async function stopRegisteredChannel(channelId: string): Promise<boolean> {
+  const existing = getChannelInstance(channelId);
+  if (!existing) {
+    return false;
+  }
+  await existing.stop();
+  unregisterChannel(channelId);
+  logger.info({ channelId, type: existing.platform }, 'Channel stopped for runtime reload');
+  return true;
+}
+
+export async function reloadManagedChannels(): Promise<{ stopped: string[]; started: string[]; statuses: ChannelRuntimeStatus[] }> {
+  const previousIds = new Set<string>([
+    ...managedFactories.keys(),
+    ...listRegisteredChannels()
+      .filter(item => ['telegram', 'matrix', 'wework', 'weixin'].includes(item.type))
+      .map(item => item.channelInstanceId),
+  ]);
+
+  const stopped: string[] = [];
+  for (const channelId of Array.from(previousIds).sort()) {
+    try {
+      if (await stopRegisteredChannel(channelId)) {
+        stopped.push(channelId);
+      }
+    } catch (err: any) {
+      const message = err instanceof Error ? err.message : String(err);
+      lastChannelErrors.set(channelId, message);
+      logger.error({ err, channelId }, 'Failed to stop channel during runtime reload');
+    }
+  }
+
+  rebuildFactories();
+
+  const started: string[] = [];
+  for (const [channelId, factory] of Array.from(managedFactories.entries()).sort(([a], [b]) => a.localeCompare(b))) {
+    const status = getChannelRuntimeStatus(channelId);
+    if (!status?.enabled || !status.configured) {
+      continue;
+    }
+    try {
+      const result = await startManagedChannel(channelId);
+      if (result.started) {
+        started.push(channelId);
+      }
+    } catch (err: any) {
+      const message = err instanceof Error ? err.message : String(err);
+      lastChannelErrors.set(channelId, message);
+      logger.error({ err, channelId, type: factory.type }, 'Failed to start channel during runtime reload');
+    }
+  }
+
+  return {
+    stopped,
+    started,
+    statuses: listChannelRuntimeStatuses(),
+  };
 }
 
 export async function stopManagedChannel(channelId: string): Promise<{ stopped: boolean; status: ChannelRuntimeStatus }> {
@@ -197,7 +383,7 @@ export function listChannelRuntimeStatuses(filter?: { type?: string }): ChannelR
   ensureFactories();
   const channelIds = new Set<string>([
     ...getManagedChannelIds(),
-    ...listRegisteredChannels().map(item => item.channelId),
+    ...listRegisteredChannels().map(item => item.channelInstanceId),
     ...getNormalizedChannelConfigs(readAppConfigFile()).map(item => item.id),
   ]);
   return Array.from(channelIds)

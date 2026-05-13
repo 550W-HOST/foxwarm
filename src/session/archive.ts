@@ -4,6 +4,13 @@ import { createHash } from 'crypto';
 import { Message, MessagePart, Session } from '../types';
 import { getSessionArchiveImagesDir, getSessionArchiveLogPath } from '../config';
 import { logger } from '../common';
+import {
+  ensureSessionBranch,
+  refreshSessionArchiveImportState,
+  readEffectiveArchiveMessages,
+  readLocalArchiveMessages as readLocalArchiveMessagesFromStore,
+  writeArchiveMessages,
+} from './archiveStore';
 
 export interface ArchiveMessageRecord {
   v: number;
@@ -14,6 +21,8 @@ export interface ArchiveMessageRecord {
   timestamp: number;
   role: Message['role'];
   message: Message;
+  sourceSessionId?: string;
+  inherited?: boolean;
 }
 
 export function getMessageTimestamp(message: Message): number {
@@ -80,6 +89,7 @@ export async function buildArchiveRecord(session: Session, message: Message): Pr
 
   for (let partIndex = 0; partIndex < message.parts.length; partIndex++) {
     const part = message.parts[partIndex];
+    const existingImageMeta = part.imageMeta;
 
     if (!part.inlineData?.data) {
       archiveParts.push(part);
@@ -88,7 +98,7 @@ export async function buildArchiveRecord(session: Session, message: Message): Pr
 
     const mimeType = getInlineDataMimeType(part);
     const extension = getArchiveFileExtension(mimeType);
-    const imageId = `msg${String(seq).padStart(8, '0')}_part${partIndex + 1}`;
+    const imageId = existingImageMeta?.imageId || `msg${String(seq).padStart(8, '0')}_part${partIndex + 1}`;
     const imageDir = getSessionArchiveImagesDir(session.id);
     const fileName = `${imageId}.${extension}`;
     const filePath = path.join(imageDir, fileName);
@@ -108,6 +118,8 @@ export async function buildArchiveRecord(session: Session, message: Message): Pr
         mimeType,
         byteLength: binary.length,
         sha256,
+        width: existingImageMeta?.width,
+        height: existingImageMeta?.height,
       },
     });
   }
@@ -139,43 +151,27 @@ export async function appendMessagesToArchive(session: Session, messages: Messag
 
   const archiveLogPath = getSessionArchiveLogPath(session.id);
   await fs.ensureDir(path.dirname(archiveLogPath));
+  await ensureSessionBranch(session.id);
 
+  const records: ArchiveMessageRecord[] = [];
   const lines: string[] = [];
   for (const message of messages) {
     const record = await buildArchiveRecord(session, message);
+    records.push(record as ArchiveMessageRecord);
     lines.push(JSON.stringify(record));
   }
 
   await fs.appendFile(archiveLogPath, `${lines.join('\n')}\n`);
+  await writeArchiveMessages(records);
+  await refreshSessionArchiveImportState(session.id, 'messages');
 }
 
 export async function readArchiveMessages(sessionId: string): Promise<ArchiveMessageRecord[]> {
-  const archiveLogPath = getSessionArchiveLogPath(sessionId);
-  if (!await fs.pathExists(archiveLogPath)) {
-    return [];
-  }
+  return readEffectiveArchiveMessages(sessionId);
+}
 
-  const raw = await fs.readFile(archiveLogPath, 'utf8');
-  const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
-  const parsed: ArchiveMessageRecord[] = [];
-
-  for (const line of lines) {
-    try {
-      const record = JSON.parse(line);
-      if (
-        record?.kind === 'message'
-        && typeof record.sessionId === 'string'
-        && typeof record.seq === 'number'
-        && record.message
-      ) {
-        parsed.push(record as ArchiveMessageRecord);
-      }
-    } catch (e) {
-      logger.warn({ err: e, sessionId }, 'Skipping malformed archive log line');
-    }
-  }
-
-  return parsed.sort((a, b) => a.seq - b.seq);
+export async function readLocalArchiveMessages(sessionId: string): Promise<ArchiveMessageRecord[]> {
+  return readLocalArchiveMessagesFromStore(sessionId);
 }
 
 export function stripMessageSeq(message: Message): Message {
@@ -192,10 +188,9 @@ export function stripMessageSeq(message: Message): Message {
   return clonedMessage;
 }
 export async function readArchiveMessagesBySeqRange(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageRecord[]> {
-  const records = await readArchiveMessages(sessionId);
-  return records.filter(record => {
-    if (typeof startSeq === 'number' && record.seq < startSeq) return false;
-    if (typeof endSeq === 'number' && record.seq > endSeq) return false;
-    return true;
-  });
+  return readEffectiveArchiveMessages(sessionId, startSeq, endSeq);
+}
+
+export async function readLocalArchiveMessagesBySeqRange(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageRecord[]> {
+  return readLocalArchiveMessagesFromStore(sessionId, startSeq, endSeq);
 }

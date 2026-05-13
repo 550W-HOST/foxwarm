@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowLeft, ChevronDown, ChevronRight, Copy, Download, FileText, Folder, FolderOpen, Save, SquareTerminal, X } from 'lucide-react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, ChevronDown, ChevronRight, Copy, Download, FileText, Folder, FolderOpen, Save, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
+import ContentHeader from './ContentHeader'
 import ContextMenu, { type ContextMenuEntry } from './ContextMenu'
 import { MAX_INLINE_FILE_BYTES, buildWorkspaceDownloadUrl, formatSize, formatTimestamp, triggerBrowserDownload } from './workspaceShared'
+
+const MonacoFileEditor = lazy(() => import('./MonacoFileEditor'))
 
 interface WorkspaceEntry {
   name: string
@@ -477,27 +480,13 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
-      <div className="border-b border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            {onBack && (
-              <button
-                onClick={onBack}
-                className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
-                title="Back"
-              >
-                <ArrowLeft className="h-5 w-5" />
-              </button>
-            )}
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Workspace</h2>
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                node {rootNodeId} · root <span className="font-mono text-[12px]">{rootPath}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
+      <ContentHeader
+        icon={<FolderOpen className="h-5 w-5" />}
+        title="Workspace"
+        subtitle={<>node {rootNodeId} · root <span className="font-mono text-[12px]">{rootPath}</span></>}
+        onBack={onBack}
+        actions={(
+          <>
             {activeFilePath && onOpenFile && (
               <button
                 onClick={() => onOpenFile(rootNodeId, activeFilePath)}
@@ -535,22 +524,18 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
               <Save className="h-4 w-4" />
               <span className="hidden md:inline">{isSaving ? 'Saving...' : 'Save file'}</span>
             </button>
-          </div>
-        </div>
-
-        {error && (
-          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
+          </>
+        )}
+        below={error ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
             {error}
           </div>
-        )}
-
-        {notice && !error && (
-          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200">
+        ) : notice ? (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200">
             {notice}
           </div>
-        )}
-
-      </div>
+        ) : null}
+      />
 
       <div className="flex min-h-0 flex-1">
         <div className="flex w-[360px] shrink-0 flex-col border-r border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
@@ -678,12 +663,9 @@ export default function WorkspaceView({ initialNodeId, initialPath, onBack, onOp
             ) : isFileLoading ? (
               <div className="flex h-full items-center justify-center text-sm text-gray-500 dark:text-gray-400">Loading file…</div>
             ) : activeFilePath ? (
-              <textarea
-                value={editorContent}
-                onChange={(event) => setEditorContent(event.target.value)}
-                className="h-full w-full resize-none rounded-xl border border-gray-300 bg-white p-4 font-mono text-sm text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 dark:focus:border-blue-500 dark:focus:ring-blue-900"
-                spellCheck={false}
-              />
+              <Suspense fallback={<div className="flex h-full items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white text-sm text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">Loading editor…</div>}>
+                <MonacoFileEditor value={editorContent} onChange={setEditorContent} filePath={activeFilePath} />
+              </Suspense>
             ) : (
               <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white text-sm text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">
                 Select a file from the root tree or opened files list to edit it here.

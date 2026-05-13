@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=400">
+  <title>Foxwarm Browser Node</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-title">
+        <img src="../icons/icon48.png" alt="" class="logo" width="24" height="24">
+        <h1>Foxwarm Browser Node</h1>
+      </div>
+      <div id="status-badge" class="badge badge-disconnected">Disconnected</div>
+    </div>
+
+    <!-- Connection Panel -->
+    <section id="connection-panel" class="panel">
+      <h2>Connection</h2>
+      <div id="connection-form">
+        <div class="form-group">
+          <label for="host-input">Master URL</label>
+          <input type="text" id="host-input" placeholder="http://localhost:3001" spellcheck="false">
+        </div>
+        <div class="form-group">
+          <label for="token-input">Pairing Token</label>
+          <input type="text" id="token-input" placeholder="Enter pairing token" spellcheck="false">
+        </div>
+        <div class="form-group">
+          <label for="name-input">Node Name</label>
+          <input type="text" id="name-input" placeholder="browser-ext" spellcheck="false">
+        </div>
+        <div class="button-row">
+          <button id="connect-btn" class="btn btn-primary">Connect</button>
+          <button id="disconnect-btn" class="btn btn-secondary" style="display:none">Disconnect</button>
+          <button id="reset-btn" class="btn btn-danger" style="display:none" title="Clear stored credentials and disconnect">Reset</button>
+        </div>
+      </div>
+      <div id="pairing-info" class="info-box" style="display:none">
+        <div class="info-label">Pairing Code</div>
+        <div id="pair-code" class="pair-code"></div>
+        <div class="info-hint">Approve this node on the Foxwarm master</div>
+      </div>
+      <div id="registered-info" class="info-box info-success" style="display:none">
+        <div class="info-label">Connected as</div>
+        <div id="node-id-display" class="node-id"></div>
+      </div>
+    </section>
+
+    <!-- Permissions Panel -->
+    <section id="permissions-panel" class="panel">
+      <h2>Permissions</h2>
+
+      <div class="form-group">
+        <label>Default for new tabs</label>
+        <div class="permission-toggle" id="default-permission">
+          <button class="perm-btn" data-level="off">Off</button>
+          <button class="perm-btn" data-level="ask">Ask</button>
+          <button class="perm-btn" data-level="auto">Auto</button>
+        </div>
+      </div>
+
+      <!-- Domain rules -->
+      <div class="subsection">
+        <h3>Domain Rules</h3>
+        <div id="domain-rules-list" class="rules-list"></div>
+        <div class="add-rule-row">
+          <input type="text" id="new-domain-input" placeholder="example.com" spellcheck="false">
+          <select id="new-domain-level">
+            <option value="auto">Auto</option>
+            <option value="ask">Ask</option>
+            <option value="off">Off</option>
+          </select>
+          <button id="add-domain-btn" class="btn btn-small">Add</button>
+        </div>
+      </div>
+
+      <!-- Open tabs -->
+      <div class="subsection">
+        <h3>Open Tabs</h3>
+        <div id="tabs-list" class="tabs-list"></div>
+      </div>
+    </section>
+
+    <!-- Pending Confirmations -->
+    <section id="confirmations-panel" class="panel" style="display:none">
+      <h2>Pending Confirmations</h2>
+      <div id="confirmations-list"></div>
+    </section>
+  </div>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

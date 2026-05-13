@@ -1,0 +1,46 @@
+{
+  "name": "@foxwarm/shared",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./toolResponseFormatting": {
+      "types": "./dist/toolResponseFormatting.d.ts",
+      "default": "./dist/toolResponseFormatting.js"
+    },
+    "./nodeTools": {
+      "types": "./dist/nodeTools.d.ts",
+      "default": "./dist/nodeTools.js"
+    },
+    "./nodeFileTransfer": {
+      "types": "./dist/nodeFileTransfer.d.ts",
+      "default": "./dist/nodeFileTransfer.js"
+    },
+    "./nodeCapabilities": {
+      "types": "./dist/nodeCapabilities.d.ts",
+      "default": "./dist/nodeCapabilities.js"
+    },
+    "./tokenCount": {
+      "types": "./dist/tokenCount.d.ts",
+      "default": "./dist/tokenCount.js"
+    }
+  },
+  "dependencies": {
+    "fs-extra": "^11.3.3",
+    "js-yaml": "^4.1.0",
+    "puppeteer-core": "^24.37.5"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.19.11",
+    "typescript": "^5.9.3"
+  }
+}

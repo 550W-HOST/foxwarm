@@ -76,10 +76,12 @@ export class NodesManager {
       'write_memory',
       'edit_memory',
       'delete_memory',
+      'apply_patch_memory',
       'apply_patch',
       'list_files',
       'delete_file',
       'exec',
+      'search_vector',
       'search_memory',
       'get_memory_context',
       'create_child_session',
@@ -87,26 +89,29 @@ export class NodesManager {
       'create_session',
       'set_agent_inherit',
       'send_to_session',
+      'wait',
       'end_turn',
       'submit_compact_plan',
       'list_sessions',
       'list_skills',
-      'attach_agent_skill',
-      'detach_agent_skill',
       'load_skill',
       'get_session_messages',
       'get_archived_messages',
+      'get_archived_blocks',
+      'get_context_archive',
       'delete_session',
       'update_session_name',
+      'set_session_child_model',
       'set_session_compact_threshold',
       'stop_session',
       'compact_session',
-      'compress_session',
       'browse_open',
       'browse_list',
       'browse_get',
       'browse_close',
       'browse_interact',
+      'search_tools',
+      'call_tool',
       'copy_between_nodes',
     ]);
   }
@@ -313,6 +318,12 @@ export class NodesManager {
       this.toolCalls.set(callId, toolCall);
       
       // Send tool call to node
+      // Only send sessionCwd when the session's currentNode matches the target node.
+      // When using call_tool to temporarily execute on a remote node, session.cwd
+      // is a master-local path and should not be forwarded.
+      const shouldSendCwd = session.currentNode === nodeId && typeof session.cwd === 'string';
+      const timeoutMs = 62000;
+
       node.ws!.send(JSON.stringify({
         type: 'tool_call',
         callId: callId,
@@ -320,16 +331,17 @@ export class NodesManager {
         args: args,
         sessionId,
         agentName: session.agent || 'main',
-        sessionCwd: typeof session.cwd === 'string' ? session.cwd : undefined
+        timeoutMs,
+        ...(shouldSendCwd ? { sessionCwd: session.cwd } : {}),
       }));
       
-      // Set timeout (30 seconds default)
+      // Set timeout
       setTimeout(() => {
         if (this.toolCalls.has(callId)) {
           this.toolCalls.delete(callId);
           reject(`Tool call \`${callId}\` timed out`);
         }
-      }, 30000);
+      }, timeoutMs);
     });
   }
 
@@ -500,10 +512,97 @@ export class NodesManager {
     throw new Error(`Node "${nodeId}" cannot send session events to "${sessionId}" because the session is not assigned to that node or its isolated agent.`);
   }
 
+  private nodeCanAccessSession(nodeId: string, session: any): boolean {
+    if (session.currentNode === nodeId) {
+      return true;
+    }
+
+    const agentName = session.agent || 'main';
+    return sessionManager.isAgentIsolated(agentName) && sessionManager.getAgentIsolationNode(agentName) === nodeId;
+  }
+
+  private async assertNodeCanAccessSession(nodeId: string, sessionId: string, action: string): Promise<any> {
+    const session = await sessionManager.getExistingSession(sessionId);
+    if (!session) {
+      throw new Error(`Target session "${sessionId}" not found.`);
+    }
+
+    if (this.nodeCanAccessSession(nodeId, session)) {
+      return session;
+    }
+
+    throw new Error(`Node "${nodeId}" cannot ${action} session "${sessionId}" because the session is not assigned to that node or its isolated agent.`);
+  }
+
+  private summarizeSession(session: any) {
+    return {
+      id: session.id,
+      displayName: session.displayName,
+      messageCount: session.meta?.messageCount || session.history?.length || 0,
+      lastMessageTime: session.meta?.lastMessageTime || null,
+      currentNode: session.currentNode,
+      cwd: session.cwd,
+      busy: session.busy,
+      queueLength: session.queue?.length || 0,
+    };
+  }
+
+  private messagePartToText(part: any): string {
+    if (!part || typeof part !== 'object') {
+      return String(part ?? '');
+    }
+    if (typeof part.text === 'string') return part.text;
+    if (typeof part.system === 'string') return `[SYSTEM] ${part.system}`;
+    if (part.inlineData) return `[inline data: ${part.inlineData.mimeType || 'unknown'}]`;
+    if (part.functionCall) return `[tool call: ${part.functionCall.name || 'unknown'} ${JSON.stringify(part.functionCall.args || {})}]`;
+    if (part.functionResponse) return `[tool response: ${part.functionResponse.name || 'unknown'} ${JSON.stringify(part.functionResponse.response || {})}]`;
+    return JSON.stringify(part);
+  }
+
+  private serializeSessionMessage(message: any, index: number) {
+    const parts = Array.isArray(message.parts) ? message.parts : [];
+    return {
+      index,
+      role: message.role || 'unknown',
+      text: parts.map((part: any) => this.messagePartToText(part)).filter(Boolean).join('\n'),
+      timestamp: message.__meta?.timestamp,
+    };
+  }
+
+  async listSessionsForNode(nodeId: string) {
+    const summaries = [];
+    for (const item of sessionManager.listSessions()) {
+      const session = await sessionManager.getExistingSession(item.id);
+      if (session && this.nodeCanAccessSession(nodeId, session)) {
+        summaries.push(this.summarizeSession(session));
+      }
+    }
+    return summaries;
+  }
+
+  async getSessionHistoryForNode(nodeId: string, sessionId: string, count = 30) {
+    const session = await this.assertNodeCanAccessSession(nodeId, sessionId, 'read history for');
+    const totalMessages = session.history?.length || 0;
+    const safeCount = Math.max(1, Math.min(100, Number(count) || 30));
+    const start = Math.max(0, totalMessages - safeCount);
+    const messages = await sessionManager.getSessionMessages(session.id, start, safeCount);
+    return {
+      session: this.summarizeSession(session),
+      totalMessages,
+      messages: messages.map((message, offset) => this.serializeSessionMessage(message, start + offset)),
+    };
+  }
+
   async handleSessionEvent(nodeId: string, sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
     await this.assertNodeOwnsSessionForEvent(nodeId, sessionId);
     await sessionManager.queueSessionSystemEvent(sessionId, message, type);
     logger.info({ nodeId, sessionId, type }, 'Session event received from remote node');
+  }
+
+  async handleSessionUserMessage(nodeId: string, sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'trigger'): Promise<void> {
+    await this.assertNodeCanAccessSession(nodeId, sessionId, 'send messages to');
+    await sessionManager.queueSessionEvent(sessionId, message, type);
+    logger.info({ nodeId, sessionId, type }, 'Session user message received from remote node');
   }
 
   /**
@@ -522,10 +621,11 @@ export class NodesManager {
   getToolDefinition(toolName: string): any {
     // Keep lazy require here to avoid a real circular dependency:
     // tools -> nodesManager -> tools.
-    const toolsModule = require('./tools');
+    const toolsModule = require('../tools');
     const definitions = toolsModule.definitions;
     
-    return definitions.find((d: any) => d.name === toolName);
+    return definitions.find((d: any) => d.name === toolName)
+      || (toolName === 'search_memory' ? definitions.find((d: any) => d.name === 'search_vector') : undefined);
   }
 
   /**
@@ -534,8 +634,13 @@ export class NodesManager {
   async executeToolLocally(toolName: string, args: Record<string, any>, sessionId: string): Promise<any> {
     // Keep lazy require here to avoid a real circular dependency:
     // tools -> nodesManager -> tools.
-    const toolsModule = require('./tools');
+    const toolsModule = require('../tools');
     const tool = toolsModule[toolName];
+    const runtimeNodeId = typeof args?.__runtimeNodeId === 'string' && args.__runtimeNodeId.trim().length > 0
+      ? args.__runtimeNodeId.trim()
+      : 'master';
+    const toolArgs = { ...(args || {}) };
+    delete toolArgs.__runtimeNodeId;
     
     if (!tool) {
       throw new Error(`Tool \`${toolName}\` not found`);
@@ -544,7 +649,7 @@ export class NodesManager {
     const ctx = {
       sessionId,
       session: await sessionManager.getSession(sessionId),
-      runtimeNodeId: 'master',
+      runtimeNodeId,
       broadcast: async (text: string) => {
         // Broadcast via session
         const session = await sessionManager.getSession(sessionId);
@@ -554,7 +659,7 @@ export class NodesManager {
       }
     };
     
-    return await tool(args, ctx);
+    return await tool(toolArgs, ctx);
   }
 }
 

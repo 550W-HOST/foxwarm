@@ -30,6 +30,9 @@ from node_auth import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+ANDROID_NODE_PING_INTERVAL = 30
+ANDROID_NODE_PING_TIMEOUT = 10
+
 
 # Tool definitions for dynamic registration
 TOOL_DEFINITIONS = [
@@ -157,6 +160,18 @@ TOOL_DEFINITIONS = [
             },
             "required": ["packageName"]
         }
+    },
+    {
+        "name": "android_shell",
+        "description": "Execute an arbitrary adb shell command on the Android device and return its output",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The shell command to execute on the device"},
+                "timeout": {"type": "number", "description": "Timeout in seconds (default: 10)", "default": 10}
+            },
+            "required": ["command"]
+        }
     }
 ]
 
@@ -236,6 +251,8 @@ class AndroidNode:
                 return await self.launch_app(args)
             elif tool == "android_stop_app":
                 return await self.stop_app(args)
+            elif tool == "android_shell":
+                return await self.shell(args)
             else:
                 return {"error": f"Unknown tool: {tool}"}
         except Exception as e:
@@ -455,6 +472,35 @@ class AndroidNode:
             "state": await self.current_app({}),
         }
 
+    async def shell(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute an arbitrary adb shell command"""
+        command = args.get("command")
+        if not command:
+            return {"error": "Missing command"}
+        timeout = int(args.get("timeout", 10))
+        timeout = max(1, min(timeout, 120))
+
+        serial = getattr(self.device, "serial", None) or getattr(self.device, "_serial", None)
+        cmd = ["adb"]
+        if serial:
+            cmd.extend(["-s", serial])
+        cmd.extend(["shell", command])
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout
+            )
+            output = (result.stdout + result.stderr).strip()
+            return {
+                "success": True,
+                "action": "shell",
+                "command": command,
+                "exitCode": result.returncode,
+                "output": output,
+            }
+        except subprocess.TimeoutExpired:
+            return {"error": f"Command timed out after {timeout}s", "command": command}
+
     async def unlock(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Wake device and unlock with numeric PIN"""
         pin = str(args.get("pin", ""))
@@ -619,7 +665,11 @@ async def connect_to_foxwarm(node: AndroidNode):
         )
 
         try:
-            async with websockets.connect(ws_url) as websocket:
+            async with websockets.connect(
+                ws_url,
+                ping_interval=ANDROID_NODE_PING_INTERVAL,
+                ping_timeout=ANDROID_NODE_PING_TIMEOUT,
+            ) as websocket:
                 if mode == "authenticated":
                     logger.info("Sending node registration...")
                     await websocket.send(json.dumps(build_registration_payload(node)))

@@ -63,7 +63,7 @@ Foxwarm 会为每个 session 生成 `persistentMemorySnapshot`。当前 prompt �
 
 1. inherited agent memory（按继承链从根到当前 agent）
 2. 当前 agent 自身 memory
-3. attached skills 的 memory
+3. visible skills catalog（技能名 + 描述；完整文档按需通过 `load_skill` 加载）
 
 生成后的 snapshot 会缓存到 session，并在相关变更时刷新。
 
@@ -165,8 +165,9 @@ state/
 
 ### `state/models.yaml`
 - 默认模型 key
-- 可选模型列表
-- 每个模型条目的 provider / model / baseUrl / apiKey 覆盖
+- `providers`（首选）或兼容旧根层 `models`
+- 每个 provider entry 的 `providerType` / `models` / `baseUrl` / `apiKey`
+- `models` 支持字符串列表，或带 `id` / `contextLimit` / `extraFields` / `extraHeaders` 的 object list
 
 ### `templates/`
 - 初始 agent memory 模板

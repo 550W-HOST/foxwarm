@@ -1,17 +1,21 @@
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import * as skills from './skills';
 import * as timers from './timers';
 import type { ChannelFile } from './channel';
-import { getAgentDir } from './config';
+import { getAgentDir, resolveModelConfig } from './config';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
 import { AGENTS_DIR, COMPACT_PERCENT } from './config';
-import { clearSessionTodo, normalizeRemindEvery, normalizeTodoText, setSessionTodo } from './session/todo';
+import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, resolveSessionGoalRemindOnTurnEnd, setSessionGoal } from './session/goal';
+import { formatArchiveBlockTimeRange } from './session/layeredContext';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './utils/messageFormat';
+import { formatModelVisibilitySuffix, redactDisplayOnlyMessageForModel } from './session/messageVisibility';
+import { truncateUnicodeSafe } from './utils/unicode';
 import { requireNotIsolated, checkArchivedReadPermission, checkChannelPermission, checkPathAccess, checkSendFilePermission, checkTimerPermission } from './isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
 
@@ -24,25 +28,75 @@ interface ToolContext {
 
 type ToolArgs = Record<string, any>;
 
+const ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT = 20_000;
+
 function buildEndTurnResult(_reason?: string) {
   return { output: 'ok', __toolLoopControl: { stopCurrentTurn: true } };
 }
 
-function getSubconsciousPrimarySessionId(ctx?: ToolContext): string | undefined {
-  return sessionManager.getSubconsciousPrimarySessionId(ctx?.session);
+function normalizeWaitTimeoutSeconds(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  const timeoutSeconds = Number(value);
+  if (!Number.isFinite(timeoutSeconds)) {
+    throw new Error('timeoutSeconds must be a non-negative number.');
+  }
+  if (timeoutSeconds < 0) {
+    throw new Error('timeoutSeconds must be a non-negative number.');
+  }
+  if (timeoutSeconds === 0) {
+    return undefined;
+  }
+
+  return timeoutSeconds;
 }
 
-function assertAllowedSubconsciousTarget(ctx: ToolContext | undefined, targetSessionId: string | undefined, toolName: string): void {
-  const primarySessionId = getSubconsciousPrimarySessionId(ctx);
-  if (!primarySessionId) {
+function normalizePositivePreviewLength(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
+}
+
+function calculatePreviewRequestChars(itemCount: number, previewLength: number): number {
+  const normalizedCount = Math.max(0, Math.floor(itemCount));
+  if (normalizedCount <= 1) {
+    return 0;
+  }
+  return normalizedCount * previewLength;
+}
+
+function assertPreviewRequestWithinLimit(
+  toolName: string,
+  segments: Array<{ label: string; count: number; previewLength: number }>,
+): void {
+  const evaluatedSegments = segments
+    .map(segment => {
+      const count = Math.max(0, Math.floor(segment.count));
+      const previewLength = Math.max(0, Math.floor(segment.previewLength));
+      return {
+        ...segment,
+        count,
+        previewLength,
+        requestedChars: calculatePreviewRequestChars(count, previewLength),
+      };
+    })
+    .filter(segment => segment.count > 0);
+
+  const totalRequestedChars = evaluatedSegments.reduce((sum, segment) => sum + segment.requestedChars, 0);
+  if (totalRequestedChars <= ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT) {
     return;
   }
 
-  const resolvedTargetSessionId = targetSessionId || ctx?.sessionId;
-  const selfSessionId = ctx?.sessionId;
-  if (!resolvedTargetSessionId || (resolvedTargetSessionId !== primarySessionId && resolvedTargetSessionId !== selfSessionId)) {
-    throw new Error(`Subconscious side sessions may only use ${toolName} with their primary session or themselves.`);
-  }
+  const detailText = evaluatedSegments
+    .map(segment => `${segment.label}: ${segment.count} × ${segment.previewLength}${segment.count <= 1 ? ' (single-item request exempt)' : ` = ${segment.requestedChars}`}`)
+    .join('; ');
+
+  throw new Error(
+    `Request too large for ${toolName}: requested preview budget is ${totalRequestedChars} characters, exceeding the ${ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT}-character limit. `
+    + `First narrow the range or locate the relevant message/block position, then request fuller content. ${detailText}`,
+  );
 }
 
 const MIME_TYPE_BY_EXT: Record<string, string> = {
@@ -112,9 +166,23 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function normalizeToolModelKey(value: unknown): string | undefined {
+  if (!isNonEmptyString(value)) {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  const { modelsConfig } = resolveModelConfig(undefined);
+  if (!modelsConfig.models[normalized]) {
+    throw new Error(`Unknown model \`${normalized}\`. Use /model to list available models.`);
+  }
+
+  return normalized;
+}
+
 function formatArchivedMessagePreview(
   sessionId: string,
-  records: Array<{ seq: number; message: any }>,
+  records: Array<{ seq: number; message: any; inherited?: boolean; sourceSessionId?: string }>,
   meta: { totalMatched: number; startSeq?: number; endSeq?: number },
   previewLength: number,
 ): string {
@@ -136,13 +204,17 @@ function formatArchivedMessagePreview(
 
   let result = `Archived messages for session \`${sessionId}\` - showing ${records.length} of ${meta.totalMatched} matched message(s)${rangeLabel}.\n\n`;
   for (const record of records) {
-    const roleEmoji = record.message.role === 'user' ? '👤' : record.message.role === 'model' ? '🤖' : '🔧';
-    const preview = formatMessagePreviewText(record.message, previewLength, {
+    const message = redactDisplayOnlyMessageForModel(record.message);
+    const roleEmoji = message.role === 'user' ? '👤' : message.role === 'model' ? '🤖' : '🔧';
+    const preview = formatMessagePreviewText(message, previewLength, {
       skipEphemeralSystem: true,
       skipRagMemorySnippets: true,
       skipThinking: true,
     });
-    result += `${formatPrefixedMultilineText(`[#${record.seq}] ${roleEmoji} ${record.message.role}: `, preview)}\n`;
+    const originLabel = record.inherited
+      ? `[inherited from ${record.sourceSessionId || 'unknown'}] `
+      : '[local] ';
+    result += `${formatPrefixedMultilineText(`[#${record.seq}] ${originLabel}${roleEmoji} ${record.message.role}${formatModelVisibilitySuffix(record.message)}: `, preview)}\n`;
   }
   return result;
 }
@@ -150,7 +222,20 @@ function formatArchivedMessagePreview(
 
 function formatArchivedBlockPreview(
   sessionId: string,
-  records: Array<{ id: number; level: number; rawStartSeq: number; rawEndSeq: number; summary: string; sourceKind: string; sourceStart: number; sourceEnd: number; }>,
+  records: Array<{
+    id: number;
+    level: number;
+    rawStartSeq: number;
+    rawEndSeq: number;
+    rawStartTimestamp?: number;
+    rawEndTimestamp?: number;
+    summary: string;
+    sourceKind: string;
+    sourceStart: number;
+    sourceEnd: number;
+    inherited?: boolean;
+    sourceSessionId?: string;
+  }>,
   meta: { totalMatched: number; startId?: number; endId?: number },
   previewLength: number,
 ): string {
@@ -170,11 +255,16 @@ function formatArchivedBlockPreview(
 
 `;
   for (const record of records) {
-    const prefix = `[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
-    result += `${formatPrefixedMultilineText(prefix, (record.summary || '').slice(0, previewLength) || '[empty summary]')}
+    const locality = record.inherited ? `[inherited from ${record.sourceSessionId || 'unknown'}] ` : '[local] ';
+    const prefix = `${locality}[B#${record.id}] L${record.level} raw#${record.rawStartSeq}${record.rawStartSeq === record.rawEndSeq ? '' : `-#${record.rawEndSeq}`}${formatArchiveBlockTimeRange(record)} from ${record.sourceKind} ${record.sourceStart}-${record.sourceEnd}: `;
+    result += `${formatPrefixedMultilineText(prefix, truncateUnicodeSafe(record.summary || '', previewLength) || '[empty summary]')}
 `;
   }
   return result;
+}
+
+function formatCombinedArchivedContextPreview(parts: Array<string | null | undefined>): string {
+  return parts.filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('\n\n');
 }
 
 
@@ -249,9 +339,20 @@ function formatSendFileSessionResult(targetSessionId: string, file: ChannelFile,
   return lines.join('\n');
 }
 
+function isWebUiUnsupportedFileDelivery(channelId: string, reason: string): boolean {
+  return channelId.startsWith('webui:') && reason === 'channel does not support file sending yet';
+}
+
+function buildSendFileResult(output: string, file: ChannelFile) {
+  return {
+    output,
+    fullPath: file.path,
+  };
+}
+
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  const { suffix, fork = true, message, node, noFurtherAssistantReply } = args;
+  const { suffix, fork = false, message, node, noFurtherAssistantReply } = args;
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
@@ -284,34 +385,49 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
     throw new Error('sessionId is required');
   }
 
-  const subconsciousPrimarySessionId = getSubconsciousPrimarySessionId(ctx);
-  if (subconsciousPrimarySessionId && sessionId !== subconsciousPrimarySessionId) {
-    throw new Error('Subconscious side sessions may only send hints to their primary session.');
-  }
-
   await sessionManager.sendToSession(sessionId, message, fromSessionId);
-  if (subconsciousPrimarySessionId && fromSessionId) {
-    await sessionManager.noteSubconsciousHintDelivered(fromSessionId, sessionId);
-  }
   const output = `Message sent to session \`${sessionId}\``;
   return noFurtherAssistantReply
     ? { ...buildEndTurnResult(), output }
     : output;
 }
 
-export async function tool_end_turn(args: ToolArgs) {
+export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   const { reason } = args || {};
+  const timeoutSeconds = normalizeWaitTimeoutSeconds(args?.timeoutSeconds);
+
+  if (ctx?.sessionId) {
+    const waitState = await sessionManager.startSessionWait(ctx.sessionId, {
+      reason: typeof reason === 'string' ? reason : undefined,
+      timeoutSeconds,
+    });
+
+    if (timeoutSeconds !== undefined) {
+      await timers.createWaitTimeoutTimer({
+        sessionId: ctx.sessionId,
+        waitId: waitState.id,
+        timeoutSeconds,
+      });
+    }
+  } else if (timeoutSeconds !== undefined) {
+    throw new Error('Cannot use wait timeout without session context.');
+  }
+
   return buildEndTurnResult(typeof reason === 'string' ? reason : undefined);
 }
 
+export async function tool_end_turn(args: ToolArgs, ctx?: ToolContext) {
+  return tool_wait(args, ctx);
+}
+
 export async function tool_submit_compact_plan() {
-  return `${COMPACT_PLAN_TOOL_NAME} is only valid inside the dedicated compact planning flow. Request compaction with compact_session/compress_session and only submit a plan when the system compact prompt explicitly asks for it.`;
+  return `${COMPACT_PLAN_TOOL_NAME} is only valid inside the dedicated compact planning flow. Request compaction with compact_session and only submit a plan when the system compact prompt explicitly asks for it.`;
 }
 
 export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
-  const { channelId, message } = args;
-  if (!channelId || typeof channelId !== 'string') {
-    throw new Error('channelId is required (format: platform:userId)');
+  const { channelTargetId, message } = args;
+  if (!channelTargetId || typeof channelTargetId !== 'string') {
+    throw new Error('channelTargetId is required (format: <channel-instance-id>:<conversation-id>)');
   }
   if (!message || typeof message !== 'string') {
     throw new Error('message is required');
@@ -319,20 +435,29 @@ export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
 
   // Check isolated session channel permission
   if (ctx?.sessionId) {
-    await checkChannelPermission(ctx.sessionId, channelId);
+    await checkChannelPermission(ctx.sessionId, channelTargetId);
   }
 
-  await sessionManager.sendToChannelById(channelId, message);
-  return `Message sent to channel \`${channelId}\``;
+  await sessionManager.sendToChannelTargetId(channelTargetId, message);
+  return `Message sent to channel target \`${channelTargetId}\``;
 }
 
 export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
-  const { sessionId, channelId, filePath } = args;
+  const { sessionId, channelTargetId, filePath } = args;
   const hasSessionId = isNonEmptyString(sessionId);
-  const hasChannelId = isNonEmptyString(channelId);
+  const normalizedChannelTargetId = isNonEmptyString(channelTargetId)
+    ? channelTargetId.trim()
+    : undefined;
+  const hasChannelTargetId = Boolean(normalizedChannelTargetId);
+  const normalizedSessionId = hasSessionId
+    ? sessionId.trim()
+    : (ctx?.sessionId ? ctx.sessionId : undefined);
 
-  if (hasSessionId === hasChannelId) {
-    throw new Error('Exactly one of sessionId or channelId is required');
+  if (hasSessionId && hasChannelTargetId) {
+    throw new Error('At most one of sessionId or channelTargetId may be specified');
+  }
+  if (!normalizedSessionId && !hasChannelTargetId) {
+    throw new Error('sessionId or channelTargetId is required when there is no active session context');
   }
   if (!isNonEmptyString(filePath)) {
     throw new Error('filePath is required');
@@ -344,26 +469,39 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
 
   if (ctx?.sessionId) {
     await checkSendFilePermission(ctx.sessionId, {
-      channelId: hasChannelId ? channelId.trim() : undefined,
-      targetSessionId: hasSessionId ? sessionId.trim() : undefined,
+      channelTargetId: normalizedChannelTargetId,
+      targetSessionId: normalizedChannelTargetId ? undefined : normalizedSessionId,
     });
   }
 
   const file = await prepareChannelFile(filePath.trim(), ctx);
 
-  if (hasChannelId) {
-    const normalizedChannelId = channelId.trim();
-    await sessionManager.sendFileToChannelById(normalizedChannelId, file, { caption });
-    return `File \`${file.name}\` sent to channel \`${normalizedChannelId}\``;
+  if (normalizedChannelTargetId) {
+    if (normalizedChannelTargetId.startsWith('webui:')) {
+      return buildSendFileResult(`File \`${file.name}\` is ready for WebUI target \`${normalizedChannelTargetId}\`.`, file);
+    }
+
+    await sessionManager.sendFileToChannelTargetId(normalizedChannelTargetId, file, { caption });
+    return buildSendFileResult(`File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``, file);
   }
 
-  const normalizedSessionId = sessionId.trim();
   const result = await sessionManager.sendFileToSession(normalizedSessionId, file, { caption });
-  if (result.deliveredChannels.length === 0) {
-    throw new Error(formatSendFileSessionResult(normalizedSessionId, file, result));
+  const hasWebUiDownloadFallback = result.skippedChannels.some((item) => isWebUiUnsupportedFileDelivery(item.channelId, item.reason));
+  const output = formatSendFileSessionResult(normalizedSessionId, file, result);
+
+  if (hasWebUiDownloadFallback && result.deliveredChannels.length === 0 && result.failedChannels.length === 0) {
+    return buildSendFileResult(output, file);
   }
 
-  return formatSendFileSessionResult(normalizedSessionId, file, result);
+  if (result.deliveredChannels.length === 0) {
+    throw new Error(output);
+  }
+
+  if (hasWebUiDownloadFallback) {
+    return buildSendFileResult(output, file);
+  }
+
+  return buildSendFileResult(output, file);
 }
 
 export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext) {
@@ -415,7 +553,7 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   const entries = await fs.readdir(agentsDir, { withFileTypes: true });
-  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, skills?: string[], isolated?: boolean, isolatedNode?: string}> = [];
+  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, isolated?: boolean, isolatedNode?: string}> = [];
 
   for (const entry of entries) {
     if (entry.isDirectory()) {
@@ -428,7 +566,6 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
         hasSessions: sessions.length > 0,
         sessionCount: sessions.length,
         inherit: sessionManager.getAgentMetadata(agentName).inherit,
-        skills: sessionManager.getAgentSkills(agentName),
         isolated: sessionManager.getAgentMetadata(agentName).isolated,
         isolatedNode: sessionManager.getAgentIsolationNode(agentName),
       });
@@ -450,9 +587,6 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
     }
     if (agent.isolated) {
       result += ` [isolated${agent.isolatedNode ? `:${agent.isolatedNode}` : ''}]`;
-    }
-    if (agent.skills && agent.skills.length > 0) {
-      result += ` [skills: ${agent.skills.join(', ')}]`;
     }
     result += '\n';
   }
@@ -484,58 +618,6 @@ export async function tool_list_skills(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   return result;
-}
-
-export async function tool_attach_agent_skill(args: ToolArgs, ctx?: ToolContext) {
-  await requireNotIsolated(ctx, 'attach_agent_skill');
-  const { agentName, skillName } = args;
-
-  if (!agentName || typeof agentName !== 'string') {
-    throw new Error('agentName is required');
-  }
-  if (!skillName || typeof skillName !== 'string') {
-    throw new Error('skillName is required');
-  }
-
-  const result = await sessionManager.attachAgentSkill(agentName, skillName);
-  if (!result.changed) {
-    return `Agent "${agentName}" already has skill "${skillName}" attached.`;
-  }
-
-  let message = `Skill "${skillName}" attached to agent "${agentName}".`;
-  if (result.skills.length > 0) {
-    message += `\nCurrent skills: ${result.skills.join(', ')}`;
-  }
-  if (result.affectedSessions.length > 0) {
-    message += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`;
-  }
-  return message;
-}
-
-export async function tool_detach_agent_skill(args: ToolArgs, ctx?: ToolContext) {
-  await requireNotIsolated(ctx, 'detach_agent_skill');
-  const { agentName, skillName } = args;
-
-  if (!agentName || typeof agentName !== 'string') {
-    throw new Error('agentName is required');
-  }
-  if (!skillName || typeof skillName !== 'string') {
-    throw new Error('skillName is required');
-  }
-
-  const result = await sessionManager.detachAgentSkill(agentName, skillName);
-  if (!result.changed) {
-    return `Agent "${agentName}" does not have skill "${skillName}" attached.`;
-  }
-
-  let message = `Skill "${skillName}" detached from agent "${agentName}".`;
-  message += result.skills.length > 0
-    ? `\nCurrent skills: ${result.skills.join(', ')}`
-    : '\nCurrent skills: (none)';
-  if (result.affectedSessions.length > 0) {
-    message += `\nUpdated ${result.affectedSessions.length} session snapshot(s).`;
-  }
-  return message;
 }
 
 export async function tool_load_skill(args: ToolArgs, ctx?: ToolContext) {
@@ -572,9 +654,8 @@ export async function tool_load_skill(args: ToolArgs, ctx?: ToolContext) {
 
 export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'get_session_messages');
-  const { sessionId, start, count, previewLength = 100 } = args;
-
-  assertAllowedSubconsciousTarget(ctx, sessionId, 'get_session_messages');
+  const { sessionId, start, count } = args;
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 100);
 
   const session = await sessionManager.getExistingSession(sessionId);
   if (!session) {
@@ -601,20 +682,25 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
   actualStart = Math.max(0, Math.min(actualStart, totalMessages));
   actualCount = Math.min(actualCount, totalMessages - actualStart);
 
+  assertPreviewRequestWithinLimit('get_session_messages', [
+    { label: 'messages', count: actualCount, previewLength },
+  ]);
+
   const messages = await sessionManager.getSessionMessages(sessionId, actualStart, actualCount);
 
   if (messages.length === 0) {
     return `No messages found in session \`${sessionId}\` (total: ${totalMessages} messages).`;
   }
 
-  return formatSessionMessagesPreview(sessionId, messages, actualStart, totalMessages, previewLength);
+  return formatSessionMessagesPreview(sessionId, messages, actualStart, totalMessages, previewLength, {
+    hideDisplayOnlyContent: true,
+  });
 }
 
 export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolContext) {
-  const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
+  const targetSessionId = args.sessionId || ctx?.sessionId;
   await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
-  assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_archived_messages');
-  const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
 
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
@@ -632,6 +718,10 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
     return `No archived messages matched for session \`${targetSessionId}\`.${availableRange}`;
   }
 
+  assertPreviewRequestWithinLimit('get_archived_messages', [
+    { label: 'archived messages', count: result.records.length, previewLength },
+  ]);
+
   return formatArchivedMessagePreview(targetSessionId, result.records, {
     totalMatched: result.totalMatched,
     startSeq: result.requestedRange.startSeq,
@@ -641,10 +731,9 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
 
 
 export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext) {
-  const targetSessionId = args.sessionId || getSubconsciousPrimarySessionId(ctx) || ctx?.sessionId;
+  const targetSessionId = args.sessionId || ctx?.sessionId;
   await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
-  assertAllowedSubconsciousTarget(ctx, targetSessionId, 'get_archived_blocks');
-  const previewLength = typeof args.previewLength === 'number' && args.previewLength > 0 ? args.previewLength : 1000;
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
 
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
@@ -655,11 +744,82 @@ export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext
     endId: typeof args.endId === 'number' ? args.endId : undefined,
   });
 
+  assertPreviewRequestWithinLimit('get_archived_blocks', [
+    { label: 'archived blocks', count: result.records.length, previewLength },
+  ]);
+
   return formatArchivedBlockPreview(targetSessionId, result.records, {
     totalMatched: result.totalMatched,
     startId: result.requestedRange.startId,
     endId: result.requestedRange.endId,
   }, previewLength);
+}
+
+export async function tool_get_context_archive(args: ToolArgs, ctx?: ToolContext) {
+  const targetSessionId = args.sessionId || ctx?.sessionId;
+  if (!targetSessionId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
+  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
+
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
+  const hasMessageRange = typeof args.startSeq === 'number' || typeof args.endSeq === 'number';
+  const hasBlockRange = typeof args.startId === 'number' || typeof args.endId === 'number';
+  const includeMessages = typeof args.includeMessages === 'boolean'
+    ? args.includeMessages
+    : (!hasBlockRange || hasMessageRange);
+  const includeBlocks = typeof args.includeBlocks === 'boolean'
+    ? args.includeBlocks
+    : (!hasMessageRange || hasBlockRange);
+
+  const sections: string[] = [];
+  const previewSegments: Array<{ label: string; count: number; previewLength: number }> = [];
+
+  if (includeMessages) {
+    const messageResult = await sessionManager.getArchivedMessages(targetSessionId, {
+      startSeq: typeof args.startSeq === 'number' ? args.startSeq : undefined,
+      endSeq: typeof args.endSeq === 'number' ? args.endSeq : undefined,
+    });
+    const messageRecords = (!hasMessageRange && !hasBlockRange)
+      ? messageResult.records.slice(-10)
+      : messageResult.records;
+
+    previewSegments.push({ label: 'archived messages', count: messageRecords.length, previewLength });
+
+    sections.push(formatArchivedMessagePreview(targetSessionId, messageRecords, {
+      totalMatched: messageResult.totalMatched,
+      startSeq: messageResult.requestedRange.startSeq,
+      endSeq: messageResult.requestedRange.endSeq,
+    }, previewLength));
+  }
+
+  if (includeBlocks) {
+    const blockResult = await sessionManager.getArchivedBlocks(targetSessionId, {
+      startId: typeof args.startId === 'number' ? args.startId : undefined,
+      endId: typeof args.endId === 'number' ? args.endId : undefined,
+    });
+    const blockRecords = (!hasMessageRange && !hasBlockRange)
+      ? blockResult.records.slice(-10)
+      : blockResult.records;
+
+    previewSegments.push({ label: 'archived blocks', count: blockRecords.length, previewLength });
+
+    sections.push(formatArchivedBlockPreview(targetSessionId, blockRecords, {
+      totalMatched: blockResult.totalMatched,
+      startId: blockResult.requestedRange.startId,
+      endId: blockResult.requestedRange.endId,
+    }, previewLength));
+  }
+
+  if (sections.length === 0) {
+    throw new Error('get_context_archive requires includeMessages and/or includeBlocks to be true.');
+  }
+
+  assertPreviewRequestWithinLimit('get_context_archive', previewSegments);
+
+  return formatCombinedArchivedContextPreview(sections);
 }
 
 export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
@@ -731,7 +891,7 @@ export async function tool_update_session_snapshot(args: ToolArgs, ctx: ToolCont
   return `Session \`${result.sessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``;
 }
 
-export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
+export async function tool_set_goal(args: ToolArgs, ctx: ToolContext) {
   const targetId = ctx?.sessionId;
   if (!targetId) {
     throw new Error('Current session context is required.');
@@ -741,24 +901,25 @@ export async function tool_set_todo(args: ToolArgs, ctx: ToolContext) {
   const clear = args.clear === true;
 
   if (clear) {
-    const cleared = clearSessionTodo(session);
+    const cleared = clearSessionGoal(session);
     await sessionManager.saveSession(session.id);
     return cleared
       ? 'ok'
       : 'ok';
   }
 
-  const todo = normalizeTodoText(args.todo);
-  if (!todo) {
-    const cleared = clearSessionTodo(session);
+  const goal = normalizeGoalText(args.goal);
+  if (!goal) {
+    const cleared = clearSessionGoal(session);
     await sessionManager.saveSession(session.id);
     return cleared
       ? 'ok'
       : 'ok';
   }
 
-  const remindEvery = normalizeRemindEvery(args.remindEvery);
-  setSessionTodo(session, todo, remindEvery);
+  const remindEvery = resolveSessionGoalRemindEvery(session, args.remindEvery);
+  const remindOnTurnEnd = resolveSessionGoalRemindOnTurnEnd(session, args.remindOnTurnEnd);
+  setSessionGoal(session, goal, remindEvery, remindOnTurnEnd);
   await sessionManager.saveSession(session.id);
 
   return 'ok';
@@ -800,6 +961,51 @@ export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: To
     `Session \`${result.sessionId}\` compact threshold updated.`,
     `override: ${result.thresholdTokens} tokens`,
     `effective: ${result.effectiveThresholdTokens} tokens`,
+  ].join('\n');
+}
+
+export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolContext) {
+  const targetId = args.sessionId || ctx?.sessionId;
+  if (!targetId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  const clear = args.clear === true;
+  if (clear) {
+    const result = await sessionManager.setSessionChildModelDefault(targetId);
+    const { currentKey } = resolveModelConfig(result.effectiveModel);
+    return [
+      `Session \`${result.sessionId}\` child default model cleared.`,
+      `Now inheriting the current session model path (effective spawn model: \`${currentKey}\`).`,
+    ].join('\n');
+  }
+
+  const normalizedModel = normalizeToolModelKey(args.model);
+  if (!normalizedModel) {
+    const session = await sessionManager.getExistingSession(targetId);
+    if (!session) {
+      throw new Error(`Session \`${targetId}\` not found.`);
+    }
+
+    const override = typeof session.childModelDefault === 'string' && session.childModelDefault.trim()
+      ? `\`${session.childModelDefault.trim()}\``
+      : 'inherit current session model';
+    const { currentKey: currentSessionModel } = resolveModelConfig(session.model);
+    const { currentKey: effectiveSpawnModel } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session));
+    return [
+      `Session \`${session.id}\` child default model status:`,
+      `override: ${override}`,
+      `current session model: \`${currentSessionModel}\``,
+      `effective spawned-session model: \`${effectiveSpawnModel}\``,
+    ].join('\n');
+  }
+
+  const result = await sessionManager.setSessionChildModelDefault(targetId, normalizedModel);
+  const { currentKey } = resolveModelConfig(result.effectiveModel);
+  return [
+    `Session \`${result.sessionId}\` child default model updated.`,
+    `override: \`${normalizedModel}\``,
+    `effective spawned-session model: \`${currentKey}\``,
   ].join('\n');
 }
 
@@ -885,8 +1091,6 @@ export async function tool_compact_session(args: ToolArgs, ctx: ToolContext) {
 
   return `Compaction requested for session \`${targetSessionId}\` using ${mode}. Pending queue length: ${result.queueLength}`;
 }
-
-export const tool_compress_session = tool_compact_session;
 
 export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
   await checkTimerPermission(ctx, {
@@ -1031,6 +1235,14 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
 export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_session');
   const { agentName, sessionName, displayName, parentSessionId } = args;
+  const requestedModel = normalizeToolModelKey(args.model);
+  const systemPromptFiles = args.systemPromptFiles === undefined
+    ? undefined
+    : llm.normalizeSystemPromptFiles(args.systemPromptFiles);
+
+  if (args.systemPromptFiles !== undefined && !Array.isArray(args.systemPromptFiles)) {
+    throw new Error('systemPromptFiles must be an array of strings');
+  }
 
   if (!agentName || typeof agentName !== 'string') {
     throw new Error('agentName is required');
@@ -1044,8 +1256,9 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     sessionName,
     displayName,
     parentSessionId,
+    systemPromptFiles,
     currentNode: ctx.session?.currentNode,
-    model: ctx.session?.model,
+    model: sessionManager.resolveSpawnedSessionModel(ctx.session, requestedModel),
   });
 
   let message = `Session "${result.sessionId}" created under agent "${agentName}".`;
@@ -1055,6 +1268,12 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   if (parentSessionId) {
     message += `\nParent session: ${parentSessionId}`;
   }
+  if (systemPromptFiles) {
+    message += `\nSystem prompt files: ${systemPromptFiles.length > 0 ? systemPromptFiles.join(', ') : '(none)'}`;
+  }
+  const createdSession = await sessionManager.getSession(result.sessionId);
+  const { currentKey } = resolveModelConfig(createdSession.model);
+  message += `\nModel: ${currentKey}`;
   return message;
 }
 

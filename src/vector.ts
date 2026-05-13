@@ -3,39 +3,62 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Message } from './types';
 import { estimateTokenCount } from './tokenCount';
-import { DB_DIR, OLLAMA_BASE_URL, SESSION_LOGS_DIR, getSessionArchiveLogPath } from './config';
+import { DB_DIR, OLLAMA_BASE_URL, SESSION_LOGS_DIR } from './config';
 import { logger } from './common';
 import { formatMessageText } from './utils/messageFormat';
+import { isModelVisibleMessage } from './session/messageVisibility';
+import {
+    ArchiveBlockRecord,
+    readLocalArchiveBlocksByIdRange,
+} from './session/layeredContext';
+import {
+    ArchiveMessageRecord,
+    readLocalArchiveMessagesBySeqRange,
+} from './session/archive';
+import {
+    getVectorCheckpointSync,
+    listSessionsNeedingVectorBackfill,
+    getVectorSearchLineage,
+    getVectorSearchLineageSync,
+    initArchiveStore,
+    setVectorCheckpointSync,
+} from './session/archiveStore';
 
 const DB_PATH = DB_DIR;
-const TABLE_NAME = 'messages_v6';
-const CHECKPOINTS_PATH = path.join(DB_DIR, 'vector-index-checkpoints-v2.json');
+const TABLE_NAME = 'messages_v7';
+const LEGACY_CHECKPOINTS_PATH = path.join(DB_DIR, 'vector-index-checkpoints-v2.json');
 const EMBEDDING_MODEL = 'qwen3-embedding:0.6b';
 
 // Keep a conservative margin under the embedding model's real 4096-token limit
 // because estimateTokenCount() can undercount slightly on some inputs.
-const CHUNK_SIZE = 3000;
-const EMBEDDING_MAX_LENGTH = 3000;
-const SEGMENT_TARGET_TOKENS = 2400;
-const SEGMENT_OVERLAP_TOKENS = 500;
-const SEGMENT_OVERLAP_MAX_MESSAGE_TOKENS = 500;
+// Raw archive indexing now targets a noticeably finer 1500-token chunk ceiling,
+// while still aggregating adjacent messages into moderately sized segments.
+const CHUNK_SIZE = 1500;
+const EMBEDDING_MAX_LENGTH = 1500;
+const SEGMENT_TARGET_TOKENS = 1200;
+const SEGMENT_OVERLAP_TOKENS = 400;
+const SEGMENT_OVERLAP_MAX_MESSAGE_TOKENS = 400;
 const ARCHIVE_INDEX_MIN_PENDING_MESSAGES = 50;
 const ARCHIVE_INDEX_MIN_PENDING_TOKENS = 8000;
+const RAW_REBUILD_BATCH_SEGMENT_LIMIT = Math.max(1, Number(process.env.FOXWARM_VECTOR_RAW_REBUILD_BATCH_SEGMENTS || 16));
 
 let table: any;
-let checkpoints: VectorIndexCheckpointFile = { version: 2, sessions: {} };
+let legacyCheckpoints: VectorIndexCheckpointFile = { version: 2, sessions: {} };
 const indexingChains = new Map<string, Promise<number>>();
 const archiveIndexBatchStates = new Map<string, SessionArchiveBatchState>();
-let checkpointSaveChain: Promise<void> = Promise.resolve();
+let startupBackfillPromise: Promise<void> | null = null;
 
 type VectorRow = {
     id: string;
     message_id: string;
     session_id: string;
     agent: string;
+    memory_kind: 'raw' | 'block';
     seq: number;
     start_seq: number;
     end_seq: number;
+    raw_start_seq: number;
+    raw_end_seq: number;
     message_count: number;
     role: string;
     timestamp: number;
@@ -45,24 +68,24 @@ type VectorRow = {
     chunk_count: number;
     text: string;
     chunk_text: string;
+    block_id: number | null;
+    block_level: number | null;
+    source_kind: string | null;
+    source_start: number | null;
+    source_end: number | null;
     vector: number[];
 };
 
 type SearchOptions = {
     sessionIds?: string[];
     agent?: string;
+    lineageSessions?: Array<{ sessionId: string; maxMessageSeq?: number; maxBlockId?: number }>;
+    includeRegex?: string;
+    excludeRegex?: string;
+    preferBlocks?: boolean;
 };
 
-type ArchiveMessageLine = {
-    v: number;
-    kind: 'message';
-    sessionId: string;
-    agent: string;
-    seq: number;
-    timestamp: number;
-    role: 'user' | 'model' | 'tool';
-    message: Message;
-};
+type ArchiveMessageLine = ArchiveMessageRecord;
 
 type ArchiveSegmentMessage = {
     sessionId: string;
@@ -91,6 +114,7 @@ type ArchiveSegment = {
 type SessionArchiveCheckpoint = {
     lastIndexedSeq: number;
     tailStartSeq: number;
+    lastIndexedBlockId: number;
     updatedAt: number;
 };
 
@@ -101,6 +125,7 @@ type VectorIndexCheckpointFile = {
 
 type SessionArchiveBatchState = {
     latestSeqHint: number;
+    latestBlockIdHint: number;
     pendingEstimatedTokens: number;
     flushQueued: boolean;
     promise?: Promise<number>;
@@ -108,11 +133,31 @@ type SessionArchiveBatchState = {
     reject?: (reason?: unknown) => void;
 };
 
+type RawRebuildProgress = {
+    lastIndexedSeq: number;
+    tailStartSeq: number;
+    processedSegments: number;
+    totalSegments: number;
+    processedRows: number;
+    totalRows: number;
+    processedMessageCount: number;
+    totalMessageCount: number;
+    batchRowCount: number;
+    batchSegmentCount: number;
+    batchStartSeq: number;
+    batchEndSeq: number;
+    batchNumber: number;
+    batchCount: number;
+    elapsedMs: number;
+    batchDurationMs: number;
+};
+
 type ArchiveIndexBatchDecision = {
     shouldFlushNow: boolean;
     pendingCount: number;
+    pendingBlockCount: number;
     pendingEstimatedTokens: number;
-    reason?: 'message-threshold' | 'token-threshold';
+    reason?: 'message-threshold' | 'token-threshold' | 'block-pending';
 };
 
 function escapeFilterValue(value: string): string {
@@ -128,7 +173,19 @@ function buildFilterPredicate(options?: SearchOptions): string | undefined {
         clauses.push(`agent = '${escapeFilterValue(options.agent)}'`);
     }
 
-    if (options.sessionIds && options.sessionIds.length > 0) {
+    if (options.lineageSessions && options.lineageSessions.length > 0) {
+        const lineageClauses = options.lineageSessions.map((entry) => {
+            const sessionClause = `session_id = '${escapeFilterValue(entry.sessionId)}'`;
+            const rawClause = typeof entry.maxMessageSeq === 'number'
+                ? `(memory_kind = 'raw' AND start_seq <= ${entry.maxMessageSeq})`
+                : `(memory_kind = 'raw')`;
+            const blockClause = typeof entry.maxBlockId === 'number'
+                ? `(memory_kind = 'block' AND block_id <= ${entry.maxBlockId})`
+                : `(memory_kind = 'block')`;
+            return `(${sessionClause} AND (${rawClause} OR ${blockClause}))`;
+        });
+        clauses.push(`(${lineageClauses.join(' OR ')})`);
+    } else if (options.sessionIds && options.sessionIds.length > 0) {
         const sessionClauses = [...new Set(options.sessionIds)].map(sessionId => (
             `session_id = '${escapeFilterValue(sessionId)}'`
         ));
@@ -140,6 +197,10 @@ function buildFilterPredicate(options?: SearchOptions): string | undefined {
 }
 
 function normalizeMessageText(message: Message): string {
+    if (!isModelVisibleMessage(message)) {
+        return '';
+    }
+
     return formatMessageText(message, {
         includeRolePrefix: true,
         skipEphemeralSystem: true,
@@ -173,6 +234,37 @@ function truncateToTokenLimit(text: string, limit: number): string {
     }
 
     return text.substring(0, left);
+}
+
+function sanitizeEmbeddingInput(text: string): string {
+    const maybeToWellFormed = (text as string & { toWellFormed?: () => string }).toWellFormed;
+    if (typeof maybeToWellFormed === 'function') {
+        return maybeToWellFormed.call(text);
+    }
+
+    let result = '';
+    for (let index = 0; index < text.length; index += 1) {
+        const code = text.charCodeAt(index);
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const nextCode = index + 1 < text.length ? text.charCodeAt(index + 1) : 0;
+            if (nextCode >= 0xDC00 && nextCode <= 0xDFFF) {
+                result += text[index] + text[index + 1];
+                index += 1;
+            } else {
+                result += '\uFFFD';
+            }
+            continue;
+        }
+
+        if (code >= 0xDC00 && code <= 0xDFFF) {
+            result += '\uFFFD';
+            continue;
+        }
+
+        result += text[index];
+    }
+
+    return result;
 }
 
 function splitTextIntoChunks(text: string): string[] {
@@ -339,9 +431,12 @@ function createRowsFromSegment(segment: ArchiveSegment): Omit<VectorRow, 'vector
         message_id: messageId,
         session_id: segment.sessionId,
         agent: segment.agent || 'main',
+        memory_kind: 'raw',
         seq: segment.startSeq,
         start_seq: segment.startSeq,
         end_seq: segment.endSeq,
+        raw_start_seq: segment.startSeq,
+        raw_end_seq: segment.endSeq,
         message_count: segment.messageCount,
         role: segment.role,
         timestamp: segment.startTimestamp,
@@ -351,11 +446,62 @@ function createRowsFromSegment(segment: ArchiveSegment): Omit<VectorRow, 'vector
         chunk_count: chunks.length,
         text,
         chunk_text: truncateToTokenLimit(chunkText, EMBEDDING_MAX_LENGTH),
+        block_id: null as number | null,
+        block_level: null as number | null,
+        source_kind: null as string | null,
+        source_start: null as number | null,
+        source_end: null as number | null,
     }));
+}
+
+async function createRowsFromBlockRecord(record: ArchiveBlockRecord): Promise<Omit<VectorRow, 'vector'>[]> {
+    const row = await createRowFromBlockRecord(record);
+    return row ? [row] : [];
+}
+
+async function createRowFromBlockRecord(record: ArchiveBlockRecord): Promise<Omit<VectorRow, 'vector'> | null> {
+    const text = String(record.summary || '').trim();
+    if (!text) {
+        return null;
+    }
+
+    const messageRecords = await readLocalArchiveMessagesBySeqRange(record.sessionId, record.rawStartSeq, record.rawEndSeq);
+    const startTimestamp = Number(messageRecords[0]?.timestamp) || Number(record.createdAt) || Date.now();
+    const endTimestamp = Number(messageRecords[messageRecords.length - 1]?.timestamp) || startTimestamp;
+    const messageId = `${record.sessionId}:block:${record.id}`;
+    const estimatedMessageCount = Math.max(1, record.rawEndSeq - record.rawStartSeq + 1);
+
+    return {
+        id: `${messageId}:0`,
+        message_id: messageId,
+        session_id: record.sessionId,
+        agent: record.agent || 'main',
+        memory_kind: 'block',
+        seq: record.rawStartSeq,
+        start_seq: record.rawStartSeq,
+        end_seq: record.rawEndSeq,
+        raw_start_seq: record.rawStartSeq,
+        raw_end_seq: record.rawEndSeq,
+        message_count: estimatedMessageCount,
+        role: 'model',
+        timestamp: startTimestamp,
+        start_timestamp: startTimestamp,
+        end_timestamp: endTimestamp,
+        chunk_index: 0,
+        chunk_count: 1,
+        text,
+        chunk_text: truncateToTokenLimit(text, EMBEDDING_MAX_LENGTH),
+        block_id: record.id,
+        block_level: record.level,
+        source_kind: record.sourceKind,
+        source_start: record.sourceStart,
+        source_end: record.sourceEnd,
+    };
 }
 
 async function getEmbedding(text: string) {
     const truncated = truncateToTokenLimit(text, EMBEDDING_MAX_LENGTH);
+    const sanitized = sanitizeEmbeddingInput(truncated);
     // Keep using the existing OLLAMA_BASE_URL config key for compatibility,
     // but send embeddings requests through the OpenAI-compatible /v1/embeddings API.
     const baseUrl = OLLAMA_BASE_URL.replace(/\/+$/, '');
@@ -366,7 +512,7 @@ async function getEmbedding(text: string) {
         },
         body: JSON.stringify({
             model: EMBEDDING_MODEL,
-            input: truncated,
+            input: sanitized,
         }),
         signal: AbortSignal.timeout(60_000),
     });
@@ -393,34 +539,68 @@ async function getEmbedding(text: string) {
 }
 
 async function loadCheckpoints() {
-    if (await fs.pathExists(CHECKPOINTS_PATH)) {
+    if (await fs.pathExists(LEGACY_CHECKPOINTS_PATH)) {
         try {
-            const loaded = await fs.readJson(CHECKPOINTS_PATH);
+            const loaded = await fs.readJson(LEGACY_CHECKPOINTS_PATH);
             if (loaded?.version === 2 && loaded?.sessions && typeof loaded.sessions === 'object') {
-                checkpoints = loaded;
+                legacyCheckpoints = loaded;
             } else {
-                logger.warn({ path: CHECKPOINTS_PATH, version: loaded?.version }, 'Ignoring incompatible vector archive checkpoints');
-                checkpoints = { version: 2, sessions: {} };
+                logger.warn({ path: LEGACY_CHECKPOINTS_PATH, version: loaded?.version }, 'Ignoring incompatible legacy vector archive checkpoints');
+                legacyCheckpoints = { version: 2, sessions: {} };
             }
         } catch (e) {
-            logger.error({ err: e }, 'Failed to load vector archive checkpoints, starting fresh');
-            checkpoints = { version: 2, sessions: {} };
+            logger.error({ err: e }, 'Failed to load legacy vector archive checkpoints, starting fresh');
+            legacyCheckpoints = { version: 2, sessions: {} };
         }
     }
 }
 
-async function saveCheckpoints() {
-    checkpointSaveChain = checkpointSaveChain.then(async () => {
-        await fs.ensureDir(path.dirname(CHECKPOINTS_PATH));
-        await fs.writeJson(CHECKPOINTS_PATH, checkpoints, { spaces: 2 });
-    });
-    await checkpointSaveChain;
+async function migrateLegacyCheckpointsToDb(): Promise<void> {
+    const sessionEntries = Object.entries(legacyCheckpoints.sessions || {});
+    for (const [sessionId, checkpoint] of sessionEntries) {
+        const current = getVectorCheckpointSync(sessionId);
+        if (current.updatedAt > 0 || current.rawLastIndexedSeq > 0 || current.rawTailStartSeq > 0 || current.lastIndexedBlockId > 0) {
+            continue;
+        }
+
+        setVectorCheckpointSync(sessionId, {
+            rawLastIndexedSeq: checkpoint.lastIndexedSeq,
+            rawTailStartSeq: checkpoint.tailStartSeq,
+            lastIndexedBlockId: 0,
+        });
+    }
 }
 
 function getSessionArchiveCheckpoint(sessionId: string): SessionArchiveCheckpoint {
-    return checkpoints.sessions[sessionId] || {
+    const dbCheckpoint = getVectorCheckpointSync(sessionId);
+    if (dbCheckpoint.updatedAt > 0 || dbCheckpoint.rawLastIndexedSeq > 0 || dbCheckpoint.lastIndexedBlockId > 0 || dbCheckpoint.rawTailStartSeq > 0) {
+        return {
+            lastIndexedSeq: dbCheckpoint.rawLastIndexedSeq,
+            tailStartSeq: dbCheckpoint.rawTailStartSeq,
+            lastIndexedBlockId: dbCheckpoint.lastIndexedBlockId,
+            updatedAt: dbCheckpoint.updatedAt,
+        };
+    }
+
+    const legacy = legacyCheckpoints.sessions[sessionId];
+    if (legacy) {
+        const migrated = setVectorCheckpointSync(sessionId, {
+            rawLastIndexedSeq: legacy.lastIndexedSeq,
+            rawTailStartSeq: legacy.tailStartSeq,
+            lastIndexedBlockId: 0,
+        });
+        return {
+            lastIndexedSeq: migrated.rawLastIndexedSeq,
+            tailStartSeq: migrated.rawTailStartSeq,
+            lastIndexedBlockId: migrated.lastIndexedBlockId,
+            updatedAt: migrated.updatedAt,
+        };
+    }
+
+    return {
         lastIndexedSeq: 0,
         tailStartSeq: 0,
+        lastIndexedBlockId: 0,
         updatedAt: 0,
     };
 }
@@ -430,12 +610,24 @@ function getLastIndexedSeq(sessionId: string): number {
 }
 
 async function setSessionArchiveCheckpoint(sessionId: string, checkpoint: { lastIndexedSeq: number; tailStartSeq: number }): Promise<void> {
-    checkpoints.sessions[sessionId] = {
-        lastIndexedSeq: checkpoint.lastIndexedSeq,
-        tailStartSeq: checkpoint.tailStartSeq,
-        updatedAt: Date.now(),
-    };
-    await saveCheckpoints();
+    setVectorCheckpointSync(sessionId, {
+        rawLastIndexedSeq: checkpoint.lastIndexedSeq,
+        rawTailStartSeq: checkpoint.tailStartSeq,
+    });
+}
+
+function startStartupArchiveVectorBackfill(): Promise<void> {
+    if (!startupBackfillPromise) {
+        startupBackfillPromise = runStartupArchiveVectorBackfill().finally(() => {
+            startupBackfillPromise = null;
+        });
+    }
+
+    return startupBackfillPromise;
+}
+
+async function waitForStartupArchiveVectorBackfill(): Promise<void> {
+    await startStartupArchiveVectorBackfill();
 }
 
 function getOrCreateBatchState(sessionId: string): SessionArchiveBatchState {
@@ -443,6 +635,7 @@ function getOrCreateBatchState(sessionId: string): SessionArchiveBatchState {
     if (!state) {
         state = {
             latestSeqHint: getLastIndexedSeq(sessionId),
+            latestBlockIdHint: getSessionArchiveCheckpoint(sessionId).lastIndexedBlockId,
             pendingEstimatedTokens: 0,
             flushQueued: false,
         };
@@ -495,15 +688,18 @@ function rejectBatchState(sessionId: string, error: unknown): void {
 
 function getArchiveIndexBatchDecision({
     pendingCount,
+    pendingBlockCount,
     pendingEstimatedTokens,
 }: {
     pendingCount: number;
+    pendingBlockCount: number;
     pendingEstimatedTokens: number;
 }): ArchiveIndexBatchDecision {
     if (pendingCount >= ARCHIVE_INDEX_MIN_PENDING_MESSAGES) {
         return {
             shouldFlushNow: true,
             pendingCount,
+            pendingBlockCount,
             pendingEstimatedTokens,
             reason: 'message-threshold',
         };
@@ -513,40 +709,36 @@ function getArchiveIndexBatchDecision({
         return {
             shouldFlushNow: true,
             pendingCount,
+            pendingBlockCount,
             pendingEstimatedTokens,
             reason: 'token-threshold',
+        };
+    }
+
+    if (pendingBlockCount > 0) {
+        return {
+            shouldFlushNow: true,
+            pendingCount,
+            pendingBlockCount,
+            pendingEstimatedTokens,
+            reason: 'block-pending',
         };
     }
 
     return {
         shouldFlushNow: false,
         pendingCount,
+        pendingBlockCount,
         pendingEstimatedTokens,
     };
 }
 
 async function readArchiveLines(sessionId: string): Promise<ArchiveMessageLine[]> {
-    const archivePath = getSessionArchiveLogPath(sessionId);
-    if (!await fs.pathExists(archivePath)) {
-        return [];
-    }
+    return readLocalArchiveMessagesBySeqRange(sessionId);
+}
 
-    const raw = await fs.readFile(archivePath, 'utf8');
-    const lines = raw.split('\n').map((line: string) => line.trim()).filter(Boolean);
-    const parsed: ArchiveMessageLine[] = [];
-
-    for (const line of lines) {
-        try {
-            const record = JSON.parse(line);
-            if (record?.kind === 'message' && typeof record.sessionId === 'string' && typeof record.seq === 'number') {
-                parsed.push(record as ArchiveMessageLine);
-            }
-        } catch (e) {
-            logger.warn({ err: e, sessionId }, 'Skipping malformed archive log line');
-        }
-    }
-
-    return parsed.sort((a, b) => a.seq - b.seq);
+async function readLocalBlockLines(sessionId: string): Promise<ArchiveBlockRecord[]> {
+    return readLocalArchiveBlocksByIdRange(sessionId);
 }
 
 async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: number, archiveLines: ArchiveMessageLine[]): Promise<{ lastIndexedSeq: number; tailStartSeq: number; rowCount: number; segmentCount: number; rebuiltMessageCount: number; rebuiltStartSeq: number; rebuiltEndSeq: number; }> {
@@ -563,10 +755,100 @@ async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: numb
         };
     }
 
-    await table.delete(`session_id = '${escapeFilterValue(sessionId)}' AND start_seq >= ${rewindStartSeq}`);
+    await table.delete(`session_id = '${escapeFilterValue(sessionId)}' AND memory_kind = 'raw' AND start_seq >= ${rewindStartSeq}`);
 
     const segments = buildArchiveSegments(targetLines);
-    const rows = segments.flatMap(createRowsFromSegment);
+    const segmentRows = segments.map(segment => ({
+        segment,
+        rows: createRowsFromSegment(segment),
+    }));
+    const totalRowCount = segmentRows.reduce((sum, entry) => sum + entry.rows.length, 0);
+    const totalMessageCount = targetLines.length;
+    const batchCount = Math.max(1, Math.ceil(segmentRows.length / RAW_REBUILD_BATCH_SEGMENT_LIMIT));
+    const rebuildStartTime = Date.now();
+
+    let processedSegments = 0;
+    let processedRows = 0;
+    let finalLastIndexedSeq = targetLines[targetLines.length - 1].seq;
+    let finalTailStartSeq = segments[segments.length - 1]?.startSeq || finalLastIndexedSeq;
+
+    for (let batchStartIndex = 0; batchStartIndex < segmentRows.length; batchStartIndex += RAW_REBUILD_BATCH_SEGMENT_LIMIT) {
+        const batchStartTime = Date.now();
+        const batchEntries = segmentRows.slice(batchStartIndex, batchStartIndex + RAW_REBUILD_BATCH_SEGMENT_LIMIT);
+        const hydratedRows: VectorRow[] = [];
+
+        for (const entry of batchEntries) {
+            for (const row of entry.rows) {
+                const vector = await getEmbedding(row.chunk_text);
+                hydratedRows.push({ ...row, vector });
+            }
+        }
+
+        if (hydratedRows.length > 0) {
+            await table.add(hydratedRows);
+        }
+
+        processedSegments += batchEntries.length;
+        processedRows += hydratedRows.length;
+
+        const lastBatchSegment = batchEntries[batchEntries.length - 1].segment;
+        finalLastIndexedSeq = lastBatchSegment.endSeq;
+        finalTailStartSeq = lastBatchSegment.startSeq;
+
+        await setSessionArchiveCheckpoint(sessionId, {
+            lastIndexedSeq: finalLastIndexedSeq,
+            tailStartSeq: finalTailStartSeq,
+        });
+
+        const progress: RawRebuildProgress = {
+            lastIndexedSeq: finalLastIndexedSeq,
+            tailStartSeq: finalTailStartSeq,
+            processedSegments,
+            totalSegments: segmentRows.length,
+            processedRows,
+            totalRows: totalRowCount,
+            processedMessageCount: Math.max(0, finalLastIndexedSeq - targetLines[0].seq + 1),
+            totalMessageCount,
+            batchRowCount: hydratedRows.length,
+            batchSegmentCount: batchEntries.length,
+            batchStartSeq: batchEntries[0].segment.startSeq,
+            batchEndSeq: finalLastIndexedSeq,
+            batchNumber: Math.floor(batchStartIndex / RAW_REBUILD_BATCH_SEGMENT_LIMIT) + 1,
+            batchCount,
+            elapsedMs: Date.now() - rebuildStartTime,
+            batchDurationMs: Date.now() - batchStartTime,
+        };
+
+        logger.info({
+            sessionId,
+            rewindStartSeq,
+            ...progress,
+        }, 'Committed session archive vector raw rebuild batch');
+    }
+
+    return {
+        lastIndexedSeq: finalLastIndexedSeq,
+        tailStartSeq: finalTailStartSeq,
+        rowCount: totalRowCount,
+        segmentCount: segments.length,
+        rebuiltMessageCount: targetLines.length,
+        rebuiltStartSeq: targetLines[0].seq,
+        rebuiltEndSeq: targetLines[targetLines.length - 1].seq,
+    };
+}
+
+async function appendIndexedBlocks(sessionId: string, lastIndexedBlockId: number, blockLines: ArchiveBlockRecord[]): Promise<{ lastIndexedBlockId: number; rowCount: number; blockCount: number; }> {
+    const targetBlocks = blockLines.filter(line => line.id > lastIndexedBlockId);
+    if (targetBlocks.length === 0) {
+        return {
+            lastIndexedBlockId,
+            rowCount: 0,
+            blockCount: 0,
+        };
+    }
+
+    const rowGroups = await Promise.all(targetBlocks.map(createRowsFromBlockRecord));
+    const rows = rowGroups.flat();
     const hydratedRows: VectorRow[] = [];
 
     for (const row of rows) {
@@ -579,83 +861,142 @@ async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: numb
     }
 
     return {
-        lastIndexedSeq: targetLines[targetLines.length - 1].seq,
-        tailStartSeq: segments[segments.length - 1]?.startSeq || targetLines[targetLines.length - 1].seq,
+        lastIndexedBlockId: targetBlocks[targetBlocks.length - 1].id,
         rowCount: hydratedRows.length,
-        segmentCount: segments.length,
-        rebuiltMessageCount: targetLines.length,
-        rebuiltStartSeq: targetLines[0].seq,
-        rebuiltEndSeq: targetLines[targetLines.length - 1].seq,
+        blockCount: targetBlocks.length,
     };
 }
 
-async function indexSessionArchiveInternal(sessionId: string, latestSeqHint?: number): Promise<number> {
+async function indexSessionArchiveInternal(sessionId: string, latestSeqHint?: number, latestBlockIdHint?: number): Promise<number> {
     const checkpoint = getSessionArchiveCheckpoint(sessionId);
     const lastIndexedSeq = checkpoint.lastIndexedSeq;
-    if (latestSeqHint !== undefined && latestSeqHint <= lastIndexedSeq) {
+    const lastIndexedBlockId = checkpoint.lastIndexedBlockId;
+    const shouldSkipRaw = latestSeqHint !== undefined && latestSeqHint <= lastIndexedSeq;
+    const shouldSkipBlocks = latestBlockIdHint !== undefined && latestBlockIdHint <= lastIndexedBlockId;
+    if (shouldSkipRaw && shouldSkipBlocks) {
         return lastIndexedSeq;
     }
 
     const archiveLines = await readArchiveLines(sessionId);
-    if (archiveLines.length === 0) {
+    const blockLines = await readLocalBlockLines(sessionId);
+
+    if (archiveLines.length === 0 && blockLines.length === 0) {
         return lastIndexedSeq;
     }
 
-    const latestArchivedSeq = archiveLines[archiveLines.length - 1].seq;
-    if (latestArchivedSeq <= lastIndexedSeq) {
-        return lastIndexedSeq;
+    let nextLastIndexedSeq = lastIndexedSeq;
+    let nextTailStartSeq = checkpoint.tailStartSeq;
+    let rawRowCount = 0;
+    let rawSegmentCount = 0;
+    let rebuiltMessageCount = 0;
+    let rebuiltStartSeq = 0;
+    let rebuiltEndSeq = 0;
+
+    const latestArchivedSeq = archiveLines[archiveLines.length - 1]?.seq || 0;
+    if (archiveLines.length > 0 && latestArchivedSeq > lastIndexedSeq) {
+        const rewindStartSeqCandidate = checkpoint.tailStartSeq > 0 ? checkpoint.tailStartSeq : archiveLines[0].seq;
+        const rewindStartSeq = archiveLines.some(line => line.seq >= rewindStartSeqCandidate)
+            ? rewindStartSeqCandidate
+            : archiveLines[0].seq;
+
+        const rebuildLines = archiveLines.filter(line => line.seq >= rewindStartSeq);
+        const startTime = Date.now();
+
+        logger.info({
+            sessionId,
+            latestSeqHint,
+            lastIndexedSeq,
+            latestArchivedSeq,
+            rewindStartSeq,
+            pendingMessageCount: Math.max(0, latestArchivedSeq - lastIndexedSeq),
+            rebuildMessageCount: rebuildLines.length,
+            rebuildStartSeq: rebuildLines[0]?.seq,
+            rebuildEndSeq: rebuildLines[rebuildLines.length - 1]?.seq,
+        }, 'Starting session archive vector raw index rebuild');
+
+        const result = await replaceIndexedArchiveTail(sessionId, rewindStartSeq, archiveLines);
+        nextLastIndexedSeq = result.lastIndexedSeq;
+        nextTailStartSeq = result.tailStartSeq;
+        rawRowCount = result.rowCount;
+        rawSegmentCount = result.segmentCount;
+        rebuiltMessageCount = result.rebuiltMessageCount;
+        rebuiltStartSeq = result.rebuiltStartSeq;
+        rebuiltEndSeq = result.rebuiltEndSeq;
+
+        logger.info({
+            sessionId,
+            latestSeqHint,
+            previousLastIndexedSeq: lastIndexedSeq,
+            rewindStartSeq,
+            lastIndexedSeq: result.lastIndexedSeq,
+            tailStartSeq: result.tailStartSeq,
+            advancedBy: Math.max(0, result.lastIndexedSeq - lastIndexedSeq),
+            rebuiltMessageCount: result.rebuiltMessageCount,
+            rebuiltStartSeq: result.rebuiltStartSeq || undefined,
+            rebuiltEndSeq: result.rebuiltEndSeq || undefined,
+            rowCount: result.rowCount,
+            segmentCount: result.segmentCount,
+            durationMs: Date.now() - startTime,
+        }, 'Completed session archive vector raw index rebuild');
     }
 
-    const rewindStartSeqCandidate = checkpoint.tailStartSeq > 0 ? checkpoint.tailStartSeq : archiveLines[0].seq;
-    const rewindStartSeq = archiveLines.some(line => line.seq >= rewindStartSeqCandidate)
-        ? rewindStartSeqCandidate
-        : archiveLines[0].seq;
+    let nextLastIndexedBlockId = lastIndexedBlockId;
+    let blockRowCount = 0;
+    let blockCount = 0;
+    if (blockLines.length > 0) {
+        const blockResult = await appendIndexedBlocks(sessionId, lastIndexedBlockId, blockLines);
+        nextLastIndexedBlockId = blockResult.lastIndexedBlockId;
+        blockRowCount = blockResult.rowCount;
+        blockCount = blockResult.blockCount;
+        if (blockCount > 0) {
+            logger.info({
+                sessionId,
+                latestBlockIdHint,
+                previousLastIndexedBlockId: lastIndexedBlockId,
+                lastIndexedBlockId: nextLastIndexedBlockId,
+                blockCount,
+                rowCount: blockRowCount,
+            }, 'Completed session archive vector block append');
+        }
+    }
 
-    const rebuildLines = archiveLines.filter(line => line.seq >= rewindStartSeq);
-    const startTime = Date.now();
+    // Advance lastIndexedBlockId to latestBlockIdHint when there are no new local blocks to index,
+    // preventing infinite retry loops when the hint indicates blocks exist but local data is empty
+    // (e.g. blocks inherited from parent sessions via lineage).
+    if (nextLastIndexedBlockId < (latestBlockIdHint ?? 0) && blockCount === 0) {
+        nextLastIndexedBlockId = latestBlockIdHint!;
+    }
 
     logger.info({
         sessionId,
         latestSeqHint,
-        lastIndexedSeq,
-        latestArchivedSeq,
-        rewindStartSeq,
-        pendingMessageCount: Math.max(0, latestArchivedSeq - lastIndexedSeq),
-        rebuildMessageCount: rebuildLines.length,
-        rebuildStartSeq: rebuildLines[0]?.seq,
-        rebuildEndSeq: rebuildLines[rebuildLines.length - 1]?.seq,
-    }, 'Starting session archive vector index rebuild');
+        latestBlockIdHint,
+        lastIndexedSeq: nextLastIndexedSeq,
+        tailStartSeq: nextTailStartSeq,
+        lastIndexedBlockId: nextLastIndexedBlockId,
+        rebuiltMessageCount,
+        rebuiltStartSeq: rebuiltStartSeq || undefined,
+        rebuiltEndSeq: rebuiltEndSeq || undefined,
+        rawRowCount,
+        rawSegmentCount,
+        blockRowCount,
+        blockCount,
+    }, 'Completed session archive vector index cycle');
 
-    const result = await replaceIndexedArchiveTail(sessionId, rewindStartSeq, archiveLines);
-    await setSessionArchiveCheckpoint(sessionId, {
-        lastIndexedSeq: result.lastIndexedSeq,
-        tailStartSeq: result.tailStartSeq,
+    setVectorCheckpointSync(sessionId, {
+        rawLastIndexedSeq: nextLastIndexedSeq,
+        rawTailStartSeq: nextTailStartSeq,
+        lastIndexedBlockId: nextLastIndexedBlockId,
     });
 
-    logger.info({
-        sessionId,
-        latestSeqHint,
-        previousLastIndexedSeq: lastIndexedSeq,
-        rewindStartSeq,
-        lastIndexedSeq: result.lastIndexedSeq,
-        tailStartSeq: result.tailStartSeq,
-        advancedBy: Math.max(0, result.lastIndexedSeq - lastIndexedSeq),
-        rebuiltMessageCount: result.rebuiltMessageCount,
-        rebuiltStartSeq: result.rebuiltStartSeq || undefined,
-        rebuiltEndSeq: result.rebuiltEndSeq || undefined,
-        rowCount: result.rowCount,
-        segmentCount: result.segmentCount,
-        durationMs: Date.now() - startTime,
-    }, 'Completed session archive vector index rebuild');
-
-    return result.lastIndexedSeq;
+    return nextLastIndexedSeq;
 }
 
-function queueArchiveIndexRun(sessionId: string, targetLatestSeqHint?: number): Promise<number> {
+function queueArchiveIndexRun(sessionId: string, targetLatestSeqHint?: number, targetLatestBlockIdHint?: number): Promise<number> {
     const previous = indexingChains.get(sessionId) || Promise.resolve(getLastIndexedSeq(sessionId));
     const next = previous
         .catch(() => getLastIndexedSeq(sessionId))
-        .then(() => indexSessionArchiveInternal(sessionId, targetLatestSeqHint));
+        .then(() => indexSessionArchiveInternal(sessionId, targetLatestSeqHint, targetLatestBlockIdHint));
 
     indexingChains.set(sessionId, next);
     next.finally(() => {
@@ -669,17 +1010,21 @@ function queueArchiveIndexRun(sessionId: string, targetLatestSeqHint?: number): 
 
 function planSessionArchiveIndex(sessionId: string): Promise<number> {
     const state = archiveIndexBatchStates.get(sessionId);
-    const lastIndexedSeq = getLastIndexedSeq(sessionId);
+    const checkpoint = getSessionArchiveCheckpoint(sessionId);
+    const lastIndexedSeq = checkpoint.lastIndexedSeq;
+    const lastIndexedBlockId = checkpoint.lastIndexedBlockId;
 
-    if (!state || state.latestSeqHint <= lastIndexedSeq) {
+    if (!state || (state.latestSeqHint <= lastIndexedSeq && state.latestBlockIdHint <= lastIndexedBlockId)) {
         resolveBatchState(sessionId, lastIndexedSeq);
         return Promise.resolve(lastIndexedSeq);
     }
 
     const promise = ensureBatchPromise(state);
     const pendingCount = Math.max(0, state.latestSeqHint - lastIndexedSeq);
+    const pendingBlockCount = Math.max(0, state.latestBlockIdHint - lastIndexedBlockId);
     const decision = getArchiveIndexBatchDecision({
         pendingCount,
+        pendingBlockCount,
         pendingEstimatedTokens: state.pendingEstimatedTokens,
     });
 
@@ -691,18 +1036,22 @@ function planSessionArchiveIndex(sessionId: string): Promise<number> {
         state.flushQueued = true;
 
         const targetLatestSeqHint = state.latestSeqHint;
+        const targetLatestBlockIdHint = state.latestBlockIdHint;
         state.pendingEstimatedTokens = 0;
 
         logger.debug({
             sessionId,
             pendingCount: decision.pendingCount,
+            pendingBlockCount: decision.pendingBlockCount,
             pendingEstimatedTokens: decision.pendingEstimatedTokens,
             reason: decision.reason,
             targetLatestSeqHint,
+            targetLatestBlockIdHint,
             lastIndexedSeq,
+            lastIndexedBlockId,
         }, 'Queueing session archive indexing batch');
 
-        queueArchiveIndexRun(sessionId, targetLatestSeqHint)
+        queueArchiveIndexRun(sessionId, targetLatestSeqHint, targetLatestBlockIdHint)
             .then((indexedSeq) => {
                 const currentState = archiveIndexBatchStates.get(sessionId);
                 if (!currentState) {
@@ -711,13 +1060,16 @@ function planSessionArchiveIndex(sessionId: string): Promise<number> {
 
                 currentState.flushQueued = false;
 
-                if (indexedSeq < targetLatestSeqHint && currentState.latestSeqHint <= targetLatestSeqHint) {
-                    logger.warn({ sessionId, targetLatestSeqHint, indexedSeq }, 'Archive index batch made no progress; clearing pending batch hint');
+                const currentCheckpoint = getSessionArchiveCheckpoint(sessionId);
+                if (indexedSeq < targetLatestSeqHint
+                    && currentState.latestSeqHint <= targetLatestSeqHint
+                    && currentCheckpoint.lastIndexedBlockId >= targetLatestBlockIdHint) {
+                    logger.warn({ sessionId, targetLatestSeqHint, targetLatestBlockIdHint, indexedSeq }, 'Archive index batch made no progress; clearing pending batch hint');
                     resolveBatchState(sessionId, indexedSeq);
                     return;
                 }
 
-                if (currentState.latestSeqHint <= indexedSeq) {
+                if (currentState.latestSeqHint <= indexedSeq && currentState.latestBlockIdHint <= currentCheckpoint.lastIndexedBlockId) {
                     resolveBatchState(sessionId, indexedSeq);
                     return;
                 }
@@ -738,9 +1090,11 @@ function planSessionArchiveIndex(sessionId: string): Promise<number> {
     return promise;
 }
 
-async function scheduleSessionArchiveIndex(sessionId: string, latestSeqHint?: number, latestMessageTokenEstimate?: number): Promise<number> {
-    const lastIndexedSeq = getLastIndexedSeq(sessionId);
-    if (latestSeqHint !== undefined && latestSeqHint <= lastIndexedSeq) {
+async function scheduleSessionArchiveIndex(sessionId: string, latestSeqHint?: number, latestMessageTokenEstimate?: number, latestBlockIdHint?: number): Promise<number> {
+    const checkpoint = getSessionArchiveCheckpoint(sessionId);
+    const lastIndexedSeq = checkpoint.lastIndexedSeq;
+    if ((latestSeqHint === undefined || latestSeqHint <= lastIndexedSeq)
+        && (latestBlockIdHint === undefined || latestBlockIdHint <= checkpoint.lastIndexedBlockId)) {
         return lastIndexedSeq;
     }
 
@@ -758,18 +1112,27 @@ async function scheduleSessionArchiveIndex(sessionId: string, latestSeqHint?: nu
         }
     }
 
+    if (latestBlockIdHint !== undefined && latestBlockIdHint > state.latestBlockIdHint) {
+        state.latestBlockIdHint = latestBlockIdHint;
+    }
+
     return planSessionArchiveIndex(sessionId);
 }
 
-async function indexSessionArchive(sessionId: string, latestSeqHint?: number): Promise<number> {
-    const lastIndexedSeq = getLastIndexedSeq(sessionId);
+async function indexSessionArchive(sessionId: string, latestSeqHint?: number, latestBlockIdHint?: number): Promise<number> {
+    const checkpoint = getSessionArchiveCheckpoint(sessionId);
+    const lastIndexedSeq = checkpoint.lastIndexedSeq;
     const state = getOrCreateBatchState(sessionId);
 
     if (latestSeqHint !== undefined && latestSeqHint > state.latestSeqHint) {
         state.latestSeqHint = latestSeqHint;
     }
 
-    if (state.latestSeqHint <= lastIndexedSeq) {
+    if (latestBlockIdHint !== undefined && latestBlockIdHint > state.latestBlockIdHint) {
+        state.latestBlockIdHint = latestBlockIdHint;
+    }
+
+    if (state.latestSeqHint <= lastIndexedSeq && state.latestBlockIdHint <= checkpoint.lastIndexedBlockId) {
         clearBatchState(sessionId);
         return lastIndexedSeq;
     }
@@ -780,16 +1143,20 @@ async function indexSessionArchive(sessionId: string, latestSeqHint?: number): P
 
     try {
         const targetLatestSeqHint = state.latestSeqHint;
-        const indexedSeq = await queueArchiveIndexRun(sessionId, targetLatestSeqHint);
+        const targetLatestBlockIdHint = state.latestBlockIdHint;
+        const indexedSeq = await queueArchiveIndexRun(sessionId, targetLatestSeqHint, targetLatestBlockIdHint);
         const currentState = archiveIndexBatchStates.get(sessionId);
+        const currentCheckpoint = getSessionArchiveCheckpoint(sessionId);
 
-        if (indexedSeq < targetLatestSeqHint && (!currentState || currentState.latestSeqHint <= targetLatestSeqHint)) {
-            logger.warn({ sessionId, targetLatestSeqHint, indexedSeq }, 'Forced archive index made no progress; clearing pending batch hint');
+        if (indexedSeq < targetLatestSeqHint
+            && (!currentState || currentState.latestSeqHint <= targetLatestSeqHint)
+            && currentCheckpoint.lastIndexedBlockId >= targetLatestBlockIdHint) {
+            logger.warn({ sessionId, targetLatestSeqHint, targetLatestBlockIdHint, indexedSeq }, 'Forced archive index made no progress; clearing pending batch hint');
             resolveBatchState(sessionId, indexedSeq);
             return indexedSeq;
         }
 
-        if (currentState && currentState.latestSeqHint > indexedSeq) {
+        if (currentState && (currentState.latestSeqHint > indexedSeq || currentState.latestBlockIdHint > currentCheckpoint.lastIndexedBlockId)) {
             currentState.flushQueued = false;
             return planSessionArchiveIndex(sessionId);
         }
@@ -822,7 +1189,7 @@ async function getAllArchiveSessionIds(): Promise<string[]> {
                 continue;
             }
 
-            if (!entry.isFile() || !entry.name.endsWith('.jsonl')) {
+            if (!entry.isFile() || !entry.name.endsWith('.jsonl') || entry.name.endsWith('.blocks.jsonl')) {
                 continue;
             }
 
@@ -846,48 +1213,66 @@ async function indexAllSessionArchives(sessionIds?: string[]): Promise<void> {
     }
 }
 
-async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: string): Promise<void> {
-    const oldCheckpoint = checkpoints.sessions[oldSessionId];
-    const newCheckpoint = checkpoints.sessions[newSessionId];
-
-    if (!oldCheckpoint && !newCheckpoint) {
+async function runStartupArchiveVectorBackfill(): Promise<void> {
+    const candidates = await listSessionsNeedingVectorBackfill();
+    if (candidates.length === 0) {
         return;
     }
 
-    if (oldCheckpoint && newCheckpoint) {
-        const preferOld = oldCheckpoint.lastIndexedSeq > newCheckpoint.lastIndexedSeq;
-        const preferCheckpoint = preferOld ? oldCheckpoint : newCheckpoint;
-        checkpoints.sessions[newSessionId] = {
-            lastIndexedSeq: Math.max(oldCheckpoint.lastIndexedSeq, newCheckpoint.lastIndexedSeq),
-            tailStartSeq: preferCheckpoint.tailStartSeq,
-            updatedAt: Date.now(),
-        };
-    } else if (oldCheckpoint) {
-        checkpoints.sessions[newSessionId] = {
-            ...oldCheckpoint,
-            updatedAt: Date.now(),
-        };
+    logger.info({
+        sessionCount: candidates.length,
+        sessions: candidates.map(candidate => candidate.sessionId),
+    }, 'Starting startup archive vector backfill for imported/pending sessions');
+
+    for (const candidate of candidates) {
+        try {
+            await indexSessionArchive(candidate.sessionId, candidate.latestLocalMessageSeq, candidate.latestLocalBlockId);
+        } catch (err) {
+            logger.error({
+                err,
+                sessionId: candidate.sessionId,
+                latestLocalMessageSeq: candidate.latestLocalMessageSeq,
+                latestLocalBlockId: candidate.latestLocalBlockId,
+                checkpointRawLastIndexedSeq: candidate.checkpointRawLastIndexedSeq,
+                checkpointLastIndexedBlockId: candidate.checkpointLastIndexedBlockId,
+            }, 'Startup archive vector backfill failed for session');
+        }
     }
 
-    delete checkpoints.sessions[oldSessionId];
-    await saveCheckpoints();
+    logger.info({
+        sessionCount: candidates.length,
+        sessions: candidates.map(candidate => candidate.sessionId),
+    }, 'Completed startup archive vector backfill for imported/pending sessions');
+}
+
+async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: string): Promise<void> {
+    const oldCheckpoint = getSessionArchiveCheckpoint(oldSessionId);
+    const newCheckpoint = getSessionArchiveCheckpoint(newSessionId);
+
+    if (oldCheckpoint.updatedAt <= 0 && newCheckpoint.updatedAt <= 0) {
+        return;
+    }
+
+    setVectorCheckpointSync(newSessionId, {
+        rawLastIndexedSeq: Math.max(oldCheckpoint.lastIndexedSeq, newCheckpoint.lastIndexedSeq),
+        rawTailStartSeq: oldCheckpoint.lastIndexedSeq > newCheckpoint.lastIndexedSeq
+            ? oldCheckpoint.tailStartSeq
+            : newCheckpoint.tailStartSeq,
+        lastIndexedBlockId: Math.max(oldCheckpoint.lastIndexedBlockId, newCheckpoint.lastIndexedBlockId),
+    });
 }
 
 async function copySessionArchiveIndexCheckpoint(sourceSessionId: string, targetSessionId: string): Promise<void> {
-    const sourceCheckpoint = checkpoints.sessions[sourceSessionId];
-    if (!sourceCheckpoint) {
+    const sourceCheckpoint = getSessionArchiveCheckpoint(sourceSessionId);
+    if (sourceCheckpoint.updatedAt <= 0) {
         return;
     }
 
-    checkpoints.sessions[targetSessionId] = {
-        lastIndexedSeq: sourceCheckpoint.lastIndexedSeq,
-        // Forked sessions copy archive files but not vector rows. Start future tail rewinds
-        // strictly after the inherited indexed range so child-only new messages do not
-        // rebuild the parent's inherited archive tail under the forked session id.
-        tailStartSeq: sourceCheckpoint.lastIndexedSeq > 0 ? sourceCheckpoint.lastIndexedSeq + 1 : 0,
-        updatedAt: Date.now(),
-    };
-    await saveCheckpoints();
+    setVectorCheckpointSync(targetSessionId, {
+        rawLastIndexedSeq: sourceCheckpoint.lastIndexedSeq,
+        rawTailStartSeq: sourceCheckpoint.lastIndexedSeq > 0 ? sourceCheckpoint.lastIndexedSeq + 1 : 0,
+        lastIndexedBlockId: sourceCheckpoint.lastIndexedBlockId,
+    });
 }
 
 function formatSeqLabel(startSeq: number, endSeq: number): string {
@@ -898,11 +1283,23 @@ function getMemorySearchCandidateCount(limit: number): number {
     return Math.max(limit * 4, 20);
 }
 
+function buildSearchRegex(pattern: string | undefined, label: 'includeRegex' | 'excludeRegex'): RegExp | null {
+    if (!pattern) {
+        return null;
+    }
+
+    try {
+        return new RegExp(pattern, 'i');
+    } catch (err: any) {
+        throw new Error(`Invalid ${label}: ${err?.message || 'failed to compile regex'}`);
+    }
+}
+
 function reciprocalRank(rank: number, k: number = 60): number {
     return 1 / (k + rank + 1);
 }
 
-function rerankSearchResultsByRecency(results: any[], limit: number): any[] {
+function rerankSearchResultsByRecency(results: any[], limit: number, options?: SearchOptions): any[] {
     if (results.length <= 1) {
         return results.slice(0, limit);
     }
@@ -927,9 +1324,12 @@ function rerankSearchResultsByRecency(results: any[], limit: number): any[] {
             const id = String(row.id);
             const semantic = reciprocalRank(semanticRank.get(id) ?? results.length);
             const recency = reciprocalRank(recencyRank.get(id) ?? results.length);
+            const blockBoost = row.kind === 'block'
+                ? (options?.preferBlocks ? 0.012 : 0.004)
+                : 0;
             return {
                 ...row,
-                _rerankScore: semantic + (recency * 0.75),
+                _rerankScore: semantic + (recency * 0.75) + blockBoost,
             };
         })
         .sort((a, b) => {
@@ -963,10 +1363,55 @@ function buildMemoryPreview(text: string, maxChars: number = 420): string {
     return `${clipped.trim()}…`;
 }
 
+async function clipResultToLineageBoundary(result: any, options?: SearchOptions): Promise<any> {
+    if (!options?.lineageSessions?.length || result.kind !== 'raw') {
+        return result;
+    }
+
+    const lineageEntry = options.lineageSessions.find(entry => entry.sessionId === result.session_id);
+    if (!lineageEntry || typeof lineageEntry.maxMessageSeq !== 'number') {
+        return result;
+    }
+
+    const maxSeq = lineageEntry.maxMessageSeq;
+    const startSeq = Number(result.start_seq ?? result.seq ?? 0);
+    const endSeq = Number(result.end_seq ?? result.seq ?? 0);
+    if (!(startSeq <= maxSeq && endSeq > maxSeq)) {
+        return result;
+    }
+
+    const allowedRecords = await readLocalArchiveMessagesBySeqRange(result.session_id, startSeq, maxSeq);
+    const allowedMessages = allowedRecords
+        .map(normalizeArchiveMessageLine)
+        .filter((message): message is ArchiveSegmentMessage => Boolean(message));
+
+    if (allowedMessages.length === 0) {
+        return null;
+    }
+
+    const clippedText = allowedMessages.map(message => message.text).join('\n\n');
+    return {
+        ...result,
+        seq: allowedMessages[0].seq,
+        start_seq: allowedMessages[0].seq,
+        end_seq: allowedMessages[allowedMessages.length - 1].seq,
+        raw_start_seq: allowedMessages[0].seq,
+        raw_end_seq: allowedMessages[allowedMessages.length - 1].seq,
+        message_count: allowedMessages.length,
+        timestamp: allowedMessages[0].timestamp,
+        start_timestamp: allowedMessages[0].timestamp,
+        end_timestamp: allowedMessages[allowedMessages.length - 1].timestamp,
+        text: clippedText,
+        chunk_text: truncateToTokenLimit(clippedText, EMBEDDING_MAX_LENGTH),
+    };
+}
+
 async function search(query: string, limit = 5, format = true, options?: SearchOptions) {
     const vector = await getEmbedding(query);
     const results: any[] = [];
-    const candidateLimit = getMemorySearchCandidateCount(limit);
+    const candidateLimit = options?.includeRegex || options?.excludeRegex || options?.preferBlocks
+        ? Math.max(getMemorySearchCandidateCount(limit) * 2, 40)
+        : getMemorySearchCandidateCount(limit);
     let searchQuery = table.search(vector);
     const predicate = buildFilterPredicate(options);
     if (predicate) {
@@ -980,12 +1425,15 @@ async function search(query: string, limit = 5, format = true, options?: SearchO
             if (!record.text || record.session_id === '__init__') continue;
             results.push({
                 id: record.id,
+                kind: record.memory_kind || 'raw',
                 message_id: record.message_id,
                 session_id: record.session_id,
                 agent: record.agent,
                 seq: record.start_seq ?? record.seq,
                 start_seq: record.start_seq ?? record.seq,
                 end_seq: record.end_seq ?? record.seq,
+                raw_start_seq: record.raw_start_seq ?? record.start_seq ?? record.seq,
+                raw_end_seq: record.raw_end_seq ?? record.end_seq ?? record.seq,
                 message_count: record.message_count ?? 1,
                 role: record.role,
                 timestamp: record.timestamp,
@@ -993,6 +1441,11 @@ async function search(query: string, limit = 5, format = true, options?: SearchO
                 end_timestamp: record.end_timestamp ?? record.timestamp,
                 chunk_index: record.chunk_index,
                 chunk_count: record.chunk_count,
+                block_id: record.block_id ?? undefined,
+                block_level: record.block_level ?? undefined,
+                source_kind: record.source_kind ?? undefined,
+                source_start: record.source_start ?? undefined,
+                source_end: record.source_end ?? undefined,
                 text: record.text,
                 chunk_text: record.chunk_text,
                 _distance: record._distance,
@@ -1000,7 +1453,23 @@ async function search(query: string, limit = 5, format = true, options?: SearchO
         }
     }
 
-    const reranked = rerankSearchResultsByRecency(results, limit);
+    const normalizedResults = (await Promise.all(results.map(result => clipResultToLineageBoundary(result, options))))
+        .filter((result): result is any => Boolean(result));
+
+    const includeRegex = buildSearchRegex(options?.includeRegex, 'includeRegex');
+    const excludeRegex = buildSearchRegex(options?.excludeRegex, 'excludeRegex');
+    const filteredResults = normalizedResults.filter((result) => {
+        const haystack = `${result.text || ''}\n${result.chunk_text || ''}`;
+        if (includeRegex && !includeRegex.test(haystack)) {
+            return false;
+        }
+        if (excludeRegex && excludeRegex.test(haystack)) {
+            return false;
+        }
+        return true;
+    });
+
+    const reranked = rerankSearchResultsByRecency(filteredResults, limit, options);
 
     if (!format) return reranked;
     if (reranked.length === 0) return '';
@@ -1010,7 +1479,11 @@ async function search(query: string, limit = 5, format = true, options?: SearchO
         const date = ts ? new Date(ts) : null;
         const dateStr = (date && !isNaN(date.getTime())) ? date.toISOString() : 'unknown';
         const seqLabel = formatSeqLabel(Number(r.start_seq), Number(r.end_seq));
-        return `[${dateStr}] [session: ${r.session_id}] [seq: ${seqLabel}] [messages: ${r.message_count}] [chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]\n${buildMemoryPreview(r.text)}`;
+        const rawLabel = formatSeqLabel(Number(r.raw_start_seq ?? r.start_seq), Number(r.raw_end_seq ?? r.end_seq));
+        const blockLabel = r.kind === 'block'
+            ? ` [kind: block] [B#${r.block_id ?? '?'} L${r.block_level ?? '?'}] [raw: ${rawLabel}]`
+            : '';
+        return `[${dateStr}] [session: ${r.session_id}]${blockLabel} [seq: ${seqLabel}] [messages: ${r.message_count}] [chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]\n${buildMemoryPreview(r.text)}`;
     }).join('\n\n---\n\n');
 }
 
@@ -1021,7 +1494,7 @@ async function getContextAround(timestamp: number, limit = 10) {
     const results: any[] = [];
 
     const iterator = await table.query()
-        .where(`start_timestamp <= ${upper} AND end_timestamp >= ${lower}`)
+        .where(`memory_kind = 'raw' AND start_timestamp <= ${upper} AND end_timestamp >= ${lower}`)
         .limit(limit)
         .execute();
 
@@ -1031,12 +1504,15 @@ async function getContextAround(timestamp: number, limit = 10) {
             if (!record.text || record.session_id === '__init__') continue;
             results.push({
                 id: record.id,
+                kind: record.memory_kind || 'raw',
                 message_id: record.message_id,
                 session_id: record.session_id,
                 agent: record.agent,
                 seq: record.start_seq ?? record.seq,
                 start_seq: record.start_seq ?? record.seq,
                 end_seq: record.end_seq ?? record.seq,
+                raw_start_seq: record.raw_start_seq ?? record.start_seq ?? record.seq,
+                raw_end_seq: record.raw_end_seq ?? record.end_seq ?? record.seq,
                 message_count: record.message_count ?? 1,
                 role: record.role,
                 timestamp: record.timestamp,
@@ -1062,6 +1538,7 @@ async function getContextAround(timestamp: number, limit = 10) {
 async function init() {
     await fs.ensureDir(DB_PATH);
     await fs.ensureDir(SESSION_LOGS_DIR);
+    await initArchiveStore();
     const db = await lancedb.connect(DB_PATH);
     try {
         table = await db.openTable(TABLE_NAME);
@@ -1071,9 +1548,12 @@ async function init() {
             message_id: '__init__',
             session_id: '__init__',
             agent: '__init__',
+            memory_kind: 'raw',
             seq: 0,
             start_seq: 0,
             end_seq: 0,
+            raw_start_seq: 0,
+            raw_end_seq: 0,
             message_count: 1,
             role: 'system',
             timestamp: 0,
@@ -1083,6 +1563,11 @@ async function init() {
             chunk_count: 1,
             text: 'init',
             chunk_text: 'init',
+            block_id: 0,
+            block_level: 0,
+            source_kind: '',
+            source_start: 0,
+            source_end: 0,
             vector: new Array(1024).fill(0),
         }]);
         try {
@@ -1093,6 +1578,10 @@ async function init() {
     }
 
     await loadCheckpoints();
+    await migrateLegacyCheckpointsToDb();
+    void startStartupArchiveVectorBackfill().catch((err) => {
+        logger.error({ err }, 'Startup archive vector backfill failed');
+    });
 }
 
 // Compatibility wrapper during migration away from history-based indexing.
@@ -1101,11 +1590,12 @@ async function indexNewMessages(sessionId: string, _history: Message[], _lastInd
     return _history.length;
 }
 
-function getArchiveIndexStatus(sessionId: string): { lastIndexedSeq: number; tailStartSeq: number } {
+function getArchiveIndexStatus(sessionId: string): { lastIndexedSeq: number; tailStartSeq: number; lastIndexedBlockId: number } {
     const checkpoint = getSessionArchiveCheckpoint(sessionId);
     return {
         lastIndexedSeq: checkpoint.lastIndexedSeq,
         tailStartSeq: checkpoint.tailStartSeq,
+        lastIndexedBlockId: checkpoint.lastIndexedBlockId,
     };
 }
 
@@ -1114,6 +1604,7 @@ export {
     calculateNextSegmentStartIndex,
     copySessionArchiveIndexCheckpoint,
     createRowsFromSegment,
+    createRowFromBlockRecord,
     estimateArchiveMessageTokenCount,
     getArchiveIndexBatchDecision,
     getArchiveIndexStatus,
@@ -1122,7 +1613,9 @@ export {
     indexSessionArchive,
     init,
     renameSessionArchiveIndex,
+    sanitizeEmbeddingInput,
     scheduleSessionArchiveIndex,
     search,
     getContextAround,
+    waitForStartupArchiveVectorBackfill,
 };

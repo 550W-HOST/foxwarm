@@ -6,17 +6,23 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs-extra';
+import yaml from 'js-yaml';
+import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
 import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
-import { Channel, ChannelContext, ChannelMessage } from '../channel';
+import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
-import { BASE_DIR } from '../config';
+import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, loadModelsConfigFromObject, readAppConfigFile, resolveModelConfig, writeAppConfigFile } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
+import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
+import { requestLlmOnce } from '../llm';
+import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from '../weixin/api';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
+import { getSessionHistoryFilePath } from '../session/metadataStore';
 
 type WorkspaceNodeEntry = {
   name: string;
@@ -27,6 +33,183 @@ type WorkspaceNodeEntry = {
 };
 
 const MAX_INLINE_FILE_BYTES = 1024 * 1024;
+const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
+
+function isPlaceholderSecret(value: unknown): boolean {
+  return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
+}
+
+function readYamlFileIfExists(filePath: string): any {
+  if (!fs.existsSync(filePath)) {
+    return undefined;
+  }
+  return yaml.load(fs.readFileSync(filePath, 'utf8')) || {};
+}
+
+function dumpYaml(value: unknown): string {
+  return yaml.dump(value, { noRefs: true, lineWidth: 120 });
+}
+
+function getModelsSetupDiagnostics() {
+  const exists = fs.existsSync(DEFAULT_MODELS_CONFIG_PATH);
+  const raw = exists ? readYamlFileIfExists(DEFAULT_MODELS_CONFIG_PATH) : undefined;
+  const rawYaml = exists ? fs.readFileSync(DEFAULT_MODELS_CONFIG_PATH, 'utf8') : '';
+  const providers = raw?.providers || raw?.models || {};
+  const providerEntries = providers && typeof providers === 'object' && !Array.isArray(providers) ? Object.entries(providers as Record<string, ProviderConfigEntry>) : [];
+  const providerCount = providerEntries.length;
+  const defaultModel = typeof raw?.default === 'string' ? raw.default : null;
+  const placeholderProviders = providerEntries
+    .filter(([, entry]) => isPlaceholderSecret((entry as ProviderConfigEntry).apiKey))
+    .map(([key]) => key);
+
+  return {
+    path: DEFAULT_MODELS_CONFIG_PATH,
+    templatePath: MODELS_CONFIG_TEMPLATE_PATH,
+    exists,
+    providerCount,
+    defaultModel,
+    rawYaml,
+    providers: providerEntries.map(([key, entry]) => {
+      const rawModels = Array.isArray(entry.models) ? entry.models : Array.isArray(entry.model) ? entry.model : (entry.model ? [entry.model] : []);
+      const models = rawModels
+        .map((item: any) => typeof item === 'string' ? item : item?.id)
+        .filter((item: any) => typeof item === 'string' && item.trim())
+        .join('\n');
+      const defaultPrefix = `${key}/`;
+      return {
+        id: key,
+        providerType: entry.providerType || entry.provider || 'openai-completions',
+        baseUrl: entry.baseUrl || '',
+        apiKey: entry.apiKey || '',
+        models,
+        defaultModel: defaultModel?.startsWith(defaultPrefix) ? defaultModel.slice(defaultPrefix.length) : '',
+      };
+    }),
+    hasPlaceholderSecrets: placeholderProviders.length > 0,
+    placeholderProviders,
+    oobe: !exists,
+  };
+}
+
+function buildProviderConfigFromSetup(body: any): { default: string; providers: Record<string, ProviderConfigEntry> } {
+  const providerKey = String(body?.providerKey || body?.provider || 'openai').trim() || 'openai';
+  const providerType = String(body?.providerType || 'openai-completions').trim() || 'openai-completions';
+  const baseUrl = String(body?.baseUrl || '').trim();
+  const apiKey = String(body?.apiKey || '').trim();
+  const modelLines = String(body?.models || body?.model || '')
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (modelLines.length === 0) {
+    throw new Error('At least one model id is required.');
+  }
+
+  const defaultModelId = String(body?.defaultModel || modelLines[0]).trim() || modelLines[0];
+  const defaultKey = modelLines.length === 1 ? providerKey : `${providerKey}/${defaultModelId}`;
+  const provider: ProviderConfigEntry = {
+    providerType,
+    baseUrl: baseUrl || undefined,
+    ...(apiKey ? { apiKey } : {}),
+    models: modelLines,
+  };
+
+  return {
+    default: defaultKey,
+    providers: {
+      [providerKey]: provider,
+    },
+  };
+}
+
+function parseChannelsYaml(rawYaml: unknown): AppConfig['channels'] {
+  const text = typeof rawYaml === 'string' ? rawYaml.trim() : '';
+  if (!text) {
+    return {};
+  }
+  const parsed = yaml.load(text) as any;
+  if (!parsed) {
+    return {};
+  }
+  const channels = parsed.channels && typeof parsed.channels === 'object' ? parsed.channels : parsed;
+  if (!channels || typeof channels !== 'object' || Array.isArray(channels)) {
+    throw new Error('channels config must be a YAML object or an object under `channels:`.');
+  }
+  return channels;
+}
+
+function sanitizeChannelConfigForSetup(config: AppConfig): Record<string, any> {
+  return config.channels || {};
+}
+
+function getWeixinSetupConfig(body: any = {}) {
+  const appConfig = readAppConfigFile();
+  const rawChannels = appConfig.channels || {};
+  const requestedChannelId = typeof body.channelId === 'string' && body.channelId.trim() ? body.channelId.trim() : undefined;
+  const channelId = requestedChannelId
+    || Object.entries(rawChannels).find(([id, config]: [string, any]) => (config?.type || id) === 'weixin')?.[0]
+    || 'weixin';
+  const existing = (rawChannels as any)[channelId] || {};
+  return {
+    appConfig,
+    channelId,
+    existing,
+    baseUrl: body.baseUrl?.trim?.() || existing.baseUrl || DEFAULT_WEIXIN_BASE_URL,
+    routeTag: body.routeTag?.trim?.() || existing.routeTag || undefined,
+    botType: body.botType?.trim?.() || existing.loginBotType || DEFAULT_WEIXIN_LOGIN_BOT_TYPE,
+  };
+}
+
+function buildWebUiModelStatus(session: { model?: string; childModelDefault?: string }) {
+  const { defaultKey, currentKey } = resolveModelConfig(session.model);
+  const { currentKey: effectiveChildModelKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session));
+  return {
+    model: typeof session.model === 'string' && session.model.trim() ? session.model.trim() : null,
+    modelKey: currentKey,
+    defaultModelKey: defaultKey,
+    childModelDefault: typeof session.childModelDefault === 'string' && session.childModelDefault.trim() ? session.childModelDefault.trim() : null,
+    effectiveChildModelKey,
+  };
+}
+
+function buildWebUiModelsPayload(currentModel?: string) {
+  const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(currentModel);
+  const displayModels = modelsConfig.displayModels || Object.keys(modelsConfig.models || {});
+  return {
+    defaultKey,
+    currentKey,
+    models: displayModels.map((key) => {
+      const entry = modelsConfig.models[key];
+      return {
+        key,
+        label: key,
+        isDefault: key === defaultKey,
+        contextLimit: entry?.contextLimit || null,
+      };
+    }),
+  };
+}
+
+function normalizeWebUiModelSelection(value: unknown): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new Error('model must be a string, null, or omitted with clear=true.');
+  }
+
+  const normalized = value.trim();
+  if (!normalized || normalized === 'default' || normalized === 'unset' || normalized === 'clear') {
+    return undefined;
+  }
+
+  const { modelsConfig } = resolveModelConfig(undefined);
+  if (!modelsConfig.models[normalized]) {
+    throw new Error(`Unknown model \`${normalized}\`.`);
+  }
+
+  return normalized;
+}
 
 function createWorkspaceFileTooLargeError(filePath: string, size: number, maxSize: number): Error & { code: string; path: string; size: number; maxSize: number } {
   const error = new Error(`File too large to open in WebUI editor (${size} bytes > ${maxSize} bytes). Please download it instead.`) as Error & {
@@ -317,7 +500,8 @@ export class WebUIChannel implements Channel {
           } else {
             res.status(401).json({ error: 'Invalid token' });
           }
-        }
+        },
+        noAuth: true,
       });
 
       // Get available slash commands for WebUI autocomplete
@@ -341,6 +525,210 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get commands');
             res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/models',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const currentModel = typeof req.query.current === 'string' ? req.query.current : undefined;
+            res.json(buildWebUiModelsPayload(currentModel));
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get models');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/status',
+        method: 'GET',
+        handler: async (_req: express.Request, res: express.Response) => {
+          try {
+            const models = getModelsSetupDiagnostics();
+            const appConfig = readAppConfigFile();
+            const channels = sanitizeChannelConfigForSetup(appConfig);
+            res.json({
+              oobe: models.oobe,
+              models,
+              config: {
+                appConfigPath: APP_CONFIG_PATH,
+                channelsYaml: dumpYaml(channels),
+                channelCount: Object.keys(channels).length,
+              },
+              channels: listChannelRuntimeStatuses(),
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get setup status');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/models',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const config = req.body?.yaml
+              ? (yaml.load(String(req.body.yaml)) as any)
+              : buildProviderConfigFromSetup(req.body);
+
+            if (!config || typeof config !== 'object' || Array.isArray(config)) {
+              throw new Error('models config must be a YAML object.');
+            }
+
+            // Validate before writing, so a bad setup payload does not create a
+            // broken state/models.yaml and accidentally leave OOBE mode.
+            loadModelsConfigFromObject(config);
+
+            fs.ensureDirSync(path.dirname(DEFAULT_MODELS_CONFIG_PATH));
+            fs.writeFileSync(DEFAULT_MODELS_CONFIG_PATH, dumpYaml(config), 'utf8');
+
+            // Validate by resolving the newly written config.
+            const payload = buildWebUiModelsPayload();
+            res.json({ success: true, models: getModelsSetupDiagnostics(), payload });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to save models setup');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/models/test',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const transientConfig = buildProviderConfigFromSetup(req.body);
+            const config = transientConfig.providers[Object.keys(transientConfig.providers)[0]];
+            const model = typeof req.body?.testModel === 'string' && req.body.testModel.trim()
+              ? req.body.testModel.trim()
+              : (Array.isArray(config.models) ? (typeof config.models[0] === 'string' ? config.models[0] : config.models[0]?.id) : '');
+            if (!model) {
+              throw new Error('A model id is required for test.');
+            }
+
+            const modelConfig = {
+              ...config,
+              model,
+              providerKey: Object.keys(transientConfig.providers)[0],
+              extraFields: config.extraFields || {},
+              extraHeaders: config.extraHeaders || {},
+            } as any;
+            const result = await requestLlmOnce({
+              contents: [{ role: 'user', parts: [{ text: 'Please reply ok' }] }],
+              systemPrompt: '',
+              modelEntryOverride: modelConfig,
+              sessionId: 'setup-model-test',
+              promptCacheKey: 'setup-model-test',
+              iteration: 0,
+              toolDefinitions: [],
+              notifySessionEvents: false,
+              registerAbortController: false,
+              maxRetries: 1,
+              timeoutMs: 30000,
+            });
+            if (/^\s*Error:/i.test(result.text || '')) {
+              return res.status(400).json({ success: false, error: result.text });
+            }
+            res.json({ success: true, text: result.text, usage: result.usage || null });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to test models setup');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/channels',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const nextChannels = req.body?.channels && typeof req.body.channels === 'object'
+              ? req.body.channels
+              : parseChannelsYaml(req.body?.yaml);
+            const current = readAppConfigFile();
+            const next: AppConfig = {
+              ...current,
+              channels: nextChannels,
+            };
+            writeAppConfigFile(next);
+            const reload = await reloadManagedChannels();
+            res.json({
+              success: true,
+              configPath: APP_CONFIG_PATH,
+              channelsYaml: dumpYaml(next.channels || {}),
+              reload,
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to save channels setup');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/weixin/login/start',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const setup = getWeixinSetupConfig(req.body || {});
+            const result = await startWeixinQrLogin({
+              baseUrl: setup.baseUrl,
+              botType: setup.botType,
+              routeTag: setup.routeTag,
+              force: req.body?.force === true,
+            });
+            res.json({ success: true, channelId: setup.channelId, baseUrl: setup.baseUrl, routeTag: setup.routeTag || null, botType: setup.botType, ...result });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to start Weixin setup login');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/weixin/login/wait',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionKey = typeof req.body?.sessionKey === 'string' ? req.body.sessionKey.trim() : '';
+            if (!sessionKey) {
+              throw new Error('sessionKey is required.');
+            }
+            const setup = getWeixinSetupConfig(req.body || {});
+            const result = await waitForWeixinQrLogin({ sessionKey, baseUrl: setup.baseUrl, routeTag: setup.routeTag, timeoutMs: 5000 });
+            if (result.connected && result.botToken) {
+              const current = readAppConfigFile();
+              const existingChannels = current.channels || {};
+              const previous = (existingChannels as any)[setup.channelId] || {};
+              const next: AppConfig = {
+                ...current,
+                channels: {
+                  ...existingChannels,
+                  [setup.channelId]: {
+                    ...previous,
+                    type: previous.type || (setup.channelId === 'weixin' ? undefined : 'weixin'),
+                    enabled: true,
+                    baseUrl: result.baseUrl || setup.baseUrl,
+                    token: result.botToken,
+                    routeTag: setup.routeTag,
+                    allowedUsers: result.userId ? Array.from(new Set([...(previous.allowedUsers || []), result.userId])) : previous.allowedUsers,
+                  },
+                },
+              };
+              writeAppConfigFile(next);
+              const reload = await reloadManagedChannels();
+              return res.json({ success: true, channelId: setup.channelId, connected: true, userId: result.userId || null, message: result.message, reload });
+            }
+            res.json({ success: true, channelId: setup.channelId, connected: false, message: result.message });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed while waiting for Weixin setup login');
+            res.status(400).json({ error: e.message });
           }
         },
       });
@@ -382,6 +770,7 @@ export class WebUIChannel implements Channel {
                 archived: session.archived || false,
                 currentNode: session.currentNode || 'master',
                 cwd: session.cwd || null,
+                ...buildWebUiModelStatus(session),
                 isolated: sessionManager.isSessionEffectivelyIsolated(session),
                 tokenUsage: {
                   cachedTokens: session.stats?.totalCachedTokens || 0,
@@ -443,6 +832,57 @@ export class WebUIChannel implements Channel {
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session cwd');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/model',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
+            const session = await sessionManager.getExistingSession(sessionId);
+            if (!session) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
+
+            const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
+            if (model !== undefined) {
+              session.model = model;
+            } else {
+              delete session.model;
+            }
+
+            await sessionManager.saveSession(session.id);
+            this.broadcastSessionListUpdate();
+            res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(session) });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to update session model');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/child-model',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
+            const session = await sessionManager.getExistingSession(sessionId);
+            if (!session) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
+
+            const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
+            await sessionManager.setSessionChildModelDefault(session.id, model);
+            const updated = await sessionManager.getExistingSession(session.id) || session;
+            this.broadcastSessionListUpdate();
+            res.json({ success: true, sessionId: updated.id, ...buildWebUiModelStatus(updated) });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to update session child model');
             res.status(400).json({ error: e.message });
           }
         },
@@ -616,6 +1056,26 @@ export class WebUIChannel implements Channel {
       });
 
       // Get session history (must be before DELETE /:sessionId)
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/debug-file',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const resolvedPath = getSessionHistoryFilePath(sessionId);
+            if (!await fs.pathExists(resolvedPath)) {
+              return res.status(404).json({ error: 'Session file not found' });
+            }
+            const payload = await fs.readJson(resolvedPath);
+            res.json({ resolvedPath, payload });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to read session debug file');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/history',
         method: 'GET',
@@ -915,6 +1375,7 @@ export class WebUIChannel implements Channel {
               res.json({ 
                 path: finalPath,
                 filename: req.file.originalname,
+                mimeType: req.file.mimetype,
                 size: req.file.size
               });
             });
@@ -1131,7 +1592,12 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            const { text, parts, filePaths } = req.body;
+            const { text, parts, filePaths, uploadedFiles } = req.body;
+
+            const existingSession = await sessionManager.getExistingSession(sessionId);
+            if (!existingSession) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
 
             // Support both old format (text) and new format (parts)
             let finalParts = parts || (text ? [{ text }] : []);
@@ -1178,45 +1644,63 @@ export class WebUIChannel implements Channel {
               conversationId: sessionId,
               username: 'webui'
             };
-            
-            // If filePaths provided, read and add image parts
-            if (filePaths && Array.isArray(filePaths)) {
-              for (const filePath of filePaths) {
+
+            const uploadedEntries = Array.isArray(uploadedFiles)
+              ? uploadedFiles
+              : (Array.isArray(filePaths) ? filePaths.map((filePath) => ({ path: filePath })) : []);
+
+            if (uploadedEntries.length > 0) {
+              for (const entry of uploadedEntries) {
+                const tempPath = typeof entry === 'string'
+                  ? entry
+                  : (typeof entry?.path === 'string' ? entry.path : '');
+                if (!tempPath) continue;
+
                 try {
-                  // Check if file exists and is an image
-                  const stats = await fs.stat(filePath);
-                  if (stats.isFile()) {
-                    const ext = path.extname(filePath).toLowerCase();
-                    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
-                    
-                    if (imageExts.includes(ext)) {
-                      // Read image and convert to base64
-                      const imageBuffer = await fs.readFile(filePath);
-                      const base64 = imageBuffer.toString('base64');
-                      const mimeType = ext === '.png' ? 'image/png' : 
-                                      ext === '.gif' ? 'image/gif' :
-                                      ext === '.webp' ? 'image/webp' : 'image/jpeg';
-                      
-                      finalParts.push({
-                        inlineData: {
-                          data: base64,
-                          mimeType
-                        }
-                      });
-                    }
+                  const stats = await fs.stat(tempPath);
+                  if (!stats.isFile()) continue;
+
+                  const fileBuffer = await fs.readFile(tempPath);
+                  const originalName = typeof entry?.filename === 'string' && entry.filename.trim()
+                    ? entry.filename.trim()
+                    : path.basename(tempPath);
+                  const ext = path.extname(originalName || tempPath).toLowerCase();
+                  const mimeType = typeof entry?.mimeType === 'string' && entry.mimeType.trim()
+                    ? entry.mimeType.trim()
+                    : (ext === '.png' ? 'image/png'
+                      : ext === '.gif' ? 'image/gif'
+                      : ext === '.webp' ? 'image/webp'
+                      : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+                      : 'application/octet-stream');
+                  const isImage = mimeType.startsWith('image/');
+                  const saved = await saveInboundSessionFile({
+                    sessionId,
+                    platform: 'webui',
+                    buffer: fileBuffer,
+                    fileName: originalName,
+                    mimeType,
+                    isImage,
+                  });
+
+                  finalParts.push({ text: buildSavedFileText(saved, isImage ? 'image' : 'file') });
+
+                  if (isImage) {
+                    finalParts.push({
+                      inlineData: {
+                        data: fileBuffer.toString('base64'),
+                        mimeType,
+                      }
+                    });
                   }
                 } catch (err) {
-                  logger.warn({ filePath, err }, 'Failed to read uploaded file');
+                  logger.warn({ filePath: tempPath, err }, 'Failed to process uploaded file');
+                } finally {
+                  await fs.remove(tempPath).catch(() => {});
                 }
               }
             }
             
             if (finalParts.length === 0) throw new Error('Missing message content');
-
-            const existingSession = await sessionManager.getExistingSession(sessionId);
-            if (!existingSession) {
-              return res.status(404).json({ error: 'Session not found' });
-            }
 
             // Attach webui channel if not already attached
             // Use sessionId as channelUserId so each session has its own channel
@@ -1375,6 +1859,22 @@ export class WebUIChannel implements Channel {
         isInstantNotification: true // Mark as instant notification (like compact messages)
       }
     });
+  }
+
+  async sendFile(channelUserId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+    // WebUI does not need a channel-side binary push: the tool result includes
+    // the local fullPath, and WebUI renders tool results with download/open
+    // affordances. Implementing this as a successful no-op prevents generic
+    // session delivery from reporting that WebUI "does not support file
+    // sending", which incorrectly suggests to agents that WebUI users cannot
+    // access the file.
+    logger.debug({
+      sessionId: channelUserId,
+      fileName: file.name,
+      filePath: file.path,
+      sizeBytes: file.sizeBytes,
+      caption: options?.caption,
+    }, 'WebUI sendFile noop called');
   }
 
   async sendTyping(channelUserId: string): Promise<void> {

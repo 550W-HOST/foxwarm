@@ -10,6 +10,10 @@ import {
 } from 'lucide-react'
 import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
+export { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
+import { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
+
+export const formatObject = formatCompactObjectPreview
 
 export interface SlashCommandOption {
   name: string
@@ -57,8 +61,6 @@ export interface SlashCommandCompletion {
   trailingSpace: boolean
 }
 
-export type SendKeyMode = 'mod-enter' | 'enter'
-
 export type ViewMode = 'rendered' | 'raw' | 'json'
 
 export type ToolViewMode = 'default' | 'json'
@@ -67,6 +69,56 @@ export interface FunctionCall {
   id?: string
   name: string
   args: any
+}
+
+const normalizeToolLabelValue = (value: unknown): string | null => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed || null
+  }
+  if (value === undefined || value === null) return null
+  return String(value)
+}
+
+export const formatToolLabel = (name: string, args?: any): string => {
+  if (name === 'remote_node') {
+    const nodeId = normalizeToolLabelValue(args?.nodeId)
+    const tool = normalizeToolLabelValue(args?.tool)
+    if (nodeId && tool) {
+      return `node:${nodeId}:${tool}`
+    }
+  }
+
+  if (name === 'call_mcp') {
+    const tool = normalizeToolLabelValue(args?.tool)
+    if (tool) {
+      const server = normalizeToolLabelValue(args?.server) || 'default'
+      return `mcp:${server}:${tool}`
+    }
+  }
+
+  if (name === 'call_tool') {
+    const toolId = normalizeToolLabelValue(args?.toolId)
+    if (toolId) {
+      return `tool:${toolId}`
+    }
+
+    const source = normalizeToolLabelValue(args?.source)
+    const tool = normalizeToolLabelValue(args?.name)
+    if (source && tool) {
+      const scope = normalizeToolLabelValue(args?.server) || normalizeToolLabelValue(args?.nodeId)
+      return scope ? `tool:${source}:${scope}:${tool}` : `tool:${source}:${tool}`
+    }
+  }
+
+  if (name === 'search_tools') {
+    const sources = Array.isArray(args?.sources) ? args.sources.join(',') : normalizeToolLabelValue(args?.sources)
+    const scope = normalizeToolLabelValue(args?.server) || normalizeToolLabelValue(args?.nodeId)
+    const query = normalizeToolLabelValue(args?.query)
+    return ['search_tools', sources, scope, query].filter(Boolean).join(':')
+  }
+
+  return name
 }
 
 export interface FunctionResponse {
@@ -173,20 +225,6 @@ export const copyTextToClipboard = async (text: string) => {
   if (!copied) {
     throw new Error('Copy command was rejected by the browser')
   }
-}
-
-export const formatObject = (obj: any): string => {
-  if (!obj || typeof obj !== 'object') return String(obj)
-  const keys = Object.keys(obj)
-  if (keys.length === 1) {
-    const value = obj[keys[0]]
-    return typeof value === 'object' ? JSON.stringify(value) : String(value)
-  }
-  return keys.map(key => {
-    const value = obj[key]
-    const valueStr = typeof value === 'object' ? JSON.stringify(value) : value
-    return `${key}: ${valueStr}`
-  }).join('\n')
 }
 
 export const formatStructuredSystemText = (system: string): string => (
@@ -455,6 +493,7 @@ const toolIcons: Record<string, LucideIcon> = {
   write: Pencil,
   edit: Pencil,
   apply_patch: Wrench,
+  apply_patch_memory: Wrench,
   exec: Terminal,
 }
 
@@ -464,6 +503,7 @@ export type ToolTagTone = 'neutral' | 'success' | 'error'
 
 export interface ToolTagItem {
   name: string
+  label?: string
   tone?: ToolTagTone
 }
 
@@ -473,30 +513,30 @@ const toolTagToneClasses: Record<ToolTagTone, string> = {
   error: 'border-red-200 dark:border-red-800 bg-red-50/80 dark:bg-red-900/20 text-red-700 dark:text-red-300',
 }
 
-export const ToolTag = ({ name, tone = 'neutral', className = '' }: { name: string; tone?: ToolTagTone; className?: string }) => {
+export const ToolTag = ({ name, label = name, tone = 'neutral', className = '' }: { name: string; label?: string; tone?: ToolTagTone; className?: string }) => {
   const Icon = getToolIcon(name)
 
   return (
     <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
       <Icon size={12} />
-      <span>{name}</span>
+      <span>{label}</span>
     </span>
   )
 }
 
-export const ToolLabel = ({ name }: { name: string }) => <ToolTag name={name} />
+export const ToolLabel = ({ name, label }: { name: string; label?: string }) => <ToolTag name={name} label={label} />
 
 export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
   <div className="flex min-w-0 flex-wrap items-center gap-1.5">
     {items.map((item, idx) => (
-      <ToolTag key={`${item.name}-${idx}`} name={item.name} tone={item.tone} />
+      <ToolTag key={`${item.name}-${idx}`} name={item.name} label={item.label} tone={item.tone} />
     ))}
   </div>
 )
 
 export const SessionHashLink = ({ sessionId, className = '' }: { sessionId: string; className?: string }) => (
   <a
-    href={`#${sessionId}`}
+    href={`#session/${encodeURIComponent(sessionId)}`}
     className={`font-mono underline decoration-dotted underline-offset-2 hover:text-blue-600 dark:hover:text-blue-300 ${className}`.trim()}
     title={`Open session ${sessionId}`}
   >
@@ -570,16 +610,20 @@ const parsePatchUpdateSection = (lines: string[], filePath: string): PatchPrevie
     }
 
     const hunkLines: string[] = []
-    let sawChange = false
 
     while (i < lines.length) {
       const line = lines[i]
 
-      if (line.startsWith('@@') && hunkLines.length > 0 && sawChange) {
+      if (line.startsWith('@@')) {
         break
       }
 
-      if (line.trim() === '' && sawChange) {
+      if (line === '*** End of File') {
+        i++
+        break
+      }
+
+      if (line.trim() === '') {
         let j = i + 1
         while (j < lines.length && lines[j].trim() === '') j++
         if (j >= lines.length || lines[j].startsWith('@@')) {
@@ -588,16 +632,12 @@ const parsePatchUpdateSection = (lines: string[], filePath: string): PatchPrevie
         }
       }
 
-      if (line.startsWith('-') || line.startsWith('+')) {
-        sawChange = true
-      }
-
       hunkLines.push(line)
       i++
     }
 
-    if (!sawChange) {
-      throw new Error(`Invalid apply_patch input for ${filePath}: update hunk must include at least one changed line.`)
+    if (anchors.length === 0 && hunkLines.length === 0) {
+      throw new Error(`Invalid apply_patch input for ${filePath}: empty update hunk.`)
     }
 
     hunks.push({ anchors, lines: hunkLines })
@@ -696,8 +736,9 @@ export const buildPatchHunkSnippets = (hunk: PatchPreviewHunk): { oldText: strin
       continue
     }
 
-    oldLines.push(line)
-    newLines.push(line)
+    const contextLine = line.startsWith(' ') ? line.slice(1) : line
+    oldLines.push(contextLine)
+    newLines.push(contextLine)
   }
 
   return {

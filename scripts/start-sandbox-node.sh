@@ -19,11 +19,16 @@ else
 fi
 
 echo "Waiting for foxwarm master at $NODE_MASTER_URL..."
-until curl --noproxy "*" -fsS "${NODE_MASTER_URL%/}/login.html" >/dev/null 2>&1; do
+until curl -fsS "${NODE_MASTER_URL%/}/login.html" >/dev/null 2>&1; do
   sleep 1
 done
 
-exec node lib/nodes/client.js \
+NODE_CLIENT_ENTRYPOINT="packages/cli-node/dist/client.bundle.js"
+if [ ! -f "$NODE_CLIENT_ENTRYPOINT" ]; then
+  NODE_CLIENT_ENTRYPOINT="packages/cli-node/dist/client.js"
+fi
+
+exec node "$NODE_CLIENT_ENTRYPOINT" \
   --host "$NODE_MASTER_URL" \
   --id "$NODE_IDENTIFIER" \
   --token "$RESOLVED_NODE_TOKEN" \

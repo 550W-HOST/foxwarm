@@ -1,5 +1,7 @@
 import fs from 'fs-extra';
-import { MCP_CONFIG_PATH, STATE_DIR } from './config';
+import { MCP_CONFIG_PATH } from './config';
+import { logger } from './common';
+import { DiskJsonData } from './utils/diskJsonData';
 
 type McpSdkModules = {
   Client: any;
@@ -55,6 +57,21 @@ export type McpConfig = {
   servers: Record<string, McpServerConfig>;
 };
 
+export type McpServerSummary = {
+  name: string;
+  enabled: boolean;
+  transport: McpTransport;
+  description?: string;
+  url?: string;
+  command?: string;
+  cwd?: string;
+  stderr?: 'inherit' | 'pipe' | 'ignore';
+  argsCount: number;
+  envKeys: string[];
+  headerKeys: string[];
+  hasToken: boolean;
+};
+
 type StandardTransportKind = 'streamable-http' | 'sse' | 'stdio';
 
 type StandardConnection = {
@@ -79,6 +96,34 @@ type PooledStdioConnection = StandardConnection & {
 const VALID_TRANSPORTS = new Set<McpTransport>(['streamable-http', 'sse', 'stdio', 'auto']);
 const STDIO_POOL_IDLE_TTL_MS = 60_000;
 const stdioConnectionPool = new Map<string, PooledStdioConnection>();
+
+function normalizeMcpConfigPayload(raw: any, filePath: string): McpConfig {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid MCP config payload in ${filePath}`);
+  }
+
+  const servers = raw.servers && typeof raw.servers === 'object' ? raw.servers : {};
+  const normalizedServers = Object.fromEntries(
+    Object.entries(servers).map(([name, server]) => [name, sanitizeServerConfig(server as McpServerConfig)])
+  );
+  return { servers: normalizedServers };
+}
+
+export function createMcpConfigStore(filePath: string = MCP_CONFIG_PATH): DiskJsonData<McpConfig> {
+  return new DiskJsonData<McpConfig>(filePath, {
+    backup: false,
+    normalizeLoadedData: normalizeMcpConfigPayload,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read MCP config candidate');
+    },
+  });
+}
+
+let mcpConfigStore = createMcpConfigStore();
+
+export function setMcpConfigStoreForTests(store: DiskJsonData<McpConfig> | null): void {
+  mcpConfigStore = store || createMcpConfigStore();
+}
 
 function normalizeTransport(server: McpServerConfig): McpTransport {
   const raw = typeof server.transport === 'string'
@@ -109,25 +154,51 @@ function sanitizeServerConfig(server: McpServerConfig): McpServerConfig {
   return next;
 }
 
+export function summarizeServerConfig(name: string, server: McpServerConfig): McpServerSummary {
+  const normalized = sanitizeServerConfig(server);
+  return {
+    name,
+    enabled: normalized.enable !== false,
+    transport: normalizeTransport(normalized),
+    ...(normalized.description ? { description: normalized.description } : {}),
+    ...(normalized.url ? { url: normalized.url } : {}),
+    ...(normalized.command ? { command: normalized.command } : {}),
+    ...(normalized.cwd ? { cwd: normalized.cwd } : {}),
+    ...(normalized.stderr ? { stderr: normalized.stderr } : {}),
+    argsCount: Array.isArray(normalized.args) ? normalized.args.length : 0,
+    envKeys: normalized.env && typeof normalized.env === 'object'
+      ? Object.keys(normalized.env).sort()
+      : [],
+    headerKeys: normalized.headers && typeof normalized.headers === 'object'
+      ? Object.keys(normalized.headers).sort()
+      : [],
+    hasToken: Boolean(normalized.token),
+  };
+}
+
+export function summarizeServers(servers: Record<string, McpServerConfig> | undefined | null): McpServerSummary[] {
+  const entries = Object.entries(servers || {});
+  return entries
+    .map(([name, server]) => summarizeServerConfig(name, server))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 async function loadConfig(): Promise<McpConfig> {
   try {
-    const exists = await fs.pathExists(MCP_CONFIG_PATH);
-    if (!exists) return { servers: {} };
-    const raw = await fs.readFile(MCP_CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    const servers = parsed.servers || {};
-    const normalizedServers = Object.fromEntries(
-      Object.entries(servers).map(([name, server]) => [name, sanitizeServerConfig(server as McpServerConfig)])
-    );
-    return { servers: normalizedServers };
+    const loaded = await mcpConfigStore.loadFirstAvailable();
+    if (!loaded) return { servers: {} };
+    if (loaded.source !== mcpConfigStore.filePath) {
+      logger.warn({ source: loaded.source }, 'Recovering MCP config from fallback source');
+      await mcpConfigStore.write(loaded.data);
+    }
+    return loaded.data;
   } catch (e) {
     throw new Error(`Failed to load MCP config: ${e}`);
   }
 }
 
 async function saveConfig(config: McpConfig) {
-  await fs.ensureDir(STATE_DIR);
-  await fs.writeFile(MCP_CONFIG_PATH, JSON.stringify(config, null, 2));
+  await mcpConfigStore.write(config);
 }
 
 async function getServerConfig(name?: string): Promise<{ name: string; config: McpServerConfig }> {
@@ -375,23 +446,21 @@ async function withServerConnection<T>(serverName: string, config: McpServerConf
 
 export async function listTools(serverName?: string) {
   const { name, config } = await getServerConfig(serverName);
-  return withServerConnection(name, config, async ({ client, transportKind }) => {
-    const result = await client.listTools();
-    return {
-      ...result,
-      _transport: transportKind,
-    };
+  return withServerConnection(name, config, async ({ client }) => {
+    return await client.listTools();
   });
 }
 
 export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>) {
   const { name, config } = await getServerConfig(serverName);
-  return withServerConnection(name, config, async ({ client, transportKind }) => {
+  return withServerConnection(name, config, async ({ client }) => {
     const result = await client.callTool({ name: tool, arguments: args || {} });
-    return {
-      ...result,
-      _transport: transportKind,
-    };
+    // Unwrap single text content for cleaner output
+    const content = result.content;
+    if (Array.isArray(content) && content.length === 1 && content[0].type === 'text') {
+      return { output: content[0].text };
+    }
+    return result;
   });
 }
 
@@ -415,4 +484,9 @@ export async function setServerEnabled(name: string, enable: boolean) {
 export async function getServers() {
   const cfg = await loadConfig();
   return cfg.servers || {};
+}
+
+export async function listServers() {
+  const servers = await getServers();
+  return summarizeServers(servers);
 }

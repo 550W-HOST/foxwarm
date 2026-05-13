@@ -1,4 +1,6 @@
 import { Message, MessagePart } from '../types';
+import { stringifyFunctionCallArgs } from '../toolCallArgs';
+import { truncateUnicodeSafe } from './unicode';
 
 export const DEFAULT_TOOL_CONTENT_CHAR_LIMIT = 200;
 
@@ -17,6 +19,7 @@ const EPHEMERAL_SYSTEM_PREFIXES = [
   'FROM:',
   'The following message is a direct user message via channel;',
   'Channel is in push-only mode.',
+  'Channel is in send-only mode.',
 ];
 
 function isEphemeralSystemText(text: string): boolean {
@@ -28,7 +31,7 @@ function truncateText(text: string, maxChars: number): string {
     return text;
   }
 
-  return `${text.slice(0, maxChars)}...`;
+  return truncateUnicodeSafe(text, maxChars, '...');
 }
 
 function formatMultilineText(text: string, continuationPrefix: string = '> '): string {
@@ -60,11 +63,7 @@ export function formatPrefixedMultilineText(prefix: string, text: string, contin
 }
 
 function stringifyFunctionArgs(part: MessagePart): string {
-  try {
-    return JSON.stringify(part.functionCall?.args);
-  } catch {
-    return '[unserializable args]';
-  }
+  return stringifyFunctionCallArgs(part.functionCall);
 }
 
 function formatFunctionResponse(part: MessagePart): string | undefined {
@@ -117,12 +116,12 @@ function formatPartLines(message: Message, part: MessagePart, options: Required<
 
   if (part.functionCall) {
     const args = truncateText(stringifyFunctionArgs(part), toolCharLimit);
-    lines.push(`[function_call:${part.functionCall.name}] ${args}`);
+    lines.push(`[call:${part.functionCall.name}] ${args}`);
   }
 
   const functionResponse = formatFunctionResponse(part);
   if (functionResponse) {
-    lines.push(`[function_response:${part.functionResponse?.name || 'unknown'}] ${truncateText(functionResponse, toolCharLimit)}`);
+    lines.push(`[tool:${part.functionResponse?.name || 'unknown'}] ${truncateText(functionResponse, toolCharLimit)}`);
   }
 
   const inlineDataRef = part.inlineDataRef as any;
@@ -132,7 +131,8 @@ function formatPartLines(message: Message, part: MessagePart, options: Required<
     lines.push(`[image:${mimeType}] ${imageId}`);
   } else if (part.inlineData) {
     const mimeType = part.inlineData.mimeType || part.inlineData.mime_type || 'application/octet-stream';
-    lines.push(`[image:${mimeType}]`);
+    const imageId = part.imageMeta?.imageId;
+    lines.push(imageId ? `[image:${mimeType}] ${imageId}` : `[image:${mimeType}]`);
   }
 
   return lines;
@@ -179,5 +179,5 @@ export function formatMessagePreviewText(
     return preview;
   }
 
-  return `${preview.slice(0, previewLength)}...`;
+  return truncateUnicodeSafe(preview, previewLength, '...');
 }

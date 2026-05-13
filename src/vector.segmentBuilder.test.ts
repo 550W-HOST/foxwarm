@@ -43,11 +43,11 @@ test('buildArchiveSegments overlaps by token budget on the segment tail', () => 
     const lines = Array.from({ length: 10 }, (_, index) => makeArchiveLine(index + 1, mediumMessage));
 
     const segments = buildArchiveSegments(lines);
-    assert.equal(segments.length, 2);
+    assert.equal(segments.length, 5);
     assert.equal(segments[0].startSeq, 1);
-    assert.equal(segments[0].endSeq, 7);
-    assert.equal(segments[1].startSeq, 7);
-    assert.equal(segments[1].endSeq, 10);
+    assert.equal(segments[0].endSeq, 3);
+    assert.equal(segments[1].startSeq, 3);
+    assert.equal(segments[1].endSeq, 5);
 });
 
 test('overlap does not cross a long message that would dominate overlap budget', () => {
@@ -66,10 +66,10 @@ test('overlap does not cross a long message that would dominate overlap budget',
     ];
 
     const segments = buildArchiveSegments(lines);
-    assert.equal(segments.length, 2);
-    assert.equal(segments[0].endSeq, 6);
-    assert.equal(segments[1].startSeq, 6);
-    assert.notEqual(segments[1].startSeq, 5);
+    const longMessageSegmentIndex = segments.findIndex(segment => segment.endSeq === 5);
+    assert.ok(longMessageSegmentIndex >= 0, 'expected a segment that ends with the long message');
+    assert.equal(segments[longMessageSegmentIndex + 1]?.startSeq, 6);
+    assert.notEqual(segments[longMessageSegmentIndex + 1]?.startSeq, 5);
 });
 
 test('single oversized message becomes a single segment with multiple embedding rows', () => {

@@ -1,8 +1,8 @@
 import crypto from 'crypto'
-import fs from 'fs-extra'
-import path from 'path'
 import { WebSocket } from 'ws'
 import { NODES_FILE } from '../config'
+import { logger } from '../common'
+import { DiskJsonData } from '../utils/diskJsonData'
 
 export type NodeToolDefinition = {
   name: string
@@ -34,12 +34,19 @@ export type PendingPairingRecord = {
   updatedAt: number
   pairCode: string
   capabilities: NodeCapabilitiesSnapshot
+  /** Set when approved but not yet delivered to the client */
+  approvedNodeId?: string
+  /** Plaintext auth token — stored temporarily until client picks it up */
+  approvedAuthToken?: string
+  approvedAt?: number
 }
 
 type NodeRegistryData = {
   approvedNodes: Record<string, ApprovedNodeRecord>
   pendingPairings: Record<string, PendingPairingRecord>
 }
+
+export const PENDING_PAIRING_TTL_MS = 60 * 60 * 1000
 
 const RESERVED_NODE_IDS = new Set(['master'])
 const DEFAULT_REGISTRY: NodeRegistryData = {
@@ -49,6 +56,36 @@ const DEFAULT_REGISTRY: NodeRegistryData = {
 
 let registryData: NodeRegistryData | null = null
 const pendingSockets = new Map<string, WebSocket>()
+
+function normalizeRegistryData(raw: any, filePath: string): NodeRegistryData {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid node registry payload in ${filePath}`)
+  }
+
+  return {
+    approvedNodes: raw.approvedNodes && typeof raw.approvedNodes === 'object' ? raw.approvedNodes : {},
+    pendingPairings: raw.pendingPairings && typeof raw.pendingPairings === 'object' ? raw.pendingPairings : {},
+  }
+}
+
+export function createNodeRegistryStore(filePath: string = NODES_FILE): DiskJsonData<NodeRegistryData> {
+  return new DiskJsonData<NodeRegistryData>(filePath, {
+    backup: {
+      rotate: 3,
+      includeLegacyBak: true,
+      bestEffort: true,
+    },
+    normalizeLoadedData: normalizeRegistryData,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read node registry candidate')
+    },
+    onBackupError: (err: unknown) => {
+      logger.warn({ err }, 'Failed to rotate node registry backups')
+    },
+  })
+}
+
+let registryStore = createNodeRegistryStore()
 
 function cloneDefaultRegistry(): NodeRegistryData {
   return {
@@ -62,25 +99,34 @@ async function loadRegistry(): Promise<NodeRegistryData> {
     return registryData
   }
 
-  if (!await fs.pathExists(NODES_FILE)) {
+  const loaded = await registryStore.loadFirstAvailable()
+  if (!loaded) {
     registryData = cloneDefaultRegistry()
     return registryData
   }
 
-  const raw = await fs.readJSON(NODES_FILE)
-  registryData = {
-    approvedNodes: raw?.approvedNodes || {},
-    pendingPairings: raw?.pendingPairings || {},
+  registryData = loaded.data
+  if (loaded.source !== registryStore.filePath) {
+    logger.warn({ source: loaded.source }, 'Recovering node registry from fallback source')
+    await registryStore.write(registryData)
   }
+
   return registryData
 }
 
 async function saveRegistry(): Promise<void> {
   const data = await loadRegistry()
-  await fs.ensureDir(path.dirname(NODES_FILE))
-  const tempPath = `${NODES_FILE}.tmp`
-  await fs.writeJSON(tempPath, data, { spaces: 2 })
-  await fs.move(tempPath, NODES_FILE, { overwrite: true })
+  await registryStore.write(data)
+}
+
+export function setNodeRegistryStoreForTests(store: DiskJsonData<NodeRegistryData> | null): void {
+  registryStore = store || createNodeRegistryStore()
+  registryData = null
+}
+
+export function resetNodeRegistryForTests(): void {
+  registryData = null
+  pendingSockets.clear()
 }
 
 function hashToken(token: string): string {
@@ -136,6 +182,7 @@ async function allocateUniqueNodeId(base: string): Promise<string> {
 
 export async function initializeNodeRegistry(): Promise<void> {
   await loadRegistry()
+  await cleanupExpiredPendingPairings()
 }
 
 export function isReservedNodeId(nodeId: string): boolean {
@@ -147,6 +194,7 @@ export async function createPendingPairing(input: {
   nodeType: string
   capabilities: NodeCapabilitiesSnapshot
 }): Promise<PendingPairingRecord> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   const now = Date.now()
   const pending: PendingPairingRecord = {
@@ -172,6 +220,7 @@ export function detachPendingPairingSocket(pendingId: string): void {
 }
 
 export async function listPendingPairings(): Promise<Array<PendingPairingRecord & { connected: boolean }>> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   return Object.values(data.pendingPairings)
     .sort((a, b) => a.requestedAt - b.requestedAt)
@@ -179,8 +228,56 @@ export async function listPendingPairings(): Promise<Array<PendingPairingRecord 
 }
 
 export async function listApprovedNodes(): Promise<ApprovedNodeRecord[]> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   return Object.values(data.approvedNodes).sort((a, b) => a.nodeId.localeCompare(b.nodeId))
+}
+
+function getPendingPairingExpiryTimestamp(record: PendingPairingRecord): number {
+  return Number(record.approvedAt) || Number(record.requestedAt) || Number(record.updatedAt) || 0
+}
+
+function isPendingPairingExpired(record: PendingPairingRecord, now = Date.now()): boolean {
+  const expiresFrom = getPendingPairingExpiryTimestamp(record)
+  return expiresFrom > 0 && now - expiresFrom > PENDING_PAIRING_TTL_MS
+}
+
+export async function cleanupExpiredPendingPairings(now = Date.now()): Promise<number> {
+  const data = await loadRegistry()
+  const expired = Object.entries(data.pendingPairings)
+    .filter(([, record]) => isPendingPairingExpired(record, now))
+
+  if (expired.length === 0) {
+    return 0
+  }
+
+  for (const [pendingId, record] of expired) {
+    delete data.pendingPairings[pendingId]
+
+    if (record.approvedNodeId) {
+      delete data.approvedNodes[record.approvedNodeId]
+    }
+
+    const ws = pendingSockets.get(pendingId)
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({
+          type: 'pair_rejected',
+          pendingId,
+          reason: 'Pairing request expired after 1 hour',
+        }))
+      } catch {}
+
+      try {
+        ws.close(1008, 'Pairing request expired after 1 hour')
+      } catch {}
+    }
+
+    pendingSockets.delete(pendingId)
+  }
+
+  await saveRegistry()
+  return expired.length
 }
 
 export async function authenticateApprovedNode(nodeId: string, authToken: string): Promise<ApprovedNodeRecord | null> {
@@ -218,6 +315,7 @@ export async function approvePendingPairing(pendingId: string, requestedNodeId?:
   pending: PendingPairingRecord
   deliveredLive: boolean
 }> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   const pending = data.pendingPairings[pendingId]
   if (!pending) {
@@ -263,13 +361,42 @@ export async function approvePendingPairing(pendingId: string, requestedNodeId?:
       ws.close(1000, 'Pairing approved; reconnect with node credentials')
     } catch {}
     deliveredLive = true
+  } else {
+    // Client is offline — keep the pending record with approval info
+    // so the client can pick it up on next reconnect
+    data.pendingPairings[pendingId] = {
+      ...pending,
+      approvedNodeId: nodeId,
+      approvedAuthToken: authToken,
+      approvedAt: now,
+      updatedAt: now,
+    }
+    await saveRegistry()
   }
   pendingSockets.delete(pendingId)
 
   return { nodeId, authToken, pending, deliveredLive }
 }
 
+/** Check if a pending pairing has been approved offline. If so, claim it (delete pending, return credentials). */
+export async function claimApprovedPairing(pendingId: string): Promise<{
+  nodeId: string
+  authToken: string
+} | null> {
+  await cleanupExpiredPendingPairings()
+  const data = await loadRegistry()
+  const pending = data.pendingPairings[pendingId]
+  if (!pending || !pending.approvedNodeId || !pending.approvedAuthToken) {
+    return null
+  }
+  const { approvedNodeId, approvedAuthToken } = pending
+  delete data.pendingPairings[pendingId]
+  await saveRegistry()
+  return { nodeId: approvedNodeId, authToken: approvedAuthToken }
+}
+
 export async function rejectPendingPairing(pendingId: string, reason?: string): Promise<void> {
+  await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   const pending = data.pendingPairings[pendingId]
   if (!pending) {

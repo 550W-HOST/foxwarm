@@ -1,240 +1,447 @@
 # Foxwarm 🦊
 
-Foxwarm is a lightweight, extensible AI assistant framework for development-oriented workflows. It combines multi-channel chat, long-term memory, tool calling, agent/session separation, and optional multi-node execution in a small TypeScript codebase.
+Foxwarm is a lightweight, extensible AI assistant framework for development-oriented workflows. It combines WebUI chat, long-term memory, tool calling, agents/sessions, skills, channels, and optional remote nodes in a small TypeScript codebase.
 
 ## Features
 
-- **Multi-Channel Support**: Telegram, Matrix, WeChat Work, and WebUI
-- **Agents, Sessions, and Skills**: Separate long-lived knowledge from runtime conversation threads
-- **Persistent Memory**: Long-term context storage with LanceDB-based retrieval
-- **Tool Calling**: File operations, shell commands, browsing, session management, and more
-- **Queue + Compaction**: Serialized session work with manual/history compaction support
+- **WebUI + Channels**: WebUI, Telegram, Matrix, WeChat Work, Weixin, and external trigger support
+- **Agents, Sessions, and Skills**: Separate long-lived memory/workspaces from runnable conversation threads
+- **Tool Calling**: File operations, shell commands, browser/node tools, session management, and more
+- **Persistent Memory**: Agent memory files plus LanceDB-based searchable history
+- **Nodes**: Optional remote/browser/CLI/sandbox tool hosts
+- **Queue + Compaction**: Serialized session work and context compaction for long-running conversations
 
-## Quick Start
+## Quick Start: one-line install
+
+The recommended first-time path is the installer script. It clones Foxwarm into `./foxwarm`, stores runtime data/config in `./foxwarm-data`, builds the app, starts it in the normal tmux mode, and prints a WebUI URL with token.
+
+### Linux / macOS / WSL
+
+```bash
+curl -fsSL https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.sh | bash
+```
+
+Until the script is hosted publicly, run it from a checkout:
+
+```bash
+git clone https://github.com/550W-HOST/foxwarm.git foxwarm
+cd foxwarm
+./install-foxwarm.sh
+```
+
+Prerequisites: Git, Node.js 20+, npm, and tmux. The installer validates these and prints clear instructions if anything is missing; it does not install system packages for you.
+
+Useful overrides:
+
+```bash
+# CLI flags
+curl -fsSL https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.sh | bash -s -- \
+  --dir "$PWD/foxwarm" \
+  --data-dir "$PWD/foxwarm-data"
+
+# Environment variables
+export FOXWARM_DIR="$PWD/foxwarm"
+export FOXWARM_DATA_DIR="$PWD/foxwarm-data"
+export FOXWARM_TMUX_SESSION=foxwarm
+export FOXWARM_BRANCH=main
+export FOXWARM_REPO=https://github.com/550W-HOST/foxwarm.git
+curl -fsSL https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.sh | bash
+```
+
+The data directory contains runtime `state/`, `agents/`, tokens, logs, models, sessions, and channel config. Bundled skills stay in the program repo under `skills/`. Back up `foxwarm-data/` to preserve your Foxwarm runtime state.
+
+After startup, the installer prints a URL like:
+
+```text
+http://localhost:3001/#token=...
+```
+
+The installer does not auto-attach. To view the running console/logs:
+
+```bash
+tmux attach -t foxwarm
+```
+
+Detach without stopping Foxwarm:
+
+```text
+Ctrl-b then d
+```
+
+Stop later:
+
+```bash
+cd foxwarm
+npm run stop
+```
+
+### Windows PowerShell
+
+```powershell
+irm https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.ps1 | iex
+```
+
+Until hosted publicly, run from a checkout:
+
+```powershell
+git clone https://github.com/550W-HOST/foxwarm.git foxwarm
+cd foxwarm
+.\install-foxwarm.ps1
+```
+
+The Windows script checks for Git and Node.js 20+/npm, builds Foxwarm, stores data in `./foxwarm-data` by default, writes a `data_dir` pointer into the program checkout, starts Foxwarm in a new PowerShell window, and opens the WebUI token URL when available.
+
+If local script execution is blocked, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1
+```
+
+Optional parameters:
+
+```powershell
+.\install-foxwarm.ps1 -InstallDir .\foxwarm -DataDir .\foxwarm-data -BranchName main
+```
+
+## Manual install / development start
+
+Use this path if you are developing Foxwarm itself.
 
 ### Prerequisites
 
+- Git
 - Node.js 20+ and npm
-- (Optional) Ollama for embeddings
-- (Optional) Chromium for browsing features
+- tmux for the normal background start mode
+- (Optional) Ollama for embeddings / vector memory
+- (Optional) Chromium or a browser node for browsing features
 
-### Installation
+### Install and build
 
 ```bash
-# Clone the repository
-git clone <your-repo-url> foxwarm
+git clone https://github.com/550W-HOST/foxwarm.git foxwarm
 cd foxwarm
-
-# Create local config files
-cp .env.example .env
-mkdir -p state
-cp templates/models.example.yaml state/models.yaml
-
-# Install + build backend and WebUI in one step
 npm run build-all
 ```
 
-Then edit `state/models.yaml` and choose the models you actually want to use.
+For a clean manual install with an external data directory:
 
-### Running Foxwarm
+```bash
+mkdir -p ../foxwarm-data
+printf "%s\n" "$PWD/../foxwarm-data" > data_dir
+export FOXWARM_DATA_DIR="$PWD/../foxwarm-data"
+```
 
-**Option 1: Direct run (foreground)**
+The installer creates this `data_dir` pointer automatically, so later `npm start` / `npm run restart` from a new shell continue using `foxwarm-data`.
+
+Do **not** copy `templates/models.example.yaml` into `$FOXWARM_DATA_DIR/state/models.yaml` for first-time setup unless you want to configure it manually. If `state/models.yaml` is missing in the data directory, WebUI enters OOBE and helps create it.
+
+### Start
+
+Foreground:
+
 ```bash
 npm run start:notmux
 ```
 
-**Option 2: Background run with tmux**
+Normal tmux mode:
+
 ```bash
 npm start
+```
 
-# Attach to the running process
+Then open `http://localhost:3001` and log in with the token from:
+
+```bash
+cat "$FOXWARM_DATA_DIR/state/token"
+```
+
+Other tmux helpers:
+
+```bash
 tmux attach -t foxwarm
-
-# Restart
 npm run restart
-
-# Stop
 npm run stop
 ```
 
-Logs are written to:
+Logs are written under:
 
-```bash
-tail -f state/logs/foxwarm.log
+```text
+$FOXWARM_DATA_DIR/state/logs/
 ```
 
-### Running with Docker Compose
+## Docker Compose
+
+Docker Compose is still supported, but the recommended first-time UX is the installer + WebUI OOBE.
 
 ```bash
-cp .env.example .env
-mkdir -p state agents skills
-cp templates/models.example.yaml state/models.yaml
-
+mkdir -p foxwarm-data/state foxwarm-data/agents
 docker compose up -d --build
 ```
 
-Then open `http://localhost:3001` and use the token from `state/token` to log in.
-
-Useful commands:
+Open `http://localhost:3001` and use the token from:
 
 ```bash
-docker compose logs -f
-docker compose down
+cat foxwarm-data/state/token
 ```
 
-The bundled `docker-compose.yml` mounts `state/`, `agents/`, and `skills/` from the host so your config, logs, and agent data persist across rebuilds. By default it also points `OLLAMA_BASE_URL` at `http://host.docker.internal:11434`; change that in `.env` if your embedding service runs elsewhere.
+The compose file mounts `./foxwarm-data` to `/data` and sets `FOXWARM_DATA_DIR=/data`, so configuration and memory persist outside the program image.
 
-## First Run
+Compose starts in OOBE by default when `foxwarm-data/state/models.yaml` is missing. To skip OOBE, create `foxwarm-data/state/models.yaml` before starting. You can also create `foxwarm-data/state/config.yaml` for app/channel settings. If changing `bot.httpPort` under Docker Compose, update `docker-compose.yml` `ports` and `healthcheck` to match; otherwise keep the default 3001.
 
-On first startup, Foxwarm will:
+## First Run / OOBE Setup
 
-1. Create or load runtime state in `state/`
-2. Load or create the main agent in `agents/main`
-3. Load model definitions from `state/models.yaml`
-   - if missing, it falls back to `templates/models.example.yaml`
-4. Load session metadata and agent memory
-5. Load or generate runtime auth tokens:
-   - `state/token`
-   - `state/node_token`
-6. Start configured channels (Telegram / Matrix / WeChat Work / WebUI)
-7. Run `ONBOOT.md` if present and show `BOOTSTRAP.md` guidance for first-time setup
+Foxwarm enters **OOBE** (first-time setup) when:
+
+```text
+state/models.yaml
+```
+
+does not exist.
+
+After logging into WebUI, the OOBE page cannot be closed until models are configured. Once models are saved, you can use WebUI or any configured channel to ask the agent how to explore Foxwarm.
+
+OOBE/Setup supports:
+
+1. **Models** — creates `state/models.yaml`; includes a **Test model** button that sends `Please reply ok` without writing conversation history
+2. **Channels** — edits `state/config.yaml` and hot-reloads managed channels
+3. **Weixin login** — starts QR login in WebUI, shows the QR image or pairing link when the upstream returns a displayable value, saves the resulting token into channel config, and hot-reloads channels
+
+You can later return to the same page from the WebUI setup/settings button.
 
 ## Configuration
 
-Foxwarm configuration has four main entry points:
+Foxwarm's current primary configuration files live inside the data directory:
 
-1. `.env` — app-level settings, ports, feature flags, and channel tokens
-2. `state/models.yaml` — available models and default model key
+1. `state/config.yaml` — app settings and channels
+2. `state/models.yaml` — model providers, model list, and default model
 3. `agents/<agent>/memory/` — long-term memory for each agent
-4. `skills/<skill>/` — reusable skill memory packs that can be attached to agents
+4. `skills/<skill>/` — bundled reusable skill documents in the program repo
+5. `state/token` and `state/node_token` — WebUI and node pairing tokens
 
-### Models Configuration
+For installer-based setup, `state/` and `agents/` are under `./foxwarm-data/` by default, and the installer writes `foxwarm/data_dir` so later starts keep using that data directory. For Docker Compose, `state/` and `agents/` are under `./foxwarm-data/` on the host and `/data/` in the container. Bundled skills remain in the program image/repo under `skills/`.
 
-The runtime resolves model definitions in this order:
+Example `state/config.yaml` app settings:
 
-1. `MODELS_CONFIG_PATH` (if set)
-2. `state/models.yaml`
-3. `templates/models.example.yaml`
+```yaml
+bot:
+  httpPort: 3001
+  enableWebUI: true
+  enableTrigger: true
+llm:
+  ollamaBaseUrl: http://localhost:11434
+```
 
-Foxwarm's public setup flow is **YAML-first**: put each provider's connection settings and model list directly in `state/models.yaml`.
+## Models (`state/models.yaml`)
 
-Example:
+The WebUI OOBE page can create a basic model config. You can also edit `state/models.yaml` manually.
+
+Preferred schema:
 
 ```yaml
 default: openai/gpt-5.2-codex
-models:
+providers:
   openai:
-    provider: openai
+    providerType: openai-completions
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
-    model:
+    models:
       - gpt-5.2-codex
       - gpt-5.3-codex
       - gpt-5.4
-
-  anthropic:
-    provider: anthropic
-    baseUrl: https://api.anthropic.com
-    apiKey: your-anthropic-key
-    model:
-      - claude-sonnet-4-5
-      - claude-sonnet-4-6
-      - claude-sonnet-4-5-thinking
-      - claude-sonnet-4-6-thinking
+      - gpt-5.5
 ```
 
-You can also replace those provider entries with a local OpenAI-compatible endpoint if you want to use your own hosted model.
+Provider notes:
 
-### Embeddings
+- `openai-completions` uses `/chat/completions`
+- `openai` and `openai-responses` use `/responses`
+- `anthropic` uses Anthropic-compatible requests
+- OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
 
-Vector memory uses Ollama for embeddings. The current embedding model is:
+The runtime resolves model definitions in this order:
+
+1. `MODELS_CONFIG_PATH` if set
+2. `state/models.yaml`
+3. `templates/models.example.yaml` fallback
+
+The template fallback is mainly a fallback for development and diagnostics; OOBE treats missing `state/models.yaml` as first-time setup.
+
+## Channels (`state/config.yaml`) and hot reload
+
+Channels are configured under `channels:` in `state/config.yaml`.
+
+Example Telegram channel:
+
+```yaml
+channels:
+  telegram:
+    type: telegram
+    enabled: true
+    botToken: "123456:telegram-token"
+    mainAttachUser: "your-telegram-user-id"
+    allowedUsers:
+      - "your-telegram-user-id"
+```
+
+Example Weixin channel:
+
+```yaml
+channels:
+  weixin:
+    type: weixin
+    enabled: true
+    baseUrl: "https://ilinkai.weixin.qq.com"
+    token: "token-from-login"
+    allowAllUsers: false
+```
+
+You can configure Weixin from WebUI Setup without manually editing the token: click **Start Weixin login**, scan the QR code or open the pairing link shown by Setup, then click **Check login**. On success, Setup writes the token to `state/config.yaml` and hot-reloads channels.
+
+WebUI Setup can edit channels and then reload them without restarting Foxwarm. The reload flow stops registered managed channels and starts the enabled/configured channels again.
+
+Managed channel types currently include:
+
+- `telegram`
+- `matrix`
+- `wework`
+- `weixin`
+
+Slash-command alternatives are available for runtime inspection and manual control:
 
 ```text
-qwen3-embedding:0.6b
+/channel status
+/channel start <channel-id>
+/channel stop <channel-id>
+/channel restart <channel-id>
 ```
 
-If you want retrieval / vector memory features, make sure that model is available in your Ollama environment.
+## First-run Troubleshooting
 
-### Server and Channels
+### I do not see the token URL
 
-Common settings live in `.env`, for example:
+Read the token directly from the data directory:
 
-- `HTTP_PORT` — WebUI + trigger server port (default `3001`)
-- `ENABLE_WEBUI`
-- `ENABLE_TRIGGER`
-- Telegram / Matrix / WeChat Work channel tokens if you want those integrations
+```bash
+cat foxwarm-data/state/token
+```
+
+Then open `http://localhost:3001/#token=<token>`.
+
+### tmux basics
+
+```bash
+tmux attach -t foxwarm   # view Foxwarm console/logs
+# detach without stopping: Ctrl-b then d
+cd foxwarm && npm run stop
+cd foxwarm && npm run restart
+```
+
+If you used a custom session name, pass `FOXWARM_TMUX_SESSION=<name>` for attach/start/restart/stop.
+
+### Model test or chat fails
+
+Return to WebUI Setup and check provider type, base URL, model id, and API key. Local OpenAI-compatible gateways may leave API key empty, but hosted providers usually require one. If a bad `state/models.yaml` was created manually, fix it or delete it to re-enter OOBE. Check logs under `foxwarm-data/state/logs/`.
+
+### Docker and local model endpoints
+
+Inside Docker, `localhost` means the container itself. To reach a model server on the host machine, use `host.docker.internal` where supported, for example in `foxwarm-data/state/config.yaml` or `state/models.yaml` base URLs.
+
+### Port already in use
+
+For local/tmux installs, edit `foxwarm-data/state/config.yaml` and set `bot.httpPort`. For Docker Compose, also update `docker-compose.yml` `ports` and `healthcheck` to match the new port.
+
+### Channels do not reload
+
+Open WebUI Setup and save channels again, or inspect runtime state with `/channel status`. Channel reload errors are shown in Setup and logged under `foxwarm-data/state/logs/`.
 
 ## Core Concepts
 
 ### Agent
-A long-lived workspace + memory container.
+
+A long-lived workspace + memory container. Agent memory lives under:
+
+```text
+agents/<agent>/memory/
+```
 
 ### Session
-A runnable conversation thread bound to exactly one agent.
+
+A runnable conversation thread bound to an agent. A single agent can have many sessions.
 
 ### Skill
-A reusable memory/capability pack attached explicitly to an agent.
 
-Foxwarm can also ship bundled optional skills under `skills/`. For example, `skills/ask_gemini/` provides an external-info lookup helper backed by Gemini; it requires a Gemini API key via `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `~/.secrets/gemini_api_key`.
+A reusable instruction/documentation pack under `skills/<skill>/`. The bundled `about-foxwarm` skill explains Foxwarm concepts after models are configured.
 
-### `agent.inherit`
-Shared-memory composition between agents. It is **not** a reporting hierarchy.
+### Tool
+
+An action the assistant can call, such as file operations, shell commands, memory search, session management, or node operations.
+
+### Node
+
+An execution host for tools. `master` is the default local node; remote/browser/CLI/sandbox nodes can be paired and approved.
+
+## Node quick start
+
+From a running Foxwarm WebUI or chat command, inspect node pairing help:
+
+```text
+/node pair-help
+```
+
+Detailed docs are in:
+
+```text
+docs/node-client.md
+```
 
 ## Common Commands
 
-- `/session` — list, create, fork, move, archive, isolate, index
-- `/agent` — list, create, inherit, delete
-- `/model` — inspect or switch the current model
-- `/skill` — list, attach, detach, inspect skills
-- `/node` — list or switch the current execution node
-- `/compact` / `/compress` — compact session history
-
-## Channels
-
-Foxwarm supports multiple channels at the same time:
-
-- **Telegram**
-- **Matrix**
-- **WeChat Work**
-- **WebUI**
-
-All channels share the same agents, sessions, and memory backend.
+```text
+/session     list, create, fork, move, archive, isolate, index
+/agent       list, create, inherit, delete
+/model       inspect or switch the current model
+/skill       list, attach, detach, inspect skills
+/node        list/switch nodes, approve pairings, show pair-help
+/channel     inspect and reload channel runtime state
+/compact     compact session history
+```
 
 ## Project Structure
 
 ```text
 foxwarm/
-├── src/                  # TypeScript source
+├── src/                  # TypeScript backend source
 ├── lib/                  # Compiled JavaScript
-├── agents/               # Agent workspaces and memory
-├── skills/               # Optional skill definitions
-├── state/                # Runtime state (tokens, logs, models, sessions, db)
-├── templates/            # Tracked starter templates
 ├── packages/webui/       # Browser frontend
-├── test/                 # Local test environment
+├── packages/browser-node/# Browser node extension
+├── packages/cli-node/    # CLI / interactive node client
+├── agents/               # Agent workspaces and memory (runtime data)
+├── skills/               # Skill definitions
+├── state/                # Runtime state, config, tokens, sessions, logs, db
+├── templates/            # Starter templates
 ├── scripts/              # Start/restart/stop helpers
-└── docs/                 # Documentation
+├── docs/                 # Detailed documentation
+└── examples/             # Examples, including ToolScript
 ```
 
 ## Documentation
 
+- [Architecture](docs/architecture.md)
 - [Session Management](docs/session-management.md)
 - [Multi-Agent Guide](docs/multi-agent.md)
-- [Architecture](docs/architecture.md)
-- [Development](docs/development.md)
+- [Node Client](docs/node-client.md)
 - [Vector Memory](docs/vector-memory.md)
+- [Development](docs/development.md)
+- [ToolScript examples](examples/toolscript/README.md)
 
 ## Development
 
 ```bash
-# Watch mode
-npm run dev
-
-# Backend-only build
-npm run build
-
-# Backend + WebUI install/build
-npm run build-all
+npm run build        # backend/shared/cli-node build
+npm run build-all    # install + build backend and WebUI
+npm run dev          # TypeScript watch mode
+npm run start:notmux # build + foreground backend start
+npm start            # build + tmux start
 ```
 
 ## License

@@ -1,22 +1,39 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ArrowUp, Mic, Paperclip, Plus, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import {
   applySlashCommandSuggestion,
   getSlashCommandCompletion,
   resizeTextarea,
-  type SendKeyMode,
   type SlashCommandOption,
   type SlashCommandSuggestion,
 } from './chatShared'
+
+export type ModelOption = {
+  key: string
+  label: string
+  isDefault?: boolean
+  contextLimit?: number | null
+}
 
 interface ChatComposerProps {
   sessionId: string
   sessionMissing: boolean
   loading: boolean
   asrAvailable: boolean
-  sendKeyMode: SendKeyMode
-  onToggleSendKeyMode: () => void
+  modelOptions: ModelOption[]
+  currentModelKey?: string
+  sessionModel?: string | null
+  defaultModelKey?: string
+  childModelDefault?: string | null
+  effectiveChildModelKey?: string
+  modelBusy?: boolean
+  modelError?: string | null
+  onChangeModel: (model: string | null) => Promise<void>
+  onChangeChildModel: (model: string | null) => Promise<void>
+  sendKeyMode?: 'modEnter' | 'enter'
+  onHeightChange?: (height: number) => void
   onSend: (payload: { text: string; attachments: File[] }) => Promise<boolean>
   onTranscribeAudio: (file: File, context: string) => Promise<{
     text: string
@@ -36,6 +53,225 @@ interface ChatComposerProps {
     stop: () => void
     cancel: () => void
   }>
+  onDraftEdited?: (draftText: string) => void
+}
+
+function persistDraft(sessionId: string, value: string) {
+  const draftKey = `draft_${sessionId}`
+  if (value.length > 0) {
+    localStorage.setItem(draftKey, value)
+  } else {
+    localStorage.removeItem(draftKey)
+  }
+}
+
+function formatModelLabel(option: ModelOption, defaultModelKey?: string) {
+  return `${option.label}${option.key === defaultModelKey || option.isDefault ? ' · default' : ''}`
+}
+
+function ModelSelector({
+  options,
+  currentModelKey,
+  sessionModel,
+  defaultModelKey,
+  childModelDefault,
+  effectiveChildModelKey,
+  busy,
+  error,
+  onChangeModel,
+  onChangeChildModel,
+}: {
+  options: ModelOption[]
+  currentModelKey?: string
+  sessionModel?: string | null
+  defaultModelKey?: string
+  childModelDefault?: string | null
+  effectiveChildModelKey?: string
+  busy: boolean
+  error?: string | null
+  onChangeModel: (model: string | null) => Promise<void>
+  onChangeChildModel: (model: string | null) => Promise<void>
+}) {
+  const [open, setOpen] = useState(false)
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({})
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const currentIsDefault = !sessionModel
+  const childFollows = !childModelDefault
+
+  const updatePopupPosition = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const width = Math.min(420, Math.max(320, Math.min(window.innerWidth - 16, rect.width + 150)))
+    const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
+    const preferredMaxHeight = Math.min(360, Math.max(220, window.innerHeight - 24))
+    const spaceAbove = Math.max(0, rect.top - 12)
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 12)
+    const openAbove = spaceAbove >= 180 || spaceAbove >= spaceBelow
+    const maxHeight = Math.max(180, Math.min(preferredMaxHeight, openAbove ? spaceAbove : spaceBelow || preferredMaxHeight))
+    if (openAbove) {
+      setPopupStyle({
+        position: 'fixed',
+        left,
+        bottom: Math.max(8, window.innerHeight - rect.top + 8),
+        width,
+        maxHeight,
+      })
+    } else {
+      setPopupStyle({
+        position: 'fixed',
+        left,
+        top: Math.min(window.innerHeight - maxHeight - 8, rect.bottom + 8),
+        width,
+        maxHeight,
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    updatePopupPosition()
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (
+        rootRef.current?.contains(target)
+        || buttonRef.current?.contains(target)
+        || (target instanceof Element && target.closest('[data-model-selector-popup="true"]'))
+      ) {
+        return
+      }
+      setOpen(false)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    const handleReposition = () => updatePopupPosition()
+
+    document.addEventListener('mousedown', handlePointerDown, true)
+    document.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('resize', handleReposition)
+    window.addEventListener('scroll', handleReposition, true)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown, true)
+      document.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('resize', handleReposition)
+      window.removeEventListener('scroll', handleReposition, true)
+    }
+  }, [open, updatePopupPosition])
+
+  const applyCurrentModel = useCallback((model: string | null) => {
+    if (busy) return
+    void onChangeModel(model).catch(() => {})
+  }, [busy, onChangeModel])
+
+  const applyChildModel = useCallback((model: string | null) => {
+    if (busy) return
+    void onChangeChildModel(model).catch(() => {})
+  }, [busy, onChangeChildModel])
+
+  const renderCheckbox = (checked: boolean, label: string) => (
+    <span
+      aria-label={label}
+      className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[12px] font-semibold ${checked ? 'border-blue-500 bg-blue-500 text-white' : 'border-gray-300 bg-white text-transparent dark:border-gray-600 dark:bg-gray-900'}`}
+    >
+      ✓
+    </span>
+  )
+
+  const renderRow = (row: { key: string | null; label: string; title: string; currentChecked: boolean; childChecked: boolean; defaultRow?: boolean }) => (
+    <div
+      key={row.key || '__default__'}
+      className="grid grid-cols-[minmax(0,1fr)_4.5rem_4rem] items-stretch border-t border-gray-100 text-xs first:border-t-0 dark:border-gray-800"
+    >
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => applyCurrentModel(row.key)}
+        className={`min-w-0 px-3 py-2 text-left transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-blue-950/30 ${row.currentChecked ? 'text-blue-700 dark:text-blue-200' : 'text-gray-700 dark:text-gray-200'}`}
+        title={row.title}
+      >
+        <div className="truncate font-medium">{row.label}</div>
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => applyCurrentModel(row.key)}
+        className="flex items-center justify-center transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-blue-950/30"
+        title={`Use ${row.label} as current session model`}
+      >
+        {renderCheckbox(row.currentChecked, 'current model selected')}
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => applyChildModel(row.key)}
+        className="flex items-center justify-center transition hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-purple-950/30"
+        title={`Use ${row.label} as child default model`}
+      >
+        {renderCheckbox(row.childChecked, 'child default selected')}
+      </button>
+    </div>
+  )
+
+  return (
+    <div ref={rootRef} className="relative inline-flex min-w-0 shrink-0" title={error || undefined}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="inline-flex h-8 max-w-[19rem] shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+      >
+        <span className="shrink-0 text-gray-500 dark:text-gray-400">Model</span>
+        <span className="min-w-0 truncate" title={currentModelKey || defaultModelKey || 'model'}>{currentModelKey || defaultModelKey || 'model'}</span>
+        {childModelDefault && (
+          <>
+            <span className="hidden shrink-0 text-gray-400 dark:text-gray-500 sm:inline">/</span>
+            <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault}>child {childModelDefault}</span>
+          </>
+        )}
+        {busy && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
+        {error && <span className="shrink-0 text-red-500 dark:text-red-300">!</span>}
+      </button>
+
+      {open && createPortal(
+        <div
+          className="z-[1000] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
+          style={popupStyle}
+          role="dialog"
+          aria-label="Model selection"
+          data-model-selector-popup="true"
+        >
+          <div className="grid grid-cols-[minmax(0,1fr)_4.5rem_4rem] border-b border-gray-200 bg-gray-50 px-0 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
+            <div className="px-3 py-2">Model id</div>
+            <div className="px-2 py-2 text-center">Current</div>
+            <div className="px-2 py-2 text-center">Child</div>
+          </div>
+          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 78 : 42) : undefined }}>
+            {renderRow({
+              key: null,
+              label: 'default / follow',
+              title: `Current default: ${defaultModelKey || currentModelKey || 'model'}; child follows: ${effectiveChildModelKey || currentModelKey || 'model'}`,
+              currentChecked: currentIsDefault,
+              childChecked: childFollows,
+              defaultRow: true,
+            })}
+            {options.map((option) => renderRow({
+              key: option.key,
+              label: formatModelLabel(option, defaultModelKey),
+              title: option.key,
+              currentChecked: sessionModel === option.key,
+              childChecked: childModelDefault === option.key,
+            }))}
+          </div>
+          {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
 }
 
 const ChatComposer = memo(function ChatComposer({
@@ -43,11 +279,22 @@ const ChatComposer = memo(function ChatComposer({
   sessionMissing,
   loading,
   asrAvailable,
-  sendKeyMode,
-  onToggleSendKeyMode,
+  modelOptions,
+  currentModelKey,
+  sessionModel,
+  defaultModelKey,
+  childModelDefault,
+  effectiveChildModelKey,
+  modelBusy = false,
+  modelError,
+  onChangeModel,
+  onChangeChildModel,
+  sendKeyMode = 'modEnter',
+  onHeightChange,
   onSend,
   onTranscribeAudio,
   onCreateStreamingTranscriber,
+  onDraftEdited,
 }: ChatComposerProps) {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<File[]>([])
@@ -65,6 +312,7 @@ const ChatComposer = memo(function ChatComposer({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
@@ -87,6 +335,7 @@ const ChatComposer = memo(function ChatComposer({
     stop: () => void
     cancel: () => void
   } | null>(null)
+  const lastReportedHeightRef = useRef<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -147,12 +396,7 @@ const ChatComposer = memo(function ChatComposer({
     }
 
     draftSaveTimerRef.current = setTimeout(() => {
-      const draftKey = `draft_${sessionId}`
-      if (input.trim()) {
-        localStorage.setItem(draftKey, input)
-      } else {
-        localStorage.removeItem(draftKey)
-      }
+      persistDraft(sessionId, input)
     }, 2000)
 
     return () => {
@@ -204,6 +448,31 @@ const ChatComposer = memo(function ChatComposer({
       void cleanupRecording()
     }
   }, [cleanupRecording])
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root || !onHeightChange) return
+
+    const reportHeight = () => {
+      const nextHeight = Math.max(0, Math.round(root.getBoundingClientRect().height))
+      if (lastReportedHeightRef.current === nextHeight) {
+        return
+      }
+      lastReportedHeightRef.current = nextHeight
+      onHeightChange(nextHeight)
+    }
+
+    reportHeight()
+
+    const observer = new ResizeObserver(() => {
+      reportHeight()
+    })
+    observer.observe(root)
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [onHeightChange])
 
   const slashCompletion = useMemo(() => getSlashCommandCompletion(input, availableCommands), [availableCommands, input])
   const slashCommandSuggestions = slashCompletion?.suggestions || []
@@ -308,15 +577,7 @@ const ChatComposer = memo(function ChatComposer({
       return
     }
 
-    if (sendKeyMode === 'mod-enter') {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault()
-        void handleSubmit()
-      }
-      return
-    }
-
-    if (!e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (e.ctrlKey || e.metaKey || (sendKeyMode === 'enter' && !e.shiftKey)) {
       e.preventDefault()
       void handleSubmit()
     }
@@ -325,9 +586,11 @@ const ChatComposer = memo(function ChatComposer({
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextValue = e.target.value
     setInput(nextValue)
+    persistDraft(sessionId, nextValue)
+    onDraftEdited?.(nextValue)
     setDismissedSlashQuery(null)
     resizeTextarea(e.target)
-  }, [])
+  }, [onDraftEdited, sessionId])
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items
@@ -374,7 +637,10 @@ const ChatComposer = memo(function ChatComposer({
 
     setInput(prev => {
       const prefix = prev.trim()
-      return prefix ? `${prefix}\n\n${trimmed}` : trimmed
+      const nextValue = prefix ? `${prefix}\n\n${trimmed}` : trimmed
+      persistDraft(sessionId, nextValue)
+      onDraftEdited?.(nextValue)
+      return nextValue
     })
 
     requestAnimationFrame(() => {
@@ -385,7 +651,7 @@ const ChatComposer = memo(function ChatComposer({
         textareaRef.current.setSelectionRange(caret, caret)
       }
     })
-  }, [])
+  }, [onDraftEdited, sessionId])
 
   const pushAsrDebug = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString([], { hour12: false })
@@ -701,6 +967,7 @@ const ChatComposer = memo(function ChatComposer({
 
   return (
     <div
+      ref={rootRef}
       className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
     >
       {isDragging && (
@@ -934,14 +1201,18 @@ const ChatComposer = memo(function ChatComposer({
                 </div>
               </>
             )}
-            <button
-              type="button"
-              onClick={onToggleSendKeyMode}
-              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-gray-600 transition hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
-              title="Toggle send key"
-            >
-              <span>{sendKeyMode === 'enter' ? 'Enter to send' : 'Ctrl/Cmd+Enter'}</span>
-            </button>
+            <ModelSelector
+              options={modelOptions}
+              currentModelKey={currentModelKey}
+              sessionModel={sessionModel}
+              defaultModelKey={defaultModelKey}
+              childModelDefault={childModelDefault}
+              effectiveChildModelKey={effectiveChildModelKey}
+              busy={modelBusy}
+              error={modelError}
+              onChangeModel={onChangeModel}
+              onChangeChildModel={onChangeChildModel}
+            />
           </div>
           <button
             type="submit"

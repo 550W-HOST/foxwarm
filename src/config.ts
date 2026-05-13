@@ -11,6 +11,7 @@ export type TelegramConfig = {
   botToken?: string;
   allowedUsers?: string[];
   mainAttachUser?: string;
+  guestAgent?: GuestAgentConfig;
 };
 
 export type MatrixConfig = {
@@ -19,6 +20,7 @@ export type MatrixConfig = {
   accessToken?: string;
   botUserId?: string;
   allowedUsers?: string[];
+  guestAgent?: GuestAgentConfig;
 };
 
 export type WeWorkConfig = {
@@ -29,6 +31,7 @@ export type WeWorkConfig = {
   listenPort?: number;
   listenPath?: string;
   allowedUsers?: string[];
+  guestAgent?: GuestAgentConfig;
 };
 
 export type WeixinConfig = {
@@ -40,12 +43,22 @@ export type WeixinConfig = {
   allowAllUsers?: boolean;
   longPollTimeoutMs?: number;
   loginBotType?: string;
+  guestAgent?: GuestAgentConfig;
+};
+
+
+export type GuestAgentConfig = {
+  agentId: string;
+  mode?: 'single' | 'inherited';
+  isolated?: boolean;
+  node?: string;
 };
 
 export type GenericChannelConfig = Record<string, any> & {
   type?: string;
   enabled?: boolean;
   allowedUsers?: string[];
+  guestAgent?: GuestAgentConfig;
 };
 
 export type AnyChannelConfig = TelegramConfig | MatrixConfig | WeWorkConfig | WeixinConfig | GenericChannelConfig;
@@ -134,6 +147,7 @@ function resolveDataRootDir(): string {
 
 export const DATA_ROOT_DIR = resolveDataRootDir();
 export const STATE_DIR = path.join(DATA_ROOT_DIR, 'state');
+export const ARCHIVE_DB_PATH = path.join(STATE_DIR, 'archive-store.sqlite');
 
 const CONFIG_PATH_ENV = process.env.FOXWARM_CONFIG_PATH || process.env.CONFIG_PATH;
 export const APP_CONFIG_PATH = CONFIG_PATH_ENV
@@ -425,7 +439,7 @@ export const WEBUI_PORT = HTTP_PORT; // For backward compatibility
 
 // Context and compaction settings
 export const CONTEXT_LIMIT = APP_CONFIG.llm?.contextLimit || 122880; // 120K tokens
-export const COMPACT_PERCENT = APP_CONFIG.llm?.compactPercent || 0.2;
+export const COMPACT_PERCENT = APP_CONFIG.llm?.compactPercent || 0.3;
 
 // TODO: move to models config
 export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 16384;
@@ -436,9 +450,32 @@ export const DEFAULT_MODELS_CONFIG_PATH = path.join(STATE_DIR, 'models.yaml');
 export const MODELS_CONFIG_TEMPLATE_PATH = path.join(BASE_DIR, 'templates', 'models.example.yaml');
 export const MODELS_CONFIG_PATH = resolvePathValue(process.env.MODELS_CONFIG_PATH || APP_CONFIG.paths?.modelsConfigPath, DEFAULT_MODELS_CONFIG_PATH);
 
+export type ModelConfigOverride = {
+  contextLimit?: number;
+  extraFields?: Record<string, any>;
+  extraHeaders?: Record<string, any>;
+};
+
+export type ProviderModelListItem = string | ({ id: string } & ModelConfigOverride);
+
+export type ProviderConfigEntry = {
+  providerType?: string;
+  provider?: string; // legacy alias
+  models?: ProviderModelListItem[];
+  model?: string | string[] | ProviderModelListItem[]; // legacy alias
+  baseUrl?: string;
+  apiKey?: string;
+  contextLimit?: number;
+  asyncCompact?: boolean;
+  requestCompression?: 'gzip' | 'br';
+  extraFields?: Record<string, any>;
+  extraHeaders?: Record<string, any>;
+};
+
 export type ModelConfigEntry = {
-  provider?: string;
-  model?: string | string[];
+  providerKey: string;
+  providerType?: string;
+  model: string;
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
@@ -456,66 +493,165 @@ export type ModelsConfig = {
 
 let warnedTemplateModelsFallback = false;
 
-function expandModelsConfig(rawModels: Record<string, ModelConfigEntry>) {
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneConfigValue<T>(value: T): T {
+  if (value === undefined) {
+    return value;
+  }
+
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function deepMergeObjects<T extends Record<string, any> | undefined>(base: T, override: T): T {
+  if (!isPlainObject(base)) {
+    return (isPlainObject(override) ? cloneConfigValue(override) : override) as T;
+  }
+  if (!isPlainObject(override)) {
+    return cloneConfigValue(base) as T;
+  }
+
+  const result: Record<string, any> = cloneConfigValue(base);
+  for (const [key, overrideValue] of Object.entries(override)) {
+    const baseValue = result[key];
+    if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
+      result[key] = deepMergeObjects(baseValue, overrideValue);
+    } else {
+      result[key] = cloneConfigValue(overrideValue);
+    }
+  }
+
+  return result as T;
+}
+
+function getProviderType(providerEntry: ProviderConfigEntry): string {
+  return providerEntry.providerType || providerEntry.provider || 'openai';
+}
+
+function normalizeProviderModelsField(providerKey: string, providerEntry: ProviderConfigEntry): ProviderModelListItem[] | undefined {
+  const rawModels = providerEntry.models ?? providerEntry.model;
+
+  if (rawModels === undefined || rawModels === null || rawModels === '') {
+    return undefined;
+  }
+
+  if (typeof rawModels === 'string') {
+    return [rawModels];
+  }
+
+  if (!Array.isArray(rawModels)) {
+    throw new Error(
+      `Provider \`${providerKey}\` has invalid models list: expected an array of model ids or objects with \`id\`; map/object form is not supported.`
+    );
+  }
+
+  return rawModels.map((item, index) => {
+    if (typeof item === 'string') {
+      return item;
+    }
+    if (!isPlainObject(item)) {
+      throw new Error(
+        `Provider \`${providerKey}\` has invalid models[${index}] entry: expected string or object with \`id\`.`
+      );
+    }
+
+    const id = typeof item.id === 'string' ? item.id.trim() : '';
+    if (!id) {
+      throw new Error(`Provider \`${providerKey}\` has invalid models[${index}] entry: object form requires a non-empty \`id\`.`);
+    }
+
+    return {
+      ...item,
+      id,
+    } as ProviderModelListItem;
+  });
+}
+
+function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConfigEntry {
+  const providerType = getProviderType(providerEntry);
+
+  if (providerType === 'anthropic') {
+    return {
+      ...providerEntry,
+      providerType,
+      baseUrl: providerEntry.baseUrl || APP_CONFIG.llm?.anthropicBaseUrl || 'https://api.anthropic.com',
+      apiKey: providerEntry.apiKey || APP_CONFIG.llm?.anthropicApiKey,
+    };
+  }
+
+  if (providerType === 'openai' || providerType === 'openai-responses' || providerType === 'openai-completions') {
+    return {
+      ...providerEntry,
+      providerType,
+      baseUrl: providerEntry.baseUrl || APP_CONFIG.llm?.openaiBaseUrl || 'https://api.openai.com/v1',
+      apiKey: providerEntry.apiKey || APP_CONFIG.llm?.openaiApiKey,
+    };
+  }
+
+  return {
+    ...providerEntry,
+    providerType,
+  };
+}
+
+function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
+  const resolvedProviderEntry = applyProviderDefaults(providerEntry);
+  return {
+    providerKey,
+    providerType: resolvedProviderEntry.providerType,
+    model: modelId,
+    baseUrl: resolvedProviderEntry.baseUrl,
+    apiKey: resolvedProviderEntry.apiKey,
+    contextLimit: modelOverride?.contextLimit ?? resolvedProviderEntry.contextLimit,
+    asyncCompact: resolvedProviderEntry.asyncCompact,
+    requestCompression: resolvedProviderEntry.requestCompression,
+    extraHeaders: {
+      ...(resolvedProviderEntry.extraHeaders || {}),
+      ...(modelOverride?.extraHeaders || {}),
+    },
+    extraFields: deepMergeObjects(
+      resolvedProviderEntry.extraFields || {},
+      modelOverride?.extraFields || {},
+    ) || {},
+  };
+}
+
+export function expandModelsConfig(rawProviderEntries: Record<string, ProviderConfigEntry>) {
   const models: Record<string, ModelConfigEntry> = {};
   const displayModels: string[] = [];
 
-  for (const [provider, rawEntry] of Object.entries(rawModels || {})) {
-    const entry = applyProviderDefaults(rawEntry);
-    const providerType = entry.provider;
-    let modelField = entry.model;
+  for (const [providerKey, providerEntry] of Object.entries(rawProviderEntries || {})) {
+    const normalizedModels = normalizeProviderModelsField(providerKey, providerEntry);
 
     // Allow empty/undefined (some providers has default model)
-    if (!modelField || !modelField.length) {
-      models[provider] = { ...entry, provider: providerType, model: '' };
-      displayModels.push(provider);
+    if (!normalizedModels || normalizedModels.length === 0) {
+      models[providerKey] = buildResolvedModelEntry(providerKey, providerEntry, '');
+      displayModels.push(providerKey);
       continue;
     }
 
-    // Allow string
-    if (modelField && typeof modelField === 'string') {
-      modelField = [modelField];
-    }
-
-    if (modelField?.length === 1) {
-      const modelName = modelField[0];
-      models[provider] = { ...entry, provider: providerType, model: modelName };
-      models[`${provider}/${modelName}`] = { ...entry, provider: providerType, model: modelName };
-      displayModels.push(provider);
+    if (normalizedModels.length === 1) {
+      const onlyModel = normalizedModels[0];
+      const modelId = typeof onlyModel === 'string' ? onlyModel : onlyModel.id;
+      const modelOverride = typeof onlyModel === 'string' ? undefined : onlyModel;
+      const resolvedEntry = buildResolvedModelEntry(providerKey, providerEntry, modelId, modelOverride);
+      models[providerKey] = resolvedEntry;
+      models[`${providerKey}/${modelId}`] = { ...resolvedEntry };
+      displayModels.push(providerKey);
     } else {
-      for (const modelName of modelField) {
-        const modelKey = `${provider}/${modelName}`;
-        models[modelKey] = { ...entry, provider: providerType, model: modelName };
+      for (const rawModel of normalizedModels) {
+        const modelId = typeof rawModel === 'string' ? rawModel : rawModel.id;
+        const modelOverride = typeof rawModel === 'string' ? undefined : rawModel;
+        const modelKey = `${providerKey}/${modelId}`;
+        models[modelKey] = buildResolvedModelEntry(providerKey, providerEntry, modelId, modelOverride);
         displayModels.push(modelKey);
       }
     }
   }
 
   return { models, displayModels };
-}
-
-function applyProviderDefaults(entry: ModelConfigEntry): ModelConfigEntry {
-  const provider = entry.provider || 'openai';
-
-  if (provider === 'anthropic') {
-    return {
-      ...entry,
-      provider,
-      baseUrl: entry.baseUrl || APP_CONFIG.llm?.anthropicBaseUrl || 'https://api.anthropic.com',
-      apiKey: entry.apiKey || APP_CONFIG.llm?.anthropicApiKey,
-    };
-  }
-
-  if (provider === 'openai' || provider === 'openai-responses') {
-    return {
-      ...entry,
-      provider,
-      baseUrl: entry.baseUrl || APP_CONFIG.llm?.openaiBaseUrl || 'https://api.openai.com/v1',
-      apiKey: entry.apiKey || APP_CONFIG.llm?.openaiApiKey,
-    };
-  }
-
-  return entry;
 }
 
 function getResolvedModelsConfigPath(): string {
@@ -546,16 +682,24 @@ export function loadModelsConfig(): ModelsConfig {
   try {
     const rawText = fs.readFileSync(resolvedPath, 'utf8');
     const config = yaml.load(rawText) as any;
-    const expanded = expandModelsConfig(config.models);
-    const defaultKey = expanded.models[config.default] ? config.default : (expanded.displayModels[0] || config.default);
-
-    return { default: defaultKey, models: expanded.models, displayModels: expanded.displayModels };
+    return loadModelsConfigFromObject(config);
   } catch (e) {
     throw new Error(
       `Loading models config (${resolvedPath}) error: ${e}. ` +
       `Set MODELS_CONFIG_PATH, or create ${DEFAULT_MODELS_CONFIG_PATH} from ${MODELS_CONFIG_TEMPLATE_PATH}.`
     );
   }
+}
+
+export function loadModelsConfigFromObject(config: any): ModelsConfig {
+  const rawProviderEntries = config?.providers ?? config?.models;
+  if (!isPlainObject(rawProviderEntries)) {
+    throw new Error('Expected root `providers` (preferred) or legacy `models` object in models config');
+  }
+
+  const expanded = expandModelsConfig(rawProviderEntries);
+  const defaultKey = expanded.models[config?.default] ? config.default : (expanded.displayModels[0] || config?.default);
+  return { default: defaultKey, models: expanded.models, displayModels: expanded.displayModels };
 }
 
 export function resolveModelConfig(sessionModel?: string) {

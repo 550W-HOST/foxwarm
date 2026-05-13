@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, FolderOpen, SquareTerminal, X } from 'lucide-react'
+import { ArrowLeft, FolderOpen } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -47,8 +47,6 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
-  const [isClosing, setIsClosing] = useState(false)
-  const [startMode, setStartMode] = useState<'new' | 'reuse'>(createMode)
 
   const requestedCwd = useMemo(() => {
     if (typeof initialCwd === 'string' && initialCwd.trim().length > 0) {
@@ -56,6 +54,9 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
     }
     return undefined
   }, [initialCwd])
+  const requestedCwdRef = useRef<string | undefined>(requestedCwd)
+  const initialTerminalIdRef = useRef<string | undefined>(initialTerminalId)
+  const createModeRef = useRef<'new' | 'reuse'>(createMode)
 
   useEffect(() => {
     onSessionsChangedRef.current = onSessionsChanged
@@ -68,10 +69,6 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
   useEffect(() => {
     onTerminalClosedRef.current = onTerminalClosed
   }, [onTerminalClosed])
-
-  useEffect(() => {
-    setStartMode(createMode)
-  }, [createMode])
 
   useEffect(() => {
     const term = new Terminal({
@@ -135,7 +132,6 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
     setStatus('connecting')
     setError(null)
     setTerminalInfo(null)
-    setIsClosing(false)
     terminalIdRef.current = null
     term.reset()
 
@@ -144,7 +140,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
         const cols = term.cols || 100
         const rows = term.rows || 30
 
-        let terminalId = initialTerminalId || null
+        let terminalId = initialTerminalIdRef.current || null
 
         if (terminalId) {
           const lookupRes = await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(terminalId)}`)
@@ -156,7 +152,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
           }
         }
 
-        if (!terminalId && startMode !== 'new') {
+        if (!terminalId && createModeRef.current !== 'new') {
           const listRes = await fetch(`${API_BASE_PATH}/terminals?sessionId=${encodeURIComponent(sessionId)}`)
           const listData = await listRes.json().catch(() => ({}))
           if (!listRes.ok) {
@@ -164,8 +160,8 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
           }
 
           const terminals: TerminalInfo[] = Array.isArray(listData.terminals) ? listData.terminals : []
-          const reused = requestedCwd
-            ? terminals.find((item) => item.cwd === requestedCwd)
+          const reused = requestedCwdRef.current
+            ? terminals.find((item) => item.cwd === requestedCwdRef.current)
             : terminals[0]
 
           if (reused) {
@@ -180,7 +176,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
             body: JSON.stringify({
               sessionId,
               nodeId: 'master',
-              cwd: requestedCwd,
+              cwd: requestedCwdRef.current,
               cols,
               rows,
             }),
@@ -227,7 +223,6 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
                 term.write(payload.backlog)
               }
               suppressCloseCallbackRef.current = false
-              setStartMode('reuse')
               setTerminalInfo(payload.terminal)
               setStatus('ready')
               onTerminalReadyRef.current?.(payload.terminal)
@@ -285,92 +280,53 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [sessionId, requestedCwd, initialTerminalId, startMode])
-
-  const handleClose = async () => {
-    if (!terminalIdRef.current) return
-    setIsClosing(true)
-    try {
-      suppressCloseCallbackRef.current = true
-      await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(terminalIdRef.current)}`, { method: 'DELETE' })
-      wsRef.current?.close()
-      wsRef.current = null
-      setStatus('closed')
-      onTerminalClosedRef.current?.(terminalIdRef.current)
-      onSessionsChangedRef.current?.()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setStatus('error')
-    } finally {
-      setIsClosing(false)
-    }
-  }
+  }, [sessionId])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
-      <div className="border-b border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            {onBack && (
-              <button
-                onClick={onBack}
-                className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
-                title="Back"
-              >
-                <ArrowLeft className="h-5 w-5" />
-              </button>
-            )}
-            <div>
-              <div className="flex items-center gap-2">
-                <SquareTerminal className="h-5 w-5 text-gray-500 dark:text-gray-300" />
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Terminal</h2>
-              </div>
-              <div className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                <span className="font-mono text-[12px]">cwd {terminalInfo?.cwd || requestedCwd || '—'}</span>
-                <span className="ml-2">status {status}</span>
-                {terminalInfo && (
-                  <>
-                    <span className="ml-2">shell {terminalInfo.shell}</span>
-                    <span className="ml-2">pid {terminalInfo.pid}</span>
-                    <span className="ml-2">node {terminalInfo.nodeId}</span>
-                  </>
-                )}
-              </div>
+      <div className="border-b border-gray-200 bg-gray-100 px-2.5 py-1.5 dark:border-gray-700 dark:bg-gray-900">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-gray-600 dark:text-gray-300">
+              {onBack && (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-200 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100 md:hidden"
+                  aria-label="Back"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </button>
+              )}
+              <span>status {status}</span>
+              {terminalInfo && (
+                <>
+                  <span>node {terminalInfo.nodeId}</span>
+                  <span>pid {terminalInfo.pid}</span>
+                </>
+              )}
             </div>
+            {error && (
+              <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
+                {error}
+              </div>
+            )}
           </div>
-
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5">
             <button
               onClick={() => onOpenWorkspace?.(terminalInfo?.cwd || requestedCwd)}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              className="inline-flex h-6 items-center gap-1 rounded-md border border-gray-200 px-2 text-[11px] text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
               title="Open workspace"
             >
-              <FolderOpen className="h-4 w-4" />
-              <span className="hidden md:inline">Open workspace</span>
-            </button>
-            <button
-              onClick={handleClose}
-              disabled={!terminalIdRef.current || isClosing}
-              className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-800/80 dark:text-red-200 dark:hover:bg-red-900/20"
-              title="Close terminal"
-            >
-              <X className="h-4 w-4" />
-              <span className="hidden md:inline">{isClosing ? 'Closing...' : 'Close terminal'}</span>
+              <FolderOpen className="h-3 w-3" />
+              <span>Workspace</span>
             </button>
           </div>
         </div>
-
-        {error && (
-          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
-            {error}
-          </div>
-        )}
       </div>
 
-      <div className="min-h-0 flex-1 p-4">
-        <div className="h-full overflow-hidden rounded-xl border border-gray-300 bg-[#111827] shadow-sm dark:border-gray-700">
-          <div ref={hostRef} className="h-full w-full p-2" />
-        </div>
+      <div className="min-h-0 flex-1 overflow-hidden bg-[#111827]">
+        <div ref={hostRef} className="h-full w-full" />
       </div>
     </div>
   )

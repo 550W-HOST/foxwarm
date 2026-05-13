@@ -5,18 +5,19 @@
 # - service name (foxwarm-test)
 # - ports (3002:3001 → 3003:3001, etc.)
 
-name: foxwarm-test  # Change this for multi-test environments
+name: foxwarm-toolscript-managed-session-test
 
 services:
-  foxwarm-test:  # Change this service name for multi-test environments
+  foxwarm-toolscript-managed-session:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: foxwarm-test
+    container_name: foxwarm-toolscript-managed-session-test
     ports:
-      - "3002:3001"  # Change external port for multi-test environments
+      - "3002:3001" # TODO: before merging to main, remember to revisit/revert this test-env-only port tweak.
     volumes:
       - ..:/app
+      - /home/ldmbot/temp-worktrees/foxwarm-toolscript-phase1/node_modules:/app/node_modules
       - ./state:/app/state
       - ./agents:/app/agents
       - ./.env:/app/.env:ro

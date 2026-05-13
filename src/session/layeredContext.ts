@@ -7,7 +7,17 @@ import {
   getSessionFrontierPath,
 } from '../config';
 import { logger } from '../common';
+import { DiskJsonData } from '../utils/diskJsonData';
 import { ArchiveMessageRecord, readArchiveMessagesBySeqRange } from './archive';
+import { formatLocalTimeRange } from '../utils/localTime';
+import {
+  ensureSessionBranch,
+  refreshSessionArchiveImportState,
+  readEffectiveArchiveBlocks,
+  readLocalArchiveBlocks as readLocalArchiveBlocksFromStore,
+  writeArchiveBlocks,
+} from './archiveStore';
+import { isModelVisibleMessage } from './messageVisibility';
 
 const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
   'This session has been compacted.',
@@ -28,8 +38,12 @@ export interface ArchiveBlockRecord {
   sourceEnd: number;
   rawStartSeq: number;
   rawEndSeq: number;
+  rawStartTimestamp?: number;
+  rawEndTimestamp?: number;
   summary: string;
   createdAt: number;
+  sourceSessionId?: string;
+  inherited?: boolean;
 }
 
 export interface CreateArchiveBlockInput {
@@ -47,6 +61,10 @@ export function isIgnoredCompactLifecycleSystemText(text: string): boolean {
 }
 
 export function shouldIgnoreMessageInCompactCandidates(message: Message): boolean {
+  if (!isModelVisibleMessage(message)) {
+    return true;
+  }
+
   const parts = message.parts || [];
   const systemTexts = parts
     .map(part => typeof part.system === 'string' ? part.system.trim() : '')
@@ -74,6 +92,40 @@ export function shouldIgnoreMessageInCompactCandidates(message: Message): boolea
 
 function cloneFrontier(frontier: ContextFrontierItem[] | undefined): ContextFrontierItem[] | undefined {
   return frontier ? structuredClone(frontier) : undefined;
+}
+
+function normalizeFrontierPayload(raw: any, filePath: string): { v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] } {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid layered context frontier payload in ${filePath}`);
+  }
+
+  return {
+    ...raw,
+    v: typeof raw.v === 'number' ? raw.v : 1,
+    frontier: Array.isArray(raw.frontier) ? raw.frontier : [],
+  };
+}
+
+export function createSessionFrontierStore(filePath: string): DiskJsonData<{ v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] }> {
+  return new DiskJsonData(filePath, {
+    backup: false,
+    normalizeLoadedData: normalizeFrontierPayload,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read layered context frontier');
+    },
+  });
+}
+
+const frontierStores = new Map<string, DiskJsonData<{ v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] }>>();
+
+export function getSessionFrontierStore(sessionId: string): DiskJsonData<{ v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] }> {
+  const frontierPath = getSessionFrontierPath(sessionId);
+  let store = frontierStores.get(frontierPath);
+  if (!store) {
+    store = createSessionFrontierStore(frontierPath);
+    frontierStores.set(frontierPath, store);
+  }
+  return store;
 }
 
 export function getNextSessionBlockId(session: Session): number {
@@ -131,13 +183,12 @@ export async function saveSessionFrontier(session: Session): Promise<void> {
     return;
   }
 
-  await fs.ensureDir(path.dirname(frontierPath));
-  await fs.writeJson(frontierPath, {
+  await getSessionFrontierStore(session.id).write({
     v: 1,
     sessionId: session.id,
     nextBlockId: getNextSessionBlockId(session),
     frontier: session.contextFrontier,
-  }, { spaces: 2 });
+  });
 }
 
 export async function loadSessionFrontier(session: Session): Promise<void> {
@@ -147,7 +198,7 @@ export async function loadSessionFrontier(session: Session): Promise<void> {
   }
 
   try {
-    const data = await fs.readJson(frontierPath);
+    const data = await getSessionFrontierStore(session.id).readFromPath(frontierPath);
     if (Array.isArray(data?.frontier)) {
       session.contextFrontier = data.frontier;
       if (typeof data.nextBlockId === 'number' && data.nextBlockId > 0) {
@@ -161,9 +212,13 @@ export async function loadSessionFrontier(session: Session): Promise<void> {
 
 export async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
   const createdAt = Date.now();
-  return blocks.map(block => {
+  return Promise.all(blocks.map(async (block) => {
     const id = getNextSessionBlockId(session);
     session.nextBlockId = id + 1;
+    const [startRecord, endRecord] = await Promise.all([
+      readArchiveMessagesBySeqRange(session.id, block.rawStartSeq, block.rawStartSeq),
+      readArchiveMessagesBySeqRange(session.id, block.rawEndSeq, block.rawEndSeq),
+    ]);
     return {
       v: 1,
       kind: 'block',
@@ -176,10 +231,12 @@ export async function buildArchiveBlockRecords(session: Session, blocks: CreateA
       sourceEnd: block.sourceEnd,
       rawStartSeq: block.rawStartSeq,
       rawEndSeq: block.rawEndSeq,
+      rawStartTimestamp: startRecord[0]?.timestamp,
+      rawEndTimestamp: endRecord[0]?.timestamp,
       summary: block.summary,
       createdAt,
     };
-  });
+  }));
 }
 
 export async function appendBlocksToArchive(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
@@ -189,51 +246,44 @@ export async function appendBlocksToArchive(session: Session, blocks: CreateArch
 
   const archivePath = getSessionBlockArchiveLogPath(session.id);
   await fs.ensureDir(path.dirname(archivePath));
+  await ensureSessionBranch(session.id);
   const records = await buildArchiveBlockRecords(session, blocks);
   await fs.appendFile(archivePath, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
+  await writeArchiveBlocks(records);
+  await refreshSessionArchiveImportState(session.id, 'blocks');
   return records;
 }
 
 export async function readArchiveBlocks(sessionId: string): Promise<ArchiveBlockRecord[]> {
-  const archivePath = getSessionBlockArchiveLogPath(sessionId);
-  if (!await fs.pathExists(archivePath)) {
-    return [];
-  }
-
-  const raw = await fs.readFile(archivePath, 'utf8');
-  const parsed: ArchiveBlockRecord[] = [];
-  for (const line of raw.split('\n').map(line => line.trim()).filter(Boolean)) {
-    try {
-      const record = JSON.parse(line);
-      if (record?.kind === 'block' && typeof record.id === 'number' && typeof record.level === 'number') {
-        parsed.push(record as ArchiveBlockRecord);
-      }
-    } catch (e) {
-      logger.warn({ err: e, sessionId }, 'Skipping malformed block archive line');
-    }
-  }
-
-  return parsed.sort((a, b) => a.id - b.id);
+  return readEffectiveArchiveBlocks(sessionId);
 }
 
 export async function readArchiveBlocksByIdRange(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
-  const records = await readArchiveBlocks(sessionId);
-  return records.filter(record => {
-    if (typeof startId === 'number' && record.id < startId) return false;
-    if (typeof endId === 'number' && record.id > endId) return false;
-    return true;
-  });
+  return readEffectiveArchiveBlocks(sessionId, startId, endId);
+}
+
+export async function readLocalArchiveBlocks(sessionId: string): Promise<ArchiveBlockRecord[]> {
+  return readLocalArchiveBlocksFromStore(sessionId);
+}
+
+export async function readLocalArchiveBlocksByIdRange(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
+  return readLocalArchiveBlocksFromStore(sessionId, startId, endId);
 }
 
 function formatSeqRange(startSeq: number, endSeq: number): string {
   return startSeq === endSeq ? `#${startSeq}` : `#${startSeq}-#${endSeq}`;
 }
 
+export function formatArchiveBlockTimeRange(record: Pick<ArchiveBlockRecord, 'rawStartTimestamp' | 'rawEndTimestamp'>): string {
+  const range = formatLocalTimeRange(record.rawStartTimestamp, record.rawEndTimestamp);
+  return range ? ` time ${range}` : '';
+}
+
 export function renderBlockMessage(record: ArchiveBlockRecord): Message {
   return {
     role: 'model',
     parts: [{
-      text: `[CTX-BLOCK L${record.level} B#${record.id} raw${formatSeqRange(record.rawStartSeq, record.rawEndSeq)}] ${record.summary}`,
+      text: `[CTX-BLOCK L${record.level} B#${record.id} raw${formatSeqRange(record.rawStartSeq, record.rawEndSeq)}${formatArchiveBlockTimeRange(record)}] ${record.summary}`,
     }],
     __meta: { timestamp: record.createdAt },
   };

@@ -250,7 +250,10 @@ async function start() {
     
     const router = new MessageRouter(authorizedUsers);
     const commandHandler = new CommandHandler(router);
-    initializeChannelRuntime((ctx, message) => router.handleMessage(ctx, message));
+    initializeChannelRuntime(
+        (ctx, message) => router.handleMessage(ctx, message),
+        (ctx, command, args) => commandHandler.handleCommand(ctx, command, args),
+    );
     
     // Set command handler in router and give commandHandler access to router
     router.setCommandHandler((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));

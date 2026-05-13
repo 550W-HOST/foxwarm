@@ -1,0 +1,32 @@
+{
+  "name": "@foxwarm/cli-node",
+  "private": true,
+  "main": "./dist/client.js",
+  "types": "./dist/client.d.ts",
+  "bin": {
+    "cli-node": "./dist/tui.js",
+    "cli-node-client": "./dist/client.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-bundle.js"
+  },
+  "dependencies": {
+    "@foxwarm/shared": "file:../shared",
+    "fs-extra": "^11.3.3",
+    "http-proxy-agent": "^7.0.2",
+    "https-proxy-agent": "^7.0.6",
+    "ink": "^3.2.0",
+    "proxy-from-env": "^1.1.0",
+    "puppeteer-core": "^24.37.5",
+    "react": "^17.0.2",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^22.19.11",
+    "@types/react": "^17.0.89",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.27.7",
+    "typescript": "^5.9.3"
+  }
+}

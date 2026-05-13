@@ -6,8 +6,10 @@ import { logger } from '../common';
 import {
   attachPendingPairingSocket,
   authenticateApprovedNode,
+  claimApprovedPairing,
   createPendingPairing,
   detachPendingPairingSocket,
+  listPendingPairings,
   touchApprovedNode,
 } from './registry';
 
@@ -26,6 +28,59 @@ function rawDataToString(message: RawData): string {
     })).toString();
   }
   return Buffer.from(message).toString();
+}
+
+const NODE_HEARTBEAT_INTERVAL_MS = 30_000;
+const NODE_HEARTBEAT_TIMEOUT_MS = 10_000;
+
+
+function setupNodeHeartbeat(ws: WebSocket, params: {
+  getRegisteredNodeId: () => string | null;
+  getAuthenticatedNodeId: () => string | null;
+  getPendingPairingId: () => string | null;
+}): () => void {
+  let awaitingPong = false;
+  let lastPingAt = 0;
+
+  const markAlive = () => {
+    awaitingPong = false;
+    const registeredNodeId = params.getRegisteredNodeId();
+    if (registeredNodeId) {
+      nodesManager.updateNodeActivity(registeredNodeId);
+    }
+    const authenticatedNodeId = params.getAuthenticatedNodeId();
+    if (authenticatedNodeId) {
+      void touchApprovedNode(authenticatedNodeId, { lastSeenAt: Date.now() }).catch((err) => {
+        logger.warn({ err, nodeId: authenticatedNodeId }, 'Failed to record node heartbeat activity');
+      });
+    }
+  };
+
+  ws.on('pong', markAlive);
+
+  const timer = setInterval(() => {
+    if (ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (awaitingPong && Date.now() - lastPingAt >= NODE_HEARTBEAT_TIMEOUT_MS) {
+      logger.warn({
+        nodeId: params.getRegisteredNodeId() || params.getAuthenticatedNodeId(),
+        pendingPairingId: params.getPendingPairingId(),
+      }, 'Node heartbeat timed out; terminating stale WebSocket');
+      ws.terminate();
+      return;
+    }
+    awaitingPong = true;
+    lastPingAt = Date.now();
+    try {
+      ws.ping();
+    } catch (err) {
+      logger.warn({ err, nodeId: params.getRegisteredNodeId() || params.getAuthenticatedNodeId() }, 'Failed to send node heartbeat ping');
+    }
+  }, NODE_HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+
+  return () => clearInterval(timer);
 }
 
 export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string): void {
@@ -56,6 +111,11 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
     let authenticatedNodeId: string | null = null;
     let readyForMessages = false;
     const pendingMessages: string[] = [];
+    const stopHeartbeat = setupNodeHeartbeat(ws, {
+      getRegisteredNodeId: () => nodeId,
+      getAuthenticatedNodeId: () => authenticatedNodeId,
+      getPendingPairingId: () => pendingPairingId,
+    });
 
     const processNodeMessage = async (messageText: string) => {
       const data = JSON.parse(messageText);
@@ -84,6 +144,30 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
             error: 'Invalid pair_request message: missing nodeType or capabilities.tools'
           }));
           return;
+        }
+
+        // Check if there's an existing approved-but-undelivered pending for this client
+        const existingPendings = await listPendingPairings();
+        const approvedPending = existingPendings.find(p =>
+          p.approvedNodeId && p.approvedAuthToken &&
+          p.nodeType === nodeType && p.requestedName === requestedName
+        );
+
+        if (approvedPending) {
+          const claimed = await claimApprovedPairing(approvedPending.id);
+          if (claimed) {
+            logger.info({ nodeId: claimed.nodeId, pendingId: approvedPending.id }, 'Delivering previously approved pairing');
+            ws.send(JSON.stringify({
+              type: 'pair_approved',
+              pendingId: approvedPending.id,
+              nodeId: claimed.nodeId,
+              authToken: claimed.authToken,
+            }));
+            try {
+              ws.close(1000, 'Pairing approved; reconnect with node credentials');
+            } catch {}
+            return;
+          }
         }
 
         const pending = await createPendingPairing({
@@ -156,6 +240,7 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
           if (!data.sessionId || typeof data.message !== 'string') {
             ws.send(JSON.stringify({
               type: 'error',
+              requestId: data.requestId,
               error: 'Invalid session_event message: missing sessionId or message'
             }));
             break;
@@ -166,7 +251,53 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
             data.message,
             data.eventType === 'trigger' || data.eventType === 'onboot' ? data.eventType : 'background'
           );
+          if (data.requestId) {
+            ws.send(JSON.stringify({ type: 'session_event_accepted', requestId: data.requestId }));
+          }
           break;
+        case 'session_list_request': {
+          const requestId = String(data.requestId || '');
+          try {
+            const sessions = await nodesManager.listSessionsForNode(nodeId || authenticatedNodeId || 'unknown-node');
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: true, result: { sessions } }));
+          } catch (err: any) {
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: false, error: err?.message || String(err) }));
+          }
+          break;
+        }
+        case 'session_history_request': {
+          const requestId = String(data.requestId || '');
+          try {
+            const result = await nodesManager.getSessionHistoryForNode(
+              nodeId || authenticatedNodeId || 'unknown-node',
+              String(data.sessionId || ''),
+              typeof data.count === 'number' ? data.count : 30
+            );
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: true, result }));
+          } catch (err: any) {
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: false, error: err?.message || String(err) }));
+          }
+          break;
+        }
+        case 'session_send_message': {
+          const requestId = String(data.requestId || '');
+          if (!data.sessionId || typeof data.message !== 'string') {
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: false, error: 'Invalid session_send_message: missing sessionId or message' }));
+            break;
+          }
+          try {
+            await nodesManager.handleSessionUserMessage(
+              nodeId || authenticatedNodeId || 'unknown-node',
+              String(data.sessionId),
+              data.message,
+              data.eventType === 'background' || data.eventType === 'onboot' ? data.eventType : 'trigger'
+            );
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: true, result: { accepted: true } }));
+          } catch (err: any) {
+            ws.send(JSON.stringify({ type: 'cli_response', requestId, ok: false, error: err?.message || String(err) }));
+          }
+          break;
+        }
         case 'list_nodes': {
           const nodes = nodesManager.listNodes();
           ws.send(JSON.stringify({ type: 'nodes_list', nodes }));
@@ -188,6 +319,15 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
 
     ws.on('message', async (message: RawData) => {
       const messageText = rawDataToString(message);
+      const activeNodeId = nodeId || authenticatedNodeId;
+      if (activeNodeId) {
+        nodesManager.updateNodeActivity(activeNodeId);
+      }
+      if (authenticatedNodeId) {
+        void touchApprovedNode(authenticatedNodeId, { lastSeenAt: Date.now() }).catch((err) => {
+          logger.warn({ err, nodeId: authenticatedNodeId }, 'Failed to update node activity from message');
+        });
+      }
       if (!readyForMessages) {
         pendingMessages.push(messageText);
         return;
@@ -222,6 +362,7 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
     }
 
     ws.on('close', () => {
+      stopHeartbeat();
       if (pendingPairingId) {
         detachPendingPairingSocket(pendingPairingId);
       }
@@ -232,6 +373,7 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
     });
 
     ws.on('error', (err: Error) => {
+      stopHeartbeat();
       if (pendingPairingId) {
         detachPendingPairingSocket(pendingPairingId);
       }

@@ -1,12 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Copy, FolderOpen, Menu, SquareTerminal, X } from 'lucide-react'
+import { Check, Copy, FolderOpen, Menu, MessageSquareText, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
+import type { ModelOption } from './ChatComposer'
 import ChatTimeline from './ChatTimeline'
+import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
-import type { Message, MessagePart, SendKeyMode, SessionStreamEvent } from './chatShared'
-import { buildWorkspaceDownloadUrl } from './workspaceShared'
+import type { Message, MessagePart, SessionStreamEvent } from './chatShared'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
@@ -23,6 +24,7 @@ type AsrTranscribeResult = {
 
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
+const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
 
 function getMessagePlainText(message: Message): string {
   return message.parts
@@ -69,10 +71,12 @@ interface ChatProps {
   sessionId: string
   sessionDisplayName?: string
   onBack?: () => void
-  themeMode: 'auto' | 'light' | 'dark'
-  onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
   onOpenWorkspace?: () => void
   onOpenTerminal?: () => void
+  sendKeyMode?: 'modEnter' | 'enter'
+  groupTools?: boolean
+  showUsageBadge?: boolean
+  onDraftEdited?: (draftText: string) => void
 }
 
 type StreamingAsrSession = {
@@ -94,6 +98,11 @@ type SessionListRecord = {
   displayName?: string | null
   archived?: boolean
   currentNode?: string
+  model?: string | null
+  modelKey?: string
+  defaultModelKey?: string
+  childModelDefault?: string | null
+  effectiveChildModelKey?: string
   isolated?: boolean
 }
 
@@ -103,38 +112,24 @@ type SessionFilePayload = {
   [key: string]: any
 }
 
-const SESSION_JSON_BASE_PATH_CANDIDATES = [
-  '/home/ldmbot/git/foxwarm/test/state/sessions',
-  '/home/ldmbot/git/foxwarm/state/sessions',
-  '/home/ldmbot/betabot/state/sessions',
-  '/app/test/state/sessions',
-  '/app/state/sessions',
-]
-
-function buildSessionJsonPathCandidates(sessionId: string): string[] {
-  return SESSION_JSON_BASE_PATH_CANDIDATES.map((basePath) => `${basePath}/${sessionId}.json`)
-}
-
 async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPath: string | null; payload: SessionFilePayload | null }> {
-  const candidates = buildSessionJsonPathCandidates(sessionId)
-
-  for (const candidate of candidates) {
-    try {
-      const res = await fetch(buildWorkspaceDownloadUrl(candidate))
-      if (!res.ok) continue
-
-      const text = await res.text()
-      const payload = JSON.parse(text) as SessionFilePayload
-      return { resolvedPath: candidate, payload }
-    } catch {
-      // Try the next likely runtime path.
+  try {
+    const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/debug-file`)
+    if (!res.ok) {
+      return { resolvedPath: null, payload: null }
     }
-  }
 
-  return { resolvedPath: null, payload: null }
+    const data = await res.json()
+    return {
+      resolvedPath: typeof data?.resolvedPath === 'string' ? data.resolvedPath : null,
+      payload: data?.payload && typeof data.payload === 'object' ? data.payload as SessionFilePayload : null,
+    }
+  } catch {
+    return { resolvedPath: null, payload: null }
+  }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMode, onThemeChange, onOpenWorkspace, onOpenTerminal }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenWorkspace, onOpenTerminal, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -145,14 +140,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [showScrollTopButton, setShowScrollTopButton] = useState(false)
-  const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>(() => {
-    const saved = localStorage.getItem('sendKeyMode')
-    return saved === 'enter' || saved === 'mod-enter' ? saved : 'mod-enter'
-  })
-  const [verbose, setVerbose] = useState<boolean>(() => {
-    const saved = localStorage.getItem(`verbose_${sessionId}`)
-    return saved !== null ? saved === 'true' : true
-  })
   const [showMenu, setShowMenu] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
   const [debugInfoLoading, setDebugInfoLoading] = useState(false)
@@ -160,11 +147,16 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   const [debugInfoCopied, setDebugInfoCopied] = useState(false)
   const [processingReasoningSummary, setProcessingReasoningSummary] = useState('')
   const [asrAvailable, setAsrAvailable] = useState(false)
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  const [modelBusy, setModelBusy] = useState(false)
+  const [modelError, setModelError] = useState<string | null>(null)
   const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
   const [resolvedSessionFilePath, setResolvedSessionFilePath] = useState<string | null>(null)
   const [sessionFilePayload, setSessionFilePayload] = useState<SessionFilePayload | null>(null)
+  const [showFullTimeline, setShowFullTimeline] = useState(false)
 
   const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const chatRootRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const lastKnownTimestampRef = useRef<number>(0)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -173,10 +165,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   const shouldAutoScrollRef = useRef<boolean>(true)
   const pendingSentMessagesRef = useRef<string[]>([])
   const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    localStorage.setItem('sendKeyMode', sendKeyMode)
-  }, [sendKeyMode])
+  const composerHeightRef = useRef<number | null>(null)
+  const expandHistoryScrollRestoreRef = useRef<{ top: number; height: number } | null>(null)
 
   useEffect(() => {
     setProcessingReasoningSummary('')
@@ -186,6 +176,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     setShowDebugInfo(false)
     setDebugInfoError(null)
     setDebugInfoCopied(false)
+  }, [sessionId])
+
+  useEffect(() => {
+    setShowFullTimeline(false)
+    expandHistoryScrollRestoreRef.current = null
   }, [sessionId])
 
   useEffect(() => {
@@ -213,6 +208,32 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+
+    const fetchModels = async () => {
+      try {
+        const res = await fetch(`${API_BASE_PATH}/models`)
+        if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
+        const data = await res.json()
+        if (!cancelled) {
+          setModelOptions(Array.isArray(data.models) ? data.models : [])
+        }
+      } catch (error) {
+        console.error('Failed to fetch models:', error)
+        if (!cancelled) {
+          setModelError(error instanceof Error ? error.message : 'Failed to load models')
+          setModelOptions([])
+        }
+      }
+    }
+
+    fetchModels()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (!sessionBusy) {
       setProcessingReasoningSummary('')
     }
@@ -231,6 +252,15 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     if (container) {
       container.scrollTop = container.scrollHeight
     }
+  }, [])
+
+  const handleComposerHeightChange = useCallback((height: number) => {
+    const nextHeight = Math.max(0, Math.round(height))
+    if (composerHeightRef.current === nextHeight) {
+      return
+    }
+    composerHeightRef.current = nextHeight
+    chatRootRef.current?.style.setProperty('--chat-composer-offset', `${nextHeight}px`)
   }, [])
 
   useEffect(() => {
@@ -261,6 +291,14 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       setShowScrollButton(distanceFromBottom > 200)
       setShowScrollTopButton(scrollTop > 200)
       shouldAutoScrollRef.current = distanceFromBottom < 200
+
+      if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < 120) {
+        expandHistoryScrollRestoreRef.current = {
+          top: scrollTop,
+          height: container.scrollHeight,
+        }
+        setShowFullTimeline(true)
+      }
     }
 
     const container = messagesContainerRef.current
@@ -268,7 +306,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       container.addEventListener('scroll', handleScroll)
       return () => container.removeEventListener('scroll', handleScroll)
     }
-  }, [])
+  }, [messages.length, showFullTimeline])
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -460,6 +498,48 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     }
   }, [sessionId])
 
+  const updateSessionModel = useCallback(async (model: string | null) => {
+    setModelBusy(true)
+    setModelError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(model ? { model } : { clear: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || `Failed to update model (${res.status})`)
+      await refreshSessionDebugData()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update model'
+      setModelError(message)
+      throw error
+    } finally {
+      setModelBusy(false)
+    }
+  }, [refreshSessionDebugData, sessionId])
+
+  const updateChildModel = useCallback(async (model: string | null) => {
+    setModelBusy(true)
+    setModelError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/child-model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(model ? { model } : { clear: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || `Failed to update child default model (${res.status})`)
+      await refreshSessionDebugData()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update child default model'
+      setModelError(message)
+      throw error
+    } finally {
+      setModelBusy(false)
+    }
+  }, [refreshSessionDebugData, sessionId])
+
   useEffect(() => {
     fetchHistory()
     connectSSE()
@@ -527,6 +607,22 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     }
   }, [messages, scrollToBottom])
 
+  useEffect(() => {
+    const restore = expandHistoryScrollRestoreRef.current
+    if (!restore || !showFullTimeline) {
+      return
+    }
+
+    const container = messagesContainerRef.current
+    if (!container) {
+      return
+    }
+
+    const nextScrollHeight = container.scrollHeight
+    container.scrollTop = Math.max(0, nextScrollHeight - restore.height + restore.top)
+    expandHistoryScrollRestoreRef.current = null
+  }, [showFullTimeline, messages.length])
+
   const snapshotSystemMessage = useMemo<Message | null>(() => {
     const snapshotText = typeof sessionFilePayload?.persistentMemorySnapshot === 'string'
       ? sessionFilePayload.persistentMemorySnapshot.trim()
@@ -546,9 +642,18 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     }
   }, [sessionFilePayload])
 
+  const visibleMessages = useMemo(() => {
+    if (showFullTimeline || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+      return messages
+    }
+    return messages.slice(-DEFAULT_VISIBLE_TIMELINE_MESSAGES)
+  }, [messages, showFullTimeline])
+
+  const hiddenMessageCount = messages.length - visibleMessages.length
+
   const timelineMessages = useMemo(() => (
-    snapshotSystemMessage ? [snapshotSystemMessage, ...messages] : messages
-  ), [messages, snapshotSystemMessage])
+    snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
+  ), [snapshotSystemMessage, visibleMessages])
 
   const debugInfoObject = useMemo(() => ({
     sessionId,
@@ -569,10 +674,12 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       sessionMissing,
       sessionBusy,
       sessionQueueLength,
-      verbose,
-      sendKeyMode,
+      groupTools,
+      showUsageBadge,
+      sendKeyBehavior: sendKeyMode === 'enter' ? 'Enter sends; Shift+Enter inserts a new line.' : 'Ctrl/Cmd+Enter sends; Enter inserts a new line.',
       loading,
       asrAvailable,
+      modelBusy,
       processingReasoningSummary,
     },
   }), [
@@ -580,10 +687,10 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     connectionState,
     loading,
     messages,
+    modelBusy,
     processingReasoningSummary,
     reconnectCountdown,
     resolvedSessionFilePath,
-    sendKeyMode,
     sessionBusy,
     sessionDisplayName,
     sessionFilePayload,
@@ -591,7 +698,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
     sessionMissing,
     sessionQueueLength,
     sessionRecord,
-    verbose,
+    groupTools,
+    showUsageBadge,
   ])
 
   const debugInfoText = useMemo(() => JSON.stringify(debugInfoObject, null, 2), [debugInfoObject])
@@ -631,7 +739,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
 
     const parts: any[] = []
     let messageText = userMessage
-    const filePaths: string[] = []
+    let requestText = userMessage
+    const uploadedFiles: Array<{ path: string; filename: string; mimeType: string; size?: number }> = []
 
     for (const file of files) {
       try {
@@ -647,26 +756,31 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
           throw new Error('Upload failed')
         }
 
-        const { path: filePath } = await uploadRes.json()
-        filePaths.push(filePath)
+        const uploadData = await uploadRes.json()
+        uploadedFiles.push({
+          path: uploadData.path,
+          filename: uploadData.filename || file.name,
+          mimeType: uploadData.mimeType || file.type || 'application/octet-stream',
+          size: uploadData.size,
+        })
 
-        if (file.type.startsWith('image/')) {
-          messageText += `\n\n[Image: ${file.name}]\nPath: ${filePath}`
-        } else {
-          messageText += `\n\n[File: ${file.name}]\nPath: ${filePath}`
-        }
+        messageText += file.type.startsWith('image/')
+          ? `\n\n[Image: ${file.name}]`
+          : `\n\n[File: ${file.name}]`
       } catch (err) {
         console.error('File upload failed:', err)
         messageText += `\n\n[Failed to upload: ${file.name}]`
       }
     }
 
-    if (messageText) {
-      parts.push({ text: messageText })
+    if (requestText) {
+      parts.push({ text: requestText })
     }
 
+    const previewParts = messageText ? [{ text: messageText }] : parts
+
     pendingSentMessagesRef.current.push(userMessage)
-    setMessages(prev => [...prev, { role: 'user', parts }])
+    setMessages(prev => [...prev, { role: 'user', parts: previewParts }])
 
     try {
       fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
@@ -674,7 +788,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ parts, filePaths }),
+        body: JSON.stringify({ parts, uploadedFiles }),
       }).catch(e => {
         console.error('Failed to send message:', e)
         setMessages(prev => [...prev, { role: 'model', parts: [{ text: 'Error: Failed to send message' }] }])
@@ -688,10 +802,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
       return false
     }
   }, [loading, sessionId, sessionMissing])
-
-  const toggleSendKeyMode = useCallback(() => {
-    setSendKeyMode(prev => prev === 'enter' ? 'mod-enter' : 'enter')
-  }, [])
 
   const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
     const formData = new FormData()
@@ -849,28 +959,15 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
   }, [messages])
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden">
-      <div className="sticky top-0 z-30 h-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4">
-        <div className="flex h-full items-center justify-between">
-          <div className="flex items-center space-x-3 min-w-0">
-            {isMobile && onBack && (
-              <button
-                onClick={onBack}
-                className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
-            )}
-            <div className="min-w-0">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white truncate">{sessionDisplayName || sessionId}</h2>
-              {sessionDisplayName && (
-                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">{sessionId}</div>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+    <div ref={chatRootRef} className="relative flex h-full flex-col overflow-hidden">
+      <ContentHeader
+        icon={<MessageSquareText className="h-5 w-5" />}
+        title={sessionDisplayName || sessionId}
+        subtitle={<span className="font-mono text-[12px]">session {sessionId}</span>}
+        onBack={isMobile ? onBack : undefined}
+        sticky
+        actions={(
+          <>
             <button
               onClick={onOpenWorkspace}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
@@ -890,86 +987,25 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
             <div className="relative">
               <button
                 onClick={() => setShowMenu(!showMenu)}
-                className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-                title="Menu"
+                className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                title="Session options"
               >
                 <Menu size={20} />
               </button>
               {showMenu && (
-                <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 text-gray-900 dark:text-gray-100">
-                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                  <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Theme</div>
-                  <div className="flex gap-1">
-                    {(['auto', 'light', 'dark'] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        onClick={() => {
-                          onThemeChange(mode)
-                          setShowMenu(false)
-                        }}
-                        className={`flex-1 px-2 py-1 text-xs rounded capitalize ${themeMode === mode ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                      >
-                        {mode}
-                      </button>
-                    ))}
-                  </div>
+                <div className="absolute right-0 mt-2 w-56 rounded-lg border border-gray-200 bg-white text-gray-900 shadow-lg z-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+                  <button
+                    onClick={handleOpenDebugInfo}
+                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                  >
+                    debug info
+                  </button>
                 </div>
-                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                  <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Send key</div>
-                  <div className="grid grid-cols-2 gap-1">
-                    <button
-                      onClick={() => {
-                        setSendKeyMode('mod-enter')
-                        setShowMenu(false)
-                      }}
-                      className={`px-2 py-1 text-xs rounded ${sendKeyMode === 'mod-enter' ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                    >
-                      Ctrl/Cmd+Enter
-                    </button>
-                    <button
-                      onClick={() => {
-                        setSendKeyMode('enter')
-                        setShowMenu(false)
-                      }}
-                      className={`px-2 py-1 text-xs rounded ${sendKeyMode === 'enter' ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                    >
-                      Enter
-                    </button>
-                  </div>
-                  <div className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
-                    {sendKeyMode === 'mod-enter'
-                      ? 'Default: Ctrl/Cmd+Enter sends, Enter inserts a new line.'
-                      : 'Enter sends, Shift/Ctrl/Cmd+Enter inserts a new line.'}
-                  </div>
-                </div>
-                <button
-                  onClick={() => {
-                    const newVerbose = !verbose
-                    setVerbose(newVerbose)
-                    localStorage.setItem(`verbose_${sessionId}`, String(newVerbose))
-                    setShowMenu(false)
-                  }}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm"
-                >
-                  <div className="flex items-center justify-between">
-                    <span>Verbose Mode</span>
-                    <span className="inline-flex items-center justify-center min-w-4">
-                      {verbose ? <Check size={14} /> : null}
-                    </span>
-                  </div>
-                </button>
-                <button
-                  onClick={handleOpenDebugInfo}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm border-t border-gray-200 dark:border-gray-700"
-                >
-                  debug info
-                </button>
-              </div>
               )}
             </div>
-          </div>
-        </div>
-      </div>
+          </>
+        )}
+      />
 
       {connectionState !== 'connected' && (
         <div className={`sticky top-0 z-20 px-4 py-2 text-sm ${
@@ -983,52 +1019,71 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
         </div>
       )}
 
-      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 pb-56 md:pb-52">
-        <ChatTimeline messages={timelineMessages} isMobile={isMobile} verbose={verbose} />
-        <ProcessingStatus
-          sessionBusy={sessionBusy}
-          sessionQueueLength={sessionQueueLength}
-          loading={loading}
-          processingReasoningSummary={processingReasoningSummary}
-          isMobile={isMobile}
-        />
-        <div className="h-56 md:h-52" />
+      <div className="relative min-h-0 flex-1">
+        <div ref={messagesContainerRef} className="h-full overflow-y-auto p-4">
+          {hiddenMessageCount > 0 && !showFullTimeline && (
+            <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
+              Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
+            </div>
+          )}
+          <ChatTimeline messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} />
+          <ProcessingStatus
+            sessionBusy={sessionBusy}
+            sessionQueueLength={sessionQueueLength}
+            loading={loading}
+            processingReasoningSummary={processingReasoningSummary}
+            isMobile={isMobile}
+          />
+          <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
+        </div>
+
+        {showScrollTopButton && (
+          <button
+            onClick={scrollToTop}
+            className="absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            aria-label="Scroll to top"
+          >
+            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+            </svg>
+          </button>
+        )}
+
+        {showScrollButton && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-4 right-4 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            style={{ bottom: 'calc(var(--chat-composer-offset, 224px) + 1rem)' }}
+            aria-label="Scroll to bottom"
+          >
+            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
+          </button>
+        )}
       </div>
-
-      {showScrollTopButton && (
-        <button
-          onClick={scrollToTop}
-          className="fixed right-6 top-24 z-30 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center"
-          aria-label="Scroll to top"
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-          </svg>
-        </button>
-      )}
-
-      {showScrollButton && (
-        <button
-          onClick={scrollToBottom}
-          className="fixed right-6 bottom-32 z-30 w-12 h-12 bg-blue-500 dark:bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-all flex items-center justify-center md:bottom-28"
-          aria-label="Scroll to bottom"
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-          </svg>
-        </button>
-      )}
 
       <ChatComposer
         sessionId={sessionId}
         sessionMissing={sessionMissing}
         loading={loading}
         asrAvailable={asrAvailable}
+        modelOptions={modelOptions}
+        currentModelKey={sessionRecord?.modelKey}
+        sessionModel={sessionRecord?.model || null}
+        defaultModelKey={sessionRecord?.defaultModelKey}
+        childModelDefault={sessionRecord?.childModelDefault || null}
+        effectiveChildModelKey={sessionRecord?.effectiveChildModelKey}
+        modelBusy={modelBusy}
+        modelError={modelError}
+        onChangeModel={updateSessionModel}
+        onChangeChildModel={updateChildModel}
         sendKeyMode={sendKeyMode}
-        onToggleSendKeyMode={toggleSendKeyMode}
+        onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
         onTranscribeAudio={handleTranscribeAudio}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
+        onDraftEdited={onDraftEdited}
       />
 
       {showDebugInfo && (
@@ -1091,7 +1146,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, themeMo
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&
   prev.sessionDisplayName === next.sessionDisplayName &&
-  prev.themeMode === next.themeMode &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   prev.onOpenWorkspace === next.onOpenWorkspace &&
   prev.onOpenTerminal === next.onOpenTerminal

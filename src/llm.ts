@@ -1,4 +1,5 @@
 import axios, { AxiosResponse } from 'axios';
+import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { StringDecoder } from 'string_decoder';
@@ -10,7 +11,7 @@ import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BU
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
-import { loadSkillDocuments } from './skills';
+import { listSkills } from './skills';
 import { checkToolPermission, checkPathAccess } from './isolatedCheck';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -18,11 +19,22 @@ import {
     convertToOpenAIFormat as convertToOpenAIFormatProvider,
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
+import { parseFunctionCallArgs } from './toolCallArgs';
+import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
+import { isSystemPayloadTextPart } from './utils/systemMessageParts';
+import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
+import { guardToolOutputForModel } from './toolOutputGuard';
+import { sanitizeLoneSurrogatesInPayload } from './utils/unicode';
+import { isModelVisibleMessage } from './session/messageVisibility';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
     responsePath: string;
 };
+
+export function sanitizeProviderRequestPayload<T>(payload: T) {
+    return sanitizeLoneSurrogatesInPayload(payload);
+}
 
 function maybeCompressLlmRequestBody(data: any, modelEntry: ModelConfigEntry) {
     if (!modelEntry.requestCompression) {
@@ -81,17 +93,40 @@ export function isAbortError(error: any): boolean {
 }
 
 function getPromptCacheKey(session: Session): string {
-    return `${session.id || 'default'}`;
+    const sessionId = session.id || 'default';
+    return crypto.createHash('md5').update(`session_${sessionId}`).digest('hex');
 }
 
-function isOpenAIReasoningModel(modelName: string): boolean {
-    return /^gpt-5(?:[.-]|$)/.test(modelName)
-        || /^o[1-9](?:[.-]|$)/.test(modelName);
+function getPromptCacheKeyForSessionId(sessionId?: string): string {
+    const normalizedSessionId = sessionId || 'default';
+    return crypto.createHash('md5').update(`session_${normalizedSessionId}`).digest('hex');
 }
 
-function shouldUseOpenAIResponsesApi(providerType: string, modelName: string): boolean {
-    return providerType === 'openai-responses'
-        || (providerType === 'openai' && isOpenAIReasoningModel(modelName));
+type RequestLlmOnceOptions = {
+    contents: Message[];
+    systemPrompt: string;
+    model?: string;
+    modelEntryOverride?: ModelConfigEntry;
+    sessionId?: string;
+    promptCacheKey?: string;
+    iteration?: number;
+    toolDefinitions?: ToolDefinition[];
+    notifySessionEvents?: boolean;
+    registerAbortController?: boolean;
+    maxRetries?: number;
+    timeoutMs?: number;
+};
+
+export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-completions' | null {
+    if (providerType === 'openai' || providerType === 'openai-responses') {
+        return 'responses';
+    }
+
+    if (providerType === 'openai-completions') {
+        return 'chat-completions';
+    }
+
+    return null;
 }
 
 function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
@@ -179,47 +214,153 @@ function extractAnthropicThinkingTaggedParts(text: string): MessagePart[] | null
 }
 
 function formatMemoryBlock(filePath: string, agentName: string, kind: 'self' | 'inherited', content: string): string {
-    return `\nFILE: ${filePath}\n[MEMORY: agent=${agentName}; ownership=${kind}]\n${content}\n`;
+    return `\n<memory_file agent=${agentName}; ownership=${kind}; path=${filePath}>\n${content}\n</memory_file>`;
 }
 
-function formatSkillBlock(filePath: string, skillName: string, content: string): string {
-    return `\nFILE: ${filePath}\n[SKILL: ${skillName}]\n${content}\n`;
+function escapeXmlText(value: string): string {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
 }
 
-function stringifyToolOutput(output: unknown): string {
-    if (output === undefined || output === null) {
+export function normalizeSystemPromptFiles(value: unknown): string[] | undefined {
+    if (Array.isArray(value)) {
+        const normalized = value
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map(entry => entry.trim())
+            .filter(entry => entry.length > 0);
+        return normalized;
+    }
+
+    if (typeof value === 'string') {
+        const normalized = value
+            .split(/[,\n]/)
+            .map(entry => entry.trim())
+            .filter(entry => entry.length > 0 && !entry.startsWith('#'));
+        return normalized;
+    }
+
+    return undefined;
+}
+
+function expandHomePath(filePath: string): string {
+    if (filePath === '~') {
+        return process.env.HOME || filePath;
+    }
+    if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
+        return path.join(process.env.HOME || '~', filePath.slice(2));
+    }
+
+    return filePath;
+}
+
+function resolveSystemPromptFilePath(agentName: string, fileReference: string): string {
+    const expandedPath = expandHomePath(fileReference);
+    if (path.isAbsolute(expandedPath)) {
+        return path.resolve(expandedPath);
+    }
+
+    return path.resolve(getAgentDir(agentName), expandedPath);
+}
+
+async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[]): Promise<string> {
+    let combined = '';
+    const restrictToAgentDir = sessionManager.isAgentIsolated(agentName);
+
+    for (const fileReference of systemPromptFiles) {
+        const filePath = resolveSystemPromptFilePath(agentName, fileReference);
+        if (restrictToAgentDir) {
+            checkPathAccess(filePath, agentName);
+        }
+        if (!await fs.pathExists(filePath)) {
+            throw new Error(`systemPromptFiles entry \`${fileReference}\` not found for agent \`${agentName}\`.`);
+        }
+
+        const stats = await fs.stat(filePath);
+        if (!stats.isFile()) {
+            throw new Error(`systemPromptFiles entry \`${fileReference}\` is not a file.`);
+        }
+
+        const content = await fs.readFile(filePath, 'utf8');
+        combined += formatMemoryBlock(filePath, agentName, 'self', content);
+    }
+
+    return combined;
+}
+
+async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
+    const visibleSkills = await listSkills({ agentName });
+    if (visibleSkills.length === 0) {
         return '';
     }
 
-    if (typeof output === 'string') {
-        return output;
+    let combined = '';
+    combined += 'The following skills provide specialized instructions for specific tasks.\n';
+    combined += 'When a task matches a skill\'s description, call the load_skill tool\n';
+    combined += 'with the skill\'s name to load its full instructions:\n';
+    combined += '<available_skills>\n';
+
+    for (const skill of visibleSkills) {
+        combined += '  <skill>';
+        combined += `    <name>${escapeXmlText(skill.name)}</name>`;
+        combined += `    <description>${escapeXmlText(skill.description || '')}</description>`;
+        combined += '</skill>\n';
     }
 
-    if (typeof output === 'object') {
-        try {
-            return JSON.stringify(output, null, 2);
-        } catch {
-            return '[unserializable object]';
-        }
-    }
-
-    return String(output);
+    combined += '</available_skills>\n';
+    return combined;
 }
 
-function extractToolResponseOutput(response: any): unknown {
-    if (response === undefined || response === null) {
-        return response;
+async function appendDefaultMemoryFiles(agentName: string): Promise<string> {
+    const mainMemoryDir = MAIN_AGENT_MEMORY_DIR;
+    let combined = '';
+
+    const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
+    if (await fs.pathExists(mainSystemPath)) {
+        const content = await fs.readFile(mainSystemPath, 'utf8');
+        const kind = agentName === 'main' ? 'self' : 'inherited';
+        combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
     }
 
-    if (Object.prototype.hasOwnProperty.call(response, 'output')) {
-        return response.output;
+    const inheritChain = sessionManager.getAgentInheritanceChain(agentName);
+    for (const inheritedAgentName of inheritChain) {
+        const kind = inheritedAgentName === agentName ? 'self' : 'inherited';
+        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind);
     }
 
-    if (Object.prototype.hasOwnProperty.call(response, 'error')) {
-        return response.error;
-    }
+    return combined;
+}
 
-    return response;
+export async function buildSessionSystemPromptSnapshot(options: {
+    agentName?: string;
+    systemPromptFiles?: string[] | string;
+} = {}): Promise<string> {
+    const agentName = options.agentName || 'main';
+    const normalizedSystemPromptFiles = normalizeSystemPromptFiles(options.systemPromptFiles);
+    const hasCustomMemorySources = options.systemPromptFiles !== undefined;
+
+    const memoryBlocks = hasCustomMemorySources
+        ? await appendConfiguredMemoryFiles(agentName, normalizedSystemPromptFiles || [])
+        : await appendDefaultMemoryFiles(agentName);
+    const skillCatalog = await appendSkillCatalogForAgent(agentName);
+    const agentMemoryDir = getAgentMemoryDir(agentName);
+    const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_memory: ' + agentMemoryDir + '\n- agent_folder: ' + getAgentDir(agentName) + '\n';
+    const archiveInfo = '\n\n--- COMPACTED HISTORY ACCESS ---\n- Use `get_context_archive(...)` for the normal archived-history entry point.\n- If you specifically need raw-message or block-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.\n';
+    return [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
+        .filter(Boolean)
+        .join('\n\n');
+}
+
+function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string; message: string } } {
+    // Do NOT send rawArgsText in the tool response — the call's arguments
+    // already carry it, so no need to duplicate.
+    return {
+        error: {
+            type: 'invalid_tool_arguments',
+            message: call.argsParseError || 'Invalid tool arguments JSON',
+        }
+    };
 }
 
 function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string {
@@ -243,19 +384,6 @@ function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string
     return trimmed;
 }
 
-const SUBCONSCIOUS_ALLOWED_TOOL_NAMES = new Set([
-    'search_memory',
-    'get_archived_messages',
-    'get_archived_blocks',
-    'submit_compact_plan',
-    'send_to_session',
-    'end_turn',
-]);
-
-function isSubconsciousSession(session?: Session): boolean {
-    return session?.meta?.subconscious?.kind === 'subconscious';
-}
-
 async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited'): Promise<string> {
     const agentMemoryDir = getAgentMemoryDir(agentName);
     if (!await fs.pathExists(agentMemoryDir)) {
@@ -276,50 +404,10 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
     return combined;
 }
 
-async function appendSkillFilesForAgent(agentName: string): Promise<string> {
-    const skills = sessionManager.getAgentSkills(agentName);
-    if (skills.length === 0) {
-        return '';
-    }
-
-    let combined = '';
-    for (const skillName of skills) {
-        try {
-            const { documents } = await loadSkillDocuments(skillName, { agentName });
-            for (const document of documents) {
-                combined += formatSkillBlock(document.filePath, skillName, document.content);
-            }
-        } catch (e) {
-            logger.warn({ err: e, agentName, skillName }, 'Failed to load skill documents for prompt injection');
-        }
-    }
-
-    return combined;
-}
 
 export async function getPersistentMemory(agentName: string = 'main') {
     try {
-        const agentMemoryDir = getAgentMemoryDir(agentName);
-        const mainMemoryDir = MAIN_AGENT_MEMORY_DIR;
-        let combined = '';
-
-        const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
-        if (await fs.pathExists(mainSystemPath)) {
-            const content = await fs.readFile(mainSystemPath, 'utf8');
-            const kind = agentName === 'main' ? 'self' : 'inherited';
-            combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
-        }
-
-        const inheritChain = sessionManager.getAgentInheritanceChain(agentName);
-        for (const inheritedAgentName of inheritChain) {
-            const kind = inheritedAgentName === agentName ? 'self' : 'inherited';
-            combined += await appendMemoryFilesForAgent(inheritedAgentName, kind);
-        }
-
-        combined += await appendSkillFilesForAgent(agentName);
-
-        const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_memory: ' + agentMemoryDir + '\n- agent_folder: ' + getAgentDir(agentName) + '\n';
-        return combined.trim() + dirInfo;
+        return await buildSessionSystemPromptSnapshot({ agentName });
     } catch (e) {
         logger.error({ err: e, agentName }, 'Error reading persistent memory');
         return '';
@@ -373,6 +461,7 @@ export function fixToolCalls(contents: Message[]): Message[] {
         return message.parts.every((part: MessagePart) => {
             if (part.functionCall || part.functionResponse || part.inlineData || part.thinking) return false;
             if (part.system) return true;
+            if (isSystemPayloadTextPart(part)) return true;
             return typeof part.text === 'string' && part.text.startsWith('[SYSTEM:');
         });
     };
@@ -390,6 +479,17 @@ export function fixToolCalls(contents: Message[]): Message[] {
         }
         return false;
     };
+
+    const hasNearbyToolResponse = (index: number): boolean => {
+        for (let j = index + 1; j < contents.length; j++) {
+            const next = contents[j];
+            if (isSkippableSystemInterruption(next)) {
+                continue;
+            }
+            return next.role === 'tool';
+        }
+        return false;
+    };
     
     for (let i = 0; i < contents.length; i++) {
         const msg = contents[i];
@@ -400,9 +500,7 @@ export function fixToolCalls(contents: Message[]): Message[] {
             const toolCalls = msg.parts.filter((p: MessagePart) => p.functionCall);
             
             if (toolCalls.length > 0) {
-                // Check if next message is a tool response
-                const nextMsg = i + 1 < contents.length ? contents[i + 1] : null;
-                const hasToolResponse = nextMsg && nextMsg.role === 'tool';
+                const hasToolResponse = hasNearbyToolResponse(i);
                 
                 if (!hasToolResponse) {
                     // Missing tool response - insert one
@@ -437,16 +535,6 @@ export function fixToolCalls(contents: Message[]): Message[] {
             }
         }
 
-        if (msg.role === 'user') {
-            if (contents[i - 1]?.role === 'tool') {
-                fixed.splice(fixed.length - 1, 0, {
-                    role: 'model',
-                    parts: [
-                        { text: '[interrupted by user/system event]' },
-                    ],
-                });
-            }
-        }
     }
     
     return fixed as Message[];
@@ -466,6 +554,17 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
         if (role === 'tool') role = 'user';
 
         let content = [];
+        const imagePartsByToolUseId = new Map<string, MessagePart[]>();
+        if (msg.role === 'tool') {
+            for (const part of msg.parts || []) {
+                if (!part.inlineData || !part.toolUseId) {
+                    continue;
+                }
+                const grouped = imagePartsByToolUseId.get(part.toolUseId) || [];
+                grouped.push(part);
+                imagePartsByToolUseId.set(part.toolUseId, grouped);
+            }
+        }
         
         for (const part of msg.parts || []) {
             // Handle thinking (with signature support)
@@ -498,11 +597,11 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
             // Handle function response
             if (part.functionResponse) {
                 const resp = part.functionResponse.response || {};
-                const output = extractToolResponseOutput(resp);
+                const toolUseId = part.functionResponse.tool_use_id || part.toolUseId || 'unknown';
                 const toolResult = {
                     type: 'tool_result',
-                    tool_use_id: part.functionResponse.tool_use_id || part.toolUseId || 'unknown',
-                    content: stringifyToolOutput(output)
+                    tool_use_id: toolUseId,
+                    content: appendImageGuidanceText(imagePartsByToolUseId.get(toolUseId) || [], formatToolResponsePayload(resp))
                 };
                 if (config.baseUrl?.startsWith('https://api.kimi.com/')) {
                     if (!content.find(x => x.type === 'thinking')) {
@@ -559,6 +658,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
     const parts = [];
     let stopCurrentTurn = false;
+    let batchHasError = false;
 
     const normalizeToolResult = (rawResult: any): any => {
         if (rawResult === undefined) return { output: '(No output)' };
@@ -572,31 +672,15 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         return { output: String(rawResult) };
     };
 
-    const consumeInlineData = (result: any, toolId: string, fallbackLabel: string): any => {
+    const consumeInlineData = async (result: any, toolId: string, fallbackLabel: string): Promise<any> => {
         if (!result || typeof result !== 'object') return result;
 
-        const inlineItems = [
-            ...(result.inlineData ? [result.inlineData] : []),
-            ...(Array.isArray(result.inlineDataItems) ? result.inlineDataItems : []),
-        ].filter((item: any) => item?.data);
-
-        if (inlineItems.length === 0) return result;
-
-        for (const item of inlineItems) {
-            parts.push({
-                toolUseId: toolId,
-                inlineData: {
-                    data: item.data,
-                    mimeType: item.mimeType || item.mime_type || 'application/octet-stream'
-                }
-            });
+        const normalized = await normalizeToolResultImages(result, toolId, fallbackLabel);
+        if (normalized.imageParts.length > 0) {
+            parts.push(...normalized.imageParts);
         }
 
-        const { inlineData, inlineDataItems, ...rest } = result;
-        if (rest.output === undefined) {
-            rest.output = fallbackLabel;
-        }
-        return rest;
+        return normalized.result;
     };
 
     const extractToolLoopControl = (result: any): any => {
@@ -608,6 +692,13 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const { __toolLoopControl, ...rest } = result;
         return rest;
     };
+
+    const hasToolResponseError = (result: any): boolean => {
+        if (!result || typeof result !== 'object') {
+            return false;
+        }
+        return result.error !== undefined && result.error !== null;
+    };
     
     for (const call of functionCalls) {
         const toolFn = (tools as any)[call.name];
@@ -615,10 +706,14 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         
         // Log what's being executed
         let argStr = '';
-        if (call.name === 'exec') {
+        if (call.argsParseError && typeof call.rawArgsText === 'string') {
+            argStr = call.rawArgsText;
+        } else if (call.name === 'exec') {
             argStr = call.args.command;
         } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
             argStr = call.args.filePath;
+        } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
+            argStr = typeof call.args.input === 'string' ? call.args.input : '';
         } else if (call.name === 'read' || call.name === 'read_memory') {
             const { filePath, startLine, endLine } = call.args;
             argStr = filePath + (startLine ? ` (lines ${startLine}-${endLine})` : '');
@@ -644,12 +739,13 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         }
 
         let result;
-        if (isSubconsciousSession(session) && !SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(call.name)) {
-            result = { error: `Subconscious side sessions cannot use ${call.name}.` };
+        if (call.argsParseError) {
+            result = buildInvalidToolArgsResult(call);
         }
         
-        // Check if tool has node parameter
-        const nodeParam = call.args?.node;
+        const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
+        const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
+        const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
         const sessionId = toolContext.sessionId || 'main';
         
         // Get current node for this session
@@ -660,29 +756,15 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         
         // Remove node parameter from args before execution
         const toolArgs = { ...call.args };
-        delete toolArgs.node;
+        if (supportsExplicitNode) {
+            delete toolArgs.node;
+        }
         
         // Tools that must run on master because they depend on host-local
         // session/channel/agent/vector/MCP state rather than remote node files.
-        const masterOnlyTools = [
-            'remote_node', 'list_nodes', 'node_tools',
-            'search_memory', 'get_memory_context',
-            'read_memory', 'write_memory', 'edit_memory', 'delete_memory',
-            'copy_between_nodes',
-            'create_child_session', 'send_to_session', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
-            'list_sessions', 'list_agents', 'list_skills',
-            'attach_agent_skill', 'detach_agent_skill', 'load_skill',
-            'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'delete_session',
-            'update_session_name', 'set_todo', 'update_session_snapshot', 'stop_session',
-            'compact_session', 'compress_session',
-            'create_timer', 'list_timers', 'delete_timer',
-            'mcp_config', 'call_mcp', 'search_mcp_tools',
-            'change_current_node',
-            'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
-        ];
-        const forceMaster = masterOnlyTools.includes(call.name);
+        const forceMaster = tools.isMasterOnlyToolName(call.name);
         const executionNode = forceMaster ? 'master' : targetNode;
-        const permissionNode = call.name === 'send_file' ? targetNode : executionNode;
+        const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
 
         // Check isolated session tool permission (includes path access check for master)
         try {
@@ -706,7 +788,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             }
         } else if (toolFn) {
             // Execute locally on master
-            const localToolContext = call.name === 'send_file'
+            const localToolContext = call.name === 'send_file' || call.name === 'image_write_to_file'
                 ? { ...toolContext, runtimeNodeId: targetNode }
                 : toolContext;
             try {
@@ -720,28 +802,16 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         } // End if (result?.error)
 
         result = extractToolLoopControl(result);
-        result = consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
+        result = await consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
+        result = await guardToolOutputForModel(result, {
+            sessionId,
+            session,
+            toolName: call.name,
+            toolUseId: toolId,
+            nodeId: executionNode,
+        });
 
-        // Backward-compat fallback for older tools/nodes still returning marker strings.
-        if (result && typeof result.output === 'string') {
-            const output = result.output;
-
-            if (output.startsWith('__IMAGE__:')) {
-                const [, mimeType, base64] = output.split(':', 3);
-                parts.push({
-                    toolUseId: toolId,
-                    inlineData: { data: base64, mimeType }
-                });
-                result = { ...result, output: `[Image loaded: ${call.args.filePath || 'file'}]` };
-            } else if (output.startsWith('__SCREENSHOT__:')) {
-                const base64 = output.substring('__SCREENSHOT__:'.length);
-                parts.push({
-                    toolUseId: toolId,
-                    inlineData: { data: base64, mimeType: 'image/png' }
-                });
-                result = { ...result, output: `[Screenshot of ${call.args.tabId || 'page'}]` };
-            }
-        }
+        batchHasError = batchHasError || hasToolResponseError(result);
         
         parts.push({
             functionResponse: {
@@ -757,8 +827,10 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         parts: parts
     };
 
-    if (stopCurrentTurn) {
+    if (stopCurrentTurn && !batchHasError) {
         (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true };
+    } else if (stopCurrentTurn && batchHasError) {
+        logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
 
     return toolMessage;
@@ -801,7 +873,10 @@ export async function chat(
 
     // Get persistent context
     const agentName = session.agent || 'main';
-    const systemPrompt = session.persistentMemorySnapshot || await getPersistentMemory(agentName);
+    const systemPrompt = session.persistentMemorySnapshot || await buildSessionSystemPromptSnapshot({
+        agentName,
+        systemPromptFiles: session.systemPromptFiles,
+    });
 
     // Add user message if provided
     if (parts) {
@@ -811,35 +886,72 @@ export async function chat(
     }
     
     // Convert to appropriate format based on provider
-    const contentsForLlm = session.history.map(({ __meta, ...msg }: Message) => msg);
-    const fixedContents = fixToolCalls(contentsForLlm);
-    
+    const contentsForLlm = session.history
+        .filter(isModelVisibleMessage)
+        .map(({ __meta, ...msg }: Message) => msg);
+    const availableToolDefinitions = options?.toolDefinitions
+        ?? tools.modelFacingDefinitions;
+    const result = await requestLlmOnce({
+        contents: contentsForLlm,
+        systemPrompt,
+        model: session.model,
+        sessionId: session.id,
+        promptCacheKey: getPromptCacheKey(session),
+        iteration,
+        toolDefinitions: availableToolDefinitions,
+        notifySessionEvents: options?.notifySessionEvents,
+        registerAbortController: options?.registerAbortController,
+    });
+
+    if (result.usage) {
+        logger.info(`Token Usage: Cached: ${result.usage.cachedTokens || 0} | Input: ${result.usage.inputTokens} | Output: ${result.usage.outputTokens} | Calls: ${(result.toolCalls || []).length}`);
+
+        // Update session accumulated usage stats
+        session.stats.totalInputTokens += result.usage.inputTokens || 0;
+        session.stats.totalCachedTokens += result.usage.cachedTokens || 0;
+        session.stats.totalOutputTokens += result.usage.outputTokens || 0;
+    }
+
+    // Add assistant message to history
+    if (result.allParts && result.allParts.length > 0) {
+        const assistantMsg: Message = {
+            role: 'model',
+            parts: result.allParts,
+            ...(result.usage ? { __meta: { usage: result.usage } } : {}),
+        };
+        await appendMessage(assistantMsg);
+    }
+
+    return result;
+}
+
+export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
+    const fixedContents = fixToolCalls(options.contents || []);
     let messages, url, headers, data;
 
-    const { modelEntry, currentKey: modelKey } = resolveModelConfig(session.model);
-
-    const providerType = modelEntry?.provider || 'openai';
+    const resolvedModel = resolveModelConfig(options.model);
+    const modelEntry = options.modelEntryOverride || resolvedModel.modelEntry;
+    const modelKey = options.modelEntryOverride
+        ? `${options.modelEntryOverride.providerKey || 'setup'}/${options.modelEntryOverride.model || 'model'}`
+        : resolvedModel.currentKey;
+    const providerType = modelEntry?.providerType || 'openai';
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
-    const modelName = Array.isArray(modelEntry?.model)
-        ? (modelEntry.model[0] || '')
-        : (modelEntry?.model || '');
-    const promptCacheKey = getPromptCacheKey(session);
+    const modelName = modelEntry?.model || '';
+    const promptCacheKey = options.promptCacheKey || getPromptCacheKeyForSessionId(options.sessionId);
+    const openaiRequestApi = getOpenAIRequestApi(providerType);
+    const useOpenAIResponsesApi = openaiRequestApi === 'responses';
+    const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
 
     if (!baseUrl) {
         throw new Error('Model config has no baseUrl');
     }
 
+    const iteration = options.iteration || 0;
     logger.info(`Requesting LLM (${modelKey}, type ${providerType}, iteration ${iteration})...`);
 
-    const useOpenAIResponsesApi = shouldUseOpenAIResponsesApi(providerType, modelName);
-    const useOpenAIChatStream = providerType === 'openai';
-    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatStream;
-    const availableToolDefinitions = options?.toolDefinitions
-        ?? (isSubconsciousSession(session)
-            ? tools.definitions.filter(def => SUBCONSCIOUS_ALLOWED_TOOL_NAMES.has(def.name))
-            : tools.definitions);
-
+    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
+    const availableToolDefinitions = options.toolDefinitions ?? [];
     const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh' :
                          THINKING_BUDGET >= 4000 ? 'high' :
                          THINKING_BUDGET >= 2000 ? 'medium' :
@@ -851,26 +963,19 @@ export async function chat(
         url = `${baseUrl}/responses`;
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'user-agent': 'foxwarm/1.0',
+            ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
+            'user-agent': 'codex-tui/0.118.0 (Debian 13.0.0; x86_64) xterm.js_6.1.0-beta.191_ (codex-tui; 0.118.0)',
+            'originator': 'codex-tui',
+            'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
+                crypto.createHash('md5').update(`turn_id_${options.sessionId || 'default'}_${Date.now()}`).digest('hex')
+            }","sandbox":"seccomp"}`,
+            'x-client-request-id': crypto.createHash('md5').update(`req_id_${options.sessionId || 'default'}_${Date.now()}`).digest('hex'),
         };
 
         data = {
             model: modelName,
-            include: ['reasoning.encrypted_content'],
-            max_output_tokens: MAX_OUTPUT,
-            prompt_cache_key: promptCacheKey,
-            stream: true,
-            reasoning: {
-                summary: 'auto',
-                ...(openaiEffort ? { effort: openaiEffort } : {}),
-            },
+            instructions: options.systemPrompt,
             input: [
-                {
-                    type: 'message',
-                    role: 'developer',
-                    content: [{ type: 'input_text', text: systemPrompt }]
-                },
                 ...messages
             ],
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
@@ -878,15 +983,24 @@ export async function chat(
                 name: fd.name,
                 description: fd.description,
                 parameters: fd.parameters
-            })) : undefined
+            })) : undefined,
+            tool_choice: 'auto',
+            parallel_tool_calls: true,
+            reasoning: {
+                summary: 'auto',
+                ...(openaiEffort ? { effort: openaiEffort } : {}),
+            },
+            store: false,
+            include: ['reasoning.encrypted_content'],
+            prompt_cache_key: promptCacheKey,
+            stream: true,
         };
-    } else if (providerType === 'openai') {
-        // OpenAI format
+    } else if (useOpenAIChatCompletionsApi) {
         messages = convertToOpenAIFormatProvider(fixedContents);
         url = `${baseUrl}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
+            ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
             'user-agent': 'foxwarm/1.0',
         };
 
@@ -898,7 +1012,7 @@ export async function chat(
             stream: true,
             stream_options: { include_usage: true },
             messages: [
-                { role: 'system', content: systemPrompt },
+                { role: 'system', content: options.systemPrompt },
                 ...messages
             ],
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
@@ -911,12 +1025,11 @@ export async function chat(
             })) : undefined
         };
     } else {
-        // Anthropic format
         messages = convertToAnthropicFormat(fixedContents, modelEntry);
         url = `${baseUrl}/v1/messages`;
         headers = {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey,
+            ...(apiKey ? { 'x-api-key': apiKey } : {}),
             'anthropic-version': '2023-06-01',
             'anthropic-beta': 'interleaved-thinking-2025-05-14',
             'user-agent': 'foxwarm/1.0',
@@ -926,7 +1039,7 @@ export async function chat(
             model: modelName,
             max_tokens: MAX_OUTPUT,
             thinking: THINKING_BUDGET ? { type: "enabled", budget_tokens: THINKING_BUDGET } : undefined,
-            system: systemPrompt,
+            system: options.systemPrompt,
             messages: messages,
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
                 name: fd.name,
@@ -937,49 +1050,62 @@ export async function chat(
     }
 
     const extraFields = modelEntry.extraFields || {};
+    Object.assign(data, extraFields);
     if (useOpenAIResponsesApi && extraFields.reasoning && typeof extraFields.reasoning === 'object') {
-        const { reasoning: extraReasoning, ...restExtraFields } = extraFields;
+        const { reasoning: extraReasoning } = extraFields;
         const hasSummaryOverride = Object.prototype.hasOwnProperty.call(extraReasoning, 'summary');
-        Object.assign(data, restExtraFields);
         data.reasoning = {
             ...(data.reasoning || {}),
             ...extraReasoning,
             summary: hasSummaryOverride
                 ? extraReasoning.summary
-                : (data.reasoning?.summary || 'auto'),
+                : ((data.reasoning as any)?.summary || 'auto'),
         };
-    } else {
-        Object.assign(data, extraFields);
     }
-    
+
+    const sanitizedRequestPayload = sanitizeProviderRequestPayload(data);
+    if (sanitizedRequestPayload.replacementCount > 0) {
+        data = sanitizedRequestPayload.value;
+        logger.warn({
+            replacementCount: sanitizedRequestPayload.replacementCount,
+            paths: sanitizedRequestPayload.paths.slice(0, 20),
+            omittedPathCount: Math.max(0, sanitizedRequestPayload.paths.length - 20),
+            providerType,
+            modelKey,
+            sessionId: options.sessionId,
+        }, 'Sanitized lone surrogate code units from provider request payload');
+    }
+
     const logFiles = await logRequest(data, iteration);
     const responseAttempts: any[] = [];
     const returnWithLoggedFailure = async (text: string): Promise<ChatResult> => {
         await moveInteractionLogsToErrorDir(logFiles);
-        return appendTerminalModelTextAndReturn(text);
+        return {
+            text,
+            allParts: [{ text }],
+        };
     };
-    
-    // Make API call with retries
+
     let response: AxiosResponse;
     let resp: any;
-    const maxRetries = 3;
+    const maxRetries = Math.max(1, options.maxRetries ?? 3);
     const abortController = new AbortController();
-    const shouldRegisterAbortController = options?.registerAbortController !== false;
-    const shouldNotifySessionEvents = options?.notifySessionEvents !== false;
+    const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
+    const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
 
     if (shouldRegisterAbortController) {
-        sessionManager.registerSessionAbortController(session.id, abortController);
+        sessionManager.registerSessionAbortController(options.sessionId!, abortController);
     }
     if (shouldNotifySessionEvents) {
-        sessionManager.notifySessionEvent(session.id, { type: 'reasoning-summary-reset' });
+        sessionManager.notifySessionEvent(options.sessionId!, { type: 'reasoning-summary-reset' });
     }
 
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 response = await axios.post(url, data, {
-                    headers: { ...headers, ...modelEntry.extraHeaders },
-                    timeout: 180000, // 3 minutes
+                    headers: { ...headers, ...(modelEntry.extraHeaders || {}) },
+                    timeout: options.timeoutMs ?? 180000,
                     validateStatus: () => true,
                     signal: abortController.signal,
                     ...(useStreamingApi ? { responseType: 'stream' as const } : {}),
@@ -999,9 +1125,9 @@ export async function chat(
                             body: errorBody
                         }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
                         if (attempt === maxRetries) {
-                            return appendTerminalModelTextAndReturn(`Error: API request failed after ${maxRetries} attempts`);
+                            return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts`);
                         }
-                        await sleepWithSignal(2000, abortController.signal);
+                        await sleepWithSignal(5000, abortController.signal);
                         continue;
                     }
 
@@ -1009,7 +1135,7 @@ export async function chat(
                         resp = await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, {
                             onReasoningSummary: shouldNotifySessionEvents
                                 ? (text) => {
-                                    sessionManager.notifySessionEvent(session.id, {
+                                    sessionManager.notifySessionEvent(options.sessionId!, {
                                         type: 'reasoning-summary',
                                         text,
                                     });
@@ -1078,11 +1204,10 @@ export async function chat(
         }
     } finally {
         if (shouldRegisterAbortController) {
-            sessionManager.clearSessionAbortController(session.id, abortController);
+            sessionManager.clearSessionAbortController(options.sessionId!, abortController);
         }
     }
-    
-    // Extract response content blocks and tool calls
+
     let responseText = '';
     const allParts: Message['parts'] = [];
 
@@ -1125,52 +1250,59 @@ export async function chat(
             }
 
             if (item.type === 'function_call') {
-                const args = JSON.parse(item.arguments || '{}');
+                const parsedArgs = parseFunctionCallArgs(item.arguments);
                 const callId = item.call_id || item.id;
+                if (parsedArgs.argsParseError) {
+                    logger.warn({ providerType, callId, toolName: item.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI Responses tool arguments; converting to structured tool error');
+                }
                 allParts.push({
                     functionCall: {
                         id: callId,
                         name: item.name,
-                        args
+                        ...parsedArgs,
                     }
                 });
             }
         }
-    } else if (providerType === 'openai') {
-        // Parse OpenAI response
+    } else if (useOpenAIChatCompletionsApi) {
         const choice = resp.choices?.[0];
         if (!choice) {
-            return appendTerminalModelTextAndReturn('Error: No response from OpenAI API');
+            return {
+                text: 'Error: No response from OpenAI API',
+                allParts: [{ text: 'Error: No response from OpenAI API' }],
+            };
         }
-        
+
         const message = choice.message;
-        
+
         if (message.reasoning_content) {
             logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
             allParts.push({ thinking: message.reasoning_content });
         }
-        
+
         if (message.content) {
             responseText = message.content;
             allParts.push({ text: message.content });
         }
-        
+
         if (message.tool_calls) {
             for (const toolCall of message.tool_calls) {
                 if (toolCall.type === 'function') {
-                    const args = JSON.parse(toolCall.function.arguments || '{}');
-                    allParts.push({ 
-                        functionCall: { 
-                            id: toolCall.id, 
-                            name: toolCall.function.name, 
-                            args: args 
-                        } 
+                    const parsedArgs = parseFunctionCallArgs(toolCall.function.arguments);
+                    if (parsedArgs.argsParseError) {
+                        logger.warn({ providerType, callId: toolCall.id, toolName: toolCall.function.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI chat tool arguments; converting to structured tool error');
+                    }
+                    allParts.push({
+                        functionCall: {
+                            id: toolCall.id,
+                            name: toolCall.function.name,
+                            ...parsedArgs,
+                        }
                     });
                 }
             }
         }
     } else {
-        // Parse Anthropic response
         if (resp.content) {
             for (const rawBlock of resp.content) {
                 const block = rawBlock as AnthropicContentBlock;
@@ -1199,8 +1331,7 @@ export async function chat(
             }
         }
     }
-    
-    // Log token usage
+
     let usage: TokenUsage = null;
     if (useOpenAIResponsesApi) {
         const cached = resp.usage?.input_tokens_details?.cached_tokens || 0;
@@ -1209,7 +1340,7 @@ export async function chat(
             outputTokens: resp.usage.output_tokens,
             cachedTokens: cached
         } : null;
-    } else if (providerType === 'openai') {
+    } else if (useOpenAIChatCompletionsApi) {
         usage = resp.usage ? {
             inputTokens: resp.usage.prompt_tokens,
             outputTokens: resp.usage.completion_tokens,
@@ -1225,29 +1356,10 @@ export async function chat(
 
     const toolCalls = allParts.filter(x => x.functionCall).map(x => x.functionCall);
 
-    if (usage) {
-        logger.info(`Token Usage: Cached: ${usage.cachedTokens || 0} | Input: ${usage.inputTokens} | Output: ${usage.outputTokens} | Calls: ${toolCalls.length}`);
-        
-        // Update session accumulated usage stats
-        session.stats.totalInputTokens += usage.inputTokens || 0;
-        session.stats.totalCachedTokens += usage.cachedTokens || 0;
-        session.stats.totalOutputTokens += usage.outputTokens || 0;
-    }
-
-    // Add assistant message to history
-    if (allParts.length > 0) {
-        const assistantMsg: Message = {
-            role: 'model',
-            parts: allParts
-        };
-        await appendMessage(assistantMsg);
-    }
-
-    // Return response with tool calls (if any)
-    return { 
-        text: responseText, 
+    return {
+        text: responseText,
         usage,
         toolCalls,
-        allParts: allParts.length > 0 ? allParts : undefined
+        allParts: allParts.length > 0 ? allParts : undefined,
     };
 }

@@ -9,17 +9,23 @@ import {
   buildCompactPlanValidationFeedback,
   buildCompactPromptText,
   buildMessageCandidateItem,
+  COMPACT_FLOW_MAX_ROUNDS,
   COMPACT_PLAN_TOOL_NAME,
   CompactCandidateItem,
   CompactPlan,
   CompactPlanValidationError,
   describeCreatedRanges,
+  getCandidateTargetLevel,
   formatSeqRange,
+  selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { Message, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
+import { Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
+import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
+import { formatSessionGoalReminderText } from './goal';
 import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import { isModelVisibleMessage } from './messageVisibility';
 
 const TOOL_NOISE_TOKEN_THRESHOLD = 200;
 
@@ -29,7 +35,7 @@ export interface ArchivedMessagesQueryOptions {
 }
 
 export interface ArchivedMessagesQueryResult {
-  records: Array<{ seq: number; message: Message }>;
+  records: Array<{ seq: number; message: Message; sourceSessionId?: string; inherited?: boolean }>;
   totalMatched: number;
   returnedCount: number;
   availableRange: { startSeq?: number; endSeq?: number };
@@ -188,8 +194,9 @@ export async function forceIndexSession(deps: SessionHistoryDeps, sessionId: str
 
   try {
     const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
+    const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
     logger.info({ sessionId, latestSeqHint }, 'Force indexing session archive');
-    await vector.indexSessionArchive(sessionId, latestSeqHint);
+    await vector.indexSessionArchive(sessionId, latestSeqHint, latestBlockIdHint);
     session.vectorIndexPosition = session.history.length;
     session.indexingState = undefined;
     await deps.saveSession(sessionId);
@@ -208,7 +215,7 @@ function buildArchiveLookupInstruction(sessionId: string, startSeq?: number, end
     seqArgs.push(`endSeq: ${endSeq}`);
   }
 
-  return `Use get_archived_messages({sessionId: '${sessionId}'${seqArgs.length ? `, ${seqArgs.join(', ')}` : ''}}) to inspect the archived originals if needed.`;
+  return `Use get_context_archive({sessionId: '${sessionId}'${seqArgs.length ? `, ${seqArgs.join(', ')}` : ''}}) or get_archived_messages({sessionId: '${sessionId}'${seqArgs.length ? `, ${seqArgs.join(', ')}` : ''}}) to inspect the archived originals if needed.`;
 }
 
 function buildDroppedRangePlaceholder(sessionId: string, startSeq?: number, endSeq?: number, messageCount?: number): Message {
@@ -231,7 +238,7 @@ function getFunctionCallTokenCount(part: Message['parts'][number]): number {
   }
 
   return estimateTokenCount(part.functionCall.name || '')
-    + estimateTokenCount(JSON.stringify(part.functionCall.args || {}));
+    + estimateTokenCount(stringifyFunctionCallArgs(part.functionCall));
 }
 
 function getFunctionResponseTokenCount(part: Message['parts'][number]): number {
@@ -305,7 +312,7 @@ function cloneSessionForCompactJob(session: Session, historySnapshot: Message[],
     nextBlockId: session.nextBlockId,
     contextFrontier: structuredClone(frontierSnapshot),
     parentSessionId: session.parentSessionId,
-    todoState: session.todoState ? structuredClone(session.todoState) : undefined,
+    goalState: session.goalState ? structuredClone(session.goalState) : undefined,
     compactThresholdTokens: session.compactThresholdTokens,
   };
   (cloned as any).__compactJob = true;
@@ -385,8 +392,25 @@ type LayeredCompactCandidateEntry = {
   frontierEndIndex: number;
 };
 
+export function isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(
+  olderFrontier: ContextFrontierItem[],
+  frontierIndex: number,
+): boolean {
+  const current = olderFrontier[frontierIndex];
+  const previous = olderFrontier[frontierIndex - 1];
+  const next = olderFrontier[frontierIndex + 1];
+
+  return current?.kind === 'block'
+    && previous?.kind === 'block'
+    && next?.kind === 'block'
+    && previous.level > current.level
+    && next.level > current.level;
+}
+
 export function resolveCompactionSplitIndex(history: Message[], keepPercent: number): number {
-  let splitIndex = Math.floor(history.length * (1 - keepPercent));
+  let splitIndex = keepPercent > 0
+    ? Math.floor(history.length * (1 - keepPercent))
+    : history.length;
 
   if (keepPercent > 0) {
     if (splitIndex < history.length && history[splitIndex].role === 'tool') {
@@ -399,8 +423,6 @@ export function resolveCompactionSplitIndex(history: Message[], keepPercent: num
         splitIndex = cursor;
       }
     }
-  } else {
-    splitIndex = history.length;
   }
 
   return splitIndex;
@@ -436,7 +458,15 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       }
 
       entries.push({
-        item: buildBlockCandidateItem(record.id, record.level, record.rawStartSeq, record.rawEndSeq, record.summary),
+        item: buildBlockCandidateItem(
+          record.id,
+          record.level,
+          record.rawStartSeq,
+          record.rawEndSeq,
+          record.summary,
+          estimateTokenCount(record.summary),
+          isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderFrontier, frontierIndex),
+        ),
         frontierStartIndex: frontierIndex,
         frontierEndIndex: frontierIndex,
       });
@@ -471,7 +501,7 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
     }
 
     const preview = groupedRecords
-      .map(groupRecord => formatMessagePreviewText(groupRecord.message, 40, {
+      .map(groupRecord => formatMessagePreviewText(groupRecord.message, 50, {
         skipEphemeralSystem: true,
         skipRagMemorySnippets: true,
         skipThinking: true,
@@ -479,8 +509,16 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       .filter(Boolean)
       .join(' | ') || '[empty message]';
 
+    const estimatedTokens = groupedRecords.reduce((sum, groupRecord) => {
+      return sum + estimateTokenCount(formatMessagePreviewText(groupRecord.message, Number.MAX_SAFE_INTEGER, {
+        skipEphemeralSystem: true,
+        skipRagMemorySnippets: true,
+        skipThinking: true,
+      }));
+    }, 0);
+
     entries.push({
-      item: buildMessageCandidateItem(item.seq, groupedRecords[groupedRecords.length - 1].seq, preview),
+      item: buildMessageCandidateItem(item.seq, groupedRecords[groupedRecords.length - 1].seq, preview, estimatedTokens),
       frontierStartIndex: frontierIndex,
       frontierEndIndex: groupedEndFrontierIndex,
     });
@@ -489,6 +527,36 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
   }
 
   return entries;
+}
+
+function filterLayeredCompactCandidateEntries(entries: LayeredCompactCandidateEntry[]): LayeredCompactCandidateEntry[] {
+  const allowedLevels = selectCompactCandidateTargetLevels(entries.map(entry => entry.item));
+  return entries.filter(entry => allowedLevels.has(getCandidateTargetLevel(entry.item)));
+}
+
+async function getDisplayOnlyMessageSeqsForFrontier(sessionId: string, frontier: ContextFrontierItem[]): Promise<Set<number>> {
+  const messageSeqs = frontier
+    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
+    .map(item => item.seq);
+
+  if (messageSeqs.length === 0) {
+    return new Set();
+  }
+
+  const records = await readArchiveMessagesBySeqRange(sessionId, Math.min(...messageSeqs), Math.max(...messageSeqs));
+  return new Set(records
+    .filter(record => !isModelVisibleMessage(record.message))
+    .map(record => record.seq));
+}
+
+async function filterDisplayOnlyMessageFrontierItems(sessionId: string, frontier: ContextFrontierItem[]): Promise<ContextFrontierItem[]> {
+  const displayOnlySeqs = await getDisplayOnlyMessageSeqsForFrontier(sessionId, frontier);
+
+  if (displayOnlySeqs.size === 0) {
+    return frontier;
+  }
+
+  return frontier.filter(item => item.kind !== 'message' || !displayOnlySeqs.has(item.seq));
 }
 
 function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> {
@@ -580,6 +648,26 @@ function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCo
   return operations.sort((a, b) => a.startIndex - b.startIndex || a.planIndex - b.planIndex);
 }
 
+/** Extract skill names from load_skill calls in the compacted portion of history */
+function extractCompactedSkillNames(history: Message[], consumedFrontierCount: number): string[] {
+  const skillNames = new Set<string>();
+  // Scan messages that correspond to the consumed frontier portion
+  const scanLimit = Math.min(consumedFrontierCount, history.length);
+  for (let i = 0; i < scanLimit; i++) {
+    const msg = history[i];
+    if (!msg.parts) continue;
+    for (const part of msg.parts) {
+      if (part.functionCall?.name === 'load_skill') {
+        const skillName = part.functionCall.args?.skillName;
+        if (typeof skillName === 'string' && skillName.trim()) {
+          skillNames.add(skillName.trim());
+        }
+      }
+    }
+  }
+  return [...skillNames];
+}
+
 async function finalizeCompaction(
   deps: SessionHistoryDeps,
   sessionId: string,
@@ -589,19 +677,41 @@ async function finalizeCompaction(
   completionBroadcastMessage: string | undefined,
   createdBlockCount: number,
   replacedItemCount: number,
+  compactedSkillNames: string[] = [],
 ): Promise<void> {
   session.contextFrontier = newFrontier;
-  session.persistentMemorySnapshot = await llm.getPersistentMemory(session.agent || 'main');
+  session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
+    agentName: session.agent || 'main',
+    systemPromptFiles: session.systemPromptFiles,
+  });
   session.history = await renderHistoryFromFrontier(session, newFrontier);
+
+  let completionText = formatCompactionCompletionMarker(sessionId, completionMarker);
+  if (compactedSkillNames.length > 0) {
+    const skillList = compactedSkillNames.map(s => `\`${s}\``).join(', ');
+    completionText += `\nNote: The following skill(s) were loaded via load_skill but their content was compacted away: ${skillList}. If you still need them, call load_skill again.`;
+  }
+  const hasCompletionGoalReminder = !!session.goalState?.goal?.trim();
+  if (hasCompletionGoalReminder) {
+    completionText += `\n\n${formatSessionGoalReminderText(session.goalState.goal)}`;
+  }
 
   const completionMessage: Message = {
     role: 'user',
-    parts: [{ system: completionMarker }],
-    __meta: { timestamp: Date.now() },
+    parts: [{ system: completionText }],
+    __meta: {
+      timestamp: Date.now(),
+      ...(hasCompletionGoalReminder ? { goalReminder: true, goalReminderKind: 'compact-completion' } : {}),
+    },
   };
   await appendMessagesToArchive(session, [completionMessage]);
   session.history.push(completionMessage);
-  ensureContextFrontier(session).push({ kind: 'message', seq: completionMessage.__meta!.seq! });
+  const completionSeq = completionMessage.__meta!.seq!;
+  ensureContextFrontier(session).push({ kind: 'message', seq: completionSeq });
+  if (hasCompletionGoalReminder && session.goalState) {
+    session.goalState.anchorSeq = completionSeq;
+    completionMessage.__meta!.goalAnchorSeq = completionSeq;
+  }
 
   session.vectorIndexPosition = 0;
   session.historyVersion = (session.historyVersion || 0) + 1;
@@ -614,6 +724,13 @@ async function finalizeCompaction(
   if (session.broadcast) {
     session.broadcast(completionBroadcastMessage || `Layered-context compaction completed. Created ${createdBlockCount} block(s) replacing ${replacedItemCount} older item(s).`);
   }
+}
+
+export function formatCompactionCompletionMarker(sessionId: string, completionMarker: string): string {
+  const suffix = ` (session: \`${sessionId}\`)`;
+  return completionMarker.endsWith(suffix)
+    ? completionMarker
+    : `${completionMarker}${suffix}`;
 }
 
 async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot): Promise<CompactJobResult> {
@@ -632,10 +749,27 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
 
   const olderFrontier = frontierSnapshot.slice(0, splitIndex);
   const forceKeptRecentFrontier = splitIndex < frontierSnapshot.length ? frontierSnapshot.slice(splitIndex) : [];
-  const candidateEntries = await buildLayeredCompactCandidateEntries(transientSession, olderFrontier);
+  const candidateEntries = filterLayeredCompactCandidateEntries(
+    await buildLayeredCompactCandidateEntries(transientSession, olderFrontier)
+  );
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   if (candidateItems.length === 0) {
+    const droppedDisplayOnlyCount = (await getDisplayOnlyMessageSeqsForFrontier(sessionId, olderFrontier)).size;
+    if (droppedDisplayOnlyCount > 0) {
+      logger.info({ sessionId, splitIndex, droppedDisplayOnlyCount }, 'Compaction will drop display-only older messages without creating compact blocks');
+      return {
+        status: 'ready',
+        completionMarker,
+        completionBroadcastMessage,
+        snapshotFrontier: frontierSnapshot,
+        consumedFrontierCount: splitIndex,
+        operations: [],
+        createdBlocks: [],
+        replacedItemCount: droppedDisplayOnlyCount,
+      };
+    }
+
     logger.info({ sessionId, splitIndex }, 'Compaction skipped because no layered candidate items were produced');
     return {
       status: 'noop',
@@ -659,12 +793,21 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     })
   };
 
-  const maxCompactAttempts = 3;
-  let nextPromptParts = [summaryPrompt];
+  let nextPromptParts: MessagePart[] | null = [summaryPrompt];
   let compactPlan: CompactPlan | null = null;
+  let compactRoundsUsed = 0;
+  let invalidCompactPlanAttempts = 0;
+  const compactHelperToolNames = new Set([
+    'read_memory',
+    'write_memory',
+    'edit_memory',
+    'delete_memory',
+    'apply_patch_memory',
+  ]);
 
-  for (let attempt = 1; attempt <= maxCompactAttempts; attempt += 1) {
-    const result = await llm.chat(nextPromptParts, transientSession, attempt - 1, {
+  while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
+    compactRoundsUsed += 1;
+    const result = await llm.chat(nextPromptParts, transientSession, invalidCompactPlanAttempts, {
       appendMessage: async (message) => {
         await appendTransientSessionMessage(transientSession, message);
         mirrorTemporaryCompactMessage(deps, sessionId, message);
@@ -676,8 +819,37 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     if (!result.toolCalls?.length) {
       throw new Error(`Compaction failed because the model did not call ${COMPACT_PLAN_TOOL_NAME}.`);
     }
-    if (result.toolCalls.length !== 1 || result.toolCalls[0].name !== COMPACT_PLAN_TOOL_NAME) {
-      throw new Error(`Compaction failed because the model returned an unexpected tool plan instead of a single ${COMPACT_PLAN_TOOL_NAME} call.`);
+
+    const onlyPlanCall = result.toolCalls.length === 1 && result.toolCalls[0].name === COMPACT_PLAN_TOOL_NAME;
+    if (!onlyPlanCall) {
+      const invalidToolName = result.toolCalls.find(call => call.name === COMPACT_PLAN_TOOL_NAME || !compactHelperToolNames.has(call.name))?.name;
+      if (invalidToolName) {
+        logger.warn({ sessionId, invalidToolName, compactRoundsUsed }, 'Layered compact flow rejected a non-helper tool call; retrying with feedback');
+        nextPromptParts = [{
+          system: [
+            'COMPACT TOOL CALL INVALID.',
+            `During this dedicated compaction phase, do not call \`${invalidToolName}\`.`,
+            `You may inspect or update durable memory only with these helper tools before submitting the final plan: ${[...compactHelperToolNames].join(', ')}.`,
+            `When ready, call exactly one ${COMPACT_PLAN_TOOL_NAME} tool call by itself. Do not combine ${COMPACT_PLAN_TOOL_NAME} with any other tool call.`,
+          ].join(' '),
+        }];
+        continue;
+      }
+
+      const toolResultMessage = await llm.executeTools(result.toolCalls, {
+        sessionId,
+        session: transientSession,
+      }, transientSession);
+      await appendTransientSessionMessage(transientSession, {
+        role: 'tool',
+        parts: toolResultMessage.parts,
+      });
+      mirrorTemporaryCompactMessage(deps, sessionId, {
+        role: 'tool',
+        parts: toolResultMessage.parts,
+      });
+      nextPromptParts = null;
+      continue;
     }
 
     try {
@@ -688,14 +860,11 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
         throw e;
       }
 
-      const attemptsRemaining = maxCompactAttempts - attempt;
-      if (attemptsRemaining <= 0) {
-        throw new Error(`Compaction failed after ${maxCompactAttempts} invalid ${COMPACT_PLAN_TOOL_NAME} submissions: ${e.message}`);
-      }
+      invalidCompactPlanAttempts += 1;
 
-      logger.warn({ sessionId, attempt, attemptsRemaining, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
+      logger.warn({ sessionId, invalidCompactPlanAttempts, compactRoundsUsed, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
       nextPromptParts = [{
-        system: buildCompactPlanValidationFeedback(e, attemptsRemaining),
+        system: buildCompactPlanValidationFeedback(e),
       }];
     }
   }
@@ -760,7 +929,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     const operation = result.operations[index];
     const createdRecord = createdRecords[index];
     if (cursor < operation.frontierStartIndex) {
-      rewrittenOlderFrontier.push(...olderFrontier.slice(cursor, operation.frontierStartIndex));
+      rewrittenOlderFrontier.push(...await filterDisplayOnlyMessageFrontierItems(sessionId, olderFrontier.slice(cursor, operation.frontierStartIndex)));
     }
     rewrittenOlderFrontier.push({
       kind: 'block',
@@ -772,10 +941,14 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     cursor = operation.frontierEndIndex + 1;
   }
   if (cursor < olderFrontier.length) {
-    rewrittenOlderFrontier.push(...olderFrontier.slice(cursor));
+    rewrittenOlderFrontier.push(...await filterDisplayOnlyMessageFrontierItems(sessionId, olderFrontier.slice(cursor)));
   }
 
   const newFrontier = [...rewrittenOlderFrontier, ...currentFrontier.slice(result.consumedFrontierCount)];
+
+  // Scan compacted messages for load_skill calls to remind agent after compaction
+  const compactedSkillNames = extractCompactedSkillNames(session.history, result.consumedFrontierCount);
+
   await finalizeCompaction(
     deps,
     sessionId,
@@ -785,6 +958,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     result.completionBroadcastMessage,
     createdRecords.length,
     result.replacedItemCount,
+    compactedSkillNames,
   );
   return true;
 }
@@ -1046,6 +1220,8 @@ export async function getArchivedMessages(sessionId: string, options: ArchivedMe
   const sliced = matched.map(record => ({
     seq: record.seq,
     message: record.message,
+    sourceSessionId: record.sourceSessionId,
+    inherited: record.inherited,
   }));
 
   return {
@@ -1088,9 +1264,12 @@ export async function compactToolMessages(
           kind: 'function_call',
           estimatedTokens: functionCallTokens,
         });
+        const compactedArgs = buildCompactedFunctionCallArgs(placeholder);
         nextPart.functionCall = {
           ...nextPart.functionCall,
-          args: buildCompactedFunctionCallArgs(placeholder),
+          args: compactedArgs,
+          rawArgsText: JSON.stringify(compactedArgs),
+          argsParseError: undefined,
         };
         replacedFunctionCalls += 1;
         touched = true;
@@ -1166,9 +1345,16 @@ export async function checkAndCompactIfNeeded(deps: SessionHistoryDeps, sessionI
   const session = deps.getSessionById(sessionId);
   if (!session) return;
 
-  const currentSize = finalUsage
-    ? getUsageTotalTokens(finalUsage)
-    : estimateSessionTokens(session);
+  if (!finalUsage) {
+    logger.debug?.({ sessionId }, 'Skipping auto compact because request usage is unavailable');
+    return;
+  }
+
+  const currentSize = getUsageTotalTokens(finalUsage);
+  if (currentSize <= 0) {
+    logger.debug?.({ sessionId, finalUsage }, 'Skipping auto compact because request usage total is unavailable or zero');
+    return;
+  }
 
   const compactThreshold = getEffectiveCompactThresholdTokens(session);
 

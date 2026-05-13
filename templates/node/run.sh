@@ -2,32 +2,37 @@
 
 set -eu
 
-HOST=""
+HOST="__FOXWARM_DEFAULT_BASE_URL__"
 PAIRING=""
 NODE_ID="node-$(hostname 2>/dev/null || echo foxwarm-node)"
 STATE_DIR="./data"
 SOURCE_DIR="./foxwarm-node"
 ENV_FILE="./.env"
 PREPARE_ONLY=0
+DETACH=0
 
 usage() {
   cat <<'EOF'
 Usage:
   curl -fsSL http(s)://master/node/run.sh | bash -s -- \
-    --host=http://master:3001 \
     --pairing=PAIRING_TOKEN \
     --node-id=my-node
 
 This is the bare-metal bootstrap path. It prepares a local node client checkout,
-installs/builds it, and by default starts it in the background from the current directory.
+installs/builds it, and by default runs the node client in the foreground.
+
+The script defaults `--host` from the URL used to fetch `/node/run.sh`.
+Pass `--host=...` only when the node should connect to a different reachable master URL
+(for example the script was fetched through localhost, a private address, or a reverse proxy path that is not the node's real target).
 
 Options:
-  --host=URL          Foxwarm master base URL (required)
+  --host=URL          Override Foxwarm master base URL (default: derived from request URL)
   --pairing=TOKEN     Pairing token for first-time setup; optional only if stored credentials already exist
   --node-id=ID        Requested node name (default: node-<hostname>)
   --state-dir=DIR     Persistent data dir on the local machine (default: ./data)
   --source-dir=DIR    Local source dir to extract/build the node client (default: ./foxwarm-node)
   --env-file=FILE     Env record file to create (default: ./.env)
+  -d, --detach        Start in background and write logs to ./data/logs/node.log
   --prepare-only      Prepare files/install/build but do not start the node process
   --help              Show this help
 EOF
@@ -41,6 +46,7 @@ for arg in "$@"; do
     --state-dir=*) STATE_DIR="${arg#*=}" ;;
     --source-dir=*) SOURCE_DIR="${arg#*=}" ;;
     --env-file=*) ENV_FILE="${arg#*=}" ;;
+    -d|--detach) DETACH=1 ;;
     --prepare-only) PREPARE_ONLY=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $arg" >&2; usage >&2; exit 1 ;;
@@ -53,7 +59,7 @@ if [ -z "$HOST" ]; then
   exit 1
 fi
 
-for cmd in curl tar node npm; do
+for cmd in curl tar node; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: $cmd is required for bare-metal node bootstrap" >&2
     exit 1
@@ -77,6 +83,7 @@ curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$SOURCE_DIR"
 
 ABS_STATE_DIR="$(cd "$STATE_DIR" && pwd)"
 ABS_SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
+NODE_CLIENT_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/client.bundle.js"
 
 cat > "$ENV_FILE" <<EOF
 NODE_HOST=$HOST
@@ -90,13 +97,22 @@ NODE_LOG_FILE=$ABS_STATE_DIR/logs/node.log
 NODE_PID_FILE=$ABS_STATE_DIR/node.pid
 EOF
 
-echo "Installing dependencies in $ABS_SOURCE_DIR ..."
-(cd "$ABS_SOURCE_DIR" && npm ci)
+if [ -f "$NODE_CLIENT_ENTRYPOINT" ]; then
+  echo "Using bundled node client from source archive; skipping npm install."
+else
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "Error: npm is required only when the downloaded bundle is missing and a source build fallback is needed" >&2
+    exit 1
+  fi
+  echo "Bundled node client not found; installing minimal package dependencies and building fallback in $ABS_SOURCE_DIR ..."
+  (cd "$ABS_SOURCE_DIR/packages/shared" && npm ci && npm run build)
+  (cd "$ABS_SOURCE_DIR/packages/cli-node" && npm ci && npm run build)
+  NODE_CLIENT_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/client.bundle.js"
+fi
 
-echo "Building node client in $ABS_SOURCE_DIR ..."
-(cd "$ABS_SOURCE_DIR" && npm run build)
-
-START_CMD="cd '$ABS_SOURCE_DIR' && nohup node lib/nodes/client.js --host '$HOST' --id '$NODE_ID' ${PAIRING:+--token '$PAIRING'} --credentials-file '$ABS_STATE_DIR/state/node_credentials.json' >> '$ABS_STATE_DIR/logs/node.log' 2>&1 & echo \$! > '$ABS_STATE_DIR/node.pid'"
+if [ ! -f "$NODE_CLIENT_ENTRYPOINT" ]; then
+  NODE_CLIENT_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/client.js"
+fi
 
 echo "Prepared env file: $ENV_FILE"
 echo "Persistent node data: $ABS_STATE_DIR"
@@ -104,27 +120,48 @@ echo "Source directory: $ABS_SOURCE_DIR"
 echo "Credentials file: $ABS_STATE_DIR/state/node_credentials.json"
 echo "Log file: $ABS_STATE_DIR/logs/node.log"
 
+start_foreground() {
+  cd "$ABS_SOURCE_DIR"
+  if [ -n "$PAIRING" ]; then
+    exec node "$NODE_CLIENT_ENTRYPOINT" --host "$HOST" --id "$NODE_ID" --token "$PAIRING" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
+  fi
+  exec node "$NODE_CLIENT_ENTRYPOINT" --host "$HOST" --id "$NODE_ID" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
+}
+
+start_detached() {
+  (
+    cd "$ABS_SOURCE_DIR"
+    if [ -n "$PAIRING" ]; then
+      nohup node "$NODE_CLIENT_ENTRYPOINT" --host "$HOST" --id "$NODE_ID" --token "$PAIRING" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json" >> "$ABS_STATE_DIR/logs/node.log" 2>&1 &
+    else
+      nohup node "$NODE_CLIENT_ENTRYPOINT" --host "$HOST" --id "$NODE_ID" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json" >> "$ABS_STATE_DIR/logs/node.log" 2>&1 &
+    fi
+    echo $! > "$ABS_STATE_DIR/node.pid"
+  )
+}
+
 if [ "$PREPARE_ONLY" = "1" ]; then
   cat <<EOF
 
 Preparation complete. Node process was not started because --prepare-only was used.
 
 Start later with:
-  cd '$ABS_SOURCE_DIR' && node lib/nodes/client.js --host '$HOST' --id '$NODE_ID' ${PAIRING:+--token '$PAIRING'} --credentials-file '$ABS_STATE_DIR/state/node_credentials.json'
+  node '$NODE_CLIENT_ENTRYPOINT' --host '$HOST' --id '$NODE_ID' ${PAIRING:+--token '$PAIRING'} --credentials-file '$ABS_STATE_DIR/state/node_credentials.json'
 
 If this is the first run, approve the pending pairing after startup:
-  /node pair list
-  /node pair approve <pending-id> $NODE_ID
+  /node
+  /node approve <pending-id> $NODE_ID
 
 EOF
   exit 0
 fi
 
-echo "Starting node client in background ..."
-sh -c "$START_CMD"
-sleep 1
+if [ "$DETACH" = "1" ]; then
+  echo "Starting node client in background ..."
+  start_detached
+  sleep 1
 
-cat <<EOF
+  cat <<EOF
 
 Node client prepared and started in background.
 
@@ -135,11 +172,27 @@ Log file:
   $ABS_STATE_DIR/logs/node.log
 
 If this is the first run, approve the pending pairing on the master:
-  /node pair list
-  /node pair approve <pending-id> $NODE_ID
+  /node
+  /node approve <pending-id> $NODE_ID
 
 Useful follow-up commands:
   tail -f '$ABS_STATE_DIR/logs/node.log'
   cat '$ABS_STATE_DIR/node.pid'
 
 EOF
+  exit 0
+fi
+
+cat <<EOF
+
+Node client prepared. Starting in foreground below.
+
+If this is the first run, approve the pending pairing on the master:
+  /node
+  /node approve <pending-id> $NODE_ID
+
+Press Ctrl-C to stop the node process. Use -d/--detach if you want it to keep running in the background.
+
+EOF
+
+start_foreground

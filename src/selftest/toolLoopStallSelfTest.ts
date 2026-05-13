@@ -7,8 +7,9 @@ import { MessageRouter } from '../messageRouter';
 import * as sessionManager from '../sessionManager';
 import * as llm from '../llm';
 import * as vector from '../vector';
+import { COMPACT_FLOW_MAX_ROUNDS } from '../session/compactPlan';
 import { MessagePart, Session } from '../types';
-import { tool_get_archived_messages } from '../toolsSessionAgent';
+import { tool_get_archived_messages, tool_set_goal } from '../toolsSessionAgent';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -77,6 +78,8 @@ function assertLastModelText(session: Session, expected: string): void {
   assert.strictEqual(last.role, 'model');
   assert.strictEqual(last.parts.find(part => typeof part.text === 'string')?.text, expected);
 }
+
+const LARGE_COMPACT_TEXT = 'compactable context item '.repeat(900);
 
 async function test(name: string, fn: () => Promise<void>): Promise<void> {
   try {
@@ -230,9 +233,9 @@ async function main(): Promise<void> {
       assert(parent && child);
     });
 
-    await test('send_to_session plus end_turn stops the current turn without an extra LLM round', async () => {
-      const parentId = makeSessionId('selftest_parent_endturn');
-      const childId = makeSessionId('selftest_child_endturn');
+    await test('send_to_session plus wait stops the current turn without an extra LLM round', async () => {
+      const parentId = makeSessionId('selftest_parent_wait');
+      const childId = makeSessionId('selftest_child_wait');
       createdSessionIds.push(parentId, childId);
       await ensureSession(parentId);
       await ensureSession(childId, parentId);
@@ -246,17 +249,17 @@ async function main(): Promise<void> {
           childCallCount += 1;
           if (childCallCount === 1) {
             const sendToolCall = {
-              id: 'child-report-endturn',
+              id: 'child-report-wait',
               name: 'send_to_session',
-              args: { sessionId: parentId, message: 'child-endturn-ok' },
+              args: { sessionId: parentId, message: 'child-wait-ok' },
             };
-            const endTurnCall = {
-              id: 'child-end-turn',
-              name: 'end_turn',
+            const waitCall = {
+              id: 'child-wait',
+              name: 'wait',
               args: {},
             };
-            await appendStubModelMessage(activeSession, [{ functionCall: sendToolCall }, { functionCall: endTurnCall }]);
-            return { text: '', toolCalls: [sendToolCall, endTurnCall] };
+            await appendStubModelMessage(activeSession, [{ functionCall: sendToolCall }, { functionCall: waitCall }]);
+            return { text: '', toolCalls: [sendToolCall, waitCall] };
           }
 
           throw new Error(`child session should not receive a second LLM call, got ${childCallCount}`);
@@ -264,11 +267,11 @@ async function main(): Promise<void> {
 
         if (activeSession.id === parentId) {
           parentCallCount += 1;
-          await appendStubModelMessage(activeSession, [{ text: 'parent received end-turn handoff' }]);
-          return { text: 'parent received end-turn handoff' };
+          await appendStubModelMessage(activeSession, [{ text: 'parent received wait handoff' }]);
+          return { text: 'parent received wait handoff' };
         }
 
-        throw new Error(`unexpected session in end-turn selftest: ${activeSession.id}`);
+        throw new Error(`unexpected session in wait selftest: ${activeSession.id}`);
       };
 
       await (router as any).runSessionTurn(childId, {
@@ -282,15 +285,15 @@ async function main(): Promise<void> {
       assert.strictEqual(parentAfterChildRun.queue.length, 1);
       assert.strictEqual(childAfter.history[childAfter.history.length - 1]?.role, 'tool');
       assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'send_to_session')));
-      assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'end_turn')));
+      assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'wait')));
 
       await router.processSessionQueue(parentId);
 
       const parentAfter = await sessionManager.getSession(parentId);
       assert.strictEqual(parentCallCount, 1);
       assert.strictEqual(parentAfter.queue.length, 0);
-      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes('child-endturn-ok'))));
-      assertLastModelText(parentAfter, 'parent received end-turn handoff');
+      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes('child-wait-ok'))));
+      assertLastModelText(parentAfter, 'parent received wait handoff');
     });
 
     await test('send_to_session keeps backward compatibility for hidden noFurtherAssistantReply', async () => {
@@ -339,7 +342,14 @@ async function main(): Promise<void> {
     await test('compact_session retries invalid compact plans and then resumes with compacted history', async () => {
       const sessionId = makeSessionId('selftest_compact_current');
       createdSessionIds.push(sessionId);
-      await ensureSession(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await tool_set_goal({ goal: 'Keep the session goal alive across compaction.', remindEvery: 99 }, { sessionId, session });
+
+      await sessionManager.appendSessionMessage(session, {
+        role: 'user',
+        parts: [{ text: LARGE_COMPACT_TEXT }],
+      });
 
       let llmCallCount = 0;
       let compactMessageRange: { sourceStart: number; sourceEnd: number } | null = null;
@@ -372,6 +382,9 @@ async function main(): Promise<void> {
         if (llmCallCount === 2) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
+          assert.doesNotMatch(systemText, /Current session goal\/context/);
+          assert.doesNotMatch(systemText, /Keep the session goal alive across compaction/);
+          assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
           assert.match(systemText, /M#1/);
           assert.strictEqual(options?.toolDefinitions, undefined);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
@@ -415,7 +428,8 @@ async function main(): Promise<void> {
         }
 
         if (llmCallCount === 4) {
-          assert.strictEqual(parts, null);
+          assert(Array.isArray(parts));
+          assert(parts.some(part => part.text === 'compact this session now'));
           assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
           await appendStubModelMessage(activeSession, [{ text: 'continued after compact' }]);
           return { text: 'continued after compact' };
@@ -431,6 +445,14 @@ async function main(): Promise<void> {
       const finalSession = await sessionManager.getSession(sessionId);
       assert.strictEqual(llmCallCount, 4);
       assert.strictEqual(finalSession.busy, false);
+      assert.strictEqual(finalSession.goalState?.goal, 'Keep the session goal alive across compaction.');
+      const compactCompletion = finalSession.history.find(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed')));
+      const compactCompletionSystem = compactCompletion?.parts.find(part => typeof part.system === 'string')?.system || '';
+      assert.match(compactCompletionSystem, /Session goal reminder:/);
+      assert.match(compactCompletionSystem, /Keep the session goal alive across compaction/);
+      assert.strictEqual(compactCompletion?.__meta?.goalReminder, true);
+      assert.strictEqual(finalSession.goalState?.anchorSeq, compactCompletion?.__meta?.seq);
+      assert.strictEqual(finalSession.history.filter(msg => msg.__meta?.goalReminder === true).length, 1);
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('layered compact summary'))));
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed'))));
@@ -444,7 +466,7 @@ async function main(): Promise<void> {
 
       await sessionManager.appendSessionMessage(session, {
         role: 'user',
-        parts: [{ text: 'async compact message 1' }],
+        parts: [{ text: LARGE_COMPACT_TEXT }],
       });
       await sessionManager.appendSessionMessage(session, {
         role: 'model',
@@ -531,6 +553,7 @@ async function main(): Promise<void> {
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('async compact summary'))));
       assert(finalSession.history.some(msg => msg.parts.some(part => (part.text || '').includes('tail message appended after async compact job started'))));
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed.'))));
+      assert(!finalSession.history.some(msg => msg.parts.some(part => (part.system || '').includes('Session goal reminder:'))));
     });
 
     await test('get_archived_messages reads archived session history by seq range', async () => {
@@ -569,7 +592,12 @@ async function main(): Promise<void> {
     await test('automatic in-turn compaction after tool calls continues immediately and commits async compact later', async () => {
       const sessionId = makeSessionId('selftest_auto_compact_current');
       createdSessionIds.push(sessionId);
-      await ensureSession(sessionId);
+      const session = await ensureSession(sessionId);
+
+      await sessionManager.appendSessionMessage(session, {
+        role: 'user',
+        parts: [{ text: LARGE_COMPACT_TEXT }],
+      });
 
       const sampleFile = path.join(tempRoot, 'auto-compact-read.txt');
       await fs.writeFile(sampleFile, 'auto compact\n');
@@ -593,6 +621,7 @@ async function main(): Promise<void> {
           compactJobCallCount += 1;
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
+          assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
           assert.strictEqual(options?.toolDefinitions, undefined);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in auto compact prompt');
@@ -629,7 +658,10 @@ async function main(): Promise<void> {
         }
 
         if (mainTurnCallCount === 2) {
-          assert.strictEqual(parts, null);
+          if (parts !== null) {
+            assert(Array.isArray(parts));
+            assert(parts.some(part => part.text === 'trigger auto compact now'));
+          }
           assert(!activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
           await appendStubModelMessage(activeSession, [{ text: 'continued before async compact commit' }]);
           return { text: 'continued before async compact commit' };

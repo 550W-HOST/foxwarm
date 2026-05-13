@@ -188,10 +188,10 @@ export async function checkArchivedReadPermission(
 /**
  * Check if isolated session can send to a specific channel
  * @param sessionIdOrCtx Session ID or ToolContext
- * @param channelId Target channel ID (platform:userId)
+ * @param channelTargetId Target channel target id (<channel-instance-id>:<conversation-id>)
  * @throws Error if not allowed
  */
-export async function checkChannelPermission(sessionIdOrCtx: string | { sessionId?: string }, channelId: string): Promise<void> {
+export async function checkChannelPermission(sessionIdOrCtx: string | { sessionId?: string }, channelTargetId: string): Promise<void> {
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
   
@@ -201,7 +201,7 @@ export async function checkChannelPermission(sessionIdOrCtx: string | { sessionI
   const attachedChannels = sessionManager.getChannelsBySession(sessionId);
   const attachedChannelIds = attachedChannels.map(ch => `${ch.channelId}:${ch.conversationId}`);
   
-  if (!attachedChannelIds.includes(channelId)) {
+  if (!attachedChannelIds.includes(channelTargetId)) {
     throw new Error('Isolated session can only send messages to its own attached channel.');
   }
 }
@@ -214,7 +214,7 @@ export async function checkChannelPermission(sessionIdOrCtx: string | { sessionI
  */
 export async function checkSendFilePermission(
   sessionIdOrCtx: string | { sessionId?: string },
-  options: { channelId?: string; targetSessionId?: string }
+  options: { channelTargetId?: string; targetSessionId?: string }
 ): Promise<void> {
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
@@ -222,8 +222,8 @@ export async function checkSendFilePermission(
   const session = await sessionManager.getExistingSession(sessionId);
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
-  if (options.channelId) {
-    await checkChannelPermission(sessionId, options.channelId);
+  if (options.channelTargetId) {
+    await checkChannelPermission(sessionId, options.channelTargetId);
   }
 
   if (options.targetSessionId && options.targetSessionId !== sessionId) {

@@ -1,6 +1,7 @@
+#!/usr/bin/env node
 /**
  * Node Client - Connect to foxwarm master and execute tools
- * Usage: npm run node -- --host http://master:3001/ --id my-node --token <pairing-token>
+ * Usage: cli-node-client --host http://master:3001/ --id my-node --token <pairing-token>
  */
 
 import crypto from 'crypto';
@@ -8,12 +9,51 @@ import fs from 'fs-extra';
 import http from 'http';
 import path from 'path';
 import WebSocket from 'ws';
-import { logger } from '../common';
-import * as tools from '../tools';
-import { initializeExecManager } from '../execManager';
-import { readNodeTransferFile, writeNodeTransferFile } from '../nodeFileTransfer';
+import { nodeTools } from '../../shared/dist/nodeTools';
+import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
+import { readNodeTransferFile, writeNodeTransferFile } from '../../shared/dist/nodeFileTransfer';
+import { createMasterWebSocketOptions, getMasterProxyInfo } from './masterProxy';
 
-interface NodeClientOptions {
+type LogPayload = Record<string, any> | Error | any;
+const logger = {
+  info: (payload?: LogPayload, message?: string) => logLine('info', payload, message),
+  warn: (payload?: LogPayload, message?: string) => logLine('warn', payload, message),
+  error: (payload?: LogPayload, message?: string) => logLine('error', payload, message),
+};
+function logLine(level: string, payload?: LogPayload, message?: string) {
+  if (process.env.FOXWARM_NO_CONSOLE_LOG === '1') return;
+  if (typeof payload === 'string' && message === undefined) {
+    console.error(`[${level}] ${payload}`);
+  } else {
+    console.error(`[${level}] ${message || ''}`, payload || '');
+  }
+}
+
+interface PendingRequest {
+  resolve: (value: any) => void;
+  reject: (error: Error) => void;
+  timeout: NodeJS.Timeout;
+}
+
+export interface CliNodeSessionSummary {
+  id: string;
+  displayName?: string;
+  messageCount: number;
+  lastMessageTime: number | null;
+  currentNode?: string;
+  cwd?: string;
+  busy?: boolean;
+  queueLength?: number;
+}
+
+export interface CliNodeHistoryMessage {
+  index: number;
+  role: string;
+  text: string;
+  timestamp?: number;
+}
+
+export interface NodeClientOptions {
   host: string;
   nodeId?: string;
   token?: string;
@@ -21,6 +61,10 @@ interface NodeClientOptions {
   credentialsFile?: string;
   localTrigger?: boolean;
   localTriggerPort?: number;
+  /** Optional hook called before each tool execution. Return false/'rejected'/'timeout' to reject. */
+  toolCallInterceptor?: (tool: string, args: any, sessionId: string, callId: string, timeoutMs?: number) => Promise<boolean | string>;
+  /** Optional status callback for UI integration */
+  onStatus?: (event: string, detail?: Record<string, any>) => void;
 }
 
 type StoredNodeCredentials = {
@@ -29,152 +73,14 @@ type StoredNodeCredentials = {
   pairedAt: number;
 }
 
-const NODE_CAPABILITIES = {
-  tools: [
-    {
-      name: 'read',
-      description: 'Read a file from agent-folder.',
-      parameters: {
-        type: 'object',
-        properties: {
-          filePath: { type: 'string' },
-          node: { type: 'string' },
-          startLine: { type: 'number' },
-          endLine: { type: 'number' }
-        },
-        required: ['filePath']
-      }
-    },
-    {
-      name: 'write',
-      description: 'Write a file to agent-folder.',
-      parameters: {
-        type: 'object',
-        properties: {
-          filePath: { type: 'string' },
-          content: { type: 'string' },
-          overwrite: { type: 'boolean' }
-        },
-        required: ['filePath', 'content']
-      }
-    },
-    {
-      name: 'edit',
-      description: 'Replace exact text in a file using oldText/newText.',
-      parameters: {
-        type: 'object',
-        properties: {
-          filePath: { type: 'string' },
-          oldText: { type: 'string' },
-          newText: { type: 'string' },
-          node: { type: 'string' }
-        },
-        required: ['filePath', 'oldText', 'newText']
-      }
-    },
-    {
-      name: 'apply_patch',
-      description: 'Apply an OpenAI-style patch envelope to modify files.',
-      parameters: {
-        type: 'object',
-        properties: {
-          input: { type: 'string' },
-          node: { type: 'string' }
-        },
-        required: ['input']
-      }
-    },
-    {
-      name: 'exec',
-      description: 'Execute a shell command in agent-folder. Defaults to the session cwd when set. Commands running over 15 seconds time out, continue in the background, and send a completion message later.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string' },
-          cwd: { type: 'string' }
-        },
-        required: ['command']
-      }
-    },
-    {
-      name: 'browse_open',
-      description: 'Open a new browser tab and navigate to URL. Returns tab ID for future operations.',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: { type: 'string' },
-          node: { type: 'string' }
-        },
-        required: ['url']
-      }
-    },
-    {
-      name: 'browse_list',
-      description: 'List all open browser tabs with their IDs, titles, and URLs.',
-      parameters: {
-        type: 'object',
-        properties: {
-          node: { type: 'string' }
-        }
-      }
-    },
-    {
-      name: 'browse_get',
-      description: 'Get content or screenshot from a browser tab.',
-      parameters: {
-        type: 'object',
-        properties: {
-          tabId: { type: 'string' },
-          node: { type: 'string' },
-          screenshot: { type: ['boolean', 'string'], default: false }
-        },
-        required: ['tabId']
-      }
-    },
-    {
-      name: 'browse_close',
-      description: 'Close a browser tab.',
-      parameters: {
-        type: 'object',
-        properties: {
-          tabId: { type: 'string' },
-          node: { type: 'string' }
-        },
-        required: ['tabId']
-      }
-    },
-    {
-      name: 'browse_interact',
-      description: 'Interact with a browser tab. Supports: click, type, fill, press, scroll, wait, evaluate, goto, back, forward, reload.',
-      parameters: {
-        type: 'object',
-        properties: {
-          tabId: { type: 'string' },
-          action: {
-            type: 'string',
-            enum: ['click', 'type', 'fill', 'press', 'scroll', 'wait', 'evaluate', 'goto', 'back', 'forward', 'reload']
-          },
-          node: { type: 'string' },
-          params: {
-            type: 'object',
-            properties: {
-              selector: { type: 'string' },
-              text: { type: 'string' },
-              key: { type: 'string' },
-              y: { type: 'number' },
-              url: { type: 'string' },
-              code: { type: 'string' },
-              timeout: { type: 'number' }
-            }
-          }
-        },
-        required: ['tabId', 'action']
-      }
-    }
-  ]
-};
+const NODE_CAPABILITIES = CLI_NODE_CAPABILITIES;
+
 
 const DEFAULT_LOCAL_TRIGGER_HOST = '127.0.0.1';
+
+
+const NODE_CLIENT_HEARTBEAT_INTERVAL_MS = 30_000;
+const NODE_CLIENT_HEARTBEAT_TIMEOUT_MS = 10_000;
 
 type LocalTriggerRuntime = {
   host: string;
@@ -248,11 +154,17 @@ export class NodeClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectDelay = 5000; // 5 seconds
   private forceImmediateReconnect = false;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private heartbeatAwaitingPong = false;
+  private heartbeatLastPingAt = 0;
   private pairingRejected = false;
   private localTriggerEnabled = true;
   private localTriggerPort = 0;
   private localTriggerServer: http.Server | null = null;
   private localTriggerRuntime: LocalTriggerRuntime | null = null;
+  private toolCallInterceptor?: (tool: string, args: any, sessionId: string, callId: string, timeoutMs?: number) => Promise<boolean | string>;
+  private onStatus?: (event: string, detail?: Record<string, any>) => void;
+  private pendingRequests: Map<string, PendingRequest> = new Map();
 
   constructor(options: NodeClientOptions) {
     this.host = options.host;
@@ -265,6 +177,8 @@ export class NodeClient {
     this.localTriggerPort = typeof options.localTriggerPort === 'number' && Number.isFinite(options.localTriggerPort)
       ? options.localTriggerPort
       : 0;
+    this.toolCallInterceptor = options.toolCallInterceptor;
+    this.onStatus = options.onStatus;
   }
 
   private get isAuthenticatedMode(): boolean {
@@ -414,6 +328,45 @@ export class NodeClient {
     logger.info({ host: runtime.host, port: runtime.port, tokenFile: runtime.tokenFile, scriptFile: runtime.scriptFile }, 'Node local trigger endpoint ready');
   }
 
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    this.heartbeatAwaitingPong = false;
+    this.heartbeatLastPingAt = 0;
+  }
+
+  private markHeartbeatAlive(): void {
+    this.heartbeatAwaitingPong = false;
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatInterval = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (this.heartbeatAwaitingPong && Date.now() - this.heartbeatLastPingAt >= NODE_CLIENT_HEARTBEAT_TIMEOUT_MS) {
+        logger.warn({ nodeId: this.connectedNodeId || this.requestedName }, 'Master heartbeat timed out; terminating stale node client socket');
+        try {
+          this.ws.terminate();
+        } catch (err) {
+          logger.warn({ err, nodeId: this.connectedNodeId || this.requestedName }, 'Failed to terminate stale node client socket');
+        }
+        return;
+      }
+      try {
+        this.heartbeatAwaitingPong = true;
+        this.heartbeatLastPingAt = Date.now();
+        this.ws.ping();
+      } catch (err) {
+        logger.warn({ err, nodeId: this.connectedNodeId || this.requestedName }, 'Failed to send node client heartbeat ping');
+      }
+    }, NODE_CLIENT_HEARTBEAT_INTERVAL_MS);
+    this.heartbeatInterval.unref?.();
+  }
+
   private async stopLocalTriggerServer(): Promise<void> {
     if (!this.localTriggerServer) {
       return;
@@ -434,35 +387,47 @@ export class NodeClient {
       ? this.host.replace(/^http/, 'ws') + `/node_ws?id=${encodeURIComponent(String(this.connectedNodeId))}&auth=${encodeURIComponent(String(this.authToken))}`
       : this.host.replace(/^http/, 'ws') + `/node_ws?token=${encodeURIComponent(String(this.pairingToken))}`;
 
-    logger.info({ host: this.host, nodeId: this.connectedNodeId, requestedName: this.requestedName, mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' }, 'Connecting to foxwarm master...');
+    const proxyInfo = getMasterProxyInfo(wsUrl);
+    logger.info({
+      host: this.host,
+      nodeId: this.connectedNodeId,
+      requestedName: this.requestedName,
+      mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing',
+      proxy: proxyInfo?.sanitizedProxyUrl,
+    }, 'Connecting to foxwarm master...');
+    this.onStatus?.('connecting', { mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' });
 
-    this.ws = new WebSocket(wsUrl);
+    this.ws = new WebSocket(wsUrl, createMasterWebSocketOptions(wsUrl));
 
     this.ws.on('open', () => {
       logger.info({ nodeId: this.connectedNodeId, mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' }, 'Connected to foxwarm master');
+      this.onStatus?.('connected', { mode: this.isAuthenticatedMode ? 'authenticated' : 'pairing' });
 
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
 
+      this.startHeartbeat();
+
       if (this.isAuthenticatedMode) {
         this.send({
           type: 'node_register',
-          nodeType: 'sandbox',
+          nodeType: 'cli-node',
           capabilities: NODE_CAPABILITIES
         });
       } else {
         this.send({
           type: 'pair_request',
           requestedName: this.requestedName,
-          nodeType: 'sandbox',
+          nodeType: 'cli-node',
           capabilities: NODE_CAPABILITIES,
         });
       }
     });
 
     this.ws.on('message', async (data: Buffer) => {
+      this.markHeartbeatAlive();
       try {
         const message = JSON.parse(data.toString());
         await this.handleMessage(message);
@@ -471,9 +436,15 @@ export class NodeClient {
       }
     });
 
+    this.ws.on('pong', () => {
+      this.markHeartbeatAlive();
+    });
+
     this.ws.on('close', async (code: number, reason: Buffer) => {
+      this.stopHeartbeat();
       const reasonText = reason.toString();
       logger.warn({ code, reason: reasonText }, 'Disconnected from master');
+      this.onStatus?.('disconnected', { code, reason: reasonText });
       if (this.pairingRejected) {
         logger.warn('Pairing was rejected; not reconnecting automatically');
         return;
@@ -486,6 +457,7 @@ export class NodeClient {
     });
 
     this.ws.on('error', (err: Error) => {
+      this.stopHeartbeat();
       logger.error({ err }, 'WebSocket error');
     });
   }
@@ -498,6 +470,7 @@ export class NodeClient {
     const delay = this.forceImmediateReconnect ? 250 : this.reconnectDelay;
     this.forceImmediateReconnect = false;
     logger.info({ delay }, 'Scheduling reconnect...');
+    this.onStatus?.('reconnecting', { delay });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect().catch(err => {
@@ -511,6 +484,7 @@ export class NodeClient {
     switch (message.type) {
       case 'registered':
         logger.info({ nodeId: message.nodeId }, 'Node registered');
+        this.onStatus?.('registered', { nodeId: message.nodeId });
         this.connectedNodeId = message.nodeId;
         if (this.localTriggerRuntime) {
           await this.writeLocalTriggerArtifacts(this.localTriggerRuntime);
@@ -518,9 +492,11 @@ export class NodeClient {
         break;
       case 'pair_pending':
         logger.info({ pendingId: message.pendingId, pairCode: message.pairCode, requestedName: message.requestedName }, 'Node pairing pending approval');
+        this.onStatus?.('pair_pending', { pendingId: message.pendingId, pairCode: message.pairCode });
         break;
       case 'pair_approved':
         logger.info({ nodeId: message.nodeId }, 'Node pairing approved, storing credentials');
+        this.onStatus?.('pair_approved', { nodeId: message.nodeId });
         await this.saveStoredCredentials(String(message.nodeId), String(message.authToken));
         this.connectedNodeId = String(message.nodeId);
         this.authToken = String(message.authToken);
@@ -542,6 +518,16 @@ export class NodeClient {
         break;
       case 'file_write_request':
         await this.handleFileWriteRequest(message);
+        break;
+      case 'cli_response':
+        this.handleCliResponse(message);
+        break;
+      case 'session_event_accepted':
+        this.handleCliResponse({ type: 'cli_response', requestId: message.requestId, ok: true, result: { accepted: true } });
+        break;
+      case 'error':
+        if (message.requestId) this.handleCliResponse({ type: 'cli_response', requestId: message.requestId, ok: false, error: message.error || 'Unknown error' });
+        else logger.warn({ error: message.error }, 'Error from master');
         break;
       default:
         logger.warn({ type: message.type }, 'Unknown message type from master');
@@ -596,6 +582,7 @@ export class NodeClient {
 
   private async handleToolCall(message: any): Promise<void> {
     const { callId, tool, args } = message;
+    const timeoutMs = typeof message.timeoutMs === 'number' ? message.timeoutMs : undefined;
     const sessionId = typeof message.sessionId === 'string'
       ? message.sessionId
       : (typeof args?.sessionId === 'string' ? args.sessionId : 'node');
@@ -606,7 +593,24 @@ export class NodeClient {
     logger.info({ callId, tool }, 'Executing tool');
 
     try {
-      const toolFn = (tools as any)[tool];
+      // Interceptor hook: allow external code to approve/reject before execution
+      if (this.toolCallInterceptor) {
+        const result = await this.toolCallInterceptor(tool, args, sessionId, callId, timeoutMs);
+        if (result !== true) {
+          const reason = typeof result === 'string' ? result : 'rejected';
+          const errorMsg = reason === 'timeout'
+            ? 'Tool call timed out waiting for user confirmation on interactive node. The user was not present to approve.'
+            : 'Tool execution rejected by user on interactive node';
+          this.send({
+            type: 'tool_call_error',
+            callId,
+            error: errorMsg,
+          });
+          return;
+        }
+      }
+
+      const toolFn = (nodeTools as any)[tool];
       if (!toolFn) {
         throw new Error(`Tool \`${tool}\` not found`);
       }
@@ -698,11 +702,57 @@ export class NodeClient {
     });
   }
 
+
+  private handleCliResponse(message: any): void {
+    const requestId = String(message.requestId || '');
+    const pending = this.pendingRequests.get(requestId);
+    if (!pending) {
+      logger.warn({ requestId }, 'Response for unknown cli-node request');
+      return;
+    }
+    this.pendingRequests.delete(requestId);
+    clearTimeout(pending.timeout);
+    if (message.ok === false) {
+      pending.reject(new Error(message.error || 'cli-node request failed'));
+    } else {
+      pending.resolve(message.result);
+    }
+  }
+
+  private request(type: string, payload: Record<string, any> = {}, timeoutMs = 10000): Promise<any> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('Remote node is not connected to master'));
+    }
+    const requestId = `cli_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        reject(new Error(`cli-node request ${type} timed out`));
+      }, timeoutMs);
+      this.pendingRequests.set(requestId, { resolve, reject, timeout });
+      this.send({ type, requestId, ...payload });
+    });
+  }
+
+  async listBoundSessions(): Promise<CliNodeSessionSummary[]> {
+    const result = await this.request('session_list_request');
+    return Array.isArray(result?.sessions) ? result.sessions : [];
+  }
+
+  async getSessionHistory(sessionId: string, count = 30): Promise<{ session: CliNodeSessionSummary; messages: CliNodeHistoryMessage[]; totalMessages: number }> {
+    return await this.request('session_history_request', { sessionId, count });
+  }
+
+  async sendSessionMessage(sessionId: string, message: string): Promise<void> {
+    await this.request('session_send_message', { sessionId, message, eventType: 'trigger' });
+  }
+
   async disconnect(): Promise<void> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopHeartbeat();
 
     if (this.ws) {
       this.ws.close();
@@ -738,7 +788,7 @@ function parseArgs(): NodeClientOptions {
 
   if (!options.host) {
     console.error('Error: --host is required');
-    console.error('Usage: npm run node -- --host http://master:3001/ --id requested-name --token <pairing-token> [--credentials-file path] [--local-trigger-port <port>] [--no-local-trigger]');
+    console.error('Usage: cli-node-client --host http://master:3001/ --id requested-name --token <pairing-token> [--credentials-file path] [--local-trigger-port <port>] [--no-local-trigger]');
     process.exit(1);
   }
 
@@ -754,14 +804,6 @@ async function main() {
   const options = parseArgs();
   const client = new NodeClient(options);
 
-  await initializeExecManager({
-    completionDispatcher: async (entry, _status, message) => {
-      if (!entry.sessionId) {
-        return;
-      }
-      await client.sendSessionEvent(entry.sessionId, message, 'background');
-    }
-  });
 
   await client.startLocalTriggerServer();
   await client.connect();
@@ -779,7 +821,14 @@ async function main() {
   });
 }
 
-if (require.main === module) {
+function isClientCliEntrypoint(): boolean {
+  const entryBase = process.argv[1] ? path.basename(process.argv[1]) : '';
+  return entryBase === 'client.js'
+    || entryBase === 'client.bundle.js'
+    || entryBase === 'cli-node-client';
+}
+
+if (require.main === module && isClientCliEntrypoint()) {
   main().catch(err => {
     logger.error({ err }, 'Node client failed');
     process.exit(1);

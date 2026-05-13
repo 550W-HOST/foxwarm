@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, UIEvent } from 'react'
-import { Eye, Code, FileJson, Copy, Check, X } from 'lucide-react'
+import { Eye, Code, FileJson, Copy, Check, X, Download } from 'lucide-react'
 import {
   Diff,
   IconToggleButton,
@@ -12,7 +12,8 @@ import {
   buildPatchHunkSnippets,
   clampContentStyle,
   copyTextToClipboard,
-  formatObject,
+  formatToolLabel,
+  formatCompactObjectPreview,
   formatStructuredSystemText,
   getCollapsedReasoningPreview,
   isCollapsibleSystemText,
@@ -31,12 +32,166 @@ import {
   type ToolViewMode,
   type ViewMode,
 } from './chatShared'
+import { formatToolResponsePayload } from '../../../shared/src/toolResponseFormatting'
+import { SyntaxHighlightedText } from './SyntaxHighlightedText'
+import { buildWorkspaceDownloadUrl, triggerBrowserDownload } from './workspaceShared'
+
+const formatToolResponseText = (resp: { response: unknown }): string => formatToolResponsePayload(resp.response)
+
+const getMessageStableKey = (msg: Message, idx: number): string => {
+  const meta = msg.__meta || {}
+  if (meta.synthetic) return `synthetic-${String(meta.synthetic)}`
+  if (meta.id) return `id-${String(meta.id)}`
+  if (meta.timestamp !== undefined) return `ts-${String(meta.timestamp)}`
+  return `idx-${idx}`
+}
+
+const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionResponse): { url: string; fileName?: string } | null => {
+  if (resp.name !== 'send_file') {
+    return null
+  }
+
+  const response = resp.response
+  const fullPath = response && typeof response === 'object' && !Array.isArray(response)
+    ? (response as { fullPath?: unknown }).fullPath
+    : undefined
+
+  const resolvedPath = typeof fullPath === 'string' && fullPath.trim()
+    ? fullPath.trim()
+    : (typeof call?.args?.filePath === 'string' && call.args.filePath.trim() ? call.args.filePath.trim() : null)
+
+  if (!resolvedPath) {
+    return null
+  }
+
+  const fileName = resolvedPath.split(/[\\/]/).filter(Boolean).pop()
+  return {
+    url: buildWorkspaceDownloadUrl(resolvedPath),
+    fileName,
+  }
+}
+
+const ToolDownloadButton = memo(function ToolDownloadButton({ url, fileName }: { url: string; fileName?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        triggerBrowserDownload(url)
+      }}
+      className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-200 dark:hover:bg-blue-900/30"
+      title={fileName ? `Download ${fileName}` : 'Download file'}
+    >
+      <Download size={12} />
+      <span>{fileName ? `Download ${fileName}` : 'Download file'}</span>
+    </button>
+  )
+})
 
 interface ChatTimelineProps {
   messages: Message[]
   isMobile: boolean
-  verbose: boolean
+  groupTools: boolean
+  showUsageBadge: boolean
 }
+
+interface TokenUsage {
+  cachedTokens?: number | null
+  inputTokens?: number | null
+  outputTokens?: number | null
+  cachedContentTokenCount?: number | null
+  promptTokenCount?: number | null
+  candidatesTokenCount?: number | null
+}
+
+type NormalizedTokenUsage = {
+  cachedTokens: number
+  inputTokens: number
+  outputTokens: number
+}
+
+const toTokenCount = (value: unknown): number | null => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const normalizeMessageUsage = (value: unknown): NormalizedTokenUsage | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+
+  const raw = value as TokenUsage
+  const cached = toTokenCount(raw.cachedTokens) ?? toTokenCount(raw.cachedContentTokenCount)
+  const input = toTokenCount(raw.inputTokens) ?? toTokenCount(raw.promptTokenCount)
+  const output = toTokenCount(raw.outputTokens) ?? toTokenCount(raw.candidatesTokenCount)
+
+  if (cached === null && input === null && output === null) return null
+
+  return {
+    cachedTokens: cached ?? 0,
+    inputTokens: input ?? 0,
+    outputTokens: output ?? 0,
+  }
+}
+
+const getModelMessageUsage = (msg: Message) => msg.role === 'model' ? normalizeMessageUsage(msg.__meta?.usage) : null
+
+const getUsageTotalTokens = (usage: NormalizedTokenUsage) => (
+  usage.cachedTokens + usage.inputTokens + usage.outputTokens
+)
+
+const formatTokenCount = (count: number): string => {
+  if (count >= 1000000) return `${(count / 1000000).toFixed(count >= 10000000 ? 0 : 1)}M`
+  if (count >= 1000) return `${(count / 1000).toFixed(count >= 10000 ? 0 : 1)}K`
+  return String(count)
+}
+
+const formatUsageTitle = (usage: NormalizedTokenUsage, callCount?: number) => {
+  const total = getUsageTotalTokens(usage)
+  return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}${callCount ? ` • calls ${callCount}` : ''}`
+}
+
+const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'muted' | 'normal' | 'warning' }) => {
+  const colorClass = tone === 'warning'
+    ? 'text-orange-600 dark:text-orange-400'
+    : tone === 'muted'
+      ? 'text-slate-400 dark:text-slate-500'
+      : 'text-slate-500 dark:text-slate-400'
+
+  return (
+    <span className={`flex items-baseline justify-between gap-1 ${colorClass}`}>
+      <span className="text-[10px] uppercase tracking-wide opacity-80">{label}</span>
+      <span className="text-[10px] font-semibold tabular-nums">{formatTokenCount(value)}</span>
+    </span>
+  )
+}
+
+const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount }: { usage: NormalizedTokenUsage; isMobile: boolean; callCount?: number }) {
+  return (
+    <span
+      className={`${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center rounded-md border border-slate-200 bg-white/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85`}
+      title={formatUsageTitle(usage, callCount)}
+    >
+      {callCount ? <ModelUsageRow label="×" value={callCount} tone="normal" /> : null}
+      <ModelUsageRow label="C" value={usage.cachedTokens} tone="muted" />
+      <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
+      <ModelUsageRow label="O" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
+    </span>
+  )
+})
+
+const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callCount }: { usage: NormalizedTokenUsage; isMobile: boolean; callCount?: number }) {
+  if (isMobile) {
+    return (
+      <div className="pointer-events-none mb-2 mt-1 flex justify-end pr-1">
+        <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="pointer-events-none absolute bottom-0 right-0 z-10 translate-x-[calc(100%+0.5rem)]">
+      <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} />
+    </div>
+  )
+})
 
 const MarkdownContent = memo(function MarkdownContent({ text, className }: { text: string; className: string }) {
   const html = useMemo(() => renderMarkdown(text), [text])
@@ -300,38 +455,14 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
   )
 })
 
-const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassName = 'text-gray-700 dark:text-gray-200') => (
+const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassName = 'text-gray-700 dark:text-gray-200', label = name) => (
   <div className="flex items-center gap-2 min-w-0">
-    <ToolLabel name={name} />
+    <ToolLabel name={name} label={label} />
     <div className={`min-w-0 flex-1 ${summaryClassName}`}>{summary}</div>
   </div>
 )
 
-const formatToolResponseText = (resp: FunctionResponse): string => {
-  if (resp.response?.error !== undefined && resp.response?.error !== null) {
-    return typeof resp.response.error === 'string' ? resp.response.error : JSON.stringify(resp.response.error, null, 2)
-  }
-  if (resp.response?.output !== undefined && resp.response?.output !== null) {
-    return typeof resp.response.output === 'string' ? resp.response.output : JSON.stringify(resp.response.output, null, 2)
-  }
-  if (resp.response?.content !== undefined && resp.response?.content !== null) {
-    return typeof resp.response.content === 'string' ? resp.response.content : JSON.stringify(resp.response.content, null, 2)
-  }
-  return formatObject(resp.response)
-}
-
-const getPrimaryToolResponseText = (resp: FunctionResponse): string | null => {
-  if (resp.response?.error !== undefined && resp.response?.error !== null) {
-    return typeof resp.response.error === 'string' ? resp.response.error : JSON.stringify(resp.response.error, null, 2)
-  }
-  if (resp.response?.output !== undefined && resp.response?.output !== null) {
-    return typeof resp.response.output === 'string' ? resp.response.output : JSON.stringify(resp.response.output, null, 2)
-  }
-  if (resp.response?.content !== undefined && resp.response?.content !== null) {
-    return typeof resp.response.content === 'string' ? resp.response.content : JSON.stringify(resp.response.content, null, 2)
-  }
-  return null
-}
+const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
 
 const getToolResponseStatus = (resp: FunctionResponse): 'success' | 'error' => {
   if (resp.response?.error !== undefined && resp.response?.error !== null) {
@@ -359,6 +490,7 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
 }
 
 const isLegacyDiffToolName = (name: string): boolean => name === 'edit' || name === 'edit_memory'
+const isPatchToolName = (name: string): boolean => name === 'apply_patch' || name === 'apply_patch_memory'
 
 const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
@@ -392,7 +524,7 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
     )
   }
 
-  if (call.name === 'apply_patch') {
+  if (isPatchToolName(call.name)) {
     try {
       const operations = parseApplyPatchPreview(call.args.input)
       const totalHunks = operations.reduce((sum, operation) => sum + (operation.action === 'update' ? operation.hunks.length : 0), 0)
@@ -409,13 +541,14 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
   }
 
   if (call.name === 'exec') {
-    const preview = call.args.command.length > 200 ? `${call.args.command.substring(0, 200)}...` : call.args.command
-    return <span className="truncate font-mono" title={call.args.command}>{preview}</span>
+    const cmd = call.args?.command ?? ''
+    const preview = cmd.length > 200 ? `${cmd.substring(0, 200)}...` : cmd
+    return <span className="truncate font-mono" title={cmd}>{preview}</span>
   }
 
   if (call.name === 'send_to_session') {
     const targetSessionId = String(call.args.sessionId || '')
-    const message = typeof call.args.message === 'string' ? call.args.message : formatObject(call.args.message)
+    const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
     const preview = message.length > 160 ? `${message.slice(0, 160)}...` : message
     return (
       <span className="flex items-center gap-1 min-w-0" title={`${targetSessionId}: ${message}`}>
@@ -426,7 +559,7 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
     )
   }
 
-  const argsFormatted = formatObject(call.args)
+  const argsFormatted = formatCompactObjectPreview(call.args)
   const preview = argsFormatted.length > 200 ? `${argsFormatted.substring(0, 200)}...` : argsFormatted
   return <span className="truncate break-all">{preview}</span>
 }
@@ -455,14 +588,14 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     return hasLegacyDiff ? (
       <div className="space-y-2">
         <div className="text-xs text-gray-600 dark:text-gray-300">{call.args.filePath}</div>
-        <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} />
+        <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} filePath={call.args.filePath} />
       </div>
     ) : (
       <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{JSON.stringify(call.args, null, 2)}</pre>
     )
   }
 
-  if (call.name === 'apply_patch') {
+  if (isPatchToolName(call.name)) {
     try {
       const operations = parseApplyPatchPreview(call.args.input)
       return (
@@ -480,7 +613,11 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
                           {hunk.anchors.length > 0 && (
                             <div className="mb-1 text-[11px] text-gray-500 dark:text-gray-400">{hunk.anchors.map((anchor, anchorIdx) => <div key={anchorIdx}>@@ {anchor}</div>)}</div>
                           )}
-                          <DiffPreview oldText={snippets.oldText} newText={snippets.newText} diffViewMode={diffViewMode} />
+                          {snippets.oldText || snippets.newText ? (
+                            <DiffPreview oldText={snippets.oldText} newText={snippets.newText} diffViewMode={diffViewMode} filePath={operation.filePath} />
+                          ) : (
+                            <div className="rounded border border-gray-300 bg-gray-50 px-2 py-1 font-mono text-[11px] text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">anchor-only hunk</div>
+                          )}
                         </div>
                       )
                     })}
@@ -492,7 +629,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
               return (
                 <div key={operationIdx} className="space-y-1">
                   <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">Add {operation.filePath}</div>
-                  <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} />
+                  <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} filePath={operation.filePath} />
                 </div>
               )
             }
@@ -507,12 +644,13 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
   }
 
   if (call.name === 'exec') {
-    return <div className="break-all">{call.args.command}</div>
+    const cmd = call.args?.command ?? ''
+    return <div className="break-all">{cmd}</div>
   }
 
   if (call.name === 'send_to_session') {
     const targetSessionId = String(call.args.sessionId || '')
-    const message = typeof call.args.message === 'string' ? call.args.message : formatObject(call.args.message)
+    const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
     return (
       <div className="space-y-1">
         <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">To</span><SessionHashLink sessionId={targetSessionId} /><span>:</span></div>
@@ -521,10 +659,10 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     )
   }
 
-  return <div className="whitespace-pre-wrap break-all">{formatObject(call.args)}</div>
+  return <div className="whitespace-pre-wrap break-all">{formatCompactObjectPreview(call.args)}</div>
 }
 
-const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): ReactNode | null => {
+const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, call?: FunctionCall): ReactNode | null => {
   if (resp.name === 'read') {
     const fileContent = resp.response.content || resp.response.output || JSON.stringify(resp.response)
     return expanded
@@ -545,8 +683,19 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): R
     return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
   }
 
-  const primaryText = getPrimaryToolResponseText(resp)
-  if (primaryText !== null) {
+  const download = getSendFileDownload(call, resp)
+  const primaryText = formatToolResponseText(resp)
+  if (download) {
+    const preview = truncatePreviewText(primaryText, 400)
+    return (
+      <div className="space-y-2">
+        <ToolDownloadButton url={download.url} fileName={download.fileName} />
+        {primaryText ? <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div> : null}
+      </div>
+    )
+  }
+
+  if (primaryText) {
     const preview = truncatePreviewText(primaryText, 400)
     return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
   }
@@ -560,7 +709,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean): R
   return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : preview}</div>
 }
 
-const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }: { oldText: string; newText: string; diffViewMode: 'unified' | 'split' }) {
+const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode, filePath }: { oldText: string; newText: string; diffViewMode: 'unified' | 'split'; filePath?: string }) {
   const lineChanges = useMemo(() => Diff.diffLines(oldText, newText), [oldText, newText])
   const diffOldScrollRefs = useRef<HTMLDivElement | null>(null)
   const diffNewScrollRefs = useRef<HTMLDivElement | null>(null)
@@ -606,26 +755,26 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }
         elements.push(
           <div key={i} className="bg-orange-100 dark:bg-orange-900/40 pl-2">
             {charDiff.map((part, j) => part.removed
-              ? <span key={j} className="bg-orange-200/60 dark:bg-orange-700/60 text-orange-900 dark:text-orange-200">{part.value}</span>
-              : !part.added ? <span key={j} className="text-gray-900 dark:text-gray-100">{part.value}</span> : null)}
+              ? <span key={j} className="bg-orange-200/60 dark:bg-orange-700/60 text-orange-900 dark:text-orange-200"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+              : !part.added ? <span key={j} className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
           </div>
         )
         elements.push(
           <div key={i + 1} className="bg-blue-100 dark:bg-blue-900/40 pl-2">
             {charDiff.map((part, j) => part.added
-              ? <span key={j} className="bg-blue-200/60 dark:bg-blue-700/60 text-blue-900 dark:text-blue-200">{part.value}</span>
-              : !part.removed ? <span key={j} className="text-gray-900 dark:text-gray-100">{part.value}</span> : null)}
+              ? <span key={j} className="bg-blue-200/60 dark:bg-blue-700/60 text-blue-900 dark:text-blue-200"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+              : !part.removed ? <span key={j} className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
           </div>
         )
         i += 2
       } else if (change.removed) {
-        elements.push(<div key={i} className="bg-orange-100 dark:bg-orange-900/40 pl-2"><span className="text-gray-900 dark:text-gray-100">{change.value}</span></div>)
+        elements.push(<div key={i} className="bg-orange-100 dark:bg-orange-900/40 pl-2"><span className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={change.value} filePath={filePath} /></span></div>)
         i++
       } else if (change.added) {
-        elements.push(<div key={i} className="bg-blue-100 dark:bg-blue-900/40 pl-2"><span className="text-gray-900 dark:text-gray-100">{change.value}</span></div>)
+        elements.push(<div key={i} className="bg-blue-100 dark:bg-blue-900/40 pl-2"><span className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={change.value} filePath={filePath} /></span></div>)
         i++
       } else {
-        elements.push(<div key={i} className="pl-2"><span className="text-gray-900 dark:text-gray-100">{change.value}</span></div>)
+        elements.push(<div key={i} className="pl-2"><span className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={change.value} filePath={filePath} /></span></div>)
         i++
       }
     }
@@ -656,23 +805,23 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }
           oldElements.push(
             <div key={`${i}-old-${lineIdx}`} className="bg-orange-100 dark:bg-orange-900/40 block">
               {charDiff.map((part, j) => part.removed
-                ? <span key={j} className="bg-orange-200/60 dark:bg-orange-700/60 text-orange-900 dark:text-orange-200">{part.value}</span>
-                : !part.added ? <span key={j} className="text-gray-900 dark:text-gray-100">{part.value}</span> : null)}
+                ? <span key={j} className="bg-orange-200/60 dark:bg-orange-700/60 text-orange-900 dark:text-orange-200"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+                : !part.added ? <span key={j} className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
             </div>
           )
           newElements.push(
             <div key={`${i}-new-${lineIdx}`} className="bg-blue-100 dark:bg-blue-900/40 block">
               {charDiff.map((part, j) => part.added
-                ? <span key={j} className="bg-blue-200/60 dark:bg-blue-700/60 text-blue-900 dark:text-blue-200">{part.value}</span>
-                : !part.removed ? <span key={j} className="text-gray-900 dark:text-gray-100">{part.value}</span> : null)}
+                ? <span key={j} className="bg-blue-200/60 dark:bg-blue-700/60 text-blue-900 dark:text-blue-200"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+                : !part.removed ? <span key={j} className="text-gray-900 dark:text-gray-100"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
             </div>
           )
         } else if (removedLine !== undefined) {
-          oldElements.push(<div key={`${i}-old-${lineIdx}`} className="bg-orange-100 dark:bg-orange-900/40 text-gray-900 dark:text-gray-100 block">{removedLine || '\u00A0'}</div>)
+          oldElements.push(<div key={`${i}-old-${lineIdx}`} className="bg-orange-100 dark:bg-orange-900/40 text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={removedLine || '\u00A0'} filePath={filePath} /></div>)
           newElements.push(<div key={`${i}-new-pad-${lineIdx}`} className="bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 select-none block">&nbsp;</div>)
         } else if (addedLine !== undefined) {
           oldElements.push(<div key={`${i}-old-pad-${lineIdx}`} className="bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 select-none block">&nbsp;</div>)
-          newElements.push(<div key={`${i}-new-${lineIdx}`} className="bg-blue-100 dark:bg-blue-900/40 text-gray-900 dark:text-gray-100 block">{addedLine || '\u00A0'}</div>)
+          newElements.push(<div key={`${i}-new-${lineIdx}`} className="bg-blue-100 dark:bg-blue-900/40 text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={addedLine || '\u00A0'} filePath={filePath} /></div>)
         }
       }
 
@@ -680,7 +829,7 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }
     } else if (change.removed) {
       const actualLines = change.value.endsWith('\n') ? change.value.split('\n').slice(0, -1) : change.value.split('\n')
       actualLines.forEach((line, lineIdx) => {
-        oldElements.push(<div key={`${i}-${lineIdx}`} className="bg-orange-100 dark:bg-orange-900/40 text-gray-900 dark:text-gray-100 block">{line || '\u00A0'}</div>)
+        oldElements.push(<div key={`${i}-${lineIdx}`} className="bg-orange-100 dark:bg-orange-900/40 text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={line || '\u00A0'} filePath={filePath} /></div>)
         newElements.push(<div key={`${i}-pad-${lineIdx}`} className="bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 select-none block">&nbsp;</div>)
       })
       i++
@@ -688,12 +837,12 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }
       const actualLines = change.value.endsWith('\n') ? change.value.split('\n').slice(0, -1) : change.value.split('\n')
       actualLines.forEach((line, lineIdx) => {
         oldElements.push(<div key={`${i}-pad-${lineIdx}`} className="bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 select-none block">&nbsp;</div>)
-        newElements.push(<div key={`${i}-${lineIdx}`} className="bg-blue-100 dark:bg-blue-900/40 text-gray-900 dark:text-gray-100 block">{line || '\u00A0'}</div>)
+        newElements.push(<div key={`${i}-${lineIdx}`} className="bg-blue-100 dark:bg-blue-900/40 text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={line || '\u00A0'} filePath={filePath} /></div>)
       })
       i++
     } else {
-      oldElements.push(<div key={i} className="text-gray-900 dark:text-gray-100 block">{change.value}</div>)
-      newElements.push(<div key={i} className="text-gray-900 dark:text-gray-100 block">{change.value}</div>)
+      oldElements.push(<div key={i} className="text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={change.value} filePath={filePath} /></div>)
+      newElements.push(<div key={i} className="text-gray-900 dark:text-gray-100 block"><SyntaxHighlightedText text={change.value} filePath={filePath} /></div>)
       i++
     }
   }
@@ -718,12 +867,19 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode }
   )
 })
 
-const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingContent }: { call: FunctionCall; callIdx: number; hasFollowingContent: boolean }) {
+const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingContent, modelMessage }: { call: FunctionCall; callIdx: number; hasFollowingContent: boolean; modelMessage?: Message }) {
   const [expanded, setExpanded] = useState(false)
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
     return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
   })
+
+  const setToolViewMode = useCallback((mode: ToolViewMode) => {
+    if (mode === 'json') {
+      setExpanded(true)
+    }
+    setViewMode(mode)
+  }, [])
 
   const setDiffMode = useCallback((mode: 'unified' | 'split') => {
     setDiffViewMode(mode)
@@ -733,12 +889,13 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
 
   const roundedClass = callIdx === 0 ? 'rounded-t' : ''
   const borderClass = hasFollowingContent ? 'border-b-0' : ''
+  const jsonText = useMemo(() => JSON.stringify(modelMessage ? { modelMessage, call } : call, null, 2), [call, modelMessage])
 
   const content = useMemo(() => {
     if (viewMode === 'json') {
       return (
         <pre className="whitespace-pre-wrap break-all cursor-text text-gray-600 dark:text-gray-300">
-          {JSON.stringify(call, null, 2)}
+          {jsonText}
         </pre>
       )
     }
@@ -773,7 +930,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         <div>
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-2 flex-wrap">
-              <ToolLabel name={call.name} />
+              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
               {hasLegacyDiff ? (
                 <span className="text-xs"><span className="text-orange-600 dark:text-orange-400">-{oldLines}</span><span className="mx-1 text-gray-500">/</span><span className="text-blue-600 dark:text-blue-400">+{newLines}</span></span>
               ) : (
@@ -785,7 +942,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
           {expanded && (
             <div>
               <div className="mt-2" onClick={(e) => e.stopPropagation()}>
-                {hasLegacyDiff ? <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} /> : (
+                {hasLegacyDiff ? <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} filePath={call.args.filePath} /> : (
                   <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{JSON.stringify(call.args, null, 2)}</pre>
                 )}
               </div>
@@ -798,7 +955,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
       )
     }
 
-    if (call.name === 'apply_patch') {
+    if (isPatchToolName(call.name)) {
       try {
         const operations = parseApplyPatchPreview(call.args.input)
         const totalHunks = operations.reduce((sum, operation) => sum + (operation.action === 'update' ? operation.hunks.length : 0), 0)
@@ -807,7 +964,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
           <div>
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 flex-wrap">
-                <ToolLabel name={call.name} />
+                <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
                 <span className="ml-2 text-xs text-gray-500">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
                 <span className="ml-2 text-gray-600 dark:text-gray-400">{fileSummary}</span>
               </span>
@@ -827,7 +984,11 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
                                 {hunk.anchors.length > 0 && (
                                   <div className="mb-1 text-[11px] text-gray-500 dark:text-gray-400">{hunk.anchors.map((anchor, anchorIdx) => <div key={anchorIdx}>@@ {anchor}</div>)}</div>
                                 )}
-                                <DiffPreview oldText={snippets.oldText} newText={snippets.newText} diffViewMode={diffViewMode} />
+                                {snippets.oldText || snippets.newText ? (
+                                  <DiffPreview oldText={snippets.oldText} newText={snippets.newText} diffViewMode={diffViewMode} filePath={operation.filePath} />
+                                ) : (
+                                  <div className="rounded border border-gray-300 bg-gray-50 px-2 py-1 font-mono text-[11px] text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">anchor-only hunk</div>
+                                )}
                               </div>
                             )
                           })}
@@ -839,7 +1000,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
                     return (
                       <div key={operationIdx} className="space-y-1">
                         <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">Add {operation.filePath}</div>
-                        <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} />
+                        <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} filePath={operation.filePath} />
                       </div>
                     )
                   }
@@ -857,7 +1018,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         return (
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <ToolLabel name={call.name} />
+              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
               <span className="text-xs text-red-500">invalid patch</span>
             </div>
             {expanded && (
@@ -869,22 +1030,23 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
     }
 
     if (call.name === 'exec') {
-      const preview = call.args.command.length > 200 ? `${call.args.command.substring(0, 200)}...` : call.args.command
+      const cmd = call.args?.command ?? ''
+      const preview = cmd.length > 200 ? `${cmd.substring(0, 200)}...` : cmd
       return (
         <div className="space-y-1">
           {expanded ? (
             <>
-              <ToolLabel name={call.name} />
-              <div className="break-all">{call.args.command}</div>
+              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
+              <div className="break-all">{cmd}</div>
             </>
-          ) : renderInlineToolSummary(call.name, <div className="truncate font-mono" title={call.args.command}>{preview}</div>)}
+          ) : renderInlineToolSummary(call.name, <div className="truncate font-mono" title={cmd}>{preview}</div>)}
         </div>
       )
     }
 
     if (call.name === 'send_to_session') {
       const targetSessionId = String(call.args.sessionId || '')
-      const message = typeof call.args.message === 'string' ? call.args.message : formatObject(call.args.message)
+      const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
       const preview = message.length > 200 ? `${message.slice(0, 200)}...` : message
       return (
         <div className="space-y-1">
@@ -898,33 +1060,33 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
       )
     }
 
-    const argsFormatted = formatObject(call.args)
+    const argsFormatted = formatCompactObjectPreview(call.args)
     const preview = argsFormatted.length > 200 ? `${argsFormatted.substring(0, 200)}...` : argsFormatted
     return (
       <div className="space-y-1">
         {expanded ? (
           <>
-            <ToolLabel name={call.name} />
+            <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
             <div className="whitespace-pre-wrap break-all">{argsFormatted}</div>
           </>
-        ) : renderInlineToolSummary(call.name, <div className="truncate break-all">{preview}</div>)}
+        ) : renderInlineToolSummary(call.name, <div className="truncate break-all">{preview}</div>, 'text-gray-700 dark:text-gray-200', getToolDisplayLabel(call))}
       </div>
     )
-  }, [call, callIdx, diffViewMode, expanded, viewMode])
+  }, [call, diffViewMode, expanded, jsonText, viewMode])
 
   return (
     <div className={`text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${roundedClass} p-2 ${borderClass} relative group`}>
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        {isLegacyDiffToolName(call.name) || call.name === 'apply_patch' ? (
+        {isLegacyDiffToolName(call.name) || isPatchToolName(call.name) ? (
           <>
             <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={viewMode !== 'json' && diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
             <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={viewMode !== 'json' && diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
-            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('json') }} active={viewMode === 'json'} title="JSON">JSON</MiniToggleButton>
+            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON">JSON</MiniToggleButton>
           </>
         ) : (
           <>
-            <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-            <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+            <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
+            <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
           </>
         )}
       </div>
@@ -940,6 +1102,13 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const responseStatus = getToolResponseStatus(resp)
   const isError = responseStatus === 'error'
+
+  const setToolViewMode = useCallback((mode: ToolViewMode) => {
+    if (mode === 'json') {
+      setExpanded(true)
+    }
+    setViewMode(mode)
+  }, [])
 
   const content = useMemo(() => {
     if (viewMode === 'json') {
@@ -964,8 +1133,19 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
       return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
     }
 
-    const primaryText = getPrimaryToolResponseText(resp)
-    if (primaryText !== null) {
+    const download = getSendFileDownload(undefined, resp)
+    const primaryText = formatToolResponseText(resp)
+    if (download) {
+      const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
+      return (
+        <div className="space-y-2">
+          <ToolDownloadButton url={download.url} fileName={download.fileName} />
+          {primaryText ? <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div> : null}
+        </div>
+      )
+    }
+
+    if (primaryText) {
       const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
       return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
     }
@@ -986,8 +1166,8 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
   return (
     <div className={`text-xs ${isError ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'} border ${roundedClass} ${roundedBottomClass} p-2 ${borderClass} relative group`}>
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>
       <div className={`font-mono cursor-pointer ${isError ? 'text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300' : 'text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300'}`} onClick={() => setExpanded(current => !current)}>
         <span className="inline-flex items-center gap-1.5">{isError ? <X size={12} /> : <Check size={12} />}<span>{resp.name}</span></span>
@@ -1001,16 +1181,25 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   call,
   responses,
   imageParts,
+  modelMessage,
 }: {
   call: FunctionCall
   responses: FunctionResponse[]
   imageParts: MessagePart[]
+  modelMessage: Message
 }) {
   const [expanded, setExpanded] = useState(false)
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
     return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
   })
+
+  const setToolViewMode = useCallback((mode: ToolViewMode) => {
+    if (mode === 'json') {
+      setExpanded(true)
+    }
+    setViewMode(mode)
+  }, [])
 
   const setDiffMode = useCallback((mode: 'unified' | 'split') => {
     setDiffViewMode(mode)
@@ -1029,7 +1218,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const responsePreview = useMemo(() => {
     const firstResponse = responses[0]
     if (firstResponse) {
-      const previewNode = renderToolResponseContent(firstResponse, false)
+      const previewNode = renderToolResponseContent(firstResponse, false, call)
       if (responses.length > 1) {
         return (
           <div className="flex items-center gap-2 min-w-0">
@@ -1046,20 +1235,20 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     return <div>Waiting for result…</div>
   }, [imageParts.length, responses])
 
-  const jsonText = useMemo(() => JSON.stringify({ call, responses, imageParts }, null, 2), [call, imageParts, responses])
+  const jsonText = useMemo(() => JSON.stringify({ modelMessage, call, responses, imageParts }, null, 2), [call, imageParts, modelMessage, responses])
   const baseTextClass = 'font-mono text-gray-700 dark:text-gray-300'
 
   return (
     <div className={`text-xs border rounded p-2 relative group cursor-pointer ${outerToneClass}`} onClick={() => setExpanded((current) => !current)}>
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>
 
       {viewMode === 'json' ? (
         <div className={`${baseTextClass} ${expanded ? '' : 'pr-10'}`}>
           <div className="flex items-center gap-2 min-w-0">
-            <ToolTag name={call.name} tone={tagTone} />
+            <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
           </div>
           <pre className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : clampContentStyle(6)}>{jsonText}</pre>
         </div>
@@ -1067,7 +1256,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={`${baseTextClass} pr-10`}>
             <div className="space-y-1">
             <div className="flex items-center gap-2 min-w-0">
-              <ToolTag name={call.name} tone={tagTone} />
+              <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
               <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>
             </div>
             <div className="text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>
@@ -1077,12 +1266,12 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           <div>
             <div className="flex items-center gap-2 min-w-0">
-              <ToolTag name={call.name} tone={tagTone} />
+              <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
             </div>
 
             <div className="mt-2 cursor-default" onClick={(e) => e.stopPropagation()}>
-              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(isLegacyDiffToolName(call.name) || call.name === 'apply_patch') ? 'relative' : ''}`}>
-                {(isLegacyDiffToolName(call.name) || call.name === 'apply_patch') && (
+              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) ? 'relative' : ''}`}>
+                {(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) && (
                   <div className="absolute top-1 right-0 flex gap-1" onClick={(e) => e.stopPropagation()}>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
@@ -1097,7 +1286,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                 <div>
                   {responses.length > 0 ? responses.map((resp, idx) => (
                     <div key={`${resp.tool_use_id || call.id || call.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
-                      {renderToolResponseContent(resp, true)}
+                      {renderToolResponseContent(resp, true, call)}
                     </div>
                   )) : <div className="text-gray-500 dark:text-gray-400">Waiting for result…</div>}
 
@@ -1167,9 +1356,10 @@ const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, 
                 call={call}
                 responses={responseEntries.map(({ resp }) => resp)}
                 imageParts={imageParts}
+                modelMessage={msg}
               />
             ) : (
-              <ToolCallItem call={call} callIdx={callIdx} hasFollowingContent={false} />
+              <ToolCallItem call={call} callIdx={callIdx} hasFollowingContent={false} modelMessage={msg} />
             )}
           </div>
         )
@@ -1203,7 +1393,7 @@ const ToolCallsBlock = memo(function ToolCallsBlock({ msg }: { msg: Message }) {
   return (
     <div>
       {functionCalls.map((call, callIdx) => (
-        <ToolCallItem key={`call-${call.id || callIdx}`} call={call} callIdx={callIdx} hasFollowingContent={callIdx < functionCalls.length - 1} />
+        <ToolCallItem key={`call-${call.id || callIdx}`} call={call} callIdx={callIdx} hasFollowingContent={callIdx < functionCalls.length - 1} modelMessage={msg} />
       ))}
     </div>
   )
@@ -1228,14 +1418,17 @@ const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg, hasPrecedingC
 })
 
 interface MessageRowProps {
-  idx: number
+  messageKey: string
   msg: Message
   prevMsg: Message | null
   nextMsg: Message | null
   isMobile: boolean
-  verbose: boolean
+  groupTools: boolean
+  showUsageBadge: boolean
   groupKey: string
   summaryTagItemsKey: string
+  groupUsage: NormalizedTokenUsage | null
+  groupUsageCallCount: number
   keepToolGroupExpanded: boolean
   showToolGroupSummary: boolean
   groupExpanded: boolean
@@ -1243,14 +1436,17 @@ interface MessageRowProps {
 }
 
 const MessageRow = memo(function MessageRow({
-  idx,
+  messageKey,
   msg,
   prevMsg,
   nextMsg,
   isMobile,
-  verbose,
+  groupTools,
+  showUsageBadge,
   groupKey,
   summaryTagItemsKey,
+  groupUsage,
+  groupUsageCallCount,
   keepToolGroupExpanded,
   showToolGroupSummary,
   groupExpanded,
@@ -1258,6 +1454,7 @@ const MessageRow = memo(function MessageRow({
 }: MessageRowProps) {
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
   const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData), [msg.parts])
+  const usage = useMemo(() => getModelMessageUsage(msg), [msg])
   const summaryTagItems = useMemo<ToolTagItem[]>(() => {
     if (!summaryTagItemsKey) return []
     try {
@@ -1276,9 +1473,13 @@ const MessageRow = memo(function MessageRow({
     )
   }, [msg])
   const shouldSkipMargin = !systemLikeMessage && (msg.role === 'model' || msg.role === 'tool') && (prevMsg?.role === 'model' || prevMsg?.role === 'tool')
-  const isCollapsedToolGroup = !verbose && isInToolGroup && !groupExpanded && !keepToolGroupExpanded
+  const isCollapsedToolGroup = groupTools && isInToolGroup && !groupExpanded && !keepToolGroupExpanded
   const hasInterleavedToolGroup = !!(nextMsg && nextMsg.role === 'tool' && nextMsg.parts.some(p => p.functionResponse) && msg.parts.some(p => p.functionCall))
   const hasPrecedingCallMsg = !!(prevMsg?.role === 'model' && prevMsg.parts.some(p => p.functionCall))
+  const displayUsage = showUsageBadge
+    ? (isCollapsedToolGroup ? (showToolGroupSummary ? groupUsage : null) : usage)
+    : null
+  const displayUsageCallCount = isCollapsedToolGroup && showToolGroupSummary && groupUsageCallCount > 0 ? groupUsageCallCount : undefined
 
   return (
     <div className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${shouldSkipMargin ? '' : 'mt-4'}`}>
@@ -1295,10 +1496,10 @@ const MessageRow = memo(function MessageRow({
           !systemLikeMessage && msg.role === 'user'
             ? 'bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
             : ''
-        } overflow-x-hidden`}
+        } ${displayUsage && !isMobile ? 'overflow-visible' : 'overflow-x-hidden'}`}
       >
         {systemLikeMessage ? (
-          <SystemLikeMessageCard msg={msg} messageKey={`msg-${idx}`} />
+          <SystemLikeMessageCard msg={msg} messageKey={messageKey} />
         ) : msg.role === 'user' ? (
           <div className="flex flex-col">
             {textLikeParts.map((part, partIdx) => (
@@ -1308,24 +1509,24 @@ const MessageRow = memo(function MessageRow({
                   : <CollapsibleUserText text={part.text || ''} />}
               </div>
             ))}
-            <ImageParts imageParts={imageParts} keyPrefix={`user-${idx}`} />
+            <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />
           </div>
         ) : (
-          <div className="flex flex-col">
+          <div className={`flex flex-col ${displayUsage && !isMobile ? 'relative' : ''}`}>
             {textLikeParts.map((part, partIdx) => {
               if (part.system) {
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }
               if (part.thinking) {
-                if (!verbose && !hasVisibleTextContent && isInToolGroup && !groupExpanded) {
+                if (groupTools && !hasVisibleTextContent && isInToolGroup && !groupExpanded) {
                   return null
                 }
                 return <ReasoningSummaryCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
               }
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
             })}
-            <ImageParts imageParts={imageParts} keyPrefix={`message-${idx}`} />
-            {!verbose && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
+            <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
+            {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
               <div
                 className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
                 onClick={() => onExpandGroup(groupKey)}
@@ -1335,8 +1536,9 @@ const MessageRow = memo(function MessageRow({
                 </div>
               </div>
             )}
-            {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={`msg-${idx}`} /> : <ToolCallsBlock msg={msg} />)}
+            {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} /> : <ToolCallsBlock msg={msg} />)}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup ? null : <ToolResponsesBlock msg={msg} hasPrecedingCallMsg={hasPrecedingCallMsg} />)}
+            {displayUsage && <ModelUsageAnchor usage={displayUsage} isMobile={isMobile} callCount={displayUsageCallCount} />}
           </div>
         )}
       </div>
@@ -1344,21 +1546,26 @@ const MessageRow = memo(function MessageRow({
   )
 }, (prev, next) => (
   prev.msg === next.msg &&
+  prev.messageKey === next.messageKey &&
   prev.prevMsg === next.prevMsg &&
   prev.nextMsg === next.nextMsg &&
   prev.isMobile === next.isMobile &&
-  prev.verbose === next.verbose &&
+  prev.groupTools === next.groupTools &&
+  prev.showUsageBadge === next.showUsageBadge &&
   prev.groupKey === next.groupKey &&
   prev.summaryTagItemsKey === next.summaryTagItemsKey &&
+  prev.groupUsage === next.groupUsage &&
+  prev.groupUsageCallCount === next.groupUsageCallCount &&
   prev.keepToolGroupExpanded === next.keepToolGroupExpanded &&
   prev.showToolGroupSummary === next.showToolGroupSummary &&
   prev.groupExpanded === next.groupExpanded
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, groupTools, showUsageBadge }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
 
   const toolGroupMeta = useMemo(() => {
+    const messageKeys = messages.map((msg, idx) => getMessageStableKey(msg, idx))
     const hasTextContent = (msg: Message) => msg.parts.some((p) => (p.text && p.text.trim()) || (p.system && String(p.system).trim()))
     const hasToolCalls = (msg: Message) => msg.parts.some((p) => p.functionCall)
     const hasToolResponses = (msg: Message) => msg.parts.some((p) => p.functionResponse)
@@ -1449,6 +1656,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
             const status = p.functionCall.id ? toolStatusById.get(p.functionCall.id) : undefined
             items.push({
               name: p.functionCall.name,
+              label: formatToolLabel(p.functionCall.name, p.functionCall.args),
               tone: status === 'error' ? 'error' : status === 'success' ? 'success' : 'neutral',
             })
           }
@@ -1457,15 +1665,44 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
       return items
     }
 
+    const getToolGroupUsage = (startIdx: number): { usage: NormalizedTokenUsage | null; callCount: number } => {
+      const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
+      let callCount = 0
+
+      for (let i = startIdx; i < messages.length; i++) {
+        if (shouldStopAtIdx(startIdx, i)) break
+        const m = messages[i]
+        if (m.role !== 'model' && m.role !== 'tool') break
+        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
+
+        if (m.role === 'model') {
+          const usage = getModelMessageUsage(m)
+          if (usage) {
+            total.cachedTokens += usage.cachedTokens
+            total.inputTokens += usage.inputTokens
+            total.outputTokens += usage.outputTokens
+            callCount++
+          }
+        }
+      }
+
+      return { usage: callCount > 0 ? total : null, callCount }
+    }
+
     const startIdxByIndex = messages.map((_, idx) => getToolGroupStartIdx(idx))
     const summaryTagItemsByStart = new Map<number, ToolTagItem[]>()
     const summaryTagItemsKeyByStart = new Map<number, string>()
+    const groupUsageByStart = new Map<number, NormalizedTokenUsage | null>()
+    const groupUsageCallCountByStart = new Map<number, number>()
     const keepExpandedByStart = new Map<number, boolean>()
     startIdxByIndex.forEach((startIdx) => {
       if (!summaryTagItemsKeyByStart.has(startIdx)) {
         const items = getToolGroupSummaryItems(startIdx)
+        const groupUsage = getToolGroupUsage(startIdx)
         summaryTagItemsByStart.set(startIdx, items)
         summaryTagItemsKeyByStart.set(startIdx, JSON.stringify(items))
+        groupUsageByStart.set(startIdx, groupUsage.usage)
+        groupUsageCallCountByStart.set(startIdx, groupUsage.callCount)
         keepExpandedByStart.set(startIdx, startIdx === finalStandaloneStartIdx)
       }
     })
@@ -1476,8 +1713,11 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
         const prevMsg = messages[idx - 1]
         return prevMsg?.role === 'model' && prevMsg.parts.some(p => p.functionCall)
       }),
-      groupKeyByIndex: startIdxByIndex.map((startIdx) => `${startIdx}-toolgroup`),
+      messageKeyByIndex: messageKeys,
+      groupKeyByIndex: startIdxByIndex.map((startIdx) => `${messageKeys[startIdx] || `idx-${startIdx}`}-toolgroup`),
       summaryTagItemsKeyByIndex: startIdxByIndex.map((startIdx) => summaryTagItemsKeyByStart.get(startIdx) || ''),
+      groupUsageByIndex: startIdxByIndex.map((startIdx) => groupUsageByStart.get(startIdx) || null),
+      groupUsageCallCountByIndex: startIdxByIndex.map((startIdx) => groupUsageCallCountByStart.get(startIdx) || 0),
       keepExpandedByIndex: startIdxByIndex.map((startIdx) => keepExpandedByStart.get(startIdx) || false),
       shouldRenderSummary: startIdxByIndex.map((startIdx, idx) => idx === startIdx && (summaryTagItemsByStart.get(startIdx)?.length || 0) > 0),
     }
@@ -1499,17 +1739,21 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, verbose }:
         }
 
         const groupKey = toolGroupMeta.groupKeyByIndex[idx]
+        const messageKey = toolGroupMeta.messageKeyByIndex[idx]
         return (
           <MessageRow
-            key={msg.__meta?.timestamp ?? idx}
-            idx={idx}
+            key={messageKey}
+            messageKey={messageKey}
             msg={msg}
             prevMsg={idx > 0 ? messages[idx - 1] : null}
             nextMsg={idx < messages.length - 1 ? messages[idx + 1] : null}
             isMobile={isMobile}
-            verbose={verbose}
+            groupTools={groupTools}
+            showUsageBadge={showUsageBadge}
             groupKey={groupKey}
             summaryTagItemsKey={toolGroupMeta.summaryTagItemsKeyByIndex[idx]}
+            groupUsage={toolGroupMeta.groupUsageByIndex[idx]}
+            groupUsageCallCount={toolGroupMeta.groupUsageCallCountByIndex[idx]}
             keepToolGroupExpanded={toolGroupMeta.keepExpandedByIndex[idx]}
             showToolGroupSummary={toolGroupMeta.shouldRenderSummary[idx]}
             groupExpanded={expandedToolGroups.has(groupKey)}

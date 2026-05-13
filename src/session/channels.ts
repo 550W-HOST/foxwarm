@@ -4,13 +4,16 @@ import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from '../chan
 import { logger } from '../common';
 import { CHANNELS_FILE } from '../config';
 import { Session, SessionReply } from '../types';
+import { DiskJsonData } from '../utils/diskJsonData';
 
-export type ChannelMode = 'push-only' | undefined;
+export type ChannelMode = 'send-only' | undefined;
+type LegacyChannelMode = 'push-only';
 
 export interface ChannelConfig {
   sessionId: string;
-  mode?: ChannelMode;
-  dangerouslyAllowAllGroupMembers?: boolean;
+  mode?: ChannelMode | LegacyChannelMode;
+  dangerouslyAllowAllUsers?: boolean;
+  dangerouslyAllowAllGroupMembers?: boolean; // legacy compatibility on load/read only
 }
 
 export interface FileDeliveryResult {
@@ -23,20 +26,81 @@ type SessionChannelDeps = {
   getExistingSession: (sessionId: string) => Promise<Session | null>;
 };
 
+export type ChannelTarget = {
+  channelInstanceId: string;
+  conversationId: string;
+};
+
 const channelAttachments = new Map<string, ChannelConfig>();
 
-function makeChannelKey(channelId: string, conversationId: string): string {
-  return `${channelId}:${conversationId}`;
+function normalizeChannelsPayload(raw: any, filePath: string): { channels: Record<string, ChannelConfig> } {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid channels payload in ${filePath}`);
+  }
+
+  const channels = raw.channels && typeof raw.channels === 'object' ? raw.channels : {};
+  return { channels };
+}
+
+export function createChannelsStore(filePath: string = CHANNELS_FILE): DiskJsonData<{ channels: Record<string, ChannelConfig> }> {
+  return new DiskJsonData<{ channels: Record<string, ChannelConfig> }>(filePath, {
+    backup: false,
+    normalizeLoadedData: normalizeChannelsPayload,
+    onReadError: (err: unknown, candidatePath: string) => {
+      logger.warn({ err, candidatePath }, 'Failed to read channels candidate');
+    },
+  });
+}
+
+let channelsStore = createChannelsStore();
+
+export function setChannelsStoreForTests(store: DiskJsonData<{ channels: Record<string, ChannelConfig> }> | null): void {
+  channelsStore = store || createChannelsStore();
+  channelAttachments.clear();
+}
+
+export function resetChannelsForTests(): void {
+  channelAttachments.clear();
+}
+
+function makeChannelKey(channelInstanceId: string, conversationId: string): string {
+  return `${channelInstanceId}:${conversationId}`;
+}
+
+export function parseChannelTargetId(channelTargetId: string): ChannelTarget {
+  const [channelInstanceId, ...rest] = channelTargetId.split(':');
+  const conversationId = rest.join(':');
+  if (!channelInstanceId || !conversationId) {
+    throw new Error('Invalid channelTargetId format. Use <channel-instance-id>:<conversation-id>');
+  }
+
+  return { channelInstanceId, conversationId };
+}
+
+function normalizeChannelConfig(config: ChannelConfig): ChannelConfig {
+  const normalized: ChannelConfig = {
+    sessionId: config.sessionId,
+  };
+
+  if (config.mode === 'send-only' || config.mode === 'push-only') {
+    normalized.mode = 'send-only';
+  }
+
+  const dangerouslyAllowAllUsers = config.dangerouslyAllowAllUsers ?? config.dangerouslyAllowAllGroupMembers;
+  if (dangerouslyAllowAllUsers !== undefined) {
+    normalized.dangerouslyAllowAllUsers = Boolean(dangerouslyAllowAllUsers);
+  }
+
+  return normalized;
 }
 
 async function persistChannels(): Promise<void> {
   try {
-    await fs.ensureDir(path.dirname(CHANNELS_FILE));
     const data: any = { channels: {} };
     for (const [channelKey, config] of channelAttachments.entries()) {
-      data.channels[channelKey] = config;
+      data.channels[channelKey] = normalizeChannelConfig(config);
     }
-    await fs.writeJson(CHANNELS_FILE, data, { spaces: 2 });
+    await channelsStore.write(data);
   } catch (e) {
     logger.error(e, 'Failed to save channels');
   }
@@ -45,13 +109,18 @@ async function persistChannels(): Promise<void> {
 export async function loadChannels(): Promise<void> {
   channelAttachments.clear();
 
-  if (await fs.pathExists(CHANNELS_FILE)) {
+  const loaded = await channelsStore.loadFirstAvailable();
+  if (loaded) {
     try {
-      const data = await fs.readJson(CHANNELS_FILE);
+      const data = loaded.data;
       if (data.channels) {
         for (const [channelKey, config] of Object.entries(data.channels)) {
-          channelAttachments.set(channelKey, config as ChannelConfig);
+          channelAttachments.set(channelKey, normalizeChannelConfig(config as ChannelConfig));
         }
+      }
+      if (loaded.source !== channelsStore.filePath) {
+        logger.warn({ source: loaded.source }, 'Recovering channels from fallback source');
+        await channelsStore.write(data);
       }
       logger.info({ attachmentCount: channelAttachments.size }, 'Channels loaded');
     } catch (e) {
@@ -69,18 +138,18 @@ export async function importLegacyChannelAttachments(attachments: Record<string,
     if (typeof value === 'string') {
       channelAttachments.set(channelKey, { sessionId: value });
     } else if (value && typeof value === 'object' && typeof value.sessionId === 'string') {
-      channelAttachments.set(channelKey, value);
+      channelAttachments.set(channelKey, normalizeChannelConfig(value));
     }
   }
 
   await persistChannels();
 }
 
-export function attachChannel(channelId: string, conversationId: string, sessionId: string): string {
+export function attachChannel(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<ChannelConfig>): string {
   const channelKey = makeChannelKey(channelId, conversationId);
-  channelAttachments.set(channelKey, { sessionId });
+  channelAttachments.set(channelKey, normalizeChannelConfig({ sessionId, ...(configUpdates || {}) } as ChannelConfig));
   void persistChannels();
-  logger.info({ channelId, conversationId, sessionId }, 'Channel attached to session');
+  logger.info({ channelId, conversationId, sessionId, configUpdates }, 'Channel attached to session');
   return sessionId;
 }
 
@@ -89,7 +158,8 @@ export function getSessionByChannel(channelId: string, conversationId: string): 
 }
 
 export function getChannelConfig(channelId: string, conversationId: string): ChannelConfig | undefined {
-  return channelAttachments.get(makeChannelKey(channelId, conversationId));
+  const config = channelAttachments.get(makeChannelKey(channelId, conversationId));
+  return config ? normalizeChannelConfig(config) : undefined;
 }
 
 export function setChannelMode(channelId: string, conversationId: string, mode: ChannelMode | undefined): void {
@@ -98,22 +168,32 @@ export function setChannelMode(channelId: string, conversationId: string, mode: 
   if (!existing) {
     throw new Error(`Channel ${channelKey} not attached`);
   }
-  channelAttachments.set(channelKey, { ...existing, mode });
+  channelAttachments.set(channelKey, normalizeChannelConfig({ ...existing, mode }));
   void persistChannels();
 }
 
-export function getChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string): boolean {
-  return channelAttachments.get(makeChannelKey(channelId, conversationId))?.dangerouslyAllowAllGroupMembers ?? false;
+export function getChannelDangerouslyAllowAllUsers(channelId: string, conversationId: string): boolean {
+  const config = channelAttachments.get(makeChannelKey(channelId, conversationId));
+  return Boolean(config?.dangerouslyAllowAllUsers ?? config?.dangerouslyAllowAllGroupMembers);
 }
 
-export function setChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string, value: boolean): void {
+export function setChannelDangerouslyAllowAllUsers(channelId: string, conversationId: string, value: boolean): void {
   const channelKey = makeChannelKey(channelId, conversationId);
   const existing = channelAttachments.get(channelKey);
   if (!existing) {
     throw new Error(`Channel ${channelKey} not attached`);
   }
-  channelAttachments.set(channelKey, { ...existing, dangerouslyAllowAllGroupMembers: value });
+  channelAttachments.set(channelKey, normalizeChannelConfig({ ...existing, dangerouslyAllowAllUsers: value }));
   void persistChannels();
+}
+
+// Legacy compatibility wrappers
+export function getChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string): boolean {
+  return getChannelDangerouslyAllowAllUsers(channelId, conversationId);
+}
+
+export function setChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string, value: boolean): void {
+  setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
 }
 
 export function detachChannel(channelId: string, conversationId: string): void {
@@ -122,35 +202,34 @@ export function detachChannel(channelId: string, conversationId: string): void {
   logger.info({ channelId, conversationId }, 'Channel detached from session');
 }
 
-export async function sendToChannelById(channelId: string, message: string): Promise<void> {
-  const [instanceId, ...rest] = channelId.split(':');
-  const conversationId = rest.join(':');
-  if (!instanceId || !conversationId) {
-    throw new Error('Invalid channelId format. Use <channel-instance-id>:<conversation-id>');
-  }
-  const channel = getChannelInstance(instanceId);
+export async function sendToChannelTargetId(channelTargetId: string, message: string): Promise<void> {
+  const { channelInstanceId, conversationId } = parseChannelTargetId(channelTargetId);
+  const channel = getChannelInstance(channelInstanceId);
   if (!channel) {
-    throw new Error(`Channel \`${instanceId}\` not found`);
+    throw new Error(`Channel instance \`${channelInstanceId}\` not found`);
   }
   await channel.sendMessage(conversationId, message);
 }
 
-export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
-  const [instanceId, ...rest] = channelId.split(':');
-  const conversationId = rest.join(':');
-  if (!instanceId || !conversationId) {
-    throw new Error('Invalid channelId format. Use <channel-instance-id>:<conversation-id>');
-  }
+export async function sendToChannelById(channelId: string, message: string): Promise<void> {
+  await sendToChannelTargetId(channelId, message);
+}
 
-  const channel = getChannelInstance(instanceId);
+export async function sendFileToChannelTargetId(channelTargetId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+  const { channelInstanceId, conversationId } = parseChannelTargetId(channelTargetId);
+  const channel = getChannelInstance(channelInstanceId);
   if (!channel) {
-    throw new Error(`Channel \`${instanceId}\` not found`);
+    throw new Error(`Channel instance \`${channelInstanceId}\` not found`);
   }
   if (!channel.sendFile) {
-    throw new Error(`Channel \`${instanceId}\` does not support file sending yet`);
+    throw new Error(`Channel instance \`${channelInstanceId}\` does not support file sending yet`);
   }
 
   await channel.sendFile(conversationId, file, options);
+}
+
+export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+  await sendFileToChannelTargetId(channelId, file, options);
 }
 
 export async function sendFileToSession(
@@ -178,8 +257,8 @@ export async function sendFileToSession(
   for (const channelInfo of channels) {
     const targetId = `${channelInfo.channelId}:${channelInfo.conversationId}`;
     const channelConfig = getChannelConfig(channelInfo.channelId, channelInfo.conversationId);
-    if (channelConfig?.mode === 'push-only') {
-      result.skippedChannels.push({ channelId: targetId, reason: 'push-only' });
+    if (channelConfig?.mode === 'send-only') {
+      result.skippedChannels.push({ channelId: targetId, reason: 'send-only' });
       continue;
     }
 
@@ -252,7 +331,7 @@ function parseSourceSystemPart(system?: string): { channelId: string; channelUse
     return { channelId, channelUserId, conversationId: channelUserId };
   }
 
-  const directChannelIdMatch = system.match(/channel_id:\s*`([^`]+)`/);
+  const directChannelIdMatch = system.match(/channel_(?:instance_)?id:\s*`([^`]+)`/);
   const conversationIdMatch = system.match(/conversation_id:\s*`([^`]+)`/);
   if (directChannelIdMatch && conversationIdMatch) {
     const channelId = directChannelIdMatch[1];
@@ -290,7 +369,7 @@ export function getChannelBySession(sessionId: string, session?: Session): { cha
         const msg = session.history[i];
         if (msg.role !== 'user') continue;
 
-        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && (part.system.startsWith('FROM: ') || part.system.includes('channel_id: `')));
+        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && (part.system.startsWith('FROM: ') || part.system.includes('channel_id: `') || part.system.includes('channel_instance_id: `')));
         const parsedChannel = parseSourceSystemPart(sourcePart?.system);
         const attachedChannel = findAttachedChannel(channels, parsedChannel);
         if (attachedChannel) {
@@ -316,8 +395,8 @@ export function createSessionBroadcast(sessionId: string): SessionReply {
       }
 
       const channelConfig = getChannelConfig(channelInfo.channelId, channelInfo.conversationId);
-      if (channelConfig?.mode === 'push-only') {
-        logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId, sessionId }, 'Skipping push-only channel during broadcast');
+      if (channelConfig?.mode === 'send-only') {
+        logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId, sessionId }, 'Skipping send-only channel during broadcast');
         continue;
       }
 

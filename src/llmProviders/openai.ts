@@ -1,48 +1,15 @@
 import { StringDecoder } from 'string_decoder';
 import { logger } from '../common';
 import { Message, MessagePart, OpenAIResponsesContent } from '../types';
+import { stringifyFunctionCallArgs } from '../toolCallArgs';
+import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
+import { appendImageGuidanceText } from '../toolImages';
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };
     error.name = 'AbortError';
     error.code = 'ERR_CANCELED';
     return error;
-}
-
-function stringifyToolOutput(output: unknown): string {
-    if (output === undefined || output === null) {
-        return '';
-    }
-
-    if (typeof output === 'string') {
-        return output;
-    }
-
-    if (typeof output === 'object') {
-        try {
-            return JSON.stringify(output, null, 2);
-        } catch {
-            return '[unserializable object]';
-        }
-    }
-
-    return String(output);
-}
-
-function extractToolResponseOutput(response: any): unknown {
-    if (response === undefined || response === null) {
-        return response;
-    }
-
-    if (Object.prototype.hasOwnProperty.call(response, 'output')) {
-        return response.output;
-    }
-
-    if (Object.prototype.hasOwnProperty.call(response, 'error')) {
-        return response.error;
-    }
-
-    return response;
 }
 
 function parseSseEventBlock(block: string): any | null {
@@ -89,6 +56,70 @@ function appendDelta(existing: string | undefined, delta: unknown): string | und
     return `${existing || ''}${delta}`;
 }
 
+function mergeResponseContentPart(existing: any, incoming: any): any {
+    if (!existing) {
+        return incoming ? { ...incoming } : incoming;
+    }
+
+    if (!incoming) {
+        return existing;
+    }
+
+    return {
+        ...existing,
+        ...incoming,
+        text: incoming.text ?? existing.text,
+        refusal: incoming.refusal ?? existing.refusal,
+    };
+}
+
+function mergeResponseOutputItem(existing: any, incoming: any): any {
+    if (!existing) {
+        return incoming
+            ? {
+                  ...incoming,
+                  content: Array.isArray(incoming.content) ? [...incoming.content] : incoming.content,
+                  summary: Array.isArray(incoming.summary) ? [...incoming.summary] : incoming.summary,
+              }
+            : incoming;
+    }
+
+    if (!incoming) {
+        return existing;
+    }
+
+    const merged = {
+        ...existing,
+        ...incoming,
+    };
+
+    if (Array.isArray(existing.content) || Array.isArray(incoming.content)) {
+        const maxLength = Math.max(existing.content?.length || 0, incoming.content?.length || 0);
+        const content = [];
+        for (let index = 0; index < maxLength; index++) {
+            const part = mergeResponseContentPart(existing.content?.[index], incoming.content?.[index]);
+            if (part !== undefined) {
+                content.push(part);
+            }
+        }
+        merged.content = content;
+    }
+
+    if ((incoming.arguments === undefined || incoming.arguments === '') && typeof existing.arguments === 'string') {
+        merged.arguments = existing.arguments;
+    }
+
+    if (Array.isArray(existing.summary) || Array.isArray(incoming.summary)) {
+        merged.summary = Array.isArray(incoming.summary) && incoming.summary.length > 0
+            ? [...incoming.summary]
+            : Array.isArray(existing.summary)
+            ? [...existing.summary]
+            : incoming.summary;
+    }
+
+    return merged;
+}
+
 export function convertToOpenAIFormat(contents: Message[]): any[] {
     const openaiMessages = [];
 
@@ -98,6 +129,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
 
         if (role === 'tool') {
             const groupedByToolId = new Map<string, any[]>();
+            const imagePartsByToolId = new Map<string, MessagePart[]>();
             const toolIdOrder: string[] = [];
             const pendingInlineWithoutId: any[] = [];
 
@@ -124,6 +156,9 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
 
                     const toolId = part.toolUseId;
                     if (toolId) {
+                        const groupedImageParts = imagePartsByToolId.get(toolId) || [];
+                        groupedImageParts.push(part);
+                        imagePartsByToolId.set(toolId, groupedImageParts);
                         pushGroupPart(toolId, imagePart);
                     } else {
                         pendingInlineWithoutId.push(imagePart);
@@ -133,7 +168,6 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
 
                 if (part.functionResponse) {
                     const resp = part.functionResponse.response || {};
-                    const output = extractToolResponseOutput(resp);
                     const toolId = part.functionResponse.tool_use_id || part.toolUseId;
                     if (!toolId) {
                         logger.warn({ part }, 'Skipping tool response without tool_call_id');
@@ -149,7 +183,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    const outputText = stringifyToolOutput(output);
+                    const outputText = appendImageGuidanceText(imagePartsByToolId.get(toolId) || [], formatToolResponsePayload(resp));
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'text', text: outputText });
                     }
@@ -214,7 +248,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
                     type: 'function',
                     function: {
                         name: part.functionCall.name,
-                        arguments: JSON.stringify(part.functionCall.args || {})
+                        arguments: stringifyFunctionCallArgs(part.functionCall)
                     }
                 });
             }
@@ -279,6 +313,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
     for (const msg of contents) {
         if (msg.role === 'tool') {
             const groupedByToolId = new Map<string, any[]>();
+            const imagePartsByToolId = new Map<string, MessagePart[]>();
             const toolIdOrder: string[] = [];
             const pendingInlineWithoutId: any[] = [];
 
@@ -303,6 +338,9 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
 
                     const toolId = part.toolUseId;
                     if (toolId) {
+                        const groupedImageParts = imagePartsByToolId.get(toolId) || [];
+                        groupedImageParts.push(part);
+                        imagePartsByToolId.set(toolId, groupedImageParts);
                         pushGroupPart(toolId, imagePart);
                     } else {
                         pendingInlineWithoutId.push(imagePart);
@@ -312,7 +350,6 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
 
                 if (part.functionResponse) {
                     const resp = part.functionResponse.response || {};
-                    const output = extractToolResponseOutput(resp);
                     const toolId = part.functionResponse.tool_use_id || part.toolUseId;
 
                     if (!toolId) {
@@ -329,7 +366,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                         pendingInlineWithoutId.length = 0;
                     }
 
-                    const outputText = stringifyToolOutput(output);
+                    const outputText = appendImageGuidanceText(imagePartsByToolId.get(toolId) || [], formatToolResponsePayload(resp));
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'input_text', text: outputText });
                     }
@@ -401,7 +438,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                     type: 'function_call',
                     call_id: part.functionCall.id || `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                     name: part.functionCall.name,
-                    arguments: JSON.stringify(part.functionCall.args || {})
+                    arguments: stringifyFunctionCallArgs(part.functionCall)
                 });
             }
         }
@@ -429,6 +466,7 @@ export async function collectOpenAIResponsesStream(
         let completedResponse: any = null;
         let lastSummaryText = '';
         const summaryParts = new Map<string, string>();
+        const outputItems = new Map<number, any>();
         const decoder = new StringDecoder('utf8');
 
         const cleanup = () => {
@@ -458,10 +496,136 @@ export async function collectOpenAIResponsesStream(
             options?.onReasoningSummary?.(nextText);
         };
 
+        const ensureOutputItem = (outputIndex: number, initial?: any) => {
+            const existing = outputItems.get(outputIndex);
+            const next = mergeResponseOutputItem(existing, initial);
+            if (next !== undefined) {
+                outputItems.set(outputIndex, next);
+            }
+            return outputItems.get(outputIndex);
+        };
+
+        const ensureContentPart = (outputIndex: number, contentIndex: number, initial?: any) => {
+            const item = ensureOutputItem(outputIndex, { type: 'message', role: 'assistant', content: [] });
+            if (!item) {
+                return null;
+            }
+
+            if (!Array.isArray(item.content)) {
+                item.content = [];
+            }
+
+            item.content[contentIndex] = mergeResponseContentPart(item.content[contentIndex], initial);
+            return item.content[contentIndex];
+        };
+
+        const buildOutputItems = () =>
+            Array.from(outputItems.entries())
+                .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
+                .map(([outputIndex, item]) => {
+                    const mergedItem = mergeResponseOutputItem(undefined, item) || item;
+
+                    if (Array.isArray(mergedItem?.content)) {
+                        mergedItem.content = mergedItem.content.filter((part: any) => part !== undefined);
+                    }
+
+                    const reasoningSummary = Array.from(summaryParts.entries())
+                        .map(([key, text]) => {
+                            const [summaryOutput = '0', summaryIndex = '0'] = key.split(':');
+                            return {
+                                outputIndex: Number(summaryOutput),
+                                summaryIndex: Number(summaryIndex),
+                                text,
+                            };
+                        })
+                        .filter((entry) => entry.outputIndex === outputIndex && entry.text)
+                        .sort((left, right) => left.summaryIndex - right.summaryIndex)
+                        .map((entry) => ({
+                            type: 'summary_text',
+                            text: entry.text,
+                        }));
+
+                    if (mergedItem?.type === 'reasoning' && reasoningSummary.length > 0) {
+                        mergedItem.summary = reasoningSummary;
+                    }
+
+                    return mergedItem;
+                })
+                .filter(Boolean);
+
         const handleEvent = (event: any) => {
             const key = `${event.output_index ?? 0}:${event.summary_index ?? 0}`;
 
             switch (event.type) {
+                case 'response.output_item.added':
+                case 'response.output_item.done':
+                    if (typeof event.output_index === 'number' && event.item) {
+                        ensureOutputItem(event.output_index, event.item);
+                    }
+                    return;
+                case 'response.content_part.added':
+                case 'response.content_part.done':
+                    if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
+                        ensureContentPart(event.output_index, event.content_index, event.part);
+                    }
+                    return;
+                case 'response.output_text.delta':
+                    if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
+                        const part = ensureContentPart(event.output_index, event.content_index, { type: 'output_text' });
+                        if (part) {
+                            part.text = `${part.text || ''}${event.delta || ''}`;
+                        }
+                    }
+                    return;
+                case 'response.output_text.done':
+                    if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
+                        const part = ensureContentPart(event.output_index, event.content_index, {
+                            type: 'output_text',
+                            text: event.text || '',
+                        });
+                        if (part && typeof event.text === 'string') {
+                            part.text = event.text;
+                        }
+                    }
+                    return;
+                case 'response.refusal.delta':
+                    if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
+                        const part = ensureContentPart(event.output_index, event.content_index, { type: 'refusal' });
+                        if (part) {
+                            part.refusal = `${part.refusal || ''}${event.delta || ''}`;
+                        }
+                    }
+                    return;
+                case 'response.refusal.done':
+                    if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
+                        const part = ensureContentPart(event.output_index, event.content_index, {
+                            type: 'refusal',
+                            refusal: event.refusal || '',
+                        });
+                        if (part && typeof event.refusal === 'string') {
+                            part.refusal = event.refusal;
+                        }
+                    }
+                    return;
+                case 'response.function_call_arguments.delta':
+                    if (typeof event.output_index === 'number') {
+                        const item = ensureOutputItem(event.output_index, { type: 'function_call' });
+                        if (item) {
+                            item.arguments = `${item.arguments || ''}${event.delta || ''}`;
+                        }
+                    }
+                    return;
+                case 'response.function_call_arguments.done':
+                    if (typeof event.output_index === 'number') {
+                        const item = ensureOutputItem(event.output_index, {
+                            type: 'function_call',
+                            arguments: event.arguments || '',
+                        });
+                        if (item && typeof event.arguments === 'string') {
+                            item.arguments = event.arguments;
+                        }
+                    }
+                    return;
                 case 'response.reasoning_summary_part.done':
                     if (event.part?.text) {
                         summaryParts.set(key, event.part.text);
@@ -478,6 +642,12 @@ export async function collectOpenAIResponsesStream(
                     return;
                 case 'response.completed':
                     completedResponse = event.response;
+                    if (completedResponse) {
+                        const streamedOutputItems = buildOutputItems();
+                        if (streamedOutputItems.length > 0) {
+                            completedResponse.output = streamedOutputItems;
+                        }
+                    }
                     return;
                 case 'response.failed':
                     finish(() => reject(new Error(event.response?.error?.message || 'OpenAI Responses request failed.')));
@@ -532,6 +702,10 @@ export async function collectOpenAIResponsesStream(
             appendDecodedText(decoder.end());
             finish(() => {
                 if (completedResponse) {
+                    const streamedOutputItems = buildOutputItems();
+                    if (streamedOutputItems.length > 0) {
+                        completedResponse.output = streamedOutputItems;
+                    }
                     resolve(completedResponse);
                     return;
                 }
