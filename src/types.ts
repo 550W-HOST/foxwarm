@@ -67,6 +67,7 @@ export interface ImageMeta {
 
 export type MaybePromise<T> = T | Promise<T>;
 export type SessionReply = (text: string, options?: any) => MaybePromise<void>;
+export type SessionBroadcast = (text: string, options?: any) => void;
 
 export interface Message {
   role: 'user' | 'model' | 'tool';
@@ -186,7 +187,7 @@ export interface Session {
   parentSessionId?: string; // Parent session ID for child sessions
   goalState?: SessionGoalState; // Session-local goal reminder configuration
   compactThresholdTokens?: number; // Optional per-session auto-compact threshold override in tokens
-  broadcast?: SessionReply; // Broadcast message to all attached channels
+  broadcast?: SessionBroadcast; // Broadcast message to all attached channels (fire-and-forget)
 }
 
 export interface IndexingState {

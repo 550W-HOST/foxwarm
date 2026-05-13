@@ -6,7 +6,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, SessionStreamEvent } from './types';
+import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
@@ -1348,9 +1348,7 @@ export async function requestSessionCompaction(
       } catch (error: any) {
         logger.error({ err: error, sessionId }, 'Immediate session compaction failed');
         if (session.broadcast) {
-          await Promise.resolve(session.broadcast(`Error: ${error?.message || 'Compaction failed'}`)).catch((broadcastError: any) => {
-            logger.warn({ err: broadcastError, sessionId }, 'Failed to broadcast compaction error');
-          });
+          session.broadcast(`Error: ${error?.message || 'Compaction failed'}`);
         }
       } finally {
         await updateSessionBusyState(session, false);

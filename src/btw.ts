@@ -105,7 +105,7 @@ async function appendBtwResult(sessionId: string, payloadText: string): Promise<
   }));
 
   if (session.broadcast) {
-    await session.broadcast(text, { excludePlatforms: ['webui'] });
+    session.broadcast(text, { excludePlatforms: ['webui'] });
   }
 
   return text;

@@ -3,7 +3,7 @@ import path from 'path';
 import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from '../channel';
 import { logger } from '../common';
 import { CHANNELS_FILE } from '../config';
-import { Session, SessionReply } from '../types';
+import { Session, SessionBroadcast } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
 
 export type ChannelMode = 'send-only' | undefined;
@@ -382,7 +382,7 @@ export function getChannelBySession(sessionId: string, session?: Session): { cha
   return channels[0];
 }
 
-export function createSessionBroadcast(sessionId: string): SessionReply {
+export function createSessionBroadcast(sessionId: string): SessionBroadcast {
   return (text: string, options?: any) => {
     const channels = getChannelsBySession(sessionId);
     const excludePlatforms = options?.excludePlatforms || [];
