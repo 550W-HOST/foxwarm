@@ -382,6 +382,7 @@ export async function getSession(sessionId: string): Promise<Session> {
       id: realId,
       history: [],
       persistentMemorySnapshot: '',
+      promptCacheKey: llm.generatePromptCacheKey(),
       stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
       busy: false,
       queue: [],
@@ -497,6 +498,7 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
 export async function createSession(sessionId: string, sessionData: any): Promise<void> {
   if (sessionData && typeof sessionData === 'object') {
     delete sessionData.isolated;
+    llm.ensurePromptCacheKey(sessionData as Session);
   }
   sessions.set(sessionId, sessionData);
   await saveSession(sessionId);
@@ -767,12 +769,18 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
 export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
   const sourceSession = await getSession(sourceSessionId);
   const newSessionId = await allocateForkSessionId(sourceSessionId, suffix);
+  const sourcePreviousPromptCacheKey = sourceSession.promptCacheKey;
+  const promptCacheKey = llm.ensurePromptCacheKey(sourceSession);
+  if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey) {
+    await saveSession(sourceSession.id);
+  }
 
   const forkedSession: Session = {
     id: newSessionId,
     history: structuredClone(sourceSession.history),
     systemPromptFiles: sourceSession.systemPromptFiles ? [...sourceSession.systemPromptFiles] : undefined,
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
+    promptCacheKey,
     stats: {
       totalCachedTokens: 0,
       totalInputTokens: 0,
@@ -909,6 +917,11 @@ export async function createChildSession(parentSessionId: string, suffix: string
   } else {
     // Create new empty session
     const parentSession = await getSession(parentSessionId);
+    const parentPreviousPromptCacheKey = parentSession.promptCacheKey;
+    const promptCacheKey = llm.ensurePromptCacheKey(parentSession);
+    if (parentSession.promptCacheKey !== parentPreviousPromptCacheKey) {
+      await saveSession(parentSession.id);
+    }
     const childSessionId = `${parentSessionId}_${suffix}`;
 
     const agentName = parentSession.agent || 'main';
@@ -922,6 +935,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
       history: [],
       systemPromptFiles: parentSession.systemPromptFiles ? [...parentSession.systemPromptFiles] : undefined,
       persistentMemorySnapshot: snapshot,
+      promptCacheKey,
       stats: {
         totalCachedTokens: 0,
         totalInputTokens: 0,
@@ -1048,7 +1062,8 @@ export async function saveSessionsMetadata(): Promise<void> {
 
     for (const [sessionId, metadata] of Object.entries(existingSessions)) {
       if (sessions.has(sessionId) || await fs.pathExists(getSessionHistoryFilePath(sessionId))) {
-        data.sessions[sessionId] = metadata;
+        const { promptCacheKey: _legacyPromptCacheKey, ...metadataWithoutPromptCacheKey } = (metadata || {}) as Record<string, any>;
+        data.sessions[sessionId] = metadataWithoutPromptCacheKey;
       }
     }
 
@@ -1085,16 +1100,19 @@ export async function loadSessions(): Promise<void> {
       if (sessionId === 'channelAttachments') continue;
 
       const metadata = sessionsData[sessionId];
+      const { promptCacheKey: _legacyPromptCacheKey, ...metadataWithoutPromptCacheKey } = (metadata || {}) as Record<string, any>;
 
       // Create session with metadata but empty history (will be loaded when getSession is called)
       const session: Session = {
         id: sessionId,
         busy: false,
         meta: { lastMessageTime: Date.now() },
-        ...metadata,
-        systemPromptFiles: llm.normalizeSystemPromptFiles((metadata as any).systemPromptFiles),
+        ...metadataWithoutPromptCacheKey,
+        persistentMemorySnapshot: metadataWithoutPromptCacheKey.persistentMemorySnapshot || '',
+        stats: metadataWithoutPromptCacheKey.stats || { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+        systemPromptFiles: llm.normalizeSystemPromptFiles(metadataWithoutPromptCacheKey.systemPromptFiles),
         history: [], // Empty, will be loaded when getSession is called
-        queue: metadata.queue || [],
+        queue: metadataWithoutPromptCacheKey.queue || [],
       };
 
       delete (session as any).isolated;

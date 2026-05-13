@@ -1,10 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
+import { PassThrough } from 'node:stream';
 
-import { chat, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { chat, ensurePromptCacheKey, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import type { Message, Session } from './types';
 import { containsLoneSurrogate } from './utils/unicode';
+import * as sessionManager from './sessionManager';
+import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from './session/metadataStore';
+
+const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function makeChatCompletionStream(text = 'ok'): PassThrough {
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: 'stop' }] })}\n\n`);
+    stream.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 0 } } })}\n\n`);
+    stream.write('data: [DONE]\n\n');
+    stream.end();
+  });
+  return stream;
+}
+
+function createOpenAITestSession(id: string): Session {
+  return {
+    id,
+    history: [],
+    persistentMemorySnapshot: 'system prompt',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false,
+    queue: [],
+    meta: { lastMessageTime: Date.now() },
+    model: 'openai/gpt-5.2-codex',
+  } as Session;
+}
+
+function makeId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 test('sanitizeProviderRequestPayload replaces lone surrogates in nested provider payloads', () => {
   const payload = {
@@ -184,5 +217,151 @@ test('chat stores each model request usage on its assistant message metadata', a
     });
   } finally {
     (axios as any).post = originalPost;
+  }
+});
+
+test('ensurePromptCacheKey assigns a stable low-sensitivity key per session', () => {
+  const sessionA = createOpenAITestSession('prompt_cache_key_session_a');
+  const sessionB = createOpenAITestSession('prompt_cache_key_session_b');
+
+  const first = ensurePromptCacheKey(sessionA);
+  const second = ensurePromptCacheKey(sessionA);
+  const independent = ensurePromptCacheKey(sessionB);
+
+  assert.equal(first, second);
+  assert.equal(sessionA.promptCacheKey, first);
+  assert.match(first, PROMPT_CACHE_KEY_PATTERN);
+  assert.doesNotMatch(first, /prompt_cache_key_session_a/);
+  assert.notEqual(first, independent);
+});
+
+test('chat uses the stored prompt cache key for OpenAI requests', async () => {
+  const originalPost = axios.post;
+  const capturedBodies: any[] = [];
+  const session = createOpenAITestSession('stored_prompt_cache_session');
+  session.promptCacheKey = '11111111-2222-3333-4444-555555555555';
+
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBodies.push(data);
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: makeChatCompletionStream(),
+    };
+  };
+
+  try {
+    await chat([{ text: 'hello one' }], session, 0, {
+      appendMessage: async (message: Message) => { session.history.push(message); },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    await chat([{ text: 'hello two' }], session, 1, {
+      appendMessage: async (message: Message) => { session.history.push(message); },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.equal(capturedBodies.length, 2);
+    assert.equal(capturedBodies[0].prompt_cache_key, '11111111-2222-3333-4444-555555555555');
+    assert.equal(capturedBodies[1].prompt_cache_key, '11111111-2222-3333-4444-555555555555');
+    assert.equal(session.promptCacheKey, '11111111-2222-3333-4444-555555555555');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('chat lazily generates and reuses a prompt cache key for legacy sessions', async () => {
+  const originalPost = axios.post;
+  const capturedBodies: any[] = [];
+  const session = createOpenAITestSession('legacy_prompt_cache_session');
+  delete session.promptCacheKey;
+
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBodies.push(data);
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: makeChatCompletionStream(),
+    };
+  };
+
+  try {
+    await chat([{ text: 'hello legacy one' }], session, 0, {
+      appendMessage: async (message: Message) => { session.history.push(message); },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    const generatedKey = session.promptCacheKey;
+
+    await chat([{ text: 'hello legacy two' }], session, 1, {
+      appendMessage: async (message: Message) => { session.history.push(message); },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.match(generatedKey || '', PROMPT_CACHE_KEY_PATTERN);
+    assert.equal(capturedBodies[0].prompt_cache_key, generatedKey);
+    assert.equal(capturedBodies[1].prompt_cache_key, generatedKey);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('chat persists a generated prompt cache key for stored legacy sessions', async () => {
+  const originalPost = axios.post;
+  const sessionId = makeId('legacy_prompt_cache_persisted');
+  let capturedBody: any = null;
+
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBody = data;
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: makeChatCompletionStream(),
+    };
+  };
+
+  try {
+    await sessionManager.loadSessions();
+    await sessionManager.createSession(sessionId, {
+      id: sessionId,
+      agent: 'main',
+      history: [],
+      persistentMemorySnapshot: 'system prompt',
+      promptCacheKey: '',
+      stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+      busy: false,
+      queue: [],
+      meta: { lastMessageTime: Date.now() },
+      model: 'openai/gpt-5.2-codex',
+    } as Session);
+
+    const session = await sessionManager.getSession(sessionId);
+    delete session.promptCacheKey;
+
+    await chat([{ text: 'persist legacy key' }], session, 0, {
+      appendMessage: async (message: Message) => { session.history.push(message); },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.equal(capturedBody.prompt_cache_key, session.promptCacheKey);
+    assert.match(session.promptCacheKey || '', PROMPT_CACHE_KEY_PATTERN);
+    const historySnapshot = await readSessionHistorySnapshot(sessionId);
+    assert.equal(historySnapshot?.promptCacheKey, session.promptCacheKey);
+    const metadataSnapshot = await loadSessionsMetadataSnapshot();
+    assert.equal(metadataSnapshot.data.sessions?.[sessionId]?.promptCacheKey, undefined);
+  } finally {
+    (axios as any).post = originalPost;
+    await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });

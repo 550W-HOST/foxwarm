@@ -165,6 +165,7 @@ export interface Session {
   history: Message[];
   systemPromptFiles?: string[]; // Optional file list overriding the memory-file portion of snapshot composition
   persistentMemorySnapshot: string;
+  promptCacheKey?: string; // Stable low-sensitivity routing key passed to OpenAI as prompt_cache_key
   stats: SessionStats;
   busy: boolean;
   busyStartedAt?: number;
