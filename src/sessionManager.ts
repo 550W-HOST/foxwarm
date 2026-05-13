@@ -57,6 +57,13 @@ function clearSessionWaitState(session: Session): boolean {
   return true;
 }
 
+function isWaitNeutralMaintenanceQueueItem(item: QueueItem): boolean {
+  // These items represent internal compaction maintenance, not external input.
+  // They may be processed while a session is waiting, but should not consume the
+  // wait token or make a later wait-timeout event stale.
+  return item.type === 'compact' || item.type === 'compact-commit';
+}
+
 function applyQueuedItemToWaitState(session: Session, item: QueueItem): boolean {
   const wait = getSessionWaitState(session);
   if (!wait) {
@@ -75,6 +82,11 @@ function applyQueuedItemToWaitState(session: Session, item: QueueItem): boolean 
     }
 
     clearSessionWaitState(session);
+    return true;
+  }
+
+  if (isWaitNeutralMaintenanceQueueItem(item)) {
+    logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type }, 'Leaving active wait state unchanged for maintenance queue item');
     return true;
   }
 
@@ -1320,6 +1332,41 @@ export async function requestSessionCompaction(
   }
 
   const startedImmediately = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
+  if (startedImmediately) {
+    // Idle sessions do not need a synthetic queue item just to enter the compact
+    // runner. Keep the `compact` item only for busy/managed sessions where it is
+    // still the ordering marker for "compact after the current turn/step".
+    await updateSessionBusyState(session, true);
+
+    void (async () => {
+      try {
+        await processSessionCompactionRequest(sessionId, {
+          keepPercent: options.keepPercent,
+          compactGuidance: options.compactGuidance,
+          completionMarker: options.completionMarker,
+        }, 'auto');
+      } catch (error: any) {
+        logger.error({ err: error, sessionId }, 'Immediate session compaction failed');
+        if (session.broadcast) {
+          await Promise.resolve(session.broadcast(`Error: ${error?.message || 'Compaction failed'}`)).catch((broadcastError: any) => {
+            logger.warn({ err: broadcastError, sessionId }, 'Failed to broadcast compaction error');
+          });
+        }
+      } finally {
+        await updateSessionBusyState(session, false);
+        if (session.queue.length > 0) {
+          void onSessionTriggered?.(sessionId);
+        }
+      }
+    })();
+
+    return {
+      alreadyQueued: false,
+      startedImmediately: true,
+      queueLength: session.queue.length,
+    };
+  }
+
   await enqueueSessionItem(sessionId, {
     type: 'compact',
     keepPercent: options.keepPercent,
