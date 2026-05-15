@@ -172,6 +172,7 @@ export function formatMessagePreviewText(
   const preview = formatMessageText(message, {
     ...options,
     includeRolePrefix: false,
+    toolCharLimit: options.toolCharLimit ?? previewLength,
     skipThinking: options.skipThinking ?? true,
   });
 

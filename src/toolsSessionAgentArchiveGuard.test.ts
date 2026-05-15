@@ -232,3 +232,57 @@ test('get_context_archive sums message and block preview budgets while exempting
   assert.match(String(singlePerSection), /archived alpha/);
   assert.match(String(singlePerSection), /block alpha/);
 });
+
+test('get_context_archive lets previewLength control archived tool response previews', async () => {
+  const deps = await loadDeps();
+  const sessionId = makeId('archive_tool_preview');
+  const longOutput = `TOOL_OUTPUT_BEGIN_${'x'.repeat(700)}_TOOL_OUTPUT_END`;
+  const session: Session = {
+    ...createBaseSession(sessionId),
+    nextMessageSeq: 1,
+    nextBlockId: 1,
+    contextFrontier: [],
+  } as Session;
+
+  await deps.archive.appendMessagesToArchive(session, [
+    {
+      role: 'tool',
+      parts: [
+        {
+          functionResponse: {
+            tool_use_id: 'call_long_tool_output',
+            name: 'demo_tool',
+            response: { output: longOutput },
+          },
+        },
+      ],
+      __meta: { timestamp: 4000 },
+    },
+  ]);
+
+  const stored = await deps.sessionManager.getArchivedMessages(sessionId, { startSeq: 1, endSeq: 1 });
+  assert.equal(stored.records[0]?.message.parts[0]?.functionResponse?.response?.output, longOutput);
+
+  const shortPreview = String(await deps.toolsSessionAgent.tool_get_context_archive({
+    sessionId,
+    startSeq: 1,
+    endSeq: 1,
+    includeMessages: true,
+    includeBlocks: false,
+    previewLength: 120,
+  }));
+  assert.doesNotMatch(shortPreview, /TOOL_OUTPUT_END/);
+
+  const longPreview = String(await deps.toolsSessionAgent.tool_get_context_archive({
+    sessionId,
+    startSeq: 1,
+    endSeq: 1,
+    includeMessages: true,
+    includeBlocks: false,
+    previewLength: 1000,
+  }));
+  assert.match(longPreview, /\[tool:demo_tool\]/);
+  assert.match(longPreview, /TOOL_OUTPUT_BEGIN/);
+  assert.match(longPreview, /TOOL_OUTPUT_END/);
+  assert.ok(longPreview.length > shortPreview.length + 500);
+});
