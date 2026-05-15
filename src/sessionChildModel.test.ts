@@ -5,6 +5,8 @@ import { resolveModelConfig } from './config';
 import { tool_create_child_session, tool_create_session, tool_set_session_child_model } from './toolsSessionAgent';
 import { Session } from './types';
 
+const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -182,5 +184,92 @@ test('forked child sessions append inherited tool responses as tool-role message
   } finally {
     await sessionManager.deleteSession(childSessionId).catch(() => {});
     await sessionManager.deleteSession(parentSessionId).catch(() => {});
+  }
+});
+
+test('child sessions inherit the parent prompt cache key for both new and forked children', async () => {
+  await sessionManager.loadSessions();
+  const parentSessionId = makeId('prompt_cache_parent');
+  const newChildId = `${parentSessionId}_new_child`;
+  const forkedChildId = `${parentSessionId}_forked_child`;
+
+  try {
+    const parent = await ensureSession(parentSessionId);
+    parent.promptCacheKey = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    parent.history = [{ role: 'user', parts: [{ text: 'parent history' }] }];
+    await sessionManager.saveSession(parentSessionId);
+
+    await sessionManager.createChildSession(parentSessionId, 'new_child', false);
+    await sessionManager.createChildSession(parentSessionId, 'forked_child', true);
+
+    const newChild = await sessionManager.getSession(newChildId);
+    const forkedChild = await sessionManager.getSession(forkedChildId);
+    assert.equal(newChild.promptCacheKey, parent.promptCacheKey);
+    assert.equal(forkedChild.promptCacheKey, parent.promptCacheKey);
+  } finally {
+    for (const id of [newChildId, forkedChildId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
+test('createSessionInAgent inherits prompt cache key when parentSessionId is provided', async () => {
+  await sessionManager.loadSessions();
+  const parentSessionId = makeId('prompt_cache_create_session_parent');
+  const sessionName = makeId('prompt_cache_created_child');
+  const createdSessionId = sessionName;
+
+  try {
+    const parent = await ensureSession(parentSessionId);
+    parent.promptCacheKey = '12345678-1234-1234-1234-123456789abc';
+    await sessionManager.saveSession(parentSessionId);
+
+    await sessionManager.createSessionInAgent({
+      agentName: 'main',
+      sessionName,
+      parentSessionId,
+    });
+
+    const created = await sessionManager.getSession(createdSessionId);
+    assert.equal(created.promptCacheKey, parent.promptCacheKey);
+  } finally {
+    await sessionManager.deleteSession(createdSessionId).catch(() => {});
+    await sessionManager.deleteSession(parentSessionId).catch(() => {});
+  }
+});
+
+test('independent new sessions get different prompt cache keys and persist legacy migration', async () => {
+  await sessionManager.loadSessions();
+  const firstSessionId = makeId('prompt_cache_independent_a');
+  const secondSessionId = makeId('prompt_cache_independent_b');
+  const legacySessionId = makeId('prompt_cache_legacy');
+
+  try {
+    const first = await sessionManager.createEmptySession(firstSessionId);
+    const second = await sessionManager.createEmptySession(secondSessionId);
+    assert.match(first.session.promptCacheKey || '', PROMPT_CACHE_KEY_PATTERN);
+    assert.match(second.session.promptCacheKey || '', PROMPT_CACHE_KEY_PATTERN);
+    assert.notEqual(first.session.promptCacheKey, second.session.promptCacheKey);
+
+    await sessionManager.createSession(legacySessionId, {
+      id: legacySessionId,
+      agent: 'main',
+      history: [],
+      persistentMemorySnapshot: '',
+      stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+      busy: false,
+      queue: [],
+      meta: { lastMessageTime: Date.now() },
+      currentNode: 'master',
+    } as Session);
+    const migratedLegacy = await sessionManager.getSession(legacySessionId);
+    assert.match(migratedLegacy.promptCacheKey || '', PROMPT_CACHE_KEY_PATTERN);
+
+    const reloadedLegacy = await sessionManager.getSession(legacySessionId);
+    assert.equal(reloadedLegacy.promptCacheKey, migratedLegacy.promptCacheKey);
+  } finally {
+    for (const id of [firstSessionId, secondSessionId, legacySessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
   }
 });

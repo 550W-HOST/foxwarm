@@ -181,6 +181,13 @@ export async function createSessionInAgent(options: {
     throw new Error(`Session "${sessionId}" already exists.`);
   }
 
+  const parentSession = parentSessionId ? await deps.getExistingSession(parentSessionId) : undefined;
+  const parentPreviousPromptCacheKey = parentSession?.promptCacheKey;
+  const promptCacheKey = parentSession ? llm.ensurePromptCacheKey(parentSession) : undefined;
+  if (parentSession && parentSession.promptCacheKey !== parentPreviousPromptCacheKey) {
+    await deps.saveSession(parentSession.id);
+  }
+
   const agentMeta = deps.getAgentMetadata(agentName);
   const isolatedNode = agentMeta.isolated && typeof agentMeta.isolatedNode === 'string' && agentMeta.isolatedNode.trim()
     ? agentMeta.isolatedNode.trim()
@@ -194,6 +201,7 @@ export async function createSessionInAgent(options: {
     history: [],
     systemPromptFiles: systemPromptFiles ? [...systemPromptFiles] : undefined,
     persistentMemorySnapshot: snapshot,
+    promptCacheKey,
     stats: {
       totalCachedTokens: 0,
       totalInputTokens: 0,

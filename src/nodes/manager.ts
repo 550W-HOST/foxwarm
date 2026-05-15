@@ -654,7 +654,7 @@ export class NodesManager {
         // Broadcast via session
         const session = await sessionManager.getSession(sessionId);
         if (session.broadcast) {
-          await session.broadcast(text);
+          session.broadcast(text);
         }
       }
     };

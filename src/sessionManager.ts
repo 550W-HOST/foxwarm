@@ -6,7 +6,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionReply, SessionStreamEvent } from './types';
+import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
@@ -57,6 +57,13 @@ function clearSessionWaitState(session: Session): boolean {
   return true;
 }
 
+function isWaitNeutralMaintenanceQueueItem(item: QueueItem): boolean {
+  // These items represent internal compaction maintenance, not external input.
+  // They may be processed while a session is waiting, but should not consume the
+  // wait token or make a later wait-timeout event stale.
+  return item.type === 'compact' || item.type === 'compact-commit';
+}
+
 function applyQueuedItemToWaitState(session: Session, item: QueueItem): boolean {
   const wait = getSessionWaitState(session);
   if (!wait) {
@@ -75,6 +82,11 @@ function applyQueuedItemToWaitState(session: Session, item: QueueItem): boolean 
     }
 
     clearSessionWaitState(session);
+    return true;
+  }
+
+  if (isWaitNeutralMaintenanceQueueItem(item)) {
+    logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type }, 'Leaving active wait state unchanged for maintenance queue item');
     return true;
   }
 
@@ -370,6 +382,7 @@ export async function getSession(sessionId: string): Promise<Session> {
       id: realId,
       history: [],
       persistentMemorySnapshot: '',
+      promptCacheKey: llm.generatePromptCacheKey(),
       stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
       busy: false,
       queue: [],
@@ -485,6 +498,7 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
 export async function createSession(sessionId: string, sessionData: any): Promise<void> {
   if (sessionData && typeof sessionData === 'object') {
     delete sessionData.isolated;
+    llm.ensurePromptCacheKey(sessionData as Session);
   }
   sessions.set(sessionId, sessionData);
   await saveSession(sessionId);
@@ -755,12 +769,18 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
 export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
   const sourceSession = await getSession(sourceSessionId);
   const newSessionId = await allocateForkSessionId(sourceSessionId, suffix);
+  const sourcePreviousPromptCacheKey = sourceSession.promptCacheKey;
+  const promptCacheKey = llm.ensurePromptCacheKey(sourceSession);
+  if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey) {
+    await saveSession(sourceSession.id);
+  }
 
   const forkedSession: Session = {
     id: newSessionId,
     history: structuredClone(sourceSession.history),
     systemPromptFiles: sourceSession.systemPromptFiles ? [...sourceSession.systemPromptFiles] : undefined,
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
+    promptCacheKey,
     stats: {
       totalCachedTokens: 0,
       totalInputTokens: 0,
@@ -897,6 +917,11 @@ export async function createChildSession(parentSessionId: string, suffix: string
   } else {
     // Create new empty session
     const parentSession = await getSession(parentSessionId);
+    const parentPreviousPromptCacheKey = parentSession.promptCacheKey;
+    const promptCacheKey = llm.ensurePromptCacheKey(parentSession);
+    if (parentSession.promptCacheKey !== parentPreviousPromptCacheKey) {
+      await saveSession(parentSession.id);
+    }
     const childSessionId = `${parentSessionId}_${suffix}`;
 
     const agentName = parentSession.agent || 'main';
@@ -910,6 +935,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
       history: [],
       systemPromptFiles: parentSession.systemPromptFiles ? [...parentSession.systemPromptFiles] : undefined,
       persistentMemorySnapshot: snapshot,
+      promptCacheKey,
       stats: {
         totalCachedTokens: 0,
         totalInputTokens: 0,
@@ -1036,7 +1062,8 @@ export async function saveSessionsMetadata(): Promise<void> {
 
     for (const [sessionId, metadata] of Object.entries(existingSessions)) {
       if (sessions.has(sessionId) || await fs.pathExists(getSessionHistoryFilePath(sessionId))) {
-        data.sessions[sessionId] = metadata;
+        const { promptCacheKey: _legacyPromptCacheKey, ...metadataWithoutPromptCacheKey } = (metadata || {}) as Record<string, any>;
+        data.sessions[sessionId] = metadataWithoutPromptCacheKey;
       }
     }
 
@@ -1073,16 +1100,19 @@ export async function loadSessions(): Promise<void> {
       if (sessionId === 'channelAttachments') continue;
 
       const metadata = sessionsData[sessionId];
+      const { promptCacheKey: _legacyPromptCacheKey, ...metadataWithoutPromptCacheKey } = (metadata || {}) as Record<string, any>;
 
       // Create session with metadata but empty history (will be loaded when getSession is called)
       const session: Session = {
         id: sessionId,
         busy: false,
         meta: { lastMessageTime: Date.now() },
-        ...metadata,
-        systemPromptFiles: llm.normalizeSystemPromptFiles((metadata as any).systemPromptFiles),
+        ...metadataWithoutPromptCacheKey,
+        persistentMemorySnapshot: metadataWithoutPromptCacheKey.persistentMemorySnapshot || '',
+        stats: metadataWithoutPromptCacheKey.stats || { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+        systemPromptFiles: llm.normalizeSystemPromptFiles(metadataWithoutPromptCacheKey.systemPromptFiles),
         history: [], // Empty, will be loaded when getSession is called
-        queue: metadata.queue || [],
+        queue: metadataWithoutPromptCacheKey.queue || [],
       };
 
       delete (session as any).isolated;
@@ -1320,6 +1350,39 @@ export async function requestSessionCompaction(
   }
 
   const startedImmediately = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
+  if (startedImmediately) {
+    // Idle sessions do not need a synthetic queue item just to enter the compact
+    // runner. Keep the `compact` item only for busy/managed sessions where it is
+    // still the ordering marker for "compact after the current turn/step".
+    await updateSessionBusyState(session, true);
+
+    void (async () => {
+      try {
+        await processSessionCompactionRequest(sessionId, {
+          keepPercent: options.keepPercent,
+          compactGuidance: options.compactGuidance,
+          completionMarker: options.completionMarker,
+        }, 'auto');
+      } catch (error: any) {
+        logger.error({ err: error, sessionId }, 'Immediate session compaction failed');
+        if (session.broadcast) {
+          session.broadcast(`Error: ${error?.message || 'Compaction failed'}`);
+        }
+      } finally {
+        await updateSessionBusyState(session, false);
+        if (session.queue.length > 0) {
+          void onSessionTriggered?.(sessionId);
+        }
+      }
+    })();
+
+    return {
+      alreadyQueued: false,
+      startedImmediately: true,
+      queueLength: session.queue.length,
+    };
+  }
+
   await enqueueSessionItem(sessionId, {
     type: 'compact',
     keepPercent: options.keepPercent,

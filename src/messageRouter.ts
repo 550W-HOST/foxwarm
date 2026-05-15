@@ -13,7 +13,7 @@ import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalEndTurnReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
-import { Message, MessagePart, QueueItem, QueueSource, Session, SessionReply } from './types';
+import { Message, MessagePart, QueueItem, QueueSource, Session } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
 
 function formatCurrentTimeForPrompt(date: Date): string {
@@ -118,17 +118,20 @@ export class MessageRouter {
     };
   }
 
-  private getSessionReply(session: Session, sourceCtx?: ChannelContext): SessionReply | undefined {
-    if (sourceCtx?.preferDirectReply && sourceCtx.reply) {
-      return sourceCtx.reply.bind(sourceCtx);
-    }
-    return session.broadcast ?? sourceCtx?.reply?.bind(sourceCtx);
-  }
-
   private async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void> {
-    const reply = this.getSessionReply(session, sourceCtx);
-    if (!reply) return;
-    await reply(text, options);
+    if (sourceCtx?.preferDirectReply && sourceCtx.reply) {
+      await sourceCtx.reply(text, options);
+      return;
+    }
+
+    if (session.broadcast) {
+      session.broadcast(text, options);
+      return;
+    }
+
+    if (sourceCtx?.reply) {
+      await sourceCtx.reply(text, options);
+    }
   }
 
   private prepareUserParts(parts: MessagePart[], source?: QueueSource): MessagePart[] {
@@ -656,7 +659,7 @@ export class MessageRouter {
         }
 
         if (shouldBroadcastChannelText(result.text) && broadcast) {
-          await broadcast(result.text, { parse_mode: 'Markdown', excludePlatforms: ['webui'] });
+          broadcast(result.text, { parse_mode: 'Markdown', excludePlatforms: ['webui'] });
           lastTextBroadcasted = true;
         }
 

@@ -29,7 +29,7 @@ const { registerChannel } = require(path.join(__dirname, '..', 'lib', 'channel')
       throw new Error('session.broadcast missing');
     }
 
-    await session.broadcast('send-only smoke message');
+    session.broadcast('send-only smoke message');
     await new Promise(resolve => setTimeout(resolve, 50));
 
     const recipients = calls.map(call => call.channelUserId).sort();

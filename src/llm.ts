@@ -1,5 +1,5 @@
 import axios, { AxiosResponse } from 'axios';
-import crypto from 'crypto';
+import crypto, { randomUUID } from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { StringDecoder } from 'string_decoder';
@@ -92,14 +92,31 @@ export function isAbortError(error: any): boolean {
     );
 }
 
-function getPromptCacheKey(session: Session): string {
-    const sessionId = session.id || 'default';
-    return crypto.createHash('md5').update(`session_${sessionId}`).digest('hex');
+function isValidStoredPromptCacheKey(value: unknown): value is string {
+    return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+}
+
+export function generatePromptCacheKey(): string {
+    return randomUUID();
+}
+
+export function ensurePromptCacheKey(session: Session): string {
+    if (isValidStoredPromptCacheKey(session.promptCacheKey)) {
+        return session.promptCacheKey;
+    }
+
+    const promptCacheKey = generatePromptCacheKey();
+    session.promptCacheKey = promptCacheKey;
+    return promptCacheKey;
 }
 
 function getPromptCacheKeyForSessionId(sessionId?: string): string {
-    const normalizedSessionId = sessionId || 'default';
-    return crypto.createHash('md5').update(`session_${normalizedSessionId}`).digest('hex');
+    // Compatibility fallback for low-level callers that do not have a Session object.
+    // Normal session chat uses the persisted per-session key from ensurePromptCacheKey().
+    // Do not derive this fallback from the raw session id; prompt_cache_key should stay
+    // low-sensitivity even in setup/direct test calls.
+    void sessionId;
+    return generatePromptCacheKey();
 }
 
 type RequestLlmOnceOptions = {
@@ -116,6 +133,24 @@ type RequestLlmOnceOptions = {
     maxRetries?: number;
     timeoutMs?: number;
 };
+
+async function resolvePromptCacheKeyForRequest(options: RequestLlmOnceOptions): Promise<string> {
+    if (options.promptCacheKey) {
+        return options.promptCacheKey;
+    }
+
+    const session = options.sessionId ? await sessionManager.getExistingSession(options.sessionId) : undefined;
+    if (session) {
+        const previousPromptCacheKey = session.promptCacheKey;
+        const promptCacheKey = ensurePromptCacheKey(session);
+        if (session.promptCacheKey !== previousPromptCacheKey) {
+            await sessionManager.saveSession(session.id);
+        }
+        return promptCacheKey;
+    }
+
+    return getPromptCacheKeyForSessionId(options.sessionId);
+}
 
 export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-completions' | null {
     if (providerType === 'openai' || providerType === 'openai-responses') {
@@ -891,12 +926,17 @@ export async function chat(
         .map(({ __meta, ...msg }: Message) => msg);
     const availableToolDefinitions = options?.toolDefinitions
         ?? tools.modelFacingDefinitions;
+    const previousPromptCacheKey = session.promptCacheKey;
+    const promptCacheKey = ensurePromptCacheKey(session);
+    if (session.id && session.promptCacheKey !== previousPromptCacheKey && sessionManager.getAllSessions().get(session.id) === session) {
+        await sessionManager.saveSession(session.id);
+    }
     const result = await requestLlmOnce({
         contents: contentsForLlm,
         systemPrompt,
         model: session.model,
         sessionId: session.id,
-        promptCacheKey: getPromptCacheKey(session),
+        promptCacheKey,
         iteration,
         toolDefinitions: availableToolDefinitions,
         notifySessionEvents: options?.notifySessionEvents,
@@ -938,7 +978,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
     const modelName = modelEntry?.model || '';
-    const promptCacheKey = options.promptCacheKey || getPromptCacheKeyForSessionId(options.sessionId);
+    const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';

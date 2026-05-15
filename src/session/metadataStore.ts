@@ -8,6 +8,7 @@ import { DiskJsonData, getNumberedBackupPath } from '../utils/diskJsonData';
 const SESSION_HISTORY_STATE_FIELDS = [
   'queue',
   'parentSessionId',
+  'promptCacheKey',
   'systemPromptFiles',
   'indexingState',
   'historyVersion',

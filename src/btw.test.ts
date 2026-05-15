@@ -103,7 +103,7 @@ test('/btw command acks immediately and writes async result as display-only hist
     const session = await createTestSession(sessionId);
     const originalFirstMessage = structuredClone(session.history[0]);
     const broadcasts: string[] = [];
-    session.broadcast = async (text: string) => { broadcasts.push(String(text)); };
+    session.broadcast = (text: string) => { broadcasts.push(String(text)); };
 
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void> }) => {
       requestPartsAtCall = structuredClone(parts);
@@ -182,7 +182,7 @@ test('/btw does not execute tool calls returned by the model', async () => {
     const session = await createTestSession(sessionId);
     const originalHistory = structuredClone(session.history);
     const broadcasts: string[] = [];
-    session.broadcast = async (text: string) => { broadcasts.push(String(text)); };
+    session.broadcast = (text: string) => { broadcasts.push(String(text)); };
 
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void> }) => {
       if (parts) {
