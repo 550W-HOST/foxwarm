@@ -87,6 +87,7 @@ export default function Sidebar({
               onShowUsageBadgeChange={onShowUsageBadgeChange}
               instanceName={instanceName}
               onInstanceNameChange={onInstanceNameChange}
+              menuAlign="start"
               onOpenSetup={onSelectSetup}
               setupActive={currentView === 'setup'}
             />

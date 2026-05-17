@@ -16,6 +16,7 @@ interface GlobalUiSettingsMenuProps {
   onShowUsageBadgeChange: (enabled: boolean) => void
   instanceName: string
   onInstanceNameChange: (name: string) => Promise<void> | void
+  menuAlign?: 'start' | 'end'
   onOpenSetup?: () => void
   setupActive?: boolean
 }
@@ -31,6 +32,7 @@ export default function GlobalUiSettingsMenu({
   onShowUsageBadgeChange,
   instanceName,
   onInstanceNameChange,
+  menuAlign = 'end',
   onOpenSetup,
   setupActive = false,
 }: GlobalUiSettingsMenuProps) {
@@ -67,6 +69,7 @@ export default function GlobalUiSettingsMenu({
   const menuButtonClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-wait disabled:opacity-70 dark:text-gray-300 dark:hover:bg-gray-700'
   const modifierLabel = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? 'Cmd' : 'Ctrl'
   const toggleRowClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
+  const menuAlignClass = menuAlign === 'start' ? 'left-0' : 'right-0'
 
   useEffect(() => {
     if (open && !renamingInstance) {
@@ -102,7 +105,7 @@ export default function GlobalUiSettingsMenu({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+        <div className={`absolute ${menuAlignClass} top-full z-50 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100`}>
           <div className="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
             <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Theme</div>
             <div className="flex gap-1">
