@@ -14,6 +14,8 @@ interface GlobalUiSettingsMenuProps {
   onGroupToolsChange: (enabled: boolean) => void
   showUsageBadge: boolean
   onShowUsageBadgeChange: (enabled: boolean) => void
+  instanceName: string
+  onInstanceNameChange: (name: string) => Promise<void> | void
   onOpenSetup?: () => void
   setupActive?: boolean
 }
@@ -27,10 +29,16 @@ export default function GlobalUiSettingsMenu({
   onGroupToolsChange,
   showUsageBadge,
   onShowUsageBadgeChange,
+  instanceName,
+  onInstanceNameChange,
   onOpenSetup,
   setupActive = false,
 }: GlobalUiSettingsMenuProps) {
   const [open, setOpen] = useState(false)
+  const [renamingInstance, setRenamingInstance] = useState(false)
+  const [draftInstanceName, setDraftInstanceName] = useState(instanceName)
+  const [savingInstanceName, setSavingInstanceName] = useState(false)
+  const [instanceNameError, setInstanceNameError] = useState('')
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -60,6 +68,27 @@ export default function GlobalUiSettingsMenu({
   const modifierLabel = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? 'Cmd' : 'Ctrl'
   const toggleRowClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
 
+  useEffect(() => {
+    if (open && !renamingInstance) {
+      setDraftInstanceName(instanceName)
+      setInstanceNameError('')
+    }
+  }, [instanceName, open, renamingInstance])
+
+  const submitInstanceName = async (name: string) => {
+    setSavingInstanceName(true)
+    setInstanceNameError('')
+    try {
+      await onInstanceNameChange(name)
+      setRenamingInstance(false)
+      setOpen(false)
+    } catch (error: any) {
+      setInstanceNameError(error?.message || 'Failed to save instance name')
+    } finally {
+      setSavingInstanceName(false)
+    }
+  }
+
   return (
     <div ref={rootRef} className="relative">
       <button
@@ -73,7 +102,7 @@ export default function GlobalUiSettingsMenu({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+        <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
           <div className="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
             <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Theme</div>
             <div className="flex gap-1">
@@ -142,6 +171,72 @@ export default function GlobalUiSettingsMenu({
           <div className="border-t border-gray-200 px-4 py-3 dark:border-gray-700">
             <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Application</div>
             <div className="space-y-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftInstanceName(instanceName)
+                  setInstanceNameError('')
+                  setRenamingInstance((current) => !current)
+                }}
+                className={menuButtonClass}
+              >
+                <span>WebUI: Rename instance</span>
+                <span className="ml-3 max-w-[7rem] truncate text-[10px] text-gray-400 dark:text-gray-500">
+                  {instanceName || 'Foxwarm'}
+                </span>
+              </button>
+              {renamingInstance && (
+                <form
+                  className="rounded-md border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-900/50"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void submitInstanceName(draftInstanceName)
+                  }}
+                >
+                  <label className="block text-[11px] font-medium text-gray-600 dark:text-gray-300" htmlFor="webui-instance-name">
+                    Instance name
+                  </label>
+                  <input
+                    id="webui-instance-name"
+                    type="text"
+                    value={draftInstanceName}
+                    maxLength={80}
+                    onChange={(event) => setDraftInstanceName(event.target.value)}
+                    placeholder="e.g. blackwell-node"
+                    disabled={savingInstanceName}
+                    className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-800 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-70 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                  />
+                  <p className="mt-1 text-[10px] leading-snug text-gray-500 dark:text-gray-400">
+                    Stored on this Foxwarm server. It changes the browser tab title for everyone using this instance.
+                  </p>
+                  {instanceNameError && <p className="mt-1 text-[10px] text-red-600 dark:text-red-400">{instanceNameError}</p>}
+                  <div className="mt-2 flex items-center justify-end gap-1">
+                    <button
+                      type="button"
+                      disabled={savingInstanceName || !instanceName}
+                      onClick={() => void submitInstanceName('')}
+                      className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-700"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingInstanceName}
+                      onClick={() => setRenamingInstance(false)}
+                      className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-200 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-700"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingInstanceName}
+                      className="rounded bg-blue-500 px-2 py-1 text-xs font-medium text-white hover:bg-blue-600 disabled:cursor-wait disabled:opacity-70"
+                    >
+                      {savingInstanceName ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </form>
+              )}
               {onOpenSetup && (
                 <button
                   type="button"

@@ -34,6 +34,11 @@ type WorkspaceNodeEntry = {
 
 const MAX_INLINE_FILE_BYTES = 1024 * 1024;
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
+const WEBUI_SETTINGS_PATH = path.join(BASE_DIR, 'state', 'webui.json');
+
+type WebUiSettings = {
+  instanceName: string;
+};
 
 function isPlaceholderSecret(value: unknown): boolean {
   return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
@@ -48,6 +53,51 @@ function readYamlFileIfExists(filePath: string): any {
 
 function dumpYaml(value: unknown): string {
   return yaml.dump(value, { noRefs: true, lineWidth: 120 });
+}
+
+function normalizeWebUiInstanceName(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value !== 'string') {
+    throw new Error('instanceName must be a string.');
+  }
+
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (normalized.length > 80) {
+    throw new Error('instanceName must be at most 80 characters.');
+  }
+
+  return normalized;
+}
+
+function readWebUiSettings(): WebUiSettings {
+  if (!fs.existsSync(WEBUI_SETTINGS_PATH)) {
+    return { instanceName: '' };
+  }
+
+  try {
+    const raw = fs.readJsonSync(WEBUI_SETTINGS_PATH) as Partial<WebUiSettings>;
+    return {
+      instanceName: normalizeWebUiInstanceName(raw.instanceName || ''),
+    };
+  } catch (e: any) {
+    logger.warn({ err: e, path: WEBUI_SETTINGS_PATH }, 'Failed to read WebUI settings; using defaults');
+    return { instanceName: '' };
+  }
+}
+
+function writeWebUiSettings(settings: WebUiSettings): WebUiSettings {
+  const normalized: WebUiSettings = {
+    instanceName: normalizeWebUiInstanceName(settings.instanceName),
+  };
+  fs.ensureDirSync(path.dirname(WEBUI_SETTINGS_PATH));
+  fs.writeJsonSync(WEBUI_SETTINGS_PATH, normalized, { spaces: 2 });
+  return normalized;
 }
 
 function getModelsSetupDiagnostics() {
@@ -525,6 +575,33 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get commands');
             res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/webui/settings',
+        method: 'GET',
+        handler: async (_req: express.Request, res: express.Response) => {
+          try {
+            res.json({ settings: readWebUiSettings() });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get WebUI settings');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/webui/settings',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const settings = writeWebUiSettings({ instanceName: normalizeWebUiInstanceName(req.body?.instanceName || '') });
+            res.json({ success: true, settings });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to save WebUI settings');
+            res.status(400).json({ error: e.message });
           }
         },
       });

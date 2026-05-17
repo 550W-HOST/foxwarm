@@ -17,6 +17,8 @@ interface SessionListProps {
   onGroupToolsChange: (enabled: boolean) => void
   showUsageBadge: boolean
   onShowUsageBadgeChange: (enabled: boolean) => void
+  instanceName: string
+  onInstanceNameChange: (name: string) => Promise<void> | void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
@@ -39,6 +41,8 @@ export default function SessionList({
   onGroupToolsChange,
   showUsageBadge,
   onShowUsageBadgeChange,
+  instanceName,
+  onInstanceNameChange,
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
@@ -68,6 +72,8 @@ export default function SessionList({
             onGroupToolsChange={onGroupToolsChange}
             showUsageBadge={showUsageBadge}
             onShowUsageBadgeChange={onShowUsageBadgeChange}
+            instanceName={instanceName}
+            onInstanceNameChange={onInstanceNameChange}
             onOpenSetup={onSelectSetup}
             setupActive={currentView === 'setup'}
           />

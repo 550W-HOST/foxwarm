@@ -30,6 +30,10 @@ type TerminalRegistryRecord = {
   createdAt: number
 }
 
+type WebUiSettings = {
+  instanceName: string
+}
+
 const LIGHT_THEME_COLOR = '#f3f4f6'
 const DARK_THEME_COLOR = '#111827'
 const ARCHITECTURE_HASH = 'agents'
@@ -239,6 +243,7 @@ function App() {
   })
   const [groupTools, setGroupTools] = useState<boolean>(() => localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true')
   const [showUsageBadge, setShowUsageBadge] = useState<boolean>(() => localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false')
+  const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '' })
   const [sidebarPeekVisible, setSidebarPeekVisible] = useState(false)
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
@@ -283,6 +288,32 @@ function App() {
   const currentContextSessionRecord = sessions.find((session) => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
   const currentView: AppView = route.view === 'agents' ? 'agents' : route.view === 'setup' ? 'setup' : 'session'
   const busyCount = useMemo(() => sessions.filter((session) => session.busy).length, [sessions])
+
+  const fetchWebUiSettings = async () => {
+    try {
+      const res = await fetch(`${API_BASE_PATH}/webui/settings`)
+      if (!res.ok) {
+        return
+      }
+      const data = await res.json()
+      setWebUiSettings({ instanceName: typeof data?.settings?.instanceName === 'string' ? data.settings.instanceName : '' })
+    } catch (error) {
+      console.warn('Failed to load WebUI settings', error)
+    }
+  }
+
+  const saveWebUiInstanceName = async (name: string) => {
+    const res = await fetch(`${API_BASE_PATH}/webui/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instanceName: name }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data?.error || 'Failed to save instance name')
+    }
+    setWebUiSettings({ instanceName: typeof data?.settings?.instanceName === 'string' ? data.settings.instanceName : '' })
+  }
 
   useEffect(() => {
     if (darkMode) {
@@ -437,6 +468,7 @@ function App() {
   useEffect(() => {
     void fetchSessions()
     void fetchSetupStatus()
+    void fetchWebUiSettings()
     void fetchActiveTerminals()
     connectGlobalSSE()
     return () => {
@@ -526,9 +558,10 @@ function App() {
   }, [activeTerminals, allTabs, upsertTab])
 
   useEffect(() => {
-    const baseTitle = '🦊 Foxwarm'
+    const trimmedInstanceName = webUiSettings.instanceName.trim()
+    const baseTitle = trimmedInstanceName ? `${trimmedInstanceName} · Foxwarm` : '🦊 Foxwarm'
     document.title = busyCount > 0 ? `[${busyCount} busy] ${baseTitle}` : baseTitle
-  }, [busyCount])
+  }, [busyCount, webUiSettings.instanceName])
 
   useEffect(() => {
     if (route.view !== 'tab') return
@@ -1347,6 +1380,8 @@ function App() {
           onGroupToolsChange={setGroupTools}
           showUsageBadge={showUsageBadge}
           onShowUsageBadgeChange={setShowUsageBadge}
+          instanceName={webUiSettings.instanceName}
+          onInstanceNameChange={saveWebUiInstanceName}
           onSelectSession={openChatTab}
           onKeepSession={openKeptChatTab}
           onSelectArchitecture={() => {
@@ -1400,6 +1435,8 @@ function App() {
             onGroupToolsChange={setGroupTools}
             showUsageBadge={showUsageBadge}
             onShowUsageBadgeChange={setShowUsageBadge}
+            instanceName={webUiSettings.instanceName}
+            onInstanceNameChange={saveWebUiInstanceName}
             onSelectSession={openChatTab}
             onKeepSession={openKeptChatTab}
             onSelectArchitecture={() => {
@@ -1443,6 +1480,8 @@ function App() {
                 onGroupToolsChange={setGroupTools}
                 showUsageBadge={showUsageBadge}
                 onShowUsageBadgeChange={setShowUsageBadge}
+                instanceName={webUiSettings.instanceName}
+                onInstanceNameChange={saveWebUiInstanceName}
                 onSelectSession={openChatTab}
                 onKeepSession={openKeptChatTab}
                 onSelectArchitecture={() => {
