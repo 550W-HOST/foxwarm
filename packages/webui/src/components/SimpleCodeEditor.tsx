@@ -32,8 +32,12 @@ export default function SimpleCodeEditor({
   const modelRef = useRef<any>(null)
   const monacoRef = useRef<any>(null)
   const onChangeRef = useRef(onChange)
+  const valueRef = useRef(value)
+  const placeholderRef = useRef(placeholder)
 
   onChangeRef.current = onChange
+  valueRef.current = value
+  placeholderRef.current = placeholder
 
   useEffect(() => {
     let disposed = false
@@ -54,7 +58,10 @@ export default function SimpleCodeEditor({
         },
       }
 
-      const model = monaco.editor.createModel(value || placeholder || '', language)
+      // Monaco is loaded asynchronously. If the parent updates `value` before
+      // the dynamic imports finish, the initial render's value is stale. Use a
+      // ref so the model is created with the latest value shown by React.
+      const model = monaco.editor.createModel(valueRef.current || placeholderRef.current || '', language)
       const editor = monaco.editor.create(containerRef.current, {
         model,
         automaticLayout: true,

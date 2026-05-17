@@ -433,7 +433,9 @@ export class WebUIChannel implements Channel {
 
   // Middleware for static file protection
   private staticAuthMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    // Allow login.html, /api/auth, and /download without token check here (handled by route)
+    // Do not intercept public login/auth routes. Also let /download reach its
+    // dedicated route, where token validation is performed before any file is
+    // sent.
     if (req.path === '/login.html' || req.path === '/api/auth' || req.path === '/download') {
       return next();
     }
