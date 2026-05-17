@@ -7,6 +7,7 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
+import { buildModelsConfigFromSetupForm, dumpSetupYaml, readRawAppConfigFile, readRawTextFileIfExists, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from '../setupConfig';
 import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
 import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
@@ -14,7 +15,7 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
-import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, loadModelsConfigFromObject, readAppConfigFile, resolveModelConfig, writeAppConfigFile } from '../config';
+import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
@@ -39,21 +40,10 @@ function isPlaceholderSecret(value: unknown): boolean {
   return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
 }
 
-function readYamlFileIfExists(filePath: string): any {
-  if (!fs.existsSync(filePath)) {
-    return undefined;
-  }
-  return yaml.load(fs.readFileSync(filePath, 'utf8')) || {};
-}
-
-function dumpYaml(value: unknown): string {
-  return yaml.dump(value, { noRefs: true, lineWidth: 120 });
-}
-
 function getModelsSetupDiagnostics() {
   const exists = fs.existsSync(DEFAULT_MODELS_CONFIG_PATH);
-  const raw = exists ? readYamlFileIfExists(DEFAULT_MODELS_CONFIG_PATH) : undefined;
-  const rawYaml = exists ? fs.readFileSync(DEFAULT_MODELS_CONFIG_PATH, 'utf8') : '';
+  const rawYaml = exists ? readRawTextFileIfExists(DEFAULT_MODELS_CONFIG_PATH) : '';
+  const raw = rawYaml ? (yaml.load(rawYaml) as any) || {} : undefined;
   const providers = raw?.providers || raw?.models || {};
   const providerEntries = providers && typeof providers === 'object' && !Array.isArray(providers) ? Object.entries(providers as Record<string, ProviderConfigEntry>) : [];
   const providerCount = providerEntries.length;
@@ -549,14 +539,19 @@ export class WebUIChannel implements Channel {
         handler: async (_req: express.Request, res: express.Response) => {
           try {
             const models = getModelsSetupDiagnostics();
-            const appConfig = readAppConfigFile();
+            const rawAppConfigYaml = readRawAppConfigFile();
+            const appConfig = rawAppConfigYaml ? validateAppConfigYaml(rawAppConfigYaml) : readAppConfigFile();
             const channels = sanitizeChannelConfigForSetup(appConfig);
             res.json({
               oobe: models.oobe,
               models,
               config: {
                 appConfigPath: APP_CONFIG_PATH,
-                channelsYaml: dumpYaml(channels),
+                rawYaml: rawAppConfigYaml,
+                // Backward-compatible field for older clients; the Setup UI now
+                // edits rawYaml (the entire config file) so comments and unknown
+                // top-level fields are not destroyed by section serialization.
+                channelsYaml: dumpSetupYaml(channels),
                 channelCount: Object.keys(channels).length,
               },
               channels: listChannelRuntimeStatuses(),
@@ -573,20 +568,19 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const config = req.body?.yaml
-              ? (yaml.load(String(req.body.yaml)) as any)
-              : buildProviderConfigFromSetup(req.body);
-
-            if (!config || typeof config !== 'object' || Array.isArray(config)) {
-              throw new Error('models config must be a YAML object.');
-            }
-
-            // Validate before writing, so a bad setup payload does not create a
-            // broken state/models.yaml and accidentally leave OOBE mode.
-            loadModelsConfigFromObject(config);
-
             fs.ensureDirSync(path.dirname(DEFAULT_MODELS_CONFIG_PATH));
-            fs.writeFileSync(DEFAULT_MODELS_CONFIG_PATH, dumpYaml(config), 'utf8');
+            const hasRawYaml = Object.prototype.hasOwnProperty.call(req.body || {}, 'yaml');
+            if (hasRawYaml) {
+              // Raw mode is intentionally raw: validate first, then write the
+              // user-provided text byte-for-byte instead of parse + dump, so
+              // comments, key order, quoting, and custom formatting survive.
+              writeRawModelsConfig(String(req.body?.yaml ?? ''), DEFAULT_MODELS_CONFIG_PATH);
+            } else {
+              const existingRaw = readRawTextFileIfExists(DEFAULT_MODELS_CONFIG_PATH);
+              const existingConfig = existingRaw.trim() ? ((yaml.load(existingRaw) as any) || {}) : {};
+              const config = buildModelsConfigFromSetupForm(req.body || {}, existingConfig);
+              fs.writeFileSync(DEFAULT_MODELS_CONFIG_PATH, dumpSetupYaml(config), 'utf8');
+            }
 
             // Validate by resolving the newly written config.
             const payload = buildWebUiModelsPayload();
@@ -644,6 +638,28 @@ export class WebUIChannel implements Channel {
       });
 
       httpServerInstance.addRoute({
+        path: '/api/setup/config',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const rawYaml = String(req.body?.yaml ?? '');
+            const config = writeRawAppConfig(rawYaml, APP_CONFIG_PATH);
+            const reload = await reloadManagedChannels();
+            res.json({
+              success: true,
+              configPath: APP_CONFIG_PATH,
+              rawYaml,
+              channelCount: Object.keys(config.channels || {}).length,
+              reload,
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to save setup config');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
         path: '/api/setup/channels',
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
@@ -656,12 +672,12 @@ export class WebUIChannel implements Channel {
               ...current,
               channels: nextChannels,
             };
-            writeAppConfigFile(next);
+            writeAppConfigWithChannels(next.channels || {}, APP_CONFIG_PATH);
             const reload = await reloadManagedChannels();
             res.json({
               success: true,
               configPath: APP_CONFIG_PATH,
-              channelsYaml: dumpYaml(next.channels || {}),
+              channelsYaml: dumpSetupYaml(next.channels || {}),
               reload,
             });
           } catch (e: any) {
@@ -721,7 +737,7 @@ export class WebUIChannel implements Channel {
                   },
                 },
               };
-              writeAppConfigFile(next);
+              writeAppConfigWithChannels(next.channels || {}, APP_CONFIG_PATH);
               const reload = await reloadManagedChannels();
               return res.json({ success: true, channelId: setup.channelId, connected: true, userId: result.userId || null, message: result.message, reload });
             }
