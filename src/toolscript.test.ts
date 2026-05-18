@@ -371,6 +371,35 @@ test('request_model_without_context uses direct low-level llm request with no to
   }
 });
 
+test('request_model_without_context can override model per call', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_model_override');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain('return request_model_without_context("ping", model="openai/gpt-4.1-mini")'));
+
+  const session = await sessionManager.getSession(sessionId);
+  session.model = 'anthropic/claude-sonnet-4-5';
+  const originalRequestLlmOnce = (llm as any).requestLlmOnce;
+  let capturedModel = '';
+
+  (llm as any).requestLlmOnce = async (options: any) => {
+    capturedModel = options.model;
+    return { text: 'pong', toolCalls: [] as any[] };
+  };
+
+  try {
+    const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.result, { text: 'pong' });
+    assert.equal(capturedModel, 'openai/gpt-4.1-mini');
+  } finally {
+    (llm as any).requestLlmOnce = originalRequestLlmOnce;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
 test('ToolScript manager host functions can open, step, and release a managed child session', async () => {
   await resetToolScriptRunsForTests();
   const router = new MessageRouter();
