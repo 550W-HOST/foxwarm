@@ -1950,12 +1950,12 @@ export const definitions = [
         {
             name: 'wait',
             defaultInject: true,
-            description: 'Pause this session until a new message or event arrives. Use this only when you have no useful user-facing reply or tool work to do right now. If timeoutSeconds is provided, the session will be woken by a system message after that many seconds only if no other message/event woke it first.',
+            description: 'Pause this session until a new message or event arrives. Use this only when you have no useful user-facing reply or tool work to do right now. Omit timeoutSeconds or pass 0 for no timeout. If a positive timeoutSeconds is provided, the session will be woken by a system message after that many seconds only if no other message/event woke it first.',
             parameters: {
                 type: 'object',
                 properties: {
                     reason: { type: 'string', description: 'Optional short note for logs/debugging.' },
-                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. If no newer message/event wakes the session first, a system message wakes it after this many seconds.' },
+                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. Omit or pass 0 for no timeout. If a positive value is provided and no newer message/event wakes the session first, a system message wakes it after this many seconds.' },
                     waitAllSessions: {
                         type: 'array',
                         description: 'Optional list of session IDs. When provided, wait until every listed session has sent at least one new message to this session after the wait starts; unrelated messages/events and timeout still wake normally with a pending reminder.',
@@ -1971,7 +1971,7 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     reason: { type: 'string', description: 'Optional short note for logs/debugging.' },
-                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. Prefer wait(timeoutSeconds) in new calls.' }
+                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. Omit or pass 0 for no timeout. Prefer wait(timeoutSeconds) in new calls.' }
                 }
             }
         },
