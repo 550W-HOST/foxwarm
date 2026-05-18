@@ -452,10 +452,6 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   return buildEndTurnResult(typeof reason === 'string' ? reason : undefined);
 }
 
-export async function tool_end_turn(args: ToolArgs, ctx?: ToolContext) {
-  return tool_wait(args, ctx);
-}
-
 export async function tool_submit_compact_plan() {
   return `${COMPACT_PLAN_TOOL_NAME} is only valid inside the dedicated compact planning flow. Request compaction with compact_session and only submit a plan when the system compact prompt explicitly asks for it.`;
 }

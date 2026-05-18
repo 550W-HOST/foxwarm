@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from './sessionManager';
-import { tool_end_turn, tool_set_goal, tool_wait } from './toolsSessionAgent';
+import { tool_set_goal, tool_wait } from './toolsSessionAgent';
 import type { Session } from './types';
 
 function makeSessionId(prefix: string): string {
@@ -30,12 +30,6 @@ async function ensureSession(id: string): Promise<Session> {
 
 test('wait returns concise output without echoing reason text', async () => {
   const result = await tool_wait({ reason: 'because the handoff is complete' });
-  assert.equal(result.output, 'ok');
-  assert.deepEqual(result.__toolLoopControl, { stopCurrentTurn: true });
-});
-
-test('legacy end_turn alias returns concise output without echoing reason text', async () => {
-  const result = await tool_end_turn({ reason: 'because the legacy handoff is complete' });
   assert.equal(result.output, 'ok');
   assert.deepEqual(result.__toolLoopControl, { stopCurrentTurn: true });
 });

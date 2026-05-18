@@ -90,7 +90,6 @@ export class NodesManager {
       'set_agent_inherit',
       'send_to_session',
       'wait',
-      'end_turn',
       'submit_compact_plan',
       'list_sessions',
       'list_skills',

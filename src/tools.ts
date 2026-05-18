@@ -39,7 +39,6 @@ import {
     tool_create_child_session,
     tool_send_to_session,
     tool_wait,
-    tool_end_turn,
     tool_submit_compact_plan,
     tool_send_to_channel,
     tool_send_file,
@@ -91,7 +90,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
     'copy_between_nodes',
     'image_crop', 'image_write_to_file',
-    'create_child_session', 'send_to_session', 'wait', 'end_turn', 'submit_compact_plan', 'send_to_channel', 'send_file',
+    'create_child_session', 'send_to_session', 'wait', 'submit_compact_plan', 'send_to_channel', 'send_file',
     'list_sessions', 'list_agents', 'list_skills', 'load_skill',
     'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
     'update_session_name', 'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
@@ -1548,7 +1547,6 @@ export const set_agent_isolated = tool_set_agent_isolated;
 export const move_session = tool_move_session;
 export const send_to_session = tool_send_to_session;
 export const wait = tool_wait;
-export const end_turn = tool_end_turn;
 export const submit_compact_plan = tool_submit_compact_plan;
 export const send_to_channel = tool_send_to_channel;
 export const send_file = tool_send_file;
@@ -1955,23 +1953,12 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     reason: { type: 'string', description: 'Optional short note for logs/debugging.' },
-                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. Omit or pass 0 for no timeout. If a positive value is provided and no newer message/event wakes the session first, a system message wakes it after this many seconds.' },
+                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. If a positive value is provided and no newer message/event wakes the session first, a system message wakes it after this many seconds.' },
                     waitAllSessions: {
                         type: 'array',
                         description: 'Optional list of session IDs. When provided, wait until every listed session has sent at least one new message to this session after the wait starts; unrelated messages/events and timeout still wake normally with a pending reminder.',
                         items: { type: 'string', description: 'Session ID that must report before this wait-all condition is satisfied.' }
                     }
-                }
-            }
-        },
-        {
-            name: 'end_turn',
-            description: 'Legacy alias for wait. Hidden from default model-facing tools; retained so older sessions/tool calls keep working.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    reason: { type: 'string', description: 'Optional short note for logs/debugging.' },
-                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. Omit or pass 0 for no timeout. Prefer wait(timeoutSeconds) in new calls.' }
                 }
             }
         },

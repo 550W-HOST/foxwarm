@@ -55,11 +55,11 @@ test('executeTools turns malformed tool arguments into a structured tool error',
   });
 });
 
-test('executeTools suppresses end_turn when a later tool in the batch returns an error', async () => {
-  const sessionId = makeSessionId('tool_end_turn_after_error_late');
+test('executeTools suppresses wait when a later tool in the batch returns an error', async () => {
+  const sessionId = makeSessionId('tool_wait_after_error_late');
   const toolMessage = await executeTools(
     [
-      { id: 'call_end_turn_first', name: 'end_turn', args: {} },
+      { id: 'call_wait_first', name: 'wait', args: {} },
       { id: 'call_read_missing', name: 'read', args: { filePath: makeMissingFilePath() } },
     ],
     { sessionId, session: { agent: 'main' } },
@@ -77,12 +77,12 @@ test('executeTools suppresses end_turn when a later tool in the batch returns an
   }
 });
 
-test('executeTools suppresses end_turn when an earlier tool in the batch returns an error', async () => {
-  const sessionId = makeSessionId('tool_end_turn_after_error_early');
+test('executeTools suppresses wait when an earlier tool in the batch returns an error', async () => {
+  const sessionId = makeSessionId('tool_wait_after_error_early');
   const toolMessage = await executeTools(
     [
       { id: 'call_read_missing', name: 'read', args: { filePath: makeMissingFilePath() } },
-      { id: 'call_end_turn_last', name: 'end_turn', args: {} },
+      { id: 'call_wait_last', name: 'wait', args: {} },
     ],
     { sessionId, session: { agent: 'main' } },
     { agent: 'main', verbose: false },
@@ -96,34 +96,6 @@ test('executeTools suppresses end_turn when an earlier tool in the batch returns
     assert.notEqual(toolMessage.parts[0].functionResponse?.response?.error, null);
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => false);
-  }
-});
-
-test('executeTools keeps end_turn behavior for successful send_to_session handoff batches', async () => {
-  const sourceSessionId = makeSessionId('tool_end_turn_handoff_source');
-  const targetSessionId = makeSessionId('tool_end_turn_handoff_target');
-
-  await sessionManager.getSession(sourceSessionId);
-  await sessionManager.getSession(targetSessionId);
-
-  const toolMessage = await executeTools(
-    [
-      { id: 'call_send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'handoff ok' } },
-      { id: 'call_end_turn', name: 'end_turn', args: {} },
-    ],
-    { sessionId: sourceSessionId, session: { agent: 'main' } },
-    { agent: 'main', verbose: false },
-  );
-
-  try {
-    assert.equal(hasStopCurrentTurn(toolMessage), true);
-    assert.equal(toolMessage.parts.length, 2);
-    assert.deepEqual(toolMessage.parts.map(part => part.functionResponse?.name), ['send_to_session', 'end_turn']);
-    assert.equal(toolMessage.parts[0].functionResponse?.response?.error, undefined);
-    assert.equal(toolMessage.parts[1].functionResponse?.response?.error, undefined);
-  } finally {
-    await sessionManager.deleteSession(sourceSessionId).catch(() => false);
-    await sessionManager.deleteSession(targetSessionId).catch(() => false);
   }
 });
 
@@ -155,8 +127,8 @@ test('executeTools keeps wait behavior for successful send_to_session handoff ba
   }
 });
 
-test('executeTools suppresses end_turn when malformed tool arguments produce a structured error', async () => {
-  const sessionId = makeSessionId('tool_end_turn_bad_args');
+test('executeTools suppresses wait when malformed tool arguments produce a structured error', async () => {
+  const sessionId = makeSessionId('tool_wait_bad_args');
   const toolMessage = await executeTools(
     [
       {
@@ -166,7 +138,7 @@ test('executeTools suppresses end_turn when malformed tool arguments produce a s
         rawArgsText: '{"filePath":',
         argsParseError: 'Invalid tool arguments JSON: Unexpected end of JSON input',
       },
-      { id: 'call_end_turn', name: 'end_turn', args: {} },
+      { id: 'call_wait', name: 'wait', args: {} },
     ],
     { sessionId, session: { agent: 'main' } },
     { agent: 'main', verbose: false },
