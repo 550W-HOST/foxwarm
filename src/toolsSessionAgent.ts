@@ -53,6 +53,40 @@ function normalizeWaitTimeoutSeconds(value: unknown): number | undefined {
   return timeoutSeconds;
 }
 
+function normalizeWaitAllSessions(value: unknown): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error('waitAllSessions must be an array of session IDs.');
+  }
+
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      throw new Error('waitAllSessions entries must be non-empty strings.');
+    }
+
+    const sessionId = entry.trim();
+    if (!sessionId) {
+      throw new Error('waitAllSessions entries must be non-empty strings.');
+    }
+
+    if (!seen.has(sessionId)) {
+      seen.add(sessionId);
+      normalized.push(sessionId);
+    }
+  }
+
+  if (normalized.length === 0) {
+    throw new Error('waitAllSessions must include at least one session ID when provided.');
+  }
+
+  return normalized;
+}
+
 function normalizePositivePreviewLength(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -395,11 +429,13 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
 export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   const { reason } = args || {};
   const timeoutSeconds = normalizeWaitTimeoutSeconds(args?.timeoutSeconds);
+  const waitAllSessions = normalizeWaitAllSessions(args?.waitAllSessions);
 
   if (ctx?.sessionId) {
     const waitState = await sessionManager.startSessionWait(ctx.sessionId, {
       reason: typeof reason === 'string' ? reason : undefined,
       timeoutSeconds,
+      waitAllSessions,
     });
 
     if (timeoutSeconds !== undefined) {

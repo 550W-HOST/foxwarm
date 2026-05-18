@@ -845,15 +845,12 @@ export class MessageRouter {
       return;
     }
 
-    this.tryClaimSession(session);
-
-    await this.runSessionTurn(sessionId, {
+    await sessionManager.enqueueSessionItem(sessionId, {
+      type: 'user',
+      source: this.snapshotSource(ctx),
       parts: message.parts,
-      sourceCtx: ctx,
-      sendTyping: true,
-      session,
-      preclaimed: true,
     });
+    await this.processSessionQueue(sessionId);
   }
 
   /**

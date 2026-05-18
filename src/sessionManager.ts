@@ -37,7 +37,19 @@ export interface SessionWaitState {
   startedAt: number;
   reason?: string;
   timeoutSeconds?: number;
+  waitAll?: SessionWaitAllState;
 }
+
+export interface SessionWaitAllState {
+  sessions: string[];
+  satisfiedSessions: string[];
+  deferredQueue: QueueItem[];
+}
+
+type WaitQueueTransition =
+  | { action: 'drop' }
+  | { action: 'defer' }
+  | { action: 'enqueue'; items: QueueItem[] };
 
 function getSessionWaitState(session?: Session): SessionWaitState | undefined {
   const wait = session?.meta?.wait;
@@ -64,39 +76,140 @@ function isWaitNeutralMaintenanceQueueItem(item: QueueItem): boolean {
   return item.type === 'compact' || item.type === 'compact-commit';
 }
 
-function applyQueuedItemToWaitState(session: Session, item: QueueItem): boolean {
+function getWaitAllState(wait: SessionWaitState): SessionWaitAllState | undefined {
+  const waitAll = wait.waitAll;
+  if (!waitAll || typeof waitAll !== 'object' || !Array.isArray(waitAll.sessions)) {
+    return undefined;
+  }
+
+  if (!Array.isArray(waitAll.satisfiedSessions)) {
+    waitAll.satisfiedSessions = [];
+  }
+  if (!Array.isArray(waitAll.deferredQueue)) {
+    waitAll.deferredQueue = [];
+  }
+
+  return waitAll;
+}
+
+function getWaitAllPendingSessions(waitAll: SessionWaitAllState): string[] {
+  const satisfied = new Set(waitAll.satisfiedSessions);
+  return waitAll.sessions.filter(sessionId => !satisfied.has(sessionId));
+}
+
+function buildWaitAllPendingReminder(pendingSessions: string[]): string {
+  return `[SYSTEM: waitAllSessions is still pending for: ${pendingSessions.map(sessionId => `\`${sessionId}\``).join(', ')}. This session was woken before every listed session sent a new message after the wait started.]`;
+}
+
+function buildWaitAllPendingReminderItem(pendingSessions: string[]): QueueItem | undefined {
+  if (pendingSessions.length === 0) {
+    return undefined;
+  }
+
+  return {
+    type: 'background',
+    parts: buildSystemMessageParts(buildWaitAllPendingReminder(pendingSessions)),
+  };
+}
+
+function cloneQueueItems(items: QueueItem[]): QueueItem[] {
+  return items.map(item => cloneQueueItem(item));
+}
+
+function buildWaitAllUnrelatedWakeItems(waitAll: SessionWaitAllState, item: QueueItem): QueueItem[] {
+  const pendingSessions = getWaitAllPendingSessions(waitAll);
+  const items = [
+    ...cloneQueueItems(waitAll.deferredQueue),
+    cloneQueueItem(item),
+  ];
+  const reminderItem = buildWaitAllPendingReminderItem(pendingSessions);
+  if (reminderItem) {
+    items.push(reminderItem);
+  }
+  return items;
+}
+
+function getListedWaitAllSourceSession(waitAll: SessionWaitAllState, item: QueueItem): string | undefined {
+  if (item.type !== 'intersession' || typeof item.sourceSessionId !== 'string') {
+    return undefined;
+  }
+
+  return waitAll.sessions.includes(item.sourceSessionId) ? item.sourceSessionId : undefined;
+}
+
+function markWaitAllSessionSatisfied(waitAll: SessionWaitAllState, sourceSessionId: string): void {
+  if (!waitAll.satisfiedSessions.includes(sourceSessionId)) {
+    waitAll.satisfiedSessions.push(sourceSessionId);
+  }
+}
+
+function applyQueuedItemToWaitState(session: Session, item: QueueItem): WaitQueueTransition {
   const wait = getSessionWaitState(session);
   if (!wait) {
     if (typeof item.waitTimeoutId === 'string') {
       logger.info({ sessionId: session.id, waitId: item.waitTimeoutId }, 'Ignoring wait timeout event with no active wait state');
-      return false;
+      return { action: 'drop' };
     }
 
-    return true;
+    return { action: 'enqueue', items: [item] };
   }
+
+  const waitAll = getWaitAllState(wait);
 
   if (typeof item.waitTimeoutId === 'string') {
     if (item.waitTimeoutId !== wait.id) {
       logger.info({ sessionId: session.id, waitId: item.waitTimeoutId, activeWaitId: wait.id }, 'Ignoring stale wait timeout event');
-      return false;
+      return { action: 'drop' };
+    }
+
+    if (waitAll) {
+      const pendingSessions = getWaitAllPendingSessions(waitAll);
+      const items = buildWaitAllUnrelatedWakeItems(waitAll, item);
+      clearSessionWaitState(session);
+      logger.debug({ sessionId: session.id, waitId: wait.id, pendingSessions }, 'Cleared waitAll state due to wait timeout event');
+      return { action: 'enqueue', items };
     }
 
     clearSessionWaitState(session);
-    return true;
+    return { action: 'enqueue', items: [item] };
   }
 
   if (isWaitNeutralMaintenanceQueueItem(item)) {
     logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type }, 'Leaving active wait state unchanged for maintenance queue item');
-    return true;
+    return { action: 'enqueue', items: [item] };
+  }
+
+  if (waitAll) {
+    const listedSourceSessionId = getListedWaitAllSourceSession(waitAll, item);
+    if (listedSourceSessionId) {
+      waitAll.deferredQueue.push(cloneQueueItem(item));
+      markWaitAllSessionSatisfied(waitAll, listedSourceSessionId);
+      const pendingSessions = getWaitAllPendingSessions(waitAll);
+      if (pendingSessions.length > 0) {
+        logger.debug({ sessionId: session.id, waitId: wait.id, sourceSessionId: listedSourceSessionId, pendingSessions }, 'Deferred waitAllSessions intersession message');
+        return { action: 'defer' };
+      }
+
+      const items = cloneQueueItems(waitAll.deferredQueue);
+      clearSessionWaitState(session);
+      logger.debug({ sessionId: session.id, waitId: wait.id }, 'waitAllSessions satisfied; flushing deferred messages');
+      return { action: 'enqueue', items };
+    }
+
+    const pendingSessions = getWaitAllPendingSessions(waitAll);
+    const items = buildWaitAllUnrelatedWakeItems(waitAll, item);
+    clearSessionWaitState(session);
+    logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type, pendingSessions }, 'Cleared waitAll state due to unrelated wake item');
+    return { action: 'enqueue', items };
   }
 
   clearSessionWaitState(session);
   logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type }, 'Cleared active wait state due to new session queue item');
-  return true;
+  return { action: 'enqueue', items: [item] };
 }
 
 export function shouldProcessQueuedItemForWait(session: Session, item: QueueItem): boolean {
-  return applyQueuedItemToWaitState(session, item);
+  return applyQueuedItemToWaitState(session, item).action === 'enqueue';
 }
 
 export function clearSessionWaitForDirectTurn(session: Session, wakeType: string = 'direct-turn'): boolean {
@@ -113,8 +226,15 @@ export function clearSessionWaitForDirectTurn(session: Session, wakeType: string
 export async function startSessionWait(sessionId: string, options: {
   reason?: string;
   timeoutSeconds?: number;
+  waitAllSessions?: string[];
 } = {}): Promise<SessionWaitState> {
   const session = await getSession(sessionId);
+  const existingWait = getSessionWaitState(session);
+  const existingWaitAll = existingWait ? getWaitAllState(existingWait) : undefined;
+  if (existingWaitAll?.deferredQueue.length) {
+    throw new Error('Cannot start a new wait while the previous waitAllSessions has deferred messages. Wake or clear the existing wait before starting another one.');
+  }
+
   const state: SessionWaitState = {
     id: randomUUID(),
     startedAt: Date.now(),
@@ -125,6 +245,13 @@ export async function startSessionWait(sessionId: string, options: {
   }
   if (typeof options.timeoutSeconds === 'number' && Number.isFinite(options.timeoutSeconds) && options.timeoutSeconds > 0) {
     state.timeoutSeconds = options.timeoutSeconds;
+  }
+  if (Array.isArray(options.waitAllSessions) && options.waitAllSessions.length > 0) {
+    state.waitAll = {
+      sessions: [...options.waitAllSessions],
+      satisfiedSessions: [],
+      deferredQueue: [],
+    };
   }
 
   session.meta.wait = state;
@@ -1298,17 +1425,38 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
   await reclaimManagedSessionIfStale(session);
   const managedBeforeEnqueue = !!getManagedSessionState(session);
 
-  if (!applyQueuedItemToWaitState(session, item)) {
+  const waitTransition = applyQueuedItemToWaitState(session, item);
+  if (waitTransition.action === 'drop') {
+    return;
+  }
+  if (waitTransition.action === 'defer') {
+    await saveSession(sessionId);
     return;
   }
 
-  if (shouldRouteQueueItemToManagedInbox(session, item)) {
+  const itemsToEnqueue = waitTransition.items;
+  if (itemsToEnqueue.length === 0) {
+    await saveSession(sessionId);
+    return;
+  }
+
+  const managedInboxItems: QueueItem[] = [];
+  const directQueueItems: QueueItem[] = [];
+  for (const queuedItem of itemsToEnqueue) {
+    if (shouldRouteQueueItemToManagedInbox(session, queuedItem)) {
+      managedInboxItems.push(queuedItem);
+    } else {
+      directQueueItems.push(queuedItem);
+    }
+  }
+
+  if (managedInboxItems.length > 0) {
     const managed = getManagedSessionState(session);
     if (!managed) {
       throw new Error(`Managed session metadata missing for session \`${sessionId}\`.`);
     }
 
-    managed.pendingInbox.push(cloneQueueItem(item));
+    managed.pendingInbox.push(...managedInboxItems.map(cloneQueueItem));
     managed.lastInboxAt = Date.now();
     managed.leaseTouchedAt = managed.lastInboxAt;
     managed.revision += 1;
@@ -1318,14 +1466,15 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
     if (!resumedControllerRun) {
       await maybeWakeManagedSessionOwner(session, managed);
     }
-    return;
   }
 
-  session.queue.push(item);
-  await saveSession(sessionId);
+  if (directQueueItems.length > 0) {
+    session.queue.push(...directQueueItems);
+    await saveSession(sessionId);
 
-  if (!managedBeforeEnqueue && !session.busy) {
-    void onSessionTriggered?.(sessionId);
+    if (!managedBeforeEnqueue && !session.busy) {
+      void onSessionTriggered?.(sessionId);
+    }
   }
 }
 

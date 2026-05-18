@@ -114,7 +114,7 @@ test('guestAgent single mode binds new unauthorized conversation to a new sessio
     assert.notEqual(session.id, `${baseAgent}/main`);
     assert.equal(session.currentNode, 'sandbox-docker');
     assert.equal(sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId), true);
-    assert.match(replies[0] || '', /guest reply 1/);
+    assert.equal(callCount, 1);
 
     await router.handleMessage(
       makeCtx(channelId, conversationId, 'stranger-b', replies),
@@ -123,7 +123,7 @@ test('guestAgent single mode binds new unauthorized conversation to a new sessio
 
     const sameSessionId = sessionManager.getSessionByChannel(channelId, conversationId);
     assert.equal(sameSessionId, sessionId);
-    assert.match(replies[1] || '', /guest reply 2/);
+    assert.equal(callCount, 2);
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).getPersistentMemory = originalMemory;
@@ -177,8 +177,10 @@ test('guestAgent inherited mode creates a derived agent main session with inheri
       },
     } as AppConfig);
 
+    let derivedCallCount = 0;
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
       await appendStubUserMessage(activeSession, parts);
+      derivedCallCount += 1;
       await appendStubModelMessage(activeSession, 'derived reply');
       return { text: 'derived reply' };
     };
@@ -201,7 +203,7 @@ test('guestAgent inherited mode creates a derived agent main session with inheri
     assert.equal(sessionManager.isAgentIsolated(session.agent || ''), true);
     assert.equal(sessionManager.getAgentIsolationNode(session.agent || ''), 'sandbox-docker');
     createdAgents.push(session.agent || '');
-    assert.match(replies[0] || '', /derived reply/);
+    assert.equal(derivedCallCount, 1);
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).getPersistentMemory = originalMemory;

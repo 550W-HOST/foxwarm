@@ -190,6 +190,7 @@ export async function sendToSession(
 
   await deps.enqueueSessionItem(targetSessionId, {
     type: 'intersession',
+    sourceSessionId: fromSession?.id,
     parts,
   });
 }
