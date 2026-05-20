@@ -97,7 +97,7 @@ export class NodesManager {
       'get_session_messages',
       'get_archived_messages',
       'get_archived_blocks',
-      'get_context_archive',
+      'recall',
       'delete_session',
       'update_session_name',
       'set_session_child_model',

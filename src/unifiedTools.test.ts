@@ -46,16 +46,16 @@ test('search_tools returns structured builtin results with hidden/direct exposur
 
 test('search_tools multi-word queries rank tools matching more words higher', async () => {
   const result: any = await search_tools({
-    query: 'session archive',
+    query: 'session context',
     sources: ['builtin'],
     includeSchema: false,
-    limit: 10,
+    limit: 200,
   });
 
   assert.ok(result.tools.length >= 2);
-  const archiveIndex = result.tools.findIndex((tool: any) => tool.name === 'get_context_archive');
+  const archiveIndex = result.tools.findIndex((tool: any) => tool.name === 'recall');
   const sessionIndex = result.tools.findIndex((tool: any) => tool.name === 'get_session_messages');
-  assert.ok(archiveIndex >= 0, 'get_context_archive should match both words');
+  assert.ok(archiveIndex >= 0, 'recall should match both words');
   assert.ok(sessionIndex >= 0, 'get_session_messages should still match one word');
   assert.ok(archiveIndex < sessionIndex, 'tool matching more query words should rank higher');
 });
@@ -488,7 +488,8 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
 
   assert.equal(modelFacingDefinitions.some(def => def.name === 'search_tools'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'call_tool'), true);
-  assert.equal(modelFacingDefinitions.some(def => def.name === 'get_context_archive'), true);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'recall'), true);
+  assert.equal(definitions.some(def => def.name === 'get_context_archive'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_crop'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_write_to_file'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'submit_compact_plan'), true);
@@ -497,6 +498,22 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(definitions.some(def => def.name === 'set_todo'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'end_turn'), false);
   assert.equal(definitions.some(def => def.name === 'end_turn'), false);
+});
+
+test('recall model-facing schema only exposes target selector fields', () => {
+  const recallDef = definitions.find(def => def.name === 'recall');
+  assert.ok(recallDef);
+  assert.equal(recallDef.defaultInject, true);
+  assert.match(String(recallDef.description), /CTX-BLOCK/);
+  assert.deepEqual(Object.keys(recallDef.parameters?.properties || {}).sort(), [
+    'previewLength',
+    'sessionId',
+    'target',
+  ]);
+  for (const legacyName of ['startSeq', 'endSeq', 'startId', 'endId', 'includeMessages', 'includeBlocks']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(recallDef.parameters?.properties || {}, legacyName), false);
+  }
+  assert.equal(definitions.some(def => def.name === 'get_context_archive'), false);
 });
 
 test('wait is the model-facing pause tool and end_turn is removed', () => {

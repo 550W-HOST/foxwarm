@@ -49,7 +49,7 @@ import {
     tool_get_session_messages,
     tool_get_archived_messages,
     tool_get_archived_blocks,
-    tool_get_context_archive,
+    tool_recall,
     tool_delete_session,
     tool_update_session_name,
     tool_set_goal,
@@ -92,7 +92,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'image_crop', 'image_write_to_file',
     'create_child_session', 'send_to_session', 'wait', 'submit_compact_plan', 'send_to_channel', 'send_file',
     'list_sessions', 'list_agents', 'list_skills', 'load_skill',
-    'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'get_context_archive', 'delete_session',
+    'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'recall', 'delete_session',
     'update_session_name', 'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
     'compact_session',
     'create_timer', 'list_timers', 'delete_timer',
@@ -1569,7 +1569,7 @@ export const load_skill = tool_load_skill;
 export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
 export const get_archived_blocks = tool_get_archived_blocks;
-export const get_context_archive = tool_get_context_archive;
+export const recall = tool_recall;
 export const delete_session = tool_delete_session;
 export const update_session_name = tool_update_session_name;
 export const set_goal = tool_set_goal;
@@ -2094,20 +2094,15 @@ export const definitions = [
             }
         },
         {
-            name: 'get_context_archive',
+            name: 'recall',
             defaultInject: true,
-            description: 'Unified archived-context inspection helper. Use this when you want archived raw messages or layered CTX-BLOCKs.',
+            description: 'Recall earlier session context by expanding CTX-BLOCK ids (for example `B#126`) or reading message ranges. Use this when the working context contains a `[CTX-BLOCK ...]` reference and you need to drill down.',
             parameters: {
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
-                    startSeq: { type: 'number', description: 'Optional inclusive starting raw message seq' },
-                    endSeq: { type: 'number', description: 'Optional inclusive ending raw message seq' },
-                    startId: { type: 'number', description: 'Optional inclusive starting block id' },
-                    endId: { type: 'number', description: 'Optional inclusive ending block id' },
-                    includeMessages: { type: 'boolean', description: 'Include archived raw messages (default: auto)' },
-                    includeBlocks: { type: 'boolean', description: 'Include archived layered blocks (default: auto)' },
-                    previewLength: { type: 'number', description: 'Maximum preview length per returned item (default: 1000)' }
+                    target: { type: 'string', description: 'Target selector. Omit or use `overview` for help/ranges. Supported examples: `blocks`, `B#126`, `block#126`, `msg:B#126`, `msg#10637-10680`, `msg#10637`.' },
+                    previewLength: { type: 'number', description: 'Maximum preview length per returned message/summary (default: 1000). Values <= 0 use the default.' }
                 }
             }
         },
