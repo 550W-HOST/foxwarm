@@ -56,6 +56,7 @@ type ToolOutputGuardOptions = {
 
 type SavedToolOutput = {
   relativePath: string;
+  path: string;
   nodeId: string;
   lengthChars: number;
   sha256: string;
@@ -89,26 +90,30 @@ async function saveCompleteText(text: string, options: ToolOutputGuardOptions, s
   const nodeId = options.nodeId || 'master';
   const relativePath = buildToolOutputRelativePath(options, suffix);
   const sha256 = crypto.createHash('sha256').update(text).digest('hex');
+  let savedPath = relativePath;
 
   if (nodeId === 'master') {
     const fullPath = path.resolve(getAgentDir(agentName), relativePath);
     await fs.ensureDir(path.dirname(fullPath));
     await fs.writeFile(fullPath, text, 'utf8');
+    savedPath = fullPath;
   } else {
     if (!options.sessionId) {
       throw new Error('Cannot save oversized remote tool output without session context.');
     }
-    await nodesManager.writeFileToNode(
+    const writeResult = await nodesManager.writeFileToNode(
       nodeId,
       relativePath,
       Buffer.from(text, 'utf8').toString('base64'),
       false,
       options.sessionId,
     );
+    savedPath = writeResult.absolutePath || relativePath;
   }
 
   return {
     relativePath,
+    path: savedPath,
     nodeId,
     lengthChars: text.length,
     sha256,
@@ -127,16 +132,11 @@ function buildExcerpt(text: string, maxChars: number): string {
   return `${takeUnicodeSafe(text, headLength)}${marker}${tailLength > 0 ? takeUnicodeSafeEnd(text, tailLength) : ''}`;
 }
 
-function buildReadHint(saved: SavedToolOutput): string {
-  const readCall = `read({"filePath":"${saved.relativePath}"})`;
-  const nodeNote = saved.nodeId === 'master'
-    ? `node: ${saved.nodeId}`
-    : `node: ${saved.nodeId} (switch to this node first, or use the appropriate node/file tool)`;
+function buildSavedOutputLocation(saved: SavedToolOutput): string {
   return [
     `Complete output saved to:`,
-    `- ${nodeNote}`,
-    `- path: ${saved.relativePath}`,
-    `Use ${readCall} to inspect the full output.`,
+    `- Node: ${saved.nodeId}`,
+    `- Path: ${saved.path}`,
   ].join('\n');
 }
 
@@ -148,12 +148,12 @@ function buildTruncatedNotice(args: {
   return [
     `[TOOL OUTPUT TOO LONG: ${args.label}]`,
     `The complete ${args.label} was ${args.saved.lengthChars} characters and has been truncated in the tool response.`,
-    buildReadHint(args.saved),
+    buildSavedOutputLocation(args.saved),
     '',
     'Showing a truncated excerpt:',
     args.excerpt,
     '',
-    `[END TRUNCATED TOOL OUTPUT; full ${args.label} saved to ${args.saved.relativePath}]`,
+    `[END TRUNCATED TOOL OUTPUT; full ${args.label} saved to ${args.saved.path} on node ${args.saved.nodeId}]`,
   ].join('\n');
 }
 
@@ -180,7 +180,7 @@ function truncatePreservedError(value: unknown, saved: SavedToolOutput): unknown
     return value;
   }
 
-  return `[TOOL ERROR OUTPUT TOO LONG] The original error content was included in the full saved tool output at ${saved.relativePath} on node ${saved.nodeId}. ${truncateUnicodeSafe(text, 1200, '...')}`;
+  return `[TOOL ERROR OUTPUT TOO LONG] The original error content was included in the full saved tool output at ${saved.path} on node ${saved.nodeId}. ${truncateUnicodeSafe(text, 1200, '...')}`;
 }
 
 function buildStageBSummary(originalResult: any, saved: SavedToolOutput, excerpt: string): Record<string, any> {
@@ -190,7 +190,7 @@ function buildStageBSummary(originalResult: any, saved: SavedToolOutput, excerpt
       saved,
       excerpt,
     }),
-    fullOutputPath: saved.relativePath,
+    fullOutputPath: saved.path,
     fullOutputNode: saved.nodeId,
     originalLengthChars: saved.lengthChars,
     fullOutputSha256: saved.sha256,
@@ -239,7 +239,7 @@ async function guardOutputFieldIfNeeded(result: Record<string, any>, options: To
       saved,
       excerpt: buildExcerpt(outputText, TOOL_OUTPUT_GUARD_EXCERPT_LIMIT),
     }),
-    outputFullPath: saved.relativePath,
+    outputFullPath: saved.path,
     outputFullNode: saved.nodeId,
     outputOriginalLengthChars: saved.lengthChars,
     outputFullSha256: saved.sha256,
@@ -293,6 +293,7 @@ export async function guardToolOutputForModel(rawResult: any, options: ToolOutpu
     if (isPlainObject(rawResult) && rawResult.error !== undefined) {
       (fallback as any).error = truncatePreservedError(rawResult.error, {
         relativePath: '(full output save failed)',
+        path: '(full output save failed)',
         nodeId: options.nodeId || 'master',
         lengthChars: fallbackText.length,
         sha256: crypto.createHash('sha256').update(fallbackText).digest('hex'),

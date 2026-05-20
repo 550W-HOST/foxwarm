@@ -2,7 +2,7 @@ export const CLI_NODE_CAPABILITIES = {
   tools: [
     {
       name: 'read',
-      description: 'Read a file from agent-folder.',
+      description: 'Read a file. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
       parameters: {
         type: 'object',
         properties: {
@@ -15,7 +15,7 @@ export const CLI_NODE_CAPABILITIES = {
     },
     {
       name: 'write',
-      description: 'Write a file to agent-folder.',
+      description: 'Write a file. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
       parameters: {
         type: 'object',
         properties: {
@@ -28,7 +28,7 @@ export const CLI_NODE_CAPABILITIES = {
     },
     {
       name: 'edit',
-      description: 'Replace exact text in a file using oldText/newText.',
+      description: 'Replace exact text in a file using oldText/newText. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder.',
       parameters: {
         type: 'object',
         properties: {
@@ -41,7 +41,7 @@ export const CLI_NODE_CAPABILITIES = {
     },
     {
       name: 'apply_patch',
-      description: 'Apply an OpenAI-style patch envelope to modify files.',
+      description: 'Apply an OpenAI-style patch envelope to modify files. Paths in patch file headers resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder.',
       parameters: {
         type: 'object',
         properties: { input: { type: 'string' } },
@@ -50,7 +50,7 @@ export const CLI_NODE_CAPABILITIES = {
     },
     {
       name: 'exec',
-      description: 'Execute a shell command. Defaults to the session cwd when set. Commands running over the timeout continue in the background and send a completion message later.',
+      description: 'Execute a shell command. Uses explicit cwd when provided, otherwise the session cwd when supplied for this node, otherwise the node process cwd. Relative cwd values resolve from the session cwd when set, otherwise from the node process cwd. Commands running over the timeout continue in the background and send a completion message later.',
       parameters: {
         type: 'object',
         properties: {

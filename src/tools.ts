@@ -510,7 +510,7 @@ async function tool_list_files(args: ToolArgs, ctx: ToolContext) {
         limit: Math.max(1, Math.min(Number(limit) || 200, 1000)),
     }, entries);
 
-    const rootLabel = dirPath === '.' ? agentName : dirPath;
+    const rootLabel = dirPath === '.' ? (ctx.session?.cwd || agentName) : dirPath;
     if (entries.length === 0) {
         return `No files found under \`${rootLabel}\`.`;
     }
@@ -549,15 +549,27 @@ async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
         throw new Error('copy_between_nodes requires sourceNode, sourcePath, targetNode, and targetPath.');
     }
 
+    await checkToolPermission('copy_between_nodes', ctx.sessionId, 'master', {
+        sourceNode,
+        sourcePath,
+        targetNode,
+        targetPath,
+        overwrite,
+    });
+
     const file = await nodesManager.readFileFromNode(String(sourceNode), String(sourcePath), ctx.sessionId);
     const result = await nodesManager.writeFileToNode(String(targetNode), String(targetPath), file.dataBase64, overwrite === true, ctx.sessionId);
 
-    return [
+    const lines = [
         `Copied \`${sourcePath}\` from node \`${sourceNode}\` to \`${targetPath}\` on node \`${targetNode}\`.`,
         `Size: ${file.sizeBytes} B`,
         `SHA256: ${result.sha256}`,
         `Overwrote existing file: ${result.overwritten ? 'yes' : 'no'}`,
-    ].join('\n');
+    ];
+    if (result.absolutePath) {
+        lines.push(`Target absolute path: ${result.absolutePath}`);
+    }
+    return lines.join('\n');
 }
 
 async function tool_image_crop(args: ToolArgs, ctx: ToolContext) {
@@ -1697,7 +1709,7 @@ export const definitions = [
         {
             name: 'write',
             defaultInject: true,
-            description: 'Write a file to agent-folder.',
+            description: 'Write a file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
             parameters: {
                 type: 'object',
                 properties: { 
@@ -1711,7 +1723,7 @@ export const definitions = [
         {
             name: 'edit',
             defaultInject: true,
-            description: 'Replace exact text in a file (legacy surgical edit). Use oldText/newText for direct single-match replacement. Prefer apply_patch for patch-style changes.',
+            description: 'Replace exact text in a file (legacy surgical edit). Relative file paths resolve from the current session cwd when set, otherwise from the current agent folder. Use oldText/newText for direct single-match replacement. Prefer apply_patch for patch-style changes.',
             parameters: {
                 type: 'object',
                 properties: { 
@@ -1725,7 +1737,7 @@ export const definitions = [
         {
             name: 'apply_patch',
             defaultInject: true,
-            description: 'This is a custom utility that makes it more convenient to add, remove, or edit code files. Pass the patch command text as `input`. The expected format uses an apply_patch envelope with `*** Begin Patch` / `*** End Patch`, and file actions such as `*** Update File: path`, `*** Add File: path`, or `*** Delete File: path`. Update File bodies use a line-based patch format: optional `@@` / `@@ anchor` section markers, context lines prefixed with a single space, `-` deletions, `+` insertions, and optional `*** End of File`.',
+            description: 'This is a custom utility that makes it more convenient to add, remove, or edit code files. Paths in patch file headers resolve like other file tools: relative paths resolve from the current session cwd when set, otherwise from the current agent folder; absolute paths and ~/... are also accepted when allowed. Pass the patch command text as `input`. The expected format uses an apply_patch envelope with `*** Begin Patch` / `*** End Patch`, and file actions such as `*** Update File: path`, `*** Add File: path`, or `*** Delete File: path`. Update File bodies use a line-based patch format: optional `@@` / `@@ anchor` section markers, context lines prefixed with a single space, `-` deletions, `+` insertions, and optional `*** End of File`.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -1802,11 +1814,11 @@ export const definitions = [
         {
             name: 'list_files',
             defaultInject: true,
-            description: 'List files under the current agent directory. Can recurse, but path traversal outside the agent folder is blocked.',
+            description: 'List files under a directory. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Can recurse; isolated sessions on master are restricted to their agent folder.',
             parameters: {
                 type: 'object',
                 properties: {
-                    dirPath: { type: 'string', description: 'Directory path relative to the current agent folder. Defaults to .' },
+                    dirPath: { type: 'string', description: 'Directory path. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Defaults to .' },
                     recursive: { type: 'boolean', description: 'Whether to recurse into subdirectories. Default: false' },
                     includeHidden: { type: 'boolean', description: 'Whether to include dotfiles. Default: false' },
                     limit: { type: 'number', description: 'Maximum number of entries to return. Default: 200, max: 1000' }
@@ -1816,11 +1828,11 @@ export const definitions = [
         {
             name: 'delete_file',
             defaultInject: true,
-            description: 'Delete a single file or symlink inside the current agent folder. Refuses to delete directories.',
+            description: 'Delete a single file or symlink. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Refuses to delete directories.',
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'File path relative to the current agent folder.' }
+                    filePath: { type: 'string', description: 'File path. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder.' }
                 },
                 required: ['filePath']
             }
@@ -1828,14 +1840,14 @@ export const definitions = [
         {
             name: 'copy_between_nodes',
             defaultInject: true,
-            description: 'Copy a file between master/remote nodes using the current session agent directory on each endpoint. Paths must be relative to the agent folder.',
+            description: 'Copy a file between master/remote nodes. Absolute paths and ~/... are accepted when allowed. Relative paths resolve under the current agent folder on each endpoint. Non-isolated sessions have no Foxwarm path restriction; isolated sessions are restricted only when accessing master (to their own agent folder).',
             parameters: {
                 type: 'object',
                 properties: {
                     sourceNode: { type: 'string', description: 'Source node id. Use `master` for local files.' },
-                    sourcePath: { type: 'string', description: 'Relative file path inside the current agent folder on the source node.' },
+                    sourcePath: { type: 'string', description: 'Source file path on the source node. Absolute paths and ~/... are accepted when allowed; relative paths resolve under the current agent folder on that node.' },
                     targetNode: { type: 'string', description: 'Target node id. Use `master` for local files.' },
-                    targetPath: { type: 'string', description: 'Relative file path inside the current agent folder on the target node.' },
+                    targetPath: { type: 'string', description: 'Target file path on the target node. Absolute paths and ~/... are accepted when allowed; relative paths resolve under the current agent folder on that node.' },
                     overwrite: { type: 'boolean', description: 'Overwrite the target file if it already exists. Default: false' },
                 },
                 required: ['sourceNode', 'sourcePath', 'targetNode', 'targetPath']
@@ -1860,12 +1872,12 @@ export const definitions = [
         {
             name: 'image_write_to_file',
             defaultInject: true,
-            description: 'Write a previously returned session image to a file so it can be reused or sent with send_file.',
+            description: 'Write a previously returned session image to a file so it can be reused or sent with send_file. On master, relative paths resolve from the current session cwd when set, otherwise from the current agent folder; on remote nodes, relative paths resolve under that node\'s agent folder. Absolute paths and ~/... are also accepted when allowed.',
             parameters: {
                 type: 'object',
                 properties: {
                     id: { type: 'string', description: 'Image id from a prior tool-returned image label.' },
-                    filePath: { type: 'string', description: 'Output file path.' },
+                    filePath: { type: 'string', description: 'Output file path. On master, relative paths resolve from the current session cwd when set, otherwise from the current agent folder; on remote nodes, relative paths resolve under that node\'s agent folder.' },
                     overwrite: { type: 'boolean', description: 'Overwrite the target file if it already exists. Default: false.' },
                     node: { type: 'string', description: 'Optional. Node where the file should be written. Defaults to the current node.' },
                 },
@@ -1875,12 +1887,12 @@ export const definitions = [
         {
             name: 'exec',
             defaultInject: true,
-            description: 'Execute a shell command in agent-folder. Defaults to the session cwd when set; otherwise uses the agent folder. Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output saved to agent-folder/.temp/. Commands running longer than the configured timeout (default 15s, allowed range 1-60s) continue in the background and send a completion system message later.',
+            description: 'Execute a shell command. The working directory is the explicit cwd when provided (relative cwd resolves from the session cwd when set, otherwise from the current node default), otherwise the session cwd when set, otherwise the current node default (master default is the agent folder). Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output is saved under the agent folder .temp/exec area. Commands running longer than the configured timeout (default 15s, allowed range 1-60s) continue in the background and send a completion system message later.',
             parameters: {
                 type: 'object',
                 properties: {
                     command: { type: 'string' },
-                    cwd: { type: 'string', description: 'Optional working directory override. Defaults to session.cwd when set.' },
+                    cwd: { type: 'string', description: 'Optional working directory override. Relative paths resolve from session.cwd when set, otherwise from the current node default.' },
                     timeout: { type: 'number', minimum: MIN_EXEC_TIMEOUT_SECONDS, maximum: MAX_EXEC_TIMEOUT_SECONDS, description: `Optional timeout in seconds before the command is moved to background. Default: ${DEFAULT_EXEC_TIMEOUT_SECONDS}. Allowed range: ${MIN_EXEC_TIMEOUT_SECONDS}-${MAX_EXEC_TIMEOUT_SECONDS}.` }
                 },
                 required: ['command']
@@ -1984,7 +1996,7 @@ export const definitions = [
                 properties: {
                     channelTargetId: { type: 'string', description: 'Optional target channel in format <channel-instance-id>:<conversation-id>. Cannot be combined with sessionId.' },
                     sessionId: { type: 'string', description: 'Optional target session ID whose attached channels should receive the file. Defaults to the current session when omitted.' },
-                    filePath: { type: 'string', description: 'File path on the selected node. Relative paths are resolved under the current agent folder on that node; absolute paths and ~/... are also accepted when allowed.' },
+                    filePath: { type: 'string', description: 'File path on the selected node. On master, relative paths resolve from the current session cwd when set, otherwise from the current agent folder; on remote nodes, relative paths resolve under that node\'s agent folder. Absolute paths and ~/... are also accepted when allowed.' },
                     node: { type: 'string', description: 'Optional. Node where the file lives. Defaults to the current node; send_file still delivers through master-side channel/session routing.' },
                     caption: { type: 'string', description: 'Optional caption/text sent with the file where supported' },
                     text: { type: 'string', description: 'Alias of caption for convenience' }
@@ -2357,7 +2369,7 @@ export const definitions = [
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
+                    filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder.' },
                     args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable. Prefer this when visible.', additionalProperties: true },
                     argsJson: { type: 'string', description: 'JSON object string fallback exposed to the script as the `args` input variable, for providers that do not expose free-form object fields. Example: `{"key":"value"}`. Used when `args` is not available.' },
                     mode: { type: 'string', enum: ['foreground', 'background'], description: 'Run mode. foreground is the default. background runs are intended for persistent controller-style scripts.' },
@@ -2373,7 +2385,7 @@ export const definitions = [
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current agent folder (or session cwd when set).' },
+                    filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder.' },
                     args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable. Prefer this when visible.', additionalProperties: true },
                     argsJson: { type: 'string', description: 'JSON object string fallback exposed to the script as the `args` input variable, for providers that do not expose free-form object fields. Example: `{"key":"value"}`. Used when `args` is not available.' },
                     mode: { type: 'string', enum: ['foreground', 'background'], description: 'Optional explicit mode override. Defaults to background for this tool.' },

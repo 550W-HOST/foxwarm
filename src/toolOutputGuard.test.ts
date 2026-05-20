@@ -5,6 +5,7 @@ import path from 'path';
 
 import { executeTools } from './llm';
 import { getAgentDir } from './config';
+import { read } from './tools';
 import { guardToolOutputForModel, TOOL_OUTPUT_GUARD_CHAR_LIMIT } from './toolOutputGuard';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 
@@ -23,7 +24,7 @@ function guardOptions(sessionId = makeSessionId('tool_output_guard')) {
 }
 
 async function readSaved(relativePath: string): Promise<string> {
-  return fs.readFile(path.join(getAgentDir('main'), relativePath), 'utf8');
+  return fs.readFile(path.isAbsolute(relativePath) ? relativePath : path.join(getAgentDir('main'), relativePath), 'utf8');
 }
 
 test('tool output guard truncates oversized output field and preserves metadata', async () => {
@@ -39,9 +40,33 @@ test('tool output guard truncates oversized output field and preserves metadata'
   assert.equal(result.outputTruncated, true);
   assert.equal(result.outputOriginalLengthChars, longOutput.length);
   assert.match(result.output, /TOOL OUTPUT TOO LONG: output field/);
-  assert.match(result.output, /read\(\{"filePath":"\.temp\/tool-outputs\//);
+  assert.equal(path.isAbsolute(result.outputFullPath), true);
+  assert.match(result.output, /Node: master/);
+  assert.match(result.output, new RegExp(`Path: ${result.outputFullPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.doesNotMatch(result.output, /Use read|Tool path/i);
   assert.equal(await readSaved(result.outputFullPath), longOutput);
   assert.ok(formatToolResponsePayload(result).length < TOOL_OUTPUT_GUARD_CHAR_LIMIT);
+});
+
+test('tool output guard saved path is absolute and cwd-independent', async () => {
+  const sessionId = makeSessionId('tool_output_guard_cwd');
+  const cwd = path.join(getAgentDir('main'), '.temp', `tool-output-cwd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  await fs.ensureDir(cwd);
+  const content = 'CWD_INDEPENDENT_OUTPUT\n' + 'C'.repeat(TOOL_OUTPUT_GUARD_CHAR_LIMIT + 5000);
+
+  try {
+    const result = await guardToolOutputForModel({ output: content }, {
+      ...guardOptions(sessionId),
+      session: { id: sessionId, agent: 'main', cwd },
+    });
+
+    assert.equal(path.isAbsolute(result.outputFullPath), true);
+    assert.doesNotMatch(result.output, /Use read|Tool path/i);
+    const readResult = await read({ filePath: result.outputFullPath }, { session: { id: sessionId, agent: 'main', cwd } } as any);
+    assert.equal(readResult, content);
+  } finally {
+    await fs.remove(cwd);
+  }
 });
 
 test('tool output guard stage B truncates oversized non-output fields', async () => {
@@ -56,6 +81,7 @@ test('tool output guard stage B truncates oversized non-output fields', async ()
   assert.equal(result.fullPath, '/tmp/keep-me.txt');
   assert.equal(result.huge, undefined);
   assert.match(result.output, /TOOL OUTPUT TOO LONG: formatted tool response/);
+  assert.equal(path.isAbsolute(result.fullOutputPath), true);
   const saved = await readSaved(result.fullOutputPath);
   assert.match(saved, /small output/);
   assert.ok(saved.includes(hugeNestedValue));
