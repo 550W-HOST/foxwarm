@@ -241,13 +241,15 @@ test('recall blocks target lists only parentless frontier blocks sorted by messa
 
   const directory = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'blocks', previewLength: 200 }));
   assert.match(directory, /Current CTX-BLOCK frontier/);
-  assert.match(directory, /\[B#4\] L2 msg#1-2/);
+  assert.match(directory, /\[CTX-BLOCK L2 B#4 raw#1-#2/);
+  assert.match(directory, /\[CTX-BLOCK L2 B#4 raw#1-#2 time 1970-01-01 08:00:01 \+0800 -> 1970-01-01 08:00:02 \+0800\]/);
   assert.match(directory, /parent alpha beta block/);
-  assert.match(directory, /\[B#3\] L1 msg#3/);
+  assert.match(directory, /\[CTX-BLOCK L1 B#3 raw#3/);
+  assert.match(directory, /\[CTX-BLOCK L1 B#3 raw#3 time 1970-01-01 08:00:03 \+0800\]/);
   assert.match(directory, /block gamma/);
-  assert.doesNotMatch(directory, /\[B#1\] L1/);
-  assert.doesNotMatch(directory, /\[B#2\] L1/);
-  assert.ok(directory.indexOf('[B#4]') < directory.indexOf('[B#3]'), 'frontier should be sorted by message range, not latest block id');
+  assert.doesNotMatch(directory, /\[CTX-BLOCK L1 B#1/);
+  assert.doesNotMatch(directory, /\[CTX-BLOCK L1 B#2/);
+  assert.ok(directory.indexOf('B#4') < directory.indexOf('B#3'), 'frontier should be sorted by message range, not latest block id');
 });
 
 test('recall target selectors read block details and message ranges', async () => {
@@ -257,35 +259,50 @@ test('recall target selectors read block details and message ranges', async () =
 
   const messageBackedBlock = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'B#1', previewLength: 200 }));
   assert.match(messageBackedBlock, /CTX-BLOCK B#1/);
-  assert.match(messageBackedBlock, /Summary: block alpha/);
+  assert.match(messageBackedBlock, /Block: \[CTX-BLOCK L1 B#1 raw#1 time 1970-01-01 08:00:01 \+0800\] block alpha/);
+  assert.match(messageBackedBlock, /Covers: msg#1/);
   assert.match(messageBackedBlock, /Source messages/);
+  assert.match(messageBackedBlock, /\[#1 time 1970-01-01 08:00:01 \+0800\]/);
   assert.match(messageBackedBlock, /archived alpha/);
-  assert.match(messageBackedBlock, /recall\(\{"sessionId":"[^"}]+","target":"B#1"\}\)/);
+  assert.doesNotMatch(messageBackedBlock, /recall\(\{"sessionId":"[^"}]+","target":"B#1"\}\)/);
   assert.doesNotMatch(messageBackedBlock, /target":"msg:B#1"/);
+  assert.doesNotMatch(messageBackedBlock, /\n\nNext:/);
 
   const parentBlock = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'block#4', previewLength: 200 }));
   assert.match(parentBlock, /CTX-BLOCK B#4/);
-  assert.match(parentBlock, /Summary: parent alpha beta block/);
+  assert.match(parentBlock, /Block: \[CTX-BLOCK L2 B#4 raw#1-#2 time 1970-01-01 08:00:01 \+0800 -> 1970-01-01 08:00:02 \+0800\] parent alpha beta block/);
+  assert.match(parentBlock, /Covers: msg#1-2/);
   assert.match(parentBlock, /Immediate child blocks \(B#1-B#2\)/);
+  assert.match(parentBlock, /\[CTX-BLOCK L1 B#1 raw#1 time 1970-01-01 08:00:01 \+0800\] block alpha/);
   assert.match(parentBlock, /block alpha/);
   assert.match(parentBlock, /block beta/);
   assert.doesNotMatch(parentBlock, /Archived messages for session/);
+  assert.doesNotMatch(parentBlock, /target":"B#4"/);
 
   const messagesForBlock = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'msg:B#4', previewLength: 200 }));
-  assert.match(messagesForBlock, /Messages covered by CTX-BLOCK B#4 \(msg#1-2\)/);
+  assert.match(messagesForBlock, /Messages covered by CTX-BLOCK B#4 \(msg#1-2 time 1970-01-01 08:00:01 \+0800 -> 1970-01-01 08:00:02 \+0800\)/);
+  assert.match(messagesForBlock, /\[#1 time 1970-01-01 08:00:01 \+0800\]/);
+  assert.match(messagesForBlock, /\[#2 time 1970-01-01 08:00:02 \+0800\]/);
   assert.match(messagesForBlock, /archived alpha/);
   assert.match(messagesForBlock, /archived beta/);
   assert.doesNotMatch(messagesForBlock, /archived gamma/);
+  assert.doesNotMatch(messagesForBlock, /\n\nSuggestions/);
 
   const messageRange = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'msg#2-3', previewLength: 200 }));
+  assert.match(messageRange, /\[#2 time 1970-01-01 08:00:02 \+0800\]/);
+  assert.match(messageRange, /\[#3 time 1970-01-01 08:00:03 \+0800\]/);
   assert.match(messageRange, /archived beta/);
   assert.match(messageRange, /archived gamma/);
   assert.doesNotMatch(messageRange, /archived alpha/);
+  assert.doesNotMatch(messageRange, /\n\nSuggestions/);
+  assert.doesNotMatch(messageRange, /\n\nNext:/);
 
   const singleMessage = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'msg#2', previewLength: 200 }));
+  assert.match(singleMessage, /\[#2 time 1970-01-01 08:00:02 \+0800\]/);
   assert.match(singleMessage, /archived beta/);
   assert.doesNotMatch(singleMessage, /archived alpha/);
   assert.doesNotMatch(singleMessage, /archived gamma/);
+  assert.doesNotMatch(singleMessage, /\n\nSuggestions/);
 });
 
 test('recall rejects unsupported targets with examples', async () => {
@@ -337,9 +354,10 @@ test('recall enforces preview-budget guard for broad ranges but exempts single i
     previewLength: 6_000,
   }));
   assert.match(overBudgetBlock, /CTX-BLOCK B#5/);
-  assert.match(overBudgetBlock, /B#5 covers msg#1-4 \(4 message\(s\)\)/);
+  assert.match(overBudgetBlock, /B#5 covers msg#1-4 time 1970-01-01 08:00:01 \+0800 -> 1970-01-01 08:00:04 \+0800 \(4 message\(s\)\)/);
   assert.match(overBudgetBlock, /4 × 6000 = 24000/);
   assert.match(overBudgetBlock, /msg#1-3/);
+  assert.doesNotMatch(overBudgetBlock, /target":"B#5"/);
   assert.doesNotMatch(overBudgetBlock, /Archived messages for session/);
 });
 
@@ -372,8 +390,8 @@ test('recall blocks target caps large frontier output while suggesting B# drill-
   assert.match(directory, /Current CTX-BLOCK frontier/);
   assert.match(directory, /Frontier has 25 block\(s\); showing 20/);
   assert.match(directory, /Pick a specific `B#N`/);
-  assert.match(directory, /\[B#20\] L1 msg#20/);
-  assert.doesNotMatch(directory, /\[B#21\] L1/);
+  assert.match(directory, /\[CTX-BLOCK L1 B#20 raw#20/);
+  assert.doesNotMatch(directory, /\[CTX-BLOCK L1 B#21/);
 });
 
 test('recall lets previewLength control archived tool response previews and treats zero as default', async () => {

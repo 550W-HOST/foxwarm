@@ -274,16 +274,53 @@ function formatSeqRange(startSeq: number, endSeq: number): string {
   return startSeq === endSeq ? `#${startSeq}` : `#${startSeq}-#${endSeq}`;
 }
 
-export function formatArchiveBlockTimeRange(record: Pick<ArchiveBlockRecord, 'rawStartTimestamp' | 'rawEndTimestamp'>): string {
-  const range = formatLocalTimeRange(record.rawStartTimestamp, record.rawEndTimestamp);
+export type ArchiveBlockTimeRangeInput = Pick<ArchiveBlockRecord, 'rawStartTimestamp' | 'rawEndTimestamp'> & {
+  startTime?: number;
+  endTime?: number;
+  startTimestamp?: number;
+  endTimestamp?: number;
+};
+
+function normalizeArchiveBlockTimestamp(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+export function getArchiveBlockStartTimestamp(record: ArchiveBlockTimeRangeInput): number | undefined {
+  return normalizeArchiveBlockTimestamp(record.rawStartTimestamp)
+    ?? normalizeArchiveBlockTimestamp(record.startTime)
+    ?? normalizeArchiveBlockTimestamp(record.startTimestamp);
+}
+
+export function getArchiveBlockEndTimestamp(record: ArchiveBlockTimeRangeInput): number | undefined {
+  return normalizeArchiveBlockTimestamp(record.rawEndTimestamp)
+    ?? normalizeArchiveBlockTimestamp(record.endTime)
+    ?? normalizeArchiveBlockTimestamp(record.endTimestamp);
+}
+
+export function formatArchiveBlockTimeRange(record: ArchiveBlockTimeRangeInput): string {
+  const range = formatLocalTimeRange(getArchiveBlockStartTimestamp(record), getArchiveBlockEndTimestamp(record));
   return range ? ` time ${range}` : '';
+}
+
+export type ArchiveBlockContextTextInput = Pick<ArchiveBlockRecord, 'id' | 'level' | 'rawStartSeq' | 'rawEndSeq' | 'summary'> & ArchiveBlockTimeRangeInput;
+
+export function formatArchiveBlockRawRange(record: Pick<ArchiveBlockRecord, 'rawStartSeq' | 'rawEndSeq'>): string {
+  return `raw${formatSeqRange(record.rawStartSeq, record.rawEndSeq)}`;
+}
+
+export function formatArchiveBlockContextPrefix(record: Omit<ArchiveBlockContextTextInput, 'summary'>): string {
+  return `[CTX-BLOCK L${record.level} B#${record.id} ${formatArchiveBlockRawRange(record)}${formatArchiveBlockTimeRange(record)}]`;
+}
+
+export function formatArchiveBlockContextText(record: ArchiveBlockContextTextInput): string {
+  return `${formatArchiveBlockContextPrefix(record)} ${record.summary}`;
 }
 
 export function renderBlockMessage(record: ArchiveBlockRecord): Message {
   return {
     role: 'model',
     parts: [{
-      text: `[CTX-BLOCK L${record.level} B#${record.id} raw${formatSeqRange(record.rawStartSeq, record.rawEndSeq)}${formatArchiveBlockTimeRange(record)}] ${record.summary}`,
+      text: formatArchiveBlockContextText(record),
     }],
     __meta: { timestamp: record.createdAt },
   };
