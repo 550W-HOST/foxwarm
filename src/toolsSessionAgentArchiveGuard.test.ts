@@ -249,6 +249,7 @@ test('recall blocks target lists only parentless frontier blocks sorted by messa
   assert.match(directory, /block gamma/);
   assert.doesNotMatch(directory, /\[CTX-BLOCK L1 B#1/);
   assert.doesNotMatch(directory, /\[CTX-BLOCK L1 B#2/);
+  assert.doesNotMatch(directory, / from (?:messages|blocks) /);
   assert.ok(directory.indexOf('B#4') < directory.indexOf('B#3'), 'frontier should be sorted by message range, not latest block id');
 });
 
@@ -261,6 +262,7 @@ test('recall target selectors read block details and message ranges', async () =
   assert.match(messageBackedBlock, /CTX-BLOCK B#1/);
   assert.match(messageBackedBlock, /Block: \[CTX-BLOCK L1 B#1 raw#1 time 1970-01-01 08:00:01 \+0800\] block alpha/);
   assert.match(messageBackedBlock, /Covers: msg#1/);
+  assert.match(messageBackedBlock, /Source: messages msg#1/);
   assert.match(messageBackedBlock, /Source messages/);
   assert.match(messageBackedBlock, /\[#1 time 1970-01-01 08:00:01 \+0800\]/);
   assert.match(messageBackedBlock, /archived alpha/);
@@ -272,10 +274,13 @@ test('recall target selectors read block details and message ranges', async () =
   assert.match(parentBlock, /CTX-BLOCK B#4/);
   assert.match(parentBlock, /Block: \[CTX-BLOCK L2 B#4 raw#1-#2 time 1970-01-01 08:00:01 \+0800 -> 1970-01-01 08:00:02 \+0800\] parent alpha beta block/);
   assert.match(parentBlock, /Covers: msg#1-2/);
+  assert.match(parentBlock, /Source: blocks B#1-B#2/);
   assert.match(parentBlock, /Immediate child blocks \(B#1-B#2\)/);
   assert.match(parentBlock, /\[CTX-BLOCK L1 B#1 raw#1 time 1970-01-01 08:00:01 \+0800\] block alpha/);
   assert.match(parentBlock, /block alpha/);
   assert.match(parentBlock, /block beta/);
+  assert.doesNotMatch(parentBlock, / from messages msg#/);
+  assert.doesNotMatch(parentBlock, / from blocks B#/);
   assert.doesNotMatch(parentBlock, /Archived messages for session/);
   assert.doesNotMatch(parentBlock, /target":"B#4"/);
 

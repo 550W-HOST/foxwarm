@@ -452,13 +452,17 @@ function formatArchivedBlockPreviewLine(
     sourceSessionId?: string;
   },
   previewLength: number,
+  options: { includeSourceSuffix?: boolean } = {},
 ): string {
   const locality = record.inherited ? `[inherited from ${record.sourceSessionId || 'unknown'}] ` : '[local] ';
   const blockText = formatArchiveBlockContextText({
     ...record,
     summary: truncateUnicodeSafe(record.summary || '', previewLength) || '[empty summary]',
   });
-  return formatPrefixedMultilineText(locality, `${blockText} from ${formatArchiveSourceLabel(record.sourceKind, record.sourceStart, record.sourceEnd)}`);
+  const text = options.includeSourceSuffix === false
+    ? blockText
+    : `${blockText} from ${formatArchiveSourceLabel(record.sourceKind, record.sourceStart, record.sourceEnd)}`;
+  return formatPrefixedMultilineText(locality, text);
 }
 
 type RecallTargetSpec =
@@ -1415,7 +1419,9 @@ async function buildRecallBlockDetail(
     const capped = capRecallBlockSummaryRecords(childRecords, previewLength);
     const visibleChildRecords = await hydrateRecallBlockTimeRanges(targetSessionId, capped.records);
     const childSection = visibleChildRecords.length > 0
-      ? visibleChildRecords.map((child: ArchiveBlockRecord) => formatArchivedBlockPreviewLine(child, previewLength)).join('\n')
+      ? visibleChildRecords
+        .map((child: ArchiveBlockRecord) => formatArchivedBlockPreviewLine(child, previewLength, { includeSourceSuffix: false }))
+        .join('\n')
       : '[no child blocks found]';
     const capNote = capped.capped
       ? `\n\nChild block list has ${childRecords.length} block(s); showing ${capped.records.length} because ${childRecords.length} × ${previewLength} = ${capped.requestedChars} summary-preview characters exceeds the ${ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT}-character guard. Pick a specific child \`B#N\` to continue drilling down, or lower previewLength.`
