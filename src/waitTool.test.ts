@@ -106,7 +106,7 @@ test('wait tool schema includes waitAllSessions', () => {
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.items?.type, 'string');
 });
 
-test('waitAllSessions argument validation rejects invalid values and de-dupes duplicates', async () => {
+test('waitAllSessions argument validation rejects invalid values, treats empty array as ordinary wait, and de-dupes duplicates', async () => {
   const sessionId = makeSessionId('wait_all_validation');
   try {
     const session = await sessionManager.getSession(sessionId);
@@ -115,10 +115,11 @@ test('waitAllSessions argument validation rejects invalid values and de-dupes du
       () => tool_wait({ waitAllSessions: 'child-a' }, { sessionId, session }),
       /waitAllSessions must be an array/,
     );
-    await assert.rejects(
-      () => tool_wait({ waitAllSessions: [] }, { sessionId, session }),
-      /at least one session ID/,
-    );
+    const emptyResult = await tool_wait({ waitAllSessions: [] }, { sessionId, session });
+    assert.equal(emptyResult.output, 'ok');
+    let reloaded = await sessionManager.getSession(sessionId);
+    assert.equal(reloaded.meta.wait?.waitAll, undefined);
+
     await assert.rejects(
       () => tool_wait({ waitAllSessions: ['child-a', '   '] }, { sessionId, session }),
       /entries must be non-empty strings/,
@@ -130,7 +131,7 @@ test('waitAllSessions argument validation rejects invalid values and de-dupes du
 
     const result = await tool_wait({ waitAllSessions: [' child-a ', 'child-a', 'child-b'] }, { sessionId, session });
     assert.equal(result.output, 'ok');
-    const reloaded = await sessionManager.getSession(sessionId);
+    reloaded = await sessionManager.getSession(sessionId);
     assert.deepEqual(reloaded.meta.wait?.waitAll?.sessions, ['child-a', 'child-b']);
   } finally {
     await cleanupSession(sessionId);

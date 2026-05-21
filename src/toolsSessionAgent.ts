@@ -91,7 +91,7 @@ function normalizeWaitAllSessions(value: unknown): string[] | undefined {
   }
 
   if (normalized.length === 0) {
-    throw new Error('waitAllSessions must include at least one session ID when provided.');
+    return undefined;
   }
 
   return normalized;

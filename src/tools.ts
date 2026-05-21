@@ -1968,7 +1968,7 @@ export const definitions = [
                     timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. If a positive value is provided and no newer message/event wakes the session first, a system message wakes it after this many seconds.' },
                     waitAllSessions: {
                         type: 'array',
-                        description: 'Optional list of session IDs. When provided, wait until every listed session has sent at least one new message to this session after the wait starts; unrelated messages/events and timeout still wake normally with a pending reminder.',
+                        description: 'Optional list of session IDs. Omit or pass [] for ordinary wait. When provided, wait until every listed session has sent at least one new message to this session after the wait starts; unrelated messages/events and timeout still wake normally with a pending reminder.',
                         items: { type: 'string', description: 'Session ID that must report before this wait-all condition is satisfied.' }
                     }
                 }
