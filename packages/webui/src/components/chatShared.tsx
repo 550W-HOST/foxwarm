@@ -258,6 +258,7 @@ export const isCollapsibleSystemText = (text: string): boolean => (
 )
 
 export const clampContentStyle = (lines: number, extraHeightRem = 0): CSSProperties => ({
+  lineHeight: '1.5em',
   maxHeight: extraHeightRem > 0
     ? `calc(1.5em * ${lines} + ${extraHeightRem}rem)`
     : `calc(1.5em * ${lines})`,

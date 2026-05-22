@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode, UIEvent } from 'react'
+import type { MouseEvent, ReactNode, UIEvent } from 'react'
 import { Eye, Code, FileJson, Copy, Check, X, Download } from 'lucide-react'
 import {
   Diff,
@@ -15,7 +15,6 @@ import {
   formatToolLabel,
   formatCompactObjectPreview,
   formatStructuredSystemText,
-  getCollapsedReasoningPreview,
   isCollapsibleSystemText,
   isHeavySystemTextLine,
   isLightweightStructuredSystem,
@@ -33,6 +32,7 @@ import {
   type ViewMode,
 } from './chatShared'
 import { formatToolResponsePayload } from '../../../shared/src/toolResponseFormatting'
+import ReasoningCard from './ReasoningCard'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
 import { buildWorkspaceDownloadUrl, triggerBrowserDownload } from './workspaceShared'
 
@@ -84,6 +84,48 @@ const ToolDownloadButton = memo(function ToolDownloadButton({ url, fileName }: {
     >
       <Download size={12} />
       <span>{fileName ? `Download ${fileName}` : 'Download file'}</span>
+    </button>
+  )
+})
+
+type ToolThreadTone = 'neutral' | 'success' | 'error'
+
+const toolThreadLineToneClasses: Record<ToolThreadTone, string> = {
+  neutral: 'text-slate-300 hover:text-slate-500 focus-visible:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400 dark:focus-visible:text-slate-400',
+  success: 'text-emerald-300 hover:text-emerald-500 focus-visible:text-emerald-500 dark:text-emerald-700 dark:hover:text-emerald-400 dark:focus-visible:text-emerald-400',
+  error: 'text-red-300 hover:text-red-500 focus-visible:text-red-500 dark:text-red-700 dark:hover:text-red-400 dark:focus-visible:text-red-400',
+}
+
+const toolSurfaceToneClasses: Record<ToolThreadTone, string> = {
+  neutral: 'my-0.5 bg-slate-50/45 dark:bg-slate-800/20',
+  success: 'my-0.5 bg-emerald-50/35 dark:bg-emerald-900/10',
+  error: 'my-0.5 bg-red-50/40 dark:bg-red-900/10',
+}
+
+const ToolThreadLineButton = memo(function ToolThreadLineButton({
+  expanded,
+  onToggle,
+  tone = 'neutral',
+  label,
+}: {
+  expanded: boolean
+  onToggle: () => void
+  tone?: ToolThreadTone
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-label={label}
+      title={label}
+      onClick={(e) => {
+        e.stopPropagation()
+        onToggle()
+      }}
+      className={`absolute bottom-0 -left-2 top-0 flex w-4 cursor-pointer items-stretch justify-start rounded-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 sm:-left-2.5 sm:w-5 ${toolThreadLineToneClasses[tone]}`}
+    >
+      <span className="my-0.5 ml-2 block w-[2px] rounded-full bg-current opacity-80 transition-opacity group-hover:opacity-100 sm:ml-2.5" />
     </button>
   )
 })
@@ -321,75 +363,6 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   )
 })
 
-const ReasoningSummaryCard = memo(function ReasoningSummaryCard({ thinking, tone }: { thinking: string; tone: 'message' | 'processing' }) {
-  const [expanded, setExpanded] = useState(tone === 'processing')
-  const collapsedPreview = useMemo(() => getCollapsedReasoningPreview(thinking), [thinking])
-
-  useEffect(() => {
-    if (tone === 'processing') {
-      setExpanded(true)
-    }
-  }, [tone, thinking])
-
-  if (!thinking.trim()) return null
-
-  const containerClass = tone === 'processing'
-    ? 'bg-white/80 dark:bg-gray-900/40 border-blue-200 dark:border-blue-700/60 text-blue-900 dark:text-blue-100'
-    : 'bg-slate-50 dark:bg-slate-900/30 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
-  const labelClass = tone === 'processing'
-    ? 'text-blue-600 dark:text-blue-300'
-    : 'text-slate-500 dark:text-slate-400'
-  const bodyClass = tone === 'processing'
-    ? 'prose-blue dark:prose-invert prose-p:text-blue-900 dark:prose-p:text-blue-100 prose-headings:text-blue-900 dark:prose-headings:text-blue-100 prose-strong:text-blue-950 dark:prose-strong:text-white prose-li:text-blue-900 dark:prose-li:text-blue-100'
-    : 'prose-slate dark:prose-invert prose-p:text-slate-700 dark:prose-p:text-slate-300 prose-headings:text-slate-800 dark:prose-headings:text-slate-200 prose-strong:text-slate-900 dark:prose-strong:text-white prose-li:text-slate-700 dark:prose-li:text-slate-300'
-  const isProcessing = tone === 'processing'
-  const isInteractive = !isProcessing
-  const toggleExpanded = () => {
-    if (!isInteractive) return
-    setExpanded(current => !current)
-  }
-
-  return (
-    <div
-      className={`rounded-lg border px-3 py-2 ${containerClass} ${isInteractive && !expanded ? 'cursor-pointer' : ''}`}
-      onClick={!expanded && isInteractive ? toggleExpanded : undefined}
-    >
-      <div
-        className={`mb-1 flex items-start justify-between gap-3 ${isInteractive ? 'cursor-pointer' : ''}`}
-        onClick={expanded && isInteractive ? toggleExpanded : undefined}
-      >
-        <div className={`min-w-0 flex-1 text-[11px] font-medium uppercase tracking-wide ${labelClass}`}>
-          <div className="flex min-w-0 items-baseline gap-2">
-            <span className="shrink-0">Reasoning</span>
-            {!expanded && (
-              <span className="min-w-0 flex-1 truncate normal-case text-sm font-normal tracking-normal" title={collapsedPreview}>
-                {collapsedPreview}
-              </span>
-            )}
-          </div>
-        </div>
-        {!isProcessing && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              toggleExpanded()
-            }}
-            className="shrink-0 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-          >
-            {expanded ? '▲ Show less' : '▼ Show more'}
-          </button>
-        )}
-      </div>
-      {expanded ? (
-        <MarkdownContent
-          text={thinking}
-          className={`foxwarm-markdown prose prose-sm max-w-none prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 ${bodyClass}`}
-        />
-      ) : null}
-    </div>
-  )
-})
-
 const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { text: string; message: Message }) {
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const [copied, setCopied] = useState(false)
@@ -455,8 +428,11 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
   )
 })
 
-const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassName = 'text-gray-700 dark:text-gray-200', label = name) => (
-  <div className="flex items-center gap-2 min-w-0">
+const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassName = 'text-gray-700 dark:text-gray-200', label = name, headerProps: { className?: string; onClick?: (e: MouseEvent<HTMLDivElement>) => void } = {}) => (
+  <div
+    className={`flex items-center gap-2 min-w-0 ${headerProps.className || ''}`.trim()}
+    onClick={headerProps.onClick}
+  >
     <ToolLabel name={name} label={label} />
     <div className={`min-w-0 flex-1 ${summaryClassName}`}>{summary}</div>
   </div>
@@ -488,6 +464,138 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
   if (text.length <= maxLength) return text
   return `${text.slice(0, maxLength)}...`
 }
+
+const getHeredocFilePathFromMarker = (marker: string): string | null => {
+  const normalized = marker.toLowerCase()
+  if (['py', 'python', 'python3'].includes(normalized)) return 'heredoc.py'
+  if (['js', 'javascript', 'node'].includes(normalized)) return 'heredoc.js'
+  if (['ts', 'typescript'].includes(normalized)) return 'heredoc.ts'
+  if (['sh', 'bash', 'shell', 'zsh'].includes(normalized)) return 'heredoc.sh'
+  if (normalized === 'json') return 'heredoc.json'
+  if (['yaml', 'yml'].includes(normalized)) return 'heredoc.yaml'
+  if (['html', 'xml', 'css', 'sql', 'go', 'rs', 'rust', 'java', 'php', 'rb', 'ruby'].includes(normalized)) {
+    const extension = normalized === 'rust' ? 'rs' : normalized === 'ruby' ? 'rb' : normalized
+    return `heredoc.${extension}`
+  }
+  return null
+}
+
+const getHeredocFilePathFromCommand = (line: string, marker: string): string => {
+  const markerFilePath = getHeredocFilePathFromMarker(marker)
+  if (markerFilePath) return markerFilePath
+
+  const lower = line.toLowerCase()
+  if (/\bpython(?:\d+(?:\.\d+)?)?\b/.test(lower)) return 'heredoc.py'
+  if (/\b(?:node|bun|deno)\b/.test(lower)) return 'heredoc.js'
+  if (/\b(?:tsx|ts-node)\b/.test(lower)) return 'heredoc.ts'
+  if (/\b(?:bash|sh|zsh|fish)\b/.test(lower)) return 'heredoc.sh'
+  if (/\bruby\b/.test(lower)) return 'heredoc.rb'
+  if (/\bphp\b/.test(lower)) return 'heredoc.php'
+  if (/\b(?:psql|sqlite3?|mysql)\b/.test(lower)) return 'heredoc.sql'
+  return 'heredoc.sh'
+}
+
+const ExecCommandText = memo(function ExecCommandText({ command, heredocBodyBlock = true }: { command: string; heredocBodyBlock?: boolean }) {
+  const segments = useMemo(() => {
+    const lines = command.match(/[^\n]*\n|[^\n]+$/g) || (command ? [command] : [])
+    const result: Array<{ text: string; filePath: string; heredocBody?: boolean }> = []
+    let heredocMarker: string | null = null
+    let heredocFilePath = 'heredoc.sh'
+
+    const pushSegment = (text: string, filePath: string, options: { heredocBody?: boolean } = {}) => {
+      const { heredocBody = false } = options
+      const previous = result[result.length - 1]
+      if (previous && previous.filePath === filePath && previous.heredocBody === heredocBody) {
+        previous.text += text
+      } else {
+        result.push({ text, filePath, heredocBody })
+      }
+    }
+
+    lines.forEach((line) => {
+      if (heredocMarker) {
+        if (line.trim() === heredocMarker) {
+          pushSegment(line, 'command.sh')
+          heredocMarker = null
+          heredocFilePath = 'heredoc.sh'
+          return
+        }
+        pushSegment(line, heredocFilePath, { heredocBody: true })
+        return
+      }
+
+      const heredocMatch = line.match(/<<-?\s*['"]?([A-Za-z_][\w-]*)['"]?/)
+      pushSegment(line, 'command.sh')
+      if (heredocMatch) {
+        heredocMarker = heredocMatch[1]
+        heredocFilePath = getHeredocFilePathFromCommand(line, heredocMarker)
+      }
+    })
+
+    return result
+  }, [command])
+
+  return (
+    <>
+      {segments.map((segment, idx) => segment.heredocBody && heredocBodyBlock ? (
+        <div key={`${segment.filePath}-${idx}`} className="bg-sky-50/80 px-2 py-1 dark:bg-sky-900/20">
+          <SyntaxHighlightedText text={segment.text} filePath={segment.filePath} />
+        </div>
+      ) : segment.heredocBody ? (
+        <span key={`${segment.filePath}-${idx}`} className="bg-sky-50/80 px-0.5 dark:bg-sky-900/20">
+          <SyntaxHighlightedText text={segment.text} filePath={segment.filePath} />
+        </span>
+      ) : (
+        <SyntaxHighlightedText key={`${segment.filePath}-${idx}`} text={segment.text} filePath={segment.filePath} />
+      ))}
+    </>
+  )
+})
+
+const hasAnsiEscape = (text: string): boolean => /\x1B\[[0-?]*[ -/]*[@-~]/.test(text)
+
+const codeLikePathPattern = /(?:^|\s|[=:])['"]?((?:\.?\.?\/|~\/)?[\w@%+=:,./-]+(?:\.(?:tsx?|jsx?|mjs|cjs|jsonc?|css|scss|sass|less|html?|svelte|vue|mdx?|markdown|ya?ml|bash|zsh|fish|sh|pyw?|go|rs|c|cc|cpp|cxx|h|hpp|cs|java|php|rb|sql|xml|svg)|\/(?:Dockerfile|Containerfile|Makefile)|\/(?:package|tsconfig|jsconfig|composer)\.json|(?:Dockerfile|Containerfile|Makefile)|(?:package|tsconfig|jsconfig|composer)\.json))['"]?(?=$|\s|[;&|)])/gi
+
+const extractCodeLikePaths = (text: string): string[] => {
+  const paths: string[] = []
+  let match: RegExpExecArray | null
+  codeLikePathPattern.lastIndex = 0
+  while ((match = codeLikePathPattern.exec(text)) !== null) {
+    const path = match[1]
+    if (path && !paths.includes(path)) paths.push(path)
+  }
+  return paths
+}
+
+const inferExecOutputFilePath = (command?: string, output?: string): string | null => {
+  const cmd = command || ''
+  const codeReaderCommand = /\b(?:cat|sed|head|tail|nl|awk)\b/.test(cmd)
+  if (codeReaderCommand) {
+    const [path] = extractCodeLikePaths(cmd)
+    if (path) return path
+  }
+
+  const trimmed = (output || '').trim()
+  if (!trimmed) return null
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      JSON.parse(trimmed)
+      return 'output.json'
+    } catch {
+      // Not JSON; keep falling through to other lightweight heuristics.
+    }
+  }
+  if (/^\s*(?:import|export)\s/m.test(trimmed) || /^\s*(?:const|let|var|function|class)\s+/m.test(trimmed)) return 'output.ts'
+  if (/^\s*(?:def|class|from|import)\s+/m.test(trimmed)) return 'output.py'
+  if (/^\s*<\/?[A-Za-z][\s\S]*>\s*$/.test(trimmed)) return 'output.html'
+  return null
+}
+
+const ExecOutputText = memo(function ExecOutputText({ text, command }: { text: string; command?: string }) {
+  const filePath = useMemo(() => inferExecOutputFilePath(command, text), [command, text])
+  if (!filePath || hasAnsiEscape(text)) return <>{parseAnsi(text)}</>
+  return <SyntaxHighlightedText text={text} filePath={filePath} />
+})
 
 const isLegacyDiffToolName = (name: string): boolean => name === 'edit' || name === 'edit_memory'
 const isPatchToolName = (name: string): boolean => name === 'apply_patch' || name === 'apply_patch_memory'
@@ -543,7 +651,7 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
   if (call.name === 'exec') {
     const cmd = call.args?.command ?? ''
     const preview = cmd.length > 200 ? `${cmd.substring(0, 200)}...` : cmd
-    return <span className="truncate font-mono" title={cmd}>{preview}</span>
+    return <span className="truncate font-mono" title={cmd}><ExecCommandText command={preview} heredocBodyBlock={false} /></span>
   }
 
   if (call.name === 'send_to_session') {
@@ -577,7 +685,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
       <div className="space-y-2">
         <div className="whitespace-pre-wrap break-all">{call.args.filePath}</div>
         {call.args.content && (
-          <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{call.args.content}</pre>
+          <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text"><SyntaxHighlightedText text={call.args.content} filePath={call.args.filePath} /></pre>
         )}
       </div>
     )
@@ -645,7 +753,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
 
   if (call.name === 'exec') {
     const cmd = call.args?.command ?? ''
-    return <div className="break-all">{cmd}</div>
+    return <div className="whitespace-pre-wrap break-all"><ExecCommandText command={cmd} /></div>
   }
 
   if (call.name === 'send_to_session') {
@@ -666,8 +774,8 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   if (resp.name === 'read') {
     const fileContent = resp.response.content || resp.response.output || JSON.stringify(resp.response)
     return expanded
-      ? <pre className="whitespace-pre-wrap text-xs overflow-x-auto cursor-text">{fileContent}</pre>
-      : <div className="whitespace-pre-wrap break-all cursor-text">{truncatePreviewText(fileContent, 400) || 'Completed'}</div>
+      ? <pre className="whitespace-pre-wrap text-xs overflow-x-auto cursor-text"><SyntaxHighlightedText text={fileContent} filePath={call?.args?.filePath} /></pre>
+      : <div className="whitespace-pre-wrap break-all cursor-text">{fileContent ? <SyntaxHighlightedText text={truncatePreviewText(fileContent, 400)} filePath={call?.args?.filePath} /> : 'Completed'}</div>
   }
 
   if (resp.name === 'edit' && getToolResponseStatus(resp) !== 'success') {
@@ -680,7 +788,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
     const output = resp.response.output || ''
     const preview = truncatePreviewText(output, 400)
     const displayStr = expanded ? output : preview
-    return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
+    return <div className="whitespace-pre-wrap break-all cursor-text"><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
   }
 
   const download = getSendFileDownload(call, resp)
@@ -867,7 +975,7 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode, 
   )
 })
 
-const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingContent, modelMessage }: { call: FunctionCall; callIdx: number; hasFollowingContent: boolean; modelMessage?: Message }) {
+const ToolCallItem = memo(function ToolCallItem({ call, modelMessage }: { call: FunctionCall; callIdx: number; hasFollowingContent: boolean; modelMessage?: Message }) {
   const [expanded, setExpanded] = useState(false)
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
@@ -887,11 +995,14 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
     setViewMode('default')
   }, [])
 
-  const roundedClass = callIdx === 0 ? 'rounded-t' : ''
-  const borderClass = hasFollowingContent ? 'border-b-0' : ''
   const jsonText = useMemo(() => JSON.stringify(modelMessage ? { modelMessage, call } : call, null, 2), [call, modelMessage])
 
   const content = useMemo(() => {
+    const collapseHeaderProps = expanded ? {
+      className: 'cursor-pointer hover:text-gray-700 dark:hover:text-gray-200',
+      onClick: (e: MouseEvent<HTMLDivElement>) => { e.stopPropagation(); setExpanded(false) },
+    } : {}
+
     if (viewMode === 'json') {
       return (
         <pre className="whitespace-pre-wrap break-all cursor-text text-gray-600 dark:text-gray-300">
@@ -906,7 +1017,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         : ''
       return expanded ? (
         <div className="space-y-1">
-          {renderInlineToolSummary(call.name, <div className="whitespace-pre-wrap break-all"><span>{call.args.filePath}</span>{extra && <span className="ml-2 text-gray-500 dark:text-gray-400">{extra}</span>}</div>)}
+          {renderInlineToolSummary(call.name, <div className="whitespace-pre-wrap break-all"><span>{call.args.filePath}</span>{extra && <span className="ml-2 text-gray-500 dark:text-gray-400">{extra}</span>}</div>, 'text-gray-700 dark:text-gray-200', call.name, collapseHeaderProps)}
         </div>
       ) : renderInlineToolSummary(call.name, <div className="truncate" title={`${call.args.filePath}${extra}`}><span>{call.args.filePath}</span>{extra && <span className="ml-2 text-gray-500 dark:text-gray-400">{extra}</span>}</div>)
     }
@@ -914,9 +1025,9 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
     if (call.name === 'write') {
       return (
         <div className="space-y-1">
-          {renderInlineToolSummary(call.name, expanded ? <div className="whitespace-pre-wrap break-all">{call.args.filePath}</div> : <div className="truncate" title={call.args.filePath}>{call.args.filePath}</div>)}
+          {renderInlineToolSummary(call.name, expanded ? <div className="whitespace-pre-wrap break-all">{call.args.filePath}</div> : <div className="truncate" title={call.args.filePath}>{call.args.filePath}</div>, 'text-gray-700 dark:text-gray-200', call.name, collapseHeaderProps)}
           {expanded && call.args.content && (
-            <pre className="mt-2 whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{call.args.content}</pre>
+            <pre className="mt-2 whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text"><SyntaxHighlightedText text={call.args.content} filePath={call.args.filePath} /></pre>
           )}
         </div>
       )
@@ -928,7 +1039,10 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
       const newLines = hasLegacyDiff ? call.args.newText.split('\n').length - (call.args.newText.endsWith('\n') ? 1 : 0) : 0
       return (
         <div>
-          <div className="flex items-center justify-between gap-2">
+          <div
+            className={`flex items-center justify-between gap-2 ${collapseHeaderProps.className || ''}`.trim()}
+            onClick={collapseHeaderProps.onClick}
+          >
             <span className="flex items-center gap-2 flex-wrap">
               <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
               {hasLegacyDiff ? (
@@ -962,7 +1076,10 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         const fileSummary = operations.length === 1 ? operations[0].filePath : `${operations[0].filePath} +${operations.length - 1} more`
         return (
           <div>
-            <div className="flex items-center justify-between gap-2">
+            <div
+              className={`flex items-center justify-between gap-2 ${collapseHeaderProps.className || ''}`.trim()}
+              onClick={collapseHeaderProps.onClick}
+            >
               <span className="flex items-center gap-2 flex-wrap">
                 <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
                 <span className="ml-2 text-xs text-gray-500">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
@@ -1017,7 +1134,10 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         const error = e instanceof Error ? e.message : String(e)
         return (
           <div>
-            <div className="flex items-center gap-2 flex-wrap">
+            <div
+              className={`flex items-center gap-2 flex-wrap ${collapseHeaderProps.className || ''}`.trim()}
+              onClick={collapseHeaderProps.onClick}
+            >
               <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
               <span className="text-xs text-red-500">invalid patch</span>
             </div>
@@ -1036,10 +1156,12 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         <div className="space-y-1">
           {expanded ? (
             <>
-              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
-              <div className="break-all">{cmd}</div>
+              <div className={collapseHeaderProps.className} onClick={collapseHeaderProps.onClick}>
+                <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
+              </div>
+              <div className="whitespace-pre-wrap break-all"><ExecCommandText command={cmd} /></div>
             </>
-          ) : renderInlineToolSummary(call.name, <div className="truncate font-mono" title={cmd}>{preview}</div>)}
+          ) : renderInlineToolSummary(call.name, <div className="truncate font-mono" title={cmd}><ExecCommandText command={preview} heredocBodyBlock={false} /></div>)}
         </div>
       )
     }
@@ -1052,7 +1174,7 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
         <div className="space-y-1">
           {expanded ? (
             <>
-              {renderInlineToolSummary(call.name, <div className="whitespace-pre-wrap break-all"><SessionHashLink sessionId={targetSessionId} /></div>)}
+              {renderInlineToolSummary(call.name, <div className="whitespace-pre-wrap break-all"><SessionHashLink sessionId={targetSessionId} /></div>, 'text-gray-700 dark:text-gray-200', call.name, collapseHeaderProps)}
               <div className="whitespace-pre-wrap break-all">{message}</div>
             </>
           ) : renderInlineToolSummary(call.name, <div className="truncate" title={`${targetSessionId}: ${message}`}><SessionHashLink sessionId={targetSessionId} /><span>: {preview}</span></div>)}
@@ -1066,7 +1188,9 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
       <div className="space-y-1">
         {expanded ? (
           <>
-            <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
+            <div className={collapseHeaderProps.className} onClick={collapseHeaderProps.onClick}>
+              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
+            </div>
             <div className="whitespace-pre-wrap break-all">{argsFormatted}</div>
           </>
         ) : renderInlineToolSummary(call.name, <div className="truncate break-all">{preview}</div>, 'text-gray-700 dark:text-gray-200', getToolDisplayLabel(call))}
@@ -1075,7 +1199,16 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
   }, [call, diffViewMode, expanded, jsonText, viewMode])
 
   return (
-    <div className={`text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${roundedClass} p-2 ${borderClass} relative group`}>
+    <div
+      className={`text-xs relative group py-1 pl-2 pr-2 ${toolSurfaceToneClasses.neutral} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      onClick={!expanded ? () => setExpanded(true) : undefined}
+    >
+      <ToolThreadLineButton
+        expanded={expanded}
+        onToggle={() => setExpanded(current => !current)}
+        tone="neutral"
+        label={expanded ? `Collapse ${call.name} tool call` : `Expand ${call.name} tool call`}
+      />
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         {isLegacyDiffToolName(call.name) || isPatchToolName(call.name) ? (
           <>
@@ -1090,14 +1223,14 @@ const ToolCallItem = memo(function ToolCallItem({ call, callIdx, hasFollowingCon
           </>
         )}
       </div>
-      <div className="font-mono text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200" onClick={() => setExpanded(current => !current)}>
+      <div className={`font-mono text-gray-500 dark:text-gray-400 ${!expanded ? 'hover:text-gray-700 dark:hover:text-gray-200' : ''}`}>
         <div style={expanded ? undefined : clampContentStyle(1, 0.25)}>{content}</div>
       </div>
     </div>
   )
 })
 
-const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall, isLast }: { resp: FunctionResponse; hasPrecedingCall: boolean; isLast: boolean }) {
+const ToolResponseItem = memo(function ToolResponseItem({ resp }: { resp: FunctionResponse; hasPrecedingCall: boolean; isLast: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const responseStatus = getToolResponseStatus(resp)
@@ -1117,7 +1250,7 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
 
     if (resp.name === 'read') {
       const fileContent = resp.response.content || resp.response.output || JSON.stringify(resp.response)
-      return expanded ? <pre className="whitespace-pre-wrap text-xs overflow-x-auto cursor-text">{fileContent}</pre> : null
+      return expanded ? <pre className="whitespace-pre-wrap text-xs overflow-x-auto cursor-text"><SyntaxHighlightedText text={fileContent} /></pre> : null
     }
 
     if (resp.name === 'edit' && getToolResponseStatus(resp) !== 'success') {
@@ -1130,7 +1263,7 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
       const output = resp.response.output || ''
       const preview = output.length > 400 ? `${output.substring(0, 400)}...` : output
       const displayStr = expanded ? output : preview
-      return <div className="whitespace-pre-wrap break-all cursor-text">{parseAnsi(displayStr)}</div>
+      return <div className="whitespace-pre-wrap break-all cursor-text"><ExecOutputText text={displayStr} /></div>
     }
 
     const download = getSendFileDownload(undefined, resp)
@@ -1159,17 +1292,25 @@ const ToolResponseItem = memo(function ToolResponseItem({ resp, hasPrecedingCall
     return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : preview}</div>
   }, [expanded, resp, viewMode])
 
-  const roundedClass = hasPrecedingCall ? '' : 'rounded-t'
-  const roundedBottomClass = isLast ? 'rounded-b' : ''
-  const borderClass = isLast ? '' : 'border-b-0'
-
   return (
-    <div className={`text-xs ${isError ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'} border ${roundedClass} ${roundedBottomClass} p-2 ${borderClass} relative group`}>
+    <div
+      className={`text-xs relative group py-1 pl-2 pr-2 ${toolSurfaceToneClasses[isError ? 'error' : 'success']} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      onClick={!expanded ? () => setExpanded(true) : undefined}
+    >
+      <ToolThreadLineButton
+        expanded={expanded}
+        onToggle={() => setExpanded(current => !current)}
+        tone={isError ? 'error' : 'success'}
+        label={expanded ? `Collapse ${resp.name} tool response` : `Expand ${resp.name} tool response`}
+      />
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>
-      <div className={`font-mono cursor-pointer ${isError ? 'text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300' : 'text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300'}`} onClick={() => setExpanded(current => !current)}>
+      <div
+        className={`font-mono ${expanded ? 'cursor-pointer' : ''} ${isError ? `text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300` : `text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300`}`}
+        onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
+      >
         <span className="inline-flex items-center gap-1.5">{isError ? <X size={12} /> : <Check size={12} />}<span>{resp.name}</span></span>
       </div>
       {content && <div className={`font-mono mt-1 ${isError ? 'text-red-700 dark:text-red-300' : 'text-green-700 dark:text-green-300'}`} style={expanded ? undefined : clampContentStyle(3)}>{content}</div>}
@@ -1208,11 +1349,6 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   const pairStatus = getToolPairStatus(responses, imageParts)
   const isError = pairStatus === 'error'
-  const outerToneClass = pairStatus === 'error'
-    ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-    : pairStatus === 'success'
-      ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-      : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
   const tagTone = pairStatus === 'error' ? 'error' : pairStatus === 'success' ? 'success' : 'neutral'
 
   const responsePreview = useMemo(() => {
@@ -1239,7 +1375,16 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const baseTextClass = 'font-mono text-gray-700 dark:text-gray-300'
 
   return (
-    <div className={`text-xs border rounded p-2 relative group cursor-pointer ${outerToneClass}`} onClick={() => setExpanded((current) => !current)}>
+    <div
+      className={`text-xs relative group py-1 pl-2 pr-2 ${toolSurfaceToneClasses[tagTone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      onClick={!expanded ? () => setExpanded(true) : undefined}
+    >
+      <ToolThreadLineButton
+        expanded={expanded}
+        onToggle={() => setExpanded(current => !current)}
+        tone={tagTone}
+        label={expanded ? `Collapse ${call.name} tool` : `Expand ${call.name} tool`}
+      />
       <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
@@ -1247,7 +1392,10 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
       {viewMode === 'json' ? (
         <div className={`${baseTextClass} ${expanded ? '' : 'pr-10'}`}>
-          <div className="flex items-center gap-2 min-w-0">
+          <div
+            className={`flex items-center gap-2 min-w-0 ${expanded ? 'cursor-pointer hover:text-gray-900 dark:hover:text-gray-100' : ''}`}
+            onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
+          >
             <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
           </div>
           <pre className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : clampContentStyle(6)}>{jsonText}</pre>
@@ -1265,12 +1413,15 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       ) : (
         <div className={baseTextClass}>
           <div>
-            <div className="flex items-center gap-2 min-w-0">
+            <div
+              className="flex items-center gap-2 min-w-0 cursor-pointer hover:text-gray-900 dark:hover:text-gray-100"
+              onClick={(e) => { e.stopPropagation(); setExpanded(false) }}
+            >
               <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
             </div>
 
             <div className="mt-2 cursor-default" onClick={(e) => e.stopPropagation()}>
-              <div className={`bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300 ${(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) ? 'relative' : ''}`}>
+              <div className={`py-1 text-gray-700 dark:text-gray-300 ${(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) ? 'relative' : ''}`}>
                 {(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) && (
                   <div className="absolute top-1 right-0 flex gap-1" onClick={(e) => e.stopPropagation()}>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
@@ -1282,7 +1433,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
               <div className={`my-2 border-t ${isError ? 'border-red-200 dark:border-red-800' : 'border-green-200 dark:border-green-800'} opacity-70`} />
 
-              <div className="bg-white/40 dark:bg-gray-900/30 py-1 text-gray-700 dark:text-gray-300">
+              <div className="py-1 text-gray-700 dark:text-gray-300">
                 <div>
                   {responses.length > 0 ? responses.map((resp, idx) => (
                     <div key={`${resp.tool_use_id || call.id || call.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
@@ -1464,6 +1615,7 @@ const MessageRow = memo(function MessageRow({
     }
   }, [summaryTagItemsKey])
   const isInToolGroup = summaryTagItems.length > 0
+  const hasToolParts = useMemo(() => msg.parts.some(p => p.functionCall || p.functionResponse || p.thinking), [msg.parts])
   const hasVisibleTextContent = useMemo(() => msg.parts.some(p => (p.text && p.text.trim()) || (p.system && String(p.system).trim())), [msg.parts])
   const systemLikeMessage = useMemo(() => {
     if (msg.role === 'model') return false
@@ -1480,6 +1632,7 @@ const MessageRow = memo(function MessageRow({
     ? (isCollapsedToolGroup ? (showToolGroupSummary ? groupUsage : null) : usage)
     : null
   const displayUsageCallCount = isCollapsedToolGroup && showToolGroupSummary && groupUsageCallCount > 0 ? groupUsageCallCount : undefined
+  const allowOverflow = (displayUsage && !isMobile) || hasToolParts || isInToolGroup
 
   return (
     <div className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${shouldSkipMargin ? '' : 'mt-4'}`}>
@@ -1496,7 +1649,7 @@ const MessageRow = memo(function MessageRow({
           !systemLikeMessage && msg.role === 'user'
             ? 'bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
             : ''
-        } ${displayUsage && !isMobile ? 'overflow-visible' : 'overflow-x-hidden'}`}
+        } ${allowOverflow ? 'overflow-visible' : 'overflow-x-hidden'}`}
       >
         {systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} />
@@ -1521,16 +1674,22 @@ const MessageRow = memo(function MessageRow({
                 if (groupTools && !hasVisibleTextContent && isInToolGroup && !groupExpanded) {
                   return null
                 }
-                return <ReasoningSummaryCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
+                return <ReasoningCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
               }
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
               <div
-                className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+                className={`group relative py-1 pl-2 pr-2 text-xs cursor-pointer text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
                 onClick={() => onExpandGroup(groupKey)}
               >
+                <ToolThreadLineButton
+                  expanded={false}
+                  onToggle={() => onExpandGroup(groupKey)}
+                  tone="neutral"
+                  label="Expand tool group"
+                />
                 <div className="flex items-start gap-2">
                   <ToolTagList items={summaryTagItems} />
                 </div>
