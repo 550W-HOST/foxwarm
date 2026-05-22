@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { getCollapsedReasoningPreview, renderMarkdown, ToolTag } from './chatShared'
+import ThreadLineButton from './ThreadLineButton'
 
 type ReasoningTone = 'message' | 'processing'
 
@@ -39,34 +40,6 @@ const reasoningBodyClasses: Record<ReasoningTone, string> = {
   message: 'prose-slate dark:prose-invert prose-p:text-slate-700 dark:prose-p:text-slate-300 prose-headings:text-slate-800 dark:prose-headings:text-slate-200 prose-strong:text-slate-900 dark:prose-strong:text-white prose-li:text-slate-700 dark:prose-li:text-slate-300',
   processing: 'prose-blue dark:prose-invert prose-p:text-blue-900 dark:prose-p:text-blue-100 prose-headings:text-blue-900 dark:prose-headings:text-blue-100 prose-strong:text-blue-950 dark:prose-strong:text-white prose-li:text-blue-900 dark:prose-li:text-blue-100',
 }
-
-const ReasoningThreadLineButton = memo(function ReasoningThreadLineButton({
-  expanded,
-  onToggle,
-  tone,
-}: {
-  expanded: boolean
-  onToggle: () => void
-  tone: ReasoningTone
-}) {
-  const label = expanded ? 'Collapse reasoning' : 'Expand reasoning'
-
-  return (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      aria-label={label}
-      title={label}
-      onClick={(e) => {
-        e.stopPropagation()
-        onToggle()
-      }}
-      className={`absolute bottom-0 -left-2 top-0 flex w-4 cursor-pointer items-stretch justify-start rounded-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 sm:-left-2.5 sm:w-5 ${reasoningLineToneClasses[tone]}`}
-    >
-      <span className="ml-2 block w-[2px] bg-current opacity-80 transition-opacity group-hover:opacity-100 sm:ml-2.5" />
-    </button>
-  )
-})
 
 const extractOpenAIReasoningSummaryTitles = (text: string): string[] => {
   const trimmed = text.trimStart()
@@ -125,13 +98,14 @@ const ReasoningCard = memo(function ReasoningCard({
       className={`relative group pl-2 pr-2 text-xs ${reasoningSurfaceClasses[tone]} ${expanded ? 'pb-1' : ''} ${reasoningTextClasses[tone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? () => setExpanded(true) : undefined}
     >
-      <ReasoningThreadLineButton
+      <ThreadLineButton
         expanded={expanded}
         onToggle={() => setExpanded(current => !current)}
-        tone={tone}
+        label={expanded ? 'Collapse reasoning' : 'Expand reasoning'}
+        className={reasoningLineToneClasses[tone]}
       />
       <div
-        className={`${expanded ? 'mb-1' : 'py-1'} flex min-w-0 items-center gap-2 ${reasoningHeaderClasses[tone]} ${expanded ? `cursor-pointer ${reasoningHeaderHoverClasses[tone]}` : ''}`}
+        className={`${expanded ? 'mb-1' : ''} flex min-w-0 items-center gap-2 ${reasoningHeaderClasses[tone]} ${expanded ? `cursor-pointer ${reasoningHeaderHoverClasses[tone]}` : ''}`}
         onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
       >
         <ToolTag name="reasoning" label="Reasoning" tone="neutral" />
