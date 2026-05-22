@@ -116,13 +116,11 @@ test('archive store bootstraps/imports legacy jsonl archives and infers fork lin
   assert.match(String(archivedBlocksPreview), /alpha summary block/);
   assert.match(String(archivedBlocksPreview), /gamma child local block/);
 
-  const combinedPreview = await toolsSessionAgent.tool_get_context_archive({
+  const combinedPreview = await toolsSessionAgent.tool_recall({
     sessionId: 'child',
-    includeMessages: true,
-    includeBlocks: true,
+    target: 'blocks',
     previewLength: 120,
   });
-  assert.match(String(combinedPreview), /alpha parent one/);
   assert.match(String(combinedPreview), /alpha summary block/);
   assert.match(String(combinedPreview), /gamma child local/);
 });

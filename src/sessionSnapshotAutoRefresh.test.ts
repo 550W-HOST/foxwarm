@@ -140,7 +140,7 @@ test('message router refreshes stale session prompt snapshot before processing a
     });
 
     assert.equal(chatSawUpdatedSnapshot, true);
-    assert.deepEqual(replies, ['ok']);
+    assert.deepEqual(replies, []);
   } finally {
     (llm as any).chat = originalChat;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;

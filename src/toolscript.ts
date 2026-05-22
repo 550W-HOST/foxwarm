@@ -700,14 +700,14 @@ function normalizeErrorMessage(error: any, record?: ToolScriptRunRecord, runtime
   return augmentWithContext(String(error));
 }
 
-async function requestModelWithoutContext(prompt: string, session: Session): Promise<{ text: string }> {
+async function requestModelWithoutContext(prompt: string, session: Session, model?: string): Promise<{ text: string }> {
   const result = await llm.requestLlmOnce({
     contents: [{
       role: 'user',
       parts: [{ text: prompt }],
     }],
     systemPrompt: '',
-    model: session.model,
+    model: model || session.model,
     sessionId: session.id,
     toolDefinitions: [],
     notifySessionEvents: false,
@@ -904,13 +904,17 @@ async function executeScriptHostCall(
     if (typeof prompt !== 'string') {
       throw new Error('request_model_without_context requires a string prompt.');
     }
+    const model = positionalArgs.length > 1 ? positionalArgs[1] : kwargs.model;
+    if (model !== undefined && typeof model !== 'string') {
+      throw new Error('request_model_without_context model must be a string when provided.');
+    }
     const session = ctx.session || (ctx.sessionId ? await sessionManager.getSession(ctx.sessionId) : null);
     if (!session) {
       throw new Error('request_model_without_context requires a session context.');
     }
     startHostCall();
     try {
-      const result = await requestModelWithoutContext(prompt, session);
+      const result = await requestModelWithoutContext(prompt, session, model);
       finishHostCall('completed');
       return normalizeMontyValue(result);
     } catch (error: any) {

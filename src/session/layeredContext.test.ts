@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { createSessionFrontierStore, formatArchiveBlockTimeRange, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import { createSessionFrontierStore, formatArchiveBlockContextText, formatArchiveBlockTimeRange, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 import { formatCompactionCompletionMarker } from './history';
 import { Message } from '../types';
 import { formatLocalTimeRange } from '../utils/localTime';
@@ -97,6 +97,8 @@ test('renderBlockMessage includes raw message local time range when available', 
 
   const message = renderBlockMessage(record);
   const expectedRange = formatLocalTimeRange(record.rawStartTimestamp, record.rawEndTimestamp);
+  const expectedBlockText = `[CTX-BLOCK L1 B#3 raw#10-#12 time ${expectedRange}] block summary`;
   assert.equal(formatArchiveBlockTimeRange(record), ` time ${expectedRange}`);
-  assert.equal(message.parts[0].text, `[CTX-BLOCK L1 B#3 raw#10-#12 time ${expectedRange}] block summary`);
+  assert.equal(formatArchiveBlockContextText(record), expectedBlockText);
+  assert.equal(message.parts[0].text, expectedBlockText);
 });

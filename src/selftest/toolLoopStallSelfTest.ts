@@ -741,10 +741,10 @@ async function main(): Promise<void> {
       assert.strictEqual(compactedResponsePart.functionResponse?.name, 'exec');
       assert.strictEqual(compactedCallPart.functionCall?.args?.__compacted, true);
       assert.match(String(compactedCallPart.functionCall?.args?.placeholder || ''), /compacted tool call/);
-      assert.match(String(compactedCallPart.functionCall?.args?.placeholder || ''), /get_archived_messages/);
+      assert.match(String(compactedCallPart.functionCall?.args?.placeholder || ''), /recall/);
       assert.strictEqual(compactedResponsePart.functionResponse?.response?.__compacted, true);
       assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /compacted tool response/);
-      assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /get_archived_messages/);
+      assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /recall/);
       assert.match(updated.history[3].parts[0].text || '', /recent tail should stay untouched/);
     });
 

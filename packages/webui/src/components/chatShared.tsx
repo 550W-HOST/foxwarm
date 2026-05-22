@@ -258,9 +258,10 @@ export const isCollapsibleSystemText = (text: string): boolean => (
 )
 
 export const clampContentStyle = (lines: number, extraHeightRem = 0): CSSProperties => ({
+  lineHeight: '1.3em',
   maxHeight: extraHeightRem > 0
-    ? `calc(1.5em * ${lines} + ${extraHeightRem}rem)`
-    : `calc(1.5em * ${lines})`,
+    ? `calc(1.3em * ${lines} + ${extraHeightRem}rem)`
+    : `calc(1.3em * ${lines})`,
   overflow: 'hidden',
 })
 
@@ -508,9 +509,9 @@ export interface ToolTagItem {
 }
 
 const toolTagToneClasses: Record<ToolTagTone, string> = {
-  neutral: 'border-gray-200 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 text-gray-600 dark:text-gray-300',
-  success: 'border-green-200 dark:border-green-800 bg-green-50/80 dark:bg-green-900/20 text-green-700 dark:text-green-300',
-  error: 'border-red-200 dark:border-red-800 bg-red-50/80 dark:bg-red-900/20 text-red-700 dark:text-red-300',
+  neutral: 'border-slate-300 bg-slate-100 text-slate-700 dark:border-gray-600 dark:bg-gray-900/60 dark:text-gray-300',
+  success: 'border-green-300 bg-green-100 text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300',
+  error: 'border-red-300 bg-red-100 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300',
 }
 
 export const ToolTag = ({ name, label = name, tone = 'neutral', className = '' }: { name: string; label?: string; tone?: ToolTagTone; className?: string }) => {

@@ -207,15 +207,11 @@ export async function forceIndexSession(deps: SessionHistoryDeps, sessionId: str
 }
 
 function buildArchiveLookupInstruction(sessionId: string, startSeq?: number, endSeq?: number): string {
-  const seqArgs: string[] = [];
-  if (typeof startSeq === 'number') {
-    seqArgs.push(`startSeq: ${startSeq}`);
-  }
-  if (typeof endSeq === 'number') {
-    seqArgs.push(`endSeq: ${endSeq}`);
-  }
+  const target = typeof startSeq === 'number'
+    ? `msg#${startSeq}${typeof endSeq === 'number' && endSeq !== startSeq ? `-${endSeq}` : ''}`
+    : 'overview';
 
-  return `Use get_context_archive({sessionId: '${sessionId}'${seqArgs.length ? `, ${seqArgs.join(', ')}` : ''}}) or get_archived_messages({sessionId: '${sessionId}'${seqArgs.length ? `, ${seqArgs.join(', ')}` : ''}}) to inspect the archived originals if needed.`;
+  return `Use recall({sessionId: '${sessionId}', target: '${target}'}) to inspect the earlier message log if needed.`;
 }
 
 function buildDroppedRangePlaceholder(sessionId: string, startSeq?: number, endSeq?: number, messageCount?: number): Message {
@@ -262,8 +258,8 @@ function buildToolNoisePlaceholder(options: {
   const kindLabel = kind === 'function_call' ? 'tool call' : 'tool response';
   const toolLabel = toolName || 'unknown';
   const lookup = typeof seq === 'number'
-    ? `archive ${rangeLabel} via get_archived_messages`
-    : 'see archive via get_archived_messages';
+    ? `message log msg${rangeLabel} via recall`
+    : 'see earlier message log via recall';
   return `[compacted ${kindLabel}: ${toolLabel}] ${lookup}`;
 }
 

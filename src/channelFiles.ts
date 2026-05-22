@@ -105,7 +105,7 @@ function buildInboundStoragePaths(options: {
       writePath: absolutePath,
       absolutePath,
       relativePath,
-      promptPath: relativePath,
+      promptPath: absolutePath,
     };
   }
 
@@ -141,6 +141,9 @@ async function saveInboundFile(options: {
     nodeId,
   });
 
+  let absolutePath = paths.absolutePath;
+  let promptPath = paths.promptPath;
+
   if (nodeId === 'master') {
     await fs.ensureDir(path.dirname(paths.writePath));
     await fs.writeFile(paths.writePath, options.buffer);
@@ -148,15 +151,17 @@ async function saveInboundFile(options: {
     if (!options.session?.id) {
       throw new Error('Session context is required when saving inbound files to a remote node.');
     }
-    await nodesManager.writeFileToNode(nodeId, paths.writePath, options.buffer.toString('base64'), false, options.session.id);
+    const writeResult = await nodesManager.writeFileToNode(nodeId, paths.writePath, options.buffer.toString('base64'), false, options.session.id);
+    absolutePath = writeResult.absolutePath || paths.absolutePath;
+    promptPath = absolutePath;
   }
 
   return {
     agentName,
     nodeId,
-    absolutePath: paths.absolutePath,
+    absolutePath,
     relativePath: paths.relativePath,
-    promptPath: paths.promptPath,
+    promptPath,
     fileName: options.fileName || storedFileName,
     mimeType,
     sizeBytes: options.buffer.length,
@@ -203,7 +208,6 @@ function prependMessageDescriptor(text: string | undefined, descriptor: string):
 
 export function buildSavedFileText(saved: SavedChannelFile, kind: 'image' | 'file', extraText?: string): string {
   const label = kind === 'image' ? 'Image' : 'File';
-  const nodeLine = saved.nodeId !== 'master' ? `\nNode: ${saved.nodeId}` : '';
-  const descriptor = `[${label}: ${saved.fileName}]${nodeLine}\nPath: ${saved.promptPath}` + (kind === 'file' ? `\nMIME: ${saved.mimeType}` : '');
+  const descriptor = `[${label}: ${saved.fileName}]\nNode: ${saved.nodeId}\nPath: ${saved.promptPath}` + (kind === 'file' ? `\nMIME: ${saved.mimeType}` : '');
   return prependMessageDescriptor(extraText, descriptor);
 }

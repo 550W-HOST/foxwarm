@@ -4,7 +4,8 @@ import fs from 'fs-extra';
 import path from 'path';
 import { getAgentDir, getAgentMemoryDir } from './config';
 import * as sessionManager from './sessionManager';
-import { read, write, edit, apply_patch, apply_patch_memory, definitions, modelFacingDefinitions, submit_compact_plan, search_memory, search_vector } from './tools';
+import { checkToolPermission } from './isolatedCheck';
+import { read, write, edit, apply_patch, apply_patch_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, search_memory, search_vector } from './tools';
 
 test('submit_compact_plan is present in regular tool definitions and guarded outside compact flow', async () => {
   assert.ok(definitions.some(def => def.name === 'submit_compact_plan'));
@@ -123,6 +124,80 @@ test('non-isolated read accepts absolute paths outside the agent directory', asy
     assert.equal(result, 'outside');
   } finally {
     await fs.remove(outsidePath);
+  }
+});
+
+test('copy_between_nodes allows non-isolated absolute master paths outside the agent directory', async () => {
+  const sessionId = `main/copy_nonisolated_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId);
+  const sourcePath = path.join('/tmp', `foxwarm-copy-source-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+  const targetPath = path.join('/tmp', `foxwarm-copy-target-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+
+  try {
+    await fs.writeFile(sourcePath, 'copy outside agent dir');
+
+    const result = await copy_between_nodes({
+      sourceNode: 'master',
+      sourcePath,
+      targetNode: 'master',
+      targetPath,
+      overwrite: true,
+    }, { sessionId, session } as any);
+
+    assert.match(String(result), /Copied/);
+    assert.equal(await fs.readFile(targetPath, 'utf8'), 'copy outside agent dir');
+  } finally {
+    await fs.remove(sourcePath);
+    await fs.remove(targetPath);
+  }
+});
+
+test('isolated copy_between_nodes restricts master paths but allows absolute paths on the bound node', async () => {
+  const agentName = `isolated_copy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId = `${agentName}/session`;
+  const boundNode = 'sandbox-node';
+
+  try {
+    await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: boundNode } as any);
+    const session = await sessionManager.getSession(sessionId);
+    session.agent = agentName;
+    session.currentNode = boundNode;
+
+    await assert.doesNotReject(() => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+      sourceNode: boundNode,
+      sourcePath: '/var/tmp/source.txt',
+      targetNode: boundNode,
+      targetPath: '/var/tmp/target.txt',
+    }));
+
+    await assert.doesNotReject(() => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+      sourceNode: boundNode,
+      sourcePath: '/var/tmp/source.txt',
+      targetNode: 'master',
+      targetPath: path.join(getAgentDir(agentName), 'copied.txt'),
+    }));
+
+    await assert.rejects(
+      () => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+        sourceNode: 'master',
+        sourcePath: '/tmp/outside-source.txt',
+        targetNode: boundNode,
+        targetPath: '/var/tmp/target.txt',
+      }),
+      /only read from agents\//,
+    );
+
+    await assert.rejects(
+      () => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+        sourceNode: boundNode,
+        sourcePath: '/var/tmp/source.txt',
+        targetNode: 'master',
+        targetPath: '/tmp/outside-target.txt',
+      }),
+      /only write to agents\//,
+    );
+  } finally {
+    await sessionManager.setAgentMetadata(agentName, { isolated: false } as any);
   }
 });
 

@@ -381,7 +381,7 @@ export async function buildSessionSystemPromptSnapshot(options: {
     const skillCatalog = await appendSkillCatalogForAgent(agentName);
     const agentMemoryDir = getAgentMemoryDir(agentName);
     const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_memory: ' + agentMemoryDir + '\n- agent_folder: ' + getAgentDir(agentName) + '\n';
-    const archiveInfo = '\n\n--- COMPACTED HISTORY ACCESS ---\n- Use `get_context_archive(...)` for the normal archived-history entry point.\n- If you specifically need raw-message or block-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.\n';
+    const archiveInfo = '\n\n--- EARLIER CONTEXT RECALL ---\n- Use `recall({"target":"overview"})` for archived message/block ranges and examples.\n- Prefer `recall({"target":"B#123"})` when the working context contains a `[CTX-BLOCK ... B#123 ...]` reference; drill down one CTX-BLOCK layer at a time.\n- Message targets such as `msg:B#123` or `msg#100-120` are precise/advanced and can return lots of irrelevant content; use them only when you know the needed messages are in that range.\n- If you specifically need lower-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.\n';
     return [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
         .filter(Boolean)
         .join('\n\n');

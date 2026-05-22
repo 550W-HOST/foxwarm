@@ -593,13 +593,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             {hasChildren && (
               <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
                 <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation()
                     toggleExpand(session.id)
                   }}
-                  className="inline-flex items-center rounded p-0.5 -ml-1 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  className="-ml-1 -my-1 inline-flex items-center gap-x-1.5 gap-y-0.5 rounded px-1 py-1 text-left text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 dark:text-gray-400 dark:hover:text-gray-200"
                   title={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
                   aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+                  aria-expanded={isExpanded}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     {isExpanded ? (
@@ -608,14 +613,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     )}
                   </svg>
+                  <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
+                  {descendantBusyCount > 0 && (
+                    <>
+                      <span>•</span>
+                      <span className="text-blue-600 dark:text-blue-300">{descendantBusyCount} busy</span>
+                    </>
+                  )}
                 </button>
-                <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
-                {descendantBusyCount > 0 && (
-                  <>
-                    <span>•</span>
-                    <span className="text-blue-600 dark:text-blue-300">{descendantBusyCount} busy</span>
-                  </>
-                )}
               </div>
             )}
           </div>

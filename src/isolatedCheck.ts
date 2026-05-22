@@ -167,7 +167,7 @@ export async function requireNotIsolated(sessionIdOrCtx: string | { sessionId?: 
 export async function checkArchivedReadPermission(
   sessionIdOrCtx: string | { sessionId?: string },
   targetSessionId: string | undefined,
-  operation: 'get_archived_messages' | 'get_archived_blocks',
+  operation: 'get_archived_messages' | 'get_archived_blocks' | 'recall',
 ): Promise<void> {
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;

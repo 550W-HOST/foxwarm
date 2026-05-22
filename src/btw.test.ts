@@ -157,7 +157,7 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.match(toolPreview, /model \[display-only\]: \[display-only message hidden\]/);
     assert.doesNotMatch(toolPreview, /btw text answer/);
 
-    const archivePreview = await toolsSessionAgent.tool_get_context_archive({ sessionId, includeMessages: true, includeBlocks: false }, { sessionId, session: after } as any);
+    const archivePreview = await toolsSessionAgent.tool_recall({ sessionId, target: 'msg#1-2' }, { sessionId, session: after } as any);
     assert.match(archivePreview, /model \[display-only\]: \[display-only message hidden\]/);
     assert.doesNotMatch(archivePreview, /btw text answer/);
 

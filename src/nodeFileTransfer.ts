@@ -16,6 +16,7 @@ export interface NodeTransferFilePayload {
 
 export interface NodeTransferWriteResult {
   filePath: string;
+  absolutePath?: string;
   sizeBytes: number;
   sha256: string;
   overwritten: boolean;
@@ -115,6 +116,7 @@ export async function writeNodeTransferFile(filePath: string, agentName: string,
 
   return {
     filePath,
+    absolutePath: fullPath,
     sizeBytes: buffer.length,
     sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
     overwritten: exists,

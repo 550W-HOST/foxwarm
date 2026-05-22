@@ -199,10 +199,20 @@ def main(args):
     return summary
 ```
 
+To force a specific model for that helper call, pass `model`:
+
+```python
+summary = request_model_without_context(
+    "Summarize this in one sentence: ...",
+    model="openai/gpt-4.1-mini",
+)
+```
+
 Notes:
 
 - this does **not** create a fake chat session
 - it uses the low-level provider request path directly
+- if `model` is omitted, it uses the owner session's current model
 - tools are not exposed inside that helper call
 
 ## Minimal example script

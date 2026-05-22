@@ -96,17 +96,24 @@ test('archive store reads inherited and local messages/blocks without copying pa
     ],
   );
 
-  const combinedPreview = await toolsSessionAgent.tool_get_context_archive({
+  const combinedPreview = await toolsSessionAgent.tool_recall({
     sessionId: 'child',
-    includeMessages: true,
-    includeBlocks: true,
+    target: 'B#1',
     previewLength: 120,
   });
   assert.match(String(combinedPreview), /\[inherited from parent\]/);
-  assert.match(String(combinedPreview), /\[local\]/);
-  assert.match(String(combinedPreview), /raw#1-#2 time /);
+  assert.match(String(combinedPreview), /Message log range: msg#1-2/);
   assert.match(String(combinedPreview), /alpha summary block/);
-  assert.match(String(combinedPreview), /gamma child local/);
+  assert.match(String(combinedPreview), /alpha parent one/);
+
+  const frontierPreview = await toolsSessionAgent.tool_recall({
+    sessionId: 'child',
+    target: 'blocks',
+    previewLength: 120,
+  });
+  assert.match(String(frontierPreview), /\[inherited from parent\]/);
+  assert.match(String(frontierPreview), /\[local\]/);
+  assert.match(String(frontierPreview), /gamma child local block/);
 
   const childArchiveLog = await fs.readFile(config.getSessionArchiveLogPath('child'), 'utf8');
   assert.equal(childArchiveLog.trim().split('\n').length, 1, 'child raw archive should contain only local messages');

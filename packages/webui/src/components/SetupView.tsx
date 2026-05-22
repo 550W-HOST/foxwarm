@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, Plus, RefreshCw, Settings, Trash2, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ContentHeader from './ContentHeader'
@@ -19,6 +19,7 @@ type SetupStatus = {
   }
   config: {
     appConfigPath: string
+    rawYaml?: string
     channelsYaml: string
     channelCount: number
   }
@@ -49,23 +50,28 @@ interface SetupViewProps {
   onSetupChanged?: () => void
 }
 
-const DEFAULT_CHANNELS_YAML = `# Configure channels here. Changes are hot-reloaded after Save.
-# Example Telegram channel:
-# telegram:
-#   type: telegram
-#   enabled: true
-#   botToken: "123456:telegram-token"
-#   mainAttachUser: "your-telegram-user-id"
-#   allowedUsers:
-#     - "your-telegram-user-id"
+const DEFAULT_CONFIG_YAML = `# Foxwarm config. Changes to channels are hot-reloaded after Save.
+# Other settings may require a process restart to take effect.
 #
-# Example Weixin channel:
-# weixin:
-#   type: weixin
-#   enabled: true
-#   baseUrl: "https://ilinkai.weixin.qq.com"
-#   token: "token-from-webui-login"
-#   allowAllUsers: false
+# bot:
+#   name: foxwarm
+#   httpPort: 3001
+#
+# channels:
+#   telegram:
+#     type: telegram
+#     enabled: true
+#     botToken: "123456:telegram-token"
+#     mainAttachUser: "your-telegram-user-id"
+#     allowedUsers:
+#       - "your-telegram-user-id"
+#
+#   weixin:
+#     type: weixin
+#     enabled: true
+#     baseUrl: "https://ilinkai.weixin.qq.com"
+#     token: "token-from-webui-login"
+#     allowAllUsers: false
 `
 
 const makeDefaultProvider = (index = 0): ProviderDraft => ({
@@ -133,13 +139,14 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
   const [error, setError] = useState<string | null>(null)
 
   const [modelMode, setModelMode] = useState<'form' | 'raw'>('form')
+  const initializedModelModeRef = useRef(false)
   const [providers, setProviders] = useState<ProviderDraft[]>([makeDefaultProvider(0)])
   const [selectedProviderIndex, setSelectedProviderIndex] = useState(0)
   const [defaultModelKey, setDefaultModelKey] = useState('openai/gpt-5.2-codex')
   const [rawModelsYaml, setRawModelsYaml] = useState('')
-  const [channelsYaml, setChannelsYaml] = useState(DEFAULT_CHANNELS_YAML)
+  const [configYaml, setConfigYaml] = useState(DEFAULT_CONFIG_YAML)
   const [savingModels, setSavingModels] = useState(false)
-  const [savingChannels, setSavingChannels] = useState(false)
+  const [savingConfig, setSavingConfig] = useState(false)
   const [testingModel, setTestingModel] = useState(false)
   const [modelTestResult, setModelTestResult] = useState<string | null>(null)
   const [weixinBusy, setWeixinBusy] = useState(false)
@@ -164,8 +171,16 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
       setStatus(data)
       if (typeof data?.models?.rawYaml === 'string' && data.models.rawYaml.trim()) {
         setRawModelsYaml(data.models.rawYaml)
+        if (!initializedModelModeRef.current) {
+          setModelMode('raw')
+          initializedModelModeRef.current = true
+        }
       } else if (!rawModelsYaml.trim()) {
         setRawModelsYaml(generatedModelsYaml)
+        if (!initializedModelModeRef.current) {
+          setModelMode('form')
+          initializedModelModeRef.current = true
+        }
       }
       if (typeof data?.models?.defaultModel === 'string' && data.models.defaultModel) {
         setDefaultModelKey(data.models.defaultModel)
@@ -181,8 +196,10 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
         })))
         setSelectedProviderIndex(0)
       }
-      if (typeof data?.config?.channelsYaml === 'string') {
-        setChannelsYaml(data.config.channelsYaml.trim() ? data.config.channelsYaml : DEFAULT_CHANNELS_YAML)
+      if (typeof data?.config?.rawYaml === 'string') {
+        setConfigYaml(data.config.rawYaml.trim() ? data.config.rawYaml : DEFAULT_CONFIG_YAML)
+      } else if (typeof data?.config?.channelsYaml === 'string') {
+        setConfigYaml(data.config.channelsYaml.trim() ? data.config.channelsYaml : DEFAULT_CONFIG_YAML)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -215,15 +232,21 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
     setMessage(null)
     setError(null)
     try {
-      const yaml = modelMode === 'raw' ? rawModelsYaml : generatedModelsYaml
+      const body = modelMode === 'raw'
+        ? { yaml: rawModelsYaml }
+        : { mode: 'form', defaultModel: defaultModelKey, providers }
       const res = await fetch(`${API_BASE_PATH}/setup/models`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaml }),
+        body: JSON.stringify(body),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Failed to save models (${res.status})`)
-      setRawModelsYaml(yaml)
+      if (modelMode === 'raw') {
+        setRawModelsYaml(rawModelsYaml)
+      } else if (typeof data?.models?.rawYaml === 'string') {
+        setRawModelsYaml(data.models.rawYaml)
+      }
       setMessage(`Models saved to ${data.models?.path || 'state/models.yaml'}.`)
       await loadStatus()
       onSetupChanged?.()
@@ -264,26 +287,26 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
     }
   }
 
-  const saveChannels = async () => {
-    setSavingChannels(true)
+  const saveConfig = async () => {
+    setSavingConfig(true)
     setMessage(null)
     setError(null)
     try {
-      const res = await fetch(`${API_BASE_PATH}/setup/channels`, {
+      const res = await fetch(`${API_BASE_PATH}/setup/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaml: channelsYaml }),
+        body: JSON.stringify({ yaml: configYaml }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || `Failed to save channels (${res.status})`)
-      setMessage(`Channels saved and reloaded. Started: ${(data.reload?.started || []).join(', ') || 'none'}.`)
-      if (typeof data.channelsYaml === 'string') setChannelsYaml(data.channelsYaml)
+      if (!res.ok) throw new Error(data.error || `Failed to save config (${res.status})`)
+      setMessage(`Config saved. Channels reloaded; started: ${(data.reload?.started || []).join(', ') || 'none'}.`)
+      if (typeof data.rawYaml === 'string') setConfigYaml(data.rawYaml)
       await loadStatus()
       onSetupChanged?.()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setSavingChannels(false)
+      setSavingConfig(false)
     }
   }
 
@@ -388,7 +411,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
             </div>
             <p className="text-sm text-gray-600 dark:text-gray-300">
               OOBE mode is active when <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/models.yaml</code> does not exist.
-              After saving models, you can ask the agent how to explore Foxwarm. Channels can be edited and hot-reloaded below.
+              After saving models, you can ask the agent how to explore Foxwarm. The raw config editor below preserves the current <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/config.yaml</code> text.
             </p>
             {status && (
               <div className="mt-3 grid gap-2 text-xs text-gray-500 dark:text-gray-400 md:grid-cols-2">
@@ -402,7 +425,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-gray-900 dark:text-white">Models</h2>
-                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Create or edit <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/models.yaml</code>. Use form mode for common provider entries, or raw YAML for full control.</p>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Create or edit <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/models.yaml</code>. Raw YAML saves the exact text; form mode keeps provider/model custom fields where possible but rewrites YAML comments.</p>
               </div>
               <div className="flex rounded-lg border border-gray-200 p-1 text-sm dark:border-gray-700">
                 <button type="button" onClick={() => setModelMode('form')} className={`rounded px-3 py-1 ${modelMode === 'form' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'}`}>Form</button>
@@ -473,8 +496,8 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
           </section>
 
           <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <h2 className="text-base font-semibold text-gray-900 dark:text-white">Channels</h2>
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Edit channel config from <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/config.yaml</code>. Saving stops and starts managed channels without restarting Foxwarm.</p>
+            <h2 className="text-base font-semibold text-gray-900 dark:text-white">Config / Channels</h2>
+            <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Edit the full <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/config.yaml</code> file as raw YAML. Saving writes your text back directly, then hot-reloads managed channels without restarting Foxwarm.</p>
 
             <div className="mt-4 rounded-xl border border-gray-200 p-4 dark:border-gray-700">
               <h3 className="font-medium text-gray-900 dark:text-white">Weixin login</h3>
@@ -496,10 +519,10 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
             </div>
 
             <div className="mt-4">
-              <SimpleCodeEditor value={channelsYaml} onChange={setChannelsYaml} language="yaml" height={360} />
+              <SimpleCodeEditor value={configYaml} onChange={setConfigYaml} language="yaml" height={360} />
             </div>
             <div className="mt-4 flex items-center gap-2">
-              <button disabled={savingChannels} onClick={() => void saveChannels()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingChannels ? 'Saving…' : 'Save channels and reload'}</button>
+              <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config and reload channels'}</button>
             </div>
             {channelRows.length > 0 && (
               <div className="mt-4 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
