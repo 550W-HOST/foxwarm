@@ -517,77 +517,88 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   )
 })
 
-export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix }: { msg: Message; nextMsg: Message; messageKeyPrefix: string }) {
-  const { functionCalls, responseEntriesById, imageEntriesById, unmatchedResponses, unmatchedImageParts } = useMemo(() => {
-    const functionCalls = msg.parts.filter(p => p.functionCall).map(p => p.functionCall!)
-    const functionResponses = nextMsg.parts.filter(p => p.functionResponse).map(p => p.functionResponse!)
+interface ToolTimelineEntry {
+  key: string
+  call?: FunctionCall
+  responses: FunctionResponse[]
+  imageParts: MessagePart[]
+  modelMessage?: Message
+}
 
-    const responseEntriesById = new Map<string, Array<{ resp: FunctionResponse; respIdx: number }>>()
-    const unmatchedResponses: Array<{ resp: FunctionResponse; respIdx: number }> = []
-    functionResponses.forEach((resp, respIdx) => {
-      const toolId = resp.tool_use_id
-      if (!toolId) {
-        unmatchedResponses.push({ resp, respIdx })
-        return
-      }
-      const entries = responseEntriesById.get(toolId) || []
-      entries.push({ resp, respIdx })
-      responseEntriesById.set(toolId, entries)
-    })
+const getGroupedToolEntries = (msg: Message, nextMsg: Message, messageKeyPrefix: string): ToolTimelineEntry[] => {
+  const functionCalls = msg.parts.filter(p => p.functionCall).map(p => p.functionCall!)
+  const responseEntriesById = new Map<string, FunctionResponse[]>()
+  const imageEntriesById = new Map<string, MessagePart[]>()
+  const unmatchedResponses: FunctionResponse[] = []
+  const unmatchedImageParts: MessagePart[] = []
 
-    const imageEntriesById = new Map<string, MessagePart[]>()
-    const unmatchedImageParts: MessagePart[] = []
-    nextMsg.parts.filter(p => p.inlineData).forEach(part => {
-      if (part.toolUseId) {
-        const entries = imageEntriesById.get(part.toolUseId) || []
-        entries.push(part)
-        imageEntriesById.set(part.toolUseId, entries)
-      } else {
-        unmatchedImageParts.push(part)
-      }
-    })
+  nextMsg.parts.filter(p => p.functionResponse).forEach((resp) => {
+    const toolId = resp.functionResponse!.tool_use_id
+    if (!toolId) {
+      unmatchedResponses.push(resp.functionResponse!)
+      return
+    }
+    const entries = responseEntriesById.get(toolId) || []
+    entries.push(resp.functionResponse!)
+    responseEntriesById.set(toolId, entries)
+  })
 
-    return { functionCalls, responseEntriesById, imageEntriesById, unmatchedResponses, unmatchedImageParts }
-  }, [msg.parts, nextMsg.parts])
+  nextMsg.parts.filter(p => p.inlineData).forEach(part => {
+    if (part.toolUseId) {
+      const entries = imageEntriesById.get(part.toolUseId) || []
+      entries.push(part)
+      imageEntriesById.set(part.toolUseId, entries)
+    } else {
+      unmatchedImageParts.push(part)
+    }
+  })
 
   const callIds = new Set(functionCalls.map(call => call.id).filter((id): id is string => !!id))
   const orphanToolIds = Array.from(new Set([...responseEntriesById.keys(), ...imageEntriesById.keys()])).filter(toolId => !callIds.has(toolId))
 
+  return [
+    ...functionCalls.map((call, callIdx) => {
+      const toolId = call.id
+      return {
+        key: `${messageKeyPrefix}-group-${toolId || callIdx}`,
+        call,
+        responses: toolId ? (responseEntriesById.get(toolId) || []) : [],
+        imageParts: toolId ? (imageEntriesById.get(toolId) || []) : [],
+        modelMessage: msg,
+      }
+    }),
+    ...orphanToolIds.map((toolId) => ({
+      key: `${messageKeyPrefix}-orphan-tool-${toolId}`,
+      responses: responseEntriesById.get(toolId) || [],
+      imageParts: imageEntriesById.get(toolId) || [],
+    })),
+    ...unmatchedResponses.map((resp, idx) => ({
+      key: `${messageKeyPrefix}-orphan-resp-${idx}`,
+      responses: [resp],
+      imageParts: [],
+    })),
+    ...(unmatchedImageParts.length > 0 ? [{
+      key: `${messageKeyPrefix}-orphan-image`,
+      responses: [],
+      imageParts: unmatchedImageParts,
+    }] : []),
+  ]
+}
+
+export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix }: { msg: Message; nextMsg: Message; messageKeyPrefix: string }) {
+  const entries = useMemo(() => getGroupedToolEntries(msg, nextMsg, messageKeyPrefix), [messageKeyPrefix, msg, nextMsg])
+
   return (
     <div>
-      {functionCalls.map((call, callIdx) => {
-        const toolId = call.id
-        const responseEntries = toolId ? (responseEntriesById.get(toolId) || []) : []
-        const imageParts = toolId ? (imageEntriesById.get(toolId) || []) : []
-
-        return (
-          <div key={`${messageKeyPrefix}-group-${toolId || callIdx}`}>
-            <ToolCallResponseItem
-              call={call}
-              responses={responseEntries.map(({ resp }) => resp)}
-              imageParts={imageParts}
-              modelMessage={msg}
-            />
-          </div>
-        )
-      })}
-      {orphanToolIds.map((toolId) => (
+      {entries.map((entry) => (
         <ToolCallResponseItem
-          key={`${messageKeyPrefix}-orphan-tool-${toolId}`}
-          responses={(responseEntriesById.get(toolId) || []).map(({ resp }) => resp)}
-          imageParts={imageEntriesById.get(toolId) || []}
+          key={entry.key}
+          call={entry.call}
+          responses={entry.responses}
+          imageParts={entry.imageParts}
+          modelMessage={entry.modelMessage}
         />
       ))}
-      {unmatchedResponses.map(({ resp }, orphanIdx) => (
-        <ToolCallResponseItem
-          key={`${messageKeyPrefix}-orphan-resp-${orphanIdx}`}
-          responses={[resp]}
-          imageParts={[]}
-        />
-      ))}
-      {unmatchedImageParts.length > 0 && (
-        <ToolCallResponseItem responses={[]} imageParts={unmatchedImageParts} />
-      )}
     </div>
   )
 })
