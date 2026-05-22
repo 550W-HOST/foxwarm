@@ -1,11 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent, ReactNode, UIEvent } from 'react'
-import { Eye, Code, FileJson, Copy, Check, X, Download } from 'lucide-react'
+import { Eye, Code, FileJson, Copy, Check, Download } from 'lucide-react'
 import {
   Diff,
   IconToggleButton,
   MiniToggleButton,
-  ToolLabel,
   ToolTag,
   ToolTagList,
   SessionHashLink,
@@ -97,9 +96,15 @@ const toolThreadLineToneClasses: Record<ToolThreadTone, string> = {
 }
 
 const toolSurfaceToneClasses: Record<ToolThreadTone, string> = {
-  neutral: 'my-0.5 bg-slate-50/45 dark:bg-slate-800/20',
-  success: 'my-0.5 bg-emerald-50/35 dark:bg-emerald-900/10',
-  error: 'my-0.5 bg-red-50/40 dark:bg-red-900/10',
+  neutral: 'my-0.5 bg-slate-100/45 dark:bg-slate-800/20',
+  success: 'my-0.5 bg-emerald-50/55 dark:bg-emerald-900/10',
+  error: 'my-0.5 bg-red-50/55 dark:bg-red-900/10',
+}
+
+const toolHeaderToneClasses: Record<ToolThreadTone, string> = {
+  neutral: '-ml-2 bg-slate-200/80 pl-2 pr-0 py-1 dark:bg-slate-700/25',
+  success: '-ml-2 bg-emerald-100/80 pl-2 pr-0 py-1 dark:bg-emerald-800/20',
+  error: '-ml-2 bg-red-100/85 pl-2 pr-0 py-1 dark:bg-red-800/20',
 }
 
 const ToolThreadLineButton = memo(function ToolThreadLineButton({
@@ -125,7 +130,7 @@ const ToolThreadLineButton = memo(function ToolThreadLineButton({
       }}
       className={`absolute bottom-0 -left-2 top-0 flex w-4 cursor-pointer items-stretch justify-start rounded-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 sm:-left-2.5 sm:w-5 ${toolThreadLineToneClasses[tone]}`}
     >
-      <span className="my-0.5 ml-2 block w-[2px] rounded-full bg-current opacity-80 transition-opacity group-hover:opacity-100 sm:ml-2.5" />
+      <span className="ml-2 block w-[2px] bg-current opacity-80 transition-opacity group-hover:opacity-100 sm:ml-2.5" />
     </button>
   )
 })
@@ -399,7 +404,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
 
   return (
     <div className={`bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${paddingClass} rounded-lg cursor-text relative group`}>
-      <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
         <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
         </IconToggleButton>
@@ -420,23 +425,13 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
           className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100 prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
         />
       ) : viewMode === 'raw' ? (
-        <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 pr-32">{text}</pre>
+        <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100">{text}</pre>
       ) : (
-        <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto pr-32">{jsonText}</pre>
+        <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto">{jsonText}</pre>
       )}
     </div>
   )
 })
-
-const renderInlineToolSummary = (name: string, summary: ReactNode, summaryClassName = 'text-gray-700 dark:text-gray-200', label = name, headerProps: { className?: string; onClick?: (e: MouseEvent<HTMLDivElement>) => void } = {}) => (
-  <div
-    className={`flex items-center gap-2 min-w-0 ${headerProps.className || ''}`.trim()}
-    onClick={headerProps.onClick}
-  >
-    <ToolLabel name={name} label={label} />
-    <div className={`min-w-0 flex-1 ${summaryClassName}`}>{summary}</div>
-  </div>
-)
 
 const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
 
@@ -464,6 +459,7 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
   if (text.length <= maxLength) return text
   return `${text.slice(0, maxLength)}...`
 }
+
 
 const getHeredocFilePathFromMarker = (marker: string): string | null => {
   const normalized = marker.toLowerCase()
@@ -788,7 +784,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
     const output = resp.response.output || ''
     const preview = truncatePreviewText(output, 400)
     const displayStr = expanded ? output : preview
-    return <div className="whitespace-pre-wrap break-all cursor-text"><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
+    return <div className="whitespace-pre-wrap break-all cursor-text" style={{ lineHeight: '1.3em' }}><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
   }
 
   const download = getSendFileDownload(call, resp)
@@ -975,359 +971,16 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode, 
   )
 })
 
-const ToolCallItem = memo(function ToolCallItem({ call, modelMessage }: { call: FunctionCall; callIdx: number; hasFollowingContent: boolean; modelMessage?: Message }) {
-  const [expanded, setExpanded] = useState(false)
-  const [viewMode, setViewMode] = useState<ToolViewMode>('default')
-  const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
-    return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
-  })
-
-  const setToolViewMode = useCallback((mode: ToolViewMode) => {
-    if (mode === 'json') {
-      setExpanded(true)
-    }
-    setViewMode(mode)
-  }, [])
-
-  const setDiffMode = useCallback((mode: 'unified' | 'split') => {
-    setDiffViewMode(mode)
-    localStorage.setItem('diffViewMode', mode)
-    setViewMode('default')
-  }, [])
-
-  const jsonText = useMemo(() => JSON.stringify(modelMessage ? { modelMessage, call } : call, null, 2), [call, modelMessage])
-
-  const content = useMemo(() => {
-    const collapseHeaderProps = expanded ? {
-      className: 'cursor-pointer hover:text-gray-700 dark:hover:text-gray-200',
-      onClick: (e: MouseEvent<HTMLDivElement>) => { e.stopPropagation(); setExpanded(false) },
-    } : {}
-
-    if (viewMode === 'json') {
-      return (
-        <pre className="whitespace-pre-wrap break-all cursor-text text-gray-600 dark:text-gray-300">
-          {jsonText}
-        </pre>
-      )
-    }
-
-    if (call.name === 'read') {
-      const extra = (call.args.startLine || call.args.endLine)
-        ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
-        : ''
-      return expanded ? (
-        <div className="space-y-1">
-          {renderInlineToolSummary(call.name, <div className="whitespace-pre-wrap break-all"><span>{call.args.filePath}</span>{extra && <span className="ml-2 text-gray-500 dark:text-gray-400">{extra}</span>}</div>, 'text-gray-700 dark:text-gray-200', call.name, collapseHeaderProps)}
-        </div>
-      ) : renderInlineToolSummary(call.name, <div className="truncate" title={`${call.args.filePath}${extra}`}><span>{call.args.filePath}</span>{extra && <span className="ml-2 text-gray-500 dark:text-gray-400">{extra}</span>}</div>)
-    }
-
-    if (call.name === 'write') {
-      return (
-        <div className="space-y-1">
-          {renderInlineToolSummary(call.name, expanded ? <div className="whitespace-pre-wrap break-all">{call.args.filePath}</div> : <div className="truncate" title={call.args.filePath}>{call.args.filePath}</div>, 'text-gray-700 dark:text-gray-200', call.name, collapseHeaderProps)}
-          {expanded && call.args.content && (
-            <pre className="mt-2 whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text"><SyntaxHighlightedText text={call.args.content} filePath={call.args.filePath} /></pre>
-          )}
-        </div>
-      )
-    }
-
-    if (isLegacyDiffToolName(call.name)) {
-      const hasLegacyDiff = hasLegacyDiffPayload(call)
-      const oldLines = hasLegacyDiff ? call.args.oldText.split('\n').length - (call.args.oldText.endsWith('\n') ? 1 : 0) : 0
-      const newLines = hasLegacyDiff ? call.args.newText.split('\n').length - (call.args.newText.endsWith('\n') ? 1 : 0) : 0
-      return (
-        <div>
-          <div
-            className={`flex items-center justify-between gap-2 ${collapseHeaderProps.className || ''}`.trim()}
-            onClick={collapseHeaderProps.onClick}
-          >
-            <span className="flex items-center gap-2 flex-wrap">
-              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
-              {hasLegacyDiff ? (
-                <span className="text-xs"><span className="text-orange-600 dark:text-orange-400">-{oldLines}</span><span className="mx-1 text-gray-500">/</span><span className="text-blue-600 dark:text-blue-400">+{newLines}</span></span>
-              ) : (
-                <span className="text-xs text-gray-500">legacy payload unavailable</span>
-              )}
-              <span className="text-gray-600 dark:text-gray-400">{call.args.filePath}</span>
-            </span>
-          </div>
-          {expanded && (
-            <div>
-              <div className="mt-2" onClick={(e) => e.stopPropagation()}>
-                {hasLegacyDiff ? <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} filePath={call.args.filePath} /> : (
-                  <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{JSON.stringify(call.args, null, 2)}</pre>
-                )}
-              </div>
-              <div className="mt-2 text-center">
-                <button onClick={(e) => { e.stopPropagation(); setExpanded(false) }} className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">Collapse ▲</button>
-              </div>
-            </div>
-          )}
-        </div>
-      )
-    }
-
-    if (isPatchToolName(call.name)) {
-      try {
-        const operations = parseApplyPatchPreview(call.args.input)
-        const totalHunks = operations.reduce((sum, operation) => sum + (operation.action === 'update' ? operation.hunks.length : 0), 0)
-        const fileSummary = operations.length === 1 ? operations[0].filePath : `${operations[0].filePath} +${operations.length - 1} more`
-        return (
-          <div>
-            <div
-              className={`flex items-center justify-between gap-2 ${collapseHeaderProps.className || ''}`.trim()}
-              onClick={collapseHeaderProps.onClick}
-            >
-              <span className="flex items-center gap-2 flex-wrap">
-                <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
-                <span className="ml-2 text-xs text-gray-500">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
-                <span className="ml-2 text-gray-600 dark:text-gray-400">{fileSummary}</span>
-              </span>
-            </div>
-            {expanded && (
-              <div className="mt-2 space-y-4" onClick={(e) => e.stopPropagation()}>
-                {operations.map((operation, operationIdx) => {
-                  if (operation.action === 'update') {
-                    return (
-                      <div key={operationIdx} className="">
-                        <div className="text-xs font-semibold text-gray-600 dark:text-gray-300">Update {operation.filePath}</div>
-                        <div>
-                          {operation.hunks.map((hunk, hunkIdx) => {
-                            const snippets = buildPatchHunkSnippets(hunk)
-                            return (
-                              <div key={hunkIdx}>
-                                {hunk.anchors.length > 0 && (
-                                  <div className="mb-1 text-[11px] text-gray-500 dark:text-gray-400">{hunk.anchors.map((anchor, anchorIdx) => <div key={anchorIdx}>@@ {anchor}</div>)}</div>
-                                )}
-                                {snippets.oldText || snippets.newText ? (
-                                  <DiffPreview oldText={snippets.oldText} newText={snippets.newText} diffViewMode={diffViewMode} filePath={operation.filePath} />
-                                ) : (
-                                  <div className="rounded border border-gray-300 bg-gray-50 px-2 py-1 font-mono text-[11px] text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-400">anchor-only hunk</div>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )
-                  }
-                  if (operation.action === 'add') {
-                    return (
-                      <div key={operationIdx} className="space-y-1">
-                        <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">Add {operation.filePath}</div>
-                        <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} filePath={operation.filePath} />
-                      </div>
-                    )
-                  }
-                  return <div key={operationIdx} className="rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-xs text-red-700 dark:text-red-300">Delete {operation.filePath}</div>
-                })}
-                <div className="mt-2 text-center">
-                  <button onClick={(e) => { e.stopPropagation(); setExpanded(false) }} className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">Collapse ▲</button>
-                </div>
-              </div>
-            )}
-          </div>
-        )
-      } catch (e) {
-        const error = e instanceof Error ? e.message : String(e)
-        return (
-          <div>
-            <div
-              className={`flex items-center gap-2 flex-wrap ${collapseHeaderProps.className || ''}`.trim()}
-              onClick={collapseHeaderProps.onClick}
-            >
-              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
-              <span className="text-xs text-red-500">invalid patch</span>
-            </div>
-            {expanded && (
-              <pre className="mt-2 whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text">{error}\n\n{call.args.input || JSON.stringify(call.args, null, 2)}</pre>
-            )}
-          </div>
-        )
-      }
-    }
-
-    if (call.name === 'exec') {
-      const cmd = call.args?.command ?? ''
-      const preview = cmd.length > 200 ? `${cmd.substring(0, 200)}...` : cmd
-      return (
-        <div className="space-y-1">
-          {expanded ? (
-            <>
-              <div className={collapseHeaderProps.className} onClick={collapseHeaderProps.onClick}>
-                <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
-              </div>
-              <div className="whitespace-pre-wrap break-all"><ExecCommandText command={cmd} /></div>
-            </>
-          ) : renderInlineToolSummary(call.name, <div className="truncate font-mono" title={cmd}><ExecCommandText command={preview} heredocBodyBlock={false} /></div>)}
-        </div>
-      )
-    }
-
-    if (call.name === 'send_to_session') {
-      const targetSessionId = String(call.args.sessionId || '')
-      const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
-      const preview = message.length > 200 ? `${message.slice(0, 200)}...` : message
-      return (
-        <div className="space-y-1">
-          {expanded ? (
-            <>
-              {renderInlineToolSummary(call.name, <div className="whitespace-pre-wrap break-all"><SessionHashLink sessionId={targetSessionId} /></div>, 'text-gray-700 dark:text-gray-200', call.name, collapseHeaderProps)}
-              <div className="whitespace-pre-wrap break-all">{message}</div>
-            </>
-          ) : renderInlineToolSummary(call.name, <div className="truncate" title={`${targetSessionId}: ${message}`}><SessionHashLink sessionId={targetSessionId} /><span>: {preview}</span></div>)}
-        </div>
-      )
-    }
-
-    const argsFormatted = formatCompactObjectPreview(call.args)
-    const preview = argsFormatted.length > 200 ? `${argsFormatted.substring(0, 200)}...` : argsFormatted
-    return (
-      <div className="space-y-1">
-        {expanded ? (
-          <>
-            <div className={collapseHeaderProps.className} onClick={collapseHeaderProps.onClick}>
-              <ToolLabel name={call.name} label={getToolDisplayLabel(call)} />
-            </div>
-            <div className="whitespace-pre-wrap break-all">{argsFormatted}</div>
-          </>
-        ) : renderInlineToolSummary(call.name, <div className="truncate break-all">{preview}</div>, 'text-gray-700 dark:text-gray-200', getToolDisplayLabel(call))}
-      </div>
-    )
-  }, [call, diffViewMode, expanded, jsonText, viewMode])
-
-  return (
-    <div
-      className={`text-xs relative group py-1 pl-2 pr-2 ${toolSurfaceToneClasses.neutral} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
-      onClick={!expanded ? () => setExpanded(true) : undefined}
-    >
-      <ToolThreadLineButton
-        expanded={expanded}
-        onToggle={() => setExpanded(current => !current)}
-        tone="neutral"
-        label={expanded ? `Collapse ${call.name} tool call` : `Expand ${call.name} tool call`}
-      />
-      <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        {isLegacyDiffToolName(call.name) || isPatchToolName(call.name) ? (
-          <>
-            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={viewMode !== 'json' && diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
-            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={viewMode !== 'json' && diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
-            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON">JSON</MiniToggleButton>
-          </>
-        ) : (
-          <>
-            <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-            <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
-          </>
-        )}
-      </div>
-      <div className={`font-mono text-gray-500 dark:text-gray-400 ${!expanded ? 'hover:text-gray-700 dark:hover:text-gray-200' : ''}`}>
-        <div style={expanded ? undefined : clampContentStyle(1, 0.25)}>{content}</div>
-      </div>
-    </div>
-  )
-})
-
-const ToolResponseItem = memo(function ToolResponseItem({ resp }: { resp: FunctionResponse; hasPrecedingCall: boolean; isLast: boolean }) {
-  const [expanded, setExpanded] = useState(false)
-  const [viewMode, setViewMode] = useState<ToolViewMode>('default')
-  const responseStatus = getToolResponseStatus(resp)
-  const isError = responseStatus === 'error'
-
-  const setToolViewMode = useCallback((mode: ToolViewMode) => {
-    if (mode === 'json') {
-      setExpanded(true)
-    }
-    setViewMode(mode)
-  }, [])
-
-  const content = useMemo(() => {
-    if (viewMode === 'json') {
-      return <pre className="whitespace-pre-wrap break-all cursor-text text-green-700 dark:text-green-300">{JSON.stringify(resp, null, 2)}</pre>
-    }
-
-    if (resp.name === 'read') {
-      const fileContent = resp.response.content || resp.response.output || JSON.stringify(resp.response)
-      return expanded ? <pre className="whitespace-pre-wrap text-xs overflow-x-auto cursor-text"><SyntaxHighlightedText text={fileContent} /></pre> : null
-    }
-
-    if (resp.name === 'edit' && getToolResponseStatus(resp) !== 'success') {
-      const raw = formatToolResponseText(resp)
-      const preview = raw.length > 400 ? `${raw.substring(0, 400)}...` : raw
-      return <pre className="whitespace-pre-wrap break-all cursor-text text-red-700 dark:text-red-300">{expanded ? raw : preview}</pre>
-    }
-
-    if (resp.name === 'exec') {
-      const output = resp.response.output || ''
-      const preview = output.length > 400 ? `${output.substring(0, 400)}...` : output
-      const displayStr = expanded ? output : preview
-      return <div className="whitespace-pre-wrap break-all cursor-text"><ExecOutputText text={displayStr} /></div>
-    }
-
-    const download = getSendFileDownload(undefined, resp)
-    const primaryText = formatToolResponseText(resp)
-    if (download) {
-      const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
-      return (
-        <div className="space-y-2">
-          <ToolDownloadButton url={download.url} fileName={download.fileName} />
-          {primaryText ? <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div> : null}
-        </div>
-      )
-    }
-
-    if (primaryText) {
-      const preview = primaryText.length > 400 ? `${primaryText.substring(0, 400)}...` : primaryText
-      return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
-    }
-
-    if (getToolResponseStatus(resp) === 'success') {
-      return null
-    }
-
-    const respFormatted = formatToolResponseText(resp)
-    const preview = respFormatted.length > 400 ? `${respFormatted.substring(0, 400)}...` : respFormatted
-    return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : preview}</div>
-  }, [expanded, resp, viewMode])
-
-  return (
-    <div
-      className={`text-xs relative group py-1 pl-2 pr-2 ${toolSurfaceToneClasses[isError ? 'error' : 'success']} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
-      onClick={!expanded ? () => setExpanded(true) : undefined}
-    >
-      <ToolThreadLineButton
-        expanded={expanded}
-        onToggle={() => setExpanded(current => !current)}
-        tone={isError ? 'error' : 'success'}
-        label={expanded ? `Collapse ${resp.name} tool response` : `Expand ${resp.name} tool response`}
-      />
-      <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
-      </div>
-      <div
-        className={`font-mono ${expanded ? 'cursor-pointer' : ''} ${isError ? `text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300` : `text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300`}`}
-        onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
-      >
-        <span className="inline-flex items-center gap-1.5">{isError ? <X size={12} /> : <Check size={12} />}<span>{resp.name}</span></span>
-      </div>
-      {content && <div className={`font-mono mt-1 ${isError ? 'text-red-700 dark:text-red-300' : 'text-green-700 dark:text-green-300'}`} style={expanded ? undefined : clampContentStyle(3)}>{content}</div>}
-    </div>
-  )
-})
-
 const ToolCallResponseItem = memo(function ToolCallResponseItem({
   call,
   responses,
   imageParts,
   modelMessage,
 }: {
-  call: FunctionCall
+  call?: FunctionCall
   responses: FunctionResponse[]
   imageParts: MessagePart[]
-  modelMessage: Message
+  modelMessage?: Message
 }) {
   const [expanded, setExpanded] = useState(false)
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
@@ -1350,6 +1003,11 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const pairStatus = getToolPairStatus(responses, imageParts)
   const isError = pairStatus === 'error'
   const tagTone = pairStatus === 'error' ? 'error' : pairStatus === 'success' ? 'success' : 'neutral'
+  const primaryResponse = responses[0]
+  const primaryName = call?.name || primaryResponse?.name || (imageParts.length > 0 ? 'image' : 'tool')
+  const primaryLabel = call ? getToolDisplayLabel(call) : primaryName
+  const hasResponseContent = responses.length > 0 || imageParts.length > 0
+  const showDiffToggles = !!call && (isLegacyDiffToolName(call.name) || isPatchToolName(call.name))
 
   const responsePreview = useMemo(() => {
     const firstResponse = responses[0]
@@ -1368,61 +1026,69 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     if (imageParts.length > 0) {
       return <div>{imageParts.length} image{imageParts.length > 1 ? 's' : ''}</div>
     }
-    return <div>Waiting for result…</div>
-  }, [imageParts.length, responses])
+    return null
+  }, [call, imageParts.length, responses])
 
   const jsonText = useMemo(() => JSON.stringify({ modelMessage, call, responses, imageParts }, null, 2), [call, imageParts, modelMessage, responses])
   const baseTextClass = 'font-mono text-gray-700 dark:text-gray-300'
+  const hasBody = expanded || !!responsePreview
+
+  const header = (extraClass = '', onClick?: (e: MouseEvent<HTMLDivElement>) => void, includeCallPreview = false) => (
+    <div
+      className={`flex items-center gap-2 min-w-0 ${toolHeaderToneClasses[tagTone]} ${extraClass}`.trim()}
+      onClick={onClick}
+    >
+      <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} />
+      {includeCallPreview && call && <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>}
+    </div>
+  )
 
   return (
     <div
-      className={`text-xs relative group py-1 pl-2 pr-2 ${toolSurfaceToneClasses[tagTone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      className={`text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? () => setExpanded(true) : undefined}
     >
       <ToolThreadLineButton
         expanded={expanded}
         onToggle={() => setExpanded(current => !current)}
         tone={tagTone}
-        label={expanded ? `Collapse ${call.name} tool` : `Expand ${call.name} tool`}
+        label={expanded ? `Collapse ${primaryName} tool` : `Expand ${primaryName} tool`}
       />
-      <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+      <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        {showDiffToggles ? (
+          <>
+            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={viewMode !== 'json' && diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
+            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={viewMode !== 'json' && diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
+            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON">JSON</MiniToggleButton>
+          </>
+        ) : (
+          <>
+            <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
+            <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+          </>
+        )}
       </div>
 
       {viewMode === 'json' ? (
-        <div className={`${baseTextClass} ${expanded ? '' : 'pr-10'}`}>
-          <div
-            className={`flex items-center gap-2 min-w-0 ${expanded ? 'cursor-pointer hover:text-gray-900 dark:hover:text-gray-100' : ''}`}
-            onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
-          >
-            <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
-          </div>
+        <div className={baseTextClass}>
+          {header(expanded ? 'cursor-pointer hover:text-gray-900 dark:hover:text-gray-100' : '', expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined)}
           <pre className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : clampContentStyle(6)}>{jsonText}</pre>
         </div>
       ) : !expanded ? (
-        <div className={`${baseTextClass} pr-10`}>
-            <div className="space-y-1">
-            <div className="flex items-center gap-2 min-w-0">
-              <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
-              <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>
-            </div>
-            <div className="text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>
+        <div className={baseTextClass}>
+          <div className="space-y-1">
+            {header('', undefined, true)}
+            {responsePreview && <div className="pr-2 text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>}
           </div>
         </div>
       ) : (
         <div className={baseTextClass}>
-          <div>
-            <div
-              className="flex items-center gap-2 min-w-0 cursor-pointer hover:text-gray-900 dark:hover:text-gray-100"
-              onClick={(e) => { e.stopPropagation(); setExpanded(false) }}
-            >
-              <ToolTag name={call.name} label={getToolDisplayLabel(call)} tone={tagTone} />
-            </div>
+          {header('cursor-pointer hover:text-gray-900 dark:hover:text-gray-100', (e) => { e.stopPropagation(); setExpanded(false) })}
 
-            <div className="mt-2 cursor-default" onClick={(e) => e.stopPropagation()}>
-              <div className={`py-1 text-gray-700 dark:text-gray-300 ${(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) ? 'relative' : ''}`}>
-                {(isLegacyDiffToolName(call.name) || isPatchToolName(call.name)) && (
+          <div className="mt-1 cursor-default pr-2" onClick={(e) => e.stopPropagation()}>
+            {call && (
+              <div className={`text-gray-700 dark:text-gray-300 ${showDiffToggles ? 'relative' : ''}`}>
+                {showDiffToggles && (
                   <div className="absolute top-1 right-0 flex gap-1" onClick={(e) => e.stopPropagation()}>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
@@ -1430,25 +1096,27 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                 )}
                 {renderToolCallExpandedContent(call, diffViewMode)}
               </div>
+            )}
 
+            {call && hasResponseContent && (
               <div className={`my-2 border-t ${isError ? 'border-red-200 dark:border-red-800' : 'border-green-200 dark:border-green-800'} opacity-70`} />
+            )}
 
-              <div className="py-1 text-gray-700 dark:text-gray-300">
-                <div>
-                  {responses.length > 0 ? responses.map((resp, idx) => (
-                    <div key={`${resp.tool_use_id || call.id || call.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
-                      {renderToolResponseContent(resp, true, call)}
-                    </div>
-                  )) : <div className="text-gray-500 dark:text-gray-400">Waiting for result…</div>}
+            {hasResponseContent && (
+              <div className="text-gray-700 dark:text-gray-300">
+                {responses.length > 0 && responses.map((resp, idx) => (
+                  <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
+                    {renderToolResponseContent(resp, true, call)}
+                  </div>
+                ))}
 
-                  {imageParts.length > 0 && (
-                    <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
-                      <ImageParts imageParts={imageParts} keyPrefix={`tool-pair-${call.id || call.name}`} />
-                    </div>
-                  )}
-                </div>
+                {imageParts.length > 0 && (
+                  <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
+                    <ImageParts imageParts={imageParts} keyPrefix={`tool-pair-${call?.id || primaryName}`} />
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </div>
         </div>
       )}
@@ -1497,41 +1165,31 @@ const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, 
         const toolId = call.id
         const responseEntries = toolId ? (functionResponses.get(toolId) || []) : []
         const imageParts = toolId ? (imageEntriesById.get(toolId) || []) : []
-        const hasFollowingContent = responseEntries.length > 0 || imageParts.length > 0
         responseEntries.forEach(({ respIdx }) => renderedResponseIndexes.add(respIdx))
 
         return (
           <div key={`${messageKeyPrefix}-group-${toolId || callIdx}`}>
-            {hasFollowingContent ? (
-              <ToolCallResponseItem
-                call={call}
-                responses={responseEntries.map(({ resp }) => resp)}
-                imageParts={imageParts}
-                modelMessage={msg}
-              />
-            ) : (
-              <ToolCallItem call={call} callIdx={callIdx} hasFollowingContent={false} modelMessage={msg} />
-            )}
+            <ToolCallResponseItem
+              call={call}
+              responses={responseEntries.map(({ resp }) => resp)}
+              imageParts={imageParts}
+              modelMessage={msg}
+            />
           </div>
         )
       })}
       {unmatchedResponses.filter(({ respIdx }) => !renderedResponseIndexes.has(respIdx)).map(({ resp }, orphanIdx) => (
-        <ToolResponseItem
+        <ToolCallResponseItem
           key={`${messageKeyPrefix}-orphan-resp-${orphanIdx}`}
-          resp={resp}
-          hasPrecedingCall={false}
-          isLast={orphanIdx === unmatchedResponses.length - 1 && unmatchedImageParts.length === 0}
+          responses={[resp]}
+          imageParts={[]}
         />
       ))}
-      {Array.from(imageEntriesById.entries()).filter(([toolId]) => !functionCalls.some(call => call.id === toolId)).map(([toolId, imageParts], orphanIdx, orphaned) => (
-        <div key={`${messageKeyPrefix}-orphan-matched-tool-image-${toolId}`} className={`border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-2 pb-2 ${orphanIdx === orphaned.length - 1 && unmatchedImageParts.length === 0 ? 'rounded-b' : ''}`}>
-          <ImageParts imageParts={imageParts} keyPrefix={`${messageKeyPrefix}-orphan-matched-tool-image-${toolId}`} />
-        </div>
+      {Array.from(imageEntriesById.entries()).filter(([toolId]) => !functionCalls.some(call => call.id === toolId)).map(([toolId, imageParts]) => (
+        <ToolCallResponseItem key={`${messageKeyPrefix}-orphan-matched-tool-image-${toolId}`} responses={[]} imageParts={imageParts} />
       ))}
       {unmatchedImageParts.length > 0 && (
-        <div className="rounded-b border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-2 pb-2">
-          <ImageParts imageParts={unmatchedImageParts} keyPrefix={`${messageKeyPrefix}-orphan-tool-image`} />
-        </div>
+        <ToolCallResponseItem responses={[]} imageParts={unmatchedImageParts} />
       )}
     </div>
   )
@@ -1544,24 +1202,23 @@ const ToolCallsBlock = memo(function ToolCallsBlock({ msg }: { msg: Message }) {
   return (
     <div>
       {functionCalls.map((call, callIdx) => (
-        <ToolCallItem key={`call-${call.id || callIdx}`} call={call} callIdx={callIdx} hasFollowingContent={callIdx < functionCalls.length - 1} modelMessage={msg} />
+        <ToolCallResponseItem key={`call-${call.id || callIdx}`} call={call} responses={[]} imageParts={[]} modelMessage={msg} />
       ))}
     </div>
   )
 })
 
-const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg, hasPrecedingCallMsg }: { msg: Message; hasPrecedingCallMsg: boolean }) {
+const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg }: { msg: Message; hasPrecedingCallMsg: boolean }) {
   const functionResponses = useMemo(() => msg.parts.filter(p => p.functionResponse).map(p => p.functionResponse!), [msg.parts])
   if (functionResponses.length === 0) return null
 
   return (
     <div>
       {functionResponses.map((resp, respIdx) => (
-        <ToolResponseItem
+        <ToolCallResponseItem
           key={`resp-${resp.tool_use_id || respIdx}`}
-          resp={resp}
-          hasPrecedingCall={respIdx === 0 && hasPrecedingCallMsg}
-          isLast={respIdx === functionResponses.length - 1}
+          responses={[resp]}
+          imageParts={[]}
         />
       ))}
     </div>
@@ -1681,7 +1338,7 @@ const MessageRow = memo(function MessageRow({
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
               <div
-                className={`group relative py-1 pl-2 pr-2 text-xs cursor-pointer text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
+                className={`group relative pl-2 text-xs cursor-pointer text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
                 onClick={() => onExpandGroup(groupKey)}
               >
                 <ToolThreadLineButton
@@ -1690,7 +1347,7 @@ const MessageRow = memo(function MessageRow({
                   tone="neutral"
                   label="Expand tool group"
                 />
-                <div className="flex items-start gap-2">
+                <div className={`flex items-start gap-2 ${toolHeaderToneClasses.neutral}`}>
                   <ToolTagList items={summaryTagItems} />
                 </div>
               </div>

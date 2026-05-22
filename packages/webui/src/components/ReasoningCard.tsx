@@ -21,8 +21,13 @@ const reasoningTextClasses: Record<ReasoningTone, string> = {
 }
 
 const reasoningSurfaceClasses: Record<ReasoningTone, string> = {
-  message: 'my-0.5 bg-slate-50/45 dark:bg-slate-800/20',
-  processing: 'my-0.5 bg-blue-50/35 dark:bg-blue-900/10',
+  message: 'my-0.5 bg-slate-100/45 dark:bg-slate-800/20',
+  processing: 'my-0.5 bg-blue-50/55 dark:bg-blue-900/10',
+}
+
+const reasoningHeaderClasses: Record<ReasoningTone, string> = {
+  message: '-ml-2 -mr-2 bg-slate-200/80 px-2 py-1 dark:bg-slate-700/25',
+  processing: '-ml-2 -mr-2 bg-blue-100/80 px-2 py-1 dark:bg-blue-800/20',
 }
 
 const reasoningHeaderHoverClasses: Record<ReasoningTone, string> = {
@@ -58,7 +63,7 @@ const ReasoningThreadLineButton = memo(function ReasoningThreadLineButton({
       }}
       className={`absolute bottom-0 -left-2 top-0 flex w-4 cursor-pointer items-stretch justify-start rounded-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 sm:-left-2.5 sm:w-5 ${reasoningLineToneClasses[tone]}`}
     >
-      <span className="my-0.5 ml-2 block w-[2px] rounded-full bg-current opacity-80 transition-opacity group-hover:opacity-100 sm:ml-2.5" />
+      <span className="ml-2 block w-[2px] bg-current opacity-80 transition-opacity group-hover:opacity-100 sm:ml-2.5" />
     </button>
   )
 })
@@ -79,9 +84,11 @@ const extractOpenAIReasoningSummaryTitles = (text: string): string[] => {
   return titles
 }
 
-const getReasoningPreview = (text: string): string => {
+const getReasoningPreview = (text: string): { text: string; isOpenAISummary: boolean } => {
   const titles = extractOpenAIReasoningSummaryTitles(text)
-  return titles.length > 0 ? titles.join(' / ') : getCollapsedReasoningPreview(text)
+  return titles.length > 0
+    ? { text: titles.join(' / '), isOpenAISummary: true }
+    : { text: getCollapsedReasoningPreview(text), isOpenAISummary: false }
 }
 
 const ReasoningCard = memo(function ReasoningCard({
@@ -115,7 +122,7 @@ const ReasoningCard = memo(function ReasoningCard({
 
   return (
     <div
-      className={`relative group py-1 pl-2 pr-2 text-xs ${reasoningSurfaceClasses[tone]} ${reasoningTextClasses[tone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      className={`relative group pl-2 pr-2 text-xs ${reasoningSurfaceClasses[tone]} ${expanded ? 'pb-1' : ''} ${reasoningTextClasses[tone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? () => setExpanded(true) : undefined}
     >
       <ReasoningThreadLineButton
@@ -124,13 +131,13 @@ const ReasoningCard = memo(function ReasoningCard({
         tone={tone}
       />
       <div
-        className={`mb-1 flex min-w-0 items-center gap-2 ${expanded ? `cursor-pointer ${reasoningHeaderHoverClasses[tone]}` : ''}`}
+        className={`${expanded ? 'mb-1' : 'py-1'} flex min-w-0 items-center gap-2 ${reasoningHeaderClasses[tone]} ${expanded ? `cursor-pointer ${reasoningHeaderHoverClasses[tone]}` : ''}`}
         onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
       >
         <ToolTag name="reasoning" label="Reasoning" tone="neutral" />
         {!expanded && (
-          <span className="min-w-0 flex-1 truncate py-px text-[13px] leading-5 font-normal" title={collapsedPreview}>
-            {collapsedPreview}
+          <span className={`min-w-0 flex-1 truncate text-[13px] leading-[18px] ${collapsedPreview.isOpenAISummary ? 'font-semibold' : 'font-normal'}`} title={collapsedPreview.text}>
+            {collapsedPreview.text}
           </span>
         )}
       </div>
