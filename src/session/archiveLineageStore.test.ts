@@ -102,7 +102,8 @@ test('archive store reads inherited and local messages/blocks without copying pa
     previewLength: 120,
   });
   assert.match(String(combinedPreview), /\[inherited from parent\]/);
-  assert.match(String(combinedPreview), /Message log range: msg#1-2/);
+  assert.match(String(combinedPreview), /- Covers: msg#1-2/);
+  assert.match(String(combinedPreview), /- Source: messages msg#1-2/);
   assert.match(String(combinedPreview), /alpha summary block/);
   assert.match(String(combinedPreview), /alpha parent one/);
 

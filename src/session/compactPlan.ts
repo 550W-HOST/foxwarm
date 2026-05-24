@@ -117,8 +117,10 @@ export function buildBlockCandidateItem(
   };
 }
 
-interface CandidateGroup {
+interface CandidateSegment {
   targetLevel: number;
+  sourceKind: 'message' | 'block';
+  sourceLevel?: number;
   items: CompactCandidateItem[];
 }
 
@@ -162,20 +164,72 @@ export function filterCompactCandidateItemsByLevel(items: CompactCandidateItem[]
   return items.filter(item => allowedLevels.has(getCandidateTargetLevel(item)));
 }
 
-function groupCandidatesByTargetLevel(items: CompactCandidateItem[]): CandidateGroup[] {
-  const groups: CandidateGroup[] = [];
-  let currentGroup: CandidateGroup | null = null;
+function canAppendToCandidateSegment(segment: CandidateSegment, item: CompactCandidateItem): boolean {
+  const targetLevel = getCandidateTargetLevel(item);
+  if (segment.targetLevel !== targetLevel || segment.sourceKind !== item.kind) {
+    return false;
+  }
+
+  const previous = segment.items[segment.items.length - 1];
+  if (!previous) {
+    return true;
+  }
+
+  if (item.kind === 'message') {
+    return previous.kind === 'message';
+  }
+
+  return previous.kind === 'block'
+    && item.level === segment.sourceLevel;
+}
+
+function buildCandidateSegments(items: CompactCandidateItem[]): CandidateSegment[] {
+  const segments: CandidateSegment[] = [];
+  let currentSegment: CandidateSegment | null = null;
 
   for (const item of items) {
     const targetLevel = getCandidateTargetLevel(item);
-    if (!currentGroup || currentGroup.targetLevel !== targetLevel) {
-      currentGroup = { targetLevel, items: [] };
-      groups.push(currentGroup);
+    if (!currentSegment || !canAppendToCandidateSegment(currentSegment, item)) {
+      currentSegment = {
+        targetLevel,
+        sourceKind: item.kind,
+        sourceLevel: item.kind === 'block' ? item.level : undefined,
+        items: [],
+      };
+      segments.push(currentSegment);
     }
-    currentGroup.items.push(item);
+    currentSegment.items.push(item);
   }
 
-  return groups;
+  return segments;
+}
+
+function formatCandidateSegmentHeader(segment: CandidateSegment, index: number): string {
+  const first = segment.items[0];
+  const last = segment.items[segment.items.length - 1];
+
+  if (!first || !last) {
+    return `Segment ${index}: empty candidate segment.`;
+  }
+
+  if (segment.sourceKind === 'message') {
+    const firstMessage = first as Extract<CompactCandidateItem, { kind: 'message' }>;
+    const lastMessage = last as Extract<CompactCandidateItem, { kind: 'message' }>;
+    return `Segment ${index}: raw message candidates -> L1 block(s). Legal ranges must stay within ${firstMessage.key}..${lastMessage.key} (sourceKind=message, level=1, sourceStart/sourceEnd at listed M# boundaries).`;
+  }
+
+  const firstBlock = first as Extract<CompactCandidateItem, { kind: 'block' }>;
+  const lastBlock = last as Extract<CompactCandidateItem, { kind: 'block' }>;
+  const sourceRange = firstBlock.id === lastBlock.id ? `B#${firstBlock.id}` : `B#${firstBlock.id}..B#${lastBlock.id}`;
+  const base = `Segment ${index}: frontier-contiguous L${firstBlock.level} block candidates -> L${segment.targetLevel} block(s). Legal ranges must stay within this segment (${sourceRange}; sourceKind=block, level=${segment.targetLevel}, sourceStart/sourceEnd at listed B# boundaries). Block ids inside a segment may skip numbers or be out of numeric order; a range covers the listed candidates between its endpoints, not every numeric id in between.`;
+
+  if (segment.items.length === 1) {
+    return firstBlock.allowSingleBlockCompact
+      ? `${base} This is a stranded single-block segment, so sourceStart=sourceEnd=${firstBlock.id} is allowed only if lifting this block preserves useful detail; leaving it uncompressed is also fine.`
+      : `${base} This segment has only one block, so normally leave it uncompressed rather than creating an invalid single-block plan.`;
+  }
+
+  return base;
 }
 
 export function buildCompactPromptText(options: {
@@ -191,15 +245,17 @@ export function buildCompactPromptText(options: {
     `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. No need to summarize/replace them.`,
   ];
 
-  // Group consecutive candidates by target summary level and render with group headers
-  const groups = groupCandidatesByTargetLevel(candidateItems);
+  // Group candidates by legal compression boundaries instead of only by target level.
+  // In particular, block ranges must not cross a different source level/source kind.
+  const segments = buildCandidateSegments(candidateItems);
 
-  for (const group of groups) {
-    lines.push(`Items below can be optionally summarized into L${group.targetLevel} blocks:`);
+  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+    const segment = segments[segmentIndex];
+    lines.push(formatCandidateSegmentHeader(segment, segmentIndex + 1));
 
-    const count = group.items.length;
+    const count = segment.items.length;
     for (let i = 0; i < count; i++) {
-      const item = group.items[i];
+      const item = segment.items[i];
       const isEdge = i < 2 || i >= count - 2;
       const limit = isEdge ? EDGE_PREVIEW_CHAR_LIMIT : DEFAULT_PREVIEW_CHAR_LIMIT;
 
@@ -219,9 +275,11 @@ export function buildCompactPromptText(options: {
     '- Pass the plan via createBlocksJson as a JSON array string.',
     '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
     '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim.',
+    '- Block compression is optional. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from createBlocksJson.',
     '- If a block/message still seems useful, you can leave it uncompressed by simply omitting it from createBlocksJson.',
+    '- Treat each Segment header as a hard boundary: createBlocksJson ranges must stay inside one listed segment and must not cross different block levels or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
     '- A single block may be summarized only when it is a stranded island immediately surrounded on both sides by higher-level blocks; otherwise block sources must span at least two blocks.',
-    '- Blocks must have same kind and same level of source.',
+    '- Blocks must have same kind and same level of source; do not combine low-level and high-level blocks in one createBlocks entry.',
     '- Blocks must not overlap source ranges across createBlocks.',
     '- Blocks must not separate seq/id range inside a candidate (can not separate a tool call and its response).',
     '- Keep each summary compact, factual, and continuation-oriented.',
@@ -287,7 +345,7 @@ function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPla
     if (!Number.isInteger(sourceEnd) || sourceEnd < 1) {
       details.createBlockErrors.push(`createBlocks[${index}].sourceEnd must be a positive integer.`);
     }
-    if (Number.isInteger(sourceStart) && Number.isInteger(sourceEnd) && sourceStart > sourceEnd) {
+    if (sourceKind !== 'block' && Number.isInteger(sourceStart) && Number.isInteger(sourceEnd) && sourceStart > sourceEnd) {
       details.createBlockErrors.push(`createBlocks[${index}] has sourceStart > sourceEnd.`);
     }
     if (!summary) {
@@ -340,18 +398,16 @@ function findBlockRange(candidateItems: CompactCandidateItem[], level: number, s
   const startIndex = candidateItems.findIndex(item => item.kind === 'block' && item.id === sourceStart && item.level === childLevel);
   if (startIndex < 0) return null;
 
-  let expectedId = sourceStart;
   let endIndex = startIndex - 1;
   for (let index = startIndex; index < candidateItems.length; index += 1) {
     const item = candidateItems[index];
-    if (item.kind !== 'block' || item.level !== childLevel || item.id !== expectedId) {
+    if (item.kind !== 'block' || item.level !== childLevel) {
       break;
     }
     endIndex = index;
-    if (expectedId === sourceEnd) {
+    if (item.id === sourceEnd) {
       return [startIndex, endIndex];
     }
-    expectedId += 1;
   }
 
   return null;
@@ -385,7 +441,8 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
       }
 
       const unitLabel = block.sourceKind === 'message' ? 'seq' : 'block id';
-      details.createBlockErrors.push(`createBlocks[${index}] does not match a continuous ${block.sourceKind} range in current older context for ${unitLabel} ${block.sourceStart}-${block.sourceEnd}.`);
+      const continuityLabel = block.sourceKind === 'message' ? 'message' : 'frontier/candidate block';
+      details.createBlockErrors.push(`createBlocks[${index}] does not match a continuous ${continuityLabel} range in current older context for ${unitLabel} ${block.sourceStart}-${block.sourceEnd}.`);
       return;
     }
 
@@ -419,6 +476,7 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
   return [
     'COMPACT PLAN INVALID.',
     error.message,
+    'Use only ranges shown in one Segment header; do not cross segment boundaries, different block levels, or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
     `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory, write_memory, edit_memory, delete_memory, and apply_patch_memory if needed.`,
   ].join(' ');
 }

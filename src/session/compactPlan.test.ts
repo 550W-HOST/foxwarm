@@ -51,6 +51,11 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /M#1/);
   assert.match(prompt, /B#9 L1 raw#3-#9/);
   assert.match(prompt, /resolved discussion/);
+  assert.match(prompt, /Segment 1: raw message candidates -> L1 block\(s\)/);
+  assert.match(prompt, /Segment 2: frontier-contiguous L1 block candidates -> L2 block\(s\)/);
+  assert.match(prompt, /This segment has only one block, so normally leave it uncompressed/i);
+  assert.match(prompt, /Treat each Segment header as a hard boundary/i);
+  assert.match(prompt, /Block compression is optional/i);
   assert.doesNotMatch(prompt, /Current session goal\/context/);
   assert.doesNotMatch(prompt, /Session goal reminder/);
   assert.match(prompt, /Preserve decisions/i);
@@ -66,6 +71,30 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /user\/inter-agent inputs, process, findings, and TODOs inside that range/i);
   assert.match(prompt, /do not borrow facts, later outcomes, or completions from force-kept items or any other outside range/i);
   assert.match(prompt, /force-kept later context completed a task.*source range only contains the unfinished earlier work/is);
+});
+
+test('buildCompactPromptText renders block candidates by legal frontier-contiguous segments', () => {
+  const prompt = buildCompactPromptText({
+    forcedKeptCount: 0,
+    candidateItems: [
+      buildBlockCandidateItem(10, 1, 1, 5, 'first L1 block'),
+      buildBlockCandidateItem(11, 1, 6, 10, 'second L1 block'),
+      buildBlockCandidateItem(13, 1, 11, 15, 'gap after missing B#12'),
+      buildBlockCandidateItem(14, 2, 16, 20, 'different source level'),
+      buildBlockCandidateItem(15, 1, 21, 25, 'back to L1 but new segment'),
+      buildBlockCandidateItem(16, 1, 26, 30, 'next L1 block'),
+      buildBlockCandidateItem(17, 2, 31, 35, 'stranded single L2 block', COMPACT_LEVEL_TOKEN_THRESHOLD + 1, true),
+    ],
+  });
+
+  assert.match(prompt, /Segment 1: frontier-contiguous L1 block candidates -> L2 block\(s\).*B#10\.\.B#13/s);
+  assert.match(prompt, /Block ids inside a segment may skip numbers/i);
+  assert.match(prompt, /Segment 2: frontier-contiguous L2 block candidates -> L3 block\(s\).*B#14/s);
+  assert.match(prompt, /Segment 3: frontier-contiguous L1 block candidates -> L2 block\(s\).*B#15\.\.B#16/s);
+  assert.match(prompt, /Segment 4: frontier-contiguous L2 block candidates -> L3 block\(s\).*B#17/s);
+  assert.match(prompt, /This segment has only one block, so normally leave it uncompressed/i);
+  assert.match(prompt, /stranded single-block segment.*sourceStart=sourceEnd=17/i);
+  assert.match(prompt, /must stay inside one listed segment/i);
 });
 
 test('trimPreview and compact prompt rendering do not split surrogate pairs at emoji boundaries', () => {
@@ -178,6 +207,49 @@ test('validateCompactPlanArgs accepts layered message and block range creation',
   assert.equal(plan.createBlocks.length, 2);
   assert.equal(plan.createBlocks[0].level, 1);
   assert.equal(plan.createBlocks[1].level, 2);
+});
+
+test('validateCompactPlanArgs accepts frontier-continuous block ranges with non-consecutive ids', () => {
+  const candidates = [
+    buildBlockCandidateItem(10, 1, 5, 8, 'prior L1 block'),
+    buildBlockCandidateItem(13, 1, 9, 12, 'next adjacent L1 block despite id gap'),
+    buildBlockCandidateItem(20, 2, 13, 16, 'different source level stops range'),
+  ];
+
+  const plan = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 2,
+      sourceKind: 'block',
+      sourceStart: 10,
+      sourceEnd: 13,
+      summary: 'summary for adjacent L1 blocks with non-consecutive ids',
+    }]),
+  }, candidates);
+
+  assert.equal(plan.createBlocks.length, 1);
+  assert.equal(plan.createBlocks[0].sourceStart, 10);
+  assert.equal(plan.createBlocks[0].sourceEnd, 13);
+});
+
+test('validateCompactPlanArgs accepts frontier-continuous block ranges whose endpoint ids decrease', () => {
+  const candidates = [
+    buildBlockCandidateItem(20, 1, 5, 8, 'newer-created block covering earlier context'),
+    buildBlockCandidateItem(13, 1, 9, 12, 'older-created adjacent block covering later context'),
+  ];
+
+  const plan = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 2,
+      sourceKind: 'block',
+      sourceStart: 20,
+      sourceEnd: 13,
+      summary: 'summary for adjacent L1 blocks in frontier order despite decreasing ids',
+    }]),
+  }, candidates);
+
+  assert.equal(plan.createBlocks.length, 1);
+  assert.equal(plan.createBlocks[0].sourceStart, 20);
+  assert.equal(plan.createBlocks[0].sourceEnd, 13);
 });
 
 test('validateCompactPlanArgs accepts sparse raw seq ranges when ignored lifecycle messages were filtered out of candidates', () => {
@@ -355,5 +427,6 @@ test('buildCompactPlanValidationFeedback explains invalid layered compact plans'
   const feedback = buildCompactPlanValidationFeedback(error);
   assert.match(feedback, /COMPACT PLAN INVALID/);
   assert.match(feedback, /summary must be a non-empty string/);
+  assert.match(feedback, /Use only ranges shown in one Segment header/);
   assert.match(feedback, /Fix only the layered-context plan/);
 });
