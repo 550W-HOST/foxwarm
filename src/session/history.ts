@@ -119,6 +119,7 @@ type CompactJobOperation = {
   level: number;
   sourceStart: number;
   sourceEnd: number;
+  sourceBlockIds?: number[];
   summary: string;
 };
 
@@ -142,6 +143,7 @@ type CompactJobResult =
         sourceKind: 'message' | 'block';
         sourceStart: number;
         sourceEnd: number;
+        sourceBlockIds?: number[];
         rawStartSeq: number;
         rawEndSeq: number;
         summary: string;
@@ -310,6 +312,10 @@ function cloneSessionForCompactJob(session: Session, historySnapshot: Message[],
     parentSessionId: session.parentSessionId,
     goalState: session.goalState ? structuredClone(session.goalState) : undefined,
     compactThresholdTokens: session.compactThresholdTokens,
+    // Compact jobs are transient sessions, but their LLM requests should share
+    // the real session's prompt-cache routing key so compaction can reuse the
+    // same cached system/history prefix as ordinary turns.
+    promptCacheKey: llm.ensurePromptCacheKey(session),
   };
   (cloned as any).__compactJob = true;
   return cloned;
@@ -342,6 +348,14 @@ function buildCompactJobSnapshot(session: Session, options: CompactionRunOptions
     completionBroadcastMessage,
     compactGuidance,
   };
+}
+
+async function ensureCompactPromptCacheKeyPersisted(deps: SessionHistoryDeps, session: Session): Promise<void> {
+  const previousPromptCacheKey = session.promptCacheKey;
+  llm.ensurePromptCacheKey(session);
+  if (session.id && session.promptCacheKey !== previousPromptCacheKey) {
+    await deps.saveSession(session.id);
+  }
 }
 
 function appendTransientSessionMessage(session: Session, message: Message): Promise<void> {
@@ -382,7 +396,7 @@ function hasCompatibleFrontierPrefix(currentFrontier: ContextFrontierItem[], sna
   return true;
 }
 
-type LayeredCompactCandidateEntry = {
+export type LayeredCompactCandidateEntry = {
   item: CompactCandidateItem;
   frontierStartIndex: number;
   frontierEndIndex: number;
@@ -555,7 +569,7 @@ async function filterDisplayOnlyMessageFrontierItems(sessionId: string, frontier
   return frontier.filter(item => item.kind !== 'message' || !displayOnlySeqs.has(item.seq));
 }
 
-function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; }> {
+export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; }> {
   const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; }> = [];
   const candidateItems = candidateEntries.map(entry => entry.item);
 
@@ -617,11 +631,20 @@ function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCo
     if (startIndex < 0) {
       throw new Error(`Unable to resolve layered compact block range ${block.sourceStart}-${block.sourceEnd}.`);
     }
-    endIndex = startIndex + (block.sourceEnd - block.sourceStart);
+    for (let index = startIndex; index < candidateItems.length; index += 1) {
+      const item = candidateItems[index];
+      if (item.kind !== 'block' || item.level !== block.level - 1) {
+        break;
+      }
+      endIndex = index;
+      if (item.id === block.sourceEnd) {
+        break;
+      }
+    }
     const startItem = candidateItems[startIndex];
     const endItem = candidateItems[endIndex];
-    if (startItem.kind !== 'block' || endItem.kind !== 'block') {
-      throw new Error(`Layered compact block range ${block.sourceStart}-${block.sourceEnd} resolved to non-block items.`);
+    if (endIndex < startIndex || startItem.kind !== 'block' || endItem?.kind !== 'block' || endItem.id !== block.sourceEnd) {
+      throw new Error(`Unable to resolve layered compact block range ${block.sourceStart}-${block.sourceEnd}.`);
     }
     const startEntry = candidateEntries[startIndex];
     const endEntry = candidateEntries[endIndex];
@@ -974,6 +997,8 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
     session.broadcast(options.startBroadcastMessage);
   }
 
+  await ensureCompactPromptCacheKeyPersisted(deps, session);
+
   const snapshot = buildCompactJobSnapshot(session, options);
   if (!snapshot) {
     logger.info({ sessionId }, 'Compaction skipped because there is no compactable snapshot');
@@ -1004,6 +1029,8 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
   if (session.broadcast && options.startBroadcastMessage) {
     session.broadcast(options.startBroadcastMessage);
   }
+
+  await ensureCompactPromptCacheKeyPersisted(deps, session);
 
   const snapshot = buildCompactJobSnapshot(session, options);
   if (!snapshot) {

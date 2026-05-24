@@ -198,10 +198,13 @@ test('idle compaction request starts immediately without enqueueing compact init
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   try {
     (vector as any).scheduleSessionArchiveIndex = async () => 0;
-    await seedCompactableHistory(sessionId);
+    const seededSession = await seedCompactableHistory(sessionId);
+    seededSession.promptCacheKey = '11111111-2222-3333-4444-555555555555';
+    await sessionManager.saveSession(sessionId);
 
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
       assert.equal((activeSession as any).__compactJob, true);
+      assert.equal(activeSession.promptCacheKey, seededSession.promptCacheKey);
       const prompt = (parts || []).map(part => part.system || part.text || '').join('\n');
       assert.match(prompt, /COMPACTION STARTED/);
       const toolCall = {
