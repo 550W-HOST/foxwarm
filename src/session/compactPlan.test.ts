@@ -51,6 +51,11 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /M#1/);
   assert.match(prompt, /B#9 L1 raw#3-#9/);
   assert.match(prompt, /resolved discussion/);
+  assert.match(prompt, /Segment 1: raw message candidates -> L1 block\(s\)/);
+  assert.match(prompt, /Segment 2: L1 block candidates -> L2 block\(s\)/);
+  assert.match(prompt, /This segment has only one block, so normally leave it uncompressed/i);
+  assert.match(prompt, /Treat each Segment header as a hard boundary/i);
+  assert.match(prompt, /Block compression is optional/i);
   assert.doesNotMatch(prompt, /Current session goal\/context/);
   assert.doesNotMatch(prompt, /Session goal reminder/);
   assert.match(prompt, /Preserve decisions/i);
@@ -66,6 +71,30 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /user\/inter-agent inputs, process, findings, and TODOs inside that range/i);
   assert.match(prompt, /do not borrow facts, later outcomes, or completions from force-kept items or any other outside range/i);
   assert.match(prompt, /force-kept later context completed a task.*source range only contains the unfinished earlier work/is);
+});
+
+test('buildCompactPromptText renders block candidates by legal contiguous segments', () => {
+  const prompt = buildCompactPromptText({
+    forcedKeptCount: 0,
+    candidateItems: [
+      buildBlockCandidateItem(10, 1, 1, 5, 'first L1 block'),
+      buildBlockCandidateItem(11, 1, 6, 10, 'second L1 block'),
+      buildBlockCandidateItem(13, 1, 11, 15, 'gap after missing B#12'),
+      buildBlockCandidateItem(14, 2, 16, 20, 'different source level'),
+      buildBlockCandidateItem(15, 1, 21, 25, 'back to L1 but new segment'),
+      buildBlockCandidateItem(16, 1, 26, 30, 'next L1 block'),
+      buildBlockCandidateItem(17, 2, 31, 35, 'stranded single L2 block', COMPACT_LEVEL_TOKEN_THRESHOLD + 1, true),
+    ],
+  });
+
+  assert.match(prompt, /Segment 1: L1 block candidates -> L2 block\(s\).*contiguous B#10-B#11/s);
+  assert.match(prompt, /Segment 2: L1 block candidates -> L2 block\(s\).*contiguous B#13/s);
+  assert.match(prompt, /Segment 3: L2 block candidates -> L3 block\(s\).*contiguous B#14/s);
+  assert.match(prompt, /Segment 4: L1 block candidates -> L2 block\(s\).*contiguous B#15-B#16/s);
+  assert.match(prompt, /Segment 5: L2 block candidates -> L3 block\(s\).*contiguous B#17/s);
+  assert.match(prompt, /This segment has only one block, so normally leave it uncompressed/i);
+  assert.match(prompt, /stranded single-block segment.*sourceStart=sourceEnd=17/i);
+  assert.match(prompt, /do not cross segment boundaries or gaps/i);
 });
 
 test('trimPreview and compact prompt rendering do not split surrogate pairs at emoji boundaries', () => {
@@ -355,5 +384,6 @@ test('buildCompactPlanValidationFeedback explains invalid layered compact plans'
   const feedback = buildCompactPlanValidationFeedback(error);
   assert.match(feedback, /COMPACT PLAN INVALID/);
   assert.match(feedback, /summary must be a non-empty string/);
+  assert.match(feedback, /Use only ranges shown in one Segment header/);
   assert.match(feedback, /Fix only the layered-context plan/);
 });
