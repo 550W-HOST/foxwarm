@@ -36,6 +36,7 @@ export interface ArchiveBlockRecord {
   sourceKind: 'message' | 'block';
   sourceStart: number;
   sourceEnd: number;
+  sourceBlockIds?: number[];
   rawStartSeq: number;
   rawEndSeq: number;
   rawStartTimestamp?: number;
@@ -51,6 +52,7 @@ export interface CreateArchiveBlockInput {
   sourceKind: 'message' | 'block';
   sourceStart: number;
   sourceEnd: number;
+  sourceBlockIds?: number[];
   rawStartSeq: number;
   rawEndSeq: number;
   summary: string;
@@ -229,6 +231,9 @@ export async function buildArchiveBlockRecords(session: Session, blocks: CreateA
       sourceKind: block.sourceKind,
       sourceStart: block.sourceStart,
       sourceEnd: block.sourceEnd,
+      ...(block.sourceKind === 'block' && Array.isArray(block.sourceBlockIds) && block.sourceBlockIds.length > 0
+        ? { sourceBlockIds: block.sourceBlockIds }
+        : {}),
       rawStartSeq: block.rawStartSeq,
       rawEndSeq: block.rawEndSeq,
       rawStartTimestamp: startRecord[0]?.timestamp,

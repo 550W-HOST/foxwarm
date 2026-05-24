@@ -272,6 +272,7 @@ function openArchiveStore(): void {
       source_kind TEXT NOT NULL,
       source_start INTEGER NOT NULL,
       source_end INTEGER NOT NULL,
+      source_block_ids_json TEXT,
       raw_start_seq INTEGER NOT NULL,
       raw_end_seq INTEGER NOT NULL,
       raw_start_timestamp INTEGER,
@@ -309,6 +310,9 @@ function openArchiveStore(): void {
   } catch {}
   try {
     db.exec(`ALTER TABLE archive_blocks ADD COLUMN raw_end_timestamp INTEGER`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE archive_blocks ADD COLUMN source_block_ids_json TEXT`);
   } catch {}
 }
 
@@ -356,6 +360,26 @@ function parseBlockRecord(line: string): ArchiveBlockRecord | null {
     logger.warn({ err: e }, 'Skipping malformed archive-store block import line');
   }
   return null;
+}
+
+function parseSourceBlockIdsJson(value: unknown): number[] | undefined {
+  if (typeof value !== 'string' || !value.trim()) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+
+    const ids = parsed
+      .map(id => Number(id))
+      .filter(id => Number.isInteger(id) && id > 0);
+    return ids.length > 0 ? ids : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 type BootstrapSessionCandidate = {
@@ -607,9 +631,9 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
   const database = getDb();
   const insert = database.prepare(`
     INSERT OR IGNORE INTO archive_blocks (
-      session_id, agent, id, level, source_kind, source_start, source_end,
+      session_id, agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
       raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let batch: ArchiveBlockRecord[] = [];
@@ -630,6 +654,7 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
           record.sourceKind,
           record.sourceStart,
           record.sourceEnd,
+          record.sourceKind === 'block' && Array.isArray(record.sourceBlockIds) && record.sourceBlockIds.length > 0 ? JSON.stringify(record.sourceBlockIds) : null,
           record.rawStartSeq,
           record.rawEndSeq,
           record.rawStartTimestamp ?? null,
@@ -825,9 +850,9 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
   const database = getDb();
   const insert = database.prepare(`
     INSERT OR REPLACE INTO archive_blocks (
-      session_id, agent, id, level, source_kind, source_start, source_end,
+      session_id, agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
       raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   runInTransaction(() => {
     for (const record of records) {
@@ -839,6 +864,7 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
         record.sourceKind,
         record.sourceStart,
         record.sourceEnd,
+        record.sourceKind === 'block' && Array.isArray(record.sourceBlockIds) && record.sourceBlockIds.length > 0 ? JSON.stringify(record.sourceBlockIds) : null,
         record.rawStartSeq,
         record.rawEndSeq,
         record.rawStartTimestamp ?? null,
@@ -913,7 +939,7 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
   await ensureImported(sessionId);
 
   const rows = getDb().prepare(`
-    SELECT agent, id, level, source_kind, source_start, source_end, raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
+    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json, raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
     FROM archive_blocks
     WHERE session_id = ?
       AND (? IS NULL OR id >= ?)
@@ -931,6 +957,7 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
     sourceKind: row.source_kind,
     sourceStart: Number(row.source_start),
     sourceEnd: Number(row.source_end),
+    sourceBlockIds: parseSourceBlockIdsJson(row.source_block_ids_json),
     rawStartSeq: Number(row.raw_start_seq),
     rawEndSeq: Number(row.raw_end_seq),
     rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),

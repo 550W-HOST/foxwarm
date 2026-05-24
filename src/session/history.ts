@@ -555,8 +555,8 @@ async function filterDisplayOnlyMessageFrontierItems(sessionId: string, frontier
   return frontier.filter(item => item.kind !== 'message' || !displayOnlySeqs.has(item.seq));
 }
 
-function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> {
-  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; summary: string; }> = [];
+function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; }> {
+  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; }> = [];
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   for (let planIndex = 0; planIndex < plan.createBlocks.length; planIndex += 1) {
@@ -625,6 +625,9 @@ function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCo
     }
     const startEntry = candidateEntries[startIndex];
     const endEntry = candidateEntries[endIndex];
+    const sourceBlockIds = candidateItems
+      .slice(startIndex, endIndex + 1)
+      .flatMap(item => item.kind === 'block' ? [item.id] : []);
     operations.push({
       planIndex,
       startIndex,
@@ -637,6 +640,7 @@ function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCo
       level: block.level,
       sourceStart: block.sourceStart,
       sourceEnd: block.sourceEnd,
+      sourceBlockIds,
       summary: block.summary,
     });
   }
@@ -885,6 +889,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       level: operation.level,
       sourceStart: operation.sourceStart,
       sourceEnd: operation.sourceEnd,
+      sourceBlockIds: operation.sourceBlockIds,
       summary: operation.summary,
     })),
     createdBlocks: operations.map(operation => ({
@@ -892,6 +897,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       sourceKind: operation.sourceKind,
       sourceStart: operation.sourceStart,
       sourceEnd: operation.sourceEnd,
+      sourceBlockIds: operation.sourceBlockIds,
       rawStartSeq: operation.rawStartSeq,
       rawEndSeq: operation.rawEndSeq,
       summary: operation.summary,

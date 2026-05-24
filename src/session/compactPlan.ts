@@ -180,8 +180,7 @@ function canAppendToCandidateSegment(segment: CandidateSegment, item: CompactCan
   }
 
   return previous.kind === 'block'
-    && item.level === segment.sourceLevel
-    && item.id === previous.id + 1;
+    && item.level === segment.sourceLevel;
 }
 
 function buildCandidateSegments(items: CompactCandidateItem[]): CandidateSegment[] {
@@ -221,8 +220,8 @@ function formatCandidateSegmentHeader(segment: CandidateSegment, index: number):
 
   const firstBlock = first as Extract<CompactCandidateItem, { kind: 'block' }>;
   const lastBlock = last as Extract<CompactCandidateItem, { kind: 'block' }>;
-  const sourceRange = firstBlock.id === lastBlock.id ? `B#${firstBlock.id}` : `B#${firstBlock.id}-B#${lastBlock.id}`;
-  const base = `Segment ${index}: L${firstBlock.level} block candidates -> L${segment.targetLevel} block(s). Legal ranges must stay within contiguous ${sourceRange} (sourceKind=block, level=${segment.targetLevel}, sourceStart/sourceEnd at listed B# boundaries); do not cross segment boundaries or gaps.`;
+  const sourceRange = firstBlock.id === lastBlock.id ? `B#${firstBlock.id}` : `B#${firstBlock.id}..B#${lastBlock.id}`;
+  const base = `Segment ${index}: frontier-contiguous L${firstBlock.level} block candidates -> L${segment.targetLevel} block(s). Legal ranges must stay within this segment (${sourceRange}; sourceKind=block, level=${segment.targetLevel}, sourceStart/sourceEnd at listed B# boundaries). Block ids inside a segment may skip numbers or be out of numeric order; a range covers the listed candidates between its endpoints, not every numeric id in between.`;
 
   if (segment.items.length === 1) {
     return firstBlock.allowSingleBlockCompact
@@ -247,7 +246,7 @@ export function buildCompactPromptText(options: {
   ];
 
   // Group candidates by legal compression boundaries instead of only by target level.
-  // In particular, block ranges must not cross a different source level or a non-contiguous block-id gap.
+  // In particular, block ranges must not cross a different source level/source kind.
   const segments = buildCandidateSegments(candidateItems);
 
   for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
@@ -278,7 +277,7 @@ export function buildCompactPromptText(options: {
     '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim.',
     '- Block compression is optional. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from createBlocksJson.',
     '- If a block/message still seems useful, you can leave it uncompressed by simply omitting it from createBlocksJson.',
-    '- Treat each Segment header as a hard boundary: createBlocksJson ranges must stay inside one listed segment and must not cross gaps, different block levels, or different source kinds.',
+    '- Treat each Segment header as a hard boundary: createBlocksJson ranges must stay inside one listed segment and must not cross different block levels or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
     '- A single block may be summarized only when it is a stranded island immediately surrounded on both sides by higher-level blocks; otherwise block sources must span at least two blocks.',
     '- Blocks must have same kind and same level of source; do not combine low-level and high-level blocks in one createBlocks entry.',
     '- Blocks must not overlap source ranges across createBlocks.',
@@ -346,7 +345,7 @@ function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPla
     if (!Number.isInteger(sourceEnd) || sourceEnd < 1) {
       details.createBlockErrors.push(`createBlocks[${index}].sourceEnd must be a positive integer.`);
     }
-    if (Number.isInteger(sourceStart) && Number.isInteger(sourceEnd) && sourceStart > sourceEnd) {
+    if (sourceKind !== 'block' && Number.isInteger(sourceStart) && Number.isInteger(sourceEnd) && sourceStart > sourceEnd) {
       details.createBlockErrors.push(`createBlocks[${index}] has sourceStart > sourceEnd.`);
     }
     if (!summary) {
@@ -399,18 +398,16 @@ function findBlockRange(candidateItems: CompactCandidateItem[], level: number, s
   const startIndex = candidateItems.findIndex(item => item.kind === 'block' && item.id === sourceStart && item.level === childLevel);
   if (startIndex < 0) return null;
 
-  let expectedId = sourceStart;
   let endIndex = startIndex - 1;
   for (let index = startIndex; index < candidateItems.length; index += 1) {
     const item = candidateItems[index];
-    if (item.kind !== 'block' || item.level !== childLevel || item.id !== expectedId) {
+    if (item.kind !== 'block' || item.level !== childLevel) {
       break;
     }
     endIndex = index;
-    if (expectedId === sourceEnd) {
+    if (item.id === sourceEnd) {
       return [startIndex, endIndex];
     }
-    expectedId += 1;
   }
 
   return null;
@@ -444,7 +441,8 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
       }
 
       const unitLabel = block.sourceKind === 'message' ? 'seq' : 'block id';
-      details.createBlockErrors.push(`createBlocks[${index}] does not match a continuous ${block.sourceKind} range in current older context for ${unitLabel} ${block.sourceStart}-${block.sourceEnd}.`);
+      const continuityLabel = block.sourceKind === 'message' ? 'message' : 'frontier/candidate block';
+      details.createBlockErrors.push(`createBlocks[${index}] does not match a continuous ${continuityLabel} range in current older context for ${unitLabel} ${block.sourceStart}-${block.sourceEnd}.`);
       return;
     }
 
@@ -478,7 +476,7 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
   return [
     'COMPACT PLAN INVALID.',
     error.message,
-    'Use only ranges shown in one Segment header; do not cross segment boundaries, block-id gaps, different block levels, or different source kinds.',
+    'Use only ranges shown in one Segment header; do not cross segment boundaries, different block levels, or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
     `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory, write_memory, edit_memory, delete_memory, and apply_patch_memory if needed.`,
   ].join(' ');
 }
