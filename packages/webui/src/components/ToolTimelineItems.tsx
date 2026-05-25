@@ -448,18 +448,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         className={toolThreadLineToneClasses[tagTone]}
       />
       <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-        {showDiffToggles ? (
-          <>
-            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={viewMode !== 'json' && diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
-            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={viewMode !== 'json' && diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
-            <MiniToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON">JSON</MiniToggleButton>
-          </>
-        ) : (
-          <>
-            <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-            <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
-          </>
-        )}
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>
 
       {viewMode === 'json' ? (
