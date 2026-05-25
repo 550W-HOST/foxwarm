@@ -87,6 +87,7 @@ type ToolScriptRunRecord = {
   snapshotBase64?: string;
   stdout: string;
   executedTools: string[];
+  subCalls?: ToolScriptSubCall[];
   waiting?: ToolScriptWaitingState;
   relatedManagedSessions?: ToolScriptManagedLeaseRef[];
   hostCallCount?: number;
@@ -112,6 +113,7 @@ type ToolScriptResult = {
   filePath: string;
   stdout: string;
   executedTools: string[];
+  subCalls?: ToolScriptSubCall[];
   waitingReason?: ToolScriptWaitingReason;
   waitingFor?: any;
   continuationId?: string;
@@ -595,6 +597,7 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
     filePath: run.filePath,
     stdout: run.stdout,
     executedTools: [...run.executedTools],
+    ...(run.subCalls?.length ? { subCalls: run.subCalls.map(sc => ({ ...sc })) } : {}),
     ...(run.waiting?.reason ? { waitingReason: run.waiting.reason } : {}),
     ...(buildWaitingFor(run) !== undefined ? { waitingFor: buildWaitingFor(run) } : {}),
     ...(run.waiting?.continuationId ? { continuationId: run.waiting.continuationId } : {}),
@@ -618,6 +621,7 @@ function markRunWaiting(record: ToolScriptRunRecord, waiting: ToolScriptWaitingS
   record.waiting = waiting;
   record.stdout = currentStdout(runtimeState);
   record.executedTools = [...runtimeState.executedTools];
+  record.subCalls = runtimeState.subCalls.map(sc => ({ ...sc }));
   record.hostCallCount = runtimeState.hostCallCount;
   record.lastHostCall = runtimeState.lastHostCall ? structuredClone(runtimeState.lastHostCall) : undefined;
   record.snapshotBase64 = record.snapshotBase64;
@@ -1136,6 +1140,7 @@ async function advanceExecution(args: {
       record.waiting = undefined;
       record.stdout = currentStdout(runtimeState);
       record.executedTools = [...runtimeState.executedTools];
+      record.subCalls = runtimeState.subCalls.map(sc => ({ ...sc }));
       record.hostCallCount = runtimeState.hostCallCount;
       record.lastHostCall = runtimeState.lastHostCall ? structuredClone(runtimeState.lastHostCall) : undefined;
       record.snapshotBase64 = undefined;
@@ -1306,6 +1311,7 @@ async function failRun(record: ToolScriptRunRecord, runtimeState: RuntimeState, 
   record.waiting = undefined;
   record.stdout = currentStdout(runtimeState);
   record.executedTools = [...runtimeState.executedTools];
+  record.subCalls = runtimeState.subCalls.map(sc => ({ ...sc }));
   record.hostCallCount = runtimeState.hostCallCount;
   record.lastHostCall = runtimeState.lastHostCall ? structuredClone(runtimeState.lastHostCall) : undefined;
   record.snapshotBase64 = undefined;

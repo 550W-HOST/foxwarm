@@ -426,9 +426,14 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   }, [])
 
   // ToolScript progress: show sub-calls when tool is still running (no response yet)
+  // or from response result when completed
   const progressMap = useContext(ToolScriptProgressContext)
   const isToolScriptTool = !!call && TOOLSCRIPT_TOOL_NAMES.has(call.name)
-  const toolScriptSubCalls = isToolScriptTool && call?.id ? progressMap[call.id] : undefined
+  const responseSubCalls = isToolScriptTool && responses.length > 0
+    ? (responses[0]?.response as any)?.subCalls as ToolScriptSubCall[] | undefined
+    : undefined
+  const progressSubCalls = isToolScriptTool && call?.id ? progressMap[call.id] : undefined
+  const toolScriptSubCalls = responseSubCalls || progressSubCalls
   const hasToolScriptProgress = !!toolScriptSubCalls && toolScriptSubCalls.length > 0
 
   const pairStatus = getToolPairStatus(responses, imageParts)
@@ -499,8 +504,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           <div className="space-y-1">
             {header('', undefined, true)}
-            {responsePreview && <div className="pr-2 text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>}
-            {hasToolScriptProgress && !hasResponseContent && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
+            {responsePreview && !hasToolScriptProgress && <div className="pr-2 text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>}
+            {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
           </div>
         </div>
       ) : (
@@ -540,7 +545,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
               </div>
             )}
 
-            {hasToolScriptProgress && !hasResponseContent && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
+            {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
           </div>
         </div>
       )}
