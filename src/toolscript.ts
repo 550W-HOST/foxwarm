@@ -9,7 +9,7 @@ import * as managedSessions from './managedSessions';
 import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
-import type { Message, MessagePart, Session } from './types';
+import type { Message, MessagePart, Session, ToolScriptSubCall } from './types';
 
 type ToolArgs = Record<string, any>;
 
@@ -19,6 +19,7 @@ type ToolContext = {
   broadcast?: (text: string, options?: any) => Promise<void>;
   runtimeNodeId?: string;
   toolScriptRunId?: string;
+  toolUseId?: string;
 };
 
 type ToolScriptRunMode = 'foreground' | 'background';
@@ -130,6 +131,7 @@ type ToolScriptResult = {
 type RuntimeState = {
   stdoutParts: string[];
   executedTools: string[];
+  subCalls: ToolScriptSubCall[];
   hostCallCount: number;
   lastHostCall?: ToolScriptHostCallInfo;
 };
@@ -504,6 +506,7 @@ function createRuntimeState(stdout: string, executedTools: string[]): RuntimeSta
   return {
     stdoutParts: stdout ? [stdout] : [],
     executedTools: [...executedTools],
+    subCalls: [],
     hostCallCount: 0,
   };
 }
@@ -852,6 +855,31 @@ function normalizeManagedSessionStepInput(positionalArgs: any[], kwargs: Record<
   throw new Error('session_step message must be a string or a message object with a parts array.');
 }
 
+function emitToolScriptProgress(ctx: ToolContext, state: RuntimeState): void {
+  if (!ctx.sessionId || !ctx.toolUseId) return;
+  sessionManager.notifySessionEvent(ctx.sessionId, {
+    type: 'toolscript-progress',
+    runId: ctx.toolScriptRunId,
+    toolUseId: ctx.toolUseId,
+    subCalls: state.subCalls.map(sc => ({ ...sc })),
+  });
+}
+
+function buildArgsSummary(wrapperArgs: Record<string, any>): string {
+  const args = wrapperArgs.args || {};
+  if (args.filePath) return String(args.filePath);
+  if (args.command) {
+    const cmd = String(args.command);
+    return cmd.length > 80 ? cmd.slice(0, 80) + '...' : cmd;
+  }
+  const keys = Object.keys(args).slice(0, 2);
+  if (keys.length === 0) return '';
+  return keys.map(k => {
+    const v = String(args[k] ?? '');
+    return `${k}: ${v.length > 30 ? v.slice(0, 30) + '...' : v}`;
+  }).join(', ');
+}
+
 async function executeScriptHostCall(
   functionName: string,
   positionalArgs: any[],
@@ -888,13 +916,46 @@ async function executeScriptHostCall(
     const summaryName = buildToolSummaryName(wrapperArgs);
     const toolsModule = require('./tools');
     startHostCall(summaryName);
+
+    // Emit running progress
+    const subCallId = `tss_${state.hostCallCount}`;
+    state.subCalls.push({
+      id: subCallId,
+      name: summaryName,
+      status: 'running',
+      startedAt: Date.now(),
+      argsSummary: buildArgsSummary(wrapperArgs),
+    });
+    emitToolScriptProgress(ctx, state);
+
     try {
       const result = await toolsModule.call_tool(wrapperArgs, ctx);
       state.executedTools.push(summaryName);
       finishHostCall('completed');
+
+      // Emit completed progress
+      const sc = state.subCalls.find(s => s.id === subCallId);
+      if (sc) {
+        sc.status = 'completed';
+        sc.completedAt = Date.now();
+        sc.durationMs = sc.completedAt - sc.startedAt;
+      }
+      emitToolScriptProgress(ctx, state);
+
       return normalizeMontyValue(result);
     } catch (error: any) {
       finishHostCall('failed', error);
+
+      // Emit failed progress
+      const sc = state.subCalls.find(s => s.id === subCallId);
+      if (sc) {
+        sc.status = 'failed';
+        sc.completedAt = Date.now();
+        sc.durationMs = sc.completedAt - sc.startedAt;
+        sc.error = error?.message ? String(error.message).slice(0, 100) : 'unknown error';
+      }
+      emitToolScriptProgress(ctx, state);
+
       throw error;
     }
   }
@@ -1228,7 +1289,7 @@ function createRunRecord(args: {
     agentName: args.session.agent || 'main',
     filePath: args.filePath,
     scriptPath: args.scriptPath,
-    scriptName: path.basename(args.scriptPath) || 'script.py',
+    scriptName: args.scriptPath === '<inline>' ? 'inline.py' : (path.basename(args.scriptPath) || 'script.py'),
     stdout: '',
     executedTools: [],
     relatedManagedSessions: [],
@@ -1309,13 +1370,28 @@ function ensureRunOwnedBySession(record: ToolScriptRunRecord, sessionId: string)
 
 export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
   const { sessionId, session } = await requireSessionContext(ctx);
-  const { filePath } = args || {};
+  const { filePath, code: inlineCode } = args || {};
   const mode = parseToolScriptRunMode(args?.mode ?? args?.runMode ?? args?.background);
   const timeoutSecs = parseTimeoutSecs(args?.timeoutSecs);
   const scriptArgs = resolveObjectArgWithJsonFallback(args, 'args', 'argsJson', { label: 'run_script args' }) || {};
-  const { scriptPath, code } = await readScriptSource(filePath, ctx, session);
+
+  let scriptPath: string;
+  let code: string;
+
+  if (typeof inlineCode === 'string' && inlineCode.trim()) {
+    // Inline code mode: pass directly to Monty interpreter
+    code = inlineCode;
+    scriptPath = '<inline>';
+  } else if (filePath && typeof filePath === 'string' && filePath.trim()) {
+    const source = await readScriptSource(filePath, ctx, session);
+    scriptPath = source.scriptPath;
+    code = source.code;
+  } else {
+    throw new Error('Either filePath or code must be provided.');
+  }
+
   const runId = newRunId();
-  const record = createRunRecord({ runId, mode, session, filePath, scriptPath, timeoutSecs });
+  const record = createRunRecord({ runId, mode, session, filePath: filePath || '<inline>', scriptPath, timeoutSecs });
   return await startRun(record, code, scriptArgs, { ...ctx, sessionId, session, toolScriptRunId: runId });
 }
 

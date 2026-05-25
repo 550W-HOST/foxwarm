@@ -824,8 +824,8 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         } else if (toolFn) {
             // Execute locally on master
             const localToolContext = call.name === 'send_file' || call.name === 'image_write_to_file'
-                ? { ...toolContext, runtimeNodeId: targetNode }
-                : toolContext;
+                ? { ...toolContext, runtimeNodeId: targetNode, toolUseId: toolId }
+                : { ...toolContext, toolUseId: toolId };
             try {
                 result = normalizeToolResult(await toolFn(toolArgs, localToolContext));
             } catch (e: any) {
