@@ -7,7 +7,8 @@ import ChatTimeline from './ChatTimeline'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
-import type { Message, MessagePart, SessionStreamEvent } from './chatShared'
+import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
+import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
@@ -146,6 +147,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   const [debugInfoError, setDebugInfoError] = useState<string | null>(null)
   const [debugInfoCopied, setDebugInfoCopied] = useState(false)
   const [processingReasoningSummary, setProcessingReasoningSummary] = useState('')
+  const [toolScriptProgress, setToolScriptProgress] = useState<Record<string, ToolScriptSubCall[]>>({})
   const [asrAvailable, setAsrAvailable] = useState(false)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelBusy, setModelBusy] = useState(false)
@@ -170,6 +172,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
 
   useEffect(() => {
     setProcessingReasoningSummary('')
+    setToolScriptProgress({})
   }, [sessionId])
 
   useEffect(() => {
@@ -366,6 +369,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
             setProcessingReasoningSummary(sessionEvent.text || '')
           } else if (sessionEvent.type === 'reasoning-summary-reset') {
             setProcessingReasoningSummary('')
+          } else if (sessionEvent.type === 'toolscript-progress' && sessionEvent.toolUseId) {
+            setToolScriptProgress(prev => ({
+              ...prev,
+              [sessionEvent.toolUseId!]: sessionEvent.subCalls || [],
+            }))
           }
           return
         }
@@ -425,6 +433,25 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
             }
             return [...prev, data.message]
           })
+
+          // Clean up toolscript progress when tool response message arrives
+          if (data.message.role === 'tool') {
+            const responseIds = (data.message.parts || [])
+              .filter((p: MessagePart) => p.functionResponse)
+              .map((p: MessagePart) => p.functionResponse!.tool_use_id)
+              .filter(Boolean) as string[]
+            if (responseIds.length > 0) {
+              setToolScriptProgress(prev => {
+                const hasMatch = responseIds.some(id => prev[id])
+                if (!hasMatch) return prev
+                const next = { ...prev }
+                for (const id of responseIds) {
+                  delete next[id]
+                }
+                return next
+              })
+            }
+          }
         }
       } catch (e) {
         console.error('Failed to parse SSE message:', e)
@@ -1026,7 +1053,9 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
               Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
             </div>
           )}
-          <ChatTimeline messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} />
+          <ToolScriptProgressContext.Provider value={toolScriptProgress}>
+            <ChatTimeline messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} />
+          </ToolScriptProgressContext.Provider>
           <ProcessingStatus
             sessionBusy={sessionBusy}
             sessionQueueLength={sessionQueueLength}

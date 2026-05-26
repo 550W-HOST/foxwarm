@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState } from 'react'
+import { memo, useCallback, useContext, useMemo, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 import { Eye, FileJson, Download } from 'lucide-react'
 import {
@@ -16,9 +16,11 @@ import {
   type FunctionResponse,
   type Message,
   type MessagePart,
+  type ToolScriptSubCall,
   type ToolTagItem,
   type ToolViewMode,
 } from './chatShared'
+import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { formatToolResponsePayload } from '../../../shared/src/toolResponseFormatting'
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
@@ -364,6 +366,55 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : preview}</div>
 }
 
+const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script'])
+
+const ToolScriptSubCallsTags = memo(function ToolScriptSubCallsTags({ subCalls }: { subCalls: ToolScriptSubCall[] }) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1 py-0.5">
+      {subCalls.map((sc) => (
+        <span key={sc.id} className="inline-flex items-center gap-0.5">
+          {sc.status === 'running' && (
+            <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+          )}
+          <ToolTag
+            name={sc.name}
+            label={sc.name}
+            tone={sc.status === 'failed' ? 'error' : sc.status === 'completed' ? 'success' : 'neutral'}
+          />
+        </span>
+      ))}
+    </div>
+  )
+})
+
+const ToolScriptSubCallsList = memo(function ToolScriptSubCallsList({ subCalls }: { subCalls: ToolScriptSubCall[] }) {
+  return (
+    <div className="ml-3 border-l-2 border-blue-200 dark:border-blue-800 pl-2 space-y-0.5 py-1">
+      {subCalls.map((sc) => (
+        <div key={sc.id} className="flex items-center gap-2 text-xs">
+          {sc.status === 'running' && (
+            <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+          )}
+          <ToolTag
+            name={sc.name}
+            label={sc.name}
+            tone={sc.status === 'failed' ? 'error' : sc.status === 'completed' ? 'success' : 'neutral'}
+          />
+          {sc.argsSummary && (
+            <span className="text-gray-500 dark:text-gray-400 truncate max-w-[200px]">{sc.argsSummary}</span>
+          )}
+          {sc.durationMs !== undefined && (
+            <span className="text-gray-400 dark:text-gray-500 shrink-0">{sc.durationMs}ms</span>
+          )}
+          {sc.error && (
+            <span className="text-red-500 dark:text-red-400 truncate max-w-[150px]">{sc.error}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+})
+
 const ToolCallResponseItem = memo(function ToolCallResponseItem({
   call,
   responses,
@@ -392,6 +443,17 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     setDiffViewMode(mode)
     localStorage.setItem('diffViewMode', mode)
   }, [])
+
+  // ToolScript progress: show sub-calls when tool is still running (no response yet)
+  // or from response result when completed
+  const progressMap = useContext(ToolScriptProgressContext)
+  const isToolScriptTool = !!call && TOOLSCRIPT_TOOL_NAMES.has(call.name)
+  const responseSubCalls = isToolScriptTool && responses.length > 0
+    ? (responses[0]?.response as any)?.subCalls as ToolScriptSubCall[] | undefined
+    : undefined
+  const progressSubCalls = isToolScriptTool && call?.id ? progressMap[call.id] : undefined
+  const toolScriptSubCalls = responseSubCalls || progressSubCalls
+  const hasToolScriptProgress = !!toolScriptSubCalls && toolScriptSubCalls.length > 0
 
   const pairStatus = getToolPairStatus(responses, imageParts)
   const isError = pairStatus === 'error'
@@ -424,7 +486,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   const jsonText = useMemo(() => JSON.stringify({ modelMessage, call, responses, imageParts }, null, 2), [call, imageParts, modelMessage, responses])
   const baseTextClass = 'font-mono text-gray-700 dark:text-gray-300'
-  const hasBody = expanded || !!responsePreview
+  const hasBody = expanded || !!responsePreview || hasToolScriptProgress
 
   const header = (extraClass = '', onClick?: (e: MouseEvent<HTMLDivElement>) => void, includeCallPreview = false) => (
     <div
@@ -461,7 +523,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           <div className="space-y-1">
             {header('', undefined, true)}
-            {responsePreview && <div className="pr-2 text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>}
+            {responsePreview && !hasToolScriptProgress && <div className="pr-2 text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>}
+            {hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} />}
           </div>
         </div>
       ) : (
@@ -481,11 +544,11 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
               </div>
             )}
 
-            {call && hasResponseContent && (
+            {call && hasResponseContent && !hasToolScriptProgress && (
               <div className={`my-2 border-t ${isError ? 'border-red-200 dark:border-red-800' : 'border-green-200 dark:border-green-800'} opacity-70`} />
             )}
 
-            {hasResponseContent && (
+            {hasResponseContent && !hasToolScriptProgress && (
               <div className="text-gray-700 dark:text-gray-300">
                 {responses.length > 0 && responses.map((resp, idx) => (
                   <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
@@ -500,6 +563,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                 )}
               </div>
             )}
+
+            {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
           </div>
         </div>
       )}
