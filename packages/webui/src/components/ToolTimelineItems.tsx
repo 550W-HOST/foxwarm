@@ -415,6 +415,29 @@ const ToolScriptSubCallsList = memo(function ToolScriptSubCallsList({ subCalls }
   )
 })
 
+const stripToolScriptSubCallsFromResponse = (response: unknown): unknown => {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    return response
+  }
+  const { subCalls: _subCalls, ...rest } = response as Record<string, unknown>
+  return rest
+}
+
+const renderToolScriptResultContent = (resp: FunctionResponse, expanded: boolean): ReactNode | null => {
+  const strippedResponse = stripToolScriptSubCallsFromResponse(resp.response)
+  const primaryText = formatToolResponsePayload(strippedResponse)
+  if (!primaryText) {
+    return null
+  }
+  const displayText = expanded ? primaryText : truncatePreviewText(primaryText, 400)
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">ToolScript result</div>
+      <div className="whitespace-pre-wrap break-all cursor-text">{displayText}</div>
+    </div>
+  )
+}
+
 const ToolCallResponseItem = memo(function ToolCallResponseItem({
   call,
   responses,
@@ -544,7 +567,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
               </div>
             )}
 
-            {call && hasResponseContent && !hasToolScriptProgress && (
+            {call && hasResponseContent && (
               <div className={`my-2 border-t ${isError ? 'border-red-200 dark:border-red-800' : 'border-green-200 dark:border-green-800'} opacity-70`} />
             )}
 
@@ -565,6 +588,19 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
             )}
 
             {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
+
+            {hasToolScriptProgress && hasResponseContent && (
+              <div className="text-gray-700 dark:text-gray-300">
+                {responses.length > 0 && responses.map((resp, idx) => {
+                  const content = renderToolScriptResultContent(resp, true)
+                  return content ? (
+                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
+                      {content}
+                    </div>
+                  ) : null
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}

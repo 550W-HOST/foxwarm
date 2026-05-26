@@ -86,15 +86,68 @@ test('run_script requires an explicit main(args) entrypoint', async () => {
   }
 });
 
-test('run_script and start_toolscript_run schemas expose argsJson fallback', () => {
+test('run_script and start_toolscript_run schemas expose argsJson fallback and inline code option', () => {
   const runDef = tools.definitions.find((item: any) => item.name === 'run_script');
   const startDef = tools.definitions.find((item: any) => item.name === 'start_toolscript_run');
   assert.ok(runDef);
   assert.ok(startDef);
+  assert.equal(runDef?.parameters?.properties?.code?.type, 'string');
   assert.equal(runDef?.parameters?.properties?.args?.type, 'object');
   assert.equal(runDef?.parameters?.properties?.argsJson?.type, 'string');
+  assert.deepEqual(runDef?.parameters?.required, []);
+  assert.equal(startDef?.parameters?.properties?.code?.type, 'string');
   assert.equal(startDef?.parameters?.properties?.args?.type, 'object');
   assert.equal(startDef?.parameters?.properties?.argsJson?.type, 'string');
+  assert.deepEqual(startDef?.parameters?.required, []);
+});
+
+test('run_script and start_toolscript_run execute inline code as an alternative to filePath', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_inline_code');
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const result = await tool_run_script({
+      code: asMain([
+        'print("inline")',
+        'return {"value": args["value"], "source": "code"}',
+      ].join('\n')),
+      args: { value: 7 },
+    }, { sessionId, session });
+
+    assert.equal(result.status, 'completed');
+    assert.equal(result.filePath, '<inline>');
+    assert.equal(result.stdout, 'inline\n');
+    assert.deepEqual(result.result, { value: 7, source: 'code' });
+
+    const backgroundResult = await tool_start_toolscript_run({
+      code: asMain('return {"mode": args["mode"]}'),
+      args: { mode: 'background-inline' },
+    }, { sessionId, session });
+    assert.equal(backgroundResult.status, 'completed');
+    assert.equal(backgroundResult.mode, 'background');
+    assert.equal(backgroundResult.filePath, '<inline>');
+    assert.deepEqual(backgroundResult.result, { mode: 'background-inline' });
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('run_script requires either filePath or inline code', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_missing_source');
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    await assert.rejects(
+      () => tool_run_script({}, { sessionId, session }),
+      /Either filePath or code must be provided/i,
+    );
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
 });
 
 test('run_script parses argsJson into main(args)', async () => {
