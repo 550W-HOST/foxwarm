@@ -7,7 +7,8 @@ import ChatTimeline from './ChatTimeline'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
-import type { Message, MessagePart, SessionStreamEvent } from './chatShared'
+import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
+import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
@@ -112,6 +113,58 @@ type SessionFilePayload = {
   [key: string]: any
 }
 
+type StreamingAssistantDraft = {
+  streamId: string
+  iteration?: number
+  reasoning: string
+  text: string
+  toolCalls: ModelStreamToolCall[]
+}
+
+const normalizeStreamingToolCalls = (toolCalls: ModelStreamToolCall[] | undefined): ModelStreamToolCall[] => {
+  if (!Array.isArray(toolCalls)) return []
+  return toolCalls.map((toolCall, fallbackIndex) => ({
+    index: Number.isFinite(toolCall.index) ? toolCall.index : fallbackIndex,
+    ...(typeof toolCall.id === 'string' && toolCall.id.trim() ? { id: toolCall.id.trim() } : {}),
+    ...(typeof toolCall.name === 'string' && toolCall.name.trim() ? { name: toolCall.name.trim() } : {}),
+  }))
+}
+
+const buildStreamingAssistantMessage = (draft: StreamingAssistantDraft | null): Message | null => {
+  if (!draft) return null
+
+  const parts: MessagePart[] = []
+  if (draft.reasoning.trim()) {
+    parts.push({ thinking: draft.reasoning })
+  }
+  if (draft.text) {
+    parts.push({ text: draft.text })
+  }
+  for (const toolCall of draft.toolCalls) {
+    parts.push({
+      functionCall: {
+        id: toolCall.id || `stream-${draft.streamId}-${toolCall.index}`,
+        name: toolCall.name || 'tool call',
+        args: {},
+      },
+    })
+  }
+
+  if (parts.length === 0) return null
+  return {
+    role: 'model',
+    parts,
+    __meta: {
+      synthetic: 'streamingAssistantDraft',
+      temporary: true,
+      streaming: true,
+      streamId: draft.streamId,
+      iteration: draft.iteration,
+      timestamp: Number.MAX_SAFE_INTEGER,
+    },
+  }
+}
+
 async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPath: string | null; payload: SessionFilePayload | null }> {
   try {
     const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/debug-file`)
@@ -145,7 +198,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   const [debugInfoLoading, setDebugInfoLoading] = useState(false)
   const [debugInfoError, setDebugInfoError] = useState<string | null>(null)
   const [debugInfoCopied, setDebugInfoCopied] = useState(false)
-  const [processingReasoningSummary, setProcessingReasoningSummary] = useState('')
+  const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
+  const [toolScriptProgress, setToolScriptProgress] = useState<Record<string, ToolScriptSubCall[]>>({})
   const [asrAvailable, setAsrAvailable] = useState(false)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelBusy, setModelBusy] = useState(false)
@@ -169,7 +223,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   const expandHistoryScrollRestoreRef = useRef<{ top: number; height: number } | null>(null)
 
   useEffect(() => {
-    setProcessingReasoningSummary('')
+    setStreamingAssistantDraft(null)
+    setToolScriptProgress({})
   }, [sessionId])
 
   useEffect(() => {
@@ -235,7 +290,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
 
   useEffect(() => {
     if (!sessionBusy) {
-      setProcessingReasoningSummary('')
+      setStreamingAssistantDraft(null)
     }
   }, [sessionBusy])
 
@@ -322,7 +377,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
         const data = await res.json()
         setSessionMissing(false)
         setMessages(data.messages || [])
-        setProcessingReasoningSummary('')
+        setStreamingAssistantDraft(null)
         const lastMsg = data.messages?.[data.messages.length - 1]
         if (lastMsg?.__meta?.timestamp) {
           lastKnownTimestampRef.current = lastMsg.__meta.timestamp
@@ -362,10 +417,30 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
         const data = JSON.parse(event.data)
         if (data.type === 'session-event') {
           const sessionEvent = data.event as SessionStreamEvent
-          if (sessionEvent.type === 'reasoning-summary') {
-            setProcessingReasoningSummary(sessionEvent.text || '')
-          } else if (sessionEvent.type === 'reasoning-summary-reset') {
-            setProcessingReasoningSummary('')
+          if (sessionEvent.type === 'model-stream-reset') {
+            setStreamingAssistantDraft({
+              streamId: sessionEvent.streamId || `stream-${sessionEvent.iteration ?? 'current'}`,
+              iteration: sessionEvent.iteration,
+              reasoning: '',
+              text: '',
+              toolCalls: [],
+            })
+          } else if (sessionEvent.type === 'model-stream-update') {
+            const streamId = sessionEvent.streamId || `stream-${sessionEvent.iteration ?? 'current'}`
+            setStreamingAssistantDraft(prev => ({
+              streamId,
+              iteration: sessionEvent.iteration ?? prev?.iteration,
+              reasoning: sessionEvent.reasoning ?? (prev?.streamId === streamId ? prev.reasoning : ''),
+              text: sessionEvent.text ?? (prev?.streamId === streamId ? prev.text : ''),
+              toolCalls: sessionEvent.toolCalls !== undefined
+                ? normalizeStreamingToolCalls(sessionEvent.toolCalls)
+                : (prev?.streamId === streamId ? prev.toolCalls : []),
+            }))
+          } else if (sessionEvent.type === 'toolscript-progress' && sessionEvent.toolUseId) {
+            setToolScriptProgress(prev => ({
+              ...prev,
+              [sessionEvent.toolUseId!]: sessionEvent.subCalls || [],
+            }))
           }
           return
         }
@@ -375,7 +450,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
           const isCommandResponse = data.message.__meta?.isCommandResponse
 
           if (data.message.role === 'model') {
-            setProcessingReasoningSummary('')
+            setStreamingAssistantDraft(null)
           }
 
           if (!isCommandResponse) {
@@ -425,6 +500,25 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
             }
             return [...prev, data.message]
           })
+
+          // Clean up toolscript progress when tool response message arrives
+          if (data.message.role === 'tool') {
+            const responseIds = (data.message.parts || [])
+              .filter((p: MessagePart) => p.functionResponse)
+              .map((p: MessagePart) => p.functionResponse!.tool_use_id)
+              .filter(Boolean) as string[]
+            if (responseIds.length > 0) {
+              setToolScriptProgress(prev => {
+                const hasMatch = responseIds.some(id => prev[id])
+                if (!hasMatch) return prev
+                const next = { ...prev }
+                for (const id of responseIds) {
+                  delete next[id]
+                }
+                return next
+              })
+            }
+          }
         }
       } catch (e) {
         console.error('Failed to parse SSE message:', e)
@@ -605,7 +699,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     if (shouldAutoScrollRef.current) {
       scrollToBottom()
     }
-  }, [messages, scrollToBottom])
+  }, [messages, scrollToBottom, streamingAssistantDraft])
 
   useEffect(() => {
     const restore = expandHistoryScrollRestoreRef.current
@@ -651,9 +745,14 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
 
   const hiddenMessageCount = messages.length - visibleMessages.length
 
-  const timelineMessages = useMemo(() => (
-    snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
-  ), [snapshotSystemMessage, visibleMessages])
+  const streamingAssistantMessage = useMemo(() => (
+    buildStreamingAssistantMessage(streamingAssistantDraft)
+  ), [streamingAssistantDraft])
+
+  const timelineMessages = useMemo(() => {
+    const baseMessages = snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
+    return streamingAssistantMessage ? [...baseMessages, streamingAssistantMessage] : baseMessages
+  }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages])
 
   const debugInfoObject = useMemo(() => ({
     sessionId,
@@ -680,7 +779,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       loading,
       asrAvailable,
       modelBusy,
-      processingReasoningSummary,
+      streamingAssistantDraft,
     },
   }), [
     asrAvailable,
@@ -688,7 +787,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     loading,
     messages,
     modelBusy,
-    processingReasoningSummary,
     reconnectCountdown,
     resolvedSessionFilePath,
     sessionBusy,
@@ -698,6 +796,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     sessionMissing,
     sessionQueueLength,
     sessionRecord,
+    streamingAssistantDraft,
     groupTools,
     showUsageBadge,
   ])
@@ -730,7 +829,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
 
     setLoading(true)
-    setProcessingReasoningSummary('')
+    setStreamingAssistantDraft(null)
 
     const userMessage = text.trim()
     const files = [...attachments]
@@ -1026,12 +1125,13 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
               Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
             </div>
           )}
-          <ChatTimeline messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} />
+          <ToolScriptProgressContext.Provider value={toolScriptProgress}>
+            <ChatTimeline messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} />
+          </ToolScriptProgressContext.Provider>
           <ProcessingStatus
             sessionBusy={sessionBusy}
             sessionQueueLength={sessionQueueLength}
             loading={loading}
-            processingReasoningSummary={processingReasoningSummary}
             isMobile={isMobile}
           />
           <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />

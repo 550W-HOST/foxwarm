@@ -163,7 +163,7 @@ type CompactJobState = {
 const compactJobStates = new Map<string, CompactJobState>();
 const compactPreviewLastTimestamp = new Map<string, number>();
 
-const ASYNC_COMPACT_DONE_NOTICE = '🗜️ Background compaction finished and has been applied. This chat stayed available while it was running.';
+const ASYNC_COMPACT_DONE_NOTICE = '🗜️ Background compaction finished';
 
 function nextCompactPreviewTimestamp(sessionId: string): number {
   const now = Date.now();

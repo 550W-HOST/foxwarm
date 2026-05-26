@@ -6,7 +6,7 @@ import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
-import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition } from './types';
+import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir } from './config';
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
@@ -133,6 +133,138 @@ type RequestLlmOnceOptions = {
     maxRetries?: number;
     timeoutMs?: number;
 };
+
+type ModelStreamProgressSnapshot = {
+    reasoning?: string;
+    text?: string;
+    toolCalls?: ModelStreamToolCall[];
+};
+
+const MODEL_STREAM_EVENT_THROTTLE_MS = 80;
+
+function newModelStreamId(iteration: number): string {
+    return `ms_${iteration}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeModelStreamToolCalls(toolCalls: ModelStreamToolCall[] | undefined): ModelStreamToolCall[] {
+    if (!Array.isArray(toolCalls)) {
+        return [];
+    }
+
+    return toolCalls.map((toolCall, fallbackIndex) => ({
+        index: Number.isFinite(toolCall.index) ? toolCall.index : fallbackIndex,
+        ...(typeof toolCall.id === 'string' && toolCall.id.trim() ? { id: toolCall.id.trim() } : {}),
+        ...(typeof toolCall.name === 'string' && toolCall.name.trim() ? { name: toolCall.name.trim() } : {}),
+    }));
+}
+
+function areModelStreamToolCallsEqual(left: ModelStreamToolCall[] = [], right: ModelStreamToolCall[] = []): boolean {
+    if (left.length !== right.length) {
+        return false;
+    }
+
+    return left.every((leftCall, index) => {
+        const rightCall = right[index];
+        return !!rightCall
+            && leftCall.index === rightCall.index
+            && (leftCall.id || '') === (rightCall.id || '')
+            && (leftCall.name || '') === (rightCall.name || '');
+    });
+}
+
+function createModelStreamEventEmitter(args: {
+    enabled: boolean;
+    sessionId?: string;
+    iteration: number;
+}) {
+    const streamId = newModelStreamId(args.iteration);
+    let latestSnapshot: ModelStreamProgressSnapshot = { reasoning: '', text: '', toolCalls: [] };
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let hasPendingUpdate = false;
+    let lastSentAt = 0;
+
+    const notify = () => {
+        if (!args.enabled || !args.sessionId) {
+            return;
+        }
+
+        sessionManager.notifySessionEvent(args.sessionId, {
+            type: 'model-stream-update',
+            streamId,
+            iteration: args.iteration,
+            reasoning: latestSnapshot.reasoning || '',
+            text: latestSnapshot.text || '',
+            toolCalls: normalizeModelStreamToolCalls(latestSnapshot.toolCalls),
+        });
+        hasPendingUpdate = false;
+        lastSentAt = Date.now();
+    };
+
+    const scheduleNotify = () => {
+        if (!args.enabled || !args.sessionId) {
+            return;
+        }
+
+        hasPendingUpdate = true;
+        if (timer) {
+            return;
+        }
+
+        const elapsed = Date.now() - lastSentAt;
+        const delay = Math.max(0, MODEL_STREAM_EVENT_THROTTLE_MS - elapsed);
+        timer = setTimeout(() => {
+            timer = null;
+            notify();
+        }, delay);
+    };
+
+    return {
+        streamId,
+        reset() {
+            if (!args.enabled || !args.sessionId) {
+                return;
+            }
+
+            latestSnapshot = { reasoning: '', text: '', toolCalls: [] };
+            hasPendingUpdate = false;
+            if (timer) {
+                clearTimeout(timer);
+                timer = null;
+            }
+            sessionManager.notifySessionEvent(args.sessionId, {
+                type: 'model-stream-reset',
+                streamId,
+                iteration: args.iteration,
+            });
+            lastSentAt = Date.now();
+        },
+        emit(snapshot: ModelStreamProgressSnapshot) {
+            const nextSnapshot = {
+                reasoning: snapshot.reasoning ?? latestSnapshot.reasoning ?? '',
+                text: snapshot.text ?? latestSnapshot.text ?? '',
+                toolCalls: normalizeModelStreamToolCalls(snapshot.toolCalls ?? latestSnapshot.toolCalls),
+            };
+            const currentToolCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
+            if ((latestSnapshot.reasoning || '') === nextSnapshot.reasoning
+                && (latestSnapshot.text || '') === nextSnapshot.text
+                && areModelStreamToolCallsEqual(currentToolCalls, nextSnapshot.toolCalls)) {
+                return;
+            }
+
+            latestSnapshot = nextSnapshot;
+            scheduleNotify();
+        },
+        flush() {
+            if (timer) {
+                clearTimeout(timer);
+                timer = null;
+            }
+            if (hasPendingUpdate) {
+                notify();
+            }
+        },
+    };
+}
 
 async function resolvePromptCacheKeyForRequest(options: RequestLlmOnceOptions): Promise<string> {
     if (options.promptCacheKey) {
@@ -824,8 +956,8 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         } else if (toolFn) {
             // Execute locally on master
             const localToolContext = call.name === 'send_file' || call.name === 'image_write_to_file'
-                ? { ...toolContext, runtimeNodeId: targetNode }
-                : toolContext;
+                ? { ...toolContext, runtimeNodeId: targetNode, toolUseId: toolId }
+                : { ...toolContext, toolUseId: toolId };
             try {
                 result = normalizeToolResult(await toolFn(toolArgs, localToolContext));
             } catch (e: any) {
@@ -1132,12 +1264,17 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     const abortController = new AbortController();
     const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
     const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
+    const modelStreamEmitter = createModelStreamEventEmitter({
+        enabled: shouldNotifySessionEvents,
+        sessionId: options.sessionId,
+        iteration,
+    });
 
     if (shouldRegisterAbortController) {
         sessionManager.registerSessionAbortController(options.sessionId!, abortController);
     }
     if (shouldNotifySessionEvents) {
-        sessionManager.notifySessionEvent(options.sessionId!, { type: 'reasoning-summary-reset' });
+        modelStreamEmitter.reset();
     }
 
     try {
@@ -1173,17 +1310,16 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
 
                     if (useOpenAIResponsesApi) {
                         resp = await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, {
-                            onReasoningSummary: shouldNotifySessionEvents
-                                ? (text) => {
-                                    sessionManager.notifySessionEvent(options.sessionId!, {
-                                        type: 'reasoning-summary',
-                                        text,
-                                    });
-                                }
-                                : () => {},
+                            onProgress: shouldNotifySessionEvents
+                                ? (snapshot) => modelStreamEmitter.emit(snapshot)
+                                : undefined,
                         });
                     } else {
-                        resp = await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal);
+                        resp = await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, {
+                            onProgress: shouldNotifySessionEvents
+                                ? (snapshot) => modelStreamEmitter.emit(snapshot)
+                                : undefined,
+                        });
                     }
 
                     await logResponse({
@@ -1243,6 +1379,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             }
         }
     } finally {
+        modelStreamEmitter.flush();
         if (shouldRegisterAbortController) {
             sessionManager.clearSessionAbortController(options.sessionId!, abortController);
         }

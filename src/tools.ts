@@ -2365,12 +2365,13 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder.' },
+                    code: { type: 'string', description: 'Inline ToolScript code to execute directly. Must define `def main(args):`. When provided, filePath is not required.' },
                     args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable. Prefer this when visible.', additionalProperties: true },
                     argsJson: { type: 'string', description: 'JSON object string fallback exposed to the script as the `args` input variable, for providers that do not expose free-form object fields. Example: `{"key":"value"}`. Used when `args` is not available.' },
                     mode: { type: 'string', enum: ['foreground', 'background'], description: 'Run mode. foreground is the default. background runs are intended for persistent controller-style scripts.' },
                     timeoutSecs: { type: 'number', description: 'Optional ToolScript execution timeout budget for this run slice in seconds. Default 30. When exceeded at a safe checkpoint, the run pauses with waitingReason="timeout" and can be resumed with continue_script.' }
                 },
-                required: ['filePath']
+                required: []
             }
         },
         {
@@ -2381,12 +2382,13 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder.' },
+                    code: { type: 'string', description: 'Inline ToolScript code to execute directly. Must define `def main(args):`. When provided, filePath is not required.' },
                     args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable. Prefer this when visible.', additionalProperties: true },
                     argsJson: { type: 'string', description: 'JSON object string fallback exposed to the script as the `args` input variable, for providers that do not expose free-form object fields. Example: `{"key":"value"}`. Used when `args` is not available.' },
                     mode: { type: 'string', enum: ['foreground', 'background'], description: 'Optional explicit mode override. Defaults to background for this tool.' },
                     timeoutSecs: { type: 'number', description: 'Optional ToolScript execution timeout budget for this run slice in seconds. Default 30. When exceeded at a safe checkpoint, the run pauses with waitingReason="timeout" and can be resumed with continue_script.' }
                 },
-                required: ['filePath']
+                required: []
             }
         },
         {
