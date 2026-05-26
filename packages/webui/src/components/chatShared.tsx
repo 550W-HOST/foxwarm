@@ -151,9 +151,19 @@ export interface ToolScriptSubCall {
   argsSummary?: string
 }
 
+export interface ModelStreamToolCall {
+  index: number
+  id?: string
+  name?: string
+}
+
 export interface SessionStreamEvent {
-  type: 'reasoning-summary' | 'reasoning-summary-reset' | 'toolscript-progress'
+  type: 'model-stream-reset' | 'model-stream-update' | 'toolscript-progress'
+  streamId?: string
+  iteration?: number
+  reasoning?: string
   text?: string
+  toolCalls?: ModelStreamToolCall[]
   runId?: string
   toolUseId?: string
   subCalls?: ToolScriptSubCall[]

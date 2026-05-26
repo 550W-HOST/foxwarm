@@ -1,11 +1,9 @@
 import { memo } from 'react'
-import ReasoningCard from './ReasoningCard'
 
 interface ProcessingStatusProps {
   sessionBusy: boolean
   sessionQueueLength: number
   loading: boolean
-  processingReasoningSummary: string
   isMobile: boolean
 }
 
@@ -13,7 +11,6 @@ const ProcessingStatus = memo(function ProcessingStatus({
   sessionBusy,
   sessionQueueLength,
   loading,
-  processingReasoningSummary,
   isMobile,
 }: ProcessingStatusProps) {
   const rowWidthClass = isMobile ? 'w-full' : 'w-full max-w-[80%]'
@@ -36,13 +33,6 @@ const ProcessingStatus = memo(function ProcessingStatus({
               </div>
             </div>
           </div>
-          {processingReasoningSummary && (
-            <div className="flex justify-start mt-2">
-              <div className={`${rowWidthClass} overflow-visible`}>
-                <ReasoningCard thinking={processingReasoningSummary} tone="processing" debounceMs={30} />
-              </div>
-            </div>
-          )}
         </>
       )}
       {!sessionBusy && !loading && sessionQueueLength > 0 && (

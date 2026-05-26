@@ -30,11 +30,15 @@ test('collectOpenAIChatCompletionsStream aggregates streamed text and usage', as
     '[DONE]',
   ]);
 
-  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal);
+  const progress: any[] = [];
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal, {
+    onProgress: snapshot => progress.push(structuredClone(snapshot)),
+  });
   assert.equal(response.choices[0].message.role, 'assistant');
   assert.equal(response.choices[0].message.content, 'Hello');
   assert.equal(response.choices[0].finish_reason, 'stop');
   assert.deepEqual(response.usage, { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 });
+  assert.ok(progress.some(snapshot => snapshot.text === 'Hello'));
 });
 
 test('collectOpenAIChatCompletionsStream aggregates streamed tool calls', async () => {
@@ -68,12 +72,16 @@ test('collectOpenAIChatCompletionsStream aggregates streamed tool calls', async 
     '[DONE]',
   ]);
 
-  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal);
+  const progress: any[] = [];
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal, {
+    onProgress: snapshot => progress.push(structuredClone(snapshot)),
+  });
   assert.equal(response.choices[0].finish_reason, 'tool_calls');
   assert.equal(response.choices[0].message.tool_calls.length, 1);
   assert.equal(response.choices[0].message.tool_calls[0].id, 'call_abc');
   assert.equal(response.choices[0].message.tool_calls[0].function.name, 'read');
   assert.equal(response.choices[0].message.tool_calls[0].function.arguments, '{"filePath":"x"}');
+  assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
 });
 
 
@@ -146,7 +154,10 @@ test('collectOpenAIResponsesStream rebuilds streamed output items from SSE delta
     '[DONE]',
   ]);
 
-  const response = await collectOpenAIResponsesStream(stream, new AbortController().signal);
+  const progress: any[] = [];
+  const response = await collectOpenAIResponsesStream(stream, new AbortController().signal, {
+    onProgress: snapshot => progress.push(structuredClone(snapshot)),
+  });
   assert.equal(response.output.length, 3);
   assert.equal(response.output[0].type, 'reasoning');
   assert.deepEqual(response.output[0].summary, [{ type: 'summary_text', text: 'Thinking done' }]);
@@ -155,6 +166,9 @@ test('collectOpenAIResponsesStream rebuilds streamed output items from SSE delta
   assert.equal(response.output[2].type, 'function_call');
   assert.equal(response.output[2].call_id, 'call_1');
   assert.equal(response.output[2].arguments, '{"filePath":"x"}');
+  assert.ok(progress.some(snapshot => snapshot.reasoning === 'Thinking done'));
+  assert.ok(progress.some(snapshot => snapshot.text === 'Hello'));
+  assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
 });
 
 test('collectOpenAIResponsesStream rebuilds refusals when completed payload omits content', async () => {

@@ -56,6 +56,30 @@ function appendDelta(existing: string | undefined, delta: unknown): string | und
     return `${existing || ''}${delta}`;
 }
 
+export type OpenAIStreamToolCallSnapshot = {
+    index: number;
+    id?: string;
+    name?: string;
+};
+
+export type OpenAIStreamProgressSnapshot = {
+    reasoning?: string;
+    text?: string;
+    toolCalls?: OpenAIStreamToolCallSnapshot[];
+};
+
+type OpenAIStreamProgressOptions = {
+    onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
+};
+
+function cleanSnapshotString(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+}
+
 function mergeResponseContentPart(existing: any, incoming: any): any {
     if (!existing) {
         return incoming ? { ...incoming } : incoming;
@@ -452,9 +476,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
 export async function collectOpenAIResponsesStream(
     stream: any,
     signal: AbortSignal,
-    options?: {
-        onReasoningSummary?: (text: string) => void;
-    },
+    options?: OpenAIStreamProgressOptions,
 ): Promise<any> {
     if (signal.aborted) {
         throw makeAbortError();
@@ -486,16 +508,6 @@ export async function collectOpenAIResponsesStream(
             callback();
         };
 
-        const emitSummaryUpdate = () => {
-            const nextText = buildReasoningSummaryText(summaryParts);
-            if (nextText === lastSummaryText) {
-                return;
-            }
-
-            lastSummaryText = nextText;
-            options?.onReasoningSummary?.(nextText);
-        };
-
         const ensureOutputItem = (outputIndex: number, initial?: any) => {
             const existing = outputItems.get(outputIndex);
             const next = mergeResponseOutputItem(existing, initial);
@@ -517,6 +529,57 @@ export async function collectOpenAIResponsesStream(
 
             item.content[contentIndex] = mergeResponseContentPart(item.content[contentIndex], initial);
             return item.content[contentIndex];
+        };
+
+        const buildTextSnapshot = (): string =>
+            Array.from(outputItems.entries())
+                .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
+                .map(([, item]) => {
+                    if (item?.type !== 'message' || item.role !== 'assistant' || !Array.isArray(item.content)) {
+                        return '';
+                    }
+                    return item.content
+                        .map((part: any) => {
+                            if (part?.type === 'output_text' && typeof part.text === 'string') {
+                                return part.text;
+                            }
+                            if (part?.type === 'refusal' && typeof part.refusal === 'string') {
+                                return part.refusal;
+                            }
+                            return '';
+                        })
+                        .join('');
+                })
+                .join('');
+
+        const buildToolCallSnapshot = (): OpenAIStreamToolCallSnapshot[] =>
+            Array.from(outputItems.entries())
+                .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
+                .filter(([, item]) => item?.type === 'function_call')
+                .map(([outputIndex, item]) => ({
+                    index: outputIndex,
+                    ...(cleanSnapshotString(item.call_id || item.id) ? { id: cleanSnapshotString(item.call_id || item.id) } : {}),
+                    ...(cleanSnapshotString(item.name) ? { name: cleanSnapshotString(item.name) } : {}),
+                }));
+
+        const buildProgressSnapshot = (): OpenAIStreamProgressSnapshot => ({
+            reasoning: buildReasoningSummaryText(summaryParts),
+            text: buildTextSnapshot(),
+            toolCalls: buildToolCallSnapshot(),
+        });
+
+        const emitProgressUpdate = () => {
+            options?.onProgress?.(buildProgressSnapshot());
+        };
+
+        const emitSummaryUpdate = () => {
+            const nextText = buildReasoningSummaryText(summaryParts);
+            if (nextText === lastSummaryText) {
+                return;
+            }
+
+            lastSummaryText = nextText;
+            emitProgressUpdate();
         };
 
         const buildOutputItems = () =>
@@ -561,12 +624,14 @@ export async function collectOpenAIResponsesStream(
                 case 'response.output_item.done':
                     if (typeof event.output_index === 'number' && event.item) {
                         ensureOutputItem(event.output_index, event.item);
+                        emitProgressUpdate();
                     }
                     return;
                 case 'response.content_part.added':
                 case 'response.content_part.done':
                     if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
                         ensureContentPart(event.output_index, event.content_index, event.part);
+                        emitProgressUpdate();
                     }
                     return;
                 case 'response.output_text.delta':
@@ -574,6 +639,7 @@ export async function collectOpenAIResponsesStream(
                         const part = ensureContentPart(event.output_index, event.content_index, { type: 'output_text' });
                         if (part) {
                             part.text = `${part.text || ''}${event.delta || ''}`;
+                            emitProgressUpdate();
                         }
                     }
                     return;
@@ -585,6 +651,7 @@ export async function collectOpenAIResponsesStream(
                         });
                         if (part && typeof event.text === 'string') {
                             part.text = event.text;
+                            emitProgressUpdate();
                         }
                     }
                     return;
@@ -593,6 +660,7 @@ export async function collectOpenAIResponsesStream(
                         const part = ensureContentPart(event.output_index, event.content_index, { type: 'refusal' });
                         if (part) {
                             part.refusal = `${part.refusal || ''}${event.delta || ''}`;
+                            emitProgressUpdate();
                         }
                     }
                     return;
@@ -604,6 +672,7 @@ export async function collectOpenAIResponsesStream(
                         });
                         if (part && typeof event.refusal === 'string') {
                             part.refusal = event.refusal;
+                            emitProgressUpdate();
                         }
                     }
                     return;
@@ -612,6 +681,7 @@ export async function collectOpenAIResponsesStream(
                         const item = ensureOutputItem(event.output_index, { type: 'function_call' });
                         if (item) {
                             item.arguments = `${item.arguments || ''}${event.delta || ''}`;
+                            emitProgressUpdate();
                         }
                     }
                     return;
@@ -623,6 +693,7 @@ export async function collectOpenAIResponsesStream(
                         });
                         if (item && typeof event.arguments === 'string') {
                             item.arguments = event.arguments;
+                            emitProgressUpdate();
                         }
                     }
                     return;
@@ -647,6 +718,7 @@ export async function collectOpenAIResponsesStream(
                         if (streamedOutputItems.length > 0) {
                             completedResponse.output = streamedOutputItems;
                         }
+                        emitProgressUpdate();
                     }
                     return;
                 case 'response.failed':
@@ -728,6 +800,7 @@ export async function collectOpenAIResponsesStream(
 export async function collectOpenAIChatCompletionsStream(
     stream: any,
     signal: AbortSignal,
+    options?: OpenAIStreamProgressOptions,
 ): Promise<any> {
     if (signal.aborted) {
         throw makeAbortError();
@@ -776,6 +849,27 @@ export async function collectOpenAIChatCompletionsStream(
             return toolCalls.get(index);
         };
 
+        const buildReasoningSnapshot = (): string => [message.reasoning_content, message.reasoning]
+            .filter((value: unknown): value is string => typeof value === 'string' && value.length > 0)
+            .join('\n');
+
+        const buildToolCallSnapshot = (): OpenAIStreamToolCallSnapshot[] =>
+            Array.from(toolCalls.entries())
+                .sort(([left], [right]) => left - right)
+                .map(([index, toolCall]) => ({
+                    index,
+                    ...(cleanSnapshotString(toolCall.id) ? { id: cleanSnapshotString(toolCall.id) } : {}),
+                    ...(cleanSnapshotString(toolCall.function?.name) ? { name: cleanSnapshotString(toolCall.function?.name) } : {}),
+                }));
+
+        const emitProgressUpdate = () => {
+            options?.onProgress?.({
+                reasoning: buildReasoningSnapshot(),
+                text: typeof message.content === 'string' ? message.content : '',
+                toolCalls: buildToolCallSnapshot(),
+            });
+        };
+
         const handleEvent = (event: any) => {
             if (event?.error) {
                 finish(() => reject(new Error(event.error?.message || 'OpenAI chat stream error.')));
@@ -793,14 +887,29 @@ export async function collectOpenAIChatCompletionsStream(
 
                 sawChoice = true;
                 const delta = choice.delta || {};
+                let changed = false;
 
                 if (delta.role) {
                     message.role = delta.role;
                 }
 
-                message.content = appendDelta(message.content, delta.content) || '';
-                message.reasoning_content = appendDelta(message.reasoning_content, delta.reasoning_content);
-                message.reasoning = appendDelta(message.reasoning, delta.reasoning);
+                const nextContent = appendDelta(message.content, delta.content);
+                if (nextContent !== message.content) {
+                    message.content = nextContent || '';
+                    changed = true;
+                } else {
+                    message.content = message.content || '';
+                }
+                const nextReasoningContent = appendDelta(message.reasoning_content, delta.reasoning_content);
+                if (nextReasoningContent !== message.reasoning_content) {
+                    message.reasoning_content = nextReasoningContent;
+                    changed = true;
+                }
+                const nextReasoning = appendDelta(message.reasoning, delta.reasoning);
+                if (nextReasoning !== message.reasoning) {
+                    message.reasoning = nextReasoning;
+                    changed = true;
+                }
 
                 if (Array.isArray(delta.tool_calls)) {
                     for (const toolCallDelta of delta.tool_calls) {
@@ -815,7 +924,12 @@ export async function collectOpenAIChatCompletionsStream(
                             entry.function.name = appendDelta(entry.function.name, toolCallDelta.function.name) || entry.function.name;
                             entry.function.arguments = appendDelta(entry.function.arguments, toolCallDelta.function.arguments) || entry.function.arguments;
                         }
+                        changed = true;
                     }
+                }
+
+                if (changed) {
+                    emitProgressUpdate();
                 }
 
                 if (choice.finish_reason) {
