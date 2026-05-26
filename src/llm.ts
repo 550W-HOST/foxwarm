@@ -158,6 +158,20 @@ function normalizeModelStreamToolCalls(toolCalls: ModelStreamToolCall[] | undefi
     }));
 }
 
+function areModelStreamToolCallsEqual(left: ModelStreamToolCall[] = [], right: ModelStreamToolCall[] = []): boolean {
+    if (left.length !== right.length) {
+        return false;
+    }
+
+    return left.every((leftCall, index) => {
+        const rightCall = right[index];
+        return !!rightCall
+            && leftCall.index === rightCall.index
+            && (leftCall.id || '') === (rightCall.id || '')
+            && (leftCall.name || '') === (rightCall.name || '');
+    });
+}
+
 function createModelStreamEventEmitter(args: {
     enabled: boolean;
     sessionId?: string;
@@ -225,11 +239,19 @@ function createModelStreamEventEmitter(args: {
             lastSentAt = Date.now();
         },
         emit(snapshot: ModelStreamProgressSnapshot) {
-            latestSnapshot = {
+            const nextSnapshot = {
                 reasoning: snapshot.reasoning ?? latestSnapshot.reasoning ?? '',
                 text: snapshot.text ?? latestSnapshot.text ?? '',
-                toolCalls: snapshot.toolCalls ?? latestSnapshot.toolCalls ?? [],
+                toolCalls: normalizeModelStreamToolCalls(snapshot.toolCalls ?? latestSnapshot.toolCalls),
             };
+            const currentToolCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
+            if ((latestSnapshot.reasoning || '') === nextSnapshot.reasoning
+                && (latestSnapshot.text || '') === nextSnapshot.text
+                && areModelStreamToolCallsEqual(currentToolCalls, nextSnapshot.toolCalls)) {
+                return;
+            }
+
+            latestSnapshot = nextSnapshot;
             scheduleNotify();
         },
         flush() {
