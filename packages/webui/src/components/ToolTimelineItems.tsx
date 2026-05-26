@@ -368,6 +368,25 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
 
 const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script'])
 
+const ToolScriptSubCallsTags = memo(function ToolScriptSubCallsTags({ subCalls }: { subCalls: ToolScriptSubCall[] }) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1 py-0.5">
+      {subCalls.map((sc) => (
+        <span key={sc.id} className="inline-flex items-center gap-0.5">
+          {sc.status === 'running' && (
+            <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+          )}
+          <ToolTag
+            name={sc.name}
+            label={sc.name}
+            tone={sc.status === 'failed' ? 'error' : sc.status === 'completed' ? 'success' : 'neutral'}
+          />
+        </span>
+      ))}
+    </div>
+  )
+})
+
 const ToolScriptSubCallsList = memo(function ToolScriptSubCallsList({ subCalls }: { subCalls: ToolScriptSubCall[] }) {
   return (
     <div className="ml-3 border-l-2 border-blue-200 dark:border-blue-800 pl-2 space-y-0.5 py-1">
@@ -505,7 +524,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
           <div className="space-y-1">
             {header('', undefined, true)}
             {responsePreview && !hasToolScriptProgress && <div className="pr-2 text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>}
-            {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
+            {hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} />}
           </div>
         </div>
       ) : (
@@ -525,11 +544,11 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
               </div>
             )}
 
-            {call && hasResponseContent && (
+            {call && hasResponseContent && !hasToolScriptProgress && (
               <div className={`my-2 border-t ${isError ? 'border-red-200 dark:border-red-800' : 'border-green-200 dark:border-green-800'} opacity-70`} />
             )}
 
-            {hasResponseContent && (
+            {hasResponseContent && !hasToolScriptProgress && (
               <div className="text-gray-700 dark:text-gray-300">
                 {responses.length > 0 && responses.map((resp, idx) => (
                   <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
