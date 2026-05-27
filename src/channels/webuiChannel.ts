@@ -24,6 +24,7 @@ import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLo
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
+import { normalizeWebUiInstanceName, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 
 type WorkspaceNodeEntry = {
   name: string;
@@ -35,59 +36,9 @@ type WorkspaceNodeEntry = {
 
 const MAX_INLINE_FILE_BYTES = 1024 * 1024;
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
-const WEBUI_SETTINGS_PATH = path.join(BASE_DIR, 'state', 'webui.json');
-
-type WebUiSettings = {
-  instanceName: string;
-};
 
 function isPlaceholderSecret(value: unknown): boolean {
   return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
-}
-
-function normalizeWebUiInstanceName(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
-  if (typeof value !== 'string') {
-    throw new Error('instanceName must be a string.');
-  }
-
-  const normalized = value
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (normalized.length > 80) {
-    throw new Error('instanceName must be at most 80 characters.');
-  }
-
-  return normalized;
-}
-
-function readWebUiSettings(): WebUiSettings {
-  if (!fs.existsSync(WEBUI_SETTINGS_PATH)) {
-    return { instanceName: '' };
-  }
-
-  try {
-    const raw = fs.readJsonSync(WEBUI_SETTINGS_PATH) as Partial<WebUiSettings>;
-    return {
-      instanceName: normalizeWebUiInstanceName(raw.instanceName || ''),
-    };
-  } catch (e: any) {
-    logger.warn({ err: e, path: WEBUI_SETTINGS_PATH }, 'Failed to read WebUI settings; using defaults');
-    return { instanceName: '' };
-  }
-}
-
-function writeWebUiSettings(settings: WebUiSettings): WebUiSettings {
-  const normalized: WebUiSettings = {
-    instanceName: normalizeWebUiInstanceName(settings.instanceName),
-  };
-  fs.ensureDirSync(path.dirname(WEBUI_SETTINGS_PATH));
-  fs.writeJsonSync(WEBUI_SETTINGS_PATH, normalized, { spaces: 2 });
-  return normalized;
 }
 
 
