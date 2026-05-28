@@ -16,6 +16,8 @@ interface GlobalUiSettingsMenuProps {
   onShowUsageBadgeChange: (enabled: boolean) => void
   instanceName: string
   onInstanceNameChange: (name: string) => Promise<void> | void
+  tabIcon: string
+  onTabIconChange: (tabIcon: string) => Promise<void> | void
   menuAlign?: 'start' | 'end'
   onOpenSetup?: () => void
   setupActive?: boolean
@@ -32,15 +34,21 @@ export default function GlobalUiSettingsMenu({
   onShowUsageBadgeChange,
   instanceName,
   onInstanceNameChange,
+  tabIcon,
+  onTabIconChange,
   menuAlign = 'end',
   onOpenSetup,
   setupActive = false,
 }: GlobalUiSettingsMenuProps) {
   const [open, setOpen] = useState(false)
   const [renamingInstance, setRenamingInstance] = useState(false)
+  const [editingTabIcon, setEditingTabIcon] = useState(false)
   const [draftInstanceName, setDraftInstanceName] = useState(instanceName)
+  const [draftTabIcon, setDraftTabIcon] = useState(tabIcon)
   const [savingInstanceName, setSavingInstanceName] = useState(false)
+  const [savingTabIcon, setSavingTabIcon] = useState(false)
   const [instanceNameError, setInstanceNameError] = useState('')
+  const [tabIconError, setTabIconError] = useState('')
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -78,6 +86,13 @@ export default function GlobalUiSettingsMenu({
     }
   }, [instanceName, open, renamingInstance])
 
+  useEffect(() => {
+    if (open && !editingTabIcon) {
+      setDraftTabIcon(tabIcon)
+      setTabIconError('')
+    }
+  }, [tabIcon, open, editingTabIcon])
+
   const submitInstanceName = async (name: string) => {
     setSavingInstanceName(true)
     setInstanceNameError('')
@@ -89,6 +104,20 @@ export default function GlobalUiSettingsMenu({
       setInstanceNameError(error?.message || 'Failed to save instance name')
     } finally {
       setSavingInstanceName(false)
+    }
+  }
+
+  const submitTabIcon = async (nextTabIcon: string) => {
+    setSavingTabIcon(true)
+    setTabIconError('')
+    try {
+      await onTabIconChange(nextTabIcon)
+      setEditingTabIcon(false)
+      setOpen(false)
+    } catch (error: any) {
+      setTabIconError(error?.message || 'Failed to save tab icon')
+    } finally {
+      setSavingTabIcon(false)
     }
   }
 
@@ -179,6 +208,7 @@ export default function GlobalUiSettingsMenu({
                 onClick={() => {
                   setDraftInstanceName(instanceName)
                   setInstanceNameError('')
+                  setEditingTabIcon(false)
                   setRenamingInstance((current) => !current)
                 }}
                 className={menuButtonClass}
@@ -236,6 +266,73 @@ export default function GlobalUiSettingsMenu({
                       className="rounded bg-blue-500 px-2 py-1 text-xs font-medium text-white hover:bg-blue-600 disabled:cursor-wait disabled:opacity-70"
                     >
                       {savingInstanceName ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </form>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftTabIcon(tabIcon)
+                  setTabIconError('')
+                  setRenamingInstance(false)
+                  setEditingTabIcon((current) => !current)
+                }}
+                className={menuButtonClass}
+              >
+                <span>WebUI: Change tab icon</span>
+                <span className="ml-3 max-w-[7rem] truncate text-base leading-none text-gray-500 dark:text-gray-300">
+                  {tabIcon || '🦊'}
+                </span>
+              </button>
+              {editingTabIcon && (
+                <form
+                  className="rounded-md border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-900/50"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void submitTabIcon(draftTabIcon)
+                  }}
+                >
+                  <label className="block text-[11px] font-medium text-gray-600 dark:text-gray-300" htmlFor="webui-tab-icon">
+                    Browser tab icon
+                  </label>
+                  <input
+                    id="webui-tab-icon"
+                    type="text"
+                    value={draftTabIcon}
+                    maxLength={32}
+                    onChange={(event) => setDraftTabIcon(event.target.value)}
+                    placeholder="e.g. 🚀"
+                    disabled={savingTabIcon}
+                    className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-800 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-70 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                  />
+                  <p className="mt-1 text-[10px] leading-snug text-gray-500 dark:text-gray-400">
+                    Use an emoji or very short text. It changes the favicon shown in the browser tab for this Foxwarm instance.
+                  </p>
+                  {tabIconError && <p className="mt-1 text-[10px] text-red-600 dark:text-red-400">{tabIconError}</p>}
+                  <div className="mt-2 flex items-center justify-end gap-1">
+                    <button
+                      type="button"
+                      disabled={savingTabIcon || !tabIcon}
+                      onClick={() => void submitTabIcon('')}
+                      className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-700"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingTabIcon}
+                      onClick={() => setEditingTabIcon(false)}
+                      className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-200 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-700"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingTabIcon}
+                      className="rounded bg-blue-500 px-2 py-1 text-xs font-medium text-white hover:bg-blue-600 disabled:cursor-wait disabled:opacity-70"
+                    >
+                      {savingTabIcon ? 'Saving…' : 'Save'}
                     </button>
                   </div>
                 </form>

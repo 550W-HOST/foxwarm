@@ -39,6 +39,7 @@ const WEBUI_SETTINGS_PATH = path.join(BASE_DIR, 'state', 'webui.json');
 
 type WebUiSettings = {
   instanceName: string;
+  tabIcon: string;
 };
 
 function isPlaceholderSecret(value: unknown): boolean {
@@ -65,25 +66,47 @@ function normalizeWebUiInstanceName(value: unknown): string {
   return normalized;
 }
 
+function normalizeWebUiTabIcon(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value !== 'string') {
+    throw new Error('tabIcon must be a string.');
+  }
+
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (Array.from(normalized).length > 16) {
+    throw new Error('tabIcon must be at most 16 characters.');
+  }
+
+  return normalized;
+}
+
 function readWebUiSettings(): WebUiSettings {
   if (!fs.existsSync(WEBUI_SETTINGS_PATH)) {
-    return { instanceName: '' };
+    return { instanceName: '', tabIcon: '' };
   }
 
   try {
     const raw = fs.readJsonSync(WEBUI_SETTINGS_PATH) as Partial<WebUiSettings>;
     return {
       instanceName: normalizeWebUiInstanceName(raw.instanceName || ''),
+      tabIcon: normalizeWebUiTabIcon(raw.tabIcon || ''),
     };
   } catch (e: any) {
     logger.warn({ err: e, path: WEBUI_SETTINGS_PATH }, 'Failed to read WebUI settings; using defaults');
-    return { instanceName: '' };
+    return { instanceName: '', tabIcon: '' };
   }
 }
 
 function writeWebUiSettings(settings: WebUiSettings): WebUiSettings {
   const normalized: WebUiSettings = {
     instanceName: normalizeWebUiInstanceName(settings.instanceName),
+    tabIcon: normalizeWebUiTabIcon(settings.tabIcon),
   };
   fs.ensureDirSync(path.dirname(WEBUI_SETTINGS_PATH));
   fs.writeJsonSync(WEBUI_SETTINGS_PATH, normalized, { spaces: 2 });
@@ -590,7 +613,15 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const settings = writeWebUiSettings({ instanceName: normalizeWebUiInstanceName(req.body?.instanceName || '') });
+            const current = readWebUiSettings();
+            const settings = writeWebUiSettings({
+              instanceName: Object.prototype.hasOwnProperty.call(req.body || {}, 'instanceName')
+                ? normalizeWebUiInstanceName(req.body?.instanceName || '')
+                : current.instanceName,
+              tabIcon: Object.prototype.hasOwnProperty.call(req.body || {}, 'tabIcon')
+                ? normalizeWebUiTabIcon(req.body?.tabIcon || '')
+                : current.tabIcon,
+            });
             res.json({ success: true, settings });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to save WebUI settings');
