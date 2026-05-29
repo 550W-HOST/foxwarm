@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react'
-import { getCollapsedReasoningPreview, renderMarkdown, ToolTag } from './chatShared'
+import { getCollapsedReasoningPreview, handleMarkdownLinkClick, renderMarkdown, ToolTag } from './chatShared'
 import ThreadLineButton from './ThreadLineButton'
 
 type ReasoningTone = 'message' | 'processing'
@@ -119,6 +119,7 @@ const ReasoningCard = memo(function ReasoningCard({
         <div
           className={`foxwarm-markdown prose max-w-none text-[13px] prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${reasoningBodyClasses[tone]}`}
           dangerouslySetInnerHTML={{ __html: html }}
+          onClick={handleMarkdownLinkClick}
         />
       )}
     </div>
