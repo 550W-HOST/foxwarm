@@ -32,6 +32,7 @@ type TerminalRegistryRecord = {
 
 type WebUiSettings = {
   instanceName: string
+  tabIcon: string
 }
 
 const LIGHT_THEME_COLOR = '#f3f4f6'
@@ -47,12 +48,120 @@ const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
 const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
 const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
 const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
+const CUSTOM_FAVICON_LINK_ID = 'foxwarm-custom-favicon'
+
+type OriginalFaviconLink = {
+  link: HTMLLinkElement
+  rel: string
+  href: string | null
+  type: string | null
+  sizes: string | null
+}
+
+let originalFaviconLinks: OriginalFaviconLink[] | null = null
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const SetupView = lazy(() => import('./components/SetupView'))
 const TerminalView = lazy(() => import('./components/TerminalView'))
 const WorkspaceView = lazy(() => import('./components/WorkspaceView'))
 const FileEditorView = lazy(() => import('./components/FileEditorView'))
+
+function normalizeWebUiSettingsPayload(settings: unknown): WebUiSettings {
+  const raw = settings && typeof settings === 'object' ? settings as Partial<WebUiSettings> : {}
+  return {
+    instanceName: typeof raw.instanceName === 'string' ? raw.instanceName : '',
+    tabIcon: typeof raw.tabIcon === 'string' ? raw.tabIcon : '',
+  }
+}
+
+function escapeSvgText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+}
+
+function buildSvgFaviconDataUrl(label: string): string | null {
+  const trimmed = label.trim()
+  if (!trimmed) return null
+
+  try {
+    const glyphCount = Array.from(trimmed).length
+    const fontSize = glyphCount <= 1 ? 92 : glyphCount <= 2 ? 76 : glyphCount <= 4 ? 54 : 38
+    const svg = [
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">',
+      '<rect width="128" height="128" fill="transparent"/>',
+      `<text x="64" y="68" text-anchor="middle" dominant-baseline="middle" font-size="${fontSize}" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif">${escapeSvgText(trimmed)}</text>`,
+      '</svg>',
+    ].join('')
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  } catch (error) {
+    console.warn('Failed to build custom favicon', error)
+    return null
+  }
+}
+
+function applyCustomTabIcon(tabIcon: string) {
+  const trimmed = tabIcon.trim()
+  const customLink = document.getElementById(CUSTOM_FAVICON_LINK_ID)
+
+  if (!trimmed) {
+    customLink?.remove()
+    originalFaviconLinks?.forEach((item) => {
+      item.link.rel = item.rel
+      if (item.href === null) item.link.removeAttribute('href')
+      else item.link.href = item.href
+      if (item.type === null) item.link.removeAttribute('type')
+      else item.link.type = item.type
+      if (item.sizes === null) item.link.removeAttribute('sizes')
+      else item.link.setAttribute('sizes', item.sizes)
+    })
+    originalFaviconLinks = null
+    return
+  }
+
+  const href = buildSvgFaviconDataUrl(trimmed)
+  if (!href) {
+    customLink?.remove()
+    return
+  }
+
+  if (!originalFaviconLinks) {
+    originalFaviconLinks = Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel~="icon"]'))
+      .filter((link) => link.id !== CUSTOM_FAVICON_LINK_ID)
+      .map((link) => ({
+        link,
+        rel: link.rel,
+        href: link.getAttribute('href'),
+        type: link.getAttribute('type'),
+        sizes: link.getAttribute('sizes'),
+      }))
+  }
+
+  const link = customLink instanceof HTMLLinkElement ? customLink : document.createElement('link')
+  link.id = CUSTOM_FAVICON_LINK_ID
+  link.rel = 'icon'
+  link.type = 'image/svg+xml'
+  link.sizes = 'any'
+  link.href = href
+
+  if (!link.parentNode) {
+    document.head.appendChild(link)
+  }
+
+  // Some browsers keep using the first eligible favicon link instead of a new
+  // one appended later, especially when the document already has multiple PNG
+  // and SVG favicon candidates. Point every ordinary favicon candidate at the
+  // same generated icon so the tab updates consistently.
+  originalFaviconLinks.forEach((item) => {
+    item.link.rel = 'icon'
+    item.link.type = 'image/svg+xml'
+    item.link.setAttribute('sizes', 'any')
+    item.link.href = href
+  })
+}
 
 function LazyViewFallback({ label = 'Loading…' }: { label?: string }) {
   return (
@@ -243,7 +352,7 @@ function App() {
   })
   const [groupTools, setGroupTools] = useState<boolean>(() => localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true')
   const [showUsageBadge, setShowUsageBadge] = useState<boolean>(() => localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false')
-  const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '' })
+  const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [sidebarPeekVisible, setSidebarPeekVisible] = useState(false)
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
@@ -296,7 +405,7 @@ function App() {
         return
       }
       const data = await res.json()
-      setWebUiSettings({ instanceName: typeof data?.settings?.instanceName === 'string' ? data.settings.instanceName : '' })
+      setWebUiSettings(normalizeWebUiSettingsPayload(data?.settings))
     } catch (error) {
       console.warn('Failed to load WebUI settings', error)
     }
@@ -306,13 +415,26 @@ function App() {
     const res = await fetch(`${API_BASE_PATH}/webui/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instanceName: name }),
+      body: JSON.stringify({ instanceName: name, tabIcon: webUiSettings.tabIcon }),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       throw new Error(data?.error || 'Failed to save instance name')
     }
-    setWebUiSettings({ instanceName: typeof data?.settings?.instanceName === 'string' ? data.settings.instanceName : '' })
+    setWebUiSettings(normalizeWebUiSettingsPayload(data?.settings))
+  }
+
+  const saveWebUiTabIcon = async (tabIcon: string) => {
+    const res = await fetch(`${API_BASE_PATH}/webui/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instanceName: webUiSettings.instanceName, tabIcon }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data?.error || 'Failed to save tab icon')
+    }
+    setWebUiSettings(normalizeWebUiSettingsPayload(data?.settings))
   }
 
   useEffect(() => {
@@ -559,9 +681,14 @@ function App() {
 
   useEffect(() => {
     const trimmedInstanceName = webUiSettings.instanceName.trim()
-    const baseTitle = trimmedInstanceName ? `${trimmedInstanceName} · Foxwarm` : '🦊 Foxwarm'
+    const titleIcon = webUiSettings.tabIcon.trim() || '🦊'
+    const baseTitle = trimmedInstanceName ? `${trimmedInstanceName} · Foxwarm` : `${titleIcon} Foxwarm`
     document.title = busyCount > 0 ? `[${busyCount} busy] ${baseTitle}` : baseTitle
-  }, [busyCount, webUiSettings.instanceName])
+  }, [busyCount, webUiSettings.instanceName, webUiSettings.tabIcon])
+
+  useEffect(() => {
+    applyCustomTabIcon(webUiSettings.tabIcon)
+  }, [webUiSettings.tabIcon])
 
   useEffect(() => {
     if (route.view !== 'tab') return
@@ -1382,6 +1509,8 @@ function App() {
           onShowUsageBadgeChange={setShowUsageBadge}
           instanceName={webUiSettings.instanceName}
           onInstanceNameChange={saveWebUiInstanceName}
+          tabIcon={webUiSettings.tabIcon}
+          onTabIconChange={saveWebUiTabIcon}
           onSelectSession={openChatTab}
           onKeepSession={openKeptChatTab}
           onSelectArchitecture={() => {
@@ -1437,6 +1566,8 @@ function App() {
             onShowUsageBadgeChange={setShowUsageBadge}
             instanceName={webUiSettings.instanceName}
             onInstanceNameChange={saveWebUiInstanceName}
+            tabIcon={webUiSettings.tabIcon}
+            onTabIconChange={saveWebUiTabIcon}
             onSelectSession={openChatTab}
             onKeepSession={openKeptChatTab}
             onSelectArchitecture={() => {
@@ -1482,6 +1613,8 @@ function App() {
                 onShowUsageBadgeChange={setShowUsageBadge}
                 instanceName={webUiSettings.instanceName}
                 onInstanceNameChange={saveWebUiInstanceName}
+                tabIcon={webUiSettings.tabIcon}
+                onTabIconChange={saveWebUiTabIcon}
                 onSelectSession={openChatTab}
                 onKeepSession={openKeptChatTab}
                 onSelectArchitecture={() => {

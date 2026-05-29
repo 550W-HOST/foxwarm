@@ -24,7 +24,7 @@ import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLo
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
-import { normalizeWebUiInstanceName, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
+import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 
 type WorkspaceNodeEntry = {
   name: string;
@@ -541,7 +541,15 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const settings = writeWebUiSettings({ instanceName: normalizeWebUiInstanceName(req.body?.instanceName || '') });
+            const current = readWebUiSettings();
+            const settings = writeWebUiSettings({
+              instanceName: Object.prototype.hasOwnProperty.call(req.body || {}, 'instanceName')
+                ? normalizeWebUiInstanceName(req.body?.instanceName || '')
+                : current.instanceName,
+              tabIcon: Object.prototype.hasOwnProperty.call(req.body || {}, 'tabIcon')
+                ? normalizeWebUiTabIcon(req.body?.tabIcon || '')
+                : current.tabIcon,
+            });
             res.json({ success: true, settings });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to save WebUI settings');

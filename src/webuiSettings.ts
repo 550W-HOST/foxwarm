@@ -5,6 +5,7 @@ import { logger } from './common';
 
 export type WebUiSettings = {
   instanceName: string;
+  tabIcon: string;
 };
 
 const WEBUI_SETTINGS_FILE_NAME = 'webui.json';
@@ -41,10 +42,31 @@ export function normalizeWebUiInstanceName(value: unknown): string {
   return normalized;
 }
 
+export function normalizeWebUiTabIcon(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value !== 'string') {
+    throw new Error('tabIcon must be a string.');
+  }
+
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (Array.from(normalized).length > 16) {
+    throw new Error('tabIcon must be at most 16 characters.');
+  }
+
+  return normalized;
+}
+
 function readWebUiSettingsFromPath(filePath: string): WebUiSettings {
   const raw = fs.readJsonSync(filePath) as Partial<WebUiSettings>;
   return {
     instanceName: normalizeWebUiInstanceName(raw.instanceName || ''),
+    tabIcon: normalizeWebUiTabIcon(raw.tabIcon || ''),
   };
 }
 
@@ -60,7 +82,7 @@ export function readWebUiSettings(options: {
       return readWebUiSettingsFromPath(settingsPath);
     } catch (e: any) {
       logger.warn({ err: e, path: settingsPath }, 'Failed to read WebUI settings; using defaults');
-      return { instanceName: '' };
+      return { instanceName: '', tabIcon: '' };
     }
   }
 
@@ -73,11 +95,11 @@ export function readWebUiSettings(options: {
       return migrated;
     } catch (e: any) {
       logger.warn({ err: e, path: legacySettingsPath }, 'Failed to read legacy WebUI settings; using defaults');
-      return { instanceName: '' };
+      return { instanceName: '', tabIcon: '' };
     }
   }
 
-  return { instanceName: '' };
+  return { instanceName: '', tabIcon: '' };
 }
 
 export function writeWebUiSettings(settings: WebUiSettings, options: {
@@ -86,6 +108,7 @@ export function writeWebUiSettings(settings: WebUiSettings, options: {
   const settingsPath = options.settingsPath || getWebUiSettingsPath();
   const normalized: WebUiSettings = {
     instanceName: normalizeWebUiInstanceName(settings.instanceName),
+    tabIcon: normalizeWebUiTabIcon(settings.tabIcon),
   };
   fs.ensureDirSync(path.dirname(settingsPath));
   fs.writeJsonSync(settingsPath, normalized, { spaces: 2 });

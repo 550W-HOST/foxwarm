@@ -19,6 +19,8 @@ interface SidebarProps {
   onShowUsageBadgeChange: (enabled: boolean) => void
   instanceName: string
   onInstanceNameChange: (name: string) => Promise<void> | void
+  tabIcon: string
+  onTabIconChange: (tabIcon: string) => Promise<void> | void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
@@ -45,6 +47,8 @@ export default function Sidebar({
   onShowUsageBadgeChange,
   instanceName,
   onInstanceNameChange,
+  tabIcon,
+  onTabIconChange,
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
@@ -87,6 +91,8 @@ export default function Sidebar({
               onShowUsageBadgeChange={onShowUsageBadgeChange}
               instanceName={instanceName}
               onInstanceNameChange={onInstanceNameChange}
+              tabIcon={tabIcon}
+              onTabIconChange={onTabIconChange}
               menuAlign="start"
               onOpenSetup={onSelectSetup}
               setupActive={currentView === 'setup'}

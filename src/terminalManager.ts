@@ -33,6 +33,25 @@ const TERMINAL_OUTPUT_BUFFER_LIMIT = 200_000;
 
 const terminals = new Map<string, ManagedTerminal>();
 
+async function ensureNodePtyDarwinSpawnHelperExecutable(): Promise<void> {
+  if (process.platform !== 'darwin') {
+    return;
+  }
+
+  try {
+    const nodePtyMain = require.resolve('node-pty');
+    const nodePtyDir = path.resolve(path.dirname(nodePtyMain), '..');
+    const helperPath = path.join(nodePtyDir, 'prebuilds', `darwin-${process.arch}`, 'spawn-helper');
+    const stat = await fs.stat(helperPath);
+    if ((stat.mode & 0o111) !== 0o111) {
+      await fs.chmod(helperPath, stat.mode | 0o111);
+      logger.info({ helperPath }, 'Fixed node-pty macOS spawn-helper executable bit');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to verify node-pty macOS spawn-helper executable bit');
+  }
+}
+
 function getShellPath(): string {
   return process.env.SHELL && process.env.SHELL.trim().length > 0
     ? process.env.SHELL.trim()
@@ -158,6 +177,8 @@ export async function createTerminal(options: {
   const args = rcFilePath && shell.includes('bash')
     ? ['--rcfile', rcFilePath, '-i']
     : ['-i'];
+
+  await ensureNodePtyDarwinSpawnHelperExecutable();
 
   const ptyProcess = pty.spawn(shell, args, {
     name: 'xterm-256color',

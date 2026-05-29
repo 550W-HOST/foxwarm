@@ -19,6 +19,8 @@ interface SessionListProps {
   onShowUsageBadgeChange: (enabled: boolean) => void
   instanceName: string
   onInstanceNameChange: (name: string) => Promise<void> | void
+  tabIcon: string
+  onTabIconChange: (tabIcon: string) => Promise<void> | void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
@@ -43,6 +45,8 @@ export default function SessionList({
   onShowUsageBadgeChange,
   instanceName,
   onInstanceNameChange,
+  tabIcon,
+  onTabIconChange,
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
@@ -74,6 +78,8 @@ export default function SessionList({
             onShowUsageBadgeChange={onShowUsageBadgeChange}
             instanceName={instanceName}
             onInstanceNameChange={onInstanceNameChange}
+            tabIcon={tabIcon}
+            onTabIconChange={onTabIconChange}
             onOpenSetup={onSelectSetup}
             setupActive={currentView === 'setup'}
           />

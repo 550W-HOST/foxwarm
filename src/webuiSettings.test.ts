@@ -23,14 +23,14 @@ test('webui settings path is rooted under data state dir, not program base dir',
     const legacySettingsPath = getLegacyWebUiSettingsPath(baseDir);
 
     await fs.ensureDir(baseDir);
-    const saved = writeWebUiSettings({ instanceName: '  Demo\nInstance  ' }, { settingsPath });
+    const saved = writeWebUiSettings({ instanceName: '  Demo\nInstance  ', tabIcon: '  🚀  ' }, { settingsPath });
 
-    assert.deepEqual(saved, { instanceName: 'Demo Instance' });
+    assert.deepEqual(saved, { instanceName: 'Demo Instance', tabIcon: '🚀' });
     assert.equal(settingsPath, path.join(stateDir, 'webui.json'));
     assert.equal(legacySettingsPath, path.join(baseDir, 'state', 'webui.json'));
     assert.equal(await fs.pathExists(settingsPath), true);
     assert.equal(await fs.pathExists(legacySettingsPath), false);
-    assert.deepEqual(await fs.readJson(settingsPath), { instanceName: 'Demo Instance' });
+    assert.deepEqual(await fs.readJson(settingsPath), { instanceName: 'Demo Instance', tabIcon: '🚀' });
   });
 });
 
@@ -39,13 +39,13 @@ test('webui settings migrate from legacy base-dir state path when data state fil
     const settingsPath = path.join(dirPath, 'data', 'state', 'webui.json');
     const legacySettingsPath = path.join(dirPath, 'program', 'state', 'webui.json');
     await fs.ensureDir(path.dirname(legacySettingsPath));
-    await fs.writeJson(legacySettingsPath, { instanceName: 'Legacy Instance' });
+    await fs.writeJson(legacySettingsPath, { instanceName: 'Legacy Instance', tabIcon: '🧪' });
 
     const loaded = readWebUiSettings({ settingsPath, legacySettingsPath });
 
-    assert.deepEqual(loaded, { instanceName: 'Legacy Instance' });
-    assert.deepEqual(await fs.readJson(settingsPath), { instanceName: 'Legacy Instance' });
-    assert.deepEqual(await fs.readJson(legacySettingsPath), { instanceName: 'Legacy Instance' });
+    assert.deepEqual(loaded, { instanceName: 'Legacy Instance', tabIcon: '🧪' });
+    assert.deepEqual(await fs.readJson(settingsPath), { instanceName: 'Legacy Instance', tabIcon: '🧪' });
+    assert.deepEqual(await fs.readJson(legacySettingsPath), { instanceName: 'Legacy Instance', tabIcon: '🧪' });
   });
 });
 
@@ -55,11 +55,11 @@ test('webui settings prefer data state path over legacy base-dir path', async ()
     const legacySettingsPath = path.join(dirPath, 'program', 'state', 'webui.json');
     await fs.ensureDir(path.dirname(settingsPath));
     await fs.ensureDir(path.dirname(legacySettingsPath));
-    await fs.writeJson(settingsPath, { instanceName: 'State Instance' });
-    await fs.writeJson(legacySettingsPath, { instanceName: 'Legacy Instance' });
+    await fs.writeJson(settingsPath, { instanceName: 'State Instance', tabIcon: '📌' });
+    await fs.writeJson(legacySettingsPath, { instanceName: 'Legacy Instance', tabIcon: '🧪' });
 
     const loaded = readWebUiSettings({ settingsPath, legacySettingsPath });
 
-    assert.deepEqual(loaded, { instanceName: 'State Instance' });
+    assert.deepEqual(loaded, { instanceName: 'State Instance', tabIcon: '📌' });
   });
 });
