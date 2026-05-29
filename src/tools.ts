@@ -1,4 +1,5 @@
 import fs from 'fs-extra';
+import crypto from 'crypto';
 import os from 'os';
 import path from 'path';
 import * as vector from './vector';
@@ -80,6 +81,92 @@ interface ToolContext {
 // Tool function type
 type ToolArgs = Record<string, any>;
 type UnifiedToolSource = 'builtin' | 'mcp' | 'node';
+
+type PendingWriteRef = {
+    id: string;
+    scopeKey: string;
+    agentName: string;
+    fullPath: string;
+    displayPath: string;
+    content: string;
+    createdAt: number;
+    expiresAt: number;
+    sizeBytes: number;
+};
+
+const PENDING_WRITE_REF_TTL_MS = 15 * 60 * 1000;
+const PENDING_WRITE_REF_MAX_ENTRIES = 32;
+const PENDING_WRITE_REF_MAX_CONTENT_BYTES = 2 * 1024 * 1024;
+const PENDING_WRITE_REF_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+const pendingWriteRefs = new Map<string, PendingWriteRef>();
+
+function getPendingWriteScopeKey(ctx: ToolContext, agentName: string): string {
+    return ctx.sessionId ? `session:${ctx.sessionId}` : `agent:${agentName}`;
+}
+
+function prunePendingWriteRefs(now = Date.now()) {
+    for (const [id, ref] of pendingWriteRefs.entries()) {
+        if (ref.expiresAt <= now) {
+            pendingWriteRefs.delete(id);
+        }
+    }
+
+    while (pendingWriteRefs.size > PENDING_WRITE_REF_MAX_ENTRIES) {
+        const oldest = [...pendingWriteRefs.values()].sort((a, b) => a.createdAt - b.createdAt)[0];
+        if (!oldest) break;
+        pendingWriteRefs.delete(oldest.id);
+    }
+
+    let totalBytes = [...pendingWriteRefs.values()].reduce((sum, ref) => sum + ref.sizeBytes, 0);
+    while (totalBytes > PENDING_WRITE_REF_MAX_TOTAL_BYTES) {
+        const oldest = [...pendingWriteRefs.values()].sort((a, b) => a.createdAt - b.createdAt)[0];
+        if (!oldest) break;
+        pendingWriteRefs.delete(oldest.id);
+        totalBytes -= oldest.sizeBytes;
+    }
+}
+
+function registerPendingWriteRef(ctx: ToolContext, agentName: string, fullPath: string, displayPath: string, content: string): PendingWriteRef | null {
+    const sizeBytes = Buffer.byteLength(content, 'utf8');
+    if (sizeBytes > PENDING_WRITE_REF_MAX_CONTENT_BYTES) {
+        return null;
+    }
+
+    const now = Date.now();
+    prunePendingWriteRefs(now);
+    const id = `write_${crypto.randomBytes(6).toString('hex')}`;
+    const ref: PendingWriteRef = {
+        id,
+        scopeKey: getPendingWriteScopeKey(ctx, agentName),
+        agentName,
+        fullPath,
+        displayPath,
+        content,
+        createdAt: now,
+        expiresAt: now + PENDING_WRITE_REF_TTL_MS,
+        sizeBytes,
+    };
+    pendingWriteRefs.set(id, ref);
+    prunePendingWriteRefs(now);
+    return ref;
+}
+
+function consumePendingWriteRef(ctx: ToolContext, agentName: string, refId: string, fullPath: string): string {
+    prunePendingWriteRefs();
+    const ref = pendingWriteRefs.get(refId);
+    if (!ref) {
+        throw new Error(`Pending write contentRef not found or expired: ${refId}. Re-run write with content, or use a fresh contentRef from the previous write error.`);
+    }
+    if (ref.scopeKey !== getPendingWriteScopeKey(ctx, agentName) || ref.agentName !== agentName) {
+        throw new Error(`Pending write contentRef ${refId} is not available in this session/agent.`);
+    }
+    if (path.resolve(ref.fullPath) !== path.resolve(fullPath)) {
+        throw new Error(`Pending write contentRef ${refId} was created for ${ref.displayPath}; it cannot be used to write a different file.`);
+    }
+
+    pendingWriteRefs.delete(refId);
+    return ref.content;
+}
 
 const WORKSPACE = WORKSPACE_DIR;
 fs.ensureDirSync(getAgentDir('main'));
@@ -296,13 +383,40 @@ async function tool_read(args: ToolArgs, ctx: ToolContext) {
 }
 
 async function tool_write(args: ToolArgs, ctx: ToolContext) {
-    const { filePath, content, overwrite } = args;
+    const { filePath, overwrite } = args;
+    const contentRef = typeof args.contentRef === 'string' ? args.contentRef.trim() : '';
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
         checkPathAccess(fullPath, agentName);
     }
-    await writeResolvedPath(fullPath, content, overwrite === true, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`);
+
+    if (contentRef) {
+        if (typeof args.content === 'string') {
+            throw new Error('write accepts either content or contentRef, not both.');
+        }
+        if (overwrite !== true) {
+            throw new Error('write with contentRef requires overwrite=true.');
+        }
+        const content = consumePendingWriteRef(ctx, agentName, contentRef, fullPath);
+        await writeResolvedPath(fullPath, content, true, `File already exists: ${filePath}.`);
+        return 'File written successfully';
+    }
+
+    if (typeof args.content !== 'string') {
+        throw new Error('write requires content, or contentRef with overwrite=true from a previous write attempt.');
+    }
+
+    const exists = await fs.pathExists(fullPath);
+    if (exists && overwrite !== true) {
+        const pending = registerPendingWriteRef(ctx, agentName, fullPath, String(filePath), args.content);
+        const retryHint = pending
+            ? ` To overwrite using the same content without resending it, call write with filePath: ${JSON.stringify(filePath)}, overwrite: true, contentRef: ${JSON.stringify(pending.id)}. The contentRef expires in ${Math.floor(PENDING_WRITE_REF_TTL_MS / 60000)} minutes and only works in this session/agent for the same path.`
+            : ` The attempted content was too large to cache for contentRef retry; call write again with content and overwrite=true if you want to replace it.`;
+        throw new Error(`File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.${retryHint}`);
+    }
+
+    await writeResolvedPath(fullPath, args.content, overwrite === true, `File already exists: ${filePath}.`);
     return 'File written successfully';
 }
 
@@ -1709,15 +1823,16 @@ export const definitions = [
         {
             name: 'write',
             defaultInject: true,
-            description: 'Write a file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
+            description: 'Write a file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed. Provide either content, or contentRef from a previous write "file exists" error with overwrite=true to reuse the cached attempted content for the same path.',
             parameters: {
                 type: 'object',
                 properties: { 
                     content: { type: 'string' },
+                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists. Use with overwrite=true and the same filePath to write the cached content without resending it.' },
                     filePath: { type: 'string' },
                     overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' }
                 },
-                required: ['filePath', 'content']
+                required: ['filePath']
             }
         },
         {

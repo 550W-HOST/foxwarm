@@ -63,6 +63,88 @@ test('file tools resolve relative paths from session cwd', async () => {
   }
 });
 
+function extractWriteContentRef(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = message.match(/contentRef:\s*"([^"]+)"/);
+  assert.ok(match, `expected write error to include contentRef, got: ${message}`);
+  return match[1];
+}
+
+test('write can reuse cached contentRef after existing-file refusal', async () => {
+  const agentDir = getAgentDir('main');
+  const baseDir = path.join(agentDir, '.temp', `write-ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const filePath = path.join(baseDir, 'note.txt');
+  const ctx = { sessionId: `main/write_ref_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, session: { agent: 'main' } };
+
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(filePath, 'old');
+
+    let contentRef = '';
+    await assert.rejects(
+      async () => write({ filePath, content: 'new cached content' }, ctx as any),
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        assert.match(message, /File already exists/);
+        assert.doesNotMatch(message, /new cached content/);
+        contentRef = extractWriteContentRef(err);
+        return true;
+      },
+    );
+
+    await write({ filePath, contentRef, overwrite: true }, ctx as any);
+    assert.equal(await fs.readFile(filePath, 'utf8'), 'new cached content');
+  } finally {
+    await fs.remove(baseDir);
+  }
+});
+
+test('write contentRef is scoped to the same session and same path', async () => {
+  const agentDir = getAgentDir('main');
+  const baseDir = path.join(agentDir, '.temp', `write-ref-scope-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const firstPath = path.join(baseDir, 'first.txt');
+  const secondPath = path.join(baseDir, 'second.txt');
+  const ctx = { sessionId: `main/write_ref_scope_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, session: { agent: 'main' } };
+  const otherCtx = { sessionId: `${ctx.sessionId}_other`, session: { agent: 'main' } };
+
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(firstPath, 'first old');
+    await fs.writeFile(secondPath, 'second old');
+
+    let contentRef = '';
+    await assert.rejects(
+      async () => write({ filePath: firstPath, content: 'first new' }, ctx as any),
+      (err: unknown) => {
+        contentRef = extractWriteContentRef(err);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      () => write({ filePath: firstPath, contentRef }, otherCtx as any),
+      /requires overwrite=true/,
+    );
+    await assert.rejects(
+      () => write({ filePath: firstPath, contentRef, overwrite: true }, otherCtx as any),
+      /not available in this session\/agent/,
+    );
+    await assert.rejects(
+      () => write({ filePath: secondPath, contentRef, overwrite: true }, ctx as any),
+      /cannot be used to write a different file/,
+    );
+    await assert.rejects(
+      () => write({ filePath: firstPath, contentRef: 'write_missing_ref', overwrite: true }, ctx as any),
+      /not found or expired/,
+    );
+
+    await write({ filePath: firstPath, contentRef, overwrite: true }, ctx as any);
+    assert.equal(await fs.readFile(firstPath, 'utf8'), 'first new');
+  } finally {
+    await fs.remove(baseDir);
+  }
+});
+
 test('apply_patch_memory is restricted to the current agent memory directory and preserves apply_patch compatibility', async () => {
   const memoryDir = getAgentMemoryDir('main');
   const relativePath = `tools-memory-${Date.now()}-${Math.random().toString(36).slice(2, 8)}/note.txt`;
