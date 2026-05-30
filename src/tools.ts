@@ -272,6 +272,11 @@ function resolveAgentMemoryPath(filePath: string, agentName: string = 'main'): s
 }
 
 async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number) {
+    const stats = await fs.stat(fullPath);
+    if (stats.isDirectory()) {
+        return readDirectoryListing(fullPath, displayPath, startLine, endLine);
+    }
+
     const ext = path.extname(fullPath).toLowerCase();
     const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
 
@@ -301,6 +306,77 @@ async function readResolvedPath(fullPath: string, displayPath: string, startLine
     }
 
     return content;
+}
+
+type DirectoryListingEntry = {
+    name: string;
+    type: 'file' | 'directory' | 'symlink' | 'other';
+    size?: number;
+    modifiedAt: string;
+};
+
+function normalizeDirectoryListingStartEnd(startLine: number | undefined, endLine: number | undefined, totalItems: number): { startItem: number; endItem: number } {
+    const startItem = startLine !== undefined && Number.isFinite(Number(startLine))
+        ? Math.max(1, Math.floor(Number(startLine)))
+        : 1;
+    const endItem = endLine !== undefined && Number.isFinite(Number(endLine))
+        ? Math.max(0, Math.floor(Number(endLine)))
+        : Math.min(totalItems, startItem + 49);
+    return { startItem, endItem };
+}
+
+function formatDirectoryListingLine(entry: DirectoryListingEntry, itemNumber: number): string {
+    const name = entry.type === 'directory' ? `${entry.name}/` : entry.name;
+    const sizeLabel = entry.type === 'file' && typeof entry.size === 'number' ? `, ${entry.size} B` : '';
+    const typeLabel = entry.type === 'directory' ? 'dir' : entry.type;
+    return `${itemNumber}. \`${name}\` (${typeLabel}${sizeLabel}) - ${entry.modifiedAt}`;
+}
+
+async function readDirectoryListing(fullPath: string, displayPath: string, startLine?: number, endLine?: number): Promise<string> {
+    const dirents = await fs.readdir(fullPath, { withFileTypes: true });
+    dirents.sort((a, b) => a.name.localeCompare(b.name));
+
+    const entries: DirectoryListingEntry[] = [];
+    for (const dirent of dirents) {
+        const entryPath = path.join(fullPath, dirent.name);
+        const entryStats = await fs.lstat(entryPath);
+        entries.push({
+            name: dirent.name,
+            type: dirent.isDirectory() ? 'directory' : (dirent.isFile() ? 'file' : (dirent.isSymbolicLink() ? 'symlink' : 'other')),
+            size: dirent.isFile() ? entryStats.size : undefined,
+            modifiedAt: entryStats.mtime.toISOString(),
+        });
+    }
+
+    const totalItems = entries.length;
+    const { startItem, endItem } = normalizeDirectoryListingStartEnd(startLine, endLine, totalItems);
+    const pageEntries = startItem <= endItem
+        ? entries.slice(Math.max(0, startItem - 1), Math.min(totalItems, endItem))
+        : [];
+
+    const lines: string[] = [
+        `Directory listing for \`${displayPath}\``,
+        '',
+    ];
+
+    if (pageEntries.length === 0) {
+        lines.push(totalItems === 0 ? '(empty directory)' : '(no items in requested range)');
+    } else {
+        lines.push(...pageEntries.map((entry, index) => formatDirectoryListingLine(entry, startItem + index)));
+    }
+
+    lines.push('');
+    const shownStart = pageEntries.length > 0 ? startItem : 0;
+    const shownEnd = pageEntries.length > 0 ? startItem + pageEntries.length - 1 : 0;
+    const footer = [`Showing items ${shownStart}-${shownEnd} of ${totalItems}.`];
+    const nextStart = startItem + pageEntries.length;
+    if (nextStart <= totalItems) {
+        const nextEnd = Math.min(totalItems, nextStart + 49);
+        footer.push(`Next page: read({ filePath: ${JSON.stringify(displayPath)}, startLine: ${nextStart}, endLine: ${nextEnd} })`);
+    }
+    lines.push(footer.join(' '));
+
+    return lines.join('\n');
 }
 
 async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string) {
@@ -557,82 +633,6 @@ async function tool_apply_patch_memory(args: ToolArgs, ctx: ToolContext) {
         fullPath: resolveAgentMemoryPath(filePath, agentName),
         displayPath: normalizeMemoryRelativePath(filePath),
     }));
-}
-
-type ListFilesEntry = {
-    path: string;
-    type: 'file' | 'directory';
-    size?: number;
-    modifiedAt: string;
-};
-
-async function collectFileEntries(baseDir: string, relativeDir: string, options: {
-    recursive: boolean;
-    includeHidden: boolean;
-    limit: number;
-}, bucket: ListFilesEntry[]): Promise<void> {
-    if (bucket.length >= options.limit) {
-        return;
-    }
-
-    const fullDir = path.join(baseDir, relativeDir);
-    const entries = await fs.readdir(fullDir, { withFileTypes: true });
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-
-    for (const entry of entries) {
-        if (!options.includeHidden && entry.name.startsWith('.')) {
-            continue;
-        }
-        if (bucket.length >= options.limit) {
-            return;
-        }
-
-        const relPath = relativeDir ? path.posix.join(relativeDir.split(path.sep).join(path.posix.sep), entry.name) : entry.name;
-        const fullPath = path.join(fullDir, entry.name);
-        const stats = await fs.stat(fullPath);
-        bucket.push({
-            path: relPath,
-            type: entry.isDirectory() ? 'directory' : 'file',
-            size: entry.isDirectory() ? undefined : stats.size,
-            modifiedAt: stats.mtime.toISOString(),
-        });
-
-        if (options.recursive && entry.isDirectory()) {
-            await collectFileEntries(baseDir, path.join(relativeDir, entry.name), options, bucket);
-        }
-    }
-}
-
-async function tool_list_files(args: ToolArgs, ctx: ToolContext) {
-    const { dirPath = '.', recursive = false, includeHidden = false, limit = 200 } = args;
-    const agentName = ctx.session?.agent || 'main';
-    const fullPath = resolveAgentPath(dirPath, agentName, ctx.session?.cwd);
-
-    if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
-        checkPathAccess(fullPath, agentName);
-    }
-
-    const stats = await fs.stat(fullPath);
-    if (!stats.isDirectory()) {
-        throw new Error(`Not a directory: ${dirPath}`);
-    }
-
-    const entries: ListFilesEntry[] = [];
-    await collectFileEntries(fullPath, '', {
-        recursive: recursive === true,
-        includeHidden: includeHidden === true,
-        limit: Math.max(1, Math.min(Number(limit) || 200, 1000)),
-    }, entries);
-
-    const rootLabel = dirPath === '.' ? (ctx.session?.cwd || agentName) : dirPath;
-    if (entries.length === 0) {
-        return `No files found under \`${rootLabel}\`.`;
-    }
-
-    return `Files under \`${rootLabel}\` (${entries.length}):\n\n` + entries.map(entry => {
-        const sizeLabel = entry.type === 'file' ? ` (${entry.size} B)` : '/';
-        return `- \`${entry.path}\`${sizeLabel} - ${entry.modifiedAt}`;
-    }).join('\n');
 }
 
 async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
@@ -1656,7 +1656,6 @@ export const edit_memory = tool_edit_memory;
 export const delete_memory = tool_delete_memory;
 export const apply_patch_memory = tool_apply_patch_memory;
 export const apply_patch = tool_apply_patch;
-export const list_files = tool_list_files;
 export const delete_file = tool_delete_file;
 export const copy_between_nodes = tool_copy_between_nodes;
 export const image_crop = tool_image_crop;
@@ -1809,13 +1808,13 @@ export const definitions = [
         {
             name: 'read',
             defaultInject: true,
-            description: 'Read a file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
+            description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
             parameters: {
                 type: 'object',
                 properties: { 
                     filePath: { type: 'string' },
-                    startLine: { type: 'number', description: 'Starting line number (1-indexed, optional)' },
-                    endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional)' }
+                    startLine: { type: 'number', description: 'Starting line number/item number (1-indexed, optional)' },
+                    endLine: { type: 'number', description: 'Ending line number/item number (1-indexed, inclusive, optional)' }
                 },
                 required: ['filePath']
             }
@@ -1924,20 +1923,6 @@ export const definitions = [
                     input: { type: 'string', description: 'The apply_patch command text to execute against files under the current agent memory/ directory.' }
                 },
                 required: ['input']
-            }
-        },
-        {
-            name: 'list_files',
-            defaultInject: true,
-            description: 'List files under a directory. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Can recurse; isolated sessions on master are restricted to their agent folder.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    dirPath: { type: 'string', description: 'Directory path. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Defaults to .' },
-                    recursive: { type: 'boolean', description: 'Whether to recurse into subdirectories. Default: false' },
-                    includeHidden: { type: 'boolean', description: 'Whether to include dotfiles. Default: false' },
-                    limit: { type: 'number', description: 'Maximum number of entries to return. Default: 200, max: 1000' }
-                }
             }
         },
         {

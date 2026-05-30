@@ -2,13 +2,13 @@ export const CLI_NODE_CAPABILITIES = {
   tools: [
     {
       name: 'read',
-      description: 'Read a file. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
+      description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
       parameters: {
         type: 'object',
         properties: {
           filePath: { type: 'string' },
-          startLine: { type: 'number' },
-          endLine: { type: 'number' },
+          startLine: { type: 'number', description: 'Starting line number/item number (1-indexed, optional)' },
+          endLine: { type: 'number', description: 'Ending line number/item number (1-indexed, inclusive, optional)' },
         },
         required: ['filePath'],
       },

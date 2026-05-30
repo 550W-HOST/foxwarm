@@ -33,6 +33,11 @@ function resolveToolPath(filePath: string, ctx: NodeToolContext): string {
 }
 
 async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number) {
+  const stats = await fs.stat(fullPath);
+  if (stats.isDirectory()) {
+    return readDirectoryListing(fullPath, displayPath, startLine, endLine);
+  }
+
   const ext = path.extname(fullPath).toLowerCase();
   const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
   if (imageExts.includes(ext)) {
@@ -48,6 +53,73 @@ async function readResolvedPath(fullPath: string, displayPath: string, startLine
     content = lines.slice(start, end).join('\n');
   }
   return content;
+}
+
+type DirectoryListingEntry = {
+  name: string;
+  type: 'file' | 'directory' | 'symlink' | 'other';
+  size?: number;
+  modifiedAt: string;
+};
+
+function normalizeDirectoryListingStartEnd(startLine: number | undefined, endLine: number | undefined, totalItems: number): { startItem: number; endItem: number } {
+  const startItem = startLine !== undefined && Number.isFinite(Number(startLine))
+    ? Math.max(1, Math.floor(Number(startLine)))
+    : 1;
+  const endItem = endLine !== undefined && Number.isFinite(Number(endLine))
+    ? Math.max(0, Math.floor(Number(endLine)))
+    : Math.min(totalItems, startItem + 49);
+  return { startItem, endItem };
+}
+
+function formatDirectoryListingLine(entry: DirectoryListingEntry, itemNumber: number): string {
+  const name = entry.type === 'directory' ? `${entry.name}/` : entry.name;
+  const sizeLabel = entry.type === 'file' && typeof entry.size === 'number' ? `, ${entry.size} B` : '';
+  const typeLabel = entry.type === 'directory' ? 'dir' : entry.type;
+  return `${itemNumber}. \`${name}\` (${typeLabel}${sizeLabel}) - ${entry.modifiedAt}`;
+}
+
+async function readDirectoryListing(fullPath: string, displayPath: string, startLine?: number, endLine?: number): Promise<string> {
+  const dirents = await fs.readdir(fullPath, { withFileTypes: true });
+  dirents.sort((a, b) => a.name.localeCompare(b.name));
+
+  const entries: DirectoryListingEntry[] = [];
+  for (const dirent of dirents) {
+    const entryPath = path.join(fullPath, dirent.name);
+    const entryStats = await fs.lstat(entryPath);
+    entries.push({
+      name: dirent.name,
+      type: dirent.isDirectory() ? 'directory' : (dirent.isFile() ? 'file' : (dirent.isSymbolicLink() ? 'symlink' : 'other')),
+      size: dirent.isFile() ? entryStats.size : undefined,
+      modifiedAt: entryStats.mtime.toISOString(),
+    });
+  }
+
+  const totalItems = entries.length;
+  const { startItem, endItem } = normalizeDirectoryListingStartEnd(startLine, endLine, totalItems);
+  const pageEntries = startItem <= endItem
+    ? entries.slice(Math.max(0, startItem - 1), Math.min(totalItems, endItem))
+    : [];
+
+  const lines: string[] = [`Directory listing for \`${displayPath}\``, ''];
+  if (pageEntries.length === 0) {
+    lines.push(totalItems === 0 ? '(empty directory)' : '(no items in requested range)');
+  } else {
+    lines.push(...pageEntries.map((entry, index) => formatDirectoryListingLine(entry, startItem + index)));
+  }
+
+  lines.push('');
+  const shownStart = pageEntries.length > 0 ? startItem : 0;
+  const shownEnd = pageEntries.length > 0 ? startItem + pageEntries.length - 1 : 0;
+  const footer = [`Showing items ${shownStart}-${shownEnd} of ${totalItems}.`];
+  const nextStart = startItem + pageEntries.length;
+  if (nextStart <= totalItems) {
+    const nextEnd = Math.min(totalItems, nextStart + 49);
+    footer.push(`Next page: read({ filePath: ${JSON.stringify(displayPath)}, startLine: ${nextStart}, endLine: ${nextEnd} })`);
+  }
+  lines.push(footer.join(' '));
+
+  return lines.join('\n');
 }
 
 export async function read(args: ToolArgs, ctx: NodeToolContext = {}) {

@@ -63,6 +63,40 @@ test('file tools resolve relative paths from session cwd', async () => {
   }
 });
 
+test('read lists directories with item-number pagination', async () => {
+  const agentDir = getAgentDir('main');
+  const baseDir = path.join(agentDir, '.temp', `read-dir-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const nestedDir = path.join(baseDir, 'z-subdir');
+  const ctx = { session: { agent: 'main' } };
+
+  try {
+    await fs.ensureDir(nestedDir);
+    await fs.writeFile(path.join(nestedDir, 'inside.txt'), 'nested');
+    for (let i = 1; i <= 55; i += 1) {
+      await fs.writeFile(path.join(baseDir, `item-${String(i).padStart(3, '0')}.txt`), `item ${i}`);
+    }
+
+    const firstPage = String(await read({ filePath: baseDir }, ctx as any));
+    assert.ok(firstPage.includes(`Directory listing for \`${baseDir}\``));
+    assert.match(firstPage, /1\. `item-001\.txt` \(file, \d+ B\)/);
+    assert.match(firstPage, /50\. `item-050\.txt` \(file, \d+ B\)/);
+    assert.doesNotMatch(firstPage, /51\. `item-051\.txt`/);
+    assert.match(firstPage, /Showing items 1-50 of 56\./);
+    assert.match(firstPage, /Next page: read\(\{ filePath: .*startLine: 51, endLine: 56 \}\)/);
+
+    const secondPage = String(await read({ filePath: baseDir, startLine: 51, endLine: 56 }, ctx as any));
+    assert.doesNotMatch(secondPage, /50\. `item-050\.txt`/);
+    assert.match(secondPage, /51\. `item-051\.txt` \(file, \d+ B\)/);
+    assert.match(secondPage, /55\. `item-055\.txt` \(file, \d+ B\)/);
+    assert.match(secondPage, /56\. `z-subdir\/` \(dir\)/);
+    assert.doesNotMatch(secondPage, /inside\.txt/);
+    assert.match(secondPage, /Showing items 51-56 of 56\./);
+    assert.doesNotMatch(secondPage, /Next page:/);
+  } finally {
+    await fs.remove(baseDir);
+  }
+});
+
 function extractWriteContentRef(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const match = message.match(/contentRef:\s*"([^"]+)"/);
