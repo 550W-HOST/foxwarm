@@ -550,9 +550,14 @@ test('change_directory and compress_session are removed entirely', () => {
 });
 
 test('builtin file/browser tool schemas no longer expose node selector parameters', () => {
-  for (const name of ['read', 'write', 'edit', 'apply_patch', 'list_files', 'delete_file', 'browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact']) {
+  for (const name of ['read', 'write', 'edit', 'apply_patch', 'delete_file', 'browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact']) {
     const def = definitions.find(entry => entry.name === name);
     assert.ok(def, `${name} should exist`);
     assert.equal(Object.prototype.hasOwnProperty.call(def?.parameters?.properties || {}, 'node'), false, `${name} should not expose node parameter`);
   }
+});
+
+test('list_files is removed from builtin tool definitions', () => {
+  assert.equal(definitions.some(def => def.name === 'list_files'), false);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'list_files'), false);
 });

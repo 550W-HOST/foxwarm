@@ -185,4 +185,25 @@ input, textarea, select {
     margin-top: 0.8em;
     margin-bottom: 0.35em;
   }
+
+  .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    color: rgb(59 130 246);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+
+  .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)):hover {
+    color: rgb(37 99 235);
+    text-decoration-style: solid;
+  }
+
+  .dark .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    color: rgb(147 197 253);
+  }
+
+  .dark .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)):hover {
+    color: rgb(191 219 254);
+  }
 }

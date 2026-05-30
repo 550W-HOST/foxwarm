@@ -196,15 +196,36 @@ marked.setOptions({
 const sanitizeHtml = (html: string): string => {
   return DOMPurify.sanitize(html, {
     FORBID_TAGS: ['img', 'video', 'audio', 'iframe', 'embed', 'object', 'script', 'style'],
-    FORBID_ATTR: ['src', 'href', 'xlink:href', 'action', 'formaction'],
+    FORBID_ATTR: ['src', 'xlink:href', 'action', 'formaction'],
     ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 's', 'code', 'pre', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td'],
-    ALLOWED_ATTR: ['class'],
+    ALLOWED_ATTR: ['class', 'href', 'target', 'rel'],
+    ALLOW_UNKNOWN_PROTOCOLS: false,
+    ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel):/i,
   })
 }
 
 export const renderMarkdown = (text: string): string => {
   const html = marked(text) as string
-  return sanitizeHtml(html)
+  const sanitized = sanitizeHtml(html)
+  // Add target="_blank" and rel="noopener noreferrer" to all <a> tags
+  return sanitized.replace(/<a\s/g, '<a target="_blank" rel="noopener noreferrer" ')
+}
+
+/** Click handler for markdown containers: intercepts link clicks with a confirmation dialog */
+export const handleMarkdownLinkClick = (e: MouseEvent<HTMLDivElement>) => {
+  const target = e.target as HTMLElement
+  const anchor = target.closest('a')
+  if (!anchor) return
+
+  const href = anchor.getAttribute('href')
+  if (!href) return
+
+  e.preventDefault()
+  e.stopPropagation()
+
+  if (window.confirm(`Open this link in a new tab?\n\n${href}`)) {
+    window.open(href, '_blank', 'noopener,noreferrer')
+  }
 }
 
 export const IconToggleButton = ({ active, title, onClick, children }: { active: boolean; title: string; onClick: (e: MouseEvent<HTMLButtonElement>) => void; children: ReactNode }) => (

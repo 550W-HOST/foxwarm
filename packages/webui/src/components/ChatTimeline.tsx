@@ -10,6 +10,7 @@ import {
   isLightweightStructuredSystem,
   isSystemLikeText,
   renderMarkdown,
+  handleMarkdownLinkClick,
   renderSystemTextWithSessionLinks,
   type Message,
   type ToolTagItem,
@@ -142,7 +143,7 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
 
 const MarkdownContent = memo(function MarkdownContent({ text, className }: { text: string; className: string }) {
   const html = useMemo(() => renderMarkdown(text), [text])
-  return <div className={className} dangerouslySetInnerHTML={{ __html: html }} />
+  return <div className={className} dangerouslySetInnerHTML={{ __html: html }} onClick={handleMarkdownLinkClick} />
 })
 
 const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { systemText: string; isUser: boolean }) {

@@ -1,4 +1,5 @@
 import fs from 'fs-extra';
+import crypto from 'crypto';
 import os from 'os';
 import path from 'path';
 import * as vector from './vector';
@@ -80,6 +81,92 @@ interface ToolContext {
 // Tool function type
 type ToolArgs = Record<string, any>;
 type UnifiedToolSource = 'builtin' | 'mcp' | 'node';
+
+type PendingWriteRef = {
+    id: string;
+    scopeKey: string;
+    agentName: string;
+    fullPath: string;
+    displayPath: string;
+    content: string;
+    createdAt: number;
+    expiresAt: number;
+    sizeBytes: number;
+};
+
+const PENDING_WRITE_REF_TTL_MS = 15 * 60 * 1000;
+const PENDING_WRITE_REF_MAX_ENTRIES = 32;
+const PENDING_WRITE_REF_MAX_CONTENT_BYTES = 2 * 1024 * 1024;
+const PENDING_WRITE_REF_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+const pendingWriteRefs = new Map<string, PendingWriteRef>();
+
+function getPendingWriteScopeKey(ctx: ToolContext, agentName: string): string {
+    return ctx.sessionId ? `session:${ctx.sessionId}` : `agent:${agentName}`;
+}
+
+function prunePendingWriteRefs(now = Date.now()) {
+    for (const [id, ref] of pendingWriteRefs.entries()) {
+        if (ref.expiresAt <= now) {
+            pendingWriteRefs.delete(id);
+        }
+    }
+
+    while (pendingWriteRefs.size > PENDING_WRITE_REF_MAX_ENTRIES) {
+        const oldest = [...pendingWriteRefs.values()].sort((a, b) => a.createdAt - b.createdAt)[0];
+        if (!oldest) break;
+        pendingWriteRefs.delete(oldest.id);
+    }
+
+    let totalBytes = [...pendingWriteRefs.values()].reduce((sum, ref) => sum + ref.sizeBytes, 0);
+    while (totalBytes > PENDING_WRITE_REF_MAX_TOTAL_BYTES) {
+        const oldest = [...pendingWriteRefs.values()].sort((a, b) => a.createdAt - b.createdAt)[0];
+        if (!oldest) break;
+        pendingWriteRefs.delete(oldest.id);
+        totalBytes -= oldest.sizeBytes;
+    }
+}
+
+function registerPendingWriteRef(ctx: ToolContext, agentName: string, fullPath: string, displayPath: string, content: string): PendingWriteRef | null {
+    const sizeBytes = Buffer.byteLength(content, 'utf8');
+    if (sizeBytes > PENDING_WRITE_REF_MAX_CONTENT_BYTES) {
+        return null;
+    }
+
+    const now = Date.now();
+    prunePendingWriteRefs(now);
+    const id = `write_${crypto.randomBytes(6).toString('hex')}`;
+    const ref: PendingWriteRef = {
+        id,
+        scopeKey: getPendingWriteScopeKey(ctx, agentName),
+        agentName,
+        fullPath,
+        displayPath,
+        content,
+        createdAt: now,
+        expiresAt: now + PENDING_WRITE_REF_TTL_MS,
+        sizeBytes,
+    };
+    pendingWriteRefs.set(id, ref);
+    prunePendingWriteRefs(now);
+    return ref;
+}
+
+function consumePendingWriteRef(ctx: ToolContext, agentName: string, refId: string, fullPath: string): string {
+    prunePendingWriteRefs();
+    const ref = pendingWriteRefs.get(refId);
+    if (!ref) {
+        throw new Error(`Pending write contentRef not found or expired: ${refId}. Re-run write with content, or use a fresh contentRef from the previous write error.`);
+    }
+    if (ref.scopeKey !== getPendingWriteScopeKey(ctx, agentName) || ref.agentName !== agentName) {
+        throw new Error(`Pending write contentRef ${refId} is not available in this session/agent.`);
+    }
+    if (path.resolve(ref.fullPath) !== path.resolve(fullPath)) {
+        throw new Error(`Pending write contentRef ${refId} was created for ${ref.displayPath}; it cannot be used to write a different file.`);
+    }
+
+    pendingWriteRefs.delete(refId);
+    return ref.content;
+}
 
 const WORKSPACE = WORKSPACE_DIR;
 fs.ensureDirSync(getAgentDir('main'));
@@ -185,6 +272,11 @@ function resolveAgentMemoryPath(filePath: string, agentName: string = 'main'): s
 }
 
 async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number) {
+    const stats = await fs.stat(fullPath);
+    if (stats.isDirectory()) {
+        return readDirectoryListing(fullPath, displayPath, startLine, endLine);
+    }
+
     const ext = path.extname(fullPath).toLowerCase();
     const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
 
@@ -214,6 +306,77 @@ async function readResolvedPath(fullPath: string, displayPath: string, startLine
     }
 
     return content;
+}
+
+type DirectoryListingEntry = {
+    name: string;
+    type: 'file' | 'directory' | 'symlink' | 'other';
+    size?: number;
+    modifiedAt: string;
+};
+
+function normalizeDirectoryListingStartEnd(startLine: number | undefined, endLine: number | undefined, totalItems: number): { startItem: number; endItem: number } {
+    const startItem = startLine !== undefined && Number.isFinite(Number(startLine))
+        ? Math.max(1, Math.floor(Number(startLine)))
+        : 1;
+    const endItem = endLine !== undefined && Number.isFinite(Number(endLine))
+        ? Math.max(0, Math.floor(Number(endLine)))
+        : Math.min(totalItems, startItem + 49);
+    return { startItem, endItem };
+}
+
+function formatDirectoryListingLine(entry: DirectoryListingEntry, itemNumber: number): string {
+    const name = entry.type === 'directory' ? `${entry.name}/` : entry.name;
+    const sizeLabel = entry.type === 'file' && typeof entry.size === 'number' ? `, ${entry.size} B` : '';
+    const typeLabel = entry.type === 'directory' ? 'dir' : entry.type;
+    return `${itemNumber}. \`${name}\` (${typeLabel}${sizeLabel}) - ${entry.modifiedAt}`;
+}
+
+async function readDirectoryListing(fullPath: string, displayPath: string, startLine?: number, endLine?: number): Promise<string> {
+    const dirents = await fs.readdir(fullPath, { withFileTypes: true });
+    dirents.sort((a, b) => a.name.localeCompare(b.name));
+
+    const entries: DirectoryListingEntry[] = [];
+    for (const dirent of dirents) {
+        const entryPath = path.join(fullPath, dirent.name);
+        const entryStats = await fs.lstat(entryPath);
+        entries.push({
+            name: dirent.name,
+            type: dirent.isDirectory() ? 'directory' : (dirent.isFile() ? 'file' : (dirent.isSymbolicLink() ? 'symlink' : 'other')),
+            size: dirent.isFile() ? entryStats.size : undefined,
+            modifiedAt: entryStats.mtime.toISOString(),
+        });
+    }
+
+    const totalItems = entries.length;
+    const { startItem, endItem } = normalizeDirectoryListingStartEnd(startLine, endLine, totalItems);
+    const pageEntries = startItem <= endItem
+        ? entries.slice(Math.max(0, startItem - 1), Math.min(totalItems, endItem))
+        : [];
+
+    const lines: string[] = [
+        `Directory listing for \`${displayPath}\``,
+        '',
+    ];
+
+    if (pageEntries.length === 0) {
+        lines.push(totalItems === 0 ? '(empty directory)' : '(no items in requested range)');
+    } else {
+        lines.push(...pageEntries.map((entry, index) => formatDirectoryListingLine(entry, startItem + index)));
+    }
+
+    lines.push('');
+    const shownStart = pageEntries.length > 0 ? startItem : 0;
+    const shownEnd = pageEntries.length > 0 ? startItem + pageEntries.length - 1 : 0;
+    const footer = [`Showing items ${shownStart}-${shownEnd} of ${totalItems}.`];
+    const nextStart = startItem + pageEntries.length;
+    if (nextStart <= totalItems) {
+        const nextEnd = Math.min(totalItems, nextStart + 49);
+        footer.push(`Next page: read({ filePath: ${JSON.stringify(displayPath)}, startLine: ${nextStart}, endLine: ${nextEnd} })`);
+    }
+    lines.push(footer.join(' '));
+
+    return lines.join('\n');
 }
 
 async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string) {
@@ -296,13 +459,40 @@ async function tool_read(args: ToolArgs, ctx: ToolContext) {
 }
 
 async function tool_write(args: ToolArgs, ctx: ToolContext) {
-    const { filePath, content, overwrite } = args;
+    const { filePath, overwrite } = args;
+    const contentRef = typeof args.contentRef === 'string' ? args.contentRef.trim() : '';
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
         checkPathAccess(fullPath, agentName);
     }
-    await writeResolvedPath(fullPath, content, overwrite === true, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`);
+
+    if (contentRef) {
+        if (typeof args.content === 'string') {
+            throw new Error('write accepts either content or contentRef, not both.');
+        }
+        if (overwrite !== true) {
+            throw new Error('write with contentRef requires overwrite=true.');
+        }
+        const content = consumePendingWriteRef(ctx, agentName, contentRef, fullPath);
+        await writeResolvedPath(fullPath, content, true, `File already exists: ${filePath}.`);
+        return 'File written successfully';
+    }
+
+    if (typeof args.content !== 'string') {
+        throw new Error('write requires content, or contentRef with overwrite=true from a previous write attempt.');
+    }
+
+    const exists = await fs.pathExists(fullPath);
+    if (exists && overwrite !== true) {
+        const pending = registerPendingWriteRef(ctx, agentName, fullPath, String(filePath), args.content);
+        const retryHint = pending
+            ? ` To overwrite using the same content without resending it, call write with filePath: ${JSON.stringify(filePath)}, overwrite: true, contentRef: ${JSON.stringify(pending.id)}. The contentRef expires in ${Math.floor(PENDING_WRITE_REF_TTL_MS / 60000)} minutes and only works in this session/agent for the same path.`
+            : ` The attempted content was too large to cache for contentRef retry; call write again with content and overwrite=true if you want to replace it.`;
+        throw new Error(`File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.${retryHint}`);
+    }
+
+    await writeResolvedPath(fullPath, args.content, overwrite === true, `File already exists: ${filePath}.`);
     return 'File written successfully';
 }
 
@@ -443,82 +633,6 @@ async function tool_apply_patch_memory(args: ToolArgs, ctx: ToolContext) {
         fullPath: resolveAgentMemoryPath(filePath, agentName),
         displayPath: normalizeMemoryRelativePath(filePath),
     }));
-}
-
-type ListFilesEntry = {
-    path: string;
-    type: 'file' | 'directory';
-    size?: number;
-    modifiedAt: string;
-};
-
-async function collectFileEntries(baseDir: string, relativeDir: string, options: {
-    recursive: boolean;
-    includeHidden: boolean;
-    limit: number;
-}, bucket: ListFilesEntry[]): Promise<void> {
-    if (bucket.length >= options.limit) {
-        return;
-    }
-
-    const fullDir = path.join(baseDir, relativeDir);
-    const entries = await fs.readdir(fullDir, { withFileTypes: true });
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-
-    for (const entry of entries) {
-        if (!options.includeHidden && entry.name.startsWith('.')) {
-            continue;
-        }
-        if (bucket.length >= options.limit) {
-            return;
-        }
-
-        const relPath = relativeDir ? path.posix.join(relativeDir.split(path.sep).join(path.posix.sep), entry.name) : entry.name;
-        const fullPath = path.join(fullDir, entry.name);
-        const stats = await fs.stat(fullPath);
-        bucket.push({
-            path: relPath,
-            type: entry.isDirectory() ? 'directory' : 'file',
-            size: entry.isDirectory() ? undefined : stats.size,
-            modifiedAt: stats.mtime.toISOString(),
-        });
-
-        if (options.recursive && entry.isDirectory()) {
-            await collectFileEntries(baseDir, path.join(relativeDir, entry.name), options, bucket);
-        }
-    }
-}
-
-async function tool_list_files(args: ToolArgs, ctx: ToolContext) {
-    const { dirPath = '.', recursive = false, includeHidden = false, limit = 200 } = args;
-    const agentName = ctx.session?.agent || 'main';
-    const fullPath = resolveAgentPath(dirPath, agentName, ctx.session?.cwd);
-
-    if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
-        checkPathAccess(fullPath, agentName);
-    }
-
-    const stats = await fs.stat(fullPath);
-    if (!stats.isDirectory()) {
-        throw new Error(`Not a directory: ${dirPath}`);
-    }
-
-    const entries: ListFilesEntry[] = [];
-    await collectFileEntries(fullPath, '', {
-        recursive: recursive === true,
-        includeHidden: includeHidden === true,
-        limit: Math.max(1, Math.min(Number(limit) || 200, 1000)),
-    }, entries);
-
-    const rootLabel = dirPath === '.' ? (ctx.session?.cwd || agentName) : dirPath;
-    if (entries.length === 0) {
-        return `No files found under \`${rootLabel}\`.`;
-    }
-
-    return `Files under \`${rootLabel}\` (${entries.length}):\n\n` + entries.map(entry => {
-        const sizeLabel = entry.type === 'file' ? ` (${entry.size} B)` : '/';
-        return `- \`${entry.path}\`${sizeLabel} - ${entry.modifiedAt}`;
-    }).join('\n');
 }
 
 async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
@@ -1542,7 +1656,6 @@ export const edit_memory = tool_edit_memory;
 export const delete_memory = tool_delete_memory;
 export const apply_patch_memory = tool_apply_patch_memory;
 export const apply_patch = tool_apply_patch;
-export const list_files = tool_list_files;
 export const delete_file = tool_delete_file;
 export const copy_between_nodes = tool_copy_between_nodes;
 export const image_crop = tool_image_crop;
@@ -1695,13 +1808,13 @@ export const definitions = [
         {
             name: 'read',
             defaultInject: true,
-            description: 'Read a file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
+            description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
             parameters: {
                 type: 'object',
                 properties: { 
                     filePath: { type: 'string' },
-                    startLine: { type: 'number', description: 'Starting line number (1-indexed, optional)' },
-                    endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional)' }
+                    startLine: { type: 'number', description: 'Starting line number/item number (1-indexed, optional)' },
+                    endLine: { type: 'number', description: 'Ending line number/item number (1-indexed, inclusive, optional)' }
                 },
                 required: ['filePath']
             }
@@ -1709,15 +1822,16 @@ export const definitions = [
         {
             name: 'write',
             defaultInject: true,
-            description: 'Write a file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
+            description: 'Write a file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed. Provide either content, or contentRef from a previous write "file exists" error with overwrite=true to reuse the cached attempted content for the same path.',
             parameters: {
                 type: 'object',
                 properties: { 
                     content: { type: 'string' },
+                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists. Use with overwrite=true and the same filePath to write the cached content without resending it.' },
                     filePath: { type: 'string' },
                     overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' }
                 },
-                required: ['filePath', 'content']
+                required: ['filePath']
             }
         },
         {
@@ -1809,20 +1923,6 @@ export const definitions = [
                     input: { type: 'string', description: 'The apply_patch command text to execute against files under the current agent memory/ directory.' }
                 },
                 required: ['input']
-            }
-        },
-        {
-            name: 'list_files',
-            defaultInject: true,
-            description: 'List files under a directory. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Can recurse; isolated sessions on master are restricted to their agent folder.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    dirPath: { type: 'string', description: 'Directory path. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Defaults to .' },
-                    recursive: { type: 'boolean', description: 'Whether to recurse into subdirectories. Default: false' },
-                    includeHidden: { type: 'boolean', description: 'Whether to include dotfiles. Default: false' },
-                    limit: { type: 'number', description: 'Maximum number of entries to return. Default: 200, max: 1000' }
-                }
             }
         },
         {
