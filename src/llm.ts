@@ -1019,15 +1019,6 @@ export async function chat(
         await sessionManager.appendSessionMessage(session, message);
     };
 
-    const appendTerminalModelTextAndReturn = async (text: string): Promise<ChatResult> => {
-        await appendMessage({
-            role: 'model',
-            parts: [{ text }],
-        });
-
-        return { text };
-    };
-
     // Get persistent context
     const agentName = session.agent || 'main';
     const systemPrompt = session.persistentMemorySnapshot || await buildSessionSystemPromptSnapshot({

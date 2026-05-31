@@ -1,5 +1,3 @@
-import fs from 'fs-extra';
-import path from 'path';
 import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from '../channel';
 import { logger } from '../common';
 import { CHANNELS_FILE } from '../config';

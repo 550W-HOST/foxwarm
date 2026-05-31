@@ -1,7 +1,7 @@
 import * as llm from '../llm';
 import { logger } from '../common';
 import { COMPACT_PERCENT, resolveModelConfig } from '../config';
-import { estimateSessionTokens, estimateTokenCount } from '../tokenCount';
+import { estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
 import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange } from './archive';
 import {

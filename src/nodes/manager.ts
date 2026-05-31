@@ -5,13 +5,9 @@
 
 import http from 'http';
 import crypto from 'crypto';
-import path from 'path';
-import fs from 'fs-extra';
 import { logger } from '../common';
-import { WORKSPACE_DIR } from '../config';
 import { NodeTransferFilePayload, NodeTransferWriteResult, readNodeTransferFile, writeNodeTransferFile } from '../nodeFileTransfer';
 import * as sessionManager from '../sessionManager';
-import * as browser from '../browser';
 import { WebSocket } from 'ws';
 import { isReservedNodeId } from './registry';
 
@@ -58,8 +54,6 @@ export class NodesManager {
   private toolCalls: Map<string, ToolCall> = new Map();
   private fileTransfers: Map<string, PendingFileTransfer> = new Map();
   private tools: Set<string> = new Set(); // Available tools
-  
-  private readonly WORKSPACE = WORKSPACE_DIR;
   
   constructor() {
     this.setupTools();
