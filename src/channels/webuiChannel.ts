@@ -233,6 +233,19 @@ export interface WebUIChannelOptions {
   enableTrigger?: boolean;
 }
 
+function buildChildrenMap(allSessions: Map<string, any>): Map<string, string[]> {
+  const childrenMap = new Map<string, string[]>();
+  for (const [id, session] of allSessions.entries()) {
+    if (session.parentSessionId) {
+      if (!childrenMap.has(session.parentSessionId)) {
+        childrenMap.set(session.parentSessionId, []);
+      }
+      childrenMap.get(session.parentSessionId)!.push(id);
+    }
+  }
+  return childrenMap;
+}
+
 export class WebUIChannel implements Channel {
   readonly name = 'webui';
   readonly platform = 'webui';
@@ -797,15 +810,7 @@ export class WebUIChannel implements Channel {
             const allSessions = sessionManager.getAllSessions();
             
             // Build parent-to-children map
-            const childrenMap = new Map<string, string[]>();
-            for (const [id, session] of allSessions.entries()) {
-              if (session.parentSessionId) {
-                if (!childrenMap.has(session.parentSessionId)) {
-                  childrenMap.set(session.parentSessionId, []);
-                }
-                childrenMap.get(session.parentSessionId)!.push(id);
-              }
-            }
+            const childrenMap = buildChildrenMap(allSessions);
             
             const sessions = Array.from(allSessions.entries())
               .map(([id, session]) => ({
@@ -1076,15 +1081,7 @@ export class WebUIChannel implements Channel {
           try {
             const allSessions = sessionManager.getAllSessions();
 
-            const childrenMap = new Map<string, string[]>();
-            for (const [id, session] of allSessions.entries()) {
-              if (session.parentSessionId) {
-                if (!childrenMap.has(session.parentSessionId)) {
-                  childrenMap.set(session.parentSessionId, []);
-                }
-                childrenMap.get(session.parentSessionId)!.push(id);
-              }
-            }
+            const childrenMap = buildChildrenMap(allSessions);
             
             // Build tree structure
             const agents = Array.from(allSessions.entries()).map(([id, session]) => ({

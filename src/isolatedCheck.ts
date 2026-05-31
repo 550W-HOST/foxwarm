@@ -6,8 +6,8 @@
 import * as sessionManager from './sessionManager';
 import { AGENTS_DIR, getAgentDir } from './config';
 import * as path from 'path';
-import os from 'os';
 import { buildIsolatedToolRules, evaluatePermission } from './permissions';
+import { expandHomePath } from './utils/pathResolve';
 
 /**
  * Check if isolated session can use a specific tool
@@ -72,10 +72,7 @@ function resolvePermissionPath(filePath: unknown, agentName: string): string | n
   if (typeof filePath !== 'string' || filePath.trim().length === 0) {
     return null;
   }
-  const rawPath = filePath.trim();
-  const expandedPath = rawPath === '~'
-    ? os.homedir()
-    : (rawPath.startsWith('~/') || rawPath.startsWith('~\\') ? path.join(os.homedir(), rawPath.slice(2)) : rawPath);
+  const expandedPath = expandHomePath(filePath.trim());
   const agentDir = getAgentDir(agentName);
   return path.normalize(path.isAbsolute(expandedPath) ? path.resolve(expandedPath) : path.resolve(agentDir, expandedPath));
 }
