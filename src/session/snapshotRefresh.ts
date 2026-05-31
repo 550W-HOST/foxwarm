@@ -5,7 +5,7 @@ export const AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS = 60 * 60 * 1000;
 
 type RefreshSessionSnapshot = (sessionId: string) => Promise<unknown>;
 
-export function getSessionIdleMs(session: Pick<Session, 'meta'>, now: number = Date.now()): number {
+function getSessionIdleMs(session: Pick<Session, 'meta'>, now: number = Date.now()): number {
   const lastMessageTime = session.meta?.lastMessageTime;
   if (typeof lastMessageTime !== 'number' || !Number.isFinite(lastMessageTime)) {
     return 0;
@@ -14,7 +14,7 @@ export function getSessionIdleMs(session: Pick<Session, 'meta'>, now: number = D
   return Math.max(0, now - lastMessageTime);
 }
 
-export function shouldAutoRefreshSessionSnapshot(session: Pick<Session, 'meta'>, now: number = Date.now()): boolean {
+function shouldAutoRefreshSessionSnapshot(session: Pick<Session, 'meta'>, now: number = Date.now()): boolean {
   return getSessionIdleMs(session, now) > AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS;
 }
 
