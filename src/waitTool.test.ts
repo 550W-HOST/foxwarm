@@ -192,6 +192,82 @@ test('compact maintenance queue items are wait-neutral and keep timeout token va
   }
 });
 
+test('stop during tool execution does not launch auto compact from stale usage', async () => {
+  const sessionId = makeSessionId('wait_stop_skips_stale_usage_compact');
+  const router = new MessageRouter();
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
+  let mainTurnCallCount = 0;
+  let compactJobCallCount = 0;
+
+  try {
+    (vector as any).scheduleSessionArchiveIndex = async () => 0;
+    const session = await seedCompactableHistory(sessionId);
+    session.compactThresholdTokens = 1;
+    await sessionManager.saveSession(sessionId);
+
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      if ((activeSession as any).__compactJob) {
+        compactJobCallCount += 1;
+        const toolCall = {
+          id: 'unexpected-stop-compact-plan',
+          name: 'submit_compact_plan',
+          args: {
+            createBlocksJson: JSON.stringify([{
+              level: 1,
+              sourceKind: 'message',
+              sourceStart: 1,
+              sourceEnd: 2,
+              summary: 'unexpected compact after stop',
+            }]),
+          },
+        };
+        return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      }
+
+      mainTurnCallCount += 1;
+      if (parts?.length) {
+        await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+      }
+      const toolCall = { id: 'stop-during-tool-call', name: 'read', args: { filePath: 'unused' } };
+      await sessionManager.appendSessionMessage(activeSession, {
+        role: 'model',
+        parts: [{ functionCall: toolCall }],
+      });
+      return {
+        text: '',
+        toolCalls: [toolCall],
+        allParts: [{ functionCall: toolCall }],
+        usage: { inputTokens: 100, outputTokens: 0, cachedTokens: 0 },
+      };
+    };
+
+    (llm as any).executeTools = async () => {
+      await sessionManager.requestSessionStop(sessionId);
+      return {
+        parts: [{ functionResponse: { tool_use_id: 'stop-during-tool-call', name: 'read', response: { output: 'stopped' } } }],
+      };
+    };
+
+    await (router as any).runSessionTurn(sessionId, {
+      parts: [{ text: 'trigger stop during tool execution' }],
+    });
+
+    await sleep(50);
+
+    const finalSession = await sessionManager.getSession(sessionId);
+    assert.equal(mainTurnCallCount, 1);
+    assert.equal(compactJobCallCount, 0);
+    assert.equal(finalSession.queue.some(item => item.type === 'compact' || item.type === 'compact-commit'), false);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
+    await cleanupSession(sessionId);
+  }
+});
+
 test('idle compaction request starts immediately without enqueueing compact initiator item', async () => {
   const sessionId = makeSessionId('wait_compact_direct_start');
   const originalChat = llm.chat;

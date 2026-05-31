@@ -606,6 +606,7 @@ export class MessageRouter {
       let finalResponse = '';
       let finalUsage = null;
       let lastTextBroadcasted = false;
+      let stoppedByUser = false;
       while (iteration < 500) {
         const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
         if (pendingCompaction === 'stop') {
@@ -621,6 +622,7 @@ export class MessageRouter {
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
           session.stopping = false;
+          stoppedByUser = true;
           await sessionManager.saveSession(session.id);
 
           finalResponse = finalResponse
@@ -636,6 +638,7 @@ export class MessageRouter {
           if (session.stopping && llm.isAbortError(e)) {
             logger.info({ sessionId: session.id }, 'In-flight LLM request aborted by stop signal');
             session.stopping = false;
+            stoppedByUser = true;
             await sessionManager.saveSession(session.id);
 
             finalResponse = finalResponse
@@ -686,6 +689,18 @@ export class MessageRouter {
 
         if ((toolResultMsg as any).__toolLoopControl?.stopCurrentTurn) {
           logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
+          break;
+        }
+
+        if (session.stopping) {
+          logger.info({ sessionId: session.id, iteration }, 'Session stopping flag detected after tool execution, halting tool call loop');
+          session.stopping = false;
+          stoppedByUser = true;
+          await sessionManager.saveSession(session.id);
+
+          finalResponse = finalResponse
+            ? finalResponse + '\n\n_[Execution stopped by user]_'
+            : '_[Execution stopped by user]_';
           break;
         }
 
@@ -740,7 +755,9 @@ export class MessageRouter {
       await this.maybeQueueChildReminder(session);
       await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted);
       await this.maybeAppendGoalEndTurnReminder(session);
-      await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
+      if (!stoppedByUser) {
+        await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
+      }
     } catch (e: any) {
       logger.error(e, 'Error handling message');
       const errorText = `Error: ${e?.message || 'Unknown error'}`;
