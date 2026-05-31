@@ -129,7 +129,7 @@ export function getSessionFrontierStore(sessionId: string): DiskJsonData<{ v: nu
   return store;
 }
 
-export function getNextSessionBlockId(session: Session): number {
+function getNextSessionBlockId(session: Session): number {
   if (typeof session.nextBlockId === 'number' && session.nextBlockId > 0) {
     return session.nextBlockId;
   }
@@ -211,7 +211,7 @@ export async function loadSessionFrontier(session: Session): Promise<void> {
   }
 }
 
-export async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
+async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
   const createdAt = Date.now();
   return Promise.all(blocks.map(async (block) => {
     const id = getNextSessionBlockId(session);
@@ -256,10 +256,6 @@ export async function appendBlocksToArchive(session: Session, blocks: CreateArch
   await writeArchiveBlocks(records);
   await refreshSessionArchiveImportState(session.id, 'blocks');
   return records;
-}
-
-export async function readArchiveBlocks(sessionId: string): Promise<ArchiveBlockRecord[]> {
-  return readEffectiveArchiveBlocks(sessionId);
 }
 
 export async function readArchiveBlocksByIdRange(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
@@ -308,11 +304,11 @@ export function formatArchiveBlockTimeRange(record: ArchiveBlockTimeRangeInput):
 
 export type ArchiveBlockContextTextInput = Pick<ArchiveBlockRecord, 'id' | 'level' | 'rawStartSeq' | 'rawEndSeq' | 'summary'> & ArchiveBlockTimeRangeInput;
 
-export function formatArchiveBlockRawRange(record: Pick<ArchiveBlockRecord, 'rawStartSeq' | 'rawEndSeq'>): string {
+function formatArchiveBlockRawRange(record: Pick<ArchiveBlockRecord, 'rawStartSeq' | 'rawEndSeq'>): string {
   return `raw${formatSeqRange(record.rawStartSeq, record.rawEndSeq)}`;
 }
 
-export function formatArchiveBlockContextPrefix(record: Omit<ArchiveBlockContextTextInput, 'summary'>): string {
+function formatArchiveBlockContextPrefix(record: Omit<ArchiveBlockContextTextInput, 'summary'>): string {
   return `[CTX-BLOCK L${record.level} B#${record.id} ${formatArchiveBlockRawRange(record)}${formatArchiveBlockTimeRange(record)}]`;
 }
 
@@ -374,36 +370,4 @@ export async function renderHistoryFromFrontier(session: Session, frontier?: Con
 
 export function cloneSessionFrontier(session: Session): ContextFrontierItem[] {
   return cloneFrontier(ensureContextFrontier(session)) || [];
-}
-
-export async function copyLayeredContextFiles(sourceSessionId: string, targetSessionId: string): Promise<void> {
-  const sourceBlockArchive = getSessionBlockArchiveLogPath(sourceSessionId);
-  const targetBlockArchive = getSessionBlockArchiveLogPath(targetSessionId);
-  if (await fs.pathExists(sourceBlockArchive)) {
-    await fs.ensureDir(path.dirname(targetBlockArchive));
-    await fs.copy(sourceBlockArchive, targetBlockArchive, { overwrite: true });
-  }
-
-  const sourceFrontier = getSessionFrontierPath(sourceSessionId);
-  const targetFrontier = getSessionFrontierPath(targetSessionId);
-  if (await fs.pathExists(sourceFrontier)) {
-    await fs.ensureDir(path.dirname(targetFrontier));
-    await fs.copy(sourceFrontier, targetFrontier, { overwrite: true });
-  }
-}
-
-export async function moveLayeredContextFiles(oldSessionId: string, newSessionId: string): Promise<void> {
-  const oldBlockArchive = getSessionBlockArchiveLogPath(oldSessionId);
-  const newBlockArchive = getSessionBlockArchiveLogPath(newSessionId);
-  if (await fs.pathExists(oldBlockArchive)) {
-    await fs.ensureDir(path.dirname(newBlockArchive));
-    await fs.move(oldBlockArchive, newBlockArchive, { overwrite: true });
-  }
-
-  const oldFrontier = getSessionFrontierPath(oldSessionId);
-  const newFrontier = getSessionFrontierPath(newSessionId);
-  if (await fs.pathExists(oldFrontier)) {
-    await fs.ensureDir(path.dirname(newFrontier));
-    await fs.move(oldFrontier, newFrontier, { overwrite: true });
-  }
 }
