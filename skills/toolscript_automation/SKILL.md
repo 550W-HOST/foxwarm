@@ -262,6 +262,217 @@ After `run_script(...)` or `start_toolscript_run(...)`, inspect:
   - why the run stopped and what it needs next
   - if `waitingReason="timeout"`, the run paused at a safe checkpoint and the result should tell you that `continue_script(...)` can keep executing it
 
+## Common Tool Return Shapes
+
+When you `call_tool(...)` inside ToolScript, the return value is the **direct result** from the tool implementation (normalized to Python-native types). Here are the shapes for the most commonly used builtin tools:
+
+### `call_tool("read", {"filePath": "..."})`
+
+- **File (text):** returns a **string** — the file content (or the requested line range).
+- **Directory:** returns a **string** — a formatted listing like:
+  ```
+  Directory listing for `src/`
+
+  1. `config.ts` (file, 1234 B) - 2026-05-01T12:00:00.000Z
+  2. `utils/` (dir) - 2026-05-01T12:00:00.000Z
+
+  Showing items 1-2 of 2.
+  ```
+- **Image file** (`.png`, `.jpg`, etc.): returns a **dict** with keys `output`, `mimeType`, `sizeBytes`, `inlineData`.
+
+Typical usage:
+
+```python
+content = call_tool("read", {"filePath": "src/main.ts"})
+# content is a string
+lines = content.split("\n")
+```
+
+### `call_tool("exec", {"command": "...", "cwd": "...", "timeout": 15})`
+
+Returns a **string**. The shape depends on whether the command finishes within the timeout:
+
+- **Completed:** the raw stdout+stderr output as a string. If the working directory changed, a notice line is prepended:
+  ```
+  Working directory changed to `/some/path` (session cwd updated).
+
+  <actual command output>
+  ```
+- **Truncated output** (>10k tokens): wrapped with `[OUTPUT TOO LONG]` markers at start/end, middle replaced with `[...TRUNCATED...]`, and a path to the full log file at the end.
+- **Background timeout:** starts with `[Process running longer than Ns]`, includes partial output, then a footer with PID and log file path.
+
+Typical usage:
+
+```python
+output = call_tool("exec", {"command": "git status", "cwd": "/home/user/repo"})
+# output is a string; parse it as needed
+if "nothing to commit" in output:
+    print("clean")
+```
+
+### `call_tool("write", {"filePath": "...", "content": "...", "overwrite": True})`
+
+Returns the **string** `"File written successfully"` on success.
+
+Throws an error if the file already exists and `overwrite` is not `True`.
+
+```python
+result = call_tool("write", {"filePath": "output.txt", "content": "hello", "overwrite": True})
+# result == "File written successfully"
+```
+
+### `call_tool("edit", {"filePath": "...", "oldText": "...", "newText": "..."})`
+
+Returns the **string** `"File edited successfully"` on success.
+
+Throws if `oldText` is not found or matches multiple locations.
+
+```python
+result = call_tool("edit", {
+    "filePath": "src/config.ts",
+    "oldText": "port: 3000",
+    "newText": "port: 8080",
+})
+# result == "File edited successfully"
+```
+
+### `call_tool("apply_patch", {"input": "..."})`
+
+Returns a **string** summarizing the operations:
+
+```
+Patch applied successfully.
+- Updated src/foo.ts
+- Added src/bar.ts
+- Deleted old/baz.ts
+```
+
+### `call_tool("search_tools", {"query": "...", "sources": ["builtin"], "limit": 5})`
+
+Returns a **dict**:
+
+```python
+{
+    "count": 3,           # number of results returned (capped by limit)
+    "totalMatched": 12,   # total matches before limit
+    "tools": [
+        {
+            "source": "builtin",
+            "toolId": "builtin:read",
+            "name": "read",
+            "description": "Read a file or list a directory...",
+            "inputSchema": {...},       # present for first 10 results
+            "directExposed": True,
+            "hidden": False,
+        },
+        ...
+    ],
+    "warnings": [...]     # only present if there were errors
+}
+```
+
+### `call_tool("search_vector", {"query": "...", "limit": 5})`
+
+Returns a **dict** with search results from vector memory.
+
+### `request_model_without_context(prompt)`
+
+Returns a **dict** with a single key:
+
+```python
+result = request_model_without_context("Summarize: ...")
+# result == {"text": "The summary is..."}
+text = result["text"]
+```
+
+You can also pass a `model` keyword argument:
+
+```python
+result = request_model_without_context("Summarize: ...", model="openai/gpt-4.1-mini")
+```
+
+## Known Limitations / Gotchas
+
+### No `os.path` module
+
+ToolScript runs on [Monty](https://github.com/pydantic/monty) (a Python-subset interpreter in JS). While `import os` works for some things (e.g., `os.getcwd()`), **`os.path` is not available**:
+
+```python
+import os
+os.path.join("a", "b")  # ❌ AttributeError: 'module' object has no attribute 'path'
+```
+
+Workaround: use string concatenation or f-strings for paths, or call `exec` with shell commands.
+
+```python
+path = f"{base_dir}/{filename}"
+```
+
+### Available stdlib modules
+
+These work: `json`, `re`, `math`, `os` (partial — no `os.path`).
+
+These do **not** work: `os.path`, `pathlib`, `subprocess`, `sys`, `typing` (at runtime), `collections`, `datetime`, and most other stdlib modules. If you need filesystem operations, use `call_tool("exec", ...)` or `call_tool("read", ...)`.
+
+### Helper functions must be defined before `main()`
+
+```python
+# ✅ Correct
+def helper(x):
+    return x * 2
+
+def main(args):
+    return helper(3)
+```
+
+```python
+# ❌ Wrong — helper not yet defined when main runs
+def main(args):
+    return helper(3)
+
+def helper(x):
+    return x * 2
+```
+
+### `def main(args):` is required
+
+Every ToolScript must define `def main(args):` as its entrypoint. The script cannot rely on top-level expressions for the result.
+
+### Return value must be explicit
+
+`main()` must explicitly `return` a value. If you forget the return statement, the run result will be `None`/`null`.
+
+### `print()` goes to `stdout` in the run result
+
+`print(...)` output accumulates in the run's `stdout` field. It does not appear in the outer session. Use it for debugging/logging within the script.
+
+### No `import` of local files
+
+You cannot import other `.py` files. Each script is self-contained. If you need shared logic, define it as helper functions within the same script file.
+
+### Error handling
+
+If `call_tool(...)` throws (e.g., file not found, permission denied), the entire script fails unless you catch it:
+
+```python
+def main(args):
+    try:
+        content = call_tool("read", {"filePath": "maybe-missing.txt"})
+    except Exception as e:
+        content = None
+        print(f"read failed: {e}")
+    return {"content": content}
+```
+
+### Script resource limits
+
+- **Timeout:** 30s per run/continue slice by default (configurable via `timeoutSecs`)
+- **Memory:** 64 MB
+- **Max allocations:** 200,000
+- **Max recursion depth:** 200
+
+If the timeout is hit at a safe checkpoint, the run pauses with `waitingReason="timeout"` and can be resumed with `continue_script(...)`.
+
 ## Current limitations / cautions
 
 - there is **no `ask_user(...)`** host API yet
