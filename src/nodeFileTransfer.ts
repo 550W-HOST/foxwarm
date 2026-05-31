@@ -1,8 +1,8 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
-import os from 'os';
 import path from 'path';
 import { getAgentDir } from './config';
+import { expandHomePath } from './utils/pathResolve';
 
 export interface NodeTransferFilePayload {
   filePath: string;
@@ -43,15 +43,6 @@ const GENERIC_MIME: Record<string, string> = {
   '.sh': 'text/plain',
 };
 
-function expandHomePath(filePath: string): string {
-  if (filePath === '~') {
-    return os.homedir();
-  }
-  if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
-    return path.join(os.homedir(), filePath.slice(2));
-  }
-  return filePath;
-}
 
 export function resolveNodeTransferPath(filePath: string, agentName: string, restrictToAgentDir = true): string {
   if (!filePath || typeof filePath !== 'string') {

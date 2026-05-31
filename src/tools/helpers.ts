@@ -1,11 +1,13 @@
 import fs from 'fs-extra';
 import crypto from 'crypto';
-import os from 'os';
 import path from 'path';
 import * as sessionManager from '../sessionManager';
 import { WORKSPACE_DIR, getAgentDir, getAgentMemoryDir } from '../config';
 import { checkPathAccess } from '../isolatedCheck';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from '../applyPatch';
+import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
+
+export { expandHomePath, resolveAgentPath };
 
 // Tool context type
 export interface ToolContext {
@@ -106,31 +108,6 @@ export function consumePendingWriteRef(ctx: ToolContext, agentName: string, refI
 
     pendingWriteRefs.delete(refId);
     return ref.content;
-}
-
-// Helper function to resolve file path for agent
-export function expandHomePath(filePath: string): string {
-    if (filePath === '~') {
-        return os.homedir();
-    }
-    if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
-        return path.join(os.homedir(), filePath.slice(2));
-    }
-    return filePath;
-}
-
-export function resolveAgentPath(filePath: string, agentName: string = 'main', sessionCwd?: string): string {
-    const expandedPath = expandHomePath(filePath);
-    if (path.isAbsolute(expandedPath)) {
-        return path.resolve(expandedPath);
-    }
-
-    const agentDir = getAgentDir(agentName);
-    const baseDir = (typeof sessionCwd === 'string' && sessionCwd.trim().length > 0)
-        ? expandHomePath(sessionCwd.trim())
-        : agentDir;
-
-    return path.resolve(baseDir, expandedPath);
 }
 
 export function shouldEnforceIsolatedMasterPathAccess(ctx: ToolContext | undefined): boolean {

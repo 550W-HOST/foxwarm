@@ -1,11 +1,11 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
-import os from 'os';
 import path from 'path';
 import { STATE_DIR, getAgentDir } from './config';
 import { logger } from './common';
 import * as llm from './llm';
 import * as managedSessions from './managedSessions';
+import { expandHomePath, resolveAgentPath } from './utils/pathResolve';
 import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
@@ -235,30 +235,6 @@ async function importMonty(): Promise<MontyModule> {
     montyModulePromise = nativeImport<MontyModule>('@pydantic/monty');
   }
   return await montyModulePromise;
-}
-
-function expandHomePath(filePath: string): string {
-  if (filePath === '~') {
-    return os.homedir();
-  }
-  if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
-    return path.join(os.homedir(), filePath.slice(2));
-  }
-  return filePath;
-}
-
-function resolveAgentPath(filePath: string, agentName: string, sessionCwd?: string): string {
-  const expandedPath = expandHomePath(filePath);
-  if (path.isAbsolute(expandedPath)) {
-    return path.resolve(expandedPath);
-  }
-
-  const agentDir = getAgentDir(agentName);
-  const baseDir = (typeof sessionCwd === 'string' && sessionCwd.trim().length > 0)
-    ? expandHomePath(sessionCwd.trim())
-    : agentDir;
-
-  return path.resolve(baseDir, expandedPath);
 }
 
 function runFilePath(runId: string): string {

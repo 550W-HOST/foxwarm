@@ -13,6 +13,7 @@ import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
 import { checkToolPermission, checkPathAccess } from './isolatedCheck';
+import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
     collectOpenAIResponsesStream as collectOpenAIResponsesStreamProvider,
@@ -409,17 +410,6 @@ export function normalizeSystemPromptFiles(value: unknown): string[] | undefined
     }
 
     return undefined;
-}
-
-function expandHomePath(filePath: string): string {
-    if (filePath === '~') {
-        return process.env.HOME || filePath;
-    }
-    if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
-        return path.join(process.env.HOME || '~', filePath.slice(2));
-    }
-
-    return filePath;
 }
 
 function resolveSystemPromptFilePath(agentName: string, fileReference: string): string {

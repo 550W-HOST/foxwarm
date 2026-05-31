@@ -408,10 +408,6 @@ export function getSkillDir(skillName: string): string {
   return path.join(SKILLS_DIR, skillName);
 }
 
-export function getSkillMemoryDir(skillName: string): string {
-  return path.join(getSkillDir(skillName), 'memory');
-}
-
 export function getSessionArchiveLogPath(sessionId: string): string {
   return path.join(SESSION_LOGS_DIR, `${sessionId}.jsonl`);
 }

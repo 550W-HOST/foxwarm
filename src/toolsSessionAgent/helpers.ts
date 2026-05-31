@@ -1,4 +1,3 @@
-import os from 'os';
 import path from 'path';
 import * as sessionManager from '../sessionManager';
 import * as timers from '../timers';
@@ -6,6 +5,9 @@ import type { ChannelFile } from '../channel';
 import { getAgentDir, resolveModelConfig } from '../config';
 import { nodesManager } from '../nodes/manager';
 import { checkPathAccess } from '../isolatedCheck';
+import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
+
+export { expandHomePath, resolveAgentPath };
 
 export interface ToolContext {
   sessionId?: string;
@@ -162,30 +164,6 @@ export function formatTimerSummary(timer: timers.TimerView): string {
     : `session ${timer.sessionId}`;
 
   return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}\nMessage: ${timer.message}`;
-}
-
-export function expandHomePath(filePath: string): string {
-  if (filePath === '~') {
-    return os.homedir();
-  }
-  if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
-    return path.join(os.homedir(), filePath.slice(2));
-  }
-  return filePath;
-}
-
-export function resolveAgentPath(filePath: string, agentName: string = 'main', sessionCwd?: string): string {
-  const expandedPath = expandHomePath(filePath);
-  if (path.isAbsolute(expandedPath)) {
-    return path.resolve(expandedPath);
-  }
-
-  const agentDir = getAgentDir(agentName);
-  const baseDir = (typeof sessionCwd === 'string' && sessionCwd.trim().length > 0)
-    ? expandHomePath(sessionCwd.trim())
-    : agentDir;
-
-  return path.resolve(baseDir, expandedPath);
 }
 
 export function detectMimeType(filePath: string): string {
