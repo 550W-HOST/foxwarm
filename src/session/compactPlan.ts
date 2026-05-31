@@ -480,13 +480,3 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
     `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory, write_memory, edit_memory, delete_memory, and apply_patch_memory if needed.`,
   ].join(' ');
 }
-
-export function describeCreatedRanges(plan: CompactPlan): string {
-  if (plan.createBlocks.length === 0) {
-    return 'none';
-  }
-
-  return plan.createBlocks.map(block => (
-    `${block.sourceKind === 'message' ? 'L1' : `L${block.level}`} ${block.sourceKind} ${block.sourceStart}-${block.sourceEnd}`
-  )).join(', ');
-}
