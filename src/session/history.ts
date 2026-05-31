@@ -14,9 +14,7 @@ import {
   CompactCandidateItem,
   CompactPlan,
   CompactPlanValidationError,
-  describeCreatedRanges,
   getCandidateTargetLevel,
-  formatSeqRange,
   selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
 } from './compactPlan';
@@ -208,28 +206,6 @@ export async function forceIndexSession(deps: SessionHistoryDeps, sessionId: str
   }
 }
 
-function buildArchiveLookupInstruction(sessionId: string, startSeq?: number, endSeq?: number): string {
-  const target = typeof startSeq === 'number'
-    ? `msg#${startSeq}${typeof endSeq === 'number' && endSeq !== startSeq ? `-${endSeq}` : ''}`
-    : 'overview';
-
-  return `Use recall({sessionId: '${sessionId}', target: '${target}'}) to inspect the earlier message log if needed.`;
-}
-
-function buildDroppedRangePlaceholder(sessionId: string, startSeq?: number, endSeq?: number, messageCount?: number): Message {
-  const countLabel = typeof messageCount === 'number' && messageCount > 0
-    ? `${messageCount} message(s)`
-    : 'a compacted message range';
-  const rangeLabel = formatSeqRange(startSeq, endSeq);
-
-  return {
-    role: 'user',
-    parts: [{
-      system: `Compacted message placeholder: ${countLabel} from ${rangeLabel} were removed from working history here. ${buildArchiveLookupInstruction(sessionId, startSeq, endSeq)}`
-    }],
-  };
-}
-
 function getFunctionCallTokenCount(part: Message['parts'][number]): number {
   if (!part.functionCall) {
     return 0;
@@ -255,7 +231,7 @@ function buildToolNoisePlaceholder(options: {
   kind: 'function_call' | 'function_response';
   estimatedTokens: number;
 }): string {
-  const { sessionId, seq, toolName, kind, estimatedTokens } = options;
+  const { seq, toolName, kind } = options;
   const rangeLabel = typeof seq === 'number' ? `#${seq}` : '(seq unavailable)';
   const kindLabel = kind === 'function_call' ? 'tool call' : 'tool response';
   const toolLabel = toolName || 'unknown';

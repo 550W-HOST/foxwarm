@@ -2,7 +2,6 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Message, Session, ContextFrontierItem } from '../types';
 import {
-  getSessionArchiveLogPath,
   getSessionBlockArchiveLogPath,
   getSessionFrontierPath,
 } from '../config';

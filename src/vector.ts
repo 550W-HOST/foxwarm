@@ -18,8 +18,6 @@ import {
 import {
     getVectorCheckpointSync,
     listSessionsNeedingVectorBackfill,
-    getVectorSearchLineage,
-    getVectorSearchLineageSync,
     initArchiveStore,
     setVectorCheckpointSync,
 } from './session/archiveStore';

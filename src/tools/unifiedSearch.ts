@@ -1,5 +1,4 @@
 import { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
-import * as sessionManager from '../sessionManager';
 import { checkToolPermission } from '../isolatedCheck';
 import * as mcpClient from '../mcpClient';
 import { nodesManager } from '../nodes/manager';

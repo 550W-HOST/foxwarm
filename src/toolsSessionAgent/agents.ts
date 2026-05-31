@@ -7,7 +7,6 @@ import { requireNotIsolated } from '../isolatedCheck';
 import {
   ToolArgs,
   ToolContext,
-  isNonEmptyString,
   normalizeToolModelKey,
 } from './helpers';
 

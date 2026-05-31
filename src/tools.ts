@@ -1,5 +1,5 @@
 import fs from 'fs-extra';
-import { WORKSPACE_DIR, getAgentDir } from './config';
+import { getAgentDir } from './config';
 import {
     tool_run_script,
     tool_start_toolscript_run,

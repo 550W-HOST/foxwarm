@@ -175,7 +175,7 @@ export async function sendToSession(
   message: string,
   fromSessionId?: string
 ): Promise<void> {
-  const { sourceSession: fromSession, targetSession } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
+  const { sourceSession: fromSession } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
 
   const replyTarget = fromSessionId || 'unknown-session';
   const prefix = fromSessionId

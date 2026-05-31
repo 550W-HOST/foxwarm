@@ -1,11 +1,11 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
-import { STATE_DIR, getAgentDir } from './config';
+import { STATE_DIR } from './config';
 import { logger } from './common';
 import * as llm from './llm';
 import * as managedSessions from './managedSessions';
-import { expandHomePath, resolveAgentPath } from './utils/pathResolve';
+import { resolveAgentPath } from './utils/pathResolve';
 import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';

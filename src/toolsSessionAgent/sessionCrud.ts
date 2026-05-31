@@ -52,7 +52,6 @@ export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
   }
 
   const prep = await sessionManager.prepareSessionForDestructiveAction(sessionId);
-  const session = prep.session;
 
   if (prep.requiresRetry) {
     const queueNote = prep.droppedQueueItems > 0
