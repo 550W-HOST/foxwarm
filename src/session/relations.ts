@@ -110,7 +110,7 @@ export async function updateChildSessionParentIds(
   return updatedChildIds;
 }
 
-export function isDirectSessionLink(a: Session | undefined, b: Session | undefined): boolean {
+function isDirectSessionLink(a: Session | undefined, b: Session | undefined): boolean {
   if (!a || !b) return false;
   if (a.id === b.id) return true;
   if (a.parentSessionId === b.id || b.parentSessionId === a.id) return true;
