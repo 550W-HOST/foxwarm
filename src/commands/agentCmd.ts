@@ -1,11 +1,9 @@
 import fs from 'fs-extra';
-import { ChannelContext, getChannelId, getConversationId } from '../channel';
-import { Session } from '../types';
+import { ChannelContext } from '../channel';
 import * as sessionManager from '../sessionManager';
 import { AGENTS_DIR, getAgentDir } from '../config';
 
 export async function handleAgentCommand(ctx: ChannelContext, args: string[]) {
-  const currentSessionId = sessionManager.getSessionByChannel(getChannelId(ctx), getConversationId(ctx))
   const subcommand = args[0]
   const subArgs = args.slice(1)
 

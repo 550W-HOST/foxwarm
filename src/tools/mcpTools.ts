@@ -1,6 +1,6 @@
 import path from 'path';
 import fs from 'fs-extra';
-import { ToolArgs, ToolContext, WORKSPACE } from './helpers';
+import { ToolArgs, WORKSPACE } from './helpers';
 import * as mcpClient from '../mcpClient';
 import { estimateTokenCount } from '../tokenCount';
 import { resolveObjectArgWithJsonFallback, requireStringMapObject } from '../jsonObjectArgs';

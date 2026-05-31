@@ -61,7 +61,7 @@ export async function handleChannelCommand(ctx: ChannelContext, args: string[]) 
         return
       }
 
-      const result = await restartManagedChannel(channelId)
+      await restartManagedChannel(channelId)
       ctx.reply(`✅ Channel \`${channelId}\` restarted.\n${formatChannelRuntimeStatus(channelId)}`)
     } catch (e: any) {
       ctx.reply(`❌ Failed to ${subcommand} channel: ${e.message}`)

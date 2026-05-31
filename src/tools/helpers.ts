@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import crypto from 'crypto';
 import path from 'path';
 import * as sessionManager from '../sessionManager';
-import { WORKSPACE_DIR, getAgentDir, getAgentMemoryDir } from '../config';
+import { WORKSPACE_DIR, getAgentMemoryDir } from '../config';
 import { checkPathAccess } from '../isolatedCheck';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from '../applyPatch';
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';

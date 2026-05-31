@@ -1,11 +1,9 @@
 import {
     ToolArgs,
     ToolContext,
-    resolveAgentPath,
-    shouldEnforceIsolatedMasterPathAccess,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
-import { checkPathAccess, checkToolPermission } from '../isolatedCheck';
+import { checkToolPermission } from '../isolatedCheck';
 import { nodesManager } from '../nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstrapInfo';
 import { logger } from '../common';

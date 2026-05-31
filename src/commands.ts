@@ -1,8 +1,7 @@
-import { ChannelContext, getChannelId, getConversationId } from './channel';
+import { getChannelId, getConversationId } from './channel';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
 import { approvePendingPairing, rejectPendingPairing } from './nodes/registry';
-import { Session } from './types';
 import * as sessionManager from './sessionManager';
 import * as skills from './skills';
 import * as tools from './tools';

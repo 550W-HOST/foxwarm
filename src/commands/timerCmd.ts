@@ -1,6 +1,5 @@
-import { ChannelContext, getChannelId, getConversationId } from '../channel';
+import { ChannelContext } from '../channel';
 import { Session } from '../types';
-import * as sessionManager from '../sessionManager';
 import * as timers from '../timers';
 import { checkTimerPermission } from '../isolatedCheck';
 import { formatTimerDate, parseTimerFlags, parseTimerMessage } from './helpers';

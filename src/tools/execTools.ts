@@ -14,7 +14,6 @@ import {
     startPersistentExec,
     waitForExecCompletion,
 } from '../execManager';
-import { expandHomePath } from './helpers';
 
 function resolveExecTimeoutSeconds(timeoutValue: unknown): number {
     if (timeoutValue === undefined || timeoutValue === null) {
