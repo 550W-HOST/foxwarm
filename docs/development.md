@@ -70,7 +70,7 @@ foxwarm/
 
 ## 本地配置入口
 
-- `.env`：密钥、端口、provider 默认 URL、功能开关
+- `state/config.yaml`：bot 配置、channel 配置、LLM 默认 URL/key、端口与开关
 - `state/models.yaml`：模型列表与默认模型
 - `agents/<agent>/memory/`：agent 长期记忆
 - `skills/<skill>/memory/`：附加给 agent 的 skill 文档
