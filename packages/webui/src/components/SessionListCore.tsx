@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDraggable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2 } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 
 export interface Session {
@@ -478,6 +478,31 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     setContextMenu(null)
   }
 
+  const promoteSession = async (sessionId: string, targetParentId?: string) => {
+    try {
+      const token = getStoredAuthToken()
+      const url = `${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/promote`
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ targetParentId: targetParentId || null })
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        alert(`Failed to promote session: ${error.error}`)
+      }
+    } catch (err) {
+      console.error('[PROMOTE] Exception:', err)
+      alert('Failed to promote session')
+    }
+    setContextMenu(null)
+  }
+
   const openRenameDialog = (sessionId: string) => {
     const session = sessionMap.get(sessionId)
     setRenameSessionId(sessionId)
@@ -664,6 +689,9 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const contextMenuEntries: ContextMenuEntry[] = contextMenu ? (() => {
     const session = sessionMap.get(contextMenu.sessionId)
     const isArchived = session?.archived || false
+    const hasParent = !!session?.parentSessionId
+    const parentSession = hasParent ? sessionMap.get(session!.parentSessionId!) : undefined
+    const grandparentId = parentSession?.parentSessionId || undefined
 
     return [
       {
@@ -684,6 +712,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         label: 'Fork',
         onSelect: () => { void forkSession(contextMenu.sessionId) },
       },
+      ...(hasParent && grandparentId ? [{
+        key: 'promote-up',
+        icon: <ArrowUpFromDot size={14} />,
+        label: `Move up one level`,
+        onSelect: () => { void promoteSession(contextMenu.sessionId, grandparentId) },
+      }] : []),
+      ...(hasParent ? [{
+        key: 'promote',
+        icon: <ArrowUpFromDot size={14} />,
+        label: 'Promote to root',
+        onSelect: () => { void promoteSession(contextMenu.sessionId) },
+      }] : []),
       { key: 'divider-1', type: 'separator' },
       {
         key: 'delete',
@@ -692,7 +732,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         danger: true,
         onSelect: () => setDeleteConfirm(contextMenu.sessionId),
       },
-    ]
+    ] as ContextMenuEntry[]
   })() : []
 
   return (

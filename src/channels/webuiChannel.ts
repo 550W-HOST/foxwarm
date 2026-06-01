@@ -1232,6 +1232,28 @@ export class WebUIChannel implements Channel {
         },
       });
 
+      // Promote session (detach from parent, make it a root session)
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/promote',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const targetParentId = typeof req.body?.targetParentId === 'string' && req.body.targetParentId.trim()
+              ? req.body.targetParentId.trim()
+              : undefined;
+            const result = await sessionManager.setSessionParent(sessionId, targetParentId);
+
+            this.broadcastSessionListUpdate();
+
+            res.json({ success: true, sessionId: result.childSessionId, previousParentSessionId: result.previousParentSessionId || null });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to promote session');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
       // Delete session (must be after specific routes like /archive, /fork, /history)
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId',
