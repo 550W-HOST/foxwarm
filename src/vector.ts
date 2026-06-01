@@ -24,7 +24,6 @@ import {
 
 const DB_PATH = DB_DIR;
 const TABLE_NAME = 'messages_v7';
-const LEGACY_CHECKPOINTS_PATH = path.join(DB_DIR, 'vector-index-checkpoints-v2.json');
 const EMBEDDING_MODEL = 'qwen3-embedding:0.6b';
 
 // Keep a conservative margin under the embedding model's real 4096-token limit
@@ -41,7 +40,6 @@ const ARCHIVE_INDEX_MIN_PENDING_TOKENS = 8000;
 const RAW_REBUILD_BATCH_SEGMENT_LIMIT = Math.max(1, Number(process.env.FOXWARM_VECTOR_RAW_REBUILD_BATCH_SEGMENTS || 16));
 
 let table: any;
-let legacyCheckpoints: VectorIndexCheckpointFile = { version: 2, sessions: {} };
 const indexingChains = new Map<string, Promise<number>>();
 const archiveIndexBatchStates = new Map<string, SessionArchiveBatchState>();
 let startupBackfillPromise: Promise<void> | null = null;
@@ -114,11 +112,6 @@ type SessionArchiveCheckpoint = {
     tailStartSeq: number;
     lastIndexedBlockId: number;
     updatedAt: number;
-};
-
-type VectorIndexCheckpointFile = {
-    version: number;
-    sessions: Record<string, SessionArchiveCheckpoint>;
 };
 
 type SessionArchiveBatchState = {
@@ -536,39 +529,6 @@ async function getEmbedding(text: string) {
     return embedding;
 }
 
-async function loadCheckpoints() {
-    if (await fs.pathExists(LEGACY_CHECKPOINTS_PATH)) {
-        try {
-            const loaded = await fs.readJson(LEGACY_CHECKPOINTS_PATH);
-            if (loaded?.version === 2 && loaded?.sessions && typeof loaded.sessions === 'object') {
-                legacyCheckpoints = loaded;
-            } else {
-                logger.warn({ path: LEGACY_CHECKPOINTS_PATH, version: loaded?.version }, 'Ignoring incompatible legacy vector archive checkpoints');
-                legacyCheckpoints = { version: 2, sessions: {} };
-            }
-        } catch (e) {
-            logger.error({ err: e }, 'Failed to load legacy vector archive checkpoints, starting fresh');
-            legacyCheckpoints = { version: 2, sessions: {} };
-        }
-    }
-}
-
-async function migrateLegacyCheckpointsToDb(): Promise<void> {
-    const sessionEntries = Object.entries(legacyCheckpoints.sessions || {});
-    for (const [sessionId, checkpoint] of sessionEntries) {
-        const current = getVectorCheckpointSync(sessionId);
-        if (current.updatedAt > 0 || current.rawLastIndexedSeq > 0 || current.rawTailStartSeq > 0 || current.lastIndexedBlockId > 0) {
-            continue;
-        }
-
-        setVectorCheckpointSync(sessionId, {
-            rawLastIndexedSeq: checkpoint.lastIndexedSeq,
-            rawTailStartSeq: checkpoint.tailStartSeq,
-            lastIndexedBlockId: 0,
-        });
-    }
-}
-
 function getSessionArchiveCheckpoint(sessionId: string): SessionArchiveCheckpoint {
     const dbCheckpoint = getVectorCheckpointSync(sessionId);
     if (dbCheckpoint.updatedAt > 0 || dbCheckpoint.rawLastIndexedSeq > 0 || dbCheckpoint.lastIndexedBlockId > 0 || dbCheckpoint.rawTailStartSeq > 0) {
@@ -577,21 +537,6 @@ function getSessionArchiveCheckpoint(sessionId: string): SessionArchiveCheckpoin
             tailStartSeq: dbCheckpoint.rawTailStartSeq,
             lastIndexedBlockId: dbCheckpoint.lastIndexedBlockId,
             updatedAt: dbCheckpoint.updatedAt,
-        };
-    }
-
-    const legacy = legacyCheckpoints.sessions[sessionId];
-    if (legacy) {
-        const migrated = setVectorCheckpointSync(sessionId, {
-            rawLastIndexedSeq: legacy.lastIndexedSeq,
-            rawTailStartSeq: legacy.tailStartSeq,
-            lastIndexedBlockId: 0,
-        });
-        return {
-            lastIndexedSeq: migrated.rawLastIndexedSeq,
-            tailStartSeq: migrated.rawTailStartSeq,
-            lastIndexedBlockId: migrated.lastIndexedBlockId,
-            updatedAt: migrated.updatedAt,
         };
     }
 
@@ -1575,8 +1520,6 @@ async function init() {
         }
     }
 
-    await loadCheckpoints();
-    await migrateLegacyCheckpointsToDb();
     void startStartupArchiveVectorBackfill().catch((err) => {
         logger.error({ err }, 'Startup archive vector backfill failed');
     });

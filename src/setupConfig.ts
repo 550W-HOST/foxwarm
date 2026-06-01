@@ -7,7 +7,6 @@ import {
   DEFAULT_MODELS_CONFIG_PATH,
   ProviderConfigEntry,
   loadModelsConfigFromObject,
-  readAppConfigFile,
 } from './config';
 
 export type ProviderSetupDraft = {
@@ -71,11 +70,6 @@ export function writeRawModelsConfig(rawYaml: string, filePath: string = DEFAULT
 }
 
 export function readRawAppConfigFile(filePath: string = APP_CONFIG_PATH): string {
-  if (filePath === APP_CONFIG_PATH) {
-    // Preserve the existing legacy-.env migration side effect before exposing
-    // the raw config file text to Setup.
-    readAppConfigFile();
-  }
   return readRawTextFileIfExists(filePath);
 }
 

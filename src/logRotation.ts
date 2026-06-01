@@ -86,22 +86,6 @@ export async function moveLogsToDateErrorDir(baseDir: string, filePaths: string[
   }
 }
 
-export async function cleanupLegacyTopLevelLogDirs(baseDir: string): Promise<void> {
-  try {
-    if (!await fs.pathExists(baseDir)) return;
-
-    const entries = await fs.readdir(baseDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name === 'archives' || /^\d{4}-\d{2}-\d{2}$/.test(entry.name)) {
-        await fs.remove(path.join(baseDir, entry.name));
-      }
-    }
-  } catch (e) {
-    logger.error({ err: e, baseDir }, 'Failed to clean up legacy top-level log directories');
-  }
-}
-
 async function listDateDirs(baseDir: string): Promise<string[]> {
   if (!await fs.pathExists(baseDir)) return [];
   const entries = await fs.readdir(baseDir, { withFileTypes: true });
