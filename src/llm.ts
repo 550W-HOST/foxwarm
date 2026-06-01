@@ -1249,11 +1249,13 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         modelStreamEmitter.reset();
     }
 
+    const { requestBody, requestHeaders: compressionHeaders } = maybeCompressLlmRequestBody(data, modelEntry);
+
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                response = await axios.post(url, data, {
-                    headers: { ...headers, ...(modelEntry.extraHeaders || {}) },
+                response = await axios.post(url, requestBody, {
+                    headers: { ...headers, ...compressionHeaders, ...(modelEntry.extraHeaders || {}) },
                     timeout: options.timeoutMs ?? 180000,
                     validateStatus: () => true,
                     signal: abortController.signal,
