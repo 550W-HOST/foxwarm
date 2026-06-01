@@ -562,15 +562,6 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
 }
 
 
-export async function getPersistentMemory(agentName: string = 'main') {
-    try {
-        return await buildSessionSystemPromptSnapshot({ agentName });
-    } catch (e) {
-        logger.error({ err: e, agentName }, 'Error reading persistent memory');
-        return '';
-    }
-}
-
 async function logRequest(data: any, iteration = 0): Promise<LlmInteractionLogFiles | null> {
     try {
         const timestamp = formatTime();
