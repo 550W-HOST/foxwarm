@@ -2,37 +2,45 @@
 
 ## Dead / Unused Exports — RESOLVED
 
-All confirmed dead exports below have been removed in commits `41cf9359` through `16b44a33`:
+All confirmed dead exports below have been removed in commits `41cf9359` through `b281ef34`:
 
 - sessionManager: `shouldProcessQueuedItemForWait`, `removeAliasCacheEntry`, `*AllGroupMembers` aliases, `sendTo/sendFileToChannelById`
 - session/channels: same `*AllGroupMembers` aliases and `ById` wrappers
-- config: `getSkillMemoryDir`
+- config: `getSkillMemoryDir`, `PERSISTENT_MEMORY_DIR`
 - session/history: `buildDroppedRangePlaceholder`, `buildArchiveLookupInstruction`
 - session/compactPlan: `describeCreatedRanges`
 - session/archiveStore: `setVectorCheckpoint` (async), `getVectorSearchLineageSync`
 - session/agentMetadata: `refreshDirectAgentSessions`
-- llm: `appendTerminalModelTextAndReturn`
+- llm: `appendTerminalModelTextAndReturn`, `getPersistentMemory`
 - nodes/registry: `DEFAULT_REGISTRY`
+- session/layeredContext: `copyLayeredContextFiles`, `moveLayeredContextFiles`, `readArchiveBlocks`
+- session/metadataStore: `getSessionsMetadataBackupPath`, `getSessionsMetadataCandidatePaths`, `readSessionsMetadataSnapshotFromFile`
 
-## Questions (need user input before changing)
+## Questions — RESOLVED
 
-1. **Legacy migration code**: There's substantial legacy migration code across the codebase (env→yaml config, legacy channel attachments, legacy vector checkpoints, legacy WebUI settings paths, legacy log dirs). Is any of this still needed for active deployments, or can some be removed?
+1. **Legacy migration code** — REMOVED (`a2be403a`): env→yaml migration, legacy vector checkpoints, legacy WebUI settings path, legacy log dir cleanup. Also removed `dotenv` dependency.
 
-2. **`getPersistentMemory` in llm.ts**: Only used in test mocks. The actual memory loading goes through `buildSessionSystemPromptSnapshot`. Is this function still needed or is it vestigial?
+2. **`getPersistentMemory`** — REMOVED (`4f618784`): was vestigial; tests updated to mock `buildSessionSystemPromptSnapshot` directly.
 
-3. **`maybeCompressLlmRequestBody` in llm.ts**: Fully implemented but never called. Config supports `requestCompression` field. Enable it by wiring the call, or remove as dead code?
+3. **`maybeCompressLlmRequestBody`** — WIRED UP (`76f5894c`): now applied before LLM API requests when `requestCompression` is configured on the model entry.
 
-4. **`src/selftest/toolLoopStallSelfTest.ts` (825 lines)**: Is this still actively used/run, or is it a one-off diagnostic that could be moved to tests?
+4. **`src/selftest/toolLoopStallSelfTest.ts`** — KEPT: actively maintained (last modified 2026-05-21), tests critical integration behavior (tool loop, compact, wait, child sessions). Invoked via `npm run selftest:tool-loop-stall`.
 
 ## Potential Simplification Targets (no action taken yet)
 
-- `src/session/history.ts` (1406 lines): Could split compaction logic from archive query logic
-- `src/vector.ts` (1621 lines): Could split embedding/indexing from search/query
-- `src/channels/webuiChannel.ts` (1966 lines): Large but it's a single HTTP server with many routes; splitting routes into sub-files is possible
+- `src/session/history.ts` (1396 lines): Could split compaction logic from archive query logic
+- `src/vector.ts` (~1550 lines): Could split embedding/indexing from search/query
+- `src/channels/webuiChannel.ts` (~1960 lines): Large but it's a single HTTP server with many routes; splitting routes into sub-files is possible
 - `packages/webui/src/App.tsx` (1661 lines): Single component with 52 hooks and 19 useEffects. Could extract custom hooks (useSSEConnection, useThemeManagement, useWorkbenchTabs) but risky without good test coverage
-- **92 `as any` casts** across src/ (excluding tests): would benefit from stricter typing but requires enabling `strict: true` first
+- **~90 `as any` casts** across src/ (excluding tests): would benefit from stricter typing but requires enabling `strict: true` first
 
 ## Deduplication Done
 
-- `expandHomePath` / `resolveAgentPath`: consolidated from 5 copies into `src/utils/pathResolve.ts`
-- Unused imports cleaned across ~30 files (noUnusedLocals warnings: 41 → 7)
+- `expandHomePath` / `resolveAgentPath`: consolidated from 6 copies into `src/utils/pathResolve.ts`
+- `buildChildrenMap`: extracted from 2 inline copies in webuiChannel.ts
+- Unused imports cleaned across ~30 files (noUnusedLocals warnings: 62 → 7)
+
+## Pre-existing Test Failures (not caused by refactoring)
+
+- `lib/execToolMessages.test.js`: "read tool truncated output is wrapped with opening and closing notices" — test expects `[TOO LONG ...]` prefix but gets raw content
+- `lib/tokenCountImages.test.js`: "/status shows image count instead of inflating image payload into size" — test assertion mismatch
