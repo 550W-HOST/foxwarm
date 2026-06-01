@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import path from 'path';
-import * as sessionManager from './sessionManager';
-import { tool_create_session } from './toolsSessionAgent';
-import { SESSIONS_FILE, getAgentDir, getAgentMemoryDir } from './config';
+import * as sessionManager from '../sessionManager';
+import { tool_create_session } from '../toolsSessionAgent';
+import { SESSIONS_FILE, getAgentDir, getAgentMemoryDir } from '../config';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

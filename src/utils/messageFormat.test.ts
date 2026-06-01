@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Message } from './types';
-import { formatMessagePreviewText } from './utils/messageFormat';
-import { formatMessagePreviewLine, getMessagePreview } from './utils/messagePreview';
-import { containsLoneSurrogate } from './utils/unicode';
+import { Message } from '../types';
+import { formatMessagePreviewText } from './messageFormat';
+import { formatMessagePreviewLine, getMessagePreview } from './messagePreview';
+import { containsLoneSurrogate } from './unicode';
 
 function makeMessage(parts: Message['parts']): Message {
   return {

@@ -4,20 +4,20 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 
-import { MessageRouter } from './messageRouter';
-import * as sessionManager from './sessionManager';
-import * as llm from './llm';
-import * as vector from './vector';
+import { MessageRouter } from '../messageRouter';
+import * as sessionManager from '../sessionManager';
+import * as llm from '../llm';
+import * as vector from '../vector';
 import {
   buildWaitTimeoutMessage,
   createTimer,
   createTimersStore,
   resetTimersForTests,
   setTimersStoreForTests,
-} from './timers';
-import { definitions } from './tools';
-import { tool_wait } from './toolsSessionAgent';
-import type { Message, MessagePart, Session } from './types';
+} from '../timers';
+import { definitions } from '../tools';
+import { tool_wait } from '../toolsSessionAgent';
+import type { Message, MessagePart, Session } from '../types';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

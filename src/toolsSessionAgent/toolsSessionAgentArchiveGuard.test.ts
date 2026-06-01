@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import type { Session } from './types';
+import type { Session } from '../types';
 
 type LoadedDeps = {
   tempRoot: string;
-  sessionManager: typeof import('./sessionManager');
-  toolsSessionAgent: typeof import('./toolsSessionAgent');
-  archive: typeof import('./session/archive');
-  layeredContext: typeof import('./session/layeredContext');
+  sessionManager: typeof import('../sessionManager');
+  toolsSessionAgent: typeof import('../toolsSessionAgent');
+  archive: typeof import('../session/archive');
+  layeredContext: typeof import('../session/layeredContext');
 };
 
 let depsPromise: Promise<LoadedDeps> | null = null;
@@ -39,10 +39,10 @@ async function loadDeps(): Promise<LoadedDeps> {
       process.env.FOXWARM_DATA_DIR = tempRoot;
 
       const [sessionManager, toolsSessionAgent, archive, layeredContext] = await Promise.all([
-        import('./sessionManager'),
-        import('./toolsSessionAgent'),
-        import('./session/archive'),
-        import('./session/layeredContext'),
+        import('../sessionManager'),
+        import('../toolsSessionAgent'),
+        import('../session/archive'),
+        import('../session/layeredContext'),
       ]);
 
       await sessionManager.loadSessions();
@@ -53,14 +53,14 @@ async function loadDeps(): Promise<LoadedDeps> {
   return depsPromise;
 }
 
-async function ensureSession(sessionManager: typeof import('./sessionManager'), id: string): Promise<Session> {
+async function ensureSession(sessionManager: typeof import('../sessionManager'), id: string): Promise<Session> {
   const session = await sessionManager.getSession(id);
   Object.assign(session, createBaseSession(id));
   await sessionManager.saveSession(id);
   return session;
 }
 
-async function appendTextMessages(sessionManager: typeof import('./sessionManager'), session: Session, texts: string[]): Promise<void> {
+async function appendTextMessages(sessionManager: typeof import('../sessionManager'), session: Session, texts: string[]): Promise<void> {
   for (const text of texts) {
     await sessionManager.appendSessionMessage(session, {
       role: 'user',

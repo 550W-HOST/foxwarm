@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as sessionManager from './sessionManager';
-import { resolveModelConfig } from './config';
-import { tool_create_child_session, tool_create_session, tool_set_session_child_model } from './toolsSessionAgent';
-import { Session } from './types';
+import * as sessionManager from '../sessionManager';
+import { resolveModelConfig } from '../config';
+import { tool_create_child_session, tool_create_session, tool_set_session_child_model } from '../toolsSessionAgent';
+import { Session } from '../types';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkAndCompactIfNeeded } from './session/history';
-import type { Session } from './types';
+import { checkAndCompactIfNeeded } from './history';
+import type { Session } from '../types';
 
 function makeLargeSession(): Session {
   const history = Array.from({ length: 40 }, (_, idx) => ({

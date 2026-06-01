@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { COMMANDS } from './commands';
+import { COMMANDS } from '../commands';
 import {
   createNodeRegistryStore,
   createPendingPairing,
   resetNodeRegistryForTests,
   setNodeRegistryStoreForTests,
-} from './nodes/registry';
+} from '../nodes/registry';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-command-'));

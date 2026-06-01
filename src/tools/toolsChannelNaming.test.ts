@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
-import * as sessionManager from './sessionManager';
-import { definitions } from './tools';
-import { tool_send_file, tool_send_to_channel } from './toolsSessionAgent';
+import * as sessionManager from '../sessionManager';
+import { definitions } from '../tools';
+import { tool_send_file, tool_send_to_channel } from '../toolsSessionAgent';
 
 test('send_to_channel tool schema uses channelTargetId and drops channelId parameter', () => {
   const def = definitions.find(entry => entry.name === 'send_to_channel');

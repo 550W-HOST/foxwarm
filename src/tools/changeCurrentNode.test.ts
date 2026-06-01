@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as sessionManager from './sessionManager';
-import { getAgentDir } from './config';
-import { nodesManager } from './nodes/manager';
-import { change_current_node } from './tools';
+import * as sessionManager from '../sessionManager';
+import { getAgentDir } from '../config';
+import { nodesManager } from '../nodes/manager';
+import { change_current_node } from '../tools';
 
 test('change_current_node clears session cwd and reports master default cwd', async () => {
   const originalGetSession = sessionManager.getSession;
