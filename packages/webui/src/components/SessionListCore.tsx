@@ -86,7 +86,7 @@ const formatPromoteApiError = async (response: Response): Promise<string> => {
       const mainMessage = payload.error || payload.message || payload.reason
       const codeSuffix = payload.code ? ` [${payload.code}]` : ''
       const busyNote = payload.sessionBusy
-        ? '\n\nNote: the session is currently busy. Parent/child relation updates are intended to be allowed while a session is busy; if this keeps happening, wait for the run to finish and retry.'
+        ? '\n\nBusy is not the blocker.'
         : ''
       return `${mainMessage || `Request failed with ${status}`}${codeSuffix}${busyNote}`
     } catch (err) {
@@ -110,13 +110,13 @@ const formatPromoteNetworkError = (err: unknown, session?: Session): string => {
   const rawMessage = err instanceof Error ? err.message : String(err || 'Unknown network error')
   const normalizedMessage = rawMessage || 'Unknown network error'
   const browserFetchHint = /failed to fetch|networkerror|load failed/i.test(normalizedMessage)
-    ? 'The browser could not reach the Foxwarm API. This usually means the backend or Vite proxy restarted, the dev proxy is temporarily unavailable, or the page has a stale app shell.'
-    : 'The browser request failed before Foxwarm returned a structured error.'
+    ? 'Foxwarm API is unreachable. Refresh and retry; if Foxwarm just restarted, wait a few seconds.'
+    : 'Request failed before Foxwarm returned details.'
   const busyNote = session?.busy
-    ? '\n\nThe selected session is currently busy, but that is not supposed to block promote/move-up by itself. If this was a transient API/proxy failure, refresh the WebUI or wait for the run to finish and retry.'
+    ? '\n\nBusy is not the blocker.'
     : ''
 
-  return `${browserFetchHint}\n\nRaw browser error: ${normalizedMessage}${busyNote}`
+  return `${browserFetchHint}\n\nBrowser error: ${normalizedMessage}${busyNote}`
 }
 
 const findScrollableParent = (element: HTMLElement | null): HTMLElement | null => {
