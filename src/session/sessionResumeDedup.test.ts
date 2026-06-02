@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as sessionManager from './sessionManager';
-import { Session } from './types';
+import * as sessionManager from '../sessionManager';
+import { Session } from '../types';
 
 const RESUME_MESSAGE = 'session resumed after process restart';
 

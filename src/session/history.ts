@@ -1,7 +1,7 @@
 import * as llm from '../llm';
 import { logger } from '../common';
 import { COMPACT_PERCENT, resolveModelConfig } from '../config';
-import { estimateSessionTokens, estimateTokenCount } from '../tokenCount';
+import { estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
 import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange } from './archive';
 import {
@@ -14,9 +14,8 @@ import {
   CompactCandidateItem,
   CompactPlan,
   CompactPlanValidationError,
-  describeCreatedRanges,
+  ExtractedMemoryFact,
   getCandidateTargetLevel,
-  formatSeqRange,
   selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
 } from './compactPlan';
@@ -148,6 +147,7 @@ type CompactJobResult =
         rawEndSeq: number;
         summary: string;
       }>;
+      memoryFacts: ExtractedMemoryFact[];
       replacedItemCount: number;
     };
 
@@ -208,28 +208,6 @@ export async function forceIndexSession(deps: SessionHistoryDeps, sessionId: str
   }
 }
 
-function buildArchiveLookupInstruction(sessionId: string, startSeq?: number, endSeq?: number): string {
-  const target = typeof startSeq === 'number'
-    ? `msg#${startSeq}${typeof endSeq === 'number' && endSeq !== startSeq ? `-${endSeq}` : ''}`
-    : 'overview';
-
-  return `Use recall({sessionId: '${sessionId}', target: '${target}'}) to inspect the earlier message log if needed.`;
-}
-
-function buildDroppedRangePlaceholder(sessionId: string, startSeq?: number, endSeq?: number, messageCount?: number): Message {
-  const countLabel = typeof messageCount === 'number' && messageCount > 0
-    ? `${messageCount} message(s)`
-    : 'a compacted message range';
-  const rangeLabel = formatSeqRange(startSeq, endSeq);
-
-  return {
-    role: 'user',
-    parts: [{
-      system: `Compacted message placeholder: ${countLabel} from ${rangeLabel} were removed from working history here. ${buildArchiveLookupInstruction(sessionId, startSeq, endSeq)}`
-    }],
-  };
-}
-
 function getFunctionCallTokenCount(part: Message['parts'][number]): number {
   if (!part.functionCall) {
     return 0;
@@ -255,7 +233,7 @@ function buildToolNoisePlaceholder(options: {
   kind: 'function_call' | 'function_response';
   estimatedTokens: number;
 }): string {
-  const { sessionId, seq, toolName, kind, estimatedTokens } = options;
+  const { seq, toolName, kind } = options;
   const rangeLabel = typeof seq === 'number' ? `#${seq}` : '(seq unavailable)';
   const kindLabel = kind === 'function_call' ? 'tool call' : 'tool response';
   const toolLabel = toolName || 'unknown';
@@ -789,6 +767,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
         consumedFrontierCount: splitIndex,
         operations: [],
         createdBlocks: [],
+        memoryFacts: [],
         replacedItemCount: droppedDisplayOnlyCount,
       };
     }
@@ -925,6 +904,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       rawEndSeq: operation.rawEndSeq,
       summary: operation.summary,
     })),
+    memoryFacts: compactPlan.memoryFacts || [],
     replacedItemCount: operations.reduce((sum, operation) => sum + (operation.frontierEndIndex - operation.frontierStartIndex + 1), 0),
   };
 }
@@ -985,6 +965,22 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     result.replacedItemCount,
     compactedSkillNames,
   );
+
+  if (result.memoryFacts.length > 0 && createdRecords.length > 0) {
+    const sourceStartSeq = Math.min(...createdRecords.map(record => record.rawStartSeq));
+    const sourceEndSeq = Math.max(...createdRecords.map(record => record.rawEndSeq));
+    void vector.indexMemoryFactsFromCompaction({
+      sessionId,
+      agent: session.agent || 'main',
+      facts: result.memoryFacts,
+      sourceKind: 'compact',
+      sourceStartSeq,
+      sourceEndSeq,
+      createdAt: Date.now(),
+    }).catch((err) => {
+      logger.warn({ err, sessionId, factCount: result.memoryFacts.length }, 'Failed to index compact memory facts');
+    });
+  }
   return true;
 }
 

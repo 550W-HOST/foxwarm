@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WebUIChannel } from './channels/webuiChannel';
-import { ChannelFile } from './channel';
+import { WebUIChannel } from './webuiChannel';
+import { ChannelFile } from '../channel';
 
 test('WebUI channel implements sendFile as a successful noop', async () => {
   const file: ChannelFile = {

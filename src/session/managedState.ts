@@ -123,7 +123,7 @@ export function shouldRouteQueueItemToManagedInbox(session: Session | null | und
   return item.type !== 'compact' && item.type !== 'compact-commit';
 }
 
-export function getManagedSessionLastTouchedAt(state: ManagedSessionState): number {
+function getManagedSessionLastTouchedAt(state: ManagedSessionState): number {
   return Math.max(
     state.leaseTouchedAt || 0,
     state.lastStepAt || 0,

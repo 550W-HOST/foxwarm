@@ -3,7 +3,6 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { Message, MessagePart, Session } from '../types';
 import { getSessionArchiveImagesDir, getSessionArchiveLogPath } from '../config';
-import { logger } from '../common';
 import {
   ensureSessionBranch,
   refreshSessionArchiveImportState,

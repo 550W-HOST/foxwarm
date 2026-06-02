@@ -13,12 +13,12 @@ import * as llm from './llm';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getSessionArchiveImagesDir, getSessionArchiveLogPath } from './config';
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
-import { appendMessagesToArchive, getMessageTimestamp, getNextSessionMessageSeq } from './session/archive';
-import { appendMessagesToContextFrontier, copyLayeredContextFiles, ensureContextFrontier, loadSessionFrontier, moveLayeredContextFiles, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
-import { ensureSessionBranch, renameSessionArchiveStore } from './session/archiveStore';
+import { appendMessagesToArchive, getNextSessionMessageSeq } from './session/archive';
+import { appendMessagesToContextFrontier, loadSessionFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
+import { ensureSessionBranch } from './session/archiveStore';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
@@ -208,10 +208,6 @@ function applyQueuedItemToWaitState(session: Session, item: QueueItem): WaitQueu
   return { action: 'enqueue', items: [item] };
 }
 
-export function shouldProcessQueuedItemForWait(session: Session, item: QueueItem): boolean {
-  return applyQueuedItemToWaitState(session, item).action === 'enqueue';
-}
-
 export function clearSessionWaitForDirectTurn(session: Session, wakeType: string = 'direct-turn'): boolean {
   const wait = getSessionWaitState(session);
   if (!wait) {
@@ -296,10 +292,6 @@ export function updateAliasCache(aliases: string[], realId: string) {
   for (const alias of aliases) {
     aliasCache.set(alias, realId);
   }
-}
-
-export function removeAliasCacheEntry(alias: string) {
-  aliasCache.delete(alias);
 }
 
 /**
@@ -825,15 +817,6 @@ export function setChannelDangerouslyAllowAllUsers(channelId: string, conversati
   sessionChannels.setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
 }
 
-// Legacy compatibility aliases
-export function getChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string): boolean {
-  return getChannelDangerouslyAllowAllUsers(channelId, conversationId);
-}
-
-export function setChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string, value: boolean) {
-  setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
-}
-
 export function detachChannel(channelId: string, conversationId: string): void {
   sessionChannels.detachChannel(channelId, conversationId);
 }
@@ -842,18 +825,10 @@ export async function sendToChannelTargetId(channelTargetId: string, message: st
   await sessionChannels.sendToChannelTargetId(channelTargetId, message);
 }
 
-export async function sendToChannelById(channelId: string, message: string): Promise<void> {
-  await sendToChannelTargetId(channelId, message);
-}
-
 export type FileDeliveryResult = sessionChannels.FileDeliveryResult;
 
 export async function sendFileToChannelTargetId(channelTargetId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
   await sessionChannels.sendFileToChannelTargetId(channelTargetId, file, options);
-}
-
-export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
-  await sendFileToChannelTargetId(channelId, file, options);
 }
 
 export async function sendFileToSession(sessionId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<FileDeliveryResult> {

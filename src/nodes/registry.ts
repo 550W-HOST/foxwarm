@@ -49,10 +49,6 @@ type NodeRegistryData = {
 export const PENDING_PAIRING_TTL_MS = 60 * 60 * 1000
 
 const RESERVED_NODE_IDS = new Set(['master'])
-const DEFAULT_REGISTRY: NodeRegistryData = {
-  approvedNodes: {},
-  pendingPairings: {},
-}
 
 let registryData: NodeRegistryData | null = null
 const pendingSockets = new Map<string, WebSocket>()

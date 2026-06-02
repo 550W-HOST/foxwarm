@@ -1,5 +1,3 @@
-import fs from 'fs-extra';
-import path from 'path';
 import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from '../channel';
 import { logger } from '../common';
 import { CHANNELS_FILE } from '../config';
@@ -187,15 +185,6 @@ export function setChannelDangerouslyAllowAllUsers(channelId: string, conversati
   void persistChannels();
 }
 
-// Legacy compatibility wrappers
-export function getChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string): boolean {
-  return getChannelDangerouslyAllowAllUsers(channelId, conversationId);
-}
-
-export function setChannelDangerouslyAllowAllGroupMembers(channelId: string, conversationId: string, value: boolean): void {
-  setChannelDangerouslyAllowAllUsers(channelId, conversationId, value);
-}
-
 export function detachChannel(channelId: string, conversationId: string): void {
   channelAttachments.delete(makeChannelKey(channelId, conversationId));
   void persistChannels();
@@ -211,10 +200,6 @@ export async function sendToChannelTargetId(channelTargetId: string, message: st
   await channel.sendMessage(conversationId, message);
 }
 
-export async function sendToChannelById(channelId: string, message: string): Promise<void> {
-  await sendToChannelTargetId(channelId, message);
-}
-
 export async function sendFileToChannelTargetId(channelTargetId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
   const { channelInstanceId, conversationId } = parseChannelTargetId(channelTargetId);
   const channel = getChannelInstance(channelInstanceId);
@@ -226,10 +211,6 @@ export async function sendFileToChannelTargetId(channelTargetId: string, file: C
   }
 
   await channel.sendFile(conversationId, file, options);
-}
-
-export async function sendFileToChannelById(channelId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
-  await sendFileToChannelTargetId(channelId, file, options);
 }
 
 export async function sendFileToSession(

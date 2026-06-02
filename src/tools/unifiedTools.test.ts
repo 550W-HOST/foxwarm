@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as mcpClient from './mcpClient';
-import { nodesManager } from './nodes/manager';
+import * as mcpClient from '../mcpClient';
+import { nodesManager } from '../nodes/manager';
 import {
   call_tool,
   definitions,
   mcp_config,
   modelFacingDefinitions,
   search_tools,
-} from './tools';
+} from '../tools';
 
 test('search_tools returns structured builtin results with hidden/direct exposure metadata', async () => {
   const result: any = await search_tools({

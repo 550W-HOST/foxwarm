@@ -4,9 +4,9 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import sharp from 'sharp';
-import * as sessionManager from './sessionManager';
-import { image_crop, image_write_to_file } from './tools';
-import { normalizeToolResultImages } from './toolImages';
+import * as sessionManager from '../sessionManager';
+import { image_crop, image_write_to_file } from '../tools';
+import { normalizeToolResultImages } from '../toolImages';
 
 async function makePngBase64(width: number, height: number, rgb: { r: number; g: number; b: number } = { r: 32, g: 96, b: 192 }): Promise<string> {
   const buffer = await sharp({

@@ -40,7 +40,7 @@ export function normalizeGoalText(value: unknown): string {
   return normalized;
 }
 
-export function getLatestSessionMessageSeq(session: Session): number {
+function getLatestSessionMessageSeq(session: Session): number {
   if (typeof session.nextMessageSeq === 'number' && session.nextMessageSeq > 0) {
     return session.nextMessageSeq - 1;
   }
@@ -60,7 +60,7 @@ export function isGoalReminderMessage(message: Message): boolean {
   return message.__meta?.[GOAL_REMINDER_META_KEY] === true;
 }
 
-export function getLatestCountedMessageSeq(session: Session): number {
+function getLatestCountedMessageSeq(session: Session): number {
   for (let i = session.history.length - 1; i >= 0; i--) {
     const message = session.history[i];
     if (isGoalReminderMessage(message)) {

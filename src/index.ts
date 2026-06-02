@@ -24,12 +24,10 @@ import {
     HTTP_PORT,
     getDefaultChannelConfigByType,
     getNormalizedChannelConfigs,
-    LOGS_DIR,
     MATRIX_CONFIG,
     MAIN_AGENT_MEMORY_DIR,
     NODE_TOKEN_FILE,
     ONBOOT_FILE,
-    PERSISTENT_MEMORY_DIR,
     TELEGRAM_CONFIG,
     TOKEN_FILE,
     WEIXIN_CONFIG,
@@ -40,7 +38,7 @@ import { HttpServer, setHttpServer } from './httpServer';
 import { registerNodeWebSocket } from './nodes/websocket';
 import { registerNodeHttpRoutes } from './nodes/httpRoutes';
 import { initializeNodeRegistry } from './nodes/registry';
-import { cleanupLegacyTopLevelLogDirs, scheduleLogRotation } from './logRotation';
+import { scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
 import { initializeTimers } from './timers';
 import { initializeExecManager } from './execManager';
@@ -121,9 +119,7 @@ async function ensureNodeToken(): Promise<string> {
 }
 
 async function start() {
-    // Migrate legacy pre-agent storage into agents/main if needed
     const templatesDir = path.join(BASE_DIR, 'templates', 'main', 'memory');
-    const oldWorkspacePath = path.join(DATA_ROOT_DIR, 'workspace');
 
     if (DATA_ROOT_DIR !== BASE_DIR) {
         logger.info(`Using experimental external data root: ${DATA_ROOT_DIR}`);
@@ -132,39 +128,7 @@ async function start() {
     // Ensure agents directory exists
     await fs.ensureDir(AGENTS_DIR);
 
-    await cleanupLegacyTopLevelLogDirs(LOGS_DIR);
 
-    // Check if migration is needed (old format)
-    const oldMemoryExists = await fs.pathExists(PERSISTENT_MEMORY_DIR);
-    const oldWorkspaceExists = await fs.pathExists(oldWorkspacePath);
-    const newMemoryExists = await fs.pathExists(MAIN_AGENT_MEMORY_DIR);
-
-    if ((oldMemoryExists || oldWorkspaceExists) && !newMemoryExists) {
-        logger.info('Migrating old format to agents/main/...');
-        const mainAgentDir = path.dirname(MAIN_AGENT_MEMORY_DIR);
-        await fs.ensureDir(mainAgentDir);
-
-        // Migrate legacy memory directory into agents/main/memory
-        if (oldMemoryExists) {
-            logger.info('Migrating legacy memory directory to agents/main/memory...');
-            await fs.move(PERSISTENT_MEMORY_DIR, MAIN_AGENT_MEMORY_DIR);
-        }
-
-        // Migrate legacy root workspace files into agents/main/
-        if (oldWorkspaceExists) {
-            const workspaceFiles = await fs.readdir(oldWorkspacePath);
-            logger.info('Migrating legacy root workspace files to agents/main/...');
-            for (const file of workspaceFiles) {
-                const src = path.join(oldWorkspacePath, file);
-                const dest = path.join(mainAgentDir, file);
-                await fs.move(src, dest);
-            }
-            await fs.remove(oldWorkspacePath);
-        }
-
-        logger.info('Migration completed');
-    }
-    
     // Initialize main agent memory from templates if needed
     if (!await fs.pathExists(MAIN_AGENT_MEMORY_DIR) || 
         (await fs.readdir(MAIN_AGENT_MEMORY_DIR)).length === 0) {

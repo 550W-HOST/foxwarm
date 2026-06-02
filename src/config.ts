@@ -4,7 +4,6 @@
 import path from 'path';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
-import dotenv from 'dotenv';
 
 export type TelegramConfig = {
   enabled?: boolean;
@@ -154,23 +153,6 @@ export const APP_CONFIG_PATH = CONFIG_PATH_ENV
   ? path.resolve(BASE_DIR, CONFIG_PATH_ENV)
   : path.join(STATE_DIR, 'config.yaml');
 
-function parseBoolean(value: string | undefined): boolean | undefined {
-  if (value === undefined) return undefined;
-  return value === 'true';
-}
-
-function parseNumber(value: string | undefined): number | undefined {
-  if (!value) return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function parseList(value: string | undefined): string[] | undefined {
-  if (!value) return undefined;
-  const items = value.split(',').map(v => v.trim()).filter(Boolean);
-  return items.length > 0 ? items : undefined;
-}
-
 function cleanupUndefinedDeep<T>(value: T): T {
   if (Array.isArray(value)) {
     return value.map(item => cleanupUndefinedDeep(item)).filter(item => item !== undefined) as T;
@@ -193,110 +175,7 @@ function cleanupUndefinedDeep<T>(value: T): T {
   return value;
 }
 
-function buildConfigFromLegacyEnv(source: Record<string, string | undefined>): AppConfig {
-  const telegramAllowed = parseList(source.TELEGRAM_ALLOWED_USERS) || (source.ALLOWED_USER_ID ? [source.ALLOWED_USER_ID] : undefined);
-  const matrixAllowed = parseList(source.MATRIX_ALLOWED_USERS);
-  const weworkAllowed = parseList(source.WEWORK_ALLOWED_USERS);
-  const weixinAllowed = parseList(source.WEIXIN_ALLOWED_USERS);
-
-  const config: AppConfig = {
-    bot: {
-      name: source.BOT_NAME,
-      enableWebUI: parseBoolean(source.ENABLE_WEBUI),
-      enableTrigger: parseBoolean(source.ENABLE_TRIGGER),
-      httpPort: parseNumber(source.HTTP_PORT || source.WEBUI_PORT),
-      enableTUI: parseBoolean(source.ENABLE_TUI),
-    },
-    llm: {
-      ollamaBaseUrl: source.OLLAMA_BASE_URL,
-      contextLimit: parseNumber(source.CONTEXT_LIMIT),
-      compactPercent: parseNumber(source.COMPACT_PERCENT),
-      maxOutput: parseNumber(source.MAX_OUTPUT),
-      thinkingBudget: parseNumber(source.THINKING_BUDGET),
-      openaiBaseUrl: source.OPENAI_BASE_URL,
-      openaiApiKey: source.OPENAI_API_KEY,
-      anthropicBaseUrl: source.ANTHROPIC_BASE_URL,
-      anthropicApiKey: source.ANTHROPIC_API_KEY,
-    },
-    paths: {
-      agentsDir: source.AGENTS_DIR,
-      skillsDir: source.SKILLS_DIR,
-      modelsConfigPath: source.MODELS_CONFIG_PATH,
-      mcpConfigPath: source.MCP_CONFIG_PATH,
-    },
-    channels: {
-      telegram: {
-        enabled: source.TELEGRAM_BOT_TOKEN ? true : undefined,
-        botToken: source.TELEGRAM_BOT_TOKEN,
-        allowedUsers: telegramAllowed,
-        mainAttachUser: source.ALLOWED_USER_ID,
-      },
-      matrix: {
-        enabled: (source.MATRIX_HOMESERVER && source.MATRIX_ACCESS_TOKEN && source.MATRIX_USER_ID) ? true : undefined,
-        homeserver: source.MATRIX_HOMESERVER,
-        accessToken: source.MATRIX_ACCESS_TOKEN,
-        botUserId: source.MATRIX_USER_ID,
-        allowedUsers: matrixAllowed,
-      },
-      wework: {
-        enabled: source.WEWORK_WEBHOOK_URL ? true : undefined,
-        webhookUrl: source.WEWORK_WEBHOOK_URL,
-        token: source.WEWORK_TOKEN,
-        encodingAESKey: source.WEWORK_ENCODING_AES_KEY,
-        listenPort: parseNumber(source.WEWORK_LISTEN_PORT),
-        listenPath: source.WEWORK_LISTEN_PATH,
-        allowedUsers: weworkAllowed,
-      },
-      weixin: {
-        enabled: source.WEIXIN_TOKEN ? true : undefined,
-        baseUrl: source.WEIXIN_BASE_URL,
-        token: source.WEIXIN_TOKEN,
-        routeTag: source.WEIXIN_ROUTE_TAG,
-        allowedUsers: weixinAllowed,
-        allowAllUsers: parseBoolean(source.WEIXIN_ALLOW_ALL_USERS),
-        longPollTimeoutMs: parseNumber(source.WEIXIN_LONG_POLL_TIMEOUT_MS),
-        loginBotType: source.WEIXIN_LOGIN_BOT_TYPE,
-      },
-    },
-    asrService: {
-      enabled: parseBoolean(source.ENABLE_ASR_SERVICE),
-      url: source.ASR_SERVICE_URL,
-      key: source.ASR_SERVICE_KEY,
-    },
-  };
-
-  return cleanupUndefinedDeep(config);
-}
-
-function migrateLegacyEnvIfNeeded(): void {
-  const legacyEnvPath = path.join(BASE_DIR, '.env');
-
-  if (fs.existsSync(APP_CONFIG_PATH)) {
-    if (fs.existsSync(legacyEnvPath)) {
-      console.warn(
-        `[config] Legacy .env business config at ${legacyEnvPath} is ignored because ${APP_CONFIG_PATH} already exists.`
-      );
-    }
-    return;
-  }
-
-  let source: Record<string, string | undefined> | null = null;
-
-  if (fs.existsSync(legacyEnvPath)) {
-    source = dotenv.parse(fs.readFileSync(legacyEnvPath, 'utf8')) as Record<string, string>;
-  }
-
-  if (!source) {
-    return;
-  }
-
-  const migrated = buildConfigFromLegacyEnv(source);
-  fs.ensureDirSync(path.dirname(APP_CONFIG_PATH));
-  fs.writeFileSync(APP_CONFIG_PATH, yaml.dump(migrated, { noRefs: true, lineWidth: 120 }), 'utf8');
-}
-
 export function readAppConfigFile(): AppConfig {
-  migrateLegacyEnvIfNeeded();
 
   if (!fs.existsSync(APP_CONFIG_PATH)) {
     return {};
@@ -380,7 +259,6 @@ export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const DB_DIR = path.join(STATE_DIR, 'db');
 export const SESSIONS_DIR = path.join(STATE_DIR, 'sessions');
 export const SESSIONS_BLOB_DIR = path.join(STATE_DIR, 'sessions-blob');
-export const PERSISTENT_MEMORY_DIR = path.join(STATE_DIR, 'persistent_memory'); // Legacy path for migration
 export const MAIN_AGENT_DIR = path.join(AGENTS_DIR, 'main');
 export const MAIN_AGENT_MEMORY_DIR = path.join(MAIN_AGENT_DIR, 'memory');
 
@@ -406,10 +284,6 @@ export function getAgentMemoryDir(agentName: string = 'main'): string {
 
 export function getSkillDir(skillName: string): string {
   return path.join(SKILLS_DIR, skillName);
-}
-
-export function getSkillMemoryDir(skillName: string): string {
-  return path.join(getSkillDir(skillName), 'memory');
 }
 
 export function getSessionArchiveLogPath(sessionId: string): string {

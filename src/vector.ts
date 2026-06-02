@@ -1,4 +1,5 @@
 import * as lancedb from '@lancedb/lancedb';
+import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { Message } from './types';
@@ -7,6 +8,7 @@ import { DB_DIR, OLLAMA_BASE_URL, SESSION_LOGS_DIR } from './config';
 import { logger } from './common';
 import { formatMessageText } from './utils/messageFormat';
 import { isModelVisibleMessage } from './session/messageVisibility';
+import type { ExtractedMemoryFact, MemoryFactAttribution, MemoryFactKind } from './session/compactPlan';
 import {
     ArchiveBlockRecord,
     readLocalArchiveBlocksByIdRange,
@@ -18,15 +20,12 @@ import {
 import {
     getVectorCheckpointSync,
     listSessionsNeedingVectorBackfill,
-    getVectorSearchLineage,
-    getVectorSearchLineageSync,
     initArchiveStore,
     setVectorCheckpointSync,
 } from './session/archiveStore';
 
 const DB_PATH = DB_DIR;
 const TABLE_NAME = 'messages_v7';
-const LEGACY_CHECKPOINTS_PATH = path.join(DB_DIR, 'vector-index-checkpoints-v2.json');
 const EMBEDDING_MODEL = 'qwen3-embedding:0.6b';
 
 // Keep a conservative margin under the embedding model's real 4096-token limit
@@ -43,7 +42,6 @@ const ARCHIVE_INDEX_MIN_PENDING_TOKENS = 8000;
 const RAW_REBUILD_BATCH_SEGMENT_LIMIT = Math.max(1, Number(process.env.FOXWARM_VECTOR_RAW_REBUILD_BATCH_SEGMENTS || 16));
 
 let table: any;
-let legacyCheckpoints: VectorIndexCheckpointFile = { version: 2, sessions: {} };
 const indexingChains = new Map<string, Promise<number>>();
 const archiveIndexBatchStates = new Map<string, SessionArchiveBatchState>();
 let startupBackfillPromise: Promise<void> | null = null;
@@ -53,7 +51,7 @@ type VectorRow = {
     message_id: string;
     session_id: string;
     agent: string;
-    memory_kind: 'raw' | 'block';
+    memory_kind: 'raw' | 'block' | 'fact';
     seq: number;
     start_seq: number;
     end_seq: number;
@@ -83,6 +81,16 @@ type SearchOptions = {
     includeRegex?: string;
     excludeRegex?: string;
     preferBlocks?: boolean;
+};
+
+type CompactMemoryFactIndexInput = {
+    sessionId: string;
+    agent?: string;
+    facts: ExtractedMemoryFact[];
+    sourceKind?: 'compact';
+    sourceStartSeq: number;
+    sourceEndSeq: number;
+    createdAt?: number;
 };
 
 type ArchiveMessageLine = ArchiveMessageRecord;
@@ -116,11 +124,6 @@ type SessionArchiveCheckpoint = {
     tailStartSeq: number;
     lastIndexedBlockId: number;
     updatedAt: number;
-};
-
-type VectorIndexCheckpointFile = {
-    version: number;
-    sessions: Record<string, SessionArchiveCheckpoint>;
 };
 
 type SessionArchiveBatchState = {
@@ -182,7 +185,10 @@ function buildFilterPredicate(options?: SearchOptions): string | undefined {
             const blockClause = typeof entry.maxBlockId === 'number'
                 ? `(memory_kind = 'block' AND block_id <= ${entry.maxBlockId})`
                 : `(memory_kind = 'block')`;
-            return `(${sessionClause} AND (${rawClause} OR ${blockClause}))`;
+            const factClause = typeof entry.maxMessageSeq === 'number'
+                ? `(memory_kind = 'fact' AND raw_start_seq <= ${entry.maxMessageSeq})`
+                : `(memory_kind = 'fact')`;
+            return `(${sessionClause} AND (${rawClause} OR ${blockClause} OR ${factClause}))`;
         });
         clauses.push(`(${lineageClauses.join(' OR ')})`);
     } else if (options.sessionIds && options.sessionIds.length > 0) {
@@ -499,6 +505,146 @@ async function createRowFromBlockRecord(record: ArchiveBlockRecord): Promise<Omi
     };
 }
 
+function normalizeMemoryFactTextForHash(text: string): string {
+    return String(text || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function buildMemoryFactHash(fact: ExtractedMemoryFact): string {
+    return crypto
+        .createHash('sha256')
+        .update(`${fact.kind}\0${normalizeMemoryFactTextForHash(fact.text)}`)
+        .digest('hex')
+        .slice(0, 24);
+}
+
+function formatMemoryFactText(fact: ExtractedMemoryFact, sourceStartSeq: number, sourceEndSeq: number): string {
+    const lines = [
+        `Memory fact (${fact.kind})`,
+        fact.text.trim(),
+    ];
+
+    if (fact.context?.trim()) {
+        lines.push(`Context: ${fact.context.trim()}`);
+    }
+    if (fact.attributedTo) {
+        lines.push(`Attribution: ${fact.attributedTo}`);
+    }
+    lines.push(`Source: compacted messages ${formatSeqLabel(sourceStartSeq, sourceEndSeq)}`);
+    return lines.join('\n');
+}
+
+function parseMemoryFactKind(sourceKind: unknown): MemoryFactKind | undefined {
+    if (typeof sourceKind !== 'string' || !sourceKind.startsWith('memory_fact:')) {
+        return undefined;
+    }
+    const kind = sourceKind.slice('memory_fact:'.length);
+    return ['decision', 'preference', 'fact', 'convention', 'environment'].includes(kind)
+        ? kind as MemoryFactKind
+        : undefined;
+}
+
+function parseMemoryFactAttribution(role: unknown): MemoryFactAttribution | undefined {
+    if (typeof role !== 'string' || !role.startsWith('fact:')) {
+        return undefined;
+    }
+    const parts = role.split(':');
+    const attribution = parts[2];
+    return ['user', 'assistant', 'both'].includes(attribution)
+        ? attribution as MemoryFactAttribution
+        : undefined;
+}
+
+function createRowsFromMemoryFacts(input: CompactMemoryFactIndexInput): Omit<VectorRow, 'vector'>[] {
+    const sourceStartSeq = Number(input.sourceStartSeq);
+    const sourceEndSeq = Number(input.sourceEndSeq);
+    if (!Number.isFinite(sourceStartSeq) || !Number.isFinite(sourceEndSeq) || sourceStartSeq <= 0 || sourceEndSeq <= 0) {
+        return [];
+    }
+
+    const startSeq = Math.min(sourceStartSeq, sourceEndSeq);
+    const endSeq = Math.max(sourceStartSeq, sourceEndSeq);
+    const createdAt = Number(input.createdAt) || Date.now();
+    const agent = input.agent || 'main';
+    const seenIds = new Set<string>();
+    const rows: Omit<VectorRow, 'vector'>[] = [];
+
+    for (const fact of input.facts || []) {
+        const text = String(fact?.text || '').trim();
+        if (!text) {
+            continue;
+        }
+
+        const hash = buildMemoryFactHash({ ...fact, text });
+        const messageId = `${input.sessionId}:fact:${hash}`;
+        const id = `${messageId}:0`;
+        if (seenIds.has(id)) {
+            continue;
+        }
+        seenIds.add(id);
+
+        const attributedTo = fact.attributedTo || 'both';
+        const rowText = formatMemoryFactText({ ...fact, text, attributedTo }, startSeq, endSeq);
+        rows.push({
+            id,
+            message_id: messageId,
+            session_id: input.sessionId,
+            agent,
+            memory_kind: 'fact',
+            seq: startSeq,
+            start_seq: startSeq,
+            end_seq: endSeq,
+            raw_start_seq: startSeq,
+            raw_end_seq: endSeq,
+            message_count: Math.max(1, endSeq - startSeq + 1),
+            role: `fact:${fact.kind}:${attributedTo}`,
+            timestamp: createdAt,
+            start_timestamp: createdAt,
+            end_timestamp: createdAt,
+            chunk_index: 0,
+            chunk_count: 1,
+            text: rowText,
+            chunk_text: truncateToTokenLimit(rowText, EMBEDDING_MAX_LENGTH),
+            block_id: null as number | null,
+            block_level: null as number | null,
+            source_kind: `memory_fact:${fact.kind}`,
+            source_start: startSeq,
+            source_end: endSeq,
+        });
+    }
+
+    return rows;
+}
+
+async function indexMemoryFactsFromCompaction(input: CompactMemoryFactIndexInput): Promise<number> {
+    const rows = createRowsFromMemoryFacts(input);
+    if (rows.length === 0) {
+        return 0;
+    }
+    if (!table) {
+        throw new Error('Vector table is not initialized.');
+    }
+
+    const hydratedRows: VectorRow[] = [];
+    for (const row of rows) {
+        const vector = await getEmbedding(row.chunk_text);
+        hydratedRows.push({ ...row, vector });
+    }
+
+    for (const row of hydratedRows) {
+        await table.delete(`id = '${escapeFilterValue(row.id)}'`);
+    }
+    await table.add(hydratedRows);
+
+    logger.info({
+        sessionId: input.sessionId,
+        factCount: hydratedRows.length,
+        sourceStartSeq: input.sourceStartSeq,
+        sourceEndSeq: input.sourceEndSeq,
+    }, 'Indexed compact memory facts');
+
+    return hydratedRows.length;
+}
+
 async function getEmbedding(text: string) {
     const truncated = truncateToTokenLimit(text, EMBEDDING_MAX_LENGTH);
     const sanitized = sanitizeEmbeddingInput(truncated);
@@ -538,39 +684,6 @@ async function getEmbedding(text: string) {
     return embedding;
 }
 
-async function loadCheckpoints() {
-    if (await fs.pathExists(LEGACY_CHECKPOINTS_PATH)) {
-        try {
-            const loaded = await fs.readJson(LEGACY_CHECKPOINTS_PATH);
-            if (loaded?.version === 2 && loaded?.sessions && typeof loaded.sessions === 'object') {
-                legacyCheckpoints = loaded;
-            } else {
-                logger.warn({ path: LEGACY_CHECKPOINTS_PATH, version: loaded?.version }, 'Ignoring incompatible legacy vector archive checkpoints');
-                legacyCheckpoints = { version: 2, sessions: {} };
-            }
-        } catch (e) {
-            logger.error({ err: e }, 'Failed to load legacy vector archive checkpoints, starting fresh');
-            legacyCheckpoints = { version: 2, sessions: {} };
-        }
-    }
-}
-
-async function migrateLegacyCheckpointsToDb(): Promise<void> {
-    const sessionEntries = Object.entries(legacyCheckpoints.sessions || {});
-    for (const [sessionId, checkpoint] of sessionEntries) {
-        const current = getVectorCheckpointSync(sessionId);
-        if (current.updatedAt > 0 || current.rawLastIndexedSeq > 0 || current.rawTailStartSeq > 0 || current.lastIndexedBlockId > 0) {
-            continue;
-        }
-
-        setVectorCheckpointSync(sessionId, {
-            rawLastIndexedSeq: checkpoint.lastIndexedSeq,
-            rawTailStartSeq: checkpoint.tailStartSeq,
-            lastIndexedBlockId: 0,
-        });
-    }
-}
-
 function getSessionArchiveCheckpoint(sessionId: string): SessionArchiveCheckpoint {
     const dbCheckpoint = getVectorCheckpointSync(sessionId);
     if (dbCheckpoint.updatedAt > 0 || dbCheckpoint.rawLastIndexedSeq > 0 || dbCheckpoint.lastIndexedBlockId > 0 || dbCheckpoint.rawTailStartSeq > 0) {
@@ -579,21 +692,6 @@ function getSessionArchiveCheckpoint(sessionId: string): SessionArchiveCheckpoin
             tailStartSeq: dbCheckpoint.rawTailStartSeq,
             lastIndexedBlockId: dbCheckpoint.lastIndexedBlockId,
             updatedAt: dbCheckpoint.updatedAt,
-        };
-    }
-
-    const legacy = legacyCheckpoints.sessions[sessionId];
-    if (legacy) {
-        const migrated = setVectorCheckpointSync(sessionId, {
-            rawLastIndexedSeq: legacy.lastIndexedSeq,
-            rawTailStartSeq: legacy.tailStartSeq,
-            lastIndexedBlockId: 0,
-        });
-        return {
-            lastIndexedSeq: migrated.rawLastIndexedSeq,
-            tailStartSeq: migrated.rawTailStartSeq,
-            lastIndexedBlockId: migrated.lastIndexedBlockId,
-            updatedAt: migrated.updatedAt,
         };
     }
 
@@ -1327,9 +1425,10 @@ function rerankSearchResultsByRecency(results: any[], limit: number, options?: S
             const blockBoost = row.kind === 'block'
                 ? (options?.preferBlocks ? 0.012 : 0.004)
                 : 0;
+            const factBoost = row.kind === 'fact' ? 0.01 : 0;
             return {
                 ...row,
-                _rerankScore: semantic + (recency * 0.75) + blockBoost,
+                _rerankScore: semantic + (recency * 0.75) + blockBoost + factBoost,
             };
         })
         .sort((a, b) => {
@@ -1443,6 +1542,8 @@ async function search(query: string, limit = 5, format = true, options?: SearchO
                 chunk_count: record.chunk_count,
                 block_id: record.block_id ?? undefined,
                 block_level: record.block_level ?? undefined,
+                fact_kind: parseMemoryFactKind(record.source_kind),
+                attributed_to: parseMemoryFactAttribution(record.role),
                 source_kind: record.source_kind ?? undefined,
                 source_start: record.source_start ?? undefined,
                 source_end: record.source_end ?? undefined,
@@ -1483,7 +1584,10 @@ async function search(query: string, limit = 5, format = true, options?: SearchO
         const blockLabel = r.kind === 'block'
             ? ` [kind: block] [B#${r.block_id ?? '?'} L${r.block_level ?? '?'}] [raw: ${rawLabel}]`
             : '';
-        return `[${dateStr}] [session: ${r.session_id}]${blockLabel} [seq: ${seqLabel}] [messages: ${r.message_count}] [chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]\n${buildMemoryPreview(r.text)}`;
+        const factLabel = r.kind === 'fact'
+            ? ` [kind: memory fact] [fact: ${r.fact_kind || '?'}] [source: raw ${rawLabel}]${r.attributed_to ? ` [attributed: ${r.attributed_to}]` : ''}`
+            : '';
+        return `[${dateStr}] [session: ${r.session_id}]${blockLabel}${factLabel} [seq: ${seqLabel}] [messages: ${r.message_count}] [chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]\n${buildMemoryPreview(r.text)}`;
     }).join('\n\n---\n\n');
 }
 
@@ -1577,8 +1681,6 @@ async function init() {
         }
     }
 
-    await loadCheckpoints();
-    await migrateLegacyCheckpointsToDb();
     void startStartupArchiveVectorBackfill().catch((err) => {
         logger.error({ err }, 'Startup archive vector backfill failed');
     });
@@ -1603,12 +1705,14 @@ export {
     buildArchiveSegments,
     calculateNextSegmentStartIndex,
     copySessionArchiveIndexCheckpoint,
+    createRowsFromMemoryFacts,
     createRowsFromSegment,
     createRowFromBlockRecord,
     estimateArchiveMessageTokenCount,
     getArchiveIndexBatchDecision,
     getArchiveIndexStatus,
     indexAllSessionArchives,
+    indexMemoryFactsFromCompaction,
     indexNewMessages,
     indexSessionArchive,
     init,

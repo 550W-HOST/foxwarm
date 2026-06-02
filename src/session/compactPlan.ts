@@ -36,8 +36,19 @@ export interface LayeredCreateBlockPlan {
   summary: string;
 }
 
+export type MemoryFactKind = 'decision' | 'preference' | 'fact' | 'convention' | 'environment';
+export type MemoryFactAttribution = 'user' | 'assistant' | 'both';
+
+export interface ExtractedMemoryFact {
+  kind: MemoryFactKind;
+  text: string;
+  context?: string;
+  attributedTo?: MemoryFactAttribution;
+}
+
 export interface CompactPlan {
   createBlocks: LayeredCreateBlockPlan[];
+  memoryFacts?: ExtractedMemoryFact[];
 }
 
 export interface CompactPlanValidationDetails {
@@ -65,10 +76,106 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
         type: 'string',
         description: 'JSON array string for createBlocks. Each item should be an object like {"level":1,"sourceKind":"message","sourceStart":10,"sourceEnd":12,"summary":"..."}.',
       },
+      memoryFactsJson: {
+        type: 'string',
+        description: 'Optional JSON array string for durable memory facts extracted from the compacted source range. Each item should be {"kind":"decision|preference|fact|convention|environment","text":"self-contained fact","context":"optional reason/source","attributedTo":"user|assistant|both"}. Invalid/omitted facts are ignored and never affect block creation.',
+      },
     },
     required: ['createBlocksJson'],
   },
 };
+
+const MEMORY_FACT_KINDS = new Set<MemoryFactKind>(['decision', 'preference', 'fact', 'convention', 'environment']);
+const MEMORY_FACT_ATTRIBUTIONS = new Set<MemoryFactAttribution>(['user', 'assistant', 'both']);
+const MAX_MEMORY_FACTS_PER_PLAN = 20;
+const MAX_MEMORY_FACT_TEXT_CHARS = 900;
+const MAX_MEMORY_FACT_CONTEXT_CHARS = 500;
+
+function normalizeWhitespace(text: string): string {
+  return text.trim().replace(/\s+/g, ' ');
+}
+
+function trimCompactFactText(text: string, limit: number): string {
+  const normalized = normalizeWhitespace(text);
+  return normalized.length <= limit ? normalized : truncateUnicodeSafeWithEllipsis(normalized, limit, '…');
+}
+
+function parseOptionalJsonArray(rawValue: unknown): unknown[] | null {
+  if (Array.isArray(rawValue)) {
+    return rawValue;
+  }
+
+  if (typeof rawValue === 'string' && rawValue.trim()) {
+    try {
+      const parsed = JSON.parse(rawValue);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+export function normalizeMemoryFacts(rawArgs: Record<string, any>): ExtractedMemoryFact[] {
+  const rawFacts = parseOptionalJsonArray(rawArgs.memoryFactsJson)
+    || parseOptionalJsonArray(rawArgs.factsJson)
+    || parseOptionalJsonArray(rawArgs.memoryFacts)
+    || parseOptionalJsonArray(rawArgs.facts);
+
+  if (!rawFacts) {
+    return [];
+  }
+
+  const facts: ExtractedMemoryFact[] = [];
+  const seenTexts = new Set<string>();
+
+  for (const rawFact of rawFacts) {
+    if (facts.length >= MAX_MEMORY_FACTS_PER_PLAN) {
+      break;
+    }
+    if (!rawFact || typeof rawFact !== 'object') {
+      continue;
+    }
+
+    const entry = rawFact as Record<string, any>;
+    const kind = String(entry.kind || '').trim() as MemoryFactKind;
+    if (!MEMORY_FACT_KINDS.has(kind)) {
+      continue;
+    }
+
+    const text = typeof entry.text === 'string'
+      ? trimCompactFactText(entry.text, MAX_MEMORY_FACT_TEXT_CHARS)
+      : '';
+    if (!text) {
+      continue;
+    }
+
+    const dedupeKey = text.toLowerCase();
+    if (seenTexts.has(dedupeKey)) {
+      continue;
+    }
+    seenTexts.add(dedupeKey);
+
+    const context = typeof entry.context === 'string'
+      ? trimCompactFactText(entry.context, MAX_MEMORY_FACT_CONTEXT_CHARS)
+      : undefined;
+
+    const rawAttribution = entry.attributedTo ?? entry.attributed_to;
+    const attributedTo = MEMORY_FACT_ATTRIBUTIONS.has(String(rawAttribution || '').trim() as MemoryFactAttribution)
+      ? String(rawAttribution).trim() as MemoryFactAttribution
+      : undefined;
+
+    facts.push({
+      kind,
+      text,
+      ...(context ? { context } : {}),
+      ...(attributedTo ? { attributedTo } : {}),
+    });
+  }
+
+  return facts;
+}
 
 export function formatSeqRange(startSeq?: number, endSeq?: number): string {
   if (typeof startSeq === 'number' && typeof endSeq === 'number') {
@@ -273,6 +380,7 @@ export function buildCompactPromptText(options: {
     `Review the older candidate items above and finish by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
     'Rules:',
     '- Pass the plan via createBlocksJson as a JSON array string.',
+    '- Optionally pass durable extracted facts via memoryFactsJson as a JSON array string. Memory facts are separate from block summaries; they are used only for long-term semantic search and invalid/omitted facts will be ignored.',
     '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
     '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim.',
     '- Block compression is optional. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from createBlocksJson.',
@@ -287,6 +395,8 @@ export function buildCompactPromptText(options: {
     '- For example, if force-kept later context completed a task but the block source range only contains the unfinished earlier work, the summary must describe the task as unfinished/TODO rather than completed, so the compacted timeline stays correct.',
     '- Preserve decisions, rationale that still matters, constraints, active tasks, blockers, unresolved questions, and concrete identifiers (paths, commits, branches, nodes, URLs, session IDs, config names).',
     '- Mention when an earlier plan or decision was superseded by a later one if that matters for future work.',
+    '- For memoryFactsJson, extract only durable facts worth future retrieval: explicit user decisions, preferences, project conventions, technical discoveries, environment/deploy constraints, or stable identifiers. Do not include trivial chat, tool mechanics, transient progress, or stale TODOs.',
+    '- Each memory fact must be self-contained and understandable outside this conversation. Keep the original conversation language when practical. Use kind decision/preference/fact/convention/environment and attributedTo user/assistant/both when clear.',
     `- You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including helper-tool rounds and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,
     '- If durable project/user/workflow/rule facts should outlive this session, you may use edit_memory/apply_patch_memory before submitting the final plan.',
     `- You may use only these helper tools during compaction: read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, and call ${COMPACT_PLAN_TOOL_NAME} to finish the compaction.`,
@@ -469,6 +579,7 @@ export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateI
 
   return {
     createBlocks: normalizeCreateBlocks(rawArgs, { createBlockErrors: [] }),
+    memoryFacts: normalizeMemoryFacts(rawArgs),
   };
 }
 
@@ -479,14 +590,4 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
     'Use only ranges shown in one Segment header; do not cross segment boundaries, different block levels, or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
     `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory, write_memory, edit_memory, delete_memory, and apply_patch_memory if needed.`,
   ].join(' ');
-}
-
-export function describeCreatedRanges(plan: CompactPlan): string {
-  if (plan.createBlocks.length === 0) {
-    return 'none';
-  }
-
-  return plan.createBlocks.map(block => (
-    `${block.sourceKind === 'message' ? 'L1' : `L${block.level}`} ${block.sourceKind} ${block.sourceStart}-${block.sourceEnd}`
-  )).join(', ');
 }

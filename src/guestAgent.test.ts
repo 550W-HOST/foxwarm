@@ -55,7 +55,7 @@ async function cleanupAgent(agentName: string): Promise<void> {
 test('guestAgent single mode binds new unauthorized conversation to a new session under the target agent', async () => {
   await sessionManager.loadSessions();
   const originalChat = llm.chat;
-  const originalMemory = llm.getPersistentMemory;
+  const originalMemory = llm.buildSessionSystemPromptSnapshot;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   const originalConfig = readAppConfigFile();
   const router = new MessageRouter();
@@ -63,7 +63,7 @@ test('guestAgent single mode binds new unauthorized conversation to a new sessio
   const createdSessions: string[] = [];
 
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
-  (llm as any).getPersistentMemory = async () => '';
+  (llm as any).buildSessionSystemPromptSnapshot = async () => '';
 
   try {
     const baseAgent = makeId('guestbase');
@@ -126,7 +126,7 @@ test('guestAgent single mode binds new unauthorized conversation to a new sessio
     assert.equal(callCount, 2);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).getPersistentMemory = originalMemory;
+    (llm as any).buildSessionSystemPromptSnapshot = originalMemory;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     writeAppConfigFile(originalConfig);
     for (const sessionId of createdSessions) {
@@ -141,7 +141,7 @@ test('guestAgent single mode binds new unauthorized conversation to a new sessio
 test('guestAgent inherited mode creates a derived agent main session with inherit + isolation', async () => {
   await sessionManager.loadSessions();
   const originalChat = llm.chat;
-  const originalMemory = llm.getPersistentMemory;
+  const originalMemory = llm.buildSessionSystemPromptSnapshot;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   const originalConfig = readAppConfigFile();
   const router = new MessageRouter();
@@ -149,7 +149,7 @@ test('guestAgent inherited mode creates a derived agent main session with inheri
   const createdSessions: string[] = [];
 
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
-  (llm as any).getPersistentMemory = async () => '';
+  (llm as any).buildSessionSystemPromptSnapshot = async () => '';
 
   try {
     const baseAgent = makeId('guestinherit');
@@ -206,7 +206,7 @@ test('guestAgent inherited mode creates a derived agent main session with inheri
     assert.equal(derivedCallCount, 1);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).getPersistentMemory = originalMemory;
+    (llm as any).buildSessionSystemPromptSnapshot = originalMemory;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     writeAppConfigFile(originalConfig);
     for (const sessionId of createdSessions) {

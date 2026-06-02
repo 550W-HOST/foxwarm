@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as sessionManager from './sessionManager';
-import { tool_set_session_compact_threshold } from './toolsSessionAgent';
-import { Session } from './types';
+import * as sessionManager from '../sessionManager';
+import { tool_set_session_compact_threshold } from '../toolsSessionAgent';
+import { Session } from '../types';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

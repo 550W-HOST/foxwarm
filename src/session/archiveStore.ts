@@ -1031,32 +1031,6 @@ export function getVectorCheckpointSync(sessionId: string): ArchiveVectorCheckpo
   };
 }
 
-export async function setVectorCheckpoint(
-  sessionId: string,
-  checkpoint: Partial<Pick<ArchiveVectorCheckpoint, 'rawLastIndexedSeq' | 'rawTailStartSeq' | 'lastIndexedBlockId'>>,
-): Promise<ArchiveVectorCheckpoint> {
-  const current = await getVectorCheckpoint(sessionId);
-  const next: ArchiveVectorCheckpoint = {
-    rawLastIndexedSeq: checkpoint.rawLastIndexedSeq ?? current.rawLastIndexedSeq,
-    rawTailStartSeq: checkpoint.rawTailStartSeq ?? current.rawTailStartSeq,
-    lastIndexedBlockId: checkpoint.lastIndexedBlockId ?? current.lastIndexedBlockId,
-    updatedAt: Date.now(),
-  };
-
-  getDb().prepare(`
-    INSERT INTO archive_checkpoints (
-      session_id, raw_last_indexed_seq, raw_tail_start_seq, last_indexed_block_id, updated_at
-    ) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(session_id) DO UPDATE SET
-      raw_last_indexed_seq = excluded.raw_last_indexed_seq,
-      raw_tail_start_seq = excluded.raw_tail_start_seq,
-      last_indexed_block_id = excluded.last_indexed_block_id,
-      updated_at = excluded.updated_at
-  `).run(sessionId, next.rawLastIndexedSeq, next.rawTailStartSeq, next.lastIndexedBlockId, next.updatedAt);
-
-  return next;
-}
-
 export function setVectorCheckpointSync(
   sessionId: string,
   checkpoint: Partial<Pick<ArchiveVectorCheckpoint, 'rawLastIndexedSeq' | 'rawTailStartSeq' | 'lastIndexedBlockId'>>,
@@ -1103,11 +1077,6 @@ export async function renameSessionArchiveStore(oldSessionId: string, newSession
 export async function getVectorSearchLineage(sessionId: string): Promise<LineageEntry[]> {
   await initArchiveStore();
   await ensureImported(sessionId);
-  return buildLineage(sessionId);
-}
-
-export function getVectorSearchLineageSync(sessionId: string): LineageEntry[] {
-  initArchiveStoreSync();
   return buildLineage(sessionId);
 }
 

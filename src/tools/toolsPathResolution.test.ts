@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import path from 'path';
-import { getAgentDir, getAgentMemoryDir } from './config';
-import * as sessionManager from './sessionManager';
-import { checkToolPermission } from './isolatedCheck';
-import { read, write, edit, apply_patch, apply_patch_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, search_memory, search_vector } from './tools';
+import { getAgentDir, getAgentMemoryDir } from '../config';
+import * as sessionManager from '../sessionManager';
+import { checkToolPermission } from '../isolatedCheck';
+import { read, write, edit, apply_patch, apply_patch_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, search_memory, search_vector } from '../tools';
 
 test('submit_compact_plan is present in regular tool definitions and guarded outside compact flow', async () => {
   assert.ok(definitions.some(def => def.name === 'submit_compact_plan'));

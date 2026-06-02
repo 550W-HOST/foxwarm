@@ -13,6 +13,7 @@ import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
 import { checkToolPermission, checkPathAccess } from './isolatedCheck';
+import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
     collectOpenAIResponsesStream as collectOpenAIResponsesStreamProvider,
@@ -411,17 +412,6 @@ export function normalizeSystemPromptFiles(value: unknown): string[] | undefined
     return undefined;
 }
 
-function expandHomePath(filePath: string): string {
-    if (filePath === '~') {
-        return process.env.HOME || filePath;
-    }
-    if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
-        return path.join(process.env.HOME || '~', filePath.slice(2));
-    }
-
-    return filePath;
-}
-
 function resolveSystemPromptFilePath(agentName: string, fileReference: string): string {
     const expandedPath = expandHomePath(fileReference);
     if (path.isAbsolute(expandedPath)) {
@@ -571,15 +561,6 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
     return combined;
 }
 
-
-export async function getPersistentMemory(agentName: string = 'main') {
-    try {
-        return await buildSessionSystemPromptSnapshot({ agentName });
-    } catch (e) {
-        logger.error({ err: e, agentName }, 'Error reading persistent memory');
-        return '';
-    }
-}
 
 async function logRequest(data: any, iteration = 0): Promise<LlmInteractionLogFiles | null> {
     try {
@@ -1029,15 +1010,6 @@ export async function chat(
         await sessionManager.appendSessionMessage(session, message);
     };
 
-    const appendTerminalModelTextAndReturn = async (text: string): Promise<ChatResult> => {
-        await appendMessage({
-            role: 'model',
-            parts: [{ text }],
-        });
-
-        return { text };
-    };
-
     // Get persistent context
     const agentName = session.agent || 'main';
     const systemPrompt = session.persistentMemorySnapshot || await buildSessionSystemPromptSnapshot({
@@ -1277,11 +1249,13 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         modelStreamEmitter.reset();
     }
 
+    const { requestBody, requestHeaders: compressionHeaders } = maybeCompressLlmRequestBody(data, modelEntry);
+
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                response = await axios.post(url, data, {
-                    headers: { ...headers, ...(modelEntry.extraHeaders || {}) },
+                response = await axios.post(url, requestBody, {
+                    headers: { ...headers, ...compressionHeaders, ...(modelEntry.extraHeaders || {}) },
                     timeout: options.timeoutMs ?? 180000,
                     validateStatus: () => true,
                     signal: abortController.signal,

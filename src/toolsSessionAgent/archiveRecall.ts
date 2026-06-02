@@ -1,0 +1,956 @@
+import * as sessionManager from '../sessionManager';
+import { formatArchiveBlockContextText, formatArchiveBlockTimeRange, getArchiveBlockEndTimestamp, getArchiveBlockStartTimestamp, type ArchiveBlockRecord } from '../session/layeredContext';
+import { formatSessionMessagesPreview } from '../utils/messagePreview';
+import { formatMessagePreviewText, formatPrefixedMultilineText } from '../utils/messageFormat';
+import { formatModelVisibilitySuffix, redactDisplayOnlyMessageForModel } from '../session/messageVisibility';
+import { truncateUnicodeSafe } from '../utils/unicode';
+import { formatLocalTimestamp } from '../utils/localTime';
+import { requireNotIsolated, checkArchivedReadPermission } from '../isolatedCheck';
+import {
+  ToolArgs,
+  ToolContext,
+  ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT,
+  RECALL_DEFAULT_PREVIEW_LENGTH,
+  RECALL_LEGACY_ARG_NAMES,
+  normalizePositivePreviewLength,
+  assertPreviewRequestWithinLimit,
+  calculatePreviewRequestChars,
+  formatMessageLogRange,
+  formatBlockIdRange,
+  getPositiveInteger,
+  isNonEmptyString,
+} from './helpers';
+
+
+function formatArchiveSourceBlockIds(sourceBlockIds?: number[]): string | undefined {
+  if (!Array.isArray(sourceBlockIds) || sourceBlockIds.length === 0) {
+    return undefined;
+  }
+
+  return sourceBlockIds.map(id => `B#${id}`).join(', ');
+}
+
+function formatArchiveChildBlockReference(record: ArchiveBlockRecord): string {
+  return formatArchiveSourceBlockIds(getArchiveBlockSourceBlockIds(record))
+    || formatBlockIdRange(record.sourceStart, record.sourceEnd);
+}
+
+function getArchiveBlockSourceBlockIds(record: ArchiveBlockRecord): number[] | undefined {
+  if (record.sourceKind !== 'block' || !Array.isArray(record.sourceBlockIds) || record.sourceBlockIds.length === 0) {
+    return undefined;
+  }
+
+  const ids = record.sourceBlockIds
+    .map(id => Number(id))
+    .filter(id => Number.isInteger(id) && id > 0);
+  return ids.length > 0 ? ids : undefined;
+}
+
+function archiveBlockContainsSourceBlockId(parent: ArchiveBlockRecord, childId: number): boolean {
+  const sourceBlockIds = getArchiveBlockSourceBlockIds(parent);
+  if (sourceBlockIds) {
+    return sourceBlockIds.includes(childId);
+  }
+
+  return childId >= Math.min(parent.sourceStart, parent.sourceEnd)
+    && childId <= Math.max(parent.sourceStart, parent.sourceEnd);
+}
+
+function formatArchiveSourceLabel(sourceKind: string, sourceStart: number, sourceEnd: number, sourceBlockIds?: number[]): string {
+  if (sourceKind === 'message') {
+    return `messages ${formatMessageLogRange(sourceStart, sourceEnd)}`;
+  }
+  if (sourceKind === 'block') {
+    const explicitIds = formatArchiveSourceBlockIds(sourceBlockIds);
+    if (explicitIds) {
+      return `blocks ${explicitIds}`;
+    }
+    return `blocks ${formatBlockIdRange(sourceStart, sourceEnd)}`;
+  }
+  return `${sourceKind} ${sourceStart}-${sourceEnd}`;
+}
+
+function normalizeArchiveTimestamp(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function getArchivedMessageTimestamp(record?: { timestamp?: number; message?: any } | null): number | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  return normalizeArchiveTimestamp(record.timestamp)
+    ?? normalizeArchiveTimestamp(record.message?.__meta?.timestamp);
+}
+
+function formatArchivedMessageTime(record: { timestamp?: number; message?: any }): string {
+  const timestamp = getArchivedMessageTimestamp(record);
+  return typeof timestamp === 'number' ? ` time ${formatLocalTimestamp(timestamp)}` : '';
+}
+
+function getDirectBlockMessageSeqRange(record: ArchiveBlockRecord): { startSeq: number; endSeq: number } | undefined {
+  const rawStartSeq = getPositiveInteger(record.rawStartSeq);
+  const rawEndSeq = getPositiveInteger(record.rawEndSeq);
+  if (typeof rawStartSeq === 'number' && typeof rawEndSeq === 'number') {
+    const range = normalizeRecallRange(rawStartSeq, rawEndSeq);
+    return { startSeq: range.start, endSeq: range.end };
+  }
+
+  if (record.sourceKind === 'message') {
+    const range = normalizeRecallRange(record.sourceStart, record.sourceEnd);
+    return { startSeq: range.start, endSeq: range.end };
+  }
+
+  return undefined;
+}
+
+async function getArchivedMessageTimestampBySeq(sessionId: string, seq: number): Promise<number | undefined> {
+  const result = await sessionManager.getArchivedMessages(sessionId, { startSeq: seq, endSeq: seq });
+  return getArchivedMessageTimestamp(result.records.find(record => record.seq === seq) || result.records[0]);
+}
+
+async function hydrateRecallBlockTimeRange(
+  sessionId: string,
+  record: ArchiveBlockRecord,
+  resolvedRange?: { startSeq: number; endSeq: number } | null,
+): Promise<ArchiveBlockRecord> {
+  const startTimestamp = getArchiveBlockStartTimestamp(record);
+  const endTimestamp = getArchiveBlockEndTimestamp(record);
+  if (typeof startTimestamp === 'number' && typeof endTimestamp === 'number') {
+    return {
+      ...record,
+      rawStartTimestamp: startTimestamp,
+      rawEndTimestamp: endTimestamp,
+    };
+  }
+
+  const range = resolvedRange || getDirectBlockMessageSeqRange(record);
+  if (!range) {
+    return {
+      ...record,
+      rawStartTimestamp: startTimestamp,
+      rawEndTimestamp: endTimestamp,
+    };
+  }
+
+  const startSeq = getPositiveInteger(range.startSeq);
+  const endSeq = getPositiveInteger(range.endSeq);
+  if (typeof startSeq !== 'number' || typeof endSeq !== 'number') {
+    return {
+      ...record,
+      rawStartTimestamp: startTimestamp,
+      rawEndTimestamp: endTimestamp,
+    };
+  }
+
+  const [resolvedStartTimestamp, resolvedEndTimestamp] = await Promise.all([
+    typeof startTimestamp === 'number' ? Promise.resolve(startTimestamp) : getArchivedMessageTimestampBySeq(sessionId, startSeq),
+    typeof endTimestamp === 'number' ? Promise.resolve(endTimestamp) : getArchivedMessageTimestampBySeq(sessionId, endSeq),
+  ]);
+
+  return {
+    ...record,
+    rawStartTimestamp: resolvedStartTimestamp,
+    rawEndTimestamp: resolvedEndTimestamp,
+  };
+}
+
+async function hydrateRecallBlockTimeRanges(sessionId: string, records: ArchiveBlockRecord[]): Promise<ArchiveBlockRecord[]> {
+  return Promise.all(records.map(record => hydrateRecallBlockTimeRange(sessionId, record)));
+}
+
+function formatArchivedMessagePreview(
+  sessionId: string,
+  records: Array<{ seq: number; timestamp?: number; message: any; inherited?: boolean; sourceSessionId?: string }>,
+  meta: { totalMatched: number; startSeq?: number; endSeq?: number },
+  previewLength: number,
+): string {
+  if (records.length === 0) {
+    const rangeLabel = typeof meta.startSeq === 'number' || typeof meta.endSeq === 'number'
+      ? ` for ${typeof meta.startSeq === 'number' ? `#${meta.startSeq}` : '?'}-${typeof meta.endSeq === 'number' ? `#${meta.endSeq}` : '?'}`
+      : '';
+    return `No archived messages found in session \`${sessionId}\`${rangeLabel}.`;
+  }
+
+  const rangeBits: string[] = [];
+  if (typeof meta.startSeq === 'number') {
+    rangeBits.push(`startSeq=#${meta.startSeq}`);
+  }
+  if (typeof meta.endSeq === 'number') {
+    rangeBits.push(`endSeq=#${meta.endSeq}`);
+  }
+  const rangeLabel = rangeBits.length ? ` (${rangeBits.join(', ')})` : '';
+
+  let result = `Archived messages for session \`${sessionId}\` - showing ${records.length} of ${meta.totalMatched} matched message(s)${rangeLabel}.\n\n`;
+  for (const record of records) {
+    const message = redactDisplayOnlyMessageForModel(record.message);
+    const roleEmoji = message.role === 'user' ? '👤' : message.role === 'model' ? '🤖' : '🔧';
+    const preview = formatMessagePreviewText(message, previewLength, {
+      skipEphemeralSystem: true,
+      skipRagMemorySnippets: true,
+      skipThinking: true,
+    });
+    const originLabel = record.inherited
+      ? `[inherited from ${record.sourceSessionId || 'unknown'}] `
+      : '[local] ';
+    result += `${formatPrefixedMultilineText(`[#${record.seq}${formatArchivedMessageTime(record)}] ${originLabel}${roleEmoji} ${record.message.role}${formatModelVisibilitySuffix(record.message)}: `, preview)}\n`;
+  }
+  return result;
+}
+
+
+function formatArchivedBlockPreview(
+  sessionId: string,
+  records: Array<{
+    id: number;
+    level: number;
+    rawStartSeq: number;
+    rawEndSeq: number;
+    rawStartTimestamp?: number;
+    rawEndTimestamp?: number;
+    summary: string;
+    sourceKind: string;
+    sourceStart: number;
+    sourceEnd: number;
+    sourceBlockIds?: number[];
+    inherited?: boolean;
+    sourceSessionId?: string;
+  }>,
+  meta: { totalMatched: number; startId?: number; endId?: number },
+  previewLength: number,
+): string {
+  if (records.length === 0) {
+    const rangeLabel = typeof meta.startId === 'number' || typeof meta.endId === 'number'
+      ? ` for ${typeof meta.startId === 'number' ? `#${meta.startId}` : '?'}-${typeof meta.endId === 'number' ? `#${meta.endId}` : '?'}`
+      : '';
+    return `No archived blocks found in session \`${sessionId}\`${rangeLabel}.`;
+  }
+
+  const rangeBits: string[] = [];
+  if (typeof meta.startId === 'number') rangeBits.push(`startId=#${meta.startId}`);
+  if (typeof meta.endId === 'number') rangeBits.push(`endId=#${meta.endId}`);
+  const rangeLabel = rangeBits.length ? ` (${rangeBits.join(', ')})` : '';
+
+  let result = `Archived layered-context blocks for session \`${sessionId}\` - showing ${records.length} of ${meta.totalMatched} matched block(s)${rangeLabel}.
+
+`;
+  for (const record of records) {
+    result += `${formatArchivedBlockPreviewLine(record, previewLength)}
+`;
+  }
+  return result;
+}
+
+function formatArchivedBlockPreviewLine(
+  record: {
+    id: number;
+    level: number;
+    rawStartSeq: number;
+    rawEndSeq: number;
+    rawStartTimestamp?: number;
+    rawEndTimestamp?: number;
+    summary: string;
+    sourceKind: string;
+    sourceStart: number;
+    sourceEnd: number;
+    sourceBlockIds?: number[];
+    inherited?: boolean;
+    sourceSessionId?: string;
+  },
+  previewLength: number,
+  options: { includeSourceSuffix?: boolean } = {},
+): string {
+  const locality = record.inherited ? `[inherited from ${record.sourceSessionId || 'unknown'}] ` : '[local] ';
+  const blockText = formatArchiveBlockContextText({
+    ...record,
+    summary: truncateUnicodeSafe(record.summary || '', previewLength) || '[empty summary]',
+  });
+  const text = options.includeSourceSuffix === false
+    ? blockText
+    : `${blockText} from ${formatArchiveSourceLabel(record.sourceKind, record.sourceStart, record.sourceEnd, record.sourceBlockIds)}`;
+  return formatPrefixedMultilineText(locality, text);
+}
+
+type RecallTargetSpec =
+  | { kind: 'overview' }
+  | { kind: 'blocks' }
+  | { kind: 'block'; id: number }
+  | { kind: 'blockMessages'; id: number }
+  | { kind: 'messages'; startSeq: number; endSeq: number };
+
+function buildRecallSyntaxHelp(detail: string): string {
+  return `${detail}\n\nSupported recall target selectors:\n`
+    + '- `overview` (or omit `target`) for available message/block ranges and examples\n'
+    + '- `blocks` to list the current CTX-BLOCK frontier (top-level blocks in working context)\n'
+    + '- `B#126` or `block#126` to inspect one CTX-BLOCK summary and its immediate source\n'
+    + '- `msg:B#126` to expand the message log covered by a block\n'
+    + '- `msg#10637-10680` or `msg#10637` to read message log entries\n\n'
+    + 'Prefer `B#N` CTX-BLOCK drill-down first; message targets are precise/advanced and can return lots of irrelevant content.\n\n'
+    + 'Examples:\n'
+    + '- `recall({"target":"blocks"})`\n'
+    + '- `recall({"target":"B#126"})`\n'
+    + '- `recall({"target":"msg:B#126"})`\n'
+    + '- `recall({"target":"msg#10637-10680"})`';
+}
+
+function recallSyntaxError(detail: string): Error {
+  return new Error(buildRecallSyntaxHelp(detail));
+}
+
+function assertNoLegacyRecallArgs(args: ToolArgs): void {
+  const legacyKeys = RECALL_LEGACY_ARG_NAMES.filter(key => Object.prototype.hasOwnProperty.call(args || {}, key));
+  if (legacyKeys.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    buildRecallSyntaxHelp(
+      `recall no longer accepts legacy get_context_archive parameters: ${legacyKeys.join(', ')}. Use the target selector instead.`,
+    ),
+  );
+}
+
+function parseRecallPositiveInteger(rawValue: string, label: string): number {
+  if (!/^\d+$/.test(rawValue)) {
+    throw recallSyntaxError(`${label} must be a positive integer; got \`${rawValue}\`.`);
+  }
+
+  const value = Number(rawValue);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw recallSyntaxError(`${label} must be a positive integer; got \`${rawValue}\`.`);
+  }
+  return value;
+}
+
+function normalizeRecallRange(start: number, end: number): { start: number; end: number } {
+  return start <= end ? { start, end } : { start: end, end: start };
+}
+
+function parseRecallTarget(target: unknown): RecallTargetSpec {
+  if (target === undefined || target === null) {
+    return { kind: 'overview' };
+  }
+  if (typeof target !== 'string') {
+    throw recallSyntaxError('recall target must be a string selector.');
+  }
+
+  const trimmed = target.trim();
+  if (!trimmed || /^overview$/i.test(trimmed) || /^help$/i.test(trimmed)) {
+    return { kind: 'overview' };
+  }
+  if (/^raw\b|^raw#|^raw:/i.test(trimmed)) {
+    throw recallSyntaxError(`Target \`${trimmed}\` uses the old raw syntax. Use \`msg#...\` or \`msg:B#...\` instead.`);
+  }
+  if (/^latest:/i.test(trimmed)) {
+    throw recallSyntaxError(`Target \`${trimmed}\` is not supported by recall. Use \`overview\`, \`blocks\`, \`B#N\`, \`msg:B#N\`, or \`msg#A-B\`.`);
+  }
+  if (/^blocks#/i.test(trimmed)) {
+    throw recallSyntaxError(`Target \`${trimmed}\` is not supported. Use \`blocks\` for the current CTX-BLOCK frontier, or \`B#N\` for one block.`);
+  }
+  if (/^blocks$/i.test(trimmed)) {
+    return { kind: 'blocks' };
+  }
+
+  let match = trimmed.match(/^(?:b|block)#(\d+)$/i);
+  if (match) {
+    return { kind: 'block', id: parseRecallPositiveInteger(match[1], 'block id') };
+  }
+
+  match = trimmed.match(/^msg\s*:\s*(?:b|block)#(\d+)$/i);
+  if (match) {
+    return { kind: 'blockMessages', id: parseRecallPositiveInteger(match[1], 'block id') };
+  }
+
+  match = trimmed.match(/^msg#(\d+)(?:-(?:msg#|#)?(\d+))?$/i);
+  if (match) {
+    const startSeq = parseRecallPositiveInteger(match[1], 'message seq');
+    const endSeq = match[2] ? parseRecallPositiveInteger(match[2], 'message seq') : startSeq;
+    const range = normalizeRecallRange(startSeq, endSeq);
+    return { kind: 'messages', startSeq: range.start, endSeq: range.end };
+  }
+
+  throw recallSyntaxError(`Could not parse recall target \`${trimmed}\`.`);
+}
+
+function formatRecallExample(targetSessionId: string, includeSessionId: boolean, target?: string): string {
+  const payload: Record<string, string> = {};
+  if (includeSessionId) {
+    payload.sessionId = targetSessionId;
+  }
+  if (target !== undefined) {
+    payload.target = target;
+  }
+  return `recall(${JSON.stringify(payload)})`;
+}
+
+function formatRecallNextHints(targetSessionId: string, includeSessionId: boolean, targets: Array<string | undefined>): string {
+  const seen = new Set<string>();
+  const examples: string[] = [];
+  for (const target of targets) {
+    const example = formatRecallExample(targetSessionId, includeSessionId, target);
+    if (seen.has(example)) {
+      continue;
+    }
+    seen.add(example);
+    examples.push(example);
+    if (examples.length >= 3) {
+      break;
+    }
+  }
+
+  if (examples.length === 0) {
+    return '';
+  }
+
+  return `\n\nSuggestions (optional; not exhaustive):\n${examples.map(example => `- \`${example}\``).join('\n')}`;
+}
+
+function getRecallPreviewBudget(count: number, previewLength: number): { requestedChars: number; overLimit: boolean; maxItemsWithinLimit: number } {
+  const normalizedCount = Math.max(0, Math.floor(count));
+  const normalizedPreviewLength = Math.max(0, Math.floor(previewLength));
+  const requestedChars = calculatePreviewRequestChars(normalizedCount, normalizedPreviewLength);
+  return {
+    requestedChars,
+    overLimit: requestedChars > ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT,
+    maxItemsWithinLimit: normalizedPreviewLength > 0
+      ? Math.max(1, Math.floor(ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT / normalizedPreviewLength))
+      : normalizedCount,
+  };
+}
+
+function buildRecallMessageChunkTargets(startSeq: number, endSeq: number, previewLength: number, maxChunks: number = 3): string[] {
+  const totalMessages = Math.max(1, endSeq - startSeq + 1);
+  const budget = getRecallPreviewBudget(totalMessages, previewLength);
+  const chunkSize = Math.max(1, budget.maxItemsWithinLimit);
+  const chunks: string[] = [];
+  let cursor = startSeq;
+  while (cursor <= endSeq && chunks.length < maxChunks) {
+    const chunkEnd = Math.min(endSeq, cursor + chunkSize - 1);
+    chunks.push(formatMessageLogRange(cursor, chunkEnd));
+    cursor = chunkEnd + 1;
+  }
+  return chunks;
+}
+
+function buildRecallMessageBudgetNotice(options: {
+  targetSessionId: string;
+  includeSessionId: boolean;
+  blockId?: number;
+  startSeq: number;
+  endSeq: number;
+  messageCount: number;
+  previewLength: number;
+  preferBlockFirst?: boolean;
+  rangeSuffix?: string;
+}): string {
+  const { targetSessionId, includeSessionId, blockId, startSeq, endSeq, messageCount, previewLength, preferBlockFirst, rangeSuffix = '' } = options;
+  const budget = getRecallPreviewBudget(messageCount, previewLength);
+  const rangeTarget = `${formatMessageLogRange(startSeq, endSeq)}${rangeSuffix}`;
+  const prefix = typeof blockId === 'number'
+    ? `CTX-BLOCK B#${blockId} covers ${rangeTarget} (${messageCount} message(s)).`
+    : `Target ${rangeTarget} matches ${messageCount} message(s).`;
+  const chunks = buildRecallMessageChunkTargets(startSeq, endSeq, previewLength)
+    .map(target => formatRecallExample(targetSessionId, includeSessionId, target));
+  const lowerPreview = Math.max(1, Math.floor(ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT / Math.max(2, messageCount)));
+  const suggestions = [
+    preferBlockFirst
+      ? 'If a covering CTX-BLOCK hierarchy is available, drill down through child blocks before expanding a broad message range.'
+      : undefined,
+    chunks.length > 0 ? `Try a narrower message chunk such as ${chunks.map(example => `\`${example}\``).join(' or ')}.` : undefined,
+    lowerPreview < previewLength ? `Or lower previewLength (for example ${lowerPreview}) for this message range.` : undefined,
+  ].filter(Boolean).join(' ');
+
+  return `${prefix} Estimated preview budget is ${messageCount} × ${previewLength} = ${budget.requestedChars} characters, exceeding the ${ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT}-character limit. ${suggestions}`.trim();
+}
+
+function throwRecallMessageBudgetError(options: Parameters<typeof buildRecallMessageBudgetNotice>[0]): never {
+  throw new Error(`${buildRecallMessageBudgetNotice(options)}\n\n${buildRecallSyntaxHelp('Message target is too broad for recall preview output. Prefer `B#N` CTX-BLOCK drill-down first when you have a block id; use message targets only for precise ranges.')}`);
+}
+
+function capRecallBlockSummaryRecords(records: ArchiveBlockRecord[], previewLength: number): {
+  records: ArchiveBlockRecord[];
+  capped: boolean;
+  requestedChars: number;
+  maxItemsWithinLimit: number;
+} {
+  const budget = getRecallPreviewBudget(records.length, previewLength);
+  if (!budget.overLimit) {
+    return { records, capped: false, requestedChars: budget.requestedChars, maxItemsWithinLimit: budget.maxItemsWithinLimit };
+  }
+
+  return {
+    records: records.slice(0, budget.maxItemsWithinLimit),
+    capped: true,
+    requestedChars: budget.requestedChars,
+    maxItemsWithinLimit: budget.maxItemsWithinLimit,
+  };
+}
+
+function summarizeBlockLevels(records: Array<{ id: number; level: number }>): string {
+  if (records.length === 0) {
+    return 'none';
+  }
+
+  const byLevel = new Map<number, { count: number; latestId: number }>();
+  for (const record of records) {
+    const current = byLevel.get(record.level) || { count: 0, latestId: 0 };
+    current.count += 1;
+    current.latestId = Math.max(current.latestId, record.id);
+    byLevel.set(record.level, current);
+  }
+
+  return Array.from(byLevel.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([level, value]) => `L${level}: ${value.count} (latest B#${value.latestId})`)
+    .join(', ');
+}
+
+function sortArchiveBlocksByMessageRange(records: ArchiveBlockRecord[]): ArchiveBlockRecord[] {
+  return [...records].sort((a, b) => (
+    (a.rawStartSeq || 0) - (b.rawStartSeq || 0)
+    || (a.rawEndSeq || 0) - (b.rawEndSeq || 0)
+    || (a.rawStartTimestamp || 0) - (b.rawStartTimestamp || 0)
+    || a.id - b.id
+  ));
+}
+
+function selectRecallFrontierBlocks(records: ArchiveBlockRecord[]): ArchiveBlockRecord[] {
+  const parentBlocks = records.filter(record => record.sourceKind === 'block');
+  const frontier = records.filter(record => !parentBlocks.some(parent => (
+    parent.id !== record.id
+    && archiveBlockContainsSourceBlockId(parent, record.id)
+  )));
+
+  return sortArchiveBlocksByMessageRange(frontier);
+}
+
+function formatRecallBlockDirectoryLine(record: ArchiveBlockRecord, previewLength: number): string {
+  const origin = record.inherited ? ` [inherited from ${record.sourceSessionId || 'unknown'}]` : ' [local]';
+  const blockText = formatArchiveBlockContextText({
+    ...record,
+    summary: truncateUnicodeSafe(record.summary || '', previewLength) || '[empty summary]',
+  });
+  return `- ${blockText}${origin}`;
+}
+
+async function getRecallBlockById(sessionId: string, id: number): Promise<ArchiveBlockRecord | undefined> {
+  const result = await sessionManager.getArchivedBlocks(sessionId, { startId: id, endId: id });
+  return result.records.find((record: ArchiveBlockRecord) => record.id === id);
+}
+
+async function getRecallChildBlocksForBlock(sessionId: string, block: ArchiveBlockRecord): Promise<ArchiveBlockRecord[]> {
+  const sourceBlockIds = getArchiveBlockSourceBlockIds(block);
+  if (!sourceBlockIds) {
+    const result = await sessionManager.getArchivedBlocks(sessionId, {
+      startId: block.sourceStart,
+      endId: block.sourceEnd,
+    });
+    return result.records as ArchiveBlockRecord[];
+  }
+
+  const minId = Math.min(...sourceBlockIds);
+  const maxId = Math.max(...sourceBlockIds);
+  const order = new Map(sourceBlockIds.map((id, index) => [id, index]));
+  const result = await sessionManager.getArchivedBlocks(sessionId, {
+    startId: minId,
+    endId: maxId,
+  });
+  return (result.records as ArchiveBlockRecord[])
+    .filter(child => order.has(child.id))
+    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+}
+
+async function resolveRecallBlockMessageRange(
+  sessionId: string,
+  block: ArchiveBlockRecord,
+  seenBlockIds: Set<number> = new Set(),
+): Promise<{ startSeq: number; endSeq: number } | null> {
+  if (typeof block.rawStartSeq === 'number' && typeof block.rawEndSeq === 'number'
+    && Number.isFinite(block.rawStartSeq) && Number.isFinite(block.rawEndSeq)
+    && block.rawStartSeq > 0 && block.rawEndSeq > 0) {
+    const range = normalizeRecallRange(Math.trunc(block.rawStartSeq), Math.trunc(block.rawEndSeq));
+    return { startSeq: range.start, endSeq: range.end };
+  }
+
+  if (block.sourceKind === 'message') {
+    const range = normalizeRecallRange(block.sourceStart, block.sourceEnd);
+    return { startSeq: range.start, endSeq: range.end };
+  }
+
+  if (block.sourceKind !== 'block' || seenBlockIds.has(block.id)) {
+    return null;
+  }
+
+  seenBlockIds.add(block.id);
+  const childRecords = await getRecallChildBlocksForBlock(sessionId, block);
+  const ranges = await Promise.all(
+    childRecords.map((child: ArchiveBlockRecord) => resolveRecallBlockMessageRange(sessionId, child, seenBlockIds)),
+  );
+  const validRanges = ranges.filter((range): range is { startSeq: number; endSeq: number } => !!range);
+  if (validRanges.length === 0) {
+    return null;
+  }
+  return {
+    startSeq: Math.min(...validRanges.map(range => range.startSeq)),
+    endSeq: Math.max(...validRanges.map(range => range.endSeq)),
+  };
+}
+
+
+export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContext) {
+  await requireNotIsolated(ctx, 'get_session_messages');
+  const { sessionId, start, count } = args;
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 100);
+
+  const session = await sessionManager.getExistingSession(sessionId);
+  if (!session) {
+    return `Session \`${sessionId}\` not found.`;
+  }
+
+  const totalMessages = session.history.length;
+  let actualStart = start;
+  let actualCount = count;
+
+  if (actualStart === undefined && actualCount === undefined) {
+    actualCount = 10;
+    actualStart = Math.max(0, totalMessages - actualCount);
+  } else if (actualStart === undefined) {
+    actualStart = 0;
+  } else if (actualCount === undefined) {
+    actualCount = totalMessages - actualStart;
+  }
+
+  if (actualStart < 0) {
+    actualStart = Math.max(0, totalMessages + actualStart);
+  }
+
+  actualStart = Math.max(0, Math.min(actualStart, totalMessages));
+  actualCount = Math.min(actualCount, totalMessages - actualStart);
+
+  assertPreviewRequestWithinLimit('get_session_messages', [
+    { label: 'messages', count: actualCount, previewLength },
+  ]);
+
+  const messages = await sessionManager.getSessionMessages(sessionId, actualStart, actualCount);
+
+  if (messages.length === 0) {
+    return `No messages found in session \`${sessionId}\` (total: ${totalMessages} messages).`;
+  }
+
+  return formatSessionMessagesPreview(sessionId, messages, actualStart, totalMessages, previewLength, {
+    hideDisplayOnlyContent: true,
+  });
+}
+
+export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolContext) {
+  const targetSessionId = args.sessionId || ctx?.sessionId;
+  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
+
+  if (!targetSessionId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  const result = await sessionManager.getArchivedMessages(targetSessionId, {
+    startSeq: typeof args.startSeq === 'number' ? args.startSeq : undefined,
+    endSeq: typeof args.endSeq === 'number' ? args.endSeq : undefined,
+  });
+
+  if (result.totalMatched === 0) {
+    const availableRange = typeof result.availableRange.startSeq === 'number' || typeof result.availableRange.endSeq === 'number'
+      ? ` Available archived seq range: ${typeof result.availableRange.startSeq === 'number' ? `#${result.availableRange.startSeq}` : '?'}-${typeof result.availableRange.endSeq === 'number' ? `#${result.availableRange.endSeq}` : '?'}.`
+      : '';
+    return `No archived messages matched for session \`${targetSessionId}\`.${availableRange}`;
+  }
+
+  assertPreviewRequestWithinLimit('get_archived_messages', [
+    { label: 'archived messages', count: result.records.length, previewLength },
+  ]);
+
+  return formatArchivedMessagePreview(targetSessionId, result.records, {
+    totalMatched: result.totalMatched,
+    startSeq: result.requestedRange.startSeq,
+    endSeq: result.requestedRange.endSeq,
+  }, previewLength);
+}
+
+
+export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext) {
+  const targetSessionId = args.sessionId || ctx?.sessionId;
+  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
+  const previewLength = normalizePositivePreviewLength(args.previewLength, 1000);
+
+  if (!targetSessionId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  const result = await sessionManager.getArchivedBlocks(targetSessionId, {
+    startId: typeof args.startId === 'number' ? args.startId : undefined,
+    endId: typeof args.endId === 'number' ? args.endId : undefined,
+  });
+
+  assertPreviewRequestWithinLimit('get_archived_blocks', [
+    { label: 'archived blocks', count: result.records.length, previewLength },
+  ]);
+
+  return formatArchivedBlockPreview(targetSessionId, result.records, {
+    totalMatched: result.totalMatched,
+    startId: result.requestedRange.startId,
+    endId: result.requestedRange.endId,
+  }, previewLength);
+}
+
+async function buildRecallOverview(targetSessionId: string, includeSessionId: boolean): Promise<string> {
+  const [messageResult, blockResult] = await Promise.all([
+    sessionManager.getArchivedMessages(targetSessionId, {}),
+    sessionManager.getArchivedBlocks(targetSessionId, {}),
+  ]);
+  const blockRecords = blockResult.records as ArchiveBlockRecord[];
+  const frontierBlocks = selectRecallFrontierBlocks(blockRecords);
+
+  const messageRange = typeof messageResult.availableRange.startSeq === 'number'
+    ? `${formatMessageLogRange(messageResult.availableRange.startSeq, messageResult.availableRange.endSeq)} (${messageResult.totalMatched} message(s))`
+    : 'none';
+  const blockIds = blockRecords.map(record => record.id);
+  const minBlockId = blockIds.length ? Math.min(...blockIds) : undefined;
+  const maxBlockId = blockIds.length ? Math.max(...blockIds) : undefined;
+  const lastBlock = sortArchiveBlocksByMessageRange(blockRecords).slice(-1)[0];
+  const blockRange = typeof minBlockId === 'number' && typeof maxBlockId === 'number'
+    ? `${formatBlockIdRange(minBlockId, maxBlockId)} (${blockResult.totalMatched} total; frontier/top-level: ${frontierBlocks.length}; ${summarizeBlockLevels(blockRecords)})`
+    : 'none';
+
+  const exampleBlock = frontierBlocks[0] || lastBlock;
+  const exampleTargets = [
+    'blocks',
+    exampleBlock ? `B#${exampleBlock.id}` : undefined,
+  ];
+
+  return [
+    `Recall overview for session \`${targetSessionId}\`.`,
+    '',
+    `Available message log: ${messageRange}.`,
+    `Layered CTX-BLOCK archive: ${blockRange}.`,
+    '',
+    'Your working context may already contain active CTX-BLOCK summaries. Prefer starting from a visible `B#N` and drill down one layer at a time; message targets can return lots of irrelevant content.',
+    'Supported targets: `blocks`, `B#11`, `block#11`, `msg:B#11`, `msg#3907-4329`, `msg#3907`.',
+  ].join('\n') + formatRecallNextHints(targetSessionId, includeSessionId, exampleTargets);
+}
+
+async function buildRecallMessagesByRange(
+  targetSessionId: string,
+  startSeq: number,
+  endSeq: number,
+  previewLength: number,
+  includeSessionId: boolean,
+): Promise<string> {
+  const result = await sessionManager.getArchivedMessages(targetSessionId, { startSeq, endSeq });
+  if (result.totalMatched === 0) {
+    const availableRange = typeof result.availableRange.startSeq === 'number'
+      ? ` Available message log range: ${formatMessageLogRange(result.availableRange.startSeq, result.availableRange.endSeq)}.`
+      : '';
+    return `No message log entries found for session \`${targetSessionId}\` at ${formatMessageLogRange(startSeq, endSeq)}.${availableRange}`;
+  }
+
+  if (getRecallPreviewBudget(result.records.length, previewLength).overLimit) {
+    throwRecallMessageBudgetError({
+      targetSessionId,
+      includeSessionId,
+      startSeq,
+      endSeq,
+      messageCount: result.records.length,
+      previewLength,
+    });
+  }
+
+  return formatArchivedMessagePreview(targetSessionId, result.records, {
+    totalMatched: result.totalMatched,
+    startSeq: result.requestedRange.startSeq,
+    endSeq: result.requestedRange.endSeq,
+  }, previewLength);
+}
+
+async function buildRecallFrontierBlocks(
+  targetSessionId: string,
+  previewLength: number,
+  includeSessionId: boolean,
+): Promise<string> {
+  const result = await sessionManager.getArchivedBlocks(targetSessionId, {});
+  const frontierBlocks = selectRecallFrontierBlocks(result.records as ArchiveBlockRecord[]);
+  if (frontierBlocks.length === 0) {
+    return `No current CTX-BLOCK frontier blocks found for session \`${targetSessionId}\`.`
+      + formatRecallNextHints(targetSessionId, includeSessionId, ['overview']);
+  }
+
+  const capped = capRecallBlockSummaryRecords(frontierBlocks, previewLength);
+  const visibleRecords = await hydrateRecallBlockTimeRanges(targetSessionId, capped.records);
+  const body = visibleRecords.map(block => formatRecallBlockDirectoryLine(block, previewLength)).join('\n');
+  const capNote = capped.capped
+    ? `\n\nFrontier has ${frontierBlocks.length} block(s); showing ${capped.records.length} because ${frontierBlocks.length} × ${previewLength} = ${capped.requestedChars} summary-preview characters exceeds the ${ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT}-character guard. Pick a specific \`B#N\` to drill down, or lower previewLength.`
+    : '';
+  const firstBlock = visibleRecords[0] || capped.records[0] || frontierBlocks[0];
+  return `Current CTX-BLOCK frontier for session \`${targetSessionId}\` - ${frontierBlocks.length} top-level block(s), sorted by message range.\n\n${body}${capNote}`
+    + formatRecallNextHints(targetSessionId, includeSessionId, [
+    `B#${firstBlock.id}`,
+    'overview',
+  ]);
+}
+
+async function buildRecallBlockDetail(
+  targetSessionId: string,
+  blockId: number,
+  previewLength: number,
+  includeSessionId: boolean,
+): Promise<string> {
+  const block = await getRecallBlockById(targetSessionId, blockId);
+  if (!block) {
+    return `No CTX-BLOCK B#${blockId} found in session \`${targetSessionId}\`.`
+      + formatRecallNextHints(targetSessionId, includeSessionId, ['overview', 'blocks']);
+  }
+
+  const range = await resolveRecallBlockMessageRange(targetSessionId, block);
+  const blockWithTime = await hydrateRecallBlockTimeRange(targetSessionId, block, range);
+  const rangeTimeSuffix = formatArchiveBlockTimeRange(blockWithTime);
+  const blockText = formatArchiveBlockContextText({
+    ...blockWithTime,
+    summary: truncateUnicodeSafe(blockWithTime.summary || '', previewLength) || '[empty summary]',
+  });
+  const header = [
+    `CTX-BLOCK B#${blockWithTime.id} for session \`${targetSessionId}\`:`,
+    `- Block: ${blockText}`,
+    `- Covers: ${range ? formatMessageLogRange(range.startSeq, range.endSeq) : formatMessageLogRange(blockWithTime.rawStartSeq, blockWithTime.rawEndSeq)}`,
+    `- Source: ${formatArchiveSourceLabel(blockWithTime.sourceKind, blockWithTime.sourceStart, blockWithTime.sourceEnd, blockWithTime.sourceBlockIds)}`,
+    blockWithTime.inherited ? `- Origin: inherited from ${blockWithTime.sourceSessionId || 'unknown'}` : '- Origin: local',
+  ];
+
+  if (blockWithTime.sourceKind === 'message' && range) {
+    const messageResult = await sessionManager.getArchivedMessages(targetSessionId, {
+      startSeq: range.startSeq,
+      endSeq: range.endSeq,
+    });
+    if (getRecallPreviewBudget(messageResult.records.length, previewLength).overLimit) {
+      return `${header.join('\n')}\n\n${buildRecallMessageBudgetNotice({
+        targetSessionId,
+        includeSessionId,
+        blockId: block.id,
+        startSeq: range.startSeq,
+        endSeq: range.endSeq,
+        messageCount: messageResult.records.length,
+        previewLength,
+        rangeSuffix: rangeTimeSuffix,
+      })}` + formatRecallNextHints(targetSessionId, includeSessionId, [
+        'blocks',
+        'overview',
+      ]);
+    }
+    return `${header.join('\n')}\n\nSource messages:\n\n${formatArchivedMessagePreview(targetSessionId, messageResult.records, {
+      totalMatched: messageResult.totalMatched,
+      startSeq: messageResult.requestedRange.startSeq,
+      endSeq: messageResult.requestedRange.endSeq,
+    }, previewLength)}` + formatRecallNextHints(targetSessionId, includeSessionId, [
+      'blocks',
+      'overview',
+    ]);
+  }
+
+  if (blockWithTime.sourceKind === 'block') {
+    const childRecords = await getRecallChildBlocksForBlock(targetSessionId, blockWithTime);
+    const capped = capRecallBlockSummaryRecords(childRecords, previewLength);
+    const visibleChildRecords = await hydrateRecallBlockTimeRanges(targetSessionId, capped.records);
+    const childSection = visibleChildRecords.length > 0
+      ? visibleChildRecords
+        .map((child: ArchiveBlockRecord) => formatArchivedBlockPreviewLine(child, previewLength, { includeSourceSuffix: false }))
+        .join('\n')
+      : '[no child blocks found]';
+    const capNote = capped.capped
+      ? `\n\nChild block list has ${childRecords.length} block(s); showing ${capped.records.length} because ${childRecords.length} × ${previewLength} = ${capped.requestedChars} summary-preview characters exceeds the ${ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT}-character guard. Pick a specific child \`B#N\` to continue drilling down, or lower previewLength.`
+      : '';
+    return `${header.join('\n')}\n\nImmediate child blocks (${formatArchiveChildBlockReference(blockWithTime)}):\n${childSection}`
+      + capNote
+      + formatRecallNextHints(targetSessionId, includeSessionId, [
+        visibleChildRecords[0] ? `B#${visibleChildRecords[0].id}` : undefined,
+        'blocks',
+      ]);
+  }
+
+  return header.join('\n') + formatRecallNextHints(targetSessionId, includeSessionId, [
+    'overview',
+  ]);
+}
+
+async function buildRecallMessagesForBlock(
+  targetSessionId: string,
+  blockId: number,
+  previewLength: number,
+  includeSessionId: boolean,
+): Promise<string> {
+  const block = await getRecallBlockById(targetSessionId, blockId);
+  if (!block) {
+    return `No CTX-BLOCK B#${blockId} found in session \`${targetSessionId}\`.`
+      + formatRecallNextHints(targetSessionId, includeSessionId, ['overview', 'blocks']);
+  }
+
+  const range = await resolveRecallBlockMessageRange(targetSessionId, block);
+  const blockWithTime = await hydrateRecallBlockTimeRange(targetSessionId, block, range);
+  const rangeTimeSuffix = formatArchiveBlockTimeRange(blockWithTime);
+  if (!range) {
+    return `Could not determine the message log range covered by B#${blockId}. Inspect the block metadata first.`
+      + formatRecallNextHints(targetSessionId, includeSessionId, [`B#${blockId}`, 'overview']);
+  }
+
+  const result = await sessionManager.getArchivedMessages(targetSessionId, {
+    startSeq: range.startSeq,
+    endSeq: range.endSeq,
+  });
+  if (getRecallPreviewBudget(result.records.length, previewLength).overLimit) {
+    throwRecallMessageBudgetError({
+      targetSessionId,
+      includeSessionId,
+      blockId,
+      startSeq: range.startSeq,
+      endSeq: range.endSeq,
+      messageCount: result.records.length,
+      previewLength,
+      preferBlockFirst: true,
+      rangeSuffix: rangeTimeSuffix,
+    });
+  }
+
+  return `Messages covered by CTX-BLOCK B#${blockId} (${formatMessageLogRange(range.startSeq, range.endSeq)}${rangeTimeSuffix}) for session \`${targetSessionId}\`.\n\n`
+    + formatArchivedMessagePreview(targetSessionId, result.records, {
+      totalMatched: result.totalMatched,
+      startSeq: result.requestedRange.startSeq,
+      endSeq: result.requestedRange.endSeq,
+    }, previewLength);
+}
+
+export async function tool_recall(args: ToolArgs = {}, ctx?: ToolContext) {
+  assertNoLegacyRecallArgs(args);
+  const targetSessionId = args.sessionId || ctx?.sessionId;
+  if (!targetSessionId) {
+    throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'recall');
+
+  const previewLength = normalizePositivePreviewLength(args.previewLength, RECALL_DEFAULT_PREVIEW_LENGTH);
+  const includeSessionId = isNonEmptyString(args.sessionId);
+  const target = parseRecallTarget(args.target);
+
+  switch (target.kind) {
+    case 'overview':
+      return buildRecallOverview(targetSessionId, includeSessionId);
+    case 'blocks':
+      return buildRecallFrontierBlocks(targetSessionId, previewLength, includeSessionId);
+    case 'block':
+      return buildRecallBlockDetail(targetSessionId, target.id, previewLength, includeSessionId);
+    case 'blockMessages':
+      return buildRecallMessagesForBlock(targetSessionId, target.id, previewLength, includeSessionId);
+    case 'messages':
+      return buildRecallMessagesByRange(targetSessionId, target.startSeq, target.endSeq, previewLength, includeSessionId);
+    default: {
+      const exhaustive: never = target;
+      throw recallSyntaxError(`Unsupported recall target ${(exhaustive as any)?.kind || ''}.`);
+    }
+  }
+}
+

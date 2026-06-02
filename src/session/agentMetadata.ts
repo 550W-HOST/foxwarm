@@ -79,22 +79,6 @@ async function saveAgentMetadata(): Promise<void> {
   await agentMetadataStore.write(data);
 }
 
-async function refreshDirectAgentSessions(deps: AgentMetadataDeps, agentName: string): Promise<string[]> {
-  const affectedSessions: string[] = [];
-
-  for (const [sessionId, sessionMeta] of deps.getSessionsMap().entries()) {
-    const sessionAgent = sessionMeta.agent || 'main';
-    if (sessionAgent !== agentName) continue;
-
-    const session = await deps.getSession(sessionId);
-    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
-    await deps.saveSession(sessionId);
-    affectedSessions.push(sessionId);
-  }
-
-  return affectedSessions;
-}
-
 export async function loadAgentMetadata(): Promise<void> {
   agentMetadata.clear();
   const loaded = await agentMetadataStore.loadFirstAvailable();

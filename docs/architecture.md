@@ -157,11 +157,12 @@ state/
 
 ## 配置入口
 
-### `.env`
-- secrets
-- channel tokens
-- 端口与开关
-- provider 默认 `baseUrl` / `apiKey`
+### `state/config.yaml`
+- bot 名称、端口、功能开关
+- LLM 默认 provider URL / API key
+- channel 配置（telegram / matrix / wework / weixin）
+- ASR service 配置
+- 路径覆盖（agents dir / skills dir / models config / mcp config）
 
 ### `state/models.yaml`
 - 默认模型 key

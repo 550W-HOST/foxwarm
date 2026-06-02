@@ -1,4 +1,3 @@
-import fs from 'fs-extra';
 import { MCP_CONFIG_PATH } from './config';
 import { logger } from './common';
 import { DiskJsonData } from './utils/diskJsonData';

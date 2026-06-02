@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as sessionManager from './sessionManager';
-import { tool_set_goal, tool_wait } from './toolsSessionAgent';
-import type { Session } from './types';
+import * as sessionManager from '../sessionManager';
+import { tool_set_goal, tool_wait } from '../toolsSessionAgent';
+import type { Session } from '../types';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

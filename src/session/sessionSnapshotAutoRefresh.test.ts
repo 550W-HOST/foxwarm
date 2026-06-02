@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import path from 'path';
-import * as llm from './llm';
-import { MessageRouter } from './messageRouter';
-import * as sessionManager from './sessionManager';
-import * as vector from './vector';
-import { getAgentDir, getAgentMemoryDir } from './config';
-import { maybeRefreshStaleSessionSnapshot, AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS } from './session/snapshotRefresh';
-import type { MessagePart, Session } from './types';
+import * as llm from '../llm';
+import { MessageRouter } from '../messageRouter';
+import * as sessionManager from '../sessionManager';
+import * as vector from '../vector';
+import { getAgentDir, getAgentMemoryDir } from '../config';
+import { maybeRefreshStaleSessionSnapshot, AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS } from './snapshotRefresh';
+import type { MessagePart, Session } from '../types';
 
 function makeSession(lastMessageTime: number): Pick<Session, 'id' | 'meta'> {
   return {
