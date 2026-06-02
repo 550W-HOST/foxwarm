@@ -698,7 +698,7 @@ export const definitions = [
                 properties: {
                     runId: { type: 'string', description: 'ToolScript run identifier returned by run_script.' },
                     continuationId: { type: 'string', description: 'Continuation identifier returned when the script paused at ask_agent or timeout.' },
-                    input: { description: 'Value returned to the paused ask_agent(...) call inside the script. Ignored for timeout-paused runs.' },
+                    input: { type: 'string', description: 'String value returned to the paused ask_agent(...) call inside the script. For structured values, pass a JSON string and let the script parse it. Ignored for timeout-paused runs.' },
                     timeoutSecs: { type: 'number', description: 'Optional timeout budget for the resumed run slice in seconds. Default is to reuse the prior run timeout value.' }
                 },
                 required: ['runId', 'continuationId']
