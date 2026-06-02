@@ -90,8 +90,12 @@ export class MessageRouter {
     const channelType = source.channelType || source.platform;
     const conversationId = source.conversationId || source.channelUserId;
     const channelTargetId = `${channelInstanceId}:${conversationId}`;
-    const senderInfo = source.username ? `; sender: \`${source.username}\`` : '';
-    systemParts.push({ system: `The following message is a direct user message via channel; channel_instance_id: \`${channelInstanceId}\`; channel_type: \`${channelType}\`; conversation_id: \`${conversationId}\`; channel_target_id: \`${channelTargetId}\`${senderInfo}` });
+    if (channelType === 'webui') {
+      systemParts.push({ system: 'The following message is a direct user message via channel; channel_type: `webui`' });
+    } else {
+      const senderInfo = source.username ? `; sender: \`${source.username}\`` : '';
+      systemParts.push({ system: `The following message is a direct user message via channel; channel_instance_id: \`${channelInstanceId}\`; channel_type: \`${channelType}\`; conversation_id: \`${conversationId}\`; channel_target_id: \`${channelTargetId}\`${senderInfo}` });
+    }
 
     // Send-only channel notice
     if (conversationId) {
