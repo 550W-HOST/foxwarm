@@ -71,6 +71,8 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /user\/inter-agent inputs, process, findings, and TODOs inside that range/i);
   assert.match(prompt, /do not borrow facts, later outcomes, or completions from force-kept items or any other outside range/i);
   assert.match(prompt, /force-kept later context completed a task.*source range only contains the unfinished earlier work/is);
+  assert.match(prompt, /memoryFactsJson/);
+  assert.match(prompt, /durable facts worth future retrieval/i);
 });
 
 test('buildCompactPromptText renders block candidates by legal frontier-contiguous segments', () => {
@@ -165,6 +167,7 @@ test('filterCompactCandidateItemsByLevel does not let an unsupported single bloc
 
 test('submit compact plan opts into the normal model-facing tool schema', () => {
   assert.equal(COMPACT_PLAN_TOOL_DEFINITION.defaultInject, true);
+  assert.ok(COMPACT_PLAN_TOOL_DEFINITION.parameters.properties.memoryFactsJson);
 });
 
 test('buildCompactPlanValidationFeedback no longer suggests archive inspection helpers during compaction', () => {
@@ -207,6 +210,54 @@ test('validateCompactPlanArgs accepts layered message and block range creation',
   assert.equal(plan.createBlocks.length, 2);
   assert.equal(plan.createBlocks[0].level, 1);
   assert.equal(plan.createBlocks[1].level, 2);
+});
+
+test('validateCompactPlanArgs accepts optional memory facts without making them part of block validation', () => {
+  const plan = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 2,
+      summary: 'summary for first two messages',
+    }]),
+    memoryFactsJson: JSON.stringify([
+      {
+        kind: 'decision',
+        text: 'The project should index compacted durable facts for future semantic recall.',
+        context: 'User requested a mem0-inspired compact memory pipeline.',
+        attributedTo: 'user',
+      },
+      {
+        kind: 'unsupported',
+        text: 'ignored unsupported kind',
+      },
+    ]),
+  }, messageCandidates);
+
+  assert.equal(plan.createBlocks.length, 1);
+  assert.deepStrictEqual(plan.memoryFacts, [{
+    kind: 'decision',
+    text: 'The project should index compacted durable facts for future semantic recall.',
+    context: 'User requested a mem0-inspired compact memory pipeline.',
+    attributedTo: 'user',
+  }]);
+});
+
+test('validateCompactPlanArgs ignores malformed optional memory facts without invalidating the compact plan', () => {
+  const plan = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 2,
+      summary: 'summary for first two messages',
+    }]),
+    memoryFactsJson: '[not valid json',
+  }, messageCandidates);
+
+  assert.equal(plan.createBlocks.length, 1);
+  assert.deepStrictEqual(plan.memoryFacts, []);
 });
 
 test('validateCompactPlanArgs accepts frontier-continuous block ranges with non-consecutive ids', () => {

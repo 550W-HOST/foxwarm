@@ -139,6 +139,8 @@ export function formatMemorySearchResults(results: any): string {
             : '';
         const kindLabel = r.kind === 'block'
             ? `[kind: block] [B#${r.block_id ?? '?'} L${r.block_level ?? '?'}] [raw: ${rawSeqLabel}]`
+            : r.kind === 'fact'
+                ? `[kind: memory fact] [fact: ${r.fact_kind ?? '?'}] [source: raw ${rawSeqLabel}]${r.attributed_to ? ` [attributed: ${r.attributed_to}]` : ''}`
             : '';
         const ageLabel = `[${formatAgeLabel(ts)}]`;
         const preview = buildPreview(r.text || r.chunk_text || '');

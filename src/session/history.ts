@@ -14,6 +14,7 @@ import {
   CompactCandidateItem,
   CompactPlan,
   CompactPlanValidationError,
+  ExtractedMemoryFact,
   getCandidateTargetLevel,
   selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
@@ -146,6 +147,7 @@ type CompactJobResult =
         rawEndSeq: number;
         summary: string;
       }>;
+      memoryFacts: ExtractedMemoryFact[];
       replacedItemCount: number;
     };
 
@@ -765,6 +767,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
         consumedFrontierCount: splitIndex,
         operations: [],
         createdBlocks: [],
+        memoryFacts: [],
         replacedItemCount: droppedDisplayOnlyCount,
       };
     }
@@ -901,6 +904,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       rawEndSeq: operation.rawEndSeq,
       summary: operation.summary,
     })),
+    memoryFacts: compactPlan.memoryFacts || [],
     replacedItemCount: operations.reduce((sum, operation) => sum + (operation.frontierEndIndex - operation.frontierStartIndex + 1), 0),
   };
 }
@@ -961,6 +965,22 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     result.replacedItemCount,
     compactedSkillNames,
   );
+
+  if (result.memoryFacts.length > 0 && createdRecords.length > 0) {
+    const sourceStartSeq = Math.min(...createdRecords.map(record => record.rawStartSeq));
+    const sourceEndSeq = Math.max(...createdRecords.map(record => record.rawEndSeq));
+    void vector.indexMemoryFactsFromCompaction({
+      sessionId,
+      agent: session.agent || 'main',
+      facts: result.memoryFacts,
+      sourceKind: 'compact',
+      sourceStartSeq,
+      sourceEndSeq,
+      createdAt: Date.now(),
+    }).catch((err) => {
+      logger.warn({ err, sessionId, factCount: result.memoryFacts.length }, 'Failed to index compact memory facts');
+    });
+  }
   return true;
 }
 
