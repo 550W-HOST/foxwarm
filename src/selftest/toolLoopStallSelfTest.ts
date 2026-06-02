@@ -7,7 +7,7 @@ import { MessageRouter } from '../messageRouter';
 import * as sessionManager from '../sessionManager';
 import * as llm from '../llm';
 import * as vector from '../vector';
-import { COMPACT_FLOW_MAX_ROUNDS, COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
+import { COMPACT_FLOW_MAX_ROUNDS } from '../session/compactPlan';
 import { MessagePart, Session } from '../types';
 import { tool_get_archived_messages, tool_set_goal } from '../toolsSessionAgent';
 
@@ -15,8 +15,8 @@ function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function assertOnlyCompactPlanToolDefinitions(options?: { toolDefinitions?: Array<{ name: string }> }) {
-  assert.deepStrictEqual((options?.toolDefinitions || []).map(definition => definition.name), [COMPACT_PLAN_TOOL_NAME]);
+function assertCompactKeepsDefaultToolSchema(options?: { toolDefinitions?: Array<{ name: string }> }) {
+  assert.strictEqual(options?.toolDefinitions, undefined);
 }
 
 function createBaseSession(id: string, parentSessionId?: string): Session {
@@ -390,7 +390,7 @@ async function main(): Promise<void> {
           assert.doesNotMatch(systemText, /Keep the session goal alive across compaction/);
           assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
           assert.match(systemText, /M#1/);
-          assertOnlyCompactPlanToolDefinitions(options);
+          assertCompactKeepsDefaultToolSchema(options);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in compact prompt');
           compactMessageRange = {
@@ -410,9 +410,9 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT TOOL CALL INVALID/);
           assert.match(systemText, /Do not call `read_memory`/);
-          assert.match(systemText, /only available tool during compaction is submit_compact_plan/);
+          assert.match(systemText, /only accepted tool call during compaction is submit_compact_plan/);
           assert.match(systemText, /Do not read or write agent memory during compaction/);
-          assertOnlyCompactPlanToolDefinitions(options);
+          assertCompactKeepsDefaultToolSchema(options);
           const toolCall = {
             id: 'compact-plan-invalid',
             name: 'submit_compact_plan',
@@ -428,7 +428,7 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
           assert.match(systemText, /createBlocks must contain at least one block/);
-          assertOnlyCompactPlanToolDefinitions(options);
+          assertCompactKeepsDefaultToolSchema(options);
           assert(compactMessageRange, 'expected compact message range to be captured from initial prompt');
           const toolCall = {
             id: 'compact-plan',
@@ -642,7 +642,7 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
           assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
-          assertOnlyCompactPlanToolDefinitions(options);
+          assertCompactKeepsDefaultToolSchema(options);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in auto compact prompt');
           autoCompactMessageRange = {

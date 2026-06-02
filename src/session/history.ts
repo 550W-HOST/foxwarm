@@ -10,7 +10,6 @@ import {
   buildCompactPromptText,
   buildMessageCandidateItem,
   COMPACT_FLOW_MAX_ROUNDS,
-  COMPACT_PLAN_TOOL_DEFINITION,
   COMPACT_PLAN_TOOL_NAME,
   CompactCandidateItem,
   CompactPlan,
@@ -800,7 +799,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   let compactPlan: CompactPlan | null = null;
   let compactRoundsUsed = 0;
   let invalidCompactPlanAttempts = 0;
-  const compactToolDefinitions = [COMPACT_PLAN_TOOL_DEFINITION];
 
   while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
     compactRoundsUsed += 1;
@@ -811,7 +809,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       },
       notifySessionEvents: false,
       registerAbortController: false,
-      toolDefinitions: compactToolDefinitions,
     });
 
     if (!result.toolCalls?.length) {
@@ -824,7 +821,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       logger.warn({ sessionId, invalidToolName, compactRoundsUsed }, 'Layered compact flow rejected a non-plan tool call; retrying with feedback');
       const invalidToolNotice = invalidToolName === COMPACT_PLAN_TOOL_NAME
         ? `Call ${COMPACT_PLAN_TOOL_NAME} exactly once, by itself.`
-        : `Do not call \`${invalidToolName}\`; the only available tool during compaction is ${COMPACT_PLAN_TOOL_NAME}.`;
+        : `Do not call \`${invalidToolName}\`; the only accepted tool call during compaction is ${COMPACT_PLAN_TOOL_NAME}.`;
       nextPromptParts = [{
         system: [
           'COMPACT TOOL CALL INVALID.',
