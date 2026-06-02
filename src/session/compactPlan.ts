@@ -397,9 +397,8 @@ export function buildCompactPromptText(options: {
     '- Mention when an earlier plan or decision was superseded by a later one if that matters for future work.',
     '- For memoryFactsJson, extract only durable facts worth future retrieval: explicit user decisions, preferences, project conventions, technical discoveries, environment/deploy constraints, or stable identifiers. Do not include trivial chat, tool mechanics, transient progress, or stale TODOs.',
     '- Each memory fact must be self-contained and understandable outside this conversation. Keep the original conversation language when practical. Use kind decision/preference/fact/convention/environment and attributedTo user/assistant/both when clear.',
-    `- You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including helper-tool rounds and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,
-    '- If durable project/user/workflow/rule facts should outlive this session, you may use edit_memory/apply_patch_memory before submitting the final plan.',
-    `- You may use only these helper tools during compaction: read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory, and call ${COMPACT_PLAN_TOOL_NAME} to finish the compaction.`,
+    `- You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including invalid-tool and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,
+    `- Do not read or write agent memory during compaction. If durable project/user/workflow/rule facts should outlive this session, include them in memoryFactsJson and then call ${COMPACT_PLAN_TOOL_NAME}.`,
     '',
     ...(guidance ? ['Additional guidance from compaction requester:', guidance, ''] : []),
   );
@@ -588,6 +587,6 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
     'COMPACT PLAN INVALID.',
     error.message,
     'Use only ranges shown in one Segment header; do not cross segment boundaries, different block levels, or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
-    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. During compaction you may only use read_memory, write_memory, edit_memory, delete_memory, and apply_patch_memory if needed.`,
+    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. Do not read or write agent memory during compaction; use memoryFactsJson for durable facts instead.`,
   ].join(' ');
 }

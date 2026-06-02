@@ -10,6 +10,7 @@ import {
   buildCompactPromptText,
   buildMessageCandidateItem,
   COMPACT_FLOW_MAX_ROUNDS,
+  COMPACT_PLAN_TOOL_DEFINITION,
   COMPACT_PLAN_TOOL_NAME,
   CompactCandidateItem,
   CompactPlan,
@@ -799,13 +800,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   let compactPlan: CompactPlan | null = null;
   let compactRoundsUsed = 0;
   let invalidCompactPlanAttempts = 0;
-  const compactHelperToolNames = new Set([
-    'read_memory',
-    'write_memory',
-    'edit_memory',
-    'delete_memory',
-    'apply_patch_memory',
-  ]);
+  const compactToolDefinitions = [COMPACT_PLAN_TOOL_DEFINITION];
 
   while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
     compactRoundsUsed += 1;
@@ -816,6 +811,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       },
       notifySessionEvents: false,
       registerAbortController: false,
+      toolDefinitions: compactToolDefinitions,
     });
 
     if (!result.toolCalls?.length) {
@@ -824,33 +820,19 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
 
     const onlyPlanCall = result.toolCalls.length === 1 && result.toolCalls[0].name === COMPACT_PLAN_TOOL_NAME;
     if (!onlyPlanCall) {
-      const invalidToolName = result.toolCalls.find(call => call.name === COMPACT_PLAN_TOOL_NAME || !compactHelperToolNames.has(call.name))?.name;
-      if (invalidToolName) {
-        logger.warn({ sessionId, invalidToolName, compactRoundsUsed }, 'Layered compact flow rejected a non-helper tool call; retrying with feedback');
-        nextPromptParts = [{
-          system: [
-            'COMPACT TOOL CALL INVALID.',
-            `During this dedicated compaction phase, do not call \`${invalidToolName}\`.`,
-            `You may inspect or update durable memory only with these helper tools before submitting the final plan: ${[...compactHelperToolNames].join(', ')}.`,
-            `When ready, call exactly one ${COMPACT_PLAN_TOOL_NAME} tool call by itself. Do not combine ${COMPACT_PLAN_TOOL_NAME} with any other tool call.`,
-          ].join(' '),
-        }];
-        continue;
-      }
-
-      const toolResultMessage = await llm.executeTools(result.toolCalls, {
-        sessionId,
-        session: transientSession,
-      }, transientSession);
-      await appendTransientSessionMessage(transientSession, {
-        role: 'tool',
-        parts: toolResultMessage.parts,
-      });
-      mirrorTemporaryCompactMessage(deps, sessionId, {
-        role: 'tool',
-        parts: toolResultMessage.parts,
-      });
-      nextPromptParts = null;
+      const invalidToolName = result.toolCalls.find(call => call.name !== COMPACT_PLAN_TOOL_NAME)?.name || COMPACT_PLAN_TOOL_NAME;
+      logger.warn({ sessionId, invalidToolName, compactRoundsUsed }, 'Layered compact flow rejected a non-plan tool call; retrying with feedback');
+      const invalidToolNotice = invalidToolName === COMPACT_PLAN_TOOL_NAME
+        ? `Call ${COMPACT_PLAN_TOOL_NAME} exactly once, by itself.`
+        : `Do not call \`${invalidToolName}\`; the only available tool during compaction is ${COMPACT_PLAN_TOOL_NAME}.`;
+      nextPromptParts = [{
+        system: [
+          'COMPACT TOOL CALL INVALID.',
+          invalidToolNotice,
+          'Do not read or write agent memory during compaction.',
+          `When ready, call exactly one ${COMPACT_PLAN_TOOL_NAME} tool call by itself. Do not combine ${COMPACT_PLAN_TOOL_NAME} with any other tool call.`,
+        ].join(' '),
+      }];
       continue;
     }
 

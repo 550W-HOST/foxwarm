@@ -62,9 +62,9 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.doesNotMatch(prompt, /get_context_archive/);
   assert.doesNotMatch(prompt, /get_archived_messages/);
   assert.doesNotMatch(prompt, /get_archived_blocks/);
-  assert.match(prompt, /read_memory/);
+  assert.doesNotMatch(prompt, /read_memory|write_memory|edit_memory|delete_memory|apply_patch_memory/);
   assert.match(prompt, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
-  assert.match(prompt, /apply_patch_memory/);
+  assert.match(prompt, /Do not read or write agent memory during compaction/i);
   assert.match(prompt, /leave it uncompressed by simply omitting it from createBlocksJson/i);
   assert.match(prompt, /single block may be summarized only when it is a stranded island/i);
   assert.match(prompt, /source-range-bound/i);
@@ -72,6 +72,7 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /do not borrow facts, later outcomes, or completions from force-kept items or any other outside range/i);
   assert.match(prompt, /force-kept later context completed a task.*source range only contains the unfinished earlier work/is);
   assert.match(prompt, /memoryFactsJson/);
+  assert.match(prompt, /include them in memoryFactsJson/i);
   assert.match(prompt, /durable facts worth future retrieval/i);
 });
 
@@ -170,12 +171,13 @@ test('submit compact plan opts into the normal model-facing tool schema', () => 
   assert.ok(COMPACT_PLAN_TOOL_DEFINITION.parameters.properties.memoryFactsJson);
 });
 
-test('buildCompactPlanValidationFeedback no longer suggests archive inspection helpers during compaction', () => {
+test('buildCompactPlanValidationFeedback does not suggest memory or archive helpers during compaction', () => {
   const feedback = buildCompactPlanValidationFeedback(new CompactPlanValidationError({
     createBlockErrors: ['bad compact range'],
   }));
 
-  assert.match(feedback, /apply_patch_memory/);
+  assert.doesNotMatch(feedback, /read_memory|write_memory|edit_memory|delete_memory|apply_patch_memory/);
+  assert.match(feedback, /memoryFactsJson/);
   assert.doesNotMatch(feedback, /get_context_archive/);
   assert.doesNotMatch(feedback, /get_archived_messages/);
   assert.doesNotMatch(feedback, /get_archived_blocks/);
