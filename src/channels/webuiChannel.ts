@@ -1229,24 +1229,112 @@ export class WebUIChannel implements Channel {
         },
       });
 
-      // Promote session (detach from parent, make it a root session)
+      // Promote session (move up one level or detach from parent, making it a root session)
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/promote',
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
+          const sessionId = req.params.sessionId as string;
+          const targetParentId = typeof req.body?.targetParentId === 'string' && req.body.targetParentId.trim()
+            ? req.body.targetParentId.trim()
+            : undefined;
+          const operation = targetParentId ? 'move-up' : 'promote-to-root';
+
           try {
-            const sessionId = req.params.sessionId as string;
-            const targetParentId = typeof req.body?.targetParentId === 'string' && req.body.targetParentId.trim()
-              ? req.body.targetParentId.trim()
-              : undefined;
+            const childSession = await sessionManager.getExistingSession(sessionId);
+            if (!childSession) {
+              res.status(404).json({
+                error: `Session "${sessionId}" was not found, so it cannot be promoted.`,
+                code: 'SESSION_NOT_FOUND',
+                operation,
+                sessionId,
+                targetParentId: targetParentId || null,
+              });
+              return;
+            }
+
+            let targetParentBusy: boolean | undefined;
+            if (targetParentId) {
+              const targetParentSession = await sessionManager.getExistingSession(targetParentId);
+              if (!targetParentSession) {
+                res.status(404).json({
+                  error: `Target parent session "${targetParentId}" was not found, so session "${childSession.id}" cannot be moved there.`,
+                  code: 'TARGET_PARENT_NOT_FOUND',
+                  operation,
+                  sessionId: childSession.id,
+                  previousParentSessionId: childSession.parentSessionId || null,
+                  targetParentId,
+                  sessionBusy: !!childSession.busy,
+                });
+                return;
+              }
+
+              targetParentBusy = !!targetParentSession.busy;
+
+              if (targetParentSession.id === childSession.id) {
+                res.status(400).json({
+                  error: 'A session cannot be moved under itself.',
+                  code: 'SELF_PARENT_NOT_ALLOWED',
+                  operation,
+                  sessionId: childSession.id,
+                  previousParentSessionId: childSession.parentSessionId || null,
+                  targetParentId: targetParentSession.id,
+                  sessionBusy: !!childSession.busy,
+                  targetParentBusy,
+                });
+                return;
+              }
+
+              // Defensive guard for API callers: the WebUI only sends a grandparent here,
+              // but arbitrary targetParentId values must not be allowed to create cycles.
+              const seenAncestors = new Set<string>([childSession.id]);
+              let cursorParentId = targetParentSession.parentSessionId || undefined;
+              while (cursorParentId) {
+                if (seenAncestors.has(cursorParentId)) {
+                  res.status(400).json({
+                    error: `Session "${childSession.id}" cannot be moved under descendant "${targetParentSession.id}" because that would create a parent cycle.`,
+                    code: 'PARENT_CYCLE_NOT_ALLOWED',
+                    operation,
+                    sessionId: childSession.id,
+                    previousParentSessionId: childSession.parentSessionId || null,
+                    targetParentId: targetParentSession.id,
+                    sessionBusy: !!childSession.busy,
+                    targetParentBusy,
+                  });
+                  return;
+                }
+                seenAncestors.add(cursorParentId);
+                const cursorParent = await sessionManager.getExistingSession(cursorParentId);
+                if (!cursorParent) break;
+                cursorParentId = cursorParent.parentSessionId || undefined;
+              }
+            }
+
             const result = await sessionManager.setSessionParent(sessionId, targetParentId);
 
             this.broadcastSessionListUpdate();
 
-            res.json({ success: true, sessionId: result.childSessionId, previousParentSessionId: result.previousParentSessionId || null });
+            res.json({
+              success: true,
+              operation,
+              sessionId: result.childSessionId,
+              parentSessionId: result.parentSessionId || null,
+              previousParentSessionId: result.previousParentSessionId || null,
+              targetParentId: targetParentId || null,
+              sessionBusy: !!childSession.busy,
+              targetParentBusy,
+            });
           } catch (e: any) {
-            logger.error({ err: e }, 'Failed to promote session');
-            res.status(500).json({ error: e.message });
+            const reason = e?.message || 'Unknown backend error';
+            logger.error({ err: e, sessionId, targetParentId, operation }, 'Failed to promote session');
+            res.status(500).json({
+              error: `Could not ${targetParentId ? 'move session up one level' : 'promote session to root'}: ${reason}`,
+              reason,
+              code: 'PROMOTE_FAILED',
+              operation,
+              sessionId,
+              targetParentId: targetParentId || null,
+            });
           }
         },
       });

@@ -3,6 +3,7 @@ import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSe
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
+import CollapsedSidebar from './components/CollapsedSidebar'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
 import type { Session } from './components/SessionListCore'
@@ -353,7 +354,7 @@ function App() {
   const [groupTools, setGroupTools] = useState<boolean>(() => localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true')
   const [showUsageBadge, setShowUsageBadge] = useState<boolean>(() => localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false')
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
-  const [sidebarPeekVisible, setSidebarPeekVisible] = useState(false)
+
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
   const root = useWorkbenchStore((state) => state.root)
@@ -456,9 +457,6 @@ function App() {
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed ? 'true' : 'false')
-    if (!sidebarCollapsed) {
-      setSidebarPeekVisible(false)
-    }
   }, [sidebarCollapsed])
 
   useEffect(() => {
@@ -1587,53 +1585,13 @@ function App() {
           />
         </div>
       ) : (
-        <>
-          <div
-            className="absolute inset-y-0 left-0 z-30 w-3"
-            onMouseEnter={() => setSidebarPeekVisible(true)}
-          />
-          {sidebarPeekVisible && (
-            <div
-              className="absolute inset-y-0 left-0 z-40 shadow-2xl"
-              style={{ width: sidebarWidth }}
-              onMouseLeave={() => setSidebarPeekVisible(false)}
-            >
-              <Sidebar
-                sessions={sessions}
-                currentSession={currentContextSessionId}
-                currentView={currentView}
-                currentSessionRecord={currentContextSessionRecord}
-                themeMode={themeMode}
-                onThemeChange={setThemeMode}
-                sendKeyMode={sendKeyMode}
-                onSendKeyModeChange={setSendKeyMode}
-                groupTools={groupTools}
-                onGroupToolsChange={setGroupTools}
-                showUsageBadge={showUsageBadge}
-                onShowUsageBadgeChange={setShowUsageBadge}
-                instanceName={webUiSettings.instanceName}
-                onInstanceNameChange={saveWebUiInstanceName}
-                tabIcon={webUiSettings.tabIcon}
-                onTabIconChange={saveWebUiTabIcon}
-                onSelectSession={openChatTab}
-                onKeepSession={openKeptChatTab}
-                onSelectArchitecture={() => {
-                  setRoute({ view: 'agents' })
-                  window.location.hash = ARCHITECTURE_HASH
-                }}
-                onSelectSetup={openSetupView}
-                onCreateWorkspaceTab={(options) => openWorkspaceTab(currentContextSessionId, options)}
-                onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
-                onCreateSession={handleCreateSession}
-                onToggleCollapsed={() => {
-                  setSidebarCollapsed(false)
-                  setSidebarPeekVisible(false)
-                }}
-                isPeek
-              />
-            </div>
-          )}
-        </>
+        <CollapsedSidebar
+          sessions={sessions}
+          currentSession={currentContextSessionId}
+          onSelectSession={openChatTab}
+          onCreateSession={handleCreateSession}
+          onToggleCollapsed={() => setSidebarCollapsed(false)}
+        />
       )}
       <div className="flex-1 h-full min-h-0 overflow-hidden">
         {route.view === 'setup' ? (
