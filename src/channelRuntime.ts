@@ -109,8 +109,9 @@ function buildWeWorkFactory(channelId: string): ManagedChannelFactory {
     create: async () => {
       const entry = getChannelConfigById(channelId, readAppConfigFile());
       const config = (entry?.config || {}) as any;
-      if (!config.webhookUrl?.trim()) {
-        throw new Error(`WeChat Work webhookUrl is missing for channel \`${channelId}\` in state/config.yaml`);
+      const websocketConfigured = !!(config.aibot?.websocket?.enabled && config.aibot?.websocket?.botId?.trim() && config.aibot?.websocket?.secret?.trim());
+      if (!config.webhookUrl?.trim() && !websocketConfigured) {
+        throw new Error(`WeChat Work webhookUrl or aibot.websocket botId/secret is missing for channel \`${channelId}\` in state/config.yaml`);
       }
       const channel = new WeWorkWebhookChannel({
         name: channelId,
@@ -119,6 +120,7 @@ function buildWeWorkFactory(channelId: string): ManagedChannelFactory {
         encodingAESKey: config.encodingAESKey,
         listenPort: config.listenPort,
         listenPath: config.listenPath,
+        aibot: config.aibot,
       });
       channel.onMessage(requireRuntimeMessageHandler());
       return channel;
@@ -126,12 +128,15 @@ function buildWeWorkFactory(channelId: string): ManagedChannelFactory {
     describe: () => {
       const entry = getChannelConfigById(channelId, readAppConfigFile());
       const config = (entry?.config || {}) as any;
+      const websocketConfigured = !!(config.aibot?.websocket?.enabled && config.aibot?.websocket?.botId?.trim() && config.aibot?.websocket?.secret?.trim());
       return {
-        configured: Boolean(config.webhookUrl?.trim()),
+        configured: Boolean(config.webhookUrl?.trim()) || websocketConfigured,
         enabled: config.enabled !== false,
         details: [
           `webhookUrl=${config.webhookUrl?.trim() ? 'configured' : 'missing'}`,
           `token=${config.token?.trim() ? 'configured' : 'unset'}`,
+          `aibot.stream=${config.aibot?.stream ? 'enabled' : 'disabled'}`,
+          `aibot.websocket=${websocketConfigured ? 'configured' : (config.aibot?.websocket?.enabled ? 'missing credentials' : 'disabled')}`,
           `listenPath=${config.listenPath?.trim() || 'default'}`,
         ],
       };

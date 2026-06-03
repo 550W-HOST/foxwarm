@@ -451,12 +451,12 @@ export class MessageRouter {
 
   private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean): Promise<void> {
     if (!alreadyBroadcasted && shouldBroadcastChannelText(response)) {
-      await this.sendSessionReply(session, sourceCtx, response, { excludePlatforms: ['webui'] });
+      await this.sendSessionReply(session, sourceCtx, response, { excludePlatforms: ['webui'], turnFinal: true });
     }
   }
 
   private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any): Promise<void> {
-    await this.sendSessionReply(session, sourceCtx, `Error: ${error?.message || 'Unknown error'}`);
+    await this.sendSessionReply(session, sourceCtx, `Error: ${error?.message || 'Unknown error'}`, { turnFinal: true });
   }
 
   private async maybeCreateGuestSessionForUnauthorizedMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session } | null> {

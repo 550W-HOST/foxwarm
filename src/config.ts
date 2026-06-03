@@ -29,6 +29,19 @@ export type WeWorkConfig = {
   encodingAESKey?: string;
   listenPort?: number;
   listenPath?: string;
+  aibot?: {
+    stream?: boolean;
+    streamInitialContent?: string;
+    streamMaxContentBytes?: number;
+    websocket?: {
+      enabled?: boolean;
+      botId?: string;
+      secret?: string;
+      url?: string;
+      heartbeatMs?: number;
+      reconnectMs?: number;
+    };
+  };
   allowedUsers?: string[];
   guestAgent?: GuestAgentConfig;
 };

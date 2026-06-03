@@ -297,6 +297,34 @@ channels:
 
 You can configure Weixin from WebUI Setup without manually editing the token: click **Start Weixin login**, scan the QR code or open the pairing link shown by Setup, then click **Check login**. On success, Setup writes the token to `state/config.yaml` and hot-reloads channels.
 
+Example WeWork/企业微信 intelligent bot channel with opt-in streaming aggregation:
+
+```yaml
+channels:
+  wework-aibot:
+    type: wework
+    enabled: true
+    # Webhook callback mode. Required for short-connection callbacks; omit only
+    # when using aibot.websocket with botId/secret below.
+    webhookUrl: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+    token: "callback-token"
+    encodingAESKey: "callback-encoding-aes-key"
+    listenPort: 3003
+    listenPath: "/wework/aibot"
+    aibot:
+      # When true, incoming intelligent-bot messages use WeWork stream replies:
+      # model/tool-loop broadcasts are aggregated into one stream card and the
+      # final assistant message marks the stream as finished.
+      stream: true
+      streamInitialContent: "正在处理，请稍候…"
+      # Optional WebSocket/long-connection API mode. This can receive callbacks
+      # without a public webhook URL and pushes stream updates proactively.
+      websocket:
+        enabled: false
+        botId: "BOTID"
+        secret: "LONG_CONNECTION_SECRET"
+```
+
 WebUI Setup can edit channels and then reload them without restarting Foxwarm. The reload flow stops registered managed channels and starts the enabled/configured channels again.
 
 Managed channel types currently include:

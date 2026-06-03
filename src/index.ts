@@ -335,7 +335,8 @@ async function start() {
         }
 
         if (entry.type === 'wework') {
-            if (config.enabled === false || !config.webhookUrl) continue;
+            const websocketConfigured = !!(config.aibot?.websocket?.enabled && config.aibot?.websocket?.botId?.trim() && config.aibot?.websocket?.secret?.trim());
+            if (config.enabled === false || (!config.webhookUrl && !websocketConfigured)) continue;
             void startWithRetry(`wework:${entry.id}`, async () => {
                 const weworkChannel = new WeWorkWebhookChannel({
                     name: entry.id,
@@ -343,7 +344,8 @@ async function start() {
                     token: config.token,
                     encodingAESKey: config.encodingAESKey,
                     listenPort: config.listenPort,
-                    listenPath: config.listenPath
+                    listenPath: config.listenPath,
+                    aibot: config.aibot,
                 });
                 weworkChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
                 await weworkChannel.start();
