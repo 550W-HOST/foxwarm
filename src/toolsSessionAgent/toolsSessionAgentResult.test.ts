@@ -41,7 +41,15 @@ test('send_to_session rejects self-sends', async () => {
   try {
     await assert.rejects(
       () => tool_send_to_session({ sessionId, message: 'loopback' }, { sessionId, session }),
-      /cannot send a message to the same session/i,
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        assert.match(message, /send_to_session target resolves to this same session/i);
+        assert.match(message, new RegExp(`current_session_id=\`${sessionId}\``));
+        assert.match(message, new RegExp(`requested_session_id=\`${sessionId}\``));
+        assert.match(message, new RegExp(`resolved_session_id=\`${sessionId}\``));
+        assert.match(message, /generate ordinary assistant text instead/i);
+        return true;
+      },
     );
     assert.equal(session.queue.length, 0);
   } finally {

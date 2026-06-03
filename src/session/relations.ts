@@ -177,7 +177,7 @@ export async function sendToSession(
 ): Promise<void> {
   const { sourceSession: fromSession, targetSession } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
   if (fromSession && fromSession.id === targetSession.id) {
-    throw new Error('send_to_session cannot send a message to the same session. Reply directly in the current session instead.');
+    throw new Error(`send_to_session target resolves to this same session: current_session_id=\`${fromSession.id}\`, requested_session_id=\`${targetSessionId}\`, resolved_session_id=\`${targetSession.id}\`. You are already in this session; check whether you meant to send to a parent/child/other session. If you meant to message the direct user in the current session rather than another agent, do not use send_to_session; generate ordinary assistant text instead.`);
   }
 
   const replyTarget = fromSessionId || 'unknown-session';
