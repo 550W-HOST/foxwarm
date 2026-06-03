@@ -101,6 +101,20 @@ test('run_script and start_toolscript_run schemas expose argsJson fallback and i
   assert.deepEqual(startDef?.parameters?.required, []);
 });
 
+test('default model-facing tool schemas give every top-level property a concrete schema type', () => {
+  const missing = tools.definitions
+    .filter((definition: any) => definition.defaultInject)
+    .flatMap((definition: any) => Object.entries(definition.parameters?.properties || {})
+      .filter(([, property]: any) => {
+        return !property
+          || typeof property !== 'object'
+          || (!('type' in property) && !('enum' in property) && !('anyOf' in property) && !('oneOf' in property) && !('allOf' in property));
+      })
+      .map(([propertyName]) => `${definition.name}.${propertyName}`));
+
+  assert.deepEqual(missing, []);
+});
+
 test('run_script and start_toolscript_run execute inline code as an alternative to filePath', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_inline_code');
