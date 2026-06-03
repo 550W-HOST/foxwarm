@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDraggable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 
 export interface Session {
@@ -51,6 +51,27 @@ const FOXWARM_TOKEN_KEY = 'foxwarm_token'
 const LEGACY_TOKEN_KEY = 'alphabot_token'
 const DEFAULT_VISIBLE_CHILDREN = 5
 const MORE_VISIBLE_CHILDREN_STEP = 10
+
+const getSessionFilterFields = (session: Session): string[] => {
+  return [
+    session.displayName,
+    session.id,
+    ...(session.aliases || []),
+    session.agent,
+    session.currentNode,
+    session.cwd || undefined,
+    session.model || undefined,
+    session.modelKey,
+    session.defaultModelKey,
+    session.childModelDefault || undefined,
+    session.effectiveChildModelKey,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+}
+
+const sessionMatchesFilter = (session: Session, normalizedQuery: string): boolean => {
+  if (!normalizedQuery) return true
+  return getSessionFilterFields(session).some(field => field.toLowerCase().includes(normalizedQuery))
+}
 
 const getStoredAuthToken = () => {
   const foxwarmToken = localStorage.getItem(FOXWARM_TOKEN_KEY)
@@ -196,6 +217,7 @@ function DraggableSessionRow({
 export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession }: SessionListCoreProps) {
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
+  const [filterText, setFilterText] = useState('')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
@@ -210,6 +232,9 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     if (!a.archived && b.archived) return -1
     return (b.lastMessageTime || 0) - (a.lastMessageTime || 0)
   }
+
+  const normalizedFilterQuery = filterText.trim().toLowerCase()
+  const isFiltering = normalizedFilterQuery.length > 0
 
   const sessionMap = useMemo(() => new Map(sessions.map(session => [session.id, session])), [sessions])
 
@@ -247,11 +272,46 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     return map
   }, [sessions, sessionMap, aliasMap])
 
+  const visibleSessionIds = useMemo(() => {
+    if (!isFiltering) {
+      return null
+    }
+
+    const ids = new Set<string>()
+    for (const session of sessions) {
+      if (sessionMatchesFilter(session, normalizedFilterQuery)) {
+        ids.add(session.id)
+      }
+    }
+    return ids
+  }, [isFiltering, normalizedFilterQuery, sessions])
+
+  const visibleSessions = useMemo(
+    () => visibleSessionIds ? sessions.filter(session => visibleSessionIds.has(session.id)) : sessions,
+    [sessions, visibleSessionIds]
+  )
+
+  const visibleParentMap = useMemo(() => {
+    const map = new Map<string, string | null>()
+
+    for (const session of visibleSessions) {
+      let parentId = normalizedParentMap.get(session.id) || null
+
+      while (parentId && visibleSessionIds && !visibleSessionIds.has(parentId)) {
+        parentId = normalizedParentMap.get(parentId) || null
+      }
+
+      map.set(session.id, parentId && (!visibleSessionIds || visibleSessionIds.has(parentId)) ? parentId : null)
+    }
+
+    return map
+  }, [visibleSessions, normalizedParentMap, visibleSessionIds])
+
   const childrenMap = useMemo(() => {
     const map = new Map<string, Session[]>()
 
-    for (const session of sessions) {
-      const parentId = normalizedParentMap.get(session.id)
+    for (const session of visibleSessions) {
+      const parentId = visibleParentMap.get(session.id)
       if (!parentId) continue
 
       if (!map.has(parentId)) {
@@ -265,7 +325,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }, [sessions, normalizedParentMap])
+  }, [visibleSessions, visibleParentMap])
 
   const descendantBusyCountMap = useMemo(() => {
     const map = new Map<string, number>()
@@ -285,16 +345,16 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       return total
     }
 
-    for (const session of sessions) {
+    for (const session of visibleSessions) {
       countBusyDescendants(session.id)
     }
 
     return map
-  }, [childrenMap, sessions])
+  }, [childrenMap, visibleSessions])
 
   const rootSessions = useMemo(
-    () => sessions.filter(session => !normalizedParentMap.get(session.id)).sort(sortSessions),
-    [sessions, normalizedParentMap]
+    () => visibleSessions.filter(session => !visibleParentMap.get(session.id)).sort(sortSessions),
+    [visibleSessions, visibleParentMap]
   )
 
   const resolvedCurrentSessionId = currentSession ? resolveSessionId(currentSession) || currentSession : undefined
@@ -601,10 +661,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const children = childrenMap.get(session.id) || []
     const hasChildren = children.length > 0
     const descendantBusyCount = descendantBusyCountMap.get(session.id) || 0
-    const isExpanded = expandedSessions.has(session.id)
+    const isExpanded = isFiltering || expandedSessions.has(session.id)
     const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
-    const visibleChildren = children.slice(0, visibleCount)
-    const hiddenCount = children.length - visibleChildren.length
+    const visibleChildren = isFiltering ? children : children.slice(0, visibleCount)
+    const hiddenCount = isFiltering ? 0 : children.length - visibleChildren.length
     const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
@@ -791,7 +851,43 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   return (
     <>
-      {rootSessions.map(session => renderSession(session))}
+      <div className="mb-2 space-y-1">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+          <input
+            type="search"
+            value={filterText}
+            onChange={(e) => setFilterText(e.currentTarget.value)}
+            placeholder="Search sessions"
+            aria-label="Search sessions"
+            className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
+          />
+          {filterText && (
+            <button
+              type="button"
+              onClick={() => setFilterText('')}
+              className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              aria-label="Clear session search"
+              title="Clear search"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+        {isFiltering && (
+          <div className="px-1 text-xs text-gray-500 dark:text-gray-400">
+            {visibleSessions.length} {visibleSessions.length === 1 ? 'match' : 'matches'}
+          </div>
+        )}
+      </div>
+
+      {rootSessions.length > 0 ? (
+        rootSessions.map(session => renderSession(session))
+      ) : (
+        <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+          {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
+        </div>
+      )}
 
       <ContextMenu
         open={!!contextMenu}
