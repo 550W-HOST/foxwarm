@@ -15,6 +15,10 @@ function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function assertCompactKeepsDefaultToolSchema(options?: { toolDefinitions?: Array<{ name: string }> }) {
+  assert.strictEqual(options?.toolDefinitions, undefined);
+}
+
 function createBaseSession(id: string, parentSessionId?: string): Session {
   return {
     id,
@@ -386,13 +390,29 @@ async function main(): Promise<void> {
           assert.doesNotMatch(systemText, /Keep the session goal alive across compaction/);
           assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
           assert.match(systemText, /M#1/);
-          assert.strictEqual(options?.toolDefinitions, undefined);
+          assertCompactKeepsDefaultToolSchema(options);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in compact prompt');
           compactMessageRange = {
             sourceStart: Number(firstMessageCandidate[1]),
             sourceEnd: Number(firstMessageCandidate[2] || firstMessageCandidate[1]),
           };
+          const toolCall = {
+            id: 'compact-memory-tool-rejected',
+            name: 'read_memory',
+            args: { filePath: 'MEMORY.md' },
+          };
+          appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
+          return { text: '', toolCalls: [toolCall] };
+        }
+
+        if (llmCallCount === 3) {
+          const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
+          assert.match(systemText, /COMPACT TOOL CALL INVALID/);
+          assert.match(systemText, /Do not call `read_memory`/);
+          assert.match(systemText, /only accepted tool call during compaction is submit_compact_plan/);
+          assert.match(systemText, /Do not read or write agent memory during compaction/);
+          assertCompactKeepsDefaultToolSchema(options);
           const toolCall = {
             id: 'compact-plan-invalid',
             name: 'submit_compact_plan',
@@ -404,11 +424,11 @@ async function main(): Promise<void> {
           return { text: '', toolCalls: [toolCall] };
         }
 
-        if (llmCallCount === 3) {
+        if (llmCallCount === 4) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
           assert.match(systemText, /createBlocks must contain at least one block/);
-          assert.strictEqual(options?.toolDefinitions, undefined);
+          assertCompactKeepsDefaultToolSchema(options);
           assert(compactMessageRange, 'expected compact message range to be captured from initial prompt');
           const toolCall = {
             id: 'compact-plan',
@@ -427,7 +447,7 @@ async function main(): Promise<void> {
           return { text: '', toolCalls: [toolCall] };
         }
 
-        if (llmCallCount === 4) {
+        if (llmCallCount === 5) {
           assert(Array.isArray(parts));
           assert(parts.some(part => part.text === 'compact this session now'));
           assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
@@ -443,7 +463,7 @@ async function main(): Promise<void> {
       });
 
       const finalSession = await sessionManager.getSession(sessionId);
-      assert.strictEqual(llmCallCount, 4);
+      assert.strictEqual(llmCallCount, 5);
       assert.strictEqual(finalSession.busy, false);
       assert.strictEqual(finalSession.goalState?.goal, 'Keep the session goal alive across compaction.');
       const compactCompletion = finalSession.history.find(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('Compaction completed')));
@@ -582,9 +602,9 @@ async function main(): Promise<void> {
       }, { sessionId, session });
 
       assert.match(String(output), /Archived messages for session/);
-      assert.match(String(output), /\[#2\]/);
+      assert.match(String(output), /\[#2(?:\s|\])/);
       assert.match(String(output), /archived beta/);
-      assert.match(String(output), /\[#3\]/);
+      assert.match(String(output), /\[#3(?:\s|\])/);
       assert.match(String(output), /archived gamma/);
       assert.doesNotMatch(String(output), /archived alpha/);
     });
@@ -622,7 +642,7 @@ async function main(): Promise<void> {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
           assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
-          assert.strictEqual(options?.toolDefinitions, undefined);
+          assertCompactKeepsDefaultToolSchema(options);
           const firstMessageCandidate = systemText.match(/^- M#(\d+)(?:-#(\d+))? /m);
           assert(firstMessageCandidate, 'expected at least one message candidate in auto compact prompt');
           autoCompactMessageRange = {

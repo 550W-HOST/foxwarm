@@ -511,10 +511,11 @@ test('direct idle user messages enter the session queue gate and preserve source
     await waitFor(() => observedTurns.length === 1);
     await waitForSessionIdle(sessionId);
     assert.equal(observedTurns.length, 1);
-    assert.ok(observedTurns[0].text.includes(`channel_instance_id: \`${channelId}\``));
-    assert.ok(observedTurns[0].text.includes(`conversation_id: \`${conversationId}\``));
-    assert.match(observedTurns[0].text, /channel_target_id:/);
-    assert.match(observedTurns[0].text, /sender: `webui-user`/);
+    assert.match(observedTurns[0].text, /channel_type: `webui`/);
+    assert.ok(!observedTurns[0].text.includes(`channel_instance_id: \`${channelId}\``));
+    assert.ok(!observedTurns[0].text.includes(`conversation_id: \`${conversationId}\``));
+    assert.doesNotMatch(observedTurns[0].text, /channel_target_id:/);
+    assert.doesNotMatch(observedTurns[0].text, /sender: `webui-user`/);
     assert.match(observedTurns[0].text, /hello from direct queue/);
     assert(observedTurns[0].parts?.some(part => part.inlineData?.mimeType === 'image/png'));
   } finally {
