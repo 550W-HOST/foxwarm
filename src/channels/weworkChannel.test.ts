@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WeWorkWebhookChannel } from './weworkChannel';
+import crypto from 'node:crypto';
+import { isWeWorkChannelConfigReady, WeWorkWebhookChannel } from './weworkChannel';
 
 const aibotTextBody = {
   msgid: 'msg-1',
@@ -12,6 +13,10 @@ const aibotTextBody = {
   msgtype: 'text',
   text: { content: '@Robot hello' },
 };
+
+function cloneBody(msgid: string) {
+  return { ...aibotTextBody, msgid };
+}
 
 test('WeWork channel only enables passive stream aggregation when configured', async () => {
   const disabled = new WeWorkWebhookChannel({ name: 'wework-test', webhookUrl: 'https://example.test/webhook' });
@@ -46,4 +51,124 @@ test('WeWork channel only enables passive stream aggregation when configured', a
       content: 'working',
     },
   });
+});
+
+test('WeWork channel config readiness supports pure callback and websocket modes', () => {
+  assert.equal(isWeWorkChannelConfigReady({ webhookUrl: 'https://example.test/webhook' }), true);
+  assert.equal(isWeWorkChannelConfigReady({
+    listenPort: 3003,
+    listenPath: '/wework/aibot',
+    token: 'token',
+    encodingAESKey: 'encoding-key',
+  }), true);
+  assert.equal(isWeWorkChannelConfigReady({
+    aibot: { websocket: { enabled: true, botId: 'bot', secret: 'secret' } },
+  }), true);
+  assert.equal(isWeWorkChannelConfigReady({ listenPort: 3003, listenPath: '/missing-crypto' }), false);
+});
+
+test('WeWork channel deduplicates repeated callback msgid', async () => {
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-test',
+    aibot: { stream: true, streamInitialContent: 'working' },
+  });
+  let handled = 0;
+  channel.onMessage(async () => { handled++; });
+
+  const first = await (channel as any).processInboundBody(cloneBody('dup-msg'), {
+    mode: 'webhook',
+    responseUrl: aibotTextBody.response_url,
+  }, true);
+  const second = await (channel as any).processInboundBody(cloneBody('dup-msg'), {
+    mode: 'webhook',
+    responseUrl: aibotTextBody.response_url,
+  }, true);
+
+  assert.equal(handled, 1);
+  assert.equal(second.passiveResponse.stream.id, first.passiveResponse.stream.id);
+});
+
+test('WeWork channel can start a passive stream for pure short-callback AIBot messages without response_url', async () => {
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-test',
+    aibot: { stream: true, streamInitialContent: 'working' },
+  });
+  channel.onMessage(async () => {});
+
+  const { response_url: _responseUrl, ...body } = cloneBody('pure-callback');
+  const result = await (channel as any).processInboundBody(body, { mode: 'webhook' }, true);
+
+  assert.equal(result.handled, true);
+  assert.equal(result.passiveResponse.msgtype, 'stream');
+  assert.equal(result.passiveResponse.stream.finish, false);
+  assert.equal(result.passiveResponse.stream.content, 'working');
+});
+
+test('WeWork channel skips stream-bound broadcasts for non-matching conversations instead of falling back to webhook send', async () => {
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-test',
+    webhookUrl: 'https://example.invalid/webhook',
+    aibot: { stream: true, streamInitialContent: 'working' },
+  });
+  channel.onMessage(async () => {});
+
+  const first = await (channel as any).processInboundBody(cloneBody('skip-turn-1'), {
+    mode: 'webhook',
+    responseUrl: aibotTextBody.response_url,
+  }, true);
+
+  await channel.sendMessage('other-chat', 'must not be posted to webhook', { weworkStreamId: first.passiveResponse.stream.id });
+
+  const refresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: first.passiveResponse.stream.id } }, { mode: 'webhook' }, true);
+  assert.equal(refresh.passiveResponse.stream.content, 'working');
+  assert.equal(refresh.passiveResponse.stream.finish, false);
+});
+
+test('WeWork channel binds stream updates by stream id instead of latest conversation card', async () => {
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-test',
+    aibot: { stream: true, streamInitialContent: 'working' },
+  });
+  channel.onMessage(async () => {});
+
+  const first = await (channel as any).processInboundBody(cloneBody('turn-1'), {
+    mode: 'webhook',
+    responseUrl: aibotTextBody.response_url,
+  }, true);
+  const second = await (channel as any).processInboundBody(cloneBody('turn-2'), {
+    mode: 'webhook',
+    responseUrl: aibotTextBody.response_url,
+  }, true);
+
+  await channel.sendMessage('chat-1', 'old final', { weworkStreamId: first.passiveResponse.stream.id, turnFinal: true });
+  await channel.sendMessage('chat-1', 'new queued notice', { weworkStreamId: second.passiveResponse.stream.id });
+
+  const firstRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: first.passiveResponse.stream.id } }, { mode: 'webhook' }, true);
+  const secondRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: second.passiveResponse.stream.id } }, { mode: 'webhook' }, true);
+
+  assert.equal(firstRefresh.passiveResponse.stream.content, 'old final');
+  assert.equal(firstRefresh.passiveResponse.stream.finish, true);
+  assert.equal(secondRefresh.passiveResponse.stream.content, 'new queued notice');
+  assert.equal(secondRefresh.passiveResponse.stream.finish, false);
+});
+
+test('WeWork encrypted passive response can be decrypted back to the stream payload', () => {
+  const encodingAESKey = crypto.randomBytes(32).toString('base64').replace(/=+$/u, '');
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-test',
+    token: 'test-token',
+    encodingAESKey,
+  });
+  const payload = {
+    msgtype: 'stream',
+    stream: { id: 'stream-1', finish: false, content: 'working' },
+  };
+
+  const encrypted = (channel as any).buildPassiveHttpResponse(payload, { timestamp: '1710000000', nonce: 'nonce-1' });
+  assert.equal(typeof encrypted.encrypt, 'string');
+  assert.equal(typeof encrypted.msgsignature, 'string');
+
+  const plaintext = (channel as any).crypto.decryptCallbackMessage(encrypted.encrypt);
+  assert.deepEqual(JSON.parse(plaintext), payload);
+  assert.equal((channel as any).crypto.verifySignature(encrypted.msgsignature, String(encrypted.timestamp), encrypted.nonce, encrypted.encrypt), true);
 });

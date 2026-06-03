@@ -4,6 +4,7 @@ import {
   buildWeWorkStreamResponse,
   truncateUtf8,
   WeWorkStreamAggregator,
+  WEWORK_STREAM_CONTENT_BYTE_LIMIT,
 } from './weworkStreamAggregator';
 
 test('WeWorkStreamAggregator aggregates multiple channel messages into one stream', () => {
@@ -13,13 +14,13 @@ test('WeWorkStreamAggregator aggregates multiple channel messages into one strea
   assert.equal(first.content, 'working');
   assert.equal(first.finish, false);
 
-  let updated = aggregator.append('chat-1', 'first model message');
+  let updated = aggregator.appendByStreamId('stream-1', 'first model message');
   assert.equal(updated?.content, 'first model message');
 
-  updated = aggregator.append('chat-1', '🛠 *[read]*: `file`');
+  updated = aggregator.appendByStreamId('stream-1', '🛠 *[read]*: `file`');
   assert.equal(updated?.content, 'first model message\n\n🛠 *[read]*: `file`');
 
-  updated = aggregator.append('chat-1', 'final answer', { finish: true });
+  updated = aggregator.appendByStreamId('stream-1', 'final answer', { finish: true });
   assert.equal(updated?.finish, true);
   assert.equal(updated?.content, 'first model message\n\n🛠 *[read]*: `file`\n\nfinal answer');
 
@@ -33,18 +34,35 @@ test('WeWorkStreamAggregator aggregates multiple channel messages into one strea
   });
 });
 
-test('WeWorkStreamAggregator splits cards when a new inbound message begins', () => {
+test('WeWorkStreamAggregator binds updates by stream id when a new inbound message starts', () => {
   const aggregator = new WeWorkStreamAggregator({ initialContent: 'working' });
   aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
-  aggregator.append('chat-1', 'old answer');
-
   const second = aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-2');
 
-  assert.equal(aggregator.getByStreamId('stream-1')?.finish, true);
-  assert.equal(aggregator.getByStreamId('stream-1')?.content, 'old answer');
+  const oldFinal = aggregator.appendByStreamId('stream-1', 'old final', { finish: true });
+  const newQueued = aggregator.appendByStreamId('stream-2', 'queued notice');
+
+  assert.equal(oldFinal?.finish, true);
+  assert.equal(oldFinal?.content, 'old final');
+  assert.equal(newQueued?.finish, false);
+  assert.equal(newQueued?.content, 'queued notice');
   assert.equal(second.streamId, 'stream-2');
-  assert.equal(second.content, 'working');
-  assert.equal(second.finish, false);
+});
+
+test('WeWorkStreamAggregator cleans up expired stream states', () => {
+  const aggregator = new WeWorkStreamAggregator({ ttlMs: 50 });
+  aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+  assert.equal(aggregator.cleanupExpired(Date.now() + 100), 1);
+  assert.equal(aggregator.getByStreamId('stream-1'), undefined);
+  assert.equal(aggregator.getByConversation('chat-1'), undefined);
+});
+
+test('WeWorkStreamAggregator clamps content to the WeWork stream byte limit', () => {
+  const aggregator = new WeWorkStreamAggregator({ maxContentBytes: WEWORK_STREAM_CONTENT_BYTE_LIMIT + 1000 });
+  aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+  const updated = aggregator.appendByStreamId('stream-1', 'a'.repeat(WEWORK_STREAM_CONTENT_BYTE_LIMIT + 100));
+
+  assert.ok(Buffer.byteLength(updated?.content || '', 'utf8') <= WEWORK_STREAM_CONTENT_BYTE_LIMIT);
 });
 
 test('truncateUtf8 respects multibyte UTF-8 byte limits', () => {

@@ -119,7 +119,38 @@ export class MessageRouter {
       conversationId: getConversationId(ctx),
       username: ctx.username,
       senderId: ctx.senderId,
+      weworkStreamId: ctx.weworkStreamId,
     };
+  }
+
+  private getSourceStreamKey(source?: QueueSource): string | undefined {
+    if (!source?.weworkStreamId) {
+      return undefined;
+    }
+    return `${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.weworkStreamId}`;
+  }
+
+  private getTurnChannelOptions(sourceCtx?: ChannelContext, source?: QueueSource): Record<string, any> {
+    const streamId = sourceCtx?.weworkStreamId || source?.weworkStreamId;
+    if (!streamId) {
+      return {};
+    }
+    const channelId = sourceCtx ? getChannelId(sourceCtx) : (source?.channelId || source?.platform);
+    const conversationId = sourceCtx ? getConversationId(sourceCtx) : (source?.conversationId || source?.channelUserId);
+    if (!channelId || !conversationId) {
+      return { weworkStreamId: streamId };
+    }
+    return {
+      weworkStreamId: streamId,
+      weworkStreamChannelId: channelId,
+      weworkStreamConversationId: conversationId,
+    };
+  }
+
+  private mergeTurnOptions(turnOptions: Record<string, any>, options?: any): any {
+    return Object.keys(turnOptions).length > 0
+      ? { ...turnOptions, ...(options || {}) }
+      : options;
   }
 
   private async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void> {
@@ -164,15 +195,26 @@ export class MessageRouter {
     return finalParts;
   }
 
-  private drainLeadingQueuedMessageParts(session: Session): MessagePart[] {
+  private drainLeadingQueuedMessageParts(session: Session): { parts: MessagePart[]; broadcastSource?: QueueSource } {
     const queuedParts: MessagePart[] = [];
+    let broadcastSource: QueueSource | undefined;
+    let streamKey: string | undefined;
 
     while (session.queue[0]
       && session.queue[0].type !== 'compact'
       && session.queue[0].type !== 'compact-commit'
       && !session.queue[0].message) {
+      const nextStreamKey = this.getSourceStreamKey(session.queue[0].source);
+      if (queuedParts.length > 0 && streamKey !== nextStreamKey) {
+        break;
+      }
       const item = session.queue.shift();
       if (!item?.parts) continue;
+
+      if (!broadcastSource && item.source) {
+        broadcastSource = item.source;
+        streamKey = nextStreamKey;
+      }
 
       if (item.source) {
         queuedParts.push(...this.prepareUserParts(item.parts, item.source));
@@ -182,12 +224,13 @@ export class MessageRouter {
       queuedParts.push(...item.parts);
     }
 
-    return queuedParts;
+    return { parts: queuedParts, broadcastSource };
   }
 
   private async consumeLeadingQueuedTurnInputs(
     session: Session,
     pendingParts: MessagePart[] | null,
+    turnStreamKey?: string,
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
     let mergedParts = pendingParts;
     let consumedInput = false;
@@ -195,6 +238,11 @@ export class MessageRouter {
     while (session.queue[0]
       && session.queue[0].type !== 'compact'
       && session.queue[0].type !== 'compact-commit') {
+      const queuedStreamKey = this.getSourceStreamKey(session.queue[0].source);
+      if ((turnStreamKey || queuedStreamKey) && queuedStreamKey !== turnStreamKey) {
+        break;
+      }
+
       const item = session.queue.shift();
       if (!item) {
         continue;
@@ -277,15 +325,16 @@ export class MessageRouter {
       return true;
     }
 
-    const queuedParts = this.drainLeadingQueuedMessageParts(session);
-    if (queuedParts.length === 0) {
+    const queuedTurn = this.drainLeadingQueuedMessageParts(session);
+    if (queuedTurn.parts.length === 0) {
       return false;
     }
 
     await this.runSessionTurn(session.id, {
-      parts: queuedParts,
+      parts: queuedTurn.parts,
       session,
       preclaimed: true,
+      source: queuedTurn.broadcastSource,
     });
     return true;
   }
@@ -449,14 +498,16 @@ export class MessageRouter {
     await sessionManager.appendSessionMessage(session, reminder);
   }
 
-  private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean): Promise<void> {
+  private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean, turnOptions?: Record<string, any>): Promise<boolean> {
     if (!alreadyBroadcasted && shouldBroadcastChannelText(response)) {
-      await this.sendSessionReply(session, sourceCtx, response, { excludePlatforms: ['webui'], turnFinal: true });
+      await this.sendSessionReply(session, sourceCtx, response, this.mergeTurnOptions(turnOptions || {}, { excludePlatforms: ['webui'], turnFinal: true }));
+      return true;
     }
+    return false;
   }
 
-  private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any): Promise<void> {
-    await this.sendSessionReply(session, sourceCtx, `Error: ${error?.message || 'Unknown error'}`, { turnFinal: true });
+  private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any, turnOptions?: Record<string, any>): Promise<void> {
+    await this.sendSessionReply(session, sourceCtx, `Error: ${error?.message || 'Unknown error'}`, this.mergeTurnOptions(turnOptions || {}, { turnFinal: true }));
   }
 
   private async maybeCreateGuestSessionForUnauthorizedMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session } | null> {
@@ -544,10 +595,10 @@ export class MessageRouter {
     try {
       const handled = await this.commandHandler(ctx, command, args);
       if (!handled) {
-        await ctx.reply(`Unknown command: ${command}`);
+        await ctx.reply(`Unknown command: ${command}`, { turnFinal: true });
       }
     } catch (e: any) {
-      await ctx.reply(`Command error: ${e.message}`);
+      await ctx.reply(`Command error: ${e.message}`, { turnFinal: true });
       logger.error({ err: e }, 'Command error');
     }
 
@@ -586,7 +637,11 @@ export class MessageRouter {
 
     await maybeRefreshStaleSessionSnapshot(session, sessionManager.refreshSessionSnapshot);
 
-    const broadcast = session.broadcast;
+    const turnChannelOptions = this.getTurnChannelOptions(options.sourceCtx, options.source);
+    const turnStreamKey = this.getSourceStreamKey(options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined));
+    const broadcast = session.broadcast
+      ? (text: string, broadcastOptions?: any) => session.broadcast!(text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
+      : undefined;
 
     logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.message?.parts?.length ?? options.parts?.length ?? 0 }, 'Session turn processing');
 
@@ -620,7 +675,7 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts);
+        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnStreamKey);
         parts = queuedBeforeLlm.parts;
 
         if (session.stopping) {
@@ -717,7 +772,7 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null);
+        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
         parts = queuedAfterTools.parts;
 
         if (result.usage) {
@@ -757,7 +812,17 @@ export class MessageRouter {
       }
 
       await this.maybeQueueChildReminder(session);
-      await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted);
+      const finalSent = await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted, turnChannelOptions);
+      if (!finalSent && turnChannelOptions.weworkStreamId && broadcast) {
+        broadcast('', {
+          turnFinal: true,
+          allowEmptyBroadcast: true,
+          targetChannel: {
+            channelId: turnChannelOptions.weworkStreamChannelId,
+            conversationId: turnChannelOptions.weworkStreamConversationId,
+          },
+        });
+      }
       await this.maybeAppendGoalEndTurnReminder(session);
       if (!stoppedByUser) {
         await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
@@ -767,7 +832,7 @@ export class MessageRouter {
       const errorText = `Error: ${e?.message || 'Unknown error'}`;
       await this.appendTerminalModelMessage(session, errorText);
       await this.maybeQueueChildReminder(session);
-      await this.sendSessionError(session, options.sourceCtx, e);
+      await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions);
       await this.maybeAppendGoalEndTurnReminder(session);
     } finally {
       if (!getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
@@ -824,7 +889,7 @@ export class MessageRouter {
       }
 
       if (!resolvedSession && !this.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
-        await ctx.reply(this.buildUnauthorizedMessage(ctx));
+        await ctx.reply(this.buildUnauthorizedMessage(ctx), { turnFinal: true });
         return;
       }
     }

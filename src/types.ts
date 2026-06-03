@@ -169,6 +169,7 @@ export interface QueueSource {
   conversationId?: string; // Preferred channel-side conversation target id
   username?: string;
   senderId?: string;
+  weworkStreamId?: string; // WeWork intelligent-bot stream id for binding channel broadcasts to the originating turn
 }
 
 export interface QueueItem {

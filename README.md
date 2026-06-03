@@ -304,9 +304,14 @@ channels:
   wework-aibot:
     type: wework
     enabled: true
-    # Webhook callback mode. Required for short-connection callbacks; omit only
-    # when using aibot.websocket with botId/secret below.
+    # Optional legacy/group-robot webhook used for proactive webhook sends and
+    # media upload/download by media_id. Intelligent-bot short-connection
+    # callbacks do not require this because replies use per-message response_url
+    # or passive stream replies.
     webhookUrl: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+    # Intelligent-bot short-connection callback listener. Configure this URL in
+    # WeWork with the matching Token / EncodingAESKey. This is sufficient for
+    # receiving intelligent-bot callbacks even when webhookUrl is omitted.
     token: "callback-token"
     encodingAESKey: "callback-encoding-aes-key"
     listenPort: 3003

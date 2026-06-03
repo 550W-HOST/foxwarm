@@ -3,7 +3,7 @@ import { TelegramChannel } from './channels/telegramChannel';
 import { MatrixChannel } from './channels/matrixChannel';
 import { WebUIChannel } from './channels/webuiChannel';
 import { TUIChannel } from './channels/tuiChannel';
-import { WeWorkWebhookChannel } from './channels/weworkChannel';
+import { isWeWorkChannelConfigReady, WeWorkWebhookChannel } from './channels/weworkChannel';
 import { initializeChannelRuntime, startManagedChannel } from './channelRuntime';
 import { MessageRouter } from './messageRouter';
 import { CommandHandler } from './commandHandler';
@@ -335,8 +335,7 @@ async function start() {
         }
 
         if (entry.type === 'wework') {
-            const websocketConfigured = !!(config.aibot?.websocket?.enabled && config.aibot?.websocket?.botId?.trim() && config.aibot?.websocket?.secret?.trim());
-            if (config.enabled === false || (!config.webhookUrl && !websocketConfigured)) continue;
+            if (config.enabled === false || !isWeWorkChannelConfigReady(config)) continue;
             void startWithRetry(`wework:${entry.id}`, async () => {
                 const weworkChannel = new WeWorkWebhookChannel({
                     name: entry.id,

@@ -29,12 +29,15 @@ type WeWorkStreamState = WeWorkStreamSnapshot & {
 export type WeWorkStreamAggregatorOptions = {
   initialContent?: string;
   maxContentBytes?: number;
+  ttlMs?: number;
 };
 
 const DEFAULT_INITIAL_CONTENT = '正在处理，请稍候…';
+export const WEWORK_STREAM_CONTENT_BYTE_LIMIT = 20480;
 // WeWork stream.content limit is documented as 20480 bytes. Keep a little room
 // for the truncation marker so UTF-8 byte length remains below the platform cap.
 export const DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES = 20000;
+export const DEFAULT_WEWORK_STREAM_TTL_MS = 15 * 60 * 1000;
 
 function utf8ByteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8');
@@ -82,23 +85,22 @@ function formatSection(text: string, label?: string): string {
 export class WeWorkStreamAggregator {
   private readonly initialContent: string;
   private readonly maxContentBytes: number;
+  private readonly ttlMs: number;
   private readonly byConversation = new Map<string, WeWorkStreamState>();
   private readonly byStreamId = new Map<string, WeWorkStreamState>();
 
   constructor(options: WeWorkStreamAggregatorOptions = {}) {
     this.initialContent = options.initialContent || DEFAULT_INITIAL_CONTENT;
-    this.maxContentBytes = options.maxContentBytes || DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES;
+    const requestedMaxBytes = options.maxContentBytes || DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES;
+    this.maxContentBytes = Math.min(Math.max(1, requestedMaxBytes), WEWORK_STREAM_CONTENT_BYTE_LIMIT);
+    this.ttlMs = Math.max(1, options.ttlMs || DEFAULT_WEWORK_STREAM_TTL_MS);
   }
 
   begin(conversationId: string, delivery: WeWorkStreamDelivery, streamId: string = makeStreamId()): WeWorkStreamSnapshot {
+    this.cleanupExpired();
     const normalizedConversationId = String(conversationId || '').trim();
     if (!normalizedConversationId) {
       throw new Error('conversationId is required to begin a WeWork stream');
-    }
-
-    const existing = this.byConversation.get(normalizedConversationId);
-    if (existing && !existing.finish) {
-      this.finish(normalizedConversationId);
     }
 
     const now = Date.now();
@@ -118,7 +120,18 @@ export class WeWorkStreamAggregator {
   }
 
   append(conversationId: string, text: string, options: WeWorkStreamAppendOptions = {}): WeWorkStreamSnapshot | undefined {
+    this.cleanupExpired();
     const state = this.byConversation.get(String(conversationId || '').trim());
+    return this.appendToState(state, text, options);
+  }
+
+  appendByStreamId(streamId: string, text: string, options: WeWorkStreamAppendOptions = {}): WeWorkStreamSnapshot | undefined {
+    this.cleanupExpired();
+    const state = this.byStreamId.get(String(streamId || '').trim());
+    return this.appendToState(state, text, options);
+  }
+
+  private appendToState(state: WeWorkStreamState | undefined, text: string, options: WeWorkStreamAppendOptions = {}): WeWorkStreamSnapshot | undefined {
     if (!state) {
       return undefined;
     }
@@ -145,7 +158,18 @@ export class WeWorkStreamAggregator {
   }
 
   finish(conversationId: string): WeWorkStreamSnapshot | undefined {
+    this.cleanupExpired();
     const state = this.byConversation.get(String(conversationId || '').trim());
+    return this.finishState(state);
+  }
+
+  finishByStreamId(streamId: string): WeWorkStreamSnapshot | undefined {
+    this.cleanupExpired();
+    const state = this.byStreamId.get(String(streamId || '').trim());
+    return this.finishState(state);
+  }
+
+  private finishState(state: WeWorkStreamState | undefined): WeWorkStreamSnapshot | undefined {
     if (!state) {
       return undefined;
     }
@@ -156,18 +180,36 @@ export class WeWorkStreamAggregator {
   }
 
   getByConversation(conversationId: string): WeWorkStreamSnapshot | undefined {
+    this.cleanupExpired();
     const state = this.byConversation.get(String(conversationId || '').trim());
     return state ? this.toSnapshot(state) : undefined;
   }
 
   getByStreamId(streamId: string): WeWorkStreamSnapshot | undefined {
+    this.cleanupExpired();
     const state = this.byStreamId.get(String(streamId || '').trim());
     return state ? this.toSnapshot(state) : undefined;
   }
 
   hasActive(conversationId: string): boolean {
+    this.cleanupExpired();
     const state = this.byConversation.get(String(conversationId || '').trim());
     return !!state && !state.finish;
+  }
+
+  cleanupExpired(now: number = Date.now()): number {
+    let removed = 0;
+    for (const [streamId, state] of Array.from(this.byStreamId.entries())) {
+      if (now - state.updatedAt <= this.ttlMs) {
+        continue;
+      }
+      this.byStreamId.delete(streamId);
+      if (this.byConversation.get(state.conversationId) === state) {
+        this.byConversation.delete(state.conversationId);
+      }
+      removed++;
+    }
+    return removed;
   }
 
   private renderContent(state: WeWorkStreamState): string {

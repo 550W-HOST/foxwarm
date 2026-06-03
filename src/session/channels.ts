@@ -367,9 +367,19 @@ export function createSessionBroadcast(sessionId: string): SessionBroadcast {
   return (text: string, options?: any) => {
     const channels = getChannelsBySession(sessionId);
     const excludePlatforms = options?.excludePlatforms || [];
+    const targetChannel = options?.targetChannel;
+    const isEmptyBroadcast = typeof text !== 'string' || text.trim().length === 0;
     logger.debug({ sessionId, channelCount: channels.length, excludePlatforms, textPreview: text.substring(0, 50) }, 'Broadcasting message');
 
     for (const channelInfo of channels) {
+      if (targetChannel && (targetChannel.channelId !== channelInfo.channelId || targetChannel.conversationId !== channelInfo.conversationId)) {
+        continue;
+      }
+
+      if (isEmptyBroadcast && !options?.allowEmptyBroadcast) {
+        continue;
+      }
+
       if (excludePlatforms.includes(channelInfo.channelId)) {
         logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Skipping excluded channel');
         continue;

@@ -23,6 +23,7 @@ export interface ChannelContext {
   platform: string; // Legacy alias of channelType
   senderId?: string; // Actual sender/user identity, used for allowlist checks when available
   preferDirectReply?: boolean; // Prefer the source reply path instead of session broadcast for this turn
+  weworkStreamId?: string; // WeWork intelligent-bot stream id for this inbound turn, when applicable
   // `sessionId` is set in handleMessage internal only for tools that need it.
   // If you want to specify the session, should use `attachChannel(channelId, conversationId, targetSession)`.
 }

@@ -4,7 +4,7 @@ import { getChannelConfigById, getNormalizedChannelConfigs, readAppConfigFile } 
 import { WeixinChannel } from './channels/weixinChannel';
 import { TelegramChannel } from './channels/telegramChannel';
 import { MatrixChannel } from './channels/matrixChannel';
-import { WeWorkWebhookChannel } from './channels/weworkChannel';
+import { isWeWorkChannelConfigReady, WeWorkWebhookChannel } from './channels/weworkChannel';
 import * as sessionManager from './sessionManager';
 
 export type ChannelRuntimeStatus = {
@@ -109,9 +109,8 @@ function buildWeWorkFactory(channelId: string): ManagedChannelFactory {
     create: async () => {
       const entry = getChannelConfigById(channelId, readAppConfigFile());
       const config = (entry?.config || {}) as any;
-      const websocketConfigured = !!(config.aibot?.websocket?.enabled && config.aibot?.websocket?.botId?.trim() && config.aibot?.websocket?.secret?.trim());
-      if (!config.webhookUrl?.trim() && !websocketConfigured) {
-        throw new Error(`WeChat Work webhookUrl or aibot.websocket botId/secret is missing for channel \`${channelId}\` in state/config.yaml`);
+      if (!isWeWorkChannelConfigReady(config)) {
+        throw new Error(`WeChat Work webhookUrl, callback listen config, or aibot.websocket botId/secret is missing for channel \`${channelId}\` in state/config.yaml`);
       }
       const channel = new WeWorkWebhookChannel({
         name: channelId,
@@ -129,11 +128,13 @@ function buildWeWorkFactory(channelId: string): ManagedChannelFactory {
       const entry = getChannelConfigById(channelId, readAppConfigFile());
       const config = (entry?.config || {}) as any;
       const websocketConfigured = !!(config.aibot?.websocket?.enabled && config.aibot?.websocket?.botId?.trim() && config.aibot?.websocket?.secret?.trim());
+      const callbackConfigured = !!(config.listenPort && config.listenPath?.trim() && config.token?.trim() && config.encodingAESKey?.trim());
       return {
-        configured: Boolean(config.webhookUrl?.trim()) || websocketConfigured,
+        configured: isWeWorkChannelConfigReady(config),
         enabled: config.enabled !== false,
         details: [
-          `webhookUrl=${config.webhookUrl?.trim() ? 'configured' : 'missing'}`,
+          `webhookUrl=${config.webhookUrl?.trim() ? 'configured' : 'unset'}`,
+          `callback=${callbackConfigured ? 'configured' : 'unset'}`,
           `token=${config.token?.trim() ? 'configured' : 'unset'}`,
           `aibot.stream=${config.aibot?.stream ? 'enabled' : 'disabled'}`,
           `aibot.websocket=${websocketConfigured ? 'configured' : (config.aibot?.websocket?.enabled ? 'missing credentials' : 'disabled')}`,
