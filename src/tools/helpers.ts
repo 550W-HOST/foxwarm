@@ -110,6 +110,47 @@ export function consumePendingWriteRef(ctx: ToolContext, agentName: string, refI
     return ref.content;
 }
 
+export type WriteParentIssue = {
+    path: string;
+    reason: 'missing' | 'not-directory';
+};
+
+export async function findWriteParentIssue(fullPath: string): Promise<WriteParentIssue | null> {
+    const parentDir = path.resolve(path.dirname(fullPath));
+    const root = path.parse(parentDir).root;
+    const relativeParent = path.relative(root, parentDir);
+
+    if (!relativeParent) {
+        return null;
+    }
+
+    let current = root;
+    for (const part of relativeParent.split(path.sep).filter(Boolean)) {
+        current = path.join(current, part);
+        let stats: any;
+        try {
+            stats = await fs.lstat(current);
+        } catch (err: any) {
+            if (err?.code === 'ENOENT') {
+                return { path: current, reason: 'missing' };
+            }
+            throw err;
+        }
+        if (!stats.isDirectory()) {
+            return { path: current, reason: 'not-directory' };
+        }
+    }
+
+    return null;
+}
+
+export function formatWriteParentIssueMessage(issue: WriteParentIssue, retryHint?: string): string {
+    const base = issue.reason === 'missing'
+        ? `Parent directory does not exist: ${issue.path}. write does not create parent directories by default. Retry with createDirs=true to create missing parent directories.`
+        : `Parent path is not a directory: ${issue.path}.`;
+    return retryHint ? `${base}${retryHint}` : base;
+}
+
 export function shouldEnforceIsolatedMasterPathAccess(ctx: ToolContext | undefined): boolean {
     return sessionManager.isSessionEffectivelyIsolated(ctx?.session) && (ctx?.runtimeNodeId || 'master') === 'master';
 }
@@ -150,12 +191,25 @@ type DirectoryListingEntry = {
     modifiedAt: string;
 };
 
+function normalizeOptionalLineBound(value: number | undefined): number | undefined {
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric === 0) {
+        return undefined;
+    }
+    return numeric;
+}
+
 function normalizeDirectoryListingStartEnd(startLine: number | undefined, endLine: number | undefined, totalItems: number): { startItem: number; endItem: number } {
-    const startItem = startLine !== undefined && Number.isFinite(Number(startLine))
-        ? Math.max(1, Math.floor(Number(startLine)))
+    const normalizedStartLine = normalizeOptionalLineBound(startLine);
+    const normalizedEndLine = normalizeOptionalLineBound(endLine);
+    const startItem = normalizedStartLine !== undefined
+        ? Math.max(1, Math.floor(Number(normalizedStartLine)))
         : 1;
-    const endItem = endLine !== undefined && Number.isFinite(Number(endLine))
-        ? Math.max(0, Math.floor(Number(endLine)))
+    const endItem = normalizedEndLine !== undefined
+        ? Math.max(0, Math.floor(Number(normalizedEndLine)))
         : Math.min(totalItems, startItem + 49);
     return { startItem, endItem };
 }
@@ -241,23 +295,33 @@ export async function readResolvedPath(fullPath: string, displayPath: string, st
 
     let content = await fs.readFile(fullPath, 'utf8');
 
-    if (startLine !== undefined || endLine !== undefined) {
+    const normalizedStartLine = normalizeOptionalLineBound(startLine);
+    const normalizedEndLine = normalizeOptionalLineBound(endLine);
+
+    if (normalizedStartLine !== undefined || normalizedEndLine !== undefined) {
         const lines = content.split('\n');
-        const start = startLine !== undefined ? Math.max(0, startLine - 1) : 0;
-        const end = endLine !== undefined ? Math.min(lines.length, endLine) : lines.length;
+        const start = normalizedStartLine !== undefined ? Math.max(0, normalizedStartLine - 1) : 0;
+        const end = normalizedEndLine !== undefined ? Math.min(lines.length, normalizedEndLine) : lines.length;
         content = lines.slice(start, end).join('\n');
     }
 
     return content;
 }
 
-export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string) {
+export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string, options?: { createDirs?: boolean }) {
     const exists = await fs.pathExists(fullPath);
     if (exists && !overwrite) {
         throw new Error(existsMessage);
     }
 
-    await fs.ensureDir(path.dirname(fullPath));
+    if (options?.createDirs === true) {
+        await fs.ensureDir(path.dirname(fullPath));
+    } else {
+        const parentIssue = await findWriteParentIssue(fullPath);
+        if (parentIssue) {
+            throw new Error(formatWriteParentIssueMessage(parentIssue));
+        }
+    }
     await fs.writeFile(fullPath, content);
 }
 

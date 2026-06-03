@@ -32,6 +32,36 @@ function resolveToolPath(filePath: string, ctx: NodeToolContext): string {
   return resolveNodePath(filePath, ctx.session?.agent || 'main', ctx.session?.cwd);
 }
 
+type WriteParentIssue = { path: string; reason: 'missing' | 'not-directory' };
+
+async function findWriteParentIssue(fullPath: string): Promise<WriteParentIssue | null> {
+  const parentDir = path.resolve(path.dirname(fullPath));
+  const root = path.parse(parentDir).root;
+  const relativeParent = path.relative(root, parentDir);
+  if (!relativeParent) return null;
+
+  let current = root;
+  for (const part of relativeParent.split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    let stats: any;
+    try {
+      stats = await fs.lstat(current);
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') return { path: current, reason: 'missing' };
+      throw err;
+    }
+    if (!stats.isDirectory()) return { path: current, reason: 'not-directory' };
+  }
+  return null;
+}
+
+function formatWriteParentIssueMessage(issue: WriteParentIssue): string {
+  if (issue.reason === 'missing') {
+    return `Parent directory does not exist: ${issue.path}. write does not create parent directories by default. Retry with createDirs=true to create missing parent directories.`;
+  }
+  return `Parent path is not a directory: ${issue.path}.`;
+}
+
 async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number) {
   const stats = await fs.stat(fullPath);
   if (stats.isDirectory()) {
@@ -46,10 +76,12 @@ async function readResolvedPath(fullPath: string, displayPath: string, startLine
     return { output: `[Image loaded: ${displayPath}]`, mimeType, sizeBytes: buffer.length, inlineData: { data: buffer.toString('base64'), mimeType } };
   }
   let content = await fs.readFile(fullPath, 'utf8');
-  if (startLine !== undefined || endLine !== undefined) {
+  const normalizedStartLine = normalizeOptionalLineBound(startLine);
+  const normalizedEndLine = normalizeOptionalLineBound(endLine);
+  if (normalizedStartLine !== undefined || normalizedEndLine !== undefined) {
     const lines = content.split('\n');
-    const start = startLine !== undefined ? Math.max(0, Number(startLine) - 1) : 0;
-    const end = endLine !== undefined ? Math.min(lines.length, Number(endLine)) : lines.length;
+    const start = normalizedStartLine !== undefined ? Math.max(0, Number(normalizedStartLine) - 1) : 0;
+    const end = normalizedEndLine !== undefined ? Math.min(lines.length, Number(normalizedEndLine)) : lines.length;
     content = lines.slice(start, end).join('\n');
   }
   return content;
@@ -62,12 +94,21 @@ type DirectoryListingEntry = {
   modifiedAt: string;
 };
 
+function normalizeOptionalLineBound(value: number | undefined): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric === 0) return undefined;
+  return numeric;
+}
+
 function normalizeDirectoryListingStartEnd(startLine: number | undefined, endLine: number | undefined, totalItems: number): { startItem: number; endItem: number } {
-  const startItem = startLine !== undefined && Number.isFinite(Number(startLine))
-    ? Math.max(1, Math.floor(Number(startLine)))
+  const normalizedStartLine = normalizeOptionalLineBound(startLine);
+  const normalizedEndLine = normalizeOptionalLineBound(endLine);
+  const startItem = normalizedStartLine !== undefined
+    ? Math.max(1, Math.floor(Number(normalizedStartLine)))
     : 1;
-  const endItem = endLine !== undefined && Number.isFinite(Number(endLine))
-    ? Math.max(0, Math.floor(Number(endLine)))
+  const endItem = normalizedEndLine !== undefined
+    ? Math.max(0, Math.floor(Number(normalizedEndLine)))
     : Math.min(totalItems, startItem + 49);
   return { startItem, endItem };
 }
@@ -133,7 +174,12 @@ export async function write(args: ToolArgs, ctx: NodeToolContext = {}) {
   const fullPath = resolveToolPath(filePath, ctx);
   const exists = await fs.pathExists(fullPath);
   if (exists && overwrite !== true) throw new Error(`File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`);
-  await fs.ensureDir(path.dirname(fullPath));
+  if (args.createDirs === true) {
+    await fs.ensureDir(path.dirname(fullPath));
+  } else {
+    const parentIssue = await findWriteParentIssue(fullPath);
+    if (parentIssue) throw new Error(formatWriteParentIssueMessage(parentIssue));
+  }
   await fs.writeFile(fullPath, content);
   return 'File written successfully';
 }

@@ -2,26 +2,27 @@ export const CLI_NODE_CAPABILITIES = {
   tools: [
     {
       name: 'read',
-      description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
+      description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers; passing 0 for startLine/endLine is treated as omitted. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
       parameters: {
         type: 'object',
         properties: {
           filePath: { type: 'string' },
-          startLine: { type: 'number', description: 'Starting line number/item number (1-indexed, optional)' },
-          endLine: { type: 'number', description: 'Ending line number/item number (1-indexed, inclusive, optional)' },
+          startLine: { type: 'number', description: 'Starting line number/item number (1-indexed, optional). 0 is treated as omitted.' },
+          endLine: { type: 'number', description: 'Ending line number/item number (1-indexed, inclusive, optional). 0 is treated as omitted.' },
         },
         required: ['filePath'],
       },
     },
     {
       name: 'write',
-      description: 'Write a file. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
+      description: 'Write a file. By default, parent directories must already exist; pass createDirs=true to create missing parent directories. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
       parameters: {
         type: 'object',
         properties: {
           filePath: { type: 'string' },
           content: { type: 'string' },
           overwrite: { type: 'boolean' },
+          createDirs: { type: 'boolean', description: 'Create missing parent directories before writing. Default: false' },
         },
         required: ['filePath', 'content'],
       },

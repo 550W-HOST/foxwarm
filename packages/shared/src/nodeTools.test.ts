@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { exec } from './nodeTools';
+import { exec, read, write } from './nodeTools';
 import { getNodeAgentDir } from './nodeFileTransfer';
 
 function uniqueAgent(prefix: string): string {
@@ -13,6 +13,42 @@ function uniqueAgent(prefix: string): string {
 async function cleanupAgent(agentName: string) {
   await fs.remove(getNodeAgentDir(agentName)).catch(() => {});
 }
+
+test('node read treats startLine/endLine 0 as omitted', async () => {
+  const agentName = uniqueAgent('node_read_zero');
+  const baseDir = getNodeAgentDir(agentName);
+  const filePath = path.join(baseDir, 'note.txt');
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(filePath, 'one\ntwo\nthree');
+    assert.equal(await read({ filePath: 'note.txt', startLine: 0, endLine: 0 }, { session: { agent: agentName } }), 'one\ntwo\nthree');
+    assert.equal(await read({ filePath: 'note.txt', startLine: 2, endLine: 0 }, { session: { agent: agentName } }), 'two\nthree');
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});
+
+test('node write requires existing parent dirs unless createDirs=true', async () => {
+  const agentName = uniqueAgent('node_write_mkdir');
+  const baseDir = getNodeAgentDir(agentName);
+  try {
+    await fs.ensureDir(baseDir);
+    await assert.rejects(
+      () => write({ filePath: 'missing/child/note.txt', content: 'hello' }, { session: { agent: agentName } }),
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        assert.match(message, /Parent directory does not exist/);
+        assert.match(message, /missing/);
+        assert.match(message, /createDirs=true/);
+        return true;
+      },
+    );
+    await write({ filePath: 'missing/child/note.txt', content: 'hello', createDirs: true }, { session: { agent: agentName } });
+    assert.equal(await fs.readFile(path.join(baseDir, 'missing', 'child', 'note.txt'), 'utf8'), 'hello');
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});
 
 test('node exec expands cwd ~ on the executing node', async () => {
   const agentName = uniqueAgent('node_exec_home');

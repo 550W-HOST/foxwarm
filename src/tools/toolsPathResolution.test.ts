@@ -97,6 +97,30 @@ test('read lists directories with item-number pagination', async () => {
   }
 });
 
+test('read treats startLine/endLine 0 as omitted for files and directories', async () => {
+  const agentDir = getAgentDir('main');
+  const baseDir = path.join(agentDir, '.temp', `read-zero-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const filePath = path.join(baseDir, 'note.txt');
+  const ctx = { session: { agent: 'main' } };
+
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(filePath, 'one\ntwo\nthree');
+    await fs.writeFile(path.join(baseDir, 'item.txt'), 'item');
+
+    assert.equal(await read({ filePath, startLine: 0, endLine: 0 }, ctx as any), 'one\ntwo\nthree');
+    assert.equal(await read({ filePath, startLine: 2, endLine: 0 }, ctx as any), 'two\nthree');
+    assert.equal(await read({ filePath, startLine: 0, endLine: 2 }, ctx as any), 'one\ntwo');
+
+    const listing = String(await read({ filePath: baseDir, startLine: 0, endLine: 0 }, ctx as any));
+    assert.match(listing, /Directory listing/);
+    assert.match(listing, /1\. `item\.txt`|1\. `note\.txt`/);
+    assert.doesNotMatch(listing, /no items in requested range/);
+  } finally {
+    await fs.remove(baseDir);
+  }
+});
+
 function extractWriteContentRef(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const match = message.match(/contentRef:\s*"([^"]+)"/);
@@ -128,6 +152,57 @@ test('write can reuse cached contentRef after existing-file refusal', async () =
 
     await write({ filePath, contentRef, overwrite: true }, ctx as any);
     assert.equal(await fs.readFile(filePath, 'utf8'), 'new cached content');
+  } finally {
+    await fs.remove(baseDir);
+  }
+});
+
+test('write requires existing parent directories by default and can retry missing-parent contentRef with createDirs', async () => {
+  const agentDir = getAgentDir('main');
+  const baseDir = path.join(agentDir, '.temp', `write-mkdir-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const missingParent = path.join(baseDir, 'missing');
+  const filePath = path.join(missingParent, 'child', 'note.txt');
+  const ctx = { sessionId: `main/write_mkdir_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, session: { agent: 'main' } };
+
+  try {
+    await fs.ensureDir(baseDir);
+
+    let contentRef = '';
+    await assert.rejects(
+      async () => write({ filePath, content: 'cached missing parent content' }, ctx as any),
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        assert.match(message, /Parent directory does not exist/);
+        assert.match(message, new RegExp(missingParent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+        assert.match(message, /createDirs=true/);
+        assert.match(message, /contentRef/);
+        assert.doesNotMatch(message, /cached missing parent content/);
+        contentRef = extractWriteContentRef(err);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      () => write({ filePath, contentRef, overwrite: true }, ctx as any),
+      /Parent directory does not exist/,
+    );
+    await write({ filePath, contentRef, overwrite: true, createDirs: true }, ctx as any);
+    assert.equal(await fs.readFile(filePath, 'utf8'), 'cached missing parent content');
+  } finally {
+    await fs.remove(baseDir);
+  }
+});
+
+test('write createDirs=true creates missing parent directories for direct content', async () => {
+  const agentDir = getAgentDir('main');
+  const baseDir = path.join(agentDir, '.temp', `write-createdirs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const filePath = path.join(baseDir, 'a', 'b', 'note.txt');
+  const ctx = { session: { agent: 'main' } };
+
+  try {
+    await fs.ensureDir(baseDir);
+    await write({ filePath, content: 'created', createDirs: true }, ctx as any);
+    assert.equal(await fs.readFile(filePath, 'utf8'), 'created');
   } finally {
     await fs.remove(baseDir);
   }
