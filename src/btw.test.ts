@@ -114,7 +114,7 @@ test('/btw command acks immediately and writes async result as display-only hist
       chatStarted.resolve();
       await chatGate.promise;
       await appendTempConversation(activeSession, parts, 'btw text answer', options);
-      return { text: 'btw text answer', allParts: [{ text: 'btw text answer' }] };
+      return { text: 'btw text answer', modelId: 'anthropic/claude-sonnet-4-5', allParts: [{ text: 'btw text answer' }] };
     };
 
     const replies: string[] = [];
@@ -149,6 +149,7 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.equal(after.history[1].role, 'model');
     assert.equal(after.history[1].modelVisible, false);
     assert.equal(after.history[1].__meta?.noticeType, 'btw');
+    assert.equal(after.history[1].__meta?.modelId, 'anthropic/claude-sonnet-4-5');
     assert.match(after.history[1].parts[0].text || '', /\[BTW result\]/);
     assert.match(after.history[1].parts[0].text || '', /btw text answer/);
     assert.equal(broadcasts.length, 1);

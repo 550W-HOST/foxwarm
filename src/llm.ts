@@ -297,6 +297,23 @@ export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-c
     return null;
 }
 
+function getModelIdForMetadata(modelEntry: ModelConfigEntry | undefined, fallbackModelKey: string): string {
+    const providerKey = typeof modelEntry?.providerKey === 'string' ? modelEntry.providerKey.trim() : '';
+    const modelName = typeof modelEntry?.model === 'string' ? modelEntry.model.trim() : '';
+
+    if (providerKey && modelName) {
+        return modelName.startsWith(`${providerKey}/`)
+            ? modelName
+            : `${providerKey}/${modelName}`;
+    }
+
+    if (providerKey) {
+        return providerKey;
+    }
+
+    return fallbackModelKey;
+}
+
 function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
     if (signal.aborted) {
         return Promise.reject(makeAbortError());
@@ -1058,10 +1075,14 @@ export async function chat(
 
     // Add assistant message to history
     if (result.allParts && result.allParts.length > 0) {
+        const assistantMeta = {
+            ...(result.modelId ? { modelId: result.modelId } : {}),
+            ...(result.usage ? { usage: result.usage } : {}),
+        };
         const assistantMsg: Message = {
             role: 'model',
             parts: result.allParts,
-            ...(result.usage ? { __meta: { usage: result.usage } } : {}),
+            ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
         };
         await appendMessage(assistantMsg);
     }
@@ -1082,6 +1103,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
     const modelName = modelEntry?.model || '';
+    const modelId = getModelIdForMetadata(modelEntry, modelKey);
     const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
@@ -1222,12 +1244,16 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
 
     const logFiles = await logRequest(data, iteration);
     const responseAttempts: any[] = [];
+    const buildChatResult = (result: Omit<ChatResult, 'modelId'>): ChatResult => ({
+        ...result,
+        modelId,
+    });
     const returnWithLoggedFailure = async (text: string): Promise<ChatResult> => {
         await moveInteractionLogsToErrorDir(logFiles);
-        return {
+        return buildChatResult({
             text,
             allParts: [{ text }],
-        };
+        });
     };
 
     let response: AxiosResponse;
@@ -1418,10 +1444,10 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     } else if (useOpenAIChatCompletionsApi) {
         const choice = resp.choices?.[0];
         if (!choice) {
-            return {
+            return buildChatResult({
                 text: 'Error: No response from OpenAI API',
                 allParts: [{ text: 'Error: No response from OpenAI API' }],
-            };
+            });
         }
 
         const message = choice.message;
@@ -1507,10 +1533,10 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
 
     const toolCalls = allParts.filter(x => x.functionCall).map(x => x.functionCall);
 
-    return {
+    return buildChatResult({
         text: responseText,
         usage,
         toolCalls,
         allParts: allParts.length > 0 ? allParts : undefined,
-    };
+    });
 }

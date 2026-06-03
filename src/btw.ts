@@ -102,11 +102,12 @@ function formatBtwError(error: any): string {
   return `⚠️ [BTW error]\n${message}`;
 }
 
-async function appendBtwResult(sessionId: string, payloadText: string): Promise<string> {
+async function appendBtwResult(sessionId: string, payloadText: string, meta: Record<string, any> = {}): Promise<string> {
   const session = await sessionManager.getSession(sessionId);
   const text = formatBtwPayload(payloadText);
   await sessionManager.appendSessionMessage(session, createDisplayOnlyModelMessage(text, {
     noticeType: 'btw',
+    ...meta,
   }));
 
   if (session.broadcast) {
@@ -131,6 +132,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
 
   let payloadText: string;
   let toolDenied = false;
+  let modelId: string | undefined;
 
   try {
     logger.info({ sessionId, requestId }, 'BTW background request started');
@@ -139,6 +141,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
       notifySessionEvents: false,
       registerAbortController: false,
     });
+    modelId = result.modelId;
 
     if (result.toolCalls?.length) {
       toolDenied = true;
@@ -152,7 +155,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
     payloadText = formatBtwError(error);
   }
 
-  const text = await appendBtwResult(sessionId, payloadText);
+  const text = await appendBtwResult(sessionId, payloadText, modelId ? { modelId } : {});
   logger.info({ sessionId, requestId, toolDenied }, 'BTW background request finished');
   return { text, toolDenied };
 }

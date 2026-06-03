@@ -82,6 +82,10 @@ export interface Message {
   __meta?: {
     timestamp?: number;
     seq?: number;
+    /** Canonical provider-prefixed model id used to create this model message. */
+    modelId?: string;
+    /** Token usage reported for the model call that produced this model message. */
+    usage?: TokenUsage;
     [key: string]: any;
   };
 }
@@ -230,6 +234,8 @@ export interface IndexingState {
 // LLM types
 export interface ChatResult {
   text: string;
+  /** Canonical provider-prefixed model id used for the LLM request. */
+  modelId?: string;
   usage?: TokenUsage;
   toolCalls?: Array<FunctionCall>;
   allParts?: MessagePart[];
