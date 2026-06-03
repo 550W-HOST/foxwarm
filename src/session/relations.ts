@@ -175,7 +175,10 @@ export async function sendToSession(
   message: string,
   fromSessionId?: string
 ): Promise<void> {
-  const { sourceSession: fromSession } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
+  const { sourceSession: fromSession, targetSession } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
+  if (fromSession && fromSession.id === targetSession.id) {
+    throw new Error('send_to_session cannot send a message to the same session. Reply directly in the current session instead.');
+  }
 
   const replyTarget = fromSessionId || 'unknown-session';
   const prefix = fromSessionId

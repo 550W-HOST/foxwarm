@@ -2,7 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from './applyPatch';
-import { detectTransferMimeType, getNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
+import { getNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
+import { readFileToolPath, writeFileToolPath } from './fileToolCore';
 import { PersistentExecManager, DEFAULT_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, type ExecStatus, type RunningExecEntry } from './persistentExec';
 
 export interface NodeToolContext {
@@ -32,155 +33,20 @@ function resolveToolPath(filePath: string, ctx: NodeToolContext): string {
   return resolveNodePath(filePath, ctx.session?.agent || 'main', ctx.session?.cwd);
 }
 
-type WriteParentIssue = { path: string; reason: 'missing' | 'not-directory' };
-
-async function findWriteParentIssue(fullPath: string): Promise<WriteParentIssue | null> {
-  const parentDir = path.resolve(path.dirname(fullPath));
-  const root = path.parse(parentDir).root;
-  const relativeParent = path.relative(root, parentDir);
-  if (!relativeParent) return null;
-
-  let current = root;
-  for (const part of relativeParent.split(path.sep).filter(Boolean)) {
-    current = path.join(current, part);
-    let stats: any;
-    try {
-      stats = await fs.lstat(current);
-    } catch (err: any) {
-      if (err?.code === 'ENOENT') return { path: current, reason: 'missing' };
-      throw err;
-    }
-    if (!stats.isDirectory()) return { path: current, reason: 'not-directory' };
-  }
-  return null;
-}
-
-function formatWriteParentIssueMessage(issue: WriteParentIssue): string {
-  if (issue.reason === 'missing') {
-    return `Parent directory does not exist: ${issue.path}. write does not create parent directories by default. Retry with createDirs=true to create missing parent directories.`;
-  }
-  return `Parent path is not a directory: ${issue.path}.`;
-}
-
-async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number) {
-  const stats = await fs.stat(fullPath);
-  if (stats.isDirectory()) {
-    return readDirectoryListing(fullPath, displayPath, startLine, endLine);
-  }
-
-  const ext = path.extname(fullPath).toLowerCase();
-  const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
-  if (imageExts.includes(ext)) {
-    const buffer = await fs.readFile(fullPath);
-    const { mimeType } = detectTransferMimeType(fullPath);
-    return { output: `[Image loaded: ${displayPath}]`, mimeType, sizeBytes: buffer.length, inlineData: { data: buffer.toString('base64'), mimeType } };
-  }
-  let content = await fs.readFile(fullPath, 'utf8');
-  const normalizedStartLine = normalizeOptionalLineBound(startLine);
-  const normalizedEndLine = normalizeOptionalLineBound(endLine);
-  if (normalizedStartLine !== undefined || normalizedEndLine !== undefined) {
-    const lines = content.split('\n');
-    const start = normalizedStartLine !== undefined ? Math.max(0, Number(normalizedStartLine) - 1) : 0;
-    const end = normalizedEndLine !== undefined ? Math.min(lines.length, Number(normalizedEndLine)) : lines.length;
-    content = lines.slice(start, end).join('\n');
-  }
-  return content;
-}
-
-type DirectoryListingEntry = {
-  name: string;
-  type: 'file' | 'directory' | 'symlink' | 'other';
-  size?: number;
-  modifiedAt: string;
-};
-
-function normalizeOptionalLineBound(value: number | undefined): number | undefined {
-  if (value === undefined || value === null) return undefined;
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric === 0) return undefined;
-  return numeric;
-}
-
-function normalizeDirectoryListingStartEnd(startLine: number | undefined, endLine: number | undefined, totalItems: number): { startItem: number; endItem: number } {
-  const normalizedStartLine = normalizeOptionalLineBound(startLine);
-  const normalizedEndLine = normalizeOptionalLineBound(endLine);
-  const startItem = normalizedStartLine !== undefined
-    ? Math.max(1, Math.floor(Number(normalizedStartLine)))
-    : 1;
-  const endItem = normalizedEndLine !== undefined
-    ? Math.max(0, Math.floor(Number(normalizedEndLine)))
-    : Math.min(totalItems, startItem + 49);
-  return { startItem, endItem };
-}
-
-function formatDirectoryListingLine(entry: DirectoryListingEntry, itemNumber: number): string {
-  const name = entry.type === 'directory' ? `${entry.name}/` : entry.name;
-  const sizeLabel = entry.type === 'file' && typeof entry.size === 'number' ? `, ${entry.size} B` : '';
-  const typeLabel = entry.type === 'directory' ? 'dir' : entry.type;
-  return `${itemNumber}. \`${name}\` (${typeLabel}${sizeLabel}) - ${entry.modifiedAt}`;
-}
-
-async function readDirectoryListing(fullPath: string, displayPath: string, startLine?: number, endLine?: number): Promise<string> {
-  const dirents = await fs.readdir(fullPath, { withFileTypes: true });
-  dirents.sort((a, b) => a.name.localeCompare(b.name));
-
-  const entries: DirectoryListingEntry[] = [];
-  for (const dirent of dirents) {
-    const entryPath = path.join(fullPath, dirent.name);
-    const entryStats = await fs.lstat(entryPath);
-    entries.push({
-      name: dirent.name,
-      type: dirent.isDirectory() ? 'directory' : (dirent.isFile() ? 'file' : (dirent.isSymbolicLink() ? 'symlink' : 'other')),
-      size: dirent.isFile() ? entryStats.size : undefined,
-      modifiedAt: entryStats.mtime.toISOString(),
-    });
-  }
-
-  const totalItems = entries.length;
-  const { startItem, endItem } = normalizeDirectoryListingStartEnd(startLine, endLine, totalItems);
-  const pageEntries = startItem <= endItem
-    ? entries.slice(Math.max(0, startItem - 1), Math.min(totalItems, endItem))
-    : [];
-
-  const lines: string[] = [`Directory listing for \`${displayPath}\``, ''];
-  if (pageEntries.length === 0) {
-    lines.push(totalItems === 0 ? '(empty directory)' : '(no items in requested range)');
-  } else {
-    lines.push(...pageEntries.map((entry, index) => formatDirectoryListingLine(entry, startItem + index)));
-  }
-
-  lines.push('');
-  const shownStart = pageEntries.length > 0 ? startItem : 0;
-  const shownEnd = pageEntries.length > 0 ? startItem + pageEntries.length - 1 : 0;
-  const footer = [`Showing items ${shownStart}-${shownEnd} of ${totalItems}.`];
-  const nextStart = startItem + pageEntries.length;
-  if (nextStart <= totalItems) {
-    const nextEnd = Math.min(totalItems, nextStart + 49);
-    footer.push(`Next page: read({ filePath: ${JSON.stringify(displayPath)}, startLine: ${nextStart}, endLine: ${nextEnd} })`);
-  }
-  lines.push(footer.join(' '));
-
-  return lines.join('\n');
-}
-
 export async function read(args: ToolArgs, ctx: NodeToolContext = {}) {
   const { filePath, startLine, endLine } = args;
-  return readResolvedPath(resolveToolPath(filePath, ctx), filePath, startLine, endLine);
+  return readFileToolPath(resolveToolPath(filePath, ctx), filePath, startLine, endLine);
 }
 
 export async function write(args: ToolArgs, ctx: NodeToolContext = {}) {
   const { filePath, content, overwrite } = args;
   if (typeof content !== 'string') throw new Error('write requires string content');
   const fullPath = resolveToolPath(filePath, ctx);
-  const exists = await fs.pathExists(fullPath);
-  if (exists && overwrite !== true) throw new Error(`File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`);
-  if (args.createDirs === true) {
-    await fs.ensureDir(path.dirname(fullPath));
-  } else {
-    const parentIssue = await findWriteParentIssue(fullPath);
-    if (parentIssue) throw new Error(formatWriteParentIssueMessage(parentIssue));
-  }
-  await fs.writeFile(fullPath, content);
+  await writeFileToolPath(fullPath, content, {
+    overwrite: overwrite === true,
+    existsMessage: `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`,
+    createDirs: args.createDirs === true,
+  });
   return 'File written successfully';
 }
 
