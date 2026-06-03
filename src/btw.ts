@@ -26,6 +26,11 @@ function cloneSessionForBtw(session: Session): Session {
     history: cloneMessageArray(session.history),
     systemPromptFiles: session.systemPromptFiles ? [...session.systemPromptFiles] : undefined,
     persistentMemorySnapshot: session.persistentMemorySnapshot,
+    // BTW side requests reuse the real session's prompt-cache routing key.
+    // The model-facing prefix/schema is copied from the real session, and the
+    // temporary BTW prompt only appends to that prefix; generating a fresh key
+    // here would unnecessarily miss the existing KV/prompt cache.
+    promptCacheKey: session.promptCacheKey,
     stats: {
       totalCachedTokens: session.stats?.totalCachedTokens || 0,
       totalInputTokens: session.stats?.totalInputTokens || 0,
@@ -113,6 +118,11 @@ async function appendBtwResult(sessionId: string, payloadText: string): Promise<
 
 export async function runBtwRequest(sessionId: string, message: string): Promise<{ text: string; toolDenied: boolean }> {
   const sourceSession = await sessionManager.getSession(sessionId);
+  const previousPromptCacheKey = sourceSession.promptCacheKey;
+  llm.ensurePromptCacheKey(sourceSession);
+  if (sourceSession.promptCacheKey !== previousPromptCacheKey) {
+    await sessionManager.saveSession(sourceSession.id);
+  }
   const tempSession = cloneSessionForBtw(sourceSession);
   const requestId = randomUUID();
   const appendToTempHistory = async (newMessage: Message) => {

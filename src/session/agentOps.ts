@@ -181,11 +181,11 @@ export async function createSessionInAgent(options: {
     throw new Error(`Session "${sessionId}" already exists.`);
   }
 
-  const parentSession = parentSessionId ? await deps.getExistingSession(parentSessionId) : undefined;
-  const parentPreviousPromptCacheKey = parentSession?.promptCacheKey;
-  const promptCacheKey = parentSession ? llm.ensurePromptCacheKey(parentSession) : undefined;
-  if (parentSession && parentSession.promptCacheKey !== parentPreviousPromptCacheKey) {
-    await deps.saveSession(parentSession.id);
+  if (parentSessionId) {
+    const parentSession = await deps.getExistingSession(parentSessionId);
+    if (!parentSession) {
+      throw new Error(`Parent session "${parentSessionId}" does not exist.`);
+    }
   }
 
   const agentMeta = deps.getAgentMetadata(agentName);
@@ -201,7 +201,10 @@ export async function createSessionInAgent(options: {
     history: [],
     systemPromptFiles: systemPromptFiles ? [...systemPromptFiles] : undefined,
     persistentMemorySnapshot: snapshot,
-    promptCacheKey,
+    // createSessionInAgent always creates a fresh, empty session context even
+    // when a parent relation is recorded. Do not inherit the parent's cache key
+    // unless the operation is an actual fork that copies the prefix/history.
+    promptCacheKey: llm.generatePromptCacheKey(),
     stats: {
       totalCachedTokens: 0,
       totalInputTokens: 0,

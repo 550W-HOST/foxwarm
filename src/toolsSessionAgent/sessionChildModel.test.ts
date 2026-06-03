@@ -187,7 +187,7 @@ test('forked child sessions append inherited tool responses as tool-role message
   }
 });
 
-test('child sessions inherit the parent prompt cache key for both new and forked children', async () => {
+test('prompt cache keys follow prefix lineage for new and forked children', async () => {
   await sessionManager.loadSessions();
   const parentSessionId = makeId('prompt_cache_parent');
   const newChildId = `${parentSessionId}_new_child`;
@@ -204,7 +204,8 @@ test('child sessions inherit the parent prompt cache key for both new and forked
 
     const newChild = await sessionManager.getSession(newChildId);
     const forkedChild = await sessionManager.getSession(forkedChildId);
-    assert.equal(newChild.promptCacheKey, parent.promptCacheKey);
+    assert.match(newChild.promptCacheKey || '', PROMPT_CACHE_KEY_PATTERN);
+    assert.notEqual(newChild.promptCacheKey, parent.promptCacheKey);
     assert.equal(forkedChild.promptCacheKey, parent.promptCacheKey);
   } finally {
     for (const id of [newChildId, forkedChildId, parentSessionId]) {
@@ -213,7 +214,7 @@ test('child sessions inherit the parent prompt cache key for both new and forked
   }
 });
 
-test('createSessionInAgent inherits prompt cache key when parentSessionId is provided', async () => {
+test('createSessionInAgent starts a fresh prompt cache key even when parentSessionId is provided', async () => {
   await sessionManager.loadSessions();
   const parentSessionId = makeId('prompt_cache_create_session_parent');
   const sessionName = makeId('prompt_cache_created_child');
@@ -231,10 +232,32 @@ test('createSessionInAgent inherits prompt cache key when parentSessionId is pro
     });
 
     const created = await sessionManager.getSession(createdSessionId);
-    assert.equal(created.promptCacheKey, parent.promptCacheKey);
+    assert.match(created.promptCacheKey || '', PROMPT_CACHE_KEY_PATTERN);
+    assert.notEqual(created.promptCacheKey, parent.promptCacheKey);
   } finally {
     await sessionManager.deleteSession(createdSessionId).catch(() => {});
     await sessionManager.deleteSession(parentSessionId).catch(() => {});
+  }
+});
+
+test('clearing a session rotates the prompt cache key for the new empty prefix', async () => {
+  await sessionManager.loadSessions();
+  const sessionId = makeId('prompt_cache_clear');
+
+  try {
+    const session = await ensureSession(sessionId);
+    session.promptCacheKey = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff';
+    session.history = [{ role: 'user', parts: [{ text: 'old prefix' }] }];
+    await sessionManager.saveSession(sessionId);
+
+    await sessionManager.clearSession(sessionId);
+
+    const cleared = await sessionManager.getSession(sessionId);
+    assert.deepEqual(cleared.history, []);
+    assert.match(cleared.promptCacheKey || '', PROMPT_CACHE_KEY_PATTERN);
+    assert.notEqual(cleared.promptCacheKey, 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff');
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });
 

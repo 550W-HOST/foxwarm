@@ -1019,11 +1019,6 @@ export async function createChildSession(parentSessionId: string, suffix: string
   } else {
     // Create new empty session
     const parentSession = await getSession(parentSessionId);
-    const parentPreviousPromptCacheKey = parentSession.promptCacheKey;
-    const promptCacheKey = llm.ensurePromptCacheKey(parentSession);
-    if (parentSession.promptCacheKey !== parentPreviousPromptCacheKey) {
-      await saveSession(parentSession.id);
-    }
     const childSessionId = `${parentSessionId}_${suffix}`;
 
     const agentName = parentSession.agent || 'main';
@@ -1037,7 +1032,10 @@ export async function createChildSession(parentSessionId: string, suffix: string
       history: [],
       systemPromptFiles: parentSession.systemPromptFiles ? [...parentSession.systemPromptFiles] : undefined,
       persistentMemorySnapshot: snapshot,
-      promptCacheKey,
+      // Non-fork children start a fresh model-facing prefix, so they should not
+      // share the parent's prompt-cache routing key. Forked children do share it
+      // because their inherited prefix begins with the parent's existing history.
+      promptCacheKey: llm.generatePromptCacheKey(),
       stats: {
         totalCachedTokens: 0,
         totalInputTokens: 0,

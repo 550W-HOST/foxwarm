@@ -717,6 +717,11 @@ async function finalizeCompaction(
   session.vectorIndexPosition = 0;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
+  // Compact planning itself reuses the live session's cache key, but a
+  // successful compact commit rewrites the model-facing frontier/prefix. Route
+  // subsequent turns to a fresh prompt-cache namespace so they do not compete
+  // with requests built against the pre-compact prefix.
+  session.promptCacheKey = llm.generatePromptCacheKey();
 
   await deps.saveSession(sessionId);
   logger.info({ createdBlockCount, replacedItemCount, renderedCount: session.history.length }, 'Layered context compaction completed successfully');
@@ -1193,6 +1198,7 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
   session.nextBlockId = 1;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
+  session.promptCacheKey = llm.generatePromptCacheKey();
   session.meta = {
     ...session.meta,
     lastMessageTime: Date.now(),
