@@ -851,7 +851,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   return (
     <>
-      <div className="mb-2 space-y-1">
+      <div className="sticky top-0 z-10 mb-1 space-y-1 bg-white/95 dark:bg-gray-800/95">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
           <input
@@ -860,7 +860,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             onChange={(e) => setFilterText(e.currentTarget.value)}
             placeholder="Search sessions"
             aria-label="Search sessions"
-            className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
+            className="w-full rounded-lg border border-gray-200 bg-white py-1 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
           />
           {filterText && (
             <button
