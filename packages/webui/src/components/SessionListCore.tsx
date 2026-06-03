@@ -663,8 +663,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const descendantBusyCount = descendantBusyCountMap.get(session.id) || 0
     const isExpanded = isFiltering || expandedSessions.has(session.id)
     const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
-    const visibleChildren = isFiltering ? children : children.slice(0, visibleCount)
-    const hiddenCount = isFiltering ? 0 : children.length - visibleChildren.length
+    const visibleChildren = children.slice(0, visibleCount)
+    const hiddenCount = children.length - visibleChildren.length
     const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
