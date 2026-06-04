@@ -56,25 +56,31 @@ test('MessageRouter queue draining keeps WeWork stream-bound and unbound inputs 
 
 test('MessageRouter does not inject source prefix twice for drained queued parts', () => {
   const router = new MessageRouter() as any;
-  const source = {
-    platform: 'wework',
-    channelId: 'wework',
-    channelType: 'wework',
+  const ctx = {
     channelUserId: 'T83450036A',
     conversationId: 'T83450036A',
+    channelId: 'wework',
+    channelType: 'wework',
     username: 'T83450036A',
+    platform: 'wework',
     senderId: 'T83450036A',
     weworkStreamId: 'stream-a',
+    reply: async () => {},
+    sendTyping: async () => {},
   };
-  const alreadyPrepared = router.prepareUserParts([{ text: '在吗' }], source);
-  const turnSource = router.getPromptSourceForTurn({
-    source,
-    sourcePartsAlreadyPrepared: true,
+  const queueItem = router.buildChannelUserQueueItem(ctx, {
+    parts: [{ text: '在吗' }],
+    channelUserId: 'T83450036A',
+    conversationId: 'T83450036A',
   });
-  const parts = router.prepareTurnParts({
+  const session = {
     history: [{ role: 'user', parts: [{ text: 'previous' }] }],
     meta: { lastMessageTime: Date.now() },
-  }, 'session-1', alreadyPrepared, turnSource);
+    queue: [queueItem],
+  };
+
+  const drained = router.drainLeadingQueuedMessageParts(session);
+  const parts = router.prepareTurnParts(session, 'session-1', drained.parts);
 
   const sourcePrefixCount = parts.filter((part: any) => typeof part.system === 'string'
     && part.system.startsWith('The following message is a direct user message via channel;')).length;

@@ -153,17 +153,6 @@ export class MessageRouter {
       : options;
   }
 
-  private getPromptSourceForTurn(options: {
-    sourceCtx?: ChannelContext;
-    source?: QueueSource;
-    sourcePartsAlreadyPrepared?: boolean;
-  }): QueueSource | undefined {
-    if (options.sourcePartsAlreadyPrepared) {
-      return undefined;
-    }
-    return options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined);
-  }
-
   private async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void> {
     if (sourceCtx?.preferDirectReply && sourceCtx.reply) {
       await sourceCtx.reply(text, options);
@@ -188,8 +177,17 @@ export class MessageRouter {
     return preparedParts;
   }
 
-  private prepareTurnParts(session: Session, sessionId: string, parts: MessagePart[], source?: QueueSource): MessagePart[] {
-    const finalParts = this.prepareUserParts(parts, source);
+  private buildChannelUserQueueItem(ctx: ChannelContext, message: ChannelMessage): QueueItem {
+    const source = this.snapshotSource(ctx);
+    return {
+      type: 'user',
+      source,
+      parts: this.prepareUserParts(message.parts, source),
+    };
+  }
+
+  private prepareTurnParts(session: Session, sessionId: string, parts: MessagePart[]): MessagePart[] {
+    const finalParts = [...parts];
 
     const now = Date.now();
     const timeSinceLastMessage = now - (session.meta.lastMessageTime || now);
@@ -225,11 +223,6 @@ export class MessageRouter {
       if (!broadcastSource && item.source) {
         broadcastSource = item.source;
         streamKey = nextStreamKey;
-      }
-
-      if (item.source) {
-        queuedParts.push(...this.prepareUserParts(item.parts, item.source));
-        continue;
       }
 
       queuedParts.push(...item.parts);
@@ -275,13 +268,9 @@ export class MessageRouter {
       }
 
       consumedInput = true;
-      const preparedParts = item.source
-        ? this.prepareUserParts(item.parts, item.source)
-        : [...item.parts];
-
       mergedParts = mergedParts?.length
-        ? [...mergedParts, ...preparedParts]
-        : preparedParts;
+        ? [...mergedParts, ...item.parts]
+        : [...item.parts];
     }
 
     return {
@@ -346,7 +335,6 @@ export class MessageRouter {
       session,
       preclaimed: true,
       source: queuedTurn.broadcastSource,
-      sourcePartsAlreadyPrepared: true,
     });
     return true;
   }
@@ -634,7 +622,6 @@ export class MessageRouter {
       message?: Message;
       sourceCtx?: ChannelContext;
       source?: QueueSource;
-      sourcePartsAlreadyPrepared?: boolean;
       sendTyping?: boolean;
       session?: Session;
       preclaimed?: boolean;
@@ -668,8 +655,7 @@ export class MessageRouter {
         : this.prepareTurnParts(
           session,
           sessionId,
-          options.parts || [],
-          this.getPromptSourceForTurn(options)
+          options.parts || []
         );
       if (options.message) {
         await sessionManager.appendSessionMessage(session, options.message);
@@ -923,32 +909,22 @@ export class MessageRouter {
       };
     }
 
+    const queueItem = this.buildChannelUserQueueItem(ctx, message);
+
     if (isManagedSessionActive(session)) {
-      await sessionManager.enqueueSessionItem(sessionId, {
-        type: 'user',
-        source: this.snapshotSource(ctx),
-        parts: message.parts,
-      });
+      await sessionManager.enqueueSessionItem(sessionId, queueItem);
       await this.sendSessionReply(session, ctx, '🧭 Session is under managed control; your message was queued for its manager.');
       return;
     }
 
     if (session.busy) {
       logger.info({ channelId: getChannelId(ctx), channelType: getChannelType(ctx), user: ctx.username }, 'Session busy, queueing message');
-      await sessionManager.enqueueSessionItem(sessionId, {
-        type: 'user',
-        source: this.snapshotSource(ctx),
-        parts: message.parts,
-      });
+      await sessionManager.enqueueSessionItem(sessionId, queueItem);
       await this.sendSessionReply(session, ctx, '⏳ Request queued, currently processing another message...');
       return;
     }
 
-    await sessionManager.enqueueSessionItem(sessionId, {
-      type: 'user',
-      source: this.snapshotSource(ctx),
-      parts: message.parts,
-    });
+    await sessionManager.enqueueSessionItem(sessionId, queueItem);
     await this.processSessionQueue(sessionId);
   }
 
