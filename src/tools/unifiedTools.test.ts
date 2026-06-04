@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import * as mcpClient from '../mcpClient';
 import { nodesManager } from '../nodes/manager';
 import {
-  call_mcp,
   call_tool,
   definitions,
   mcp_config,
@@ -361,26 +360,6 @@ test('call_tool passes parsed MCP JSON text results through as structured values
   }
 });
 
-test('legacy call_mcp wrapper returns normalized MCP values without re-stringifying', async () => {
-  const originalCallTool = mcpClient.callTool;
-
-  try {
-    (mcpClient as any).callTool = async () => mcpClient.normalizeMcpToolResult({
-      content: [{ type: 'text', text: '[{"name":"foxwarm"}]' }],
-    });
-
-    const result = await call_mcp({
-      server: 'github',
-      tool: 'search_repos',
-      args: { query: 'foxwarm' },
-    });
-
-    assert.deepEqual(result, [{ name: 'foxwarm' }]);
-  } finally {
-    (mcpClient as any).callTool = originalCallTool;
-  }
-});
-
 test('search_tools and call_tool cover remote node tools', async () => {
   const originalListNodesWithTools = nodesManager.listNodesWithTools;
   const originalExecuteNodeTool = nodesManager.executeNodeTool;
@@ -508,7 +487,6 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
     'browse_close',
     'browse_interact',
     'remote_node',
-    'call_mcp',
     'search_mcp_tools',
     'get_archived_messages',
     'get_archived_blocks',
@@ -532,6 +510,7 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
     assert.equal(definitions.some(def => def.name === name), true, `${name} should remain available for runtime compatibility`);
   }
 
+  assert.equal(definitions.some(def => def.name === 'call_mcp'), false, 'legacy call_mcp should be removed entirely');
   assert.equal(modelFacingDefinitions.some(def => def.name === 'search_tools'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'call_tool'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'recall'), true);

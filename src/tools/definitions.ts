@@ -792,19 +792,6 @@ export const definitions = [
             }
         },
         {
-            name: 'call_mcp',
-            description: 'Call a tool from a configured MCP server. Use search_mcp_tools to list/search available tools first.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    server: { type: 'string', description: 'Server name (default: default)' },
-                    tool: { type: 'string', description: 'Tool name to call' },
-                    args: { type: 'object', description: 'Tool arguments' }
-                },
-                required: ['tool']
-            }
-        },
-        {
             name: 'search_mcp_tools',
             description: 'Search or list tools from an MCP server. Prefer using query to reduce output size.',
             parameters: {

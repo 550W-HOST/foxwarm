@@ -50,7 +50,7 @@ import { tool_read_memory, tool_write_memory, tool_edit_memory, tool_delete_memo
 import { tool_exec } from './tools/execTools';
 import { tool_image_crop, tool_image_write_to_file } from './tools/imageTools';
 import { tool_browse_open, tool_browse_list, tool_browse_get, tool_browse_close, tool_browse_interact } from './tools/browserTools';
-import { tool_mcp_config, tool_call_mcp, tool_search_mcp_tools, tool_list_mcp_servers } from './tools/mcpTools';
+import { tool_mcp_config, tool_search_mcp_tools, tool_list_mcp_servers } from './tools/mcpTools';
 import { tool_copy_between_nodes, tool_remote_node, tool_list_nodes, tool_change_current_node, tool_node_bootstrap_info, tool_node_pair_approve, tool_node_pair_list } from './tools/nodeTools';
 import { tool_search_vector, tool_get_memory_context, resolveMemorySearchOptions, formatMemorySearchResults } from './tools/vectorTools';
 import { tool_search_tools, tool_call_tool, setDefinitionsRef } from './tools/unifiedSearch';
@@ -72,7 +72,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'update_session_name', 'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
     'compact_session',
     'create_timer', 'list_timers', 'delete_timer',
-    'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
+    'mcp_config', 'search_mcp_tools', 'list_mcp_servers',
     'search_tools', 'call_tool',
     'run_script', 'start_toolscript_run', 'continue_script', 'list_toolscript_runs', 'get_toolscript_run', 'cancel_toolscript_run',
     'change_current_node',
@@ -127,7 +127,6 @@ export async function callTool(toolName: string, args: any, context: any): Promi
         browse_close: tool_browse_close,
         browse_interact: tool_browse_interact,
         mcp_config: tool_mcp_config,
-        call_mcp: tool_call_mcp,
         search_mcp_tools: tool_search_mcp_tools,
         list_mcp_servers: tool_list_mcp_servers,
         remote_node: tool_remote_node,
@@ -244,7 +243,6 @@ export const browse_interact = tool_browse_interact;
 export const remote_node = tool_remote_node;
 export const node_tools = tool_remote_node;
 export const mcp_config = tool_mcp_config;
-export const call_mcp = tool_call_mcp;
 export const search_mcp_tools = tool_search_mcp_tools;
 export const list_mcp_servers = tool_list_mcp_servers;
 export const search_tools = tool_search_tools;

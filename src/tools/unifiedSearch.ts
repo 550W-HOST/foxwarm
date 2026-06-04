@@ -412,9 +412,10 @@ export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
         if (!ctx?.sessionId) {
             throw new Error('call_tool for MCP requires session context.');
         }
-        await checkToolPermission('call_mcp', ctx.sessionId, 'master', {
+        await checkToolPermission('call_tool', ctx.sessionId, 'master', {
+            source: 'mcp',
             server: ref.server,
-            tool: ref.name,
+            name: ref.name,
             args: toolArgs,
         });
         return await mcpClient.callTool(ref.server, ref.name, toolArgs);

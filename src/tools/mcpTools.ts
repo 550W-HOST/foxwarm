@@ -27,23 +27,6 @@ export async function tool_mcp_config(args: ToolArgs) {
     return `MCP server \"${name}\" saved${enable === false ? ' (disabled)' : ''}.`;
 }
 
-export async function tool_call_mcp(args: ToolArgs) {
-    let { server, tool, args: toolArgs } = args;
-    if (!tool) {
-        throw new Error('call_mcp requires tool');
-    }
-
-    if (!server && typeof tool === 'string' && tool.includes('/')) {
-        const [serverName, ...rest] = tool.split('/');
-        if (serverName && rest.length) {
-            server = serverName;
-            tool = rest.join('/');
-        }
-    }
-
-    return await mcpClient.callTool(server, tool, toolArgs || {});
-}
-
 export async function tool_search_mcp_tools(args: ToolArgs) {
     const { server, query } = args;
     const tools = await mcpClient.listTools(server);
