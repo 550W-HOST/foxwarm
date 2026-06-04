@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 
-import { createMcpConfigStore, listServers, setMcpConfigStoreForTests, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
+import { createMcpConfigStore, listServers, normalizeMcpToolResult, setMcpConfigStoreForTests, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-mcp-config-'));
@@ -90,4 +90,66 @@ test('MCP config uses lightweight no-backup writes', async () => {
     assert.deepEqual(createMcpConfigStore(filePath).listCandidatePaths(), [filePath]);
     assert.deepEqual(await listBackupMatches(filePath), []);
   });
+});
+
+test('normalizeMcpToolResult parses single JSON object and array text content', () => {
+  assert.deepEqual(
+    normalizeMcpToolResult({
+      content: [{ type: 'text', text: '{"ok":true,"items":[1,2]}' }],
+    }),
+    { ok: true, items: [1, 2] },
+  );
+
+  assert.deepEqual(
+    normalizeMcpToolResult({
+      content: [{ type: 'text', text: '  [{"name":"fox"}]\n' }],
+      isError: false,
+    }),
+    [{ name: 'fox' }],
+  );
+});
+
+test('normalizeMcpToolResult keeps plain text and JSON primitives as strings', () => {
+  assert.equal(
+    normalizeMcpToolResult({ content: [{ type: 'text', text: 'plain text' }] }),
+    'plain text',
+  );
+  assert.equal(
+    normalizeMcpToolResult({ content: [{ type: 'text', text: '42' }] }),
+    '42',
+  );
+  assert.equal(
+    normalizeMcpToolResult({ content: [{ type: 'text', text: 'true' }] }),
+    'true',
+  );
+  assert.equal(
+    normalizeMcpToolResult({ content: [{ type: 'text', text: '"quoted"' }] }),
+    '"quoted"',
+  );
+});
+
+test('normalizeMcpToolResult preserves multi-content, non-text content, and metadata shapes', () => {
+  const multiContent = {
+    content: [
+      { type: 'text', text: '{"ok":true}' },
+      { type: 'text', text: 'extra text' },
+    ],
+  };
+  assert.strictEqual(normalizeMcpToolResult(multiContent), multiContent);
+
+  const imageContent = {
+    content: [{ type: 'image', mimeType: 'image/png', data: 'abc123' }],
+  };
+  assert.strictEqual(normalizeMcpToolResult(imageContent), imageContent);
+
+  const errorResult = {
+    content: [{ type: 'text', text: '{"message":"failed"}' }],
+    isError: true,
+  };
+  assert.strictEqual(normalizeMcpToolResult(errorResult), errorResult);
+
+  const annotatedText = {
+    content: [{ type: 'text', text: '{"ok":true}', annotations: { audience: ['assistant'] } }],
+  };
+  assert.strictEqual(normalizeMcpToolResult(annotatedText), annotatedText);
 });

@@ -9,6 +9,7 @@ import { MessageRouter } from './messageRouter';
 import * as sessionManager from './sessionManager';
 import * as managedSessions from './managedSessions';
 import * as tools from './tools';
+import * as mcpClient from './mcpClient';
 import { getAgentDir } from './config';
 import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, getToolScriptRunForTests, resetToolScriptRunsForTests } from './toolscript';
 import type { Session } from './types';
@@ -284,6 +285,34 @@ test('run_script passes unified MCP and node call_tool descriptors through to to
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script receives parsed MCP JSON text results through unified call_tool', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_mcp_json');
+  const session = await sessionManager.getSession(sessionId);
+  const originalCallTool = mcpClient.callTool;
+
+  (mcpClient as any).callTool = async () => mcpClient.normalizeMcpToolResult({
+    content: [{ type: 'text', text: '{"ok":true,"items":[{"name":"foxwarm"}]}' }],
+  });
+
+  try {
+    const result = await tool_run_script({
+      code: asMain('return call_tool({"source": "mcp", "server": "github", "name": "search_repos", "args": {"query": "foxwarm"}})'),
+    }, { sessionId, session });
+
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.executedTools, ['search_repos']);
+    assert.deepEqual(result.result, {
+      ok: true,
+      items: [{ name: 'foxwarm' }],
+    });
+  } finally {
+    (mcpClient as any).callTool = originalCallTool;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 });
 
