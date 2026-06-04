@@ -18,8 +18,9 @@ export type WriteParentIssue = {
 
 export type WriteFileToolPathOptions = {
   overwrite: boolean;
-  existsMessage: string;
+  existsMessage: string | (() => string);
   createDirs?: boolean;
+  parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined;
 };
 
 const INLINE_IMAGE_MIME: Record<string, string> = {
@@ -151,7 +152,7 @@ export async function findWriteParentIssue(fullPath: string): Promise<WriteParen
     current = path.join(current, part);
     let stats: Stats;
     try {
-      stats = await fs.lstat(current);
+      stats = await fs.stat(current);
     } catch (err: any) {
       if (err?.code === 'ENOENT') return { path: current, reason: 'missing' };
       throw err;
@@ -180,12 +181,33 @@ export async function ensureWriteParentReady(fullPath: string, createDirs?: bool
   }
 }
 
+function resolveExistsMessage(existsMessage: string | (() => string)): string {
+  return typeof existsMessage === 'function' ? existsMessage() : existsMessage;
+}
+
+function shouldDiagnoseWriteParentError(err: any): boolean {
+  return err?.code === 'ENOENT' || err?.code === 'ENOTDIR';
+}
+
 export async function writeFileToolPath(fullPath: string, content: string, options: WriteFileToolPathOptions): Promise<void> {
-  const exists = await fs.pathExists(fullPath);
-  if (exists && !options.overwrite) {
-    throw new Error(options.existsMessage);
+  if (options.createDirs === true) {
+    await fs.ensureDir(path.dirname(fullPath));
   }
 
-  await ensureWriteParentReady(fullPath, options.createDirs);
-  await fs.writeFile(fullPath, content);
+  try {
+    await fs.writeFile(fullPath, content, { flag: options.overwrite ? 'w' : 'wx' });
+  } catch (err: any) {
+    if (err?.code === 'EEXIST' && !options.overwrite) {
+      throw new Error(resolveExistsMessage(options.existsMessage));
+    }
+
+    if (options.createDirs !== true && shouldDiagnoseWriteParentError(err)) {
+      const parentIssue = await findWriteParentIssue(fullPath);
+      if (parentIssue) {
+        throw new Error(formatWriteParentIssueMessage(parentIssue, options.parentIssueRetryHint?.(parentIssue)));
+      }
+    }
+
+    throw err;
+  }
 }

@@ -118,6 +118,26 @@ export function consumePendingWriteRef(ctx: ToolContext, agentName: string, refI
     return ref.content;
 }
 
+export function peekPendingWriteRefContent(ctx: ToolContext, agentName: string, refId: string, fullPath: string): string {
+    prunePendingWriteRefs();
+    const ref = pendingWriteRefs.get(refId);
+    if (!ref) {
+        throw new Error(`Pending write contentRef not found or expired: ${refId}. Re-run write with content, or use a fresh contentRef from the previous write error.`);
+    }
+    if (ref.scopeKey !== getPendingWriteScopeKey(ctx, agentName) || ref.agentName !== agentName) {
+        throw new Error(`Pending write contentRef ${refId} is not available in this session/agent.`);
+    }
+    if (path.resolve(ref.fullPath) !== path.resolve(fullPath)) {
+        throw new Error(`Pending write contentRef ${refId} was created for ${ref.displayPath}; it cannot be used to write a different file.`);
+    }
+
+    return ref.content;
+}
+
+export function deletePendingWriteRef(refId: string): void {
+    pendingWriteRefs.delete(refId);
+}
+
 export function shouldEnforceIsolatedMasterPathAccess(ctx: ToolContext | undefined): boolean {
     return sessionManager.isSessionEffectivelyIsolated(ctx?.session) && (ctx?.runtimeNodeId || 'master') === 'master';
 }
@@ -155,11 +175,12 @@ export async function readResolvedPath(fullPath: string, displayPath: string, st
     return readFileToolPath(fullPath, displayPath, startLine, endLine);
 }
 
-export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string, options?: { createDirs?: boolean }) {
+export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string | (() => string), options?: { createDirs?: boolean; parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined }) {
     await writeFileToolPath(fullPath, content, {
         overwrite,
         existsMessage,
         createDirs: options?.createDirs,
+        parentIssueRetryHint: options?.parentIssueRetryHint,
     });
 }
 

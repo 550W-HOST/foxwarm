@@ -50,6 +50,21 @@ test('node write requires existing parent dirs unless createDirs=true', async ()
   }
 });
 
+test('node write accepts symlinked parent dirs without createDirs', async () => {
+  const agentName = uniqueAgent('node_write_symlink_parent');
+  const baseDir = getNodeAgentDir(agentName);
+  const realParent = path.join(baseDir, 'real-parent');
+  const symlinkParent = path.join(baseDir, 'linked-parent');
+  try {
+    await fs.ensureDir(realParent);
+    await fs.symlink(realParent, symlinkParent, 'dir');
+    await write({ filePath: 'linked-parent/note.txt', content: 'via symlink' }, { session: { agent: agentName } });
+    assert.equal(await fs.readFile(path.join(realParent, 'note.txt'), 'utf8'), 'via symlink');
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});
+
 test('node exec expands cwd ~ on the executing node', async () => {
   const agentName = uniqueAgent('node_exec_home');
   try {

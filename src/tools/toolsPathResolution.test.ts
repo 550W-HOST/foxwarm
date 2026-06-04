@@ -208,6 +208,24 @@ test('write createDirs=true creates missing parent directories for direct conten
   }
 });
 
+test('write accepts symlinked parent directories without createDirs', async () => {
+  const agentDir = getAgentDir('main');
+  const baseDir = path.join(agentDir, '.temp', `write-symlink-parent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const realParent = path.join(baseDir, 'real-parent');
+  const symlinkParent = path.join(baseDir, 'linked-parent');
+  const filePath = path.join(symlinkParent, 'note.txt');
+  const ctx = { session: { agent: 'main' } };
+
+  try {
+    await fs.ensureDir(realParent);
+    await fs.symlink(realParent, symlinkParent, 'dir');
+    await write({ filePath, content: 'via symlink' }, ctx as any);
+    assert.equal(await fs.readFile(path.join(realParent, 'note.txt'), 'utf8'), 'via symlink');
+  } finally {
+    await fs.remove(baseDir);
+  }
+});
+
 test('write contentRef is scoped to the same session and same path', async () => {
   const agentDir = getAgentDir('main');
   const baseDir = path.join(agentDir, '.temp', `write-ref-scope-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
