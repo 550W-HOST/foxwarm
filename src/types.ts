@@ -107,6 +107,22 @@ export interface ModelStreamToolCall {
   name?: string;
 }
 
+export type ChannelTurnToolStatus = 'running' | 'success' | 'error';
+
+export interface ChannelTurnToolRef {
+  id: string;
+  name: string;
+}
+
+export interface ChannelTurnToolResult extends ChannelTurnToolRef {
+  status: Exclude<ChannelTurnToolStatus, 'running'>;
+}
+
+export type ChannelTurnProgress =
+  | { type: 'llm-start' }
+  | { type: 'tool-calls-start'; calls: ChannelTurnToolRef[] }
+  | { type: 'tool-calls-finish'; results: ChannelTurnToolResult[] };
+
 export interface SessionStreamEvent {
   type: 'model-stream-reset' | 'model-stream-update' | 'toolscript-progress';
   // model-stream-* fields:

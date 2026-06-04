@@ -321,7 +321,6 @@ channels:
       # model/tool-loop broadcasts are aggregated into one stream card and the
       # final assistant message marks the stream as finished.
       stream: true
-      streamInitialContent: "正在处理，请稍候…"
       # Optional WebSocket/long-connection API mode. This can receive callbacks
       # without a public webhook URL and pushes stream updates proactively.
       websocket:

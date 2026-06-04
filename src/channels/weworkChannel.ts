@@ -12,7 +12,7 @@ import crypto from 'crypto';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { buildSavedFileText, saveInboundChannelFile } from '../channelFiles';
 import { logger } from '../common';
-import { MessagePart } from '../types';
+import type { ChannelTurnProgress, MessagePart } from '../types';
 import {
   buildWeWorkStreamResponse,
   DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES,
@@ -28,7 +28,6 @@ export interface WeWorkWebhookConfig {
   listenPath?: string; // 监听路径
   aibot?: {
     stream?: boolean;
-    streamInitialContent?: string;
     streamMaxContentBytes?: number;
     websocket?: {
       enabled?: boolean;
@@ -213,7 +212,6 @@ export class WeWorkWebhookChannel implements Channel {
     this.encodingAESKey = config.encodingAESKey;
     this.streamEnabled = !!config.aibot?.stream;
     this.streamAggregator = new WeWorkStreamAggregator({
-      initialContent: config.aibot?.streamInitialContent,
       maxContentBytes: config.aibot?.streamMaxContentBytes || DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES,
     });
     this.websocketConfig = config.aibot?.websocket;
@@ -1158,7 +1156,10 @@ export class WeWorkWebhookChannel implements Channel {
       return true;
     }
 
-    const snapshot = this.streamAggregator.appendByStreamId(streamId, text, { finish: !!options?.turnFinal });
+    const progress = this.normalizeChannelTurnProgress(options?.channelTurnProgress);
+    const snapshot = progress
+      ? this.streamAggregator.applyProgressByStreamId(streamId, progress)
+      : this.streamAggregator.appendByStreamId(streamId, text, { finish: !!options?.turnFinal });
     if (!snapshot) {
       return false;
     }
@@ -1169,6 +1170,37 @@ export class WeWorkWebhookChannel implements Channel {
     // Webhook mode is pull-based: WeWork fetches the latest snapshot through
     // subsequent msgtype=stream callbacks, so updating local state is enough.
     return true;
+  }
+
+  private normalizeChannelTurnProgress(value: unknown): ChannelTurnProgress | undefined {
+    if (!value || typeof value !== 'object') {
+      return undefined;
+    }
+    const progress = value as any;
+    if (progress.type === 'llm-start') {
+      return { type: 'llm-start' };
+    }
+    if (progress.type === 'tool-calls-start' && Array.isArray(progress.calls)) {
+      return {
+        type: 'tool-calls-start',
+        calls: progress.calls
+          .filter((call: any) => typeof call?.id === 'string' && call.id && typeof call?.name === 'string' && call.name)
+          .map((call: any) => ({ id: call.id, name: call.name })),
+      };
+    }
+    if (progress.type === 'tool-calls-finish' && Array.isArray(progress.results)) {
+      return {
+        type: 'tool-calls-finish',
+        results: progress.results
+          .filter((result: any) => typeof result?.id === 'string' && result.id && typeof result?.name === 'string' && result.name)
+          .map((result: any) => ({
+            id: result.id,
+            name: result.name,
+            status: result.status === 'error' ? 'error' : 'success',
+          })),
+      };
+    }
+    return undefined;
   }
 
   private buildMultipartBody(file: ChannelFile, buffer: Buffer, boundary: string): Buffer {

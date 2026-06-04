@@ -109,3 +109,20 @@ test('MessageRouter queue draining keeps different WeWork stream ids separate', 
   assert.equal(drained.parts.some((part: any) => part.text === 'second stream'), false);
   assert.equal(session.queue.length, 1);
 });
+
+test('MessageRouter emits turn progress as an empty targeted channel broadcast', () => {
+  const router = new MessageRouter() as any;
+  const events: Array<{ text: string; options: any }> = [];
+
+  router.emitTurnProgress((text: string, options?: any) => events.push({ text, options }), {
+    weworkStreamId: 'stream-1',
+    weworkStreamChannelId: 'wework-a',
+    weworkStreamConversationId: 'chat-a',
+  }, { type: 'llm-start' });
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].text, '');
+  assert.equal(events[0].options.allowEmptyBroadcast, true);
+  assert.deepEqual(events[0].options.targetChannel, { channelId: 'wework-a', conversationId: 'chat-a' });
+  assert.deepEqual(events[0].options.channelTurnProgress, { type: 'llm-start' });
+});

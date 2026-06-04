@@ -31,7 +31,6 @@ export type WeWorkConfig = {
   listenPath?: string;
   aibot?: {
     stream?: boolean;
-    streamInitialContent?: string;
     streamMaxContentBytes?: number;
     websocket?: {
       enabled?: boolean;

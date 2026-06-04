@@ -7,35 +7,59 @@ import {
   WEWORK_STREAM_CONTENT_BYTE_LIMIT,
 } from './weworkStreamAggregator';
 
-test('WeWorkStreamAggregator aggregates multiple channel messages into one stream', () => {
-  const aggregator = new WeWorkStreamAggregator({ initialContent: 'working' });
+test('WeWorkStreamAggregator aggregates model text and tool progress into one stream', () => {
+  const aggregator = new WeWorkStreamAggregator();
   const first = aggregator.begin('chat-1', { mode: 'webhook', responseUrl: 'https://example.test/response' }, 'stream-1');
 
-  assert.equal(first.content, 'working');
+  assert.equal(first.content, '> 🤔 thinking');
   assert.equal(first.finish, false);
 
-  let updated = aggregator.appendByStreamId('stream-1', 'first model message');
-  assert.equal(updated?.content, 'first model message');
+  let updated = aggregator.appendByStreamId('stream-1', 'model 文本消息 1');
+  updated = aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-start',
+    calls: [
+      { id: 'call-1', name: 'exec' },
+      { id: 'call-2', name: 'read' },
+    ],
+  });
+  assert.equal(updated?.content, 'model 文本消息 1\n\n> ⌛️ exec | ⌛️ read');
 
-  updated = aggregator.appendByStreamId('stream-1', '🛠 *[read]*: `file`');
-  assert.equal(updated?.content, 'first model message\n\n🛠 *[read]*: `file`');
+  updated = aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-finish',
+    results: [
+      { id: 'call-1', name: 'exec', status: 'success' },
+      { id: 'call-2', name: 'read', status: 'success' },
+    ],
+  });
+  updated = aggregator.applyProgressByStreamId('stream-1', { type: 'llm-start' });
+  assert.equal(updated?.content, 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | 🤔 thinking');
 
-  updated = aggregator.appendByStreamId('stream-1', 'final answer', { finish: true });
+  updated = aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-start',
+    calls: [{ id: 'call-3', name: 'exec' }],
+  });
+  assert.equal(updated?.content, 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | ⌛️ exec');
+
+  updated = aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-finish',
+    results: [{ id: 'call-3', name: 'exec', status: 'success' }],
+  });
+  updated = aggregator.appendByStreamId('stream-1', 'model 文本消息 2', { finish: true });
   assert.equal(updated?.finish, true);
-  assert.equal(updated?.content, 'first model message\n\n🛠 *[read]*: `file`\n\nfinal answer');
+  assert.equal(updated?.content, 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | ☑️ exec\n\nmodel 文本消息 2');
 
   assert.deepEqual(buildWeWorkStreamResponse(updated!), {
     msgtype: 'stream',
     stream: {
       id: 'stream-1',
       finish: true,
-      content: 'first model message\n\n🛠 *[read]*: `file`\n\nfinal answer',
+      content: 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | ☑️ exec\n\nmodel 文本消息 2',
     },
   });
 });
 
 test('WeWorkStreamAggregator binds updates by stream id when a new inbound message starts', () => {
-  const aggregator = new WeWorkStreamAggregator({ initialContent: 'working' });
+  const aggregator = new WeWorkStreamAggregator();
   aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
   const second = aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-2');
 

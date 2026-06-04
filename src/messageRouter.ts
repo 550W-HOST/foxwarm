@@ -13,7 +13,7 @@ import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalEndTurnReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
-import { Message, MessagePart, QueueItem, QueueSource, Session } from './types';
+import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
 
 function formatCurrentTimeForPrompt(date: Date): string {
@@ -151,6 +151,58 @@ export class MessageRouter {
     return Object.keys(turnOptions).length > 0
       ? { ...turnOptions, ...(options || {}) }
       : options;
+  }
+
+  private getTurnTargetChannel(turnOptions: Record<string, any>): { channelId: string; conversationId: string } | undefined {
+    if (!turnOptions.weworkStreamChannelId || !turnOptions.weworkStreamConversationId) {
+      return undefined;
+    }
+    return {
+      channelId: turnOptions.weworkStreamChannelId,
+      conversationId: turnOptions.weworkStreamConversationId,
+    };
+  }
+
+  private emitTurnProgress(
+    broadcast: Session['broadcast'] | undefined,
+    turnOptions: Record<string, any>,
+    progress: ChannelTurnProgress,
+  ): void {
+    if (!broadcast || !turnOptions.weworkStreamId) {
+      return;
+    }
+    broadcast('', {
+      allowEmptyBroadcast: true,
+      channelTurnProgress: progress,
+      ...(this.getTurnTargetChannel(turnOptions) ? { targetChannel: this.getTurnTargetChannel(turnOptions) } : {}),
+    });
+  }
+
+  private getTurnToolCalls(toolCalls: FunctionCall[], iteration: number): FunctionCall[] {
+    return toolCalls.map((call, index) => ({
+      ...call,
+      id: call.id || `tool_${iteration}_${index}`,
+    }));
+  }
+
+  private getToolResultProgress(toolResultMsg: Message): ChannelTurnToolResult[] {
+    return toolResultMsg.parts
+      .filter(part => part.functionResponse?.tool_use_id)
+      .map(part => ({
+        id: part.functionResponse!.tool_use_id,
+        name: part.functionResponse!.name || 'tool',
+        status: part.functionResponse!.response?.error !== undefined && part.functionResponse!.response?.error !== null ? 'error' : 'success',
+      }));
+  }
+
+  private buildToolBroadcast(broadcast: Session['broadcast'] | undefined, turnOptions: Record<string, any>): Session['broadcast'] | undefined {
+    if (!broadcast || !turnOptions.weworkStreamChannelId) {
+      return broadcast;
+    }
+    return (text: string, options?: any) => {
+      const excludePlatforms = Array.from(new Set([...(options?.excludePlatforms || []), turnOptions.weworkStreamChannelId]));
+      broadcast(text, { ...(options || {}), excludePlatforms });
+    };
   }
 
   private async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void> {
@@ -689,6 +741,8 @@ export class MessageRouter {
           break;
         }
 
+        this.emitTurnProgress(broadcast, turnChannelOptions, { type: 'llm-start' });
+
         let result;
         try {
           result = await llm.chat(parts, session, iteration);
@@ -719,19 +773,30 @@ export class MessageRouter {
           break;
         }
 
+        const turnToolCalls = this.getTurnToolCalls(result.toolCalls, iteration);
+
         if (shouldBroadcastChannelText(result.text) && broadcast) {
           broadcast(result.text, { parse_mode: 'Markdown', excludePlatforms: ['webui'] });
           lastTextBroadcasted = true;
         }
 
+        this.emitTurnProgress(broadcast, turnChannelOptions, {
+          type: 'tool-calls-start',
+          calls: turnToolCalls.map(call => ({ id: call.id, name: call.name })),
+        });
+
         const toolContext = {
           sessionId: session.id,
           session,
-          broadcast,
+          broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
         };
-        const toolResultMsg = await llm.executeTools(result.toolCalls, toolContext, session);
+        const toolResultMsg = await llm.executeTools(turnToolCalls, toolContext, session);
 
         await this.appendToolMessage(session, toolResultMsg.parts);
+        this.emitTurnProgress(broadcast, turnChannelOptions, {
+          type: 'tool-calls-finish',
+          results: this.getToolResultProgress(toolResultMsg),
+        });
 
         const managedStateAfterTools = getManagedSessionState(session);
         if (managedStateAfterTools?.currentStep?.runMode === 'tool') {

@@ -33,7 +33,7 @@ test('WeWork channel only enables passive stream aggregation when configured', a
   const enabled = new WeWorkWebhookChannel({
     name: 'wework-test',
     webhookUrl: 'https://example.test/webhook',
-    aibot: { stream: true, streamInitialContent: 'working' },
+    aibot: { stream: true },
   });
   enabled.onMessage(async () => {});
 
@@ -48,7 +48,7 @@ test('WeWork channel only enables passive stream aggregation when configured', a
     stream: {
       id: enabledResult.passiveResponse.stream.id,
       finish: false,
-      content: 'working',
+      content: '> 🤔 thinking',
     },
   });
 });
@@ -70,7 +70,7 @@ test('WeWork channel config readiness supports pure callback and websocket modes
 test('WeWork channel deduplicates repeated callback msgid', async () => {
   const channel = new WeWorkWebhookChannel({
     name: 'wework-test',
-    aibot: { stream: true, streamInitialContent: 'working' },
+    aibot: { stream: true },
   });
   let handled = 0;
   channel.onMessage(async () => { handled++; });
@@ -91,7 +91,7 @@ test('WeWork channel deduplicates repeated callback msgid', async () => {
 test('WeWork channel can start a passive stream for pure short-callback AIBot messages without response_url', async () => {
   const channel = new WeWorkWebhookChannel({
     name: 'wework-test',
-    aibot: { stream: true, streamInitialContent: 'working' },
+    aibot: { stream: true },
   });
   channel.onMessage(async () => {});
 
@@ -101,14 +101,14 @@ test('WeWork channel can start a passive stream for pure short-callback AIBot me
   assert.equal(result.handled, true);
   assert.equal(result.passiveResponse.msgtype, 'stream');
   assert.equal(result.passiveResponse.stream.finish, false);
-  assert.equal(result.passiveResponse.stream.content, 'working');
+  assert.equal(result.passiveResponse.stream.content, '> 🤔 thinking');
 });
 
 test('WeWork channel skips stream-bound broadcasts for non-matching conversations instead of falling back to webhook send', async () => {
   const channel = new WeWorkWebhookChannel({
     name: 'wework-test',
     webhookUrl: 'https://example.invalid/webhook',
-    aibot: { stream: true, streamInitialContent: 'working' },
+    aibot: { stream: true },
   });
   channel.onMessage(async () => {});
 
@@ -120,14 +120,14 @@ test('WeWork channel skips stream-bound broadcasts for non-matching conversation
   await channel.sendMessage('other-chat', 'must not be posted to webhook', { weworkStreamId: first.passiveResponse.stream.id });
 
   const refresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: first.passiveResponse.stream.id } }, { mode: 'webhook' }, true);
-  assert.equal(refresh.passiveResponse.stream.content, 'working');
+  assert.equal(refresh.passiveResponse.stream.content, '> 🤔 thinking');
   assert.equal(refresh.passiveResponse.stream.finish, false);
 });
 
 test('WeWork channel binds stream updates by stream id instead of latest conversation card', async () => {
   const channel = new WeWorkWebhookChannel({
     name: 'wework-test',
-    aibot: { stream: true, streamInitialContent: 'working' },
+    aibot: { stream: true },
   });
   channel.onMessage(async () => {});
 
@@ -152,6 +152,49 @@ test('WeWork channel binds stream updates by stream id instead of latest convers
   assert.equal(secondRefresh.passiveResponse.stream.finish, false);
 });
 
+test('WeWork channel applies structured turn progress to the bound stream card', async () => {
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-test',
+    aibot: { stream: true },
+  });
+  channel.onMessage(async () => {});
+
+  const first = await (channel as any).processInboundBody(cloneBody('progress-turn-1'), {
+    mode: 'webhook',
+    responseUrl: aibotTextBody.response_url,
+  }, true);
+  const streamId = first.passiveResponse.stream.id;
+
+  await channel.sendMessage('chat-1', 'model 文本消息 1', { weworkStreamId: streamId });
+  await channel.sendMessage('chat-1', '', {
+    weworkStreamId: streamId,
+    channelTurnProgress: {
+      type: 'tool-calls-start',
+      calls: [
+        { id: 'call-1', name: 'exec' },
+        { id: 'call-2', name: 'read' },
+      ],
+    },
+  });
+  await channel.sendMessage('chat-1', '', {
+    weworkStreamId: streamId,
+    channelTurnProgress: {
+      type: 'tool-calls-finish',
+      results: [
+        { id: 'call-1', name: 'exec', status: 'success' },
+        { id: 'call-2', name: 'read', status: 'success' },
+      ],
+    },
+  });
+  await channel.sendMessage('chat-1', '', {
+    weworkStreamId: streamId,
+    channelTurnProgress: { type: 'llm-start' },
+  });
+
+  const refresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
+  assert.equal(refresh.passiveResponse.stream.content, 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | 🤔 thinking');
+});
+
 test('WeWork encrypted passive response can be decrypted back to the stream payload', () => {
   const encodingAESKey = crypto.randomBytes(32).toString('base64').replace(/=+$/u, '');
   const channel = new WeWorkWebhookChannel({
@@ -161,7 +204,7 @@ test('WeWork encrypted passive response can be decrypted back to the stream payl
   });
   const payload = {
     msgtype: 'stream',
-    stream: { id: 'stream-1', finish: false, content: 'working' },
+    stream: { id: 'stream-1', finish: false, content: '> 🤔 thinking' },
   };
 
   const encrypted = (channel as any).buildPassiveHttpResponse(payload, { timestamp: '1710000000', nonce: 'nonce-1' });
