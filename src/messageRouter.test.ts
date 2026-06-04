@@ -54,6 +54,33 @@ test('MessageRouter queue draining keeps WeWork stream-bound and unbound inputs 
   assert.equal(session.queue.length, 1);
 });
 
+test('MessageRouter does not inject source prefix twice for drained queued parts', () => {
+  const router = new MessageRouter() as any;
+  const source = {
+    platform: 'wework',
+    channelId: 'wework',
+    channelType: 'wework',
+    channelUserId: 'T83450036A',
+    conversationId: 'T83450036A',
+    username: 'T83450036A',
+    senderId: 'T83450036A',
+    weworkStreamId: 'stream-a',
+  };
+  const alreadyPrepared = router.prepareUserParts([{ text: '在吗' }], source);
+  const turnSource = router.getPromptSourceForTurn({
+    source,
+    sourcePartsAlreadyPrepared: true,
+  });
+  const parts = router.prepareTurnParts({
+    history: [{ role: 'user', parts: [{ text: 'previous' }] }],
+    meta: { lastMessageTime: Date.now() },
+  }, 'session-1', alreadyPrepared, turnSource);
+
+  const sourcePrefixCount = parts.filter((part: any) => typeof part.system === 'string'
+    && part.system.startsWith('The following message is a direct user message via channel;')).length;
+  assert.equal(sourcePrefixCount, 1);
+});
+
 test('MessageRouter queue draining keeps different WeWork stream ids separate', () => {
   const router = new MessageRouter() as any;
   const session: any = {

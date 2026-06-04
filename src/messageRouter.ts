@@ -153,6 +153,17 @@ export class MessageRouter {
       : options;
   }
 
+  private getPromptSourceForTurn(options: {
+    sourceCtx?: ChannelContext;
+    source?: QueueSource;
+    sourcePartsAlreadyPrepared?: boolean;
+  }): QueueSource | undefined {
+    if (options.sourcePartsAlreadyPrepared) {
+      return undefined;
+    }
+    return options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined);
+  }
+
   private async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void> {
     if (sourceCtx?.preferDirectReply && sourceCtx.reply) {
       await sourceCtx.reply(text, options);
@@ -335,6 +346,7 @@ export class MessageRouter {
       session,
       preclaimed: true,
       source: queuedTurn.broadcastSource,
+      sourcePartsAlreadyPrepared: true,
     });
     return true;
   }
@@ -622,6 +634,7 @@ export class MessageRouter {
       message?: Message;
       sourceCtx?: ChannelContext;
       source?: QueueSource;
+      sourcePartsAlreadyPrepared?: boolean;
       sendTyping?: boolean;
       session?: Session;
       preclaimed?: boolean;
@@ -656,7 +669,7 @@ export class MessageRouter {
           session,
           sessionId,
           options.parts || [],
-          options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined)
+          this.getPromptSourceForTurn(options)
         );
       if (options.message) {
         await sessionManager.appendSessionMessage(session, options.message);
