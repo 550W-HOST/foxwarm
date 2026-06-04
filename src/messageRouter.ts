@@ -286,7 +286,6 @@ export class MessageRouter {
   private async consumeLeadingQueuedTurnInputs(
     session: Session,
     pendingParts: MessagePart[] | null,
-    turnStreamKey?: string,
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
     let mergedParts = pendingParts;
     let consumedInput = false;
@@ -294,11 +293,6 @@ export class MessageRouter {
     while (session.queue[0]
       && session.queue[0].type !== 'compact'
       && session.queue[0].type !== 'compact-commit') {
-      const queuedStreamKey = this.getSourceStreamKey(session.queue[0].source);
-      if ((turnStreamKey || queuedStreamKey) && queuedStreamKey !== turnStreamKey) {
-        break;
-      }
-
       const item = session.queue.shift();
       if (!item) {
         continue;
@@ -690,7 +684,6 @@ export class MessageRouter {
     await maybeRefreshStaleSessionSnapshot(session, sessionManager.refreshSessionSnapshot);
 
     const turnChannelOptions = this.getTurnChannelOptions(options.sourceCtx, options.source);
-    const turnStreamKey = this.getSourceStreamKey(options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined));
     const broadcast = session.broadcast
       ? (text: string, broadcastOptions?: any) => session.broadcast!(text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
       : undefined;
@@ -726,7 +719,7 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnStreamKey);
+        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts);
         parts = queuedBeforeLlm.parts;
 
         if (session.stopping) {
@@ -836,7 +829,7 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
+        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null);
         parts = queuedAfterTools.parts;
 
         if (result.usage) {

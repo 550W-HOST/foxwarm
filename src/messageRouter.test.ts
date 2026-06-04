@@ -16,7 +16,7 @@ test('shouldBroadcastChannelText accepts non-empty trimmed text', () => {
   assert.equal(shouldBroadcastChannelText('\nhello\n'), true);
 });
 
-test('MessageRouter queue draining keeps WeWork stream-bound and unbound inputs separate', async () => {
+test('MessageRouter queued turn start keeps WeWork stream-bound and unbound inputs separate', () => {
   const router = new MessageRouter() as any;
   const session: any = {
     queue: [
@@ -37,21 +37,33 @@ test('MessageRouter queue draining keeps WeWork stream-bound and unbound inputs 
   assert.equal(drained.parts.some((part: any) => part.text === 'stream input'), true);
   assert.equal(drained.parts.some((part: any) => part.text === 'web input'), false);
   assert.equal(session.queue.length, 1);
+});
 
-  session.queue.unshift({
-    type: 'user',
-    source: { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-a' },
-    parts: [{ text: 'next stream input' }],
-  });
+test('MessageRouter in-turn queue consumption drains WeWork stream-bound inputs before next LLM call', async () => {
+  const router = new MessageRouter() as any;
+  const session: any = {
+    queue: [
+      {
+        type: 'user',
+        source: { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-b' },
+        parts: [{ text: 'next stream input' }],
+      },
+      {
+        type: 'user',
+        source: { platform: 'webui', channelId: 'webui', conversationId: 'browser' },
+        parts: [{ text: 'web input' }],
+      },
+    ],
+  };
+
   const consumed = await router.consumeLeadingQueuedTurnInputs(
     session,
     [{ text: 'pending' }],
-    'wework-a:chat-a:stream-a',
   );
 
   assert.equal(consumed.parts.some((part: any) => part.text === 'next stream input'), true);
-  assert.equal(consumed.parts.some((part: any) => part.text === 'web input'), false);
-  assert.equal(session.queue.length, 1);
+  assert.equal(consumed.parts.some((part: any) => part.text === 'web input'), true);
+  assert.equal(session.queue.length, 0);
 });
 
 test('MessageRouter does not inject source prefix twice for drained queued parts', () => {
