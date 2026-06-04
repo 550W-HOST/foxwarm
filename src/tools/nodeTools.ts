@@ -3,7 +3,7 @@ import {
     ToolContext,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
-import { checkToolPermission } from '../isolatedCheck';
+import { checkToolAuthorization, checkToolPermission } from '../isolatedCheck';
 import { nodesManager } from '../nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstrapInfo';
 import { logger } from '../common';
@@ -57,12 +57,6 @@ export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
         ].filter((value): value is string => typeof value === 'string' && value.length > 0)))
         : [];
 
-    if (sessionManager.isSessionEffectivelyIsolated(session) && action === 'call') {
-        if (!isolatedAllowedRemoteNodes.includes(String(nodeId || ''))) {
-            throw new Error(`Isolated session can only call tools on its bound/current node (${isolatedAllowedRemoteNodes.join(', ')}).`);
-        }
-    }
-    
     if (action === 'list') {
         // List visible nodes and their tools, with optional node filter
         const nodes = nodesManager.listNodesWithTools();
@@ -89,6 +83,14 @@ export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
         // Call a specific tool on a node
         if (!nodeId || !tool) {
             throw new Error('nodeId and tool are required for call action');
+        }
+
+        if (ctx.sessionId) {
+            await checkToolAuthorization(String(tool), ctx.sessionId, String(nodeId), toolArgs || {}, 'node');
+        }
+
+        if (sessionManager.isSessionEffectivelyIsolated(session) && !isolatedAllowedRemoteNodes.includes(String(nodeId || ''))) {
+            throw new Error(`Isolated session can only call tools on its bound/current node (${isolatedAllowedRemoteNodes.join(', ')}).`);
         }
         
         const result = await nodesManager.executeNodeTool(

@@ -8,6 +8,47 @@ import { AGENTS_DIR, getAgentDir } from './config';
 import * as path from 'path';
 import { buildIsolatedToolRules, evaluatePermission } from './permissions';
 import { expandHomePath } from './utils/pathResolve';
+import {
+  assertToolAuthorization,
+  buildToolAuthorizationRequest,
+  ToolAuthorizationSource,
+} from './toolAuthorization';
+
+async function evaluateToolAuthorizationForSession(
+  sessionId: string,
+  toolName: string,
+  targetNode: string,
+  toolArgs: Record<string, any> | undefined,
+  source: ToolAuthorizationSource = 'builtin',
+) {
+  const session = await sessionManager.getExistingSession(sessionId);
+  const request = buildToolAuthorizationRequest({
+    session,
+    sessionId,
+    tool: { source, name: toolName },
+    targetNode,
+    args: toolArgs,
+  });
+  return {
+    session,
+    evaluation: await assertToolAuthorization(request),
+  };
+}
+
+/**
+ * Run only the v1 rule-based authorization preflight. This does not apply
+ * legacy isolated-session allowlists; callers use it for dynamic underlying
+ * MCP/node tools whose wrapper tools already preserve the old behavior.
+ */
+export async function checkToolAuthorization(
+  toolName: string,
+  sessionId: string,
+  targetNode?: string,
+  toolArgs?: Record<string, any>,
+  source: ToolAuthorizationSource = 'builtin',
+): Promise<void> {
+  await evaluateToolAuthorizationForSession(sessionId, toolName, targetNode || 'master', toolArgs, source);
+}
 
 /**
  * Check if isolated session can use a specific tool
@@ -23,7 +64,9 @@ export async function checkToolPermission(
   executionNode?: string,
   toolArgs?: Record<string, any>
 ): Promise<void> {
-  const session = await sessionManager.getExistingSession(sessionId);
+  const effectiveNode = executionNode || 'master';
+  const { session, evaluation } = await evaluateToolAuthorizationForSession(sessionId, toolName, effectiveNode, toolArgs, 'builtin');
+  const bypassCentralIsolatedAllowlist = evaluation.matched && evaluation.action === 'allow';
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
   const agentName = session?.agent || 'main';
   const boundNode = sessionManager.getAgentIsolationNode(agentName) || session?.currentNode || 'master';
@@ -47,7 +90,8 @@ export async function checkToolPermission(
     return;
   }
 
-  const effectiveNode = executionNode || 'master';
+  if (bypassCentralIsolatedAllowlist) return;
+
   const { action, rule } = evaluatePermission(
     buildIsolatedToolRules(agentName, session.id, boundNode, extraRuntimeNodes),
     {

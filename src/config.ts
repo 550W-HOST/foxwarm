@@ -110,6 +110,7 @@ export type AppConfig = {
     skillsDir?: string;
     modelsConfigPath?: string;
     mcpConfigPath?: string;
+    toolAuthConfigPath?: string;
   };
   channels?: Record<string, AnyChannelConfig>;
   asrService?: AsrServiceConfig;
@@ -284,6 +285,7 @@ export const CHANNELS_FILE = path.join(STATE_DIR, 'channels.json');
 export const TIMERS_FILE = path.join(STATE_DIR, 'timers.json');
 export const ONBOOT_FILE = path.join(MAIN_AGENT_MEMORY_DIR, 'ONBOOT.md');
 export const MCP_CONFIG_PATH = resolvePathValue(process.env.MCP_CONFIG_PATH || APP_CONFIG.paths?.mcpConfigPath, path.join(STATE_DIR, 'mcp.json'));
+export const TOOL_AUTH_CONFIG_PATH = resolvePathValue(process.env.TOOL_AUTH_CONFIG_PATH || APP_CONFIG.paths?.toolAuthConfigPath, path.join(STATE_DIR, 'tool-authorization.yaml'));
 
 // Helper functions
 export function getAgentDir(agentName: string = 'main'): string {

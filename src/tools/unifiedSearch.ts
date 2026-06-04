@@ -1,5 +1,5 @@
 import { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
-import { checkToolPermission } from '../isolatedCheck';
+import { checkToolAuthorization, checkToolPermission } from '../isolatedCheck';
 import * as mcpClient from '../mcpClient';
 import { nodesManager } from '../nodes/manager';
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
@@ -205,6 +205,7 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
     const targetNode = supportsExplicitNode
         ? normalizeRequestedNodeForToolCall(rawArgs?.node, currentNode)
         : currentNode;
+    const authArgs = { ...(rawArgs || {}) };
     const toolArgs = { ...(rawArgs || {}) };
     delete toolArgs.node;
 
@@ -212,7 +213,7 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
     const permissionNode = _getToolPermissionNode(toolName, executionNode, targetNode);
 
     if (ctx.sessionId) {
-        await checkToolPermission(toolName, sessionId, permissionNode, toolArgs);
+        await checkToolPermission(toolName, sessionId, permissionNode, authArgs);
     }
 
     if (executionNode !== 'master') {
@@ -401,6 +402,16 @@ export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
         label: 'call_tool args',
     })!;
 
+    if (ctx.sessionId) {
+        await checkToolPermission('call_tool', ctx.sessionId, 'master', {
+            source: ref.source,
+            server: ref.server,
+            nodeId: ref.nodeId,
+            name: ref.name,
+            args: toolArgs,
+        });
+    }
+
     if (ref.source === 'builtin') {
         return await executeBuiltinToolViaUnifiedCall(ref.name, toolArgs, ctx);
     }
@@ -412,12 +423,10 @@ export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
         if (!ctx?.sessionId) {
             throw new Error('call_tool for MCP requires session context.');
         }
-        await checkToolPermission('call_tool', ctx.sessionId, 'master', {
-            source: 'mcp',
+        await checkToolAuthorization(ref.name, ctx.sessionId, 'master', {
             server: ref.server,
-            name: ref.name,
-            args: toolArgs,
-        });
+            toolArgs,
+        }, 'mcp');
         return await mcpClient.callTool(ref.server, ref.name, toolArgs);
     }
 

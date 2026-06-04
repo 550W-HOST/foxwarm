@@ -920,6 +920,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const targetNode = normalizeRequestedNode(nodeParam, currentNode);
         
         // Remove node parameter from args before execution
+        const authArgs = { ...call.args };
         const toolArgs = { ...call.args };
         if (supportsExplicitNode) {
             delete toolArgs.node;
@@ -934,7 +935,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         // Check isolated session tool permission (includes path access check for master)
         try {
             if (!result?.error) {
-                await checkToolPermission(call.name, sessionId, permissionNode, toolArgs);
+                await checkToolPermission(call.name, sessionId, permissionNode, authArgs);
             }
         } catch (e: any) {
             result = { error: e.message || String(e) };
