@@ -61,6 +61,8 @@ export type WeixinConfig = {
 export type GuestAgentConfig = {
   agentId: string;
   mode?: 'single' | 'inherited';
+  // Defaults to true. When true, `node` is the required isolated bind node.
+  // When false, `node` is optional and sets the created session's initial currentNode.
   isolated?: boolean;
   node?: string;
 };

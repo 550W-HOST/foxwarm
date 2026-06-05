@@ -604,6 +604,7 @@ export class MessageRouter {
       const result = await sessionManager.createSessionInAgent({
         agentName: guestAgent.agentId,
         sessionName: sessionManager.generateSessionId(),
+        currentNode: guestAgent.isolated ? undefined : guestAgent.node,
       });
       sessionManager.attachChannel(channelId, conversationId, result.sessionId, { dangerouslyAllowAllUsers: true });
       return result.sessionId;
@@ -618,12 +619,14 @@ export class MessageRouter {
           return guestAgent.node;
         })()
       : undefined;
+    const currentNode = guestAgent.isolated ? undefined : guestAgent.node;
 
     const result = await sessionManager.createAgentWithMainSession({
       agentName: newAgentName,
       createMainSession: true,
       inherit: guestAgent.agentId,
       isolatedNode,
+      currentNode,
     });
     sessionManager.attachChannel(channelId, conversationId, result.mainSessionId, { dangerouslyAllowAllUsers: true });
     return result.mainSessionId;

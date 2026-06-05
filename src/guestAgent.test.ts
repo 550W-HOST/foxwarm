@@ -138,6 +138,80 @@ test('guestAgent single mode binds new unauthorized conversation to a new sessio
   }
 });
 
+test('guestAgent single mode can set initial node without isolation', async () => {
+  await sessionManager.loadSessions();
+  const originalChat = llm.chat;
+  const originalMemory = llm.buildSessionSystemPromptSnapshot;
+  const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
+  const originalConfig = readAppConfigFile();
+  const router = new MessageRouter();
+  const createdAgents: string[] = [];
+  const createdSessions: string[] = [];
+
+  (vector as any).scheduleSessionArchiveIndex = async () => 0;
+  (llm as any).buildSessionSystemPromptSnapshot = async () => '';
+
+  try {
+    const baseAgent = makeId('guestnode');
+    createdAgents.push(baseAgent);
+    const baseResult = await sessionManager.createAgentWithMainSession({
+      agentName: baseAgent,
+      createMainSession: true,
+    });
+    createdSessions.push(baseResult.mainSessionId);
+
+    const channelId = makeId('guestchan');
+    const conversationId = makeId('guestconv');
+    writeAppConfigFile({
+      ...originalConfig,
+      channels: {
+        ...(originalConfig.channels || {}),
+        [channelId]: {
+          type: 'weixin',
+          guestAgent: {
+            agentId: baseAgent,
+            isolated: false,
+            node: 'shared-agent-node',
+          },
+        },
+      },
+    } as AppConfig);
+
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      await appendStubUserMessage(activeSession, parts);
+      await appendStubModelMessage(activeSession, 'guest node reply');
+      return { text: 'guest node reply' };
+    };
+
+    const replies: string[] = [];
+    await router.handleMessage(
+      makeCtx(channelId, conversationId, 'stranger-node', replies),
+      { parts: [{ text: 'hello node' }], channelUserId: conversationId, conversationId, username: 'stranger-node' },
+    );
+
+    const sessionId = sessionManager.getSessionByChannel(channelId, conversationId);
+    assert.ok(sessionId, 'expected guest session attachment');
+    createdSessions.push(sessionId!);
+
+    const session = await sessionManager.getSession(sessionId!);
+    assert.equal(session.agent, baseAgent);
+    assert.equal(session.currentNode, 'shared-agent-node');
+    assert.equal(sessionManager.isAgentIsolated(baseAgent), false);
+    assert.equal(sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId), true);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).buildSessionSystemPromptSnapshot = originalMemory;
+    (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
+    writeAppConfigFile(originalConfig);
+    for (const sessionId of createdSessions) {
+      try { await sessionManager.deleteSession(sessionId); } catch {}
+    }
+    for (const agentName of createdAgents) {
+      await cleanupAgent(agentName);
+    }
+  }
+});
+
 test('guestAgent inherited mode creates a derived agent main session with inherit + isolation', async () => {
   await sessionManager.loadSessions();
   const originalChat = llm.chat;
@@ -204,6 +278,83 @@ test('guestAgent inherited mode creates a derived agent main session with inheri
     assert.equal(sessionManager.getAgentIsolationNode(session.agent || ''), 'sandbox-docker');
     createdAgents.push(session.agent || '');
     assert.equal(derivedCallCount, 1);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).buildSessionSystemPromptSnapshot = originalMemory;
+    (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
+    writeAppConfigFile(originalConfig);
+    for (const sessionId of createdSessions) {
+      try { await sessionManager.deleteSession(sessionId); } catch {}
+    }
+    for (const agentName of createdAgents) {
+      await cleanupAgent(agentName);
+    }
+  }
+});
+
+test('guestAgent inherited mode can set derived session initial node without isolation', async () => {
+  await sessionManager.loadSessions();
+  const originalChat = llm.chat;
+  const originalMemory = llm.buildSessionSystemPromptSnapshot;
+  const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
+  const originalConfig = readAppConfigFile();
+  const router = new MessageRouter();
+  const createdAgents: string[] = [];
+  const createdSessions: string[] = [];
+
+  (vector as any).scheduleSessionArchiveIndex = async () => 0;
+  (llm as any).buildSessionSystemPromptSnapshot = async () => '';
+
+  try {
+    const baseAgent = makeId('guestinheritnode');
+    createdAgents.push(baseAgent);
+    const baseResult = await sessionManager.createAgentWithMainSession({
+      agentName: baseAgent,
+      createMainSession: true,
+    });
+    createdSessions.push(baseResult.mainSessionId);
+
+    const channelId = makeId('guestchan');
+    const conversationId = makeId('guestconv');
+    writeAppConfigFile({
+      ...originalConfig,
+      channels: {
+        ...(originalConfig.channels || {}),
+        [channelId]: {
+          type: 'weixin',
+          guestAgent: {
+            agentId: baseAgent,
+            mode: 'inherited',
+            isolated: false,
+            node: 'shared-agent-node',
+          },
+        },
+      },
+    } as AppConfig);
+
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      await appendStubUserMessage(activeSession, parts);
+      await appendStubModelMessage(activeSession, 'derived node reply');
+      return { text: 'derived node reply' };
+    };
+
+    const replies: string[] = [];
+    await router.handleMessage(
+      makeCtx(channelId, conversationId, 'stranger-inherited-node', replies),
+      { parts: [{ text: 'hello inherited node' }], channelUserId: conversationId, conversationId, username: 'stranger-inherited-node' },
+    );
+
+    const sessionId = sessionManager.getSessionByChannel(channelId, conversationId);
+    assert.ok(sessionId, 'expected derived guest session attachment');
+    createdSessions.push(sessionId!);
+
+    const session = await sessionManager.getSession(sessionId!);
+    assert.match(session.agent || '', new RegExp(`^${baseAgent}_`));
+    assert.equal(session.id, `${session.agent}/main`);
+    assert.equal(session.currentNode, 'shared-agent-node');
+    assert.equal(sessionManager.getAgentMetadata(session.agent || '').inherit, baseAgent);
+    assert.equal(sessionManager.isAgentIsolated(session.agent || ''), false);
+    createdAgents.push(session.agent || '');
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).buildSessionSystemPromptSnapshot = originalMemory;
