@@ -211,9 +211,10 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
 
     const executionNode = _isMasterOnlyToolName(toolName) ? 'master' : targetNode;
     const permissionNode = _getToolPermissionNode(toolName, executionNode, targetNode);
+    const authorizationSource = executionNode !== 'master' ? 'node' : 'builtin';
 
     if (ctx.sessionId) {
-        await checkToolPermission(toolName, sessionId, permissionNode, authArgs);
+        await checkToolPermission(toolName, sessionId, permissionNode, authArgs, authorizationSource);
     }
 
     if (executionNode !== 'master') {

@@ -355,6 +355,47 @@ test('runtime authorization uses normalized targetNode for ordinary tools withou
   assert.match(toolResponseError(message), /Tool authorization denied by rule deny-sandbox-read/);
 });
 
+test('remote direct tools and call_tool node targets share source=node authorization', async () => {
+  const sessionId = makeId('auth_node_source_equiv');
+  const session = await sessionManager.getSession(sessionId);
+  session.currentNode = 'sandbox-node';
+  await sessionManager.saveSession(sessionId);
+  setToolAuthorizationPolicyForTests({
+    version: 1,
+    defaultAction: 'allow',
+    rules: [
+      {
+        id: 'allow-node-read-on-sandbox',
+        match: { tool: { source: 'node', name: 'read' }, targetNode: 'sandbox-node' },
+        action: 'allow',
+      },
+      { id: 'deny-main-rest', match: { agent: 'main' }, action: 'deny' },
+    ],
+  });
+
+  const directRemote = await executeTools([
+    { id: 'call_auth_direct_remote', name: 'read', args: { filePath: 'README.md' } },
+  ], { sessionId, session }, session);
+  assert.match(toolResponseError(directRemote), /Node `sandbox-node` not found/);
+
+  await assert.rejects(
+    () => call_tool({ toolId: 'builtin:read', args: { filePath: 'README.md' } }, { sessionId, session } as any),
+    /Node `sandbox-node` not found/,
+  );
+
+  await assert.rejects(
+    () => call_tool({ source: 'node', nodeId: 'sandbox-node', name: 'read', args: { filePath: 'README.md' } }, { sessionId, session } as any),
+    /Node `sandbox-node` not found/,
+  );
+
+  session.currentNode = 'master';
+  await sessionManager.saveSession(sessionId);
+  const directMaster = await executeTools([
+    { id: 'call_auth_direct_master', name: 'read', args: { filePath: 'README.md' } },
+  ], { sessionId, session }, session);
+  assert.match(toolResponseError(directMaster), /Tool authorization denied by rule deny-main-rest/);
+});
+
 test('empty authorization policy preserves legacy isolated central checks while explicit allow bypasses central allowlist', async () => {
   const agentName = `auth_isolated_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const sessionId = `${agentName}/session`;

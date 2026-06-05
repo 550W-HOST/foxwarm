@@ -931,11 +931,12 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const forceMaster = tools.isMasterOnlyToolName(call.name);
         const executionNode = forceMaster ? 'master' : targetNode;
         const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
+        const authorizationSource = executionNode !== 'master' ? 'node' : 'builtin';
 
         // Check isolated session tool permission (includes path access check for master)
         try {
             if (!result?.error) {
-                await checkToolPermission(call.name, sessionId, permissionNode, authArgs);
+                await checkToolPermission(call.name, sessionId, permissionNode, authArgs, authorizationSource);
             }
         } catch (e: any) {
             result = { error: e.message || String(e) };

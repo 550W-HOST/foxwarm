@@ -66,7 +66,8 @@ export async function checkToolPermission(
   toolName: string,
   sessionId: string,
   executionNode?: string,
-  toolArgs?: Record<string, any>
+  toolArgs?: Record<string, any>,
+  source: ToolAuthorizationSource = 'builtin',
 ): Promise<void> {
   const effectiveNode = executionNode || 'master';
   const { session, evaluation } = TOOL_AUTHORIZATION_TRANSPARENT_WRAPPER_TOOLS.has(toolName)
@@ -74,7 +75,7 @@ export async function checkToolPermission(
         session: await sessionManager.getExistingSession(sessionId),
         evaluation: { matched: false, action: 'allow' as const },
       }
-    : await evaluateToolAuthorizationForSession(sessionId, toolName, effectiveNode, toolArgs, 'builtin');
+    : await evaluateToolAuthorizationForSession(sessionId, toolName, effectiveNode, toolArgs, source);
   const bypassCentralIsolatedAllowlist = evaluation.matched && evaluation.action === 'allow';
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
   const agentName = session?.agent || 'main';
