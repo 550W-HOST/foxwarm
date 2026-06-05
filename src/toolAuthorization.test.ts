@@ -1,5 +1,6 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
 import path from 'path';
 import * as sessionManager from './sessionManager';
 import { executeTools } from './llm';
@@ -9,10 +10,12 @@ import * as mcpClient from './mcpClient';
 import {
   buildToolAuthorizationRequest,
   evaluateToolAuthorization,
+  resetToolAuthorizationPolicyCacheForTests,
+  setToolAuthorizationPolicyCacheLastReadAtForTests,
   setToolAuthorizationPolicyForTests,
 } from './toolAuthorization';
 import { checkToolPermission } from './isolatedCheck';
-import { getAgentDir } from './config';
+import { getAgentDir, STATE_DIR } from './config';
 
 function makeId(prefix: string): string {
   return `main/${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -29,6 +32,7 @@ function toolResponse(message: any): any {
 
 afterEach(() => {
   setToolAuthorizationPolicyForTests(undefined);
+  resetToolAuthorizationPolicyCacheForTests();
 });
 
 test('tool authorization evaluator uses first-match semantics and default allow', async () => {
@@ -119,6 +123,86 @@ test('tool authorization evaluator matches scalar/list/tool object, args, target
   const pathResult = await evaluateToolAuthorization(outsideRequest);
   assert.equal(pathResult.matched, true);
   assert.equal(pathResult.action, 'deny');
+});
+
+test('tool authorization config cache skips reread within ttl and when mtime is unchanged', async () => {
+  const policyPath = path.join(STATE_DIR, 'tool-authorization.yaml');
+  const hadOriginalPolicy = await fs.pathExists(policyPath);
+  const originalPolicyText = hadOriginalPolicy ? await fs.readFile(policyPath, 'utf8') : undefined;
+  const originalPolicyStat = hadOriginalPolicy ? await fs.stat(policyPath) : undefined;
+  const denyExecPolicy = [
+    'version: 1',
+    'rules:',
+    '  - id: deny-exec-file-cache',
+    '    match:',
+    '      tool: exec',
+    '    action: deny',
+    '',
+  ].join('\n');
+  const allowPolicy = [
+    'version: 1',
+    'defaultAction: allow',
+    'rules: []',
+    '',
+  ].join('\n');
+  const request = buildToolAuthorizationRequest({
+    session: { id: 'main/auth_file_cache', agent: 'main' } as any,
+    tool: 'exec',
+    targetNode: 'master',
+    args: { command: 'echo hi' },
+  });
+
+  try {
+    setToolAuthorizationPolicyForTests(undefined);
+    resetToolAuthorizationPolicyCacheForTests();
+    await fs.ensureDir(STATE_DIR);
+
+    await fs.writeFile(policyPath, denyExecPolicy, 'utf8');
+    let result = await evaluateToolAuthorization(request);
+    assert.equal(result.action, 'deny');
+    assert.equal(result.rule?.id, 'deny-exec-file-cache');
+
+    await fs.writeFile(policyPath, allowPolicy, 'utf8');
+    const changedMtime = new Date(Date.now() + 2_000);
+    await fs.utimes(policyPath, changedMtime, changedMtime);
+    result = await evaluateToolAuthorization(request);
+    assert.equal(result.action, 'deny', 'policy should not be reread within the 10s cache window');
+
+    setToolAuthorizationPolicyCacheLastReadAtForTests(Date.now() - 11_000);
+    result = await evaluateToolAuthorization(request);
+    assert.equal(result.action, 'allow', 'policy should be reread after the cache window when mtime changed');
+
+    resetToolAuthorizationPolicyCacheForTests();
+    await fs.writeFile(policyPath, denyExecPolicy, 'utf8');
+    const fixedMtime = new Date(Date.now() + 4_000);
+    await fs.utimes(policyPath, fixedMtime, fixedMtime);
+    result = await evaluateToolAuthorization(request);
+    assert.equal(result.action, 'deny');
+
+    setToolAuthorizationPolicyCacheLastReadAtForTests(Date.now() - 11_000);
+    await fs.writeFile(policyPath, allowPolicy, 'utf8');
+    await fs.utimes(policyPath, fixedMtime, fixedMtime);
+    result = await evaluateToolAuthorization(request);
+    assert.equal(result.action, 'deny', 'policy should not be reread when mtime is unchanged');
+  } finally {
+    resetToolAuthorizationPolicyCacheForTests();
+    if (hadOriginalPolicy && originalPolicyText !== undefined) {
+      await fs.writeFile(policyPath, originalPolicyText, 'utf8');
+      if (originalPolicyStat) {
+        try {
+          await fs.utimes(policyPath, originalPolicyStat.atime, originalPolicyStat.mtime);
+        } catch {
+          // Best-effort mtime restoration for the developer's local state file.
+        }
+      }
+    } else {
+      try {
+        await fs.remove(policyPath);
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+  }
 });
 
 test('runtime authorization denies non-isolated direct builtin tool calls', async () => {

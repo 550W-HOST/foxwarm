@@ -6,6 +6,7 @@ import { Session } from './types';
 import { resolveAgentPath } from './utils/pathResolve';
 
 const TOOL_AUTH_CONFIG_PATH = path.join(STATE_DIR, 'tool-authorization.yaml');
+const TOOL_AUTH_CONFIG_CACHE_MAX_AGE_MS = 10_000;
 
 export type ToolAuthorizationSource = 'builtin' | 'mcp' | 'node';
 export type ToolAuthorizationAction = 'allow' | 'deny';
@@ -68,6 +69,13 @@ export interface ToolAuthorizationEvaluation {
   rule?: ToolAuthorizationRule;
 }
 
+interface CachedToolAuthorizationPolicy {
+  policy: ToolAuthorizationPolicy;
+  exists: boolean;
+  mtimeMs?: number;
+  lastReadAtMs: number;
+}
+
 const FILE_PATH_TOOL_NAMES = new Set([
   'read',
   'write',
@@ -85,9 +93,21 @@ const MEMORY_FILE_TOOL_NAMES = new Set([
 ]);
 
 let testPolicyOverride: ToolAuthorizationPolicy | null | undefined;
+let cachedPolicy: CachedToolAuthorizationPolicy | undefined;
 
 export function setToolAuthorizationPolicyForTests(policy: ToolAuthorizationPolicy | null | undefined): void {
   testPolicyOverride = policy;
+  cachedPolicy = undefined;
+}
+
+export function resetToolAuthorizationPolicyCacheForTests(): void {
+  cachedPolicy = undefined;
+}
+
+export function setToolAuthorizationPolicyCacheLastReadAtForTests(lastReadAtMs: number): void {
+  if (cachedPolicy) {
+    cachedPolicy.lastReadAtMs = lastReadAtMs;
+  }
 }
 
 function normalizeAction(action: ToolAuthorizationRule['action']): ToolAuthorizationAction {
@@ -130,18 +150,67 @@ function normalizePolicyPayload(raw: any): ToolAuthorizationPolicy {
   };
 }
 
+function defaultToolAuthorizationPolicy(): ToolAuthorizationPolicy {
+  return { version: 1, defaultAction: 'allow', rules: [] };
+}
+
+function cacheToolAuthorizationPolicy(policy: ToolAuthorizationPolicy, options: { exists: boolean; mtimeMs?: number; nowMs: number }): ToolAuthorizationPolicy {
+  cachedPolicy = {
+    policy,
+    exists: options.exists,
+    mtimeMs: options.mtimeMs,
+    lastReadAtMs: options.nowMs,
+  };
+  return policy;
+}
+
+async function statToolAuthorizationConfig(): Promise<fs.Stats | null> {
+  try {
+    return await fs.stat(TOOL_AUTH_CONFIG_PATH);
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function loadToolAuthorizationPolicy(): Promise<ToolAuthorizationPolicy> {
   if (testPolicyOverride !== undefined) {
     return normalizePolicyPayload(testPolicyOverride);
   }
 
-  if (!await fs.pathExists(TOOL_AUTH_CONFIG_PATH)) {
-    return { version: 1, defaultAction: 'allow', rules: [] };
+  const nowMs = Date.now();
+  if (cachedPolicy && nowMs - cachedPolicy.lastReadAtMs <= TOOL_AUTH_CONFIG_CACHE_MAX_AGE_MS) {
+    return cachedPolicy.policy;
   }
 
-  const rawText = await fs.readFile(TOOL_AUTH_CONFIG_PATH, 'utf8');
-  const parsed = yaml.load(rawText);
-  return normalizePolicyPayload(parsed);
+  const stat = await statToolAuthorizationConfig();
+  if (cachedPolicy) {
+    if (!stat && !cachedPolicy.exists) {
+      cachedPolicy.lastReadAtMs = nowMs;
+      return cachedPolicy.policy;
+    }
+    if (stat && cachedPolicy.exists && cachedPolicy.mtimeMs === stat.mtimeMs) {
+      cachedPolicy.lastReadAtMs = nowMs;
+      return cachedPolicy.policy;
+    }
+  }
+
+  if (!stat) {
+    return cacheToolAuthorizationPolicy(defaultToolAuthorizationPolicy(), { exists: false, nowMs });
+  }
+
+  try {
+    const rawText = await fs.readFile(TOOL_AUTH_CONFIG_PATH, 'utf8');
+    const parsed = yaml.load(rawText);
+    return cacheToolAuthorizationPolicy(normalizePolicyPayload(parsed), { exists: true, mtimeMs: stat.mtimeMs, nowMs });
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') {
+      return cacheToolAuthorizationPolicy(defaultToolAuthorizationPolicy(), { exists: false, nowMs });
+    }
+    throw error;
+  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, any> {
