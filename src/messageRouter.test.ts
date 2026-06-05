@@ -39,13 +39,13 @@ test('MessageRouter queued turn start keeps WeWork stream-bound and unbound inpu
   assert.equal(session.queue.length, 1);
 });
 
-test('MessageRouter in-turn queue consumption drains WeWork stream-bound inputs before next LLM call', async () => {
+test('MessageRouter in-turn queue consumption drains same-stream WeWork inputs before next LLM call', async () => {
   const router = new MessageRouter() as any;
   const session: any = {
     queue: [
       {
         type: 'user',
-        source: { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-b' },
+        source: { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-a' },
         parts: [{ text: 'next stream input' }],
       },
       {
@@ -59,11 +59,34 @@ test('MessageRouter in-turn queue consumption drains WeWork stream-bound inputs 
   const consumed = await router.consumeLeadingQueuedTurnInputs(
     session,
     [{ text: 'pending' }],
+    'wework-a:chat-a:stream-a',
   );
 
   assert.equal(consumed.parts.some((part: any) => part.text === 'next stream input'), true);
   assert.equal(consumed.parts.some((part: any) => part.text === 'web input'), true);
   assert.equal(session.queue.length, 0);
+});
+
+test('MessageRouter in-turn queue consumption leaves different WeWork stream cards for their own turn', async () => {
+  const router = new MessageRouter() as any;
+  const session: any = {
+    queue: [
+      {
+        type: 'user',
+        source: { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-b' },
+        parts: [{ text: 'next card input' }],
+      },
+    ],
+  };
+
+  const consumed = await router.consumeLeadingQueuedTurnInputs(
+    session,
+    [{ text: 'pending' }],
+    'wework-a:chat-a:stream-a',
+  );
+
+  assert.equal(consumed.parts.some((part: any) => part.text === 'next card input'), false);
+  assert.equal(session.queue.length, 1);
 });
 
 test('MessageRouter does not inject source prefix twice for drained queued parts', () => {

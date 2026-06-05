@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { registerChannel, unregisterChannel } from '../channel';
+import { MessageRouter } from '../messageRouter';
+import * as llm from '../llm';
+import * as sessionManager from '../sessionManager';
+import type { MessagePart, Session } from '../types';
 import { isWeWorkChannelConfigReady, WeWorkWebhookChannel } from './weworkChannel';
 
 const aibotTextBody = {
@@ -16,6 +21,19 @@ const aibotTextBody = {
 
 function cloneBody(msgid: string) {
   return { ...aibotTextBody, msgid };
+}
+
+function makeTestId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function waitFor(condition: () => Promise<boolean> | boolean, timeoutMs = 1000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await condition()) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail('timed out waiting for condition');
 }
 
 test('WeWork channel only enables passive stream aggregation when configured', async () => {
@@ -193,6 +211,182 @@ test('WeWork channel applies structured turn progress to the bound stream card',
 
   const refresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
   assert.equal(refresh.passiveResponse.stream.content, 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | 🤔 thinking');
+});
+
+test('busy queued WeWork stream card is updated when its queued turn runs', async () => {
+  const channelId = makeTestId('wework-busy-stream');
+  const sessionId = makeTestId('session-wework-busy-stream');
+  const channel = new WeWorkWebhookChannel({
+    name: channelId,
+    aibot: { stream: true },
+  });
+  const router = new MessageRouter([{ platform: 'wework', userId: 'user-1' }]);
+  const originalChat = llm.chat;
+
+  registerChannel(channelId, channel);
+  channel.onMessage(async (ctx, message) => {
+    await router.handleMessage(ctx, message);
+  });
+
+  try {
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      assert.equal(activeSession.id, sessionId);
+      await sessionManager.appendSessionMessage(activeSession, {
+        role: 'user',
+        parts: parts || [],
+      });
+      await sessionManager.appendSessionMessage(activeSession, {
+        role: 'model',
+        parts: [{ text: 'queued answer' }],
+      });
+      return { text: 'queued answer' };
+    };
+
+    const session = await sessionManager.getSession(sessionId);
+    session.busy = true;
+    await sessionManager.saveSession(sessionId);
+    sessionManager.attachChannel(channelId, 'chat-1', sessionId);
+
+    const queuedInbound = await (channel as any).processInboundBody(cloneBody('busy-queued-turn'), {
+      mode: 'webhook',
+      responseUrl: aibotTextBody.response_url,
+    }, true);
+    const streamId = queuedInbound.passiveResponse.stream.id;
+    assert.equal(queuedInbound.passiveResponse.stream.content, '> 🤔 thinking');
+    assert.equal(queuedInbound.passiveResponse.stream.finish, false);
+
+    await waitFor(async () => {
+      const queuedSession = await sessionManager.getSession(sessionId);
+      return queuedSession.queue.length === 1;
+    });
+
+    const busyQueuedSession = await sessionManager.getSession(sessionId);
+    assert.equal(busyQueuedSession.queue[0]?.source?.weworkStreamId, streamId);
+    busyQueuedSession.busy = false;
+    busyQueuedSession.busyStartedAt = undefined;
+    await sessionManager.saveSession(sessionId);
+
+    await router.processSessionQueue(sessionId);
+
+    let refreshed: any;
+    await waitFor(async () => {
+      refreshed = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
+      return refreshed.passiveResponse.stream.content === 'queued answer' && refreshed.passiveResponse.stream.finish === true;
+    });
+
+    assert.equal(refreshed.passiveResponse.stream.content, 'queued answer');
+    assert.equal(refreshed.passiveResponse.stream.finish, true);
+  } finally {
+    (llm as any).chat = originalChat;
+    unregisterChannel(channelId);
+    const cleanupSession = await sessionManager.getSession(sessionId).catch((_err: unknown): null => null);
+    if (cleanupSession) {
+      cleanupSession.busy = false;
+      await sessionManager.saveSession(sessionId).catch(() => {});
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+  }
+});
+
+test('busy queued WeWork stream card waits for next turn while previous card is finalized', async () => {
+  const channelId = makeTestId('wework-card-switch');
+  const sessionId = makeTestId('session-wework-card-switch');
+  const channel = new WeWorkWebhookChannel({
+    name: channelId,
+    aibot: { stream: true },
+  });
+  const router = new MessageRouter([{ platform: 'wework', userId: 'user-1' }]);
+  const originalChat = llm.chat;
+  let firstStarted!: () => void;
+  let releaseFirst!: () => void;
+  const firstStartedPromise = new Promise<void>(resolve => { firstStarted = resolve; });
+  const releaseFirstPromise = new Promise<void>(resolve => { releaseFirst = resolve; });
+  let callIndex = 0;
+  const handlerRuns: Array<Promise<void>> = [];
+
+  registerChannel(channelId, channel);
+  channel.onMessage((ctx, message) => {
+    const run = router.handleMessage(ctx, message);
+    handlerRuns.push(run);
+    return run;
+  });
+
+  try {
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      assert.equal(activeSession.id, sessionId);
+      callIndex += 1;
+      const responseText = callIndex === 1 ? 'first answer' : 'second answer';
+      await sessionManager.appendSessionMessage(activeSession, {
+        role: 'user',
+        parts: parts || [],
+      });
+      if (callIndex === 1) {
+        firstStarted();
+        await releaseFirstPromise;
+      }
+      await sessionManager.appendSessionMessage(activeSession, {
+        role: 'model',
+        parts: [{ text: responseText }],
+      });
+      return { text: responseText };
+    };
+
+    await sessionManager.getSession(sessionId);
+    sessionManager.attachChannel(channelId, 'chat-1', sessionId);
+
+    const firstInbound = await (channel as any).processInboundBody(cloneBody('card-switch-turn-1'), {
+      mode: 'webhook',
+      responseUrl: aibotTextBody.response_url,
+    }, true);
+    const firstStreamId = firstInbound.passiveResponse.stream.id;
+    assert.equal(firstInbound.passiveResponse.stream.content, '> 🤔 thinking');
+
+    await firstStartedPromise;
+
+    const secondInbound = await (channel as any).processInboundBody(cloneBody('card-switch-turn-2'), {
+      mode: 'webhook',
+      responseUrl: aibotTextBody.response_url,
+    }, true);
+    const secondStreamId = secondInbound.passiveResponse.stream.id;
+    assert.notEqual(secondStreamId, firstStreamId);
+    assert.equal(secondInbound.passiveResponse.stream.content, '> 🤔 thinking');
+
+    await waitFor(() => handlerRuns.length >= 2);
+    await handlerRuns[1];
+
+    const queuedSession = await sessionManager.getSession(sessionId);
+    assert.equal(queuedSession.queue.length, 1);
+    assert.equal(queuedSession.queue[0]?.source?.weworkStreamId, secondStreamId);
+
+    releaseFirst();
+    await handlerRuns[0];
+
+    let firstRefresh: any;
+    let secondRefresh: any;
+    await waitFor(async () => {
+      firstRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: firstStreamId } }, { mode: 'webhook' }, true);
+      secondRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: secondStreamId } }, { mode: 'webhook' }, true);
+      return firstRefresh.passiveResponse.stream.finish === true
+        && firstRefresh.passiveResponse.stream.content === 'first answer'
+        && secondRefresh.passiveResponse.stream.finish === true
+        && secondRefresh.passiveResponse.stream.content === 'second answer';
+    });
+
+    assert.equal(firstRefresh.passiveResponse.stream.content.includes('thinking'), false);
+    assert.equal(firstRefresh.passiveResponse.stream.finish, true);
+    assert.equal(secondRefresh.passiveResponse.stream.content, 'second answer');
+    assert.equal(secondRefresh.passiveResponse.stream.finish, true);
+    assert.equal(callIndex, 2);
+  } finally {
+    (llm as any).chat = originalChat;
+    unregisterChannel(channelId);
+    const cleanupSession = await sessionManager.getSession(sessionId).catch((_err: unknown): null => null);
+    if (cleanupSession) {
+      cleanupSession.busy = false;
+      await sessionManager.saveSession(sessionId).catch(() => {});
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+  }
 });
 
 test('WeWork encrypted passive response can be decrypted back to the stream payload', () => {
