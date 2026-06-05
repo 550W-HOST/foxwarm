@@ -525,7 +525,7 @@ test('direct idle user messages enter the session queue gate and preserve source
   }
 });
 
-test('command, unauthorized, and busy queued notices still reply immediately before normal user enqueue', async () => {
+test('command and unauthorized notices reply immediately, while busy enqueue stays silent', async () => {
   const busySessionId = makeSessionId('wait_direct_busy_notice');
   const busyChannelId = makeSessionId('webui_busy_notice');
   const busyReplies: string[] = [];
@@ -558,7 +558,7 @@ test('command, unauthorized, and busy queued notices still reply immediately bef
       username: 'webui-user',
     });
 
-    assert.match(busyReplies[0] || '', /Request queued/);
+    assert.deepEqual(busyReplies, []);
     const busyReloaded = await sessionManager.getSession(busySessionId);
     assert.equal(busyReloaded.queue.length, 1);
 

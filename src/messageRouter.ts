@@ -978,7 +978,8 @@ export class MessageRouter {
     if (session.busy) {
       logger.info({ channelId: getChannelId(ctx), channelType: getChannelType(ctx), user: ctx.username }, 'Session busy, queueing message');
       await sessionManager.enqueueSessionItem(sessionId, queueItem);
-      await this.sendSessionReply(session, ctx, '⏳ Request queued, currently processing another message...');
+      // Intentionally no user-facing busy/queued notice: the message remains
+      // queued and will be processed when the current turn finishes.
       return;
     }
 
