@@ -58,6 +58,19 @@ test('WeWorkStreamAggregator aggregates model text and tool progress into one st
   });
 });
 
+test('WeWorkStreamAggregator can apply model text and running tools atomically', () => {
+  const aggregator = new WeWorkStreamAggregator();
+  aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+
+  const updated = aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-start',
+    text: 'model text before tools',
+    calls: [{ id: 'call-1', name: 'exec' }],
+  });
+
+  assert.equal(updated?.content, 'model text before tools\n\n> ⌛️ exec');
+});
+
 test('WeWorkStreamAggregator binds updates by stream id when a new inbound message starts', () => {
   const aggregator = new WeWorkStreamAggregator();
   aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');

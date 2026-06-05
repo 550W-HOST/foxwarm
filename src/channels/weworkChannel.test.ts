@@ -213,6 +213,91 @@ test('WeWork channel applies structured turn progress to the bound stream card',
   assert.equal(refresh.passiveResponse.stream.content, 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | 🤔 thinking');
 });
 
+test('WeWork stream card shows model text and running tools before tools finish', async () => {
+  const channelId = makeTestId('wework-tool-start');
+  const sessionId = makeTestId('session-wework-tool-start');
+  const channel = new WeWorkWebhookChannel({
+    name: channelId,
+    aibot: { stream: true },
+  });
+  const router = new MessageRouter([{ platform: 'wework', userId: 'user-1' }]);
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  let releaseTool!: () => void;
+  let toolStarted!: () => void;
+  const releaseToolPromise = new Promise<void>(resolve => { releaseTool = resolve; });
+  const toolStartedPromise = new Promise<void>(resolve => { toolStarted = resolve; });
+  const handlerRuns: Array<Promise<void>> = [];
+  let chatCalls = 0;
+
+  registerChannel(channelId, channel);
+  channel.onMessage((ctx, message) => {
+    const run = router.handleMessage(ctx, message);
+    handlerRuns.push(run);
+    return run;
+  });
+
+  try {
+    await sessionManager.getSession(sessionId);
+    sessionManager.attachChannel(channelId, 'chat-1', sessionId);
+    const toolCall = { id: 'call-1', name: 'read', args: { filePath: 'README.md' } };
+
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      assert.equal(activeSession.id, sessionId);
+      chatCalls += 1;
+      if (parts?.length) {
+        await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+      }
+      if (chatCalls === 1) {
+        await sessionManager.appendSessionMessage(activeSession, {
+          role: 'model',
+          parts: [{ text: 'I will inspect it now.' }, { functionCall: toolCall }],
+        });
+        return { text: 'I will inspect it now.', toolCalls: [toolCall], allParts: [{ text: 'I will inspect it now.' }, { functionCall: toolCall }] };
+      }
+      await sessionManager.appendSessionMessage(activeSession, {
+        role: 'model',
+        parts: [{ text: 'done' }],
+      });
+      return { text: 'done', allParts: [{ text: 'done' }] };
+    };
+
+    (llm as any).executeTools = async () => {
+      toolStarted();
+      await releaseToolPromise;
+      return {
+        role: 'tool',
+        parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }],
+      };
+    };
+
+    const inbound = await (channel as any).processInboundBody(cloneBody('tool-start-turn'), {
+      mode: 'webhook',
+      responseUrl: aibotTextBody.response_url,
+    }, true);
+    const streamId = inbound.passiveResponse.stream.id;
+
+    await toolStartedPromise;
+
+    const runningRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
+    assert.equal(runningRefresh.passiveResponse.stream.finish, false);
+    assert.equal(runningRefresh.passiveResponse.stream.content, 'I will inspect it now.\n\n> ⌛️ read');
+
+    releaseTool();
+    await handlerRuns[0];
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    unregisterChannel(channelId);
+    const cleanupSession = await sessionManager.getSession(sessionId).catch((_err: unknown): null => null);
+    if (cleanupSession) {
+      cleanupSession.busy = false;
+      await sessionManager.saveSession(sessionId).catch(() => {});
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+  }
+});
+
 test('busy queued WeWork stream card is updated when its queued turn runs', async () => {
   const channelId = makeTestId('wework-busy-stream');
   const sessionId = makeTestId('session-wework-busy-stream');

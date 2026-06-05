@@ -778,14 +778,20 @@ export class MessageRouter {
 
         const turnToolCalls = this.getTurnToolCalls(result.toolCalls, iteration);
 
-        if (shouldBroadcastChannelText(result.text) && broadcast) {
-          broadcast(result.text, { parse_mode: 'Markdown', excludePlatforms: ['webui'] });
+        const hasBroadcastableToolText = shouldBroadcastChannelText(result.text);
+        if (hasBroadcastableToolText && broadcast) {
+          const excludePlatforms = Array.from(new Set([
+            'webui',
+            ...(turnChannelOptions.weworkStreamChannelId ? [turnChannelOptions.weworkStreamChannelId] : []),
+          ]));
+          broadcast(result.text, { parse_mode: 'Markdown', excludePlatforms });
           lastTextBroadcasted = true;
         }
 
         this.emitTurnProgress(broadcast, turnChannelOptions, {
           type: 'tool-calls-start',
           calls: turnToolCalls.map(call => ({ id: call.id, name: call.name })),
+          ...(hasBroadcastableToolText ? { text: result.text } : {}),
         });
 
         const toolContext = {

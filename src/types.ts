@@ -120,7 +120,7 @@ export interface ChannelTurnToolResult extends ChannelTurnToolRef {
 
 export type ChannelTurnProgress =
   | { type: 'llm-start' }
-  | { type: 'tool-calls-start'; calls: ChannelTurnToolRef[] }
+  | { type: 'tool-calls-start'; calls: ChannelTurnToolRef[]; text?: string }
   | { type: 'tool-calls-finish'; results: ChannelTurnToolResult[] };
 
 export interface SessionStreamEvent {

@@ -307,6 +307,10 @@ export class WeWorkStreamAggregator {
 
     if (progress.type === 'tool-calls-start') {
       this.clearThinking(state);
+      const text = typeof progress.text === 'string' ? formatTextBlock(progress.text) : '';
+      if (text) {
+        state.blocks.push({ type: 'text', text });
+      }
       const group = this.getCurrentToolGroup(state, true);
       if (!group) return;
       for (const call of progress.calls || []) {

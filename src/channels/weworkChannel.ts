@@ -1163,6 +1163,9 @@ export class WeWorkWebhookChannel implements Channel {
     if (!snapshot) {
       return false;
     }
+    if (snapshot.content === existing.content && snapshot.finish === existing.finish) {
+      return true;
+    }
 
     if (snapshot.delivery.mode === 'websocket') {
       await this.pushWebSocketStream(snapshot);
@@ -1186,6 +1189,7 @@ export class WeWorkWebhookChannel implements Channel {
         calls: progress.calls
           .filter((call: any) => typeof call?.id === 'string' && call.id && typeof call?.name === 'string' && call.name)
           .map((call: any) => ({ id: call.id, name: call.name })),
+        ...(typeof progress.text === 'string' && progress.text.trim() ? { text: progress.text } : {}),
       };
     }
     if (progress.type === 'tool-calls-finish' && Array.isArray(progress.results)) {
