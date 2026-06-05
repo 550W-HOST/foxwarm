@@ -1,9 +1,11 @@
 import fs from 'fs-extra';
 import path from 'path';
 import yaml from 'js-yaml';
-import { getAgentDir, getAgentMemoryDir, TOOL_AUTH_CONFIG_PATH, WORKSPACE_DIR } from './config';
+import { getAgentDir, getAgentMemoryDir, STATE_DIR, WORKSPACE_DIR } from './config';
 import { Session } from './types';
 import { resolveAgentPath } from './utils/pathResolve';
+
+const TOOL_AUTH_CONFIG_PATH = path.join(STATE_DIR, 'tool-authorization.yaml');
 
 export type ToolAuthorizationSource = 'builtin' | 'mcp' | 'node';
 export type ToolAuthorizationAction = 'allow' | 'deny';
