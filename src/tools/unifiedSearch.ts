@@ -402,16 +402,6 @@ export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
         label: 'call_tool args',
     })!;
 
-    if (ctx.sessionId) {
-        await checkToolPermission('call_tool', ctx.sessionId, 'master', {
-            source: ref.source,
-            server: ref.server,
-            nodeId: ref.nodeId,
-            name: ref.name,
-            args: toolArgs,
-        });
-    }
-
     if (ref.source === 'builtin') {
         return await executeBuiltinToolViaUnifiedCall(ref.name, toolArgs, ctx);
     }

@@ -23,6 +23,10 @@ function toolResponseError(message: any): string {
   return String(response?.error || '');
 }
 
+function toolResponse(message: any): any {
+  return message.parts?.find((part: any) => part.functionResponse)?.functionResponse?.response;
+}
+
 afterEach(() => {
   setToolAuthorizationPolicyForTests(undefined);
 });
@@ -171,7 +175,7 @@ test('runtime authorization applies to ToolScript nested call_tool calls', async
   assert.match(String(result.error || ''), /Tool authorization denied by rule deny-exec/);
 });
 
-test('runtime authorization applies to ToolScript call_tool wrapper calls', async () => {
+test('call_tool wrapper rules are transparent for model and ToolScript calls', async () => {
   const sessionId = makeId('auth_toolscript_wrapper');
   const session = await sessionManager.getSession(sessionId);
   setToolAuthorizationPolicyForTests({
@@ -181,6 +185,20 @@ test('runtime authorization applies to ToolScript call_tool wrapper calls', asyn
     ],
   });
 
+  const message = await executeTools([
+    {
+      id: 'call_auth_wrapper_transparent',
+      name: 'call_tool',
+      args: {
+        toolId: 'builtin:search_tools',
+        args: { sources: ['builtin'], includeSchema: false, limit: 1 },
+      },
+    },
+  ], { sessionId, session }, session);
+
+  assert.equal(toolResponseError(message), '');
+  assert.equal(toolResponse(message)?.count, 1);
+
   const result: any = await tool_run_script({
     code: [
       'def main(args):',
@@ -188,8 +206,8 @@ test('runtime authorization applies to ToolScript call_tool wrapper calls', asyn
     ].join('\n'),
   }, { sessionId, session } as any);
 
-  assert.equal(result.status, 'failed');
-  assert.match(String(result.error || ''), /Tool authorization denied by rule deny-call-tool-wrapper/);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.result?.count, 1);
 });
 
 test('runtime authorization matches MCP and node targets from modern call_tool', async () => {

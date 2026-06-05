@@ -14,6 +14,10 @@ import {
   ToolAuthorizationSource,
 } from './toolAuthorization';
 
+const TOOL_AUTHORIZATION_TRANSPARENT_WRAPPER_TOOLS = new Set([
+  'call_tool',
+]);
+
 async function evaluateToolAuthorizationForSession(
   sessionId: string,
   toolName: string,
@@ -65,7 +69,12 @@ export async function checkToolPermission(
   toolArgs?: Record<string, any>
 ): Promise<void> {
   const effectiveNode = executionNode || 'master';
-  const { session, evaluation } = await evaluateToolAuthorizationForSession(sessionId, toolName, effectiveNode, toolArgs, 'builtin');
+  const { session, evaluation } = TOOL_AUTHORIZATION_TRANSPARENT_WRAPPER_TOOLS.has(toolName)
+    ? {
+        session: await sessionManager.getExistingSession(sessionId),
+        evaluation: { matched: false, action: 'allow' as const },
+      }
+    : await evaluateToolAuthorizationForSession(sessionId, toolName, effectiveNode, toolArgs, 'builtin');
   const bypassCentralIsolatedAllowlist = evaluation.matched && evaluation.action === 'allow';
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
   const agentName = session?.agent || 'main';
