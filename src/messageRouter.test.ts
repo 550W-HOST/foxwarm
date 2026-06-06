@@ -161,3 +161,53 @@ test('MessageRouter emits turn progress as an empty targeted channel broadcast',
   assert.deepEqual(events[0].options.targetChannel, { channelId: 'wework-a', conversationId: 'chat-a' });
   assert.deepEqual(events[0].options.channelTurnProgress, { type: 'llm-start' });
 });
+
+test('MessageRouter strips configured channel selfName mention before command parsing', async () => {
+  const router = new MessageRouter() as any;
+  const calls: Array<{ command: string; args: string[] }> = [];
+  router.setCommandHandler(async (_ctx: any, command: string, args: string[]) => {
+    calls.push({ command, args });
+    return true;
+  });
+
+  const handled = await router.handleCommandIfNeeded({
+    channelUserId: 'chat-a',
+    conversationId: 'chat-a',
+    channelId: 'wework-a',
+    channelType: 'wework',
+    platform: 'wework',
+    senderId: 'user-a',
+    username: 'user-a',
+    selfName: '企业微信机器人',
+    reply: async () => {},
+    sendTyping: async () => {},
+  }, '@企业微信机器人   /session list');
+
+  assert.equal(handled, true);
+  assert.deepEqual(calls, [{ command: '/session', args: ['list'] }]);
+});
+
+test('MessageRouter selfName mention stripping requires whitespace after mention', async () => {
+  const router = new MessageRouter() as any;
+  let called = false;
+  router.setCommandHandler(async () => {
+    called = true;
+    return true;
+  });
+
+  const handled = await router.handleCommandIfNeeded({
+    channelUserId: 'chat-a',
+    conversationId: 'chat-a',
+    channelId: 'wework-a',
+    channelType: 'wework',
+    platform: 'wework',
+    senderId: 'user-a',
+    username: 'user-a',
+    selfName: '企业微信机器人',
+    reply: async () => {},
+    sendTyping: async () => {},
+  }, '@企业微信机器人/session list');
+
+  assert.equal(handled, false);
+  assert.equal(called, false);
+});

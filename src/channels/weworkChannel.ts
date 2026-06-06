@@ -26,6 +26,7 @@ export interface WeWorkWebhookConfig {
   encodingAESKey?: string; // 企业微信应用的 EncodingAESKey
   listenPort?: number; // 监听端口，用于接收消息（如果企业微信支持回调）
   listenPath?: string; // 监听路径
+  selfName?: string; // Optional bot display/self name for stripping @mentions before command parsing
   aibot?: {
     stream?: boolean;
     streamMaxContentBytes?: number;
@@ -188,6 +189,7 @@ export class WeWorkWebhookChannel implements Channel {
   private webhookUrl: string;
   private token?: string;
   private encodingAESKey?: string;
+  private readonly selfName?: string;
   private crypto?: WeWorkCrypto;
   private readonly streamEnabled: boolean;
   private readonly streamAggregator: WeWorkStreamAggregator;
@@ -210,6 +212,7 @@ export class WeWorkWebhookChannel implements Channel {
     this.webhookUrl = config.webhookUrl || '';
     this.token = config.token;
     this.encodingAESKey = config.encodingAESKey;
+    this.selfName = isNonEmptyString(config.selfName) ? config.selfName.trim() : undefined;
     this.streamEnabled = !!config.aibot?.stream;
     this.streamAggregator = new WeWorkStreamAggregator({
       maxContentBytes: config.aibot?.streamMaxContentBytes || DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES,
@@ -776,6 +779,7 @@ export class WeWorkWebhookChannel implements Channel {
           platform: 'wework',
           senderId: userId, // 发送者用户ID，用于权限检查
           weworkStreamId: streamSnapshot?.streamId,
+          selfName: this.selfName,
           preferDirectReply: !!responseUrl || !!streamSnapshot,
           reply: async (text: string, options?: any) => {
             logger.debug({ channelUserId, text: text.substring(0, 100), chatType, chatId }, 'Sending reply via WeWork');

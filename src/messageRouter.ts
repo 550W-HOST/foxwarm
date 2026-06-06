@@ -640,8 +640,9 @@ export class MessageRouter {
       return false;
     }
 
+    const normalizedMessageText = this.stripConfiguredSelfMention(ctx, messageText);
     const mentionCommandRegex = /^(?:@[a-zA-Z_\-.]+\s+)?(\/[a-zA-Z_\-.]+)(?:\s+(.*))?$/s;
-    const commandMatch = messageText.match(mentionCommandRegex);
+    const commandMatch = normalizedMessageText.match(mentionCommandRegex);
     if (!commandMatch) return false;
 
     const command = commandMatch[1];
@@ -658,6 +659,24 @@ export class MessageRouter {
     }
 
     return true;
+  }
+
+  private stripConfiguredSelfMention(ctx: ChannelContext, messageText: string): string {
+    const selfName = typeof ctx.selfName === 'string' ? ctx.selfName.trim() : '';
+    if (!selfName) {
+      return messageText;
+    }
+
+    const mentionPrefix = `@${selfName}`;
+    if (!messageText.startsWith(mentionPrefix)) {
+      return messageText;
+    }
+
+    const rest = messageText.slice(mentionPrefix.length);
+    if (!/^\s+/.test(rest)) {
+      return messageText;
+    }
+    return rest.replace(/^\s+/, '');
   }
 
   private async resolveSessionForIncomingMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session }> {

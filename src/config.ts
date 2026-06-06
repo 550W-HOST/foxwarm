@@ -29,6 +29,7 @@ export type WeWorkConfig = {
   encodingAESKey?: string;
   listenPort?: number;
   listenPath?: string;
+  selfName?: string;
   aibot?: {
     stream?: boolean;
     streamMaxContentBytes?: number;

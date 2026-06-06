@@ -122,6 +122,23 @@ test('WeWork channel can start a passive stream for pure short-callback AIBot me
   assert.equal(result.passiveResponse.stream.content, '> 🤔 thinking');
 });
 
+test('WeWork channel passes configured selfName on inbound context', async () => {
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-test',
+    selfName: '企业微信机器人',
+    aibot: { stream: true },
+  });
+  let observedSelfName: string | undefined;
+  channel.onMessage(async (ctx) => { observedSelfName = ctx.selfName; });
+
+  await (channel as any).processInboundBody(cloneBody('self-name-context'), {
+    mode: 'webhook',
+    responseUrl: aibotTextBody.response_url,
+  }, true);
+
+  assert.equal(observedSelfName, '企业微信机器人');
+});
+
 test('WeWork channel skips stream-bound broadcasts for non-matching conversations instead of falling back to webhook send', async () => {
   const channel = new WeWorkWebhookChannel({
     name: 'wework-test',

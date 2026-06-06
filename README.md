@@ -316,6 +316,10 @@ channels:
     encodingAESKey: "callback-encoding-aes-key"
     listenPort: 3003
     listenPath: "/wework/aibot"
+    # Optional bot/self display name. If inbound text starts with
+    # "@企业微信机器人" followed by whitespace, that prefix is stripped before
+    # slash-command parsing so Chinese WeWork mentions can still run commands.
+    selfName: "企业微信机器人"
     aibot:
       # When true, incoming intelligent-bot messages use WeWork stream replies:
       # model/tool-loop broadcasts are aggregated into one stream card and the
