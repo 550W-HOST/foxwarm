@@ -49,7 +49,7 @@ function buildTelegramFactory(channelId: string): ManagedChannelFactory {
       if (!botToken) {
         throw new Error(`Telegram botToken is missing for channel \`${channelId}\` in state/config.yaml`);
       }
-      const channel = new TelegramChannel(botToken, channelId);
+      const channel = new TelegramChannel(config, channelId);
       channel.onMessage(requireRuntimeMessageHandler());
       if (runtimeCommandHandler) {
         channel.onCommand?.(runtimeCommandHandler);
@@ -82,7 +82,7 @@ function buildMatrixFactory(channelId: string): ManagedChannelFactory {
       if (!config.homeserver?.trim() || !config.accessToken?.trim() || !config.botUserId?.trim()) {
         throw new Error(`Matrix homeserver/accessToken/botUserId are required for channel \`${channelId}\` in state/config.yaml`);
       }
-      const channel = new MatrixChannel(config.homeserver, config.accessToken, config.botUserId, channelId);
+      const channel = new MatrixChannel(config, channelId);
       channel.onMessage(requireRuntimeMessageHandler());
       return channel;
     },
@@ -112,15 +112,7 @@ function buildWeWorkFactory(channelId: string): ManagedChannelFactory {
       if (!isWeWorkChannelConfigReady(config)) {
         throw new Error(`WeChat Work webhookUrl, callback listen config, or aibot.websocket botId/secret is missing for channel \`${channelId}\` in state/config.yaml`);
       }
-      const channel = new WeWorkWebhookChannel({
-        name: channelId,
-        webhookUrl: config.webhookUrl,
-        token: config.token,
-        encodingAESKey: config.encodingAESKey,
-        listenPort: config.listenPort,
-        listenPath: config.listenPath,
-        aibot: config.aibot,
-      });
+      const channel = new WeWorkWebhookChannel(config, channelId);
       channel.onMessage(requireRuntimeMessageHandler());
       return channel;
     },
@@ -156,12 +148,7 @@ function buildWeixinFactory(channelId: string): ManagedChannelFactory {
       if (!token) {
         throw new Error(`Weixin token is missing for channel \`${channelId}\` in state/config.yaml`);
       }
-      const channel = new WeixinChannel({
-        baseUrl: config.baseUrl || 'https://ilinkai.weixin.qq.com',
-        token,
-        routeTag: config.routeTag,
-        longPollTimeoutMs: config.longPollTimeoutMs,
-      }, channelId);
+      const channel = new WeixinChannel(config, channelId);
       channel.onMessage(requireRuntimeMessageHandler());
       return channel;
     },

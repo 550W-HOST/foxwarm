@@ -12,6 +12,7 @@ import crypto from 'crypto';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { buildSavedFileText, saveInboundChannelFile } from '../channelFiles';
 import { logger } from '../common';
+import type { WeWorkConfig } from '../config';
 import type { ChannelTurnProgress, MessagePart } from '../types';
 import {
   buildWeWorkStreamResponse,
@@ -20,27 +21,11 @@ import {
   WeWorkStreamSnapshot,
 } from './weworkStreamAggregator';
 
-export interface WeWorkWebhookConfig {
-  webhookUrl?: string;  // 企业微信群机器人 webhook URL
-  token?: string;      // 企业微信应用的 Token
-  encodingAESKey?: string; // 企业微信应用的 EncodingAESKey
-  listenPort?: number; // 监听端口，用于接收消息（如果企业微信支持回调）
-  listenPath?: string; // 监听路径
-  selfName?: string; // Optional bot display/self name for stripping @mentions before command parsing
-  aibot?: {
-    stream?: boolean;
-    streamMaxContentBytes?: number;
-    websocket?: {
-      enabled?: boolean;
-      botId?: string;
-      secret?: string;
-      url?: string;
-      heartbeatMs?: number;
-      reconnectMs?: number;
-    };
-  };
+export type WeWorkWebhookConfig = WeWorkConfig;
+
+type WeWorkWebhookConstructorConfig = WeWorkWebhookConfig & {
   name?: string;
-}
+};
 
 type WeWorkInboundDelivery =
   | { mode: 'webhook'; responseUrl?: string }
@@ -185,11 +170,11 @@ export class WeWorkWebhookChannel implements Channel {
   readonly name: string;
   readonly platform = 'wework';
   private readonly channelId: string;
+  private readonly config: WeWorkWebhookConstructorConfig;
   
   private webhookUrl: string;
   private token?: string;
   private encodingAESKey?: string;
-  private readonly selfName?: string;
   private crypto?: WeWorkCrypto;
   private readonly streamEnabled: boolean;
   private readonly streamAggregator: WeWorkStreamAggregator;
@@ -206,13 +191,13 @@ export class WeWorkWebhookChannel implements Channel {
   private app?: express.Application;
   private server?: any;
 
-  constructor(config: WeWorkWebhookConfig) {
-    this.name = config.name || 'wework';
+  constructor(config: WeWorkWebhookConstructorConfig, name?: string) {
+    this.config = config;
+    this.name = name || config.name || 'wework';
     this.channelId = this.name;
     this.webhookUrl = config.webhookUrl || '';
     this.token = config.token;
     this.encodingAESKey = config.encodingAESKey;
-    this.selfName = isNonEmptyString(config.selfName) ? config.selfName.trim() : undefined;
     this.streamEnabled = !!config.aibot?.stream;
     this.streamAggregator = new WeWorkStreamAggregator({
       maxContentBytes: config.aibot?.streamMaxContentBytes || DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES,
@@ -489,6 +474,13 @@ export class WeWorkWebhookChannel implements Channel {
 
     clearTimeout(pending.timer);
     this.pendingWsRequests.delete(reqId);
+    logger.info({
+      channelId: this.channelId,
+      reqId,
+      command: pending.cmd,
+      errcode: payload.errcode,
+      errmsg: payload.errmsg,
+    }, 'Received WeWork AIBot WebSocket command ack');
     if (payload.errcode !== undefined && payload.errcode !== 0) {
       pending.reject(new Error(`WeWork AIBot command ${pending.cmd} failed: ${payload.errmsg || 'unknown'} (code: ${payload.errcode})`));
     } else {
@@ -754,7 +746,23 @@ export class WeWorkWebhookChannel implements Channel {
 
     // Only process if we have content and user info
     if ((parts?.length || content) && userId !== 'unknown') {
-      logger.debug({ content, userId, userName, chatType, chatId, deliveryMode: delivery.mode }, 'Processing WeWork message');
+      logger.info({
+        channelId: this.channelId,
+        deliveryMode: delivery.mode,
+        msgId: callbackMsgId,
+        msgtype: body.msgtype || (body.xml || body)?.MsgType,
+        aibotId: body.aibotid,
+        chatId,
+        conversationId: chatId || userId,
+        chatType,
+        userId,
+        userName,
+        userNameSource: userName && userName !== userId ? 'payload' : 'fallback-userid',
+        fromKeys: body.from && typeof body.from === 'object' ? Object.keys(body.from) : undefined,
+        hasResponseUrl: !!responseUrl,
+        isAIBot: messageIsAIBot,
+        contentLength: content.length,
+      }, 'Received WeWork inbound message metadata');
 
       // 使用 chatId 作为 channelUserId，这样每个会话（群聊/私聊）都有独立的 channel
       // 如果没有 chatId，fallback 到 userId
@@ -779,7 +787,7 @@ export class WeWorkWebhookChannel implements Channel {
           platform: 'wework',
           senderId: userId, // 发送者用户ID，用于权限检查
           weworkStreamId: streamSnapshot?.streamId,
-          selfName: this.selfName,
+          selfName: isNonEmptyString(this.config.selfName) ? this.config.selfName.trim() : undefined,
           preferDirectReply: !!responseUrl || !!streamSnapshot,
           reply: async (text: string, options?: any) => {
             logger.debug({ channelUserId, text: text.substring(0, 100), chatType, chatId }, 'Sending reply via WeWork');

@@ -7,6 +7,7 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { buildSavedFileText, saveInboundChannelFile } from '../channelFiles';
 import { MessagePart } from '../types';
 import { logger } from '../common';
+import type { MatrixConfig } from '../config';
 
 export class MatrixChannel implements Channel {
   readonly name: string;
@@ -20,12 +21,12 @@ export class MatrixChannel implements Channel {
   private processedEvents = new Set<string>(); // Track processed event IDs
   private startTime = Date.now(); // Track when channel started
 
-  constructor(homeserverUrl: string, accessToken: string, userId: string, name: string = 'matrix') {
+  constructor(config: MatrixConfig, name: string = 'matrix') {
     this.name = name;
     this.channelId = name;
-    this.homeserverUrl = homeserverUrl;
-    this.accessToken = accessToken;
-    this.userId = userId;
+    this.homeserverUrl = config.homeserver?.trim() || '';
+    this.accessToken = config.accessToken?.trim() || '';
+    this.userId = config.botUserId?.trim() || '';
   }
 
   async start(): Promise<void> {

@@ -10,6 +10,7 @@ import { buildSavedFileText, saveInboundChannelFile } from '../channelFiles';
 import { COMMANDS } from '../commands';
 import { MessagePart } from '../types';
 import { logger } from '../common';
+import type { TelegramConfig } from '../config';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -42,10 +43,10 @@ export class TelegramChannel implements Channel {
   private messageHandler?: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>;
   private commandHandler?: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>;
 
-  constructor(token: string, name: string = 'telegram') {
+  constructor(config: TelegramConfig, name: string = 'telegram') {
     this.name = name;
     this.channelId = name;
-    this.bot = new Telegraf(token);
+    this.bot = new Telegraf(config.botToken?.trim() || '');
     this.setupHandlers();
   }
 

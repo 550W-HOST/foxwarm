@@ -4,16 +4,12 @@
 import crypto from 'crypto';
 import { Channel, ChannelContext, ChannelMessage } from '../channel';
 import { logger } from '../common';
+import type { WeixinConfig } from '../config';
 import { getWeixinUpdates, sendWeixinMessage, sendWeixinTyping, SESSION_EXPIRED_ERRCODE } from '../weixin/api';
 import { buildWeixinMessageParts, getWeixinContextToken, setWeixinContextToken } from '../weixin/inbound';
 import { WeixinMessageState, WeixinMessageType } from '../weixin/types';
 
-export interface WeixinChannelOptions {
-  baseUrl: string;
-  token: string;
-  routeTag?: string;
-  longPollTimeoutMs?: number;
-}
+export type WeixinChannelOptions = WeixinConfig;
 
 function generateClientId(): string {
   return `foxwarm-weixin-${crypto.randomBytes(8).toString('hex')}`;
@@ -38,9 +34,9 @@ export class WeixinChannel implements Channel {
   constructor(options: WeixinChannelOptions, name = 'weixin') {
     this.name = name;
     this.channelId = name;
-    this.baseUrl = options.baseUrl;
-    this.token = options.token;
-    this.routeTag = options.routeTag;
+    this.baseUrl = options.baseUrl?.trim() || 'https://ilinkai.weixin.qq.com';
+    this.token = options.token?.trim() || '';
+    this.routeTag = options.routeTag?.trim() || undefined;
     this.longPollTimeoutMs = options.longPollTimeoutMs;
   }
 

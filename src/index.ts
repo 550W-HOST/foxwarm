@@ -285,7 +285,7 @@ async function start() {
     const defaultTelegramEntry = getDefaultChannelConfigByType<TelegramConfig>('telegram');
     const telegramChannelPromise: Promise<TelegramChannel | null> = (defaultTelegramEntry?.config?.enabled !== false && defaultTelegramEntry?.config?.botToken)
         ? startWithRetry(`telegram:${defaultTelegramEntry.id}`, async () => {
-            const channel = new TelegramChannel(defaultTelegramEntry.config.botToken!, defaultTelegramEntry.id);
+            const channel = new TelegramChannel(defaultTelegramEntry.config, defaultTelegramEntry.id);
             channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
             channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
             await channel.start();
@@ -306,7 +306,7 @@ async function start() {
             if (defaultTelegramEntry?.id === entry.id) continue;
             if (config.enabled === false || !config.botToken) continue;
             void startWithRetry(`telegram:${entry.id}`, async () => {
-                const channel = new TelegramChannel(config.botToken, entry.id);
+                const channel = new TelegramChannel(config, entry.id);
                 channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
                 channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
                 await channel.start();
@@ -323,7 +323,7 @@ async function start() {
         if (entry.type === 'matrix') {
             if (config.enabled === false || !config.homeserver || !config.accessToken || !config.botUserId) continue;
             void startWithRetry(`matrix:${entry.id}`, async () => {
-                const matrixChannel = new MatrixChannel(config.homeserver, config.accessToken, config.botUserId, entry.id);
+                const matrixChannel = new MatrixChannel(config, entry.id);
                 matrixChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
                 await matrixChannel.start();
                 registerChannel(entry.id, matrixChannel);
@@ -337,15 +337,7 @@ async function start() {
         if (entry.type === 'wework') {
             if (config.enabled === false || !isWeWorkChannelConfigReady(config)) continue;
             void startWithRetry(`wework:${entry.id}`, async () => {
-                const weworkChannel = new WeWorkWebhookChannel({
-                    name: entry.id,
-                    webhookUrl: config.webhookUrl,
-                    token: config.token,
-                    encodingAESKey: config.encodingAESKey,
-                    listenPort: config.listenPort,
-                    listenPath: config.listenPath,
-                    aibot: config.aibot,
-                });
+                const weworkChannel = new WeWorkWebhookChannel(config, entry.id);
                 weworkChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
                 await weworkChannel.start();
                 registerChannel(entry.id, weworkChannel);
