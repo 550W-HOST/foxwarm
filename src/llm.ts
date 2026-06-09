@@ -628,7 +628,18 @@ export async function buildSessionSystemPromptSnapshot(options: {
         : await appendDefaultMemoryFiles(agentName, sessionId);
     const skillCatalog = await appendSkillCatalogForAgent(agentName);
     const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_folder: ' + getAgentDir(agentName) + '\n';
-    const archiveInfo = '\n\n--- EARLIER CONTEXT RECALL ---\n- Use `recall({"target":"overview"})` for archived message/block ranges and examples.\n- Prefer `recall({"target":"B#123"})` when the working context contains a `[CTX-BLOCK ... B#123 ...]` reference; drill down one CTX-BLOCK layer at a time.\n- Message targets such as `msg:B#123` or `msg#100-120` are precise/advanced and can return lots of irrelevant content; use them only when you know the needed messages are in that range.\n- If you specifically need lower-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.\n';
+    const archiveInfo = [
+        '',
+        '',
+        '--- EARLIER CONTEXT RECALL ---',
+        '- Long sessions use layered context: older conversation is archived and may be compacted into CTX-BLOCK summaries to keep the active prompt small.',
+        '- Block levels are hierarchical: lower/newer blocks are closer to raw messages; higher/older blocks are coarser summaries. Drill down step by step with `recall`.',
+        '- Use `recall({"target":"overview"})` for archived ranges/examples, and `recall({"target":"B#123"})` for a CTX-BLOCK; use `msg:B#123` or `msg#100-120` only when you need raw detail.',
+        '- Compaction/recall preserves traceable session history; it is not agent memory. Do not write routine process notes, temporary progress, or completed details to memory just to preserve context.',
+        '- Use memory files only for long-lived stable rules, preferences, environment facts, and confirmed design decisions.',
+        '- If you need lower-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.',
+        '',
+    ].join('\n');
     return [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
         .filter(Boolean)
         .join('\n\n');

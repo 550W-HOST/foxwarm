@@ -50,6 +50,13 @@ test('framework root 00_SYSTEM takes precedence over legacy fallback and dynamic
   assert.match(rootSnapshot, /--- DIRECTORIES ---/);
   assert.match(rootSnapshot, /agent_folder:/);
   assert.doesNotMatch(rootSnapshot, /agent_memory:/);
+  assert.match(rootSnapshot, /--- EARLIER CONTEXT RECALL ---/);
+  assert.match(rootSnapshot, /layered context/);
+  assert.match(rootSnapshot, /compacted into CTX-BLOCK summaries/);
+  assert.match(rootSnapshot, /Block levels are hierarchical/);
+  assert.match(rootSnapshot, /not agent memory/);
+  assert.match(rootSnapshot, /routine process notes/);
+  assert.match(rootSnapshot, /long-lived stable rules/);
 
   await fs.remove(config.AGENTS_SYSTEM_PROMPT_PATH);
   const fallbackSnapshot = await llm.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: 'main' });
