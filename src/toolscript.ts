@@ -592,6 +592,23 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
   };
 }
 
+function stdoutDeltaSince(previousStdout: string, currentStdout: string): string {
+  if (!previousStdout) {
+    return currentStdout;
+  }
+  if (currentStdout.startsWith(previousStdout)) {
+    return currentStdout.slice(previousStdout.length);
+  }
+  return currentStdout;
+}
+
+function withStdoutDelta(result: ToolScriptResult, previousStdout: string): ToolScriptResult {
+  return {
+    ...result,
+    stdout: stdoutDeltaSince(previousStdout, result.stdout),
+  };
+}
+
 function markRunWaiting(record: ToolScriptRunRecord, waiting: ToolScriptWaitingState, runtimeState: RuntimeState): void {
   record.status = 'waiting';
   record.waiting = waiting;
@@ -1405,9 +1422,13 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
   }
 
   record.timeoutSecs = parseTimeoutSecs(args?.timeoutSecs, record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS);
+  const stdoutBeforeContinue = record.stdout || '';
 
   if (record.waiting.reason === 'agent') {
-    return await resumeRun(record, args?.input, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed');
+    return withStdoutDelta(
+      await resumeRun(record, args?.input, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed'),
+      stdoutBeforeContinue,
+    );
   }
 
   if (record.waiting.reason === 'timeout') {
@@ -1416,9 +1437,15 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
       throw new Error(`ToolScript run \`${runId}\` is waiting on timeout but has no pending resume payload.`);
     }
     if (pendingResume.mode === 'return') {
-      return await resumeRun(record, pendingResume.value, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed');
+      return withStdoutDelta(
+        await resumeRun(record, pendingResume.value, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
+        stdoutBeforeContinue,
+      );
     }
-    return await resumeRun(record, { __toolscriptResumeException: pendingResume.exception }, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed');
+    return withStdoutDelta(
+      await resumeRun(record, { __toolscriptResumeException: pendingResume.exception }, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
+      stdoutBeforeContinue,
+    );
   }
 
   throw new Error(`ToolScript run \`${runId}\` is not waiting for continue_script.`);

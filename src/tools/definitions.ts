@@ -693,7 +693,7 @@ export const definitions = [
         {
             name: 'continue_script',
             defaultInject: true,
-            description: 'Resume a waiting ToolScript run created by run_script/start_toolscript_run. Used both for ask_agent continuations and for timeout-paused runs that explicitly report they can continue.',
+            description: 'Resume a waiting ToolScript run created by run_script/start_toolscript_run. Used both for ask_agent continuations and for timeout-paused runs that explicitly report they can continue. The returned stdout field is only the stdout/print output produced by this continuation slice; fetch the run to see the persisted full stdout.',
             parameters: {
                 type: 'object',
                 properties: {
