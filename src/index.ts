@@ -15,6 +15,8 @@ import crypto from 'crypto';
 import path from 'path';
 import {
     AGENTS_DIR,
+    AGENTS_SYSTEM_PROMPT_PATH,
+    AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH,
     BOT_NAME,
     BASE_DIR,
     DATA_ROOT_DIR,
@@ -120,6 +122,7 @@ async function ensureNodeToken(): Promise<string> {
 
 async function start() {
     const templatesDir = path.join(BASE_DIR, 'templates', 'main', 'memory');
+    const legacyMainSystemPromptPath = path.join(MAIN_AGENT_MEMORY_DIR, '00_SYSTEM.md');
 
     if (DATA_ROOT_DIR !== BASE_DIR) {
         logger.info(`Using experimental external data root: ${DATA_ROOT_DIR}`);
@@ -127,6 +130,19 @@ async function start() {
 
     // Ensure agents directory exists
     await fs.ensureDir(AGENTS_DIR);
+
+    // Initialize the framework-level system prompt for fresh installs. Existing
+    // legacy installs may still carry agents/main/memory/00_SYSTEM.md; keep that
+    // as the runtime fallback instead of silently creating a competing root file.
+    if (!await fs.pathExists(AGENTS_SYSTEM_PROMPT_PATH)) {
+        if (await fs.pathExists(legacyMainSystemPromptPath)) {
+            logger.info('Legacy main agent 00_SYSTEM.md found; using it as framework prompt fallback until migrated to agents/00_SYSTEM.md');
+        } else if (await fs.pathExists(AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH)) {
+            logger.info('Framework system prompt not found, copying from template...');
+            await fs.copy(AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH, AGENTS_SYSTEM_PROMPT_PATH, { overwrite: false });
+            logger.info('Framework system prompt initialized from template');
+        }
+    }
 
 
     // Initialize main agent memory from templates if needed

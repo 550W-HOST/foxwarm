@@ -683,6 +683,7 @@ async function finalizeCompaction(
   session.contextFrontier = newFrontier;
   session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
     agentName: session.agent || 'main',
+    sessionId,
     systemPromptFiles: session.systemPromptFiles,
   });
   session.history = await renderHistoryFromFrontier(session, newFrontier);

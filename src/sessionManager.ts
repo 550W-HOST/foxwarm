@@ -551,6 +551,7 @@ export async function getSession(sessionId: string): Promise<Session> {
   session.systemPromptFiles = llm.normalizeSystemPromptFiles(session.systemPromptFiles);
   if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
     agentName: session.agent,
+    sessionId: realId,
     systemPromptFiles: session.systemPromptFiles,
   });
   if (!session.stats) session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
@@ -1024,6 +1025,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
     const agentName = parentSession.agent || 'main';
     const snapshot = await llm.buildSessionSystemPromptSnapshot({
       agentName,
+      sessionId: childSessionId,
       systemPromptFiles: parentSession.systemPromptFiles,
     });
     const newSession: Session = {

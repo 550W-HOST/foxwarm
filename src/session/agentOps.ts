@@ -193,7 +193,7 @@ export async function createSessionInAgent(options: {
     ? agentMeta.isolatedNode.trim()
     : undefined;
 
-  const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, systemPromptFiles });
+  const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId, systemPromptFiles });
   await deps.createSession(sessionId, {
     id: sessionId,
     agent: agentName,
@@ -311,7 +311,7 @@ export async function createAgentWithMainSession(options: {
     };
   }
 
-  const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName });
+  const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId: mainSessionId });
   await deps.createSession(mainSessionId, {
     id: mainSessionId,
     agent: agentName,

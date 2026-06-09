@@ -5,9 +5,10 @@ import { AGENTS_FILE, getAgentDir } from '../config';
 import { Session } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
 
-function getSessionSystemPromptOptions(session: Session): { agentName: string; systemPromptFiles?: string[] } {
+function getSessionSystemPromptOptions(session: Session): { agentName: string; sessionId: string; systemPromptFiles?: string[] } {
   return {
     agentName: session.agent || 'main',
+    sessionId: session.id,
     systemPromptFiles: session.systemPromptFiles,
   };
 }

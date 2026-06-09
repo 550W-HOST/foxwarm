@@ -72,9 +72,10 @@ foxwarm/
 
 - `state/config.yaml`：bot 配置、channel 配置、LLM 默认 URL/key、端口与开关
 - `state/models.yaml`：模型列表与默认模型
+- `agents/00_SYSTEM.md`：框架级系统提示（fresh init 从 `templates/agents/00_SYSTEM.md` 创建）
 - `agents/<agent>/memory/`：agent 长期记忆
 - `skills/<skill>/memory/`：附加给 agent 的 skill 文档
-- `templates/main/memory/`：首次初始化模板
+- `templates/main/memory/`：main agent memory 首次初始化模板
 
 ## 常见开发任务
 
