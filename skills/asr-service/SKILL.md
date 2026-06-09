@@ -1,17 +1,17 @@
 ---
-name: asr_service
+name: asr-service
 description: Standalone Qwen ASR service bundle and integration guide for Foxwarm backend proxy mode.
 ---
 
-# asr_service
+# asr-service
 
 Use this skill when you need to deploy, repair, or integrate the standalone ASR service used by Foxwarm.
 
 ## What this skill contains
 
-- service entrypoint: `skills/asr_service/qwen-asr-service.js`
-- GPU service entrypoint: `skills/asr_service/qwen-asr-gpu-service.py`
-- GPU service deps: `skills/asr_service/requirements-gpu.txt`
+- service entrypoint: `skills/asr-service/qwen-asr-service.js`
+- GPU service entrypoint: `skills/asr-service/qwen-asr-gpu-service.py`
+- GPU service deps: `skills/asr-service/requirements-gpu.txt`
 - setup guidance for CPU-first local deployment
 - integration guidance for Foxwarm `state/config.yaml`
 
@@ -73,7 +73,7 @@ export QWEN_ASR_SERVICE_KEY='change-me'
 export QWEN_ASR_BIN=/path/to/qwen_asr
 export QWEN_ASR_MODEL_DIR=/path/to/qwen3-asr-0.6b
 
-node skills/asr_service/qwen-asr-service.js
+node skills/asr-service/qwen-asr-service.js
 ```
 
 Optional env:
@@ -117,8 +117,8 @@ Windows host + NVIDIA driver + WSL2 Ubuntu + qwen-asr[vllm]
 
 ### Files to use
 
-- service: `skills/asr_service/qwen-asr-gpu-service.py`
-- deps: `skills/asr_service/requirements-gpu.txt`
+- service: `skills/asr-service/qwen-asr-gpu-service.py`
+- deps: `skills/asr-service/requirements-gpu.txt`
 
 ### Suggested WSL2 setup
 
@@ -136,7 +136,7 @@ pip install -U pip wheel
 # example only; adjust to your environment
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-pip install -r skills/asr_service/requirements-gpu.txt
+pip install -r skills/asr-service/requirements-gpu.txt
 
 # optional but recommended for lower VRAM / better speed when supported
 pip install -U flash-attn --no-build-isolation
@@ -154,7 +154,7 @@ export QWEN_ASR_DTYPE='bfloat16'
 export QWEN_ASR_GPU_MEMORY_UTILIZATION='0.8'
 export QWEN_ASR_MAX_MODEL_LEN='32768'
 
-python skills/asr_service/qwen-asr-gpu-service.py
+python skills/asr-service/qwen-asr-gpu-service.py
 ```
 
 Additional optional env for smaller / mid-range GPUs:

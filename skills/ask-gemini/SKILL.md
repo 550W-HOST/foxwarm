@@ -1,9 +1,9 @@
 ---
-name: ask_gemini
+name: ask-gemini
 description: Use the bundled Gemini helper to fetch recent or public information, with setup guidance when the API key is not configured yet.
 ---
 
-# ask_gemini
+# ask-gemini
 
 Use this skill when you need recent or external public information that may be newer than the model's built-in knowledge.
 
@@ -48,7 +48,7 @@ export GEMINI_MODEL="gemini-2.5-flash"
 Verify whether the current shell/machine is already configured:
 
 ```bash
-node skills/ask_gemini/ask-gemini.js --check-config
+node skills/ask-gemini/ask-gemini.js --check-config
 ```
 
 If the key is missing, the script prints setup instructions and exits non-zero.
@@ -56,11 +56,11 @@ If the key is missing, the script prints setup instructions and exits non-zero.
 ## Usage
 
 ```bash
-node skills/ask_gemini/ask-gemini.js "What's the latest TypeScript stable version?"
+node skills/ask-gemini/ask-gemini.js "What's the latest TypeScript stable version?"
 ```
 
 ```bash
-echo "Summarize today's major AI model releases in 5 bullet points" | node skills/ask_gemini/ask-gemini.js
+echo "Summarize today's major AI model releases in 5 bullet points" | node skills/ask-gemini/ask-gemini.js
 ```
 
 ## Usage guidance for agents

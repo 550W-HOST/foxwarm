@@ -1,9 +1,9 @@
 ---
-name: toolscript_managed_controller
+name: toolscript-managed-controller
 description: Use ToolScript managed-session primitives and background controller runs when one session should temporarily control another session's inbound work.
 ---
 
-# toolscript_managed_controller
+# toolscript-managed-controller
 
 Use this skill when you want a ToolScript run to act like a **controller** for another session.
 
