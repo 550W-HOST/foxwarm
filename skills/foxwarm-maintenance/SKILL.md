@@ -212,6 +212,16 @@ After restart, verify:
 tail -n 100 "${FOXWARM_DATA_DIR:-$(cat data_dir 2>/dev/null || pwd)}/state/logs/foxwarm.log"
 ```
 
+### 4. Post-upgrade checks
+
+After the program repo has been updated, read the latest post-upgrade checklist from the updated checkout:
+
+```text
+skills/foxwarm-maintenance/memory/POST-UPGRADE.md
+```
+
+That file covers version-specific follow-up work such as comparing new templates with live user-owned files and asking before merging changes into `agents/` or `state/`.
+
 ## Quick Troubleshooting Checklist
 
 - WebUI not reachable: check the port in `state/config.yaml`, tmux console, and `state/logs/foxwarm.log`.
