@@ -6,13 +6,13 @@ export const definitions = [
         {
             name: 'read',
             defaultInject: true,
-            description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
+            description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers; passing 0 for startLine/endLine is treated as omitted. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
             parameters: {
                 type: 'object',
                 properties: { 
                     filePath: { type: 'string' },
-                    startLine: { type: 'number', description: 'Starting line number/item number (1-indexed, optional)' },
-                    endLine: { type: 'number', description: 'Ending line number/item number (1-indexed, inclusive, optional)' }
+                    startLine: { type: 'number', description: 'Starting line number/item number (1-indexed, optional). 0 is treated as omitted.' },
+                    endLine: { type: 'number', description: 'Ending line number/item number (1-indexed, inclusive, optional). 0 is treated as omitted.' }
                 },
                 required: ['filePath']
             }
@@ -20,14 +20,15 @@ export const definitions = [
         {
             name: 'write',
             defaultInject: true,
-            description: 'Write a file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed. Provide either content, or contentRef from a previous write "file exists" error with overwrite=true to reuse the cached attempted content for the same path.',
+            description: 'Write a file. By default, parent directories must already exist; pass createDirs=true to create missing parent directories. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed. Provide either content, or contentRef from a previous write failure with overwrite=true to reuse the cached attempted content for the same path.',
             parameters: {
                 type: 'object',
                 properties: { 
                     content: { type: 'string' },
-                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists. Use with overwrite=true and the same filePath to write the cached content without resending it.' },
+                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. Use with overwrite=true and the same filePath to write the cached content without resending it.' },
                     filePath: { type: 'string' },
-                    overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' }
+                    overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' },
+                    createDirs: { type: 'boolean', description: 'Create missing parent directories before writing. Default: false' }
                 },
                 required: ['filePath']
             }
@@ -66,8 +67,8 @@ export const definitions = [
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
-                    startLine: { type: 'number', description: 'Starting line number (1-indexed, optional)' },
-                    endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional)' }
+                    startLine: { type: 'number', description: 'Starting line number (1-indexed, optional). 0 is treated as omitted.' },
+                    endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional). 0 is treated as omitted.' }
                 },
                 required: ['filePath']
             }
@@ -692,7 +693,7 @@ export const definitions = [
         {
             name: 'continue_script',
             defaultInject: true,
-            description: 'Resume a waiting ToolScript run created by run_script/start_toolscript_run. Used both for ask_agent continuations and for timeout-paused runs that explicitly report they can continue.',
+            description: 'Resume a waiting ToolScript run created by run_script/start_toolscript_run. Used both for ask_agent continuations and for timeout-paused runs that explicitly report they can continue. The returned stdout field is only the stdout/print output produced by this continuation slice; fetch the run to see the persisted full stdout.',
             parameters: {
                 type: 'object',
                 properties: {

@@ -2,12 +2,13 @@ import axios, { AxiosResponse } from 'axios';
 import crypto, { randomUUID } from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
+import yaml from 'js-yaml';
 import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir } from './config';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH } from './config';
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
@@ -297,6 +298,23 @@ export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-c
     return null;
 }
 
+function getModelIdForMetadata(modelEntry: ModelConfigEntry | undefined, fallbackModelKey: string): string {
+    const providerKey = typeof modelEntry?.providerKey === 'string' ? modelEntry.providerKey.trim() : '';
+    const modelName = typeof modelEntry?.model === 'string' ? modelEntry.model.trim() : '';
+
+    if (providerKey && modelName) {
+        return modelName.startsWith(`${providerKey}/`)
+            ? modelName
+            : `${providerKey}/${modelName}`;
+    }
+
+    if (providerKey) {
+        return providerKey;
+    }
+
+    return fallbackModelKey;
+}
+
 function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
     if (signal.aborted) {
         return Promise.reject(makeAbortError());
@@ -421,7 +439,106 @@ function resolveSystemPromptFilePath(agentName: string, fileReference: string): 
     return path.resolve(getAgentDir(agentName), expandedPath);
 }
 
-async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[]): Promise<string> {
+type MemoryFileFrontMatter = Record<string, unknown>;
+
+function parseMemoryFileFrontMatter(content: string, filePath: string): { metadata: MemoryFileFrontMatter; body: string } {
+    const match = content.match(/^---[ \t]*(?:\r?\n)([\s\S]*?)(?:\r?\n)---[ \t]*(?:\r?\n|$)/);
+    if (!match) {
+        return { metadata: {}, body: content };
+    }
+
+    const body = content.slice(match[0].length);
+    try {
+        const parsed = yaml.load(match[1]);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return { metadata: {}, body };
+        }
+        return { metadata: parsed as MemoryFileFrontMatter, body };
+    } catch (err) {
+        logger.warn({ err, filePath }, 'Failed to parse memory file frontmatter; ignoring metadata and injecting body');
+        return { metadata: {}, body };
+    }
+}
+
+function normalizeSessionGlobList(value: unknown, key: string, filePath: string): string[] | undefined {
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+
+    if (typeof value === 'string') {
+        return value.trim() ? [value.trim()] : [];
+    }
+
+    if (Array.isArray(value)) {
+        const patterns: string[] = [];
+        for (const entry of value) {
+            if (typeof entry !== 'string') {
+                logger.warn({ filePath, key }, 'Invalid memory file frontmatter session glob entry; ignoring metadata key');
+                return undefined;
+            }
+            const trimmed = entry.trim();
+            if (trimmed) {
+                patterns.push(trimmed);
+            }
+        }
+        return patterns;
+    }
+
+    logger.warn({ filePath, key }, 'Invalid memory file frontmatter session glob value; ignoring metadata key');
+    return undefined;
+}
+
+function escapeRegExpChar(ch: string): string {
+    return /[\\^$+?.()|{}\[\]]/.test(ch) ? `\\${ch}` : ch;
+}
+
+function globMatchesSessionId(pattern: string, sessionId?: string): boolean {
+    if (!sessionId) {
+        return false;
+    }
+
+    let regex = '^';
+    for (let i = 0; i < pattern.length; i++) {
+        const ch = pattern[i];
+        if (ch === '*') {
+            if (pattern[i + 1] === '*') {
+                while (pattern[i + 1] === '*') i++;
+                regex += '.*';
+            } else {
+                regex += '[^/]*';
+            }
+        } else if (ch === '?') {
+            regex += '[^/]';
+        } else {
+            regex += escapeRegExpChar(ch);
+        }
+    }
+    regex += '$';
+    return new RegExp(regex).test(sessionId);
+}
+
+function shouldInjectMemoryFileForSession(metadata: MemoryFileFrontMatter, filePath: string, sessionId?: string): boolean {
+    const includeSession = normalizeSessionGlobList(metadata['include-session'], 'include-session', filePath);
+    const excludeSession = normalizeSessionGlobList(metadata['exclude-session'], 'exclude-session', filePath);
+
+    if (excludeSession?.some(pattern => globMatchesSessionId(pattern, sessionId))) {
+        return false;
+    }
+
+    if (includeSession !== undefined) {
+        return includeSession.some(pattern => globMatchesSessionId(pattern, sessionId));
+    }
+
+    return true;
+}
+
+async function readSessionFilteredMemoryFile(filePath: string, sessionId?: string): Promise<string | null> {
+    const content = await fs.readFile(filePath, 'utf8');
+    const { metadata, body } = parseMemoryFileFrontMatter(content, filePath);
+    return shouldInjectMemoryFileForSession(metadata, filePath, sessionId) ? body : null;
+}
+
+async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[], sessionId?: string): Promise<string> {
     let combined = '';
     const restrictToAgentDir = sessionManager.isAgentIsolated(agentName);
 
@@ -439,8 +556,10 @@ async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles:
             throw new Error(`systemPromptFiles entry \`${fileReference}\` is not a file.`);
         }
 
-        const content = await fs.readFile(filePath, 'utf8');
-        combined += formatMemoryBlock(filePath, agentName, 'self', content);
+        const content = await readSessionFilteredMemoryFile(filePath, sessionId);
+        if (content !== null) {
+            combined += formatMemoryBlock(filePath, agentName, 'self', content);
+        }
     }
 
     return combined;
@@ -469,21 +588,26 @@ async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
     return combined;
 }
 
-async function appendDefaultMemoryFiles(agentName: string): Promise<string> {
+async function appendDefaultMemoryFiles(agentName: string, sessionId?: string): Promise<string> {
     const mainMemoryDir = MAIN_AGENT_MEMORY_DIR;
     let combined = '';
 
-    const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
-    if (await fs.pathExists(mainSystemPath)) {
-        const content = await fs.readFile(mainSystemPath, 'utf8');
-        const kind = agentName === 'main' ? 'self' : 'inherited';
-        combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
+    if (await fs.pathExists(AGENTS_SYSTEM_PROMPT_PATH)) {
+        const content = await fs.readFile(AGENTS_SYSTEM_PROMPT_PATH, 'utf8');
+        combined += formatMemoryBlock(AGENTS_SYSTEM_PROMPT_PATH, 'framework', 'inherited', content);
+    } else {
+        const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
+        if (await fs.pathExists(mainSystemPath)) {
+            const content = await fs.readFile(mainSystemPath, 'utf8');
+            const kind = agentName === 'main' ? 'self' : 'inherited';
+            combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
+        }
     }
 
     const inheritChain = sessionManager.getAgentInheritanceChain(agentName);
     for (const inheritedAgentName of inheritChain) {
         const kind = inheritedAgentName === agentName ? 'self' : 'inherited';
-        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind);
+        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind, sessionId);
     }
 
     return combined;
@@ -491,19 +615,32 @@ async function appendDefaultMemoryFiles(agentName: string): Promise<string> {
 
 export async function buildSessionSystemPromptSnapshot(options: {
     agentName?: string;
+    sessionId?: string;
     systemPromptFiles?: string[] | string;
 } = {}): Promise<string> {
     const agentName = options.agentName || 'main';
+    const sessionId = options.sessionId;
     const normalizedSystemPromptFiles = normalizeSystemPromptFiles(options.systemPromptFiles);
     const hasCustomMemorySources = options.systemPromptFiles !== undefined;
 
     const memoryBlocks = hasCustomMemorySources
-        ? await appendConfiguredMemoryFiles(agentName, normalizedSystemPromptFiles || [])
-        : await appendDefaultMemoryFiles(agentName);
+        ? await appendConfiguredMemoryFiles(agentName, normalizedSystemPromptFiles || [], sessionId)
+        : await appendDefaultMemoryFiles(agentName, sessionId);
     const skillCatalog = await appendSkillCatalogForAgent(agentName);
-    const agentMemoryDir = getAgentMemoryDir(agentName);
-    const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_memory: ' + agentMemoryDir + '\n- agent_folder: ' + getAgentDir(agentName) + '\n';
-    const archiveInfo = '\n\n--- EARLIER CONTEXT RECALL ---\n- Use `recall({"target":"overview"})` for archived message/block ranges and examples.\n- Prefer `recall({"target":"B#123"})` when the working context contains a `[CTX-BLOCK ... B#123 ...]` reference; drill down one CTX-BLOCK layer at a time.\n- Message targets such as `msg:B#123` or `msg#100-120` are precise/advanced and can return lots of irrelevant content; use them only when you know the needed messages are in that range.\n- If you specifically need lower-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.\n';
+    const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_folder: ' + getAgentDir(agentName) + '\n';
+    const archiveInfo = [
+        '',
+        '',
+        '--- EARLIER CONTEXT RECALL ---',
+        '- Long sessions use layered context: older conversation is archived and may be compacted into CTX-BLOCK summaries to keep the active prompt small.',
+        '- Compaction is system-initiated: Foxwarm forks a temporary compact thread to generate summary blocks, then the main session gets `SYSTEM: Compaction completed` and continues the agent task.',
+        '- Block levels are hierarchical: lower/newer blocks are closer to raw messages; higher/older blocks are coarser summaries. Drill down step by step with `recall`.',
+        '- Use `recall({"target":"overview"})` for archived ranges/examples, and `recall({"target":"B#123"})` for a CTX-BLOCK; use `msg:B#123` or `msg#100-120` only when you need raw detail.',
+        '- Compaction/recall preserves traceable session history; it is not agent memory. Do not write routine process notes, temporary progress, or completed details to memory just to preserve context.',
+        '- Use memory files only for long-lived stable rules, preferences, environment facts, and confirmed design decisions.',
+        '- If you need lower-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.',
+        '',
+    ].join('\n');
     return [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
         .filter(Boolean)
         .join('\n\n');
@@ -541,7 +678,7 @@ function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string
     return trimmed;
 }
 
-async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited'): Promise<string> {
+async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited', sessionId?: string): Promise<string> {
     const agentMemoryDir = getAgentMemoryDir(agentName);
     if (!await fs.pathExists(agentMemoryDir)) {
         return '';
@@ -554,8 +691,10 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
     for (const file of mdFiles) {
         if (file.toLowerCase() === 'onboot.md') continue;
         const filePath = path.join(agentMemoryDir, file);
-        const content = await fs.readFile(filePath, 'utf8');
-        combined += formatMemoryBlock(filePath, agentName, kind, content);
+        const content = await readSessionFilteredMemoryFile(filePath, sessionId);
+        if (content !== null) {
+            combined += formatMemoryBlock(filePath, agentName, kind, content);
+        }
     }
 
     return combined;
@@ -1014,6 +1153,7 @@ export async function chat(
     const agentName = session.agent || 'main';
     const systemPrompt = session.persistentMemorySnapshot || await buildSessionSystemPromptSnapshot({
         agentName,
+        sessionId: session.id,
         systemPromptFiles: session.systemPromptFiles,
     });
 
@@ -1058,10 +1198,14 @@ export async function chat(
 
     // Add assistant message to history
     if (result.allParts && result.allParts.length > 0) {
+        const assistantMeta = {
+            ...(result.modelId ? { modelId: result.modelId } : {}),
+            ...(result.usage ? { usage: result.usage } : {}),
+        };
         const assistantMsg: Message = {
             role: 'model',
             parts: result.allParts,
-            ...(result.usage ? { __meta: { usage: result.usage } } : {}),
+            ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
         };
         await appendMessage(assistantMsg);
     }
@@ -1082,6 +1226,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
     const modelName = modelEntry?.model || '';
+    const modelId = getModelIdForMetadata(modelEntry, modelKey);
     const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
@@ -1222,12 +1367,16 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
 
     const logFiles = await logRequest(data, iteration);
     const responseAttempts: any[] = [];
+    const buildChatResult = (result: Omit<ChatResult, 'modelId'>): ChatResult => ({
+        ...result,
+        modelId,
+    });
     const returnWithLoggedFailure = async (text: string): Promise<ChatResult> => {
         await moveInteractionLogsToErrorDir(logFiles);
-        return {
+        return buildChatResult({
             text,
             allParts: [{ text }],
-        };
+        });
     };
 
     let response: AxiosResponse;
@@ -1418,10 +1567,10 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     } else if (useOpenAIChatCompletionsApi) {
         const choice = resp.choices?.[0];
         if (!choice) {
-            return {
+            return buildChatResult({
                 text: 'Error: No response from OpenAI API',
                 allParts: [{ text: 'Error: No response from OpenAI API' }],
-            };
+            });
         }
 
         const message = choice.message;
@@ -1507,10 +1656,10 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
 
     const toolCalls = allParts.filter(x => x.functionCall).map(x => x.functionCall);
 
-    return {
+    return buildChatResult({
         text: responseText,
         usage,
         toolCalls,
         allParts: allParts.length > 0 ? allParts : undefined,
-    };
+    });
 }

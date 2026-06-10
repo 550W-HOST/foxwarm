@@ -6,8 +6,16 @@ import { WORKSPACE_DIR, getAgentMemoryDir } from '../config';
 import { checkPathAccess } from '../isolatedCheck';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from '../applyPatch';
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
+import {
+    findWriteParentIssue,
+    formatWriteParentIssueMessage,
+    readFileToolPath,
+    writeFileToolPath,
+    type WriteParentIssue,
+} from '../../packages/shared/dist/fileToolCore';
 
 export { expandHomePath, resolveAgentPath };
+export { findWriteParentIssue, formatWriteParentIssueMessage, type WriteParentIssue };
 
 // Tool context type
 export interface ToolContext {
@@ -110,6 +118,26 @@ export function consumePendingWriteRef(ctx: ToolContext, agentName: string, refI
     return ref.content;
 }
 
+export function peekPendingWriteRefContent(ctx: ToolContext, agentName: string, refId: string, fullPath: string): string {
+    prunePendingWriteRefs();
+    const ref = pendingWriteRefs.get(refId);
+    if (!ref) {
+        throw new Error(`Pending write contentRef not found or expired: ${refId}. Re-run write with content, or use a fresh contentRef from the previous write error.`);
+    }
+    if (ref.scopeKey !== getPendingWriteScopeKey(ctx, agentName) || ref.agentName !== agentName) {
+        throw new Error(`Pending write contentRef ${refId} is not available in this session/agent.`);
+    }
+    if (path.resolve(ref.fullPath) !== path.resolve(fullPath)) {
+        throw new Error(`Pending write contentRef ${refId} was created for ${ref.displayPath}; it cannot be used to write a different file.`);
+    }
+
+    return ref.content;
+}
+
+export function deletePendingWriteRef(refId: string): void {
+    pendingWriteRefs.delete(refId);
+}
+
 export function shouldEnforceIsolatedMasterPathAccess(ctx: ToolContext | undefined): boolean {
     return sessionManager.isSessionEffectivelyIsolated(ctx?.session) && (ctx?.runtimeNodeId || 'master') === 'master';
 }
@@ -143,122 +171,17 @@ export function resolveAgentMemoryPath(filePath: string, agentName: string = 'ma
     return resolved;
 }
 
-type DirectoryListingEntry = {
-    name: string;
-    type: 'file' | 'directory' | 'symlink' | 'other';
-    size?: number;
-    modifiedAt: string;
-};
-
-function normalizeDirectoryListingStartEnd(startLine: number | undefined, endLine: number | undefined, totalItems: number): { startItem: number; endItem: number } {
-    const startItem = startLine !== undefined && Number.isFinite(Number(startLine))
-        ? Math.max(1, Math.floor(Number(startLine)))
-        : 1;
-    const endItem = endLine !== undefined && Number.isFinite(Number(endLine))
-        ? Math.max(0, Math.floor(Number(endLine)))
-        : Math.min(totalItems, startItem + 49);
-    return { startItem, endItem };
-}
-
-function formatDirectoryListingLine(entry: DirectoryListingEntry, itemNumber: number): string {
-    const name = entry.type === 'directory' ? `${entry.name}/` : entry.name;
-    const sizeLabel = entry.type === 'file' && typeof entry.size === 'number' ? `, ${entry.size} B` : '';
-    const typeLabel = entry.type === 'directory' ? 'dir' : entry.type;
-    return `${itemNumber}. \`${name}\` (${typeLabel}${sizeLabel}) - ${entry.modifiedAt}`;
-}
-
-async function readDirectoryListing(fullPath: string, displayPath: string, startLine?: number, endLine?: number): Promise<string> {
-    const dirents = await fs.readdir(fullPath, { withFileTypes: true });
-    dirents.sort((a, b) => a.name.localeCompare(b.name));
-
-    const entries: DirectoryListingEntry[] = [];
-    for (const dirent of dirents) {
-        const entryPath = path.join(fullPath, dirent.name);
-        const entryStats = await fs.lstat(entryPath);
-        entries.push({
-            name: dirent.name,
-            type: dirent.isDirectory() ? 'directory' : (dirent.isFile() ? 'file' : (dirent.isSymbolicLink() ? 'symlink' : 'other')),
-            size: dirent.isFile() ? entryStats.size : undefined,
-            modifiedAt: entryStats.mtime.toISOString(),
-        });
-    }
-
-    const totalItems = entries.length;
-    const { startItem, endItem } = normalizeDirectoryListingStartEnd(startLine, endLine, totalItems);
-    const pageEntries = startItem <= endItem
-        ? entries.slice(Math.max(0, startItem - 1), Math.min(totalItems, endItem))
-        : [];
-
-    const lines: string[] = [
-        `Directory listing for \`${displayPath}\``,
-        '',
-    ];
-
-    if (pageEntries.length === 0) {
-        lines.push(totalItems === 0 ? '(empty directory)' : '(no items in requested range)');
-    } else {
-        lines.push(...pageEntries.map((entry, index) => formatDirectoryListingLine(entry, startItem + index)));
-    }
-
-    lines.push('');
-    const shownStart = pageEntries.length > 0 ? startItem : 0;
-    const shownEnd = pageEntries.length > 0 ? startItem + pageEntries.length - 1 : 0;
-    const footer = [`Showing items ${shownStart}-${shownEnd} of ${totalItems}.`];
-    const nextStart = startItem + pageEntries.length;
-    if (nextStart <= totalItems) {
-        const nextEnd = Math.min(totalItems, nextStart + 49);
-        footer.push(`Next page: read({ filePath: ${JSON.stringify(displayPath)}, startLine: ${nextStart}, endLine: ${nextEnd} })`);
-    }
-    lines.push(footer.join(' '));
-
-    return lines.join('\n');
-}
-
 export async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number) {
-    const stats = await fs.stat(fullPath);
-    if (stats.isDirectory()) {
-        return readDirectoryListing(fullPath, displayPath, startLine, endLine);
-    }
-
-    const ext = path.extname(fullPath).toLowerCase();
-    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
-
-    if (imageExts.includes(ext)) {
-        const buffer = await fs.readFile(fullPath);
-        const base64 = buffer.toString('base64');
-        const mimeType = ext === '.png' ? 'image/png' :
-                        ext === '.gif' ? 'image/gif' :
-                        ext === '.webp' ? 'image/webp' :
-                        ext === '.bmp' ? 'image/bmp' : 'image/jpeg';
-
-        return {
-            output: `[Image loaded: ${displayPath}]`,
-            mimeType,
-            sizeBytes: buffer.length,
-            inlineData: { data: base64, mimeType }
-        };
-    }
-
-    let content = await fs.readFile(fullPath, 'utf8');
-
-    if (startLine !== undefined || endLine !== undefined) {
-        const lines = content.split('\n');
-        const start = startLine !== undefined ? Math.max(0, startLine - 1) : 0;
-        const end = endLine !== undefined ? Math.min(lines.length, endLine) : lines.length;
-        content = lines.slice(start, end).join('\n');
-    }
-
-    return content;
+    return readFileToolPath(fullPath, displayPath, startLine, endLine);
 }
 
-export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string) {
-    const exists = await fs.pathExists(fullPath);
-    if (exists && !overwrite) {
-        throw new Error(existsMessage);
-    }
-
-    await fs.ensureDir(path.dirname(fullPath));
-    await fs.writeFile(fullPath, content);
+export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string | (() => string), options?: { createDirs?: boolean; parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined }) {
+    await writeFileToolPath(fullPath, content, {
+        overwrite,
+        existsMessage,
+        createDirs: options?.createDirs,
+        parentIssueRetryHint: options?.parentIssueRetryHint,
+    });
 }
 
 export function escapeRegExp(text: string): string {

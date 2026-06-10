@@ -1,9 +1,9 @@
 ---
-name: agent_management
+name: agent-management
 description: "Use for Foxwarm agent management tasks: creating agents, editing agent memory, refreshing snapshots, understanding agent vs session boundaries, changing isolation/inheritance, and safely migrating or cleaning up agents."
 ---
 
-# agent_management
+# agent-management
 
 Use this skill when the task is about **agent lifecycle / maintenance**, not just one session.
 
@@ -392,7 +392,7 @@ Covered path:
 
 - agent-level isolation
 - tool path vs user command path
-- handoff to `node_setup` for node-side details
+- handoff to `node-setup` for node-side details
 
 ### Scenario E: "Can I delete the old agent now?"
 
@@ -414,7 +414,7 @@ Before telling the user to delete an old agent:
 
 ## Related skill
 
-Use **`node_setup`** when the task is primarily about:
+Use **`node-setup`** when the task is primarily about:
 
 - node bootstrap
 - pairing / approval

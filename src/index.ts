@@ -3,7 +3,7 @@ import { TelegramChannel } from './channels/telegramChannel';
 import { MatrixChannel } from './channels/matrixChannel';
 import { WebUIChannel } from './channels/webuiChannel';
 import { TUIChannel } from './channels/tuiChannel';
-import { WeWorkWebhookChannel } from './channels/weworkChannel';
+import { isWeWorkChannelConfigReady, WeWorkWebhookChannel } from './channels/weworkChannel';
 import { initializeChannelRuntime, startManagedChannel } from './channelRuntime';
 import { MessageRouter } from './messageRouter';
 import { CommandHandler } from './commandHandler';
@@ -15,6 +15,8 @@ import crypto from 'crypto';
 import path from 'path';
 import {
     AGENTS_DIR,
+    AGENTS_SYSTEM_PROMPT_PATH,
+    AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH,
     BOT_NAME,
     BASE_DIR,
     DATA_ROOT_DIR,
@@ -120,6 +122,7 @@ async function ensureNodeToken(): Promise<string> {
 
 async function start() {
     const templatesDir = path.join(BASE_DIR, 'templates', 'main', 'memory');
+    const legacyMainSystemPromptPath = path.join(MAIN_AGENT_MEMORY_DIR, '00_SYSTEM.md');
 
     if (DATA_ROOT_DIR !== BASE_DIR) {
         logger.info(`Using experimental external data root: ${DATA_ROOT_DIR}`);
@@ -127,6 +130,19 @@ async function start() {
 
     // Ensure agents directory exists
     await fs.ensureDir(AGENTS_DIR);
+
+    // Initialize the framework-level system prompt for fresh installs. Existing
+    // legacy installs may still carry agents/main/memory/00_SYSTEM.md; keep that
+    // as the runtime fallback instead of silently creating a competing root file.
+    if (!await fs.pathExists(AGENTS_SYSTEM_PROMPT_PATH)) {
+        if (await fs.pathExists(legacyMainSystemPromptPath)) {
+            logger.info('Legacy main agent 00_SYSTEM.md found; using it as framework prompt fallback until migrated to agents/00_SYSTEM.md');
+        } else if (await fs.pathExists(AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH)) {
+            logger.info('Framework system prompt not found, copying from template...');
+            await fs.copy(AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH, AGENTS_SYSTEM_PROMPT_PATH, { overwrite: false });
+            logger.info('Framework system prompt initialized from template');
+        }
+    }
 
 
     // Initialize main agent memory from templates if needed
@@ -285,7 +301,7 @@ async function start() {
     const defaultTelegramEntry = getDefaultChannelConfigByType<TelegramConfig>('telegram');
     const telegramChannelPromise: Promise<TelegramChannel | null> = (defaultTelegramEntry?.config?.enabled !== false && defaultTelegramEntry?.config?.botToken)
         ? startWithRetry(`telegram:${defaultTelegramEntry.id}`, async () => {
-            const channel = new TelegramChannel(defaultTelegramEntry.config.botToken!, defaultTelegramEntry.id);
+            const channel = new TelegramChannel(defaultTelegramEntry.config, defaultTelegramEntry.id);
             channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
             channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
             await channel.start();
@@ -306,7 +322,7 @@ async function start() {
             if (defaultTelegramEntry?.id === entry.id) continue;
             if (config.enabled === false || !config.botToken) continue;
             void startWithRetry(`telegram:${entry.id}`, async () => {
-                const channel = new TelegramChannel(config.botToken, entry.id);
+                const channel = new TelegramChannel(config, entry.id);
                 channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
                 channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
                 await channel.start();
@@ -323,7 +339,7 @@ async function start() {
         if (entry.type === 'matrix') {
             if (config.enabled === false || !config.homeserver || !config.accessToken || !config.botUserId) continue;
             void startWithRetry(`matrix:${entry.id}`, async () => {
-                const matrixChannel = new MatrixChannel(config.homeserver, config.accessToken, config.botUserId, entry.id);
+                const matrixChannel = new MatrixChannel(config, entry.id);
                 matrixChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
                 await matrixChannel.start();
                 registerChannel(entry.id, matrixChannel);
@@ -335,16 +351,9 @@ async function start() {
         }
 
         if (entry.type === 'wework') {
-            if (config.enabled === false || !config.webhookUrl) continue;
+            if (config.enabled === false || !isWeWorkChannelConfigReady(config)) continue;
             void startWithRetry(`wework:${entry.id}`, async () => {
-                const weworkChannel = new WeWorkWebhookChannel({
-                    name: entry.id,
-                    webhookUrl: config.webhookUrl,
-                    token: config.token,
-                    encodingAESKey: config.encodingAESKey,
-                    listenPort: config.listenPort,
-                    listenPath: config.listenPath
-                });
+                const weworkChannel = new WeWorkWebhookChannel(config, entry.id);
                 weworkChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
                 await weworkChannel.start();
                 registerChannel(entry.id, weworkChannel);

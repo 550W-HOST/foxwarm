@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
-import { tool_set_goal, tool_wait } from '../toolsSessionAgent';
+import { tool_send_to_session, tool_set_goal, tool_wait } from '../toolsSessionAgent';
 import type { Session } from '../types';
 
 function makeSessionId(prefix: string): string {
@@ -32,6 +32,33 @@ test('wait returns concise output without echoing reason text', async () => {
   const result = await tool_wait({ reason: 'because the handoff is complete' });
   assert.equal(result.output, 'ok');
   assert.deepEqual(result.__toolLoopControl, { stopCurrentTurn: true });
+});
+
+test('send_to_session rejects self-sends', async () => {
+  await sessionManager.loadSessions();
+  const sessionId = makeSessionId('tool_result_send_self');
+  const session = await ensureSession(sessionId);
+  try {
+    await assert.rejects(
+      () => tool_send_to_session({ sessionId, message: 'loopback' }, { sessionId, session }),
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        assert.match(message, /send_to_session target resolves to this same session/i);
+        assert.match(message, new RegExp(`current_session_id=\`${sessionId}\``));
+        assert.match(message, new RegExp(`requested_session_id=\`${sessionId}\``));
+        assert.match(message, new RegExp(`resolved_session_id=\`${sessionId}\``));
+        assert.match(message, /generate ordinary assistant text instead/i);
+        return true;
+      },
+    );
+    assert.equal(session.queue.length, 0);
+  } finally {
+    try {
+      await sessionManager.deleteSession(sessionId);
+    } catch {
+      // ignore cleanup failures in test
+    }
+  }
 });
 
 test('set_goal returns concise output without echoing goal content or remindEvery', async () => {

@@ -9,6 +9,7 @@ import { MessageRouter } from './messageRouter';
 import * as sessionManager from './sessionManager';
 import * as managedSessions from './managedSessions';
 import * as tools from './tools';
+import * as mcpClient from './mcpClient';
 import { getAgentDir } from './config';
 import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, getToolScriptRunForTests, resetToolScriptRunsForTests } from './toolscript';
 import type { Session } from './types';
@@ -287,6 +288,34 @@ test('run_script passes unified MCP and node call_tool descriptors through to to
   }
 });
 
+test('run_script receives parsed MCP JSON text results through unified call_tool', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_mcp_json');
+  const session = await sessionManager.getSession(sessionId);
+  const originalCallTool = mcpClient.callTool;
+
+  (mcpClient as any).callTool = async () => mcpClient.normalizeMcpToolResult({
+    content: [{ type: 'text', text: '{"ok":true,"items":[{"name":"foxwarm"}]}' }],
+  });
+
+  try {
+    const result = await tool_run_script({
+      code: asMain('return call_tool({"source": "mcp", "server": "github", "name": "search_repos", "args": {"query": "foxwarm"}})'),
+    }, { sessionId, session });
+
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.executedTools, ['search_repos']);
+    assert.deepEqual(result.result, {
+      ok: true,
+      items: [{ name: 'foxwarm' }],
+    });
+  } finally {
+    (mcpClient as any).callTool = originalCallTool;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
 test('run_script keeps shorthand call_tool string form for backward compatibility', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_exec_shorthand');
@@ -345,13 +374,17 @@ test('run_script pauses at ask_agent and continue_script resumes from persisted 
 
     assert.equal(completed.status, 'completed');
     assert.equal(completed.result, 'Continue');
-    assert.equal(completed.stdout, 'before\nContinue\n');
+    assert.equal(completed.stdout, 'Continue\n');
     assert.deepEqual(completed.executedTools, []);
 
     const finalRecord = await getToolScriptRunForTests(paused.runId);
     assert.equal(finalRecord?.status, 'completed');
     assert.equal(finalRecord?.snapshotBase64, undefined);
+    assert.equal(finalRecord?.stdout, 'before\nContinue\n');
     assert.equal(finalRecord?.lastResult, 'Continue');
+
+    const fetched = await tool_get_toolscript_run({ runId: paused.runId }, { sessionId, session });
+    assert.equal(fetched.stdout, 'before\nContinue\n');
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -392,8 +425,11 @@ test('run_script pauses on timeout checkpoints and continue_script can resume ex
 
     assert.equal(completed.status, 'completed');
     assert.deepEqual(completed.result, { ok: true });
-    assert.equal(completed.stdout, 'before timeout\nafter timeout\n');
+    assert.equal(completed.stdout, 'after timeout\n');
     assert.deepEqual(completed.executedTools, ['exec']);
+
+    const fetched = await tool_get_toolscript_run({ runId: paused.runId }, { sessionId, session });
+    assert.equal(fetched.stdout, 'before timeout\nafter timeout\n');
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);

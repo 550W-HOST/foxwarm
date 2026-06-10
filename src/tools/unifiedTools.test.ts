@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as mcpClient from '../mcpClient';
 import { nodesManager } from '../nodes/manager';
 import {
+  call_mcp,
   call_tool,
   definitions,
   mcp_config,
@@ -333,6 +334,51 @@ test('call_tool requires an MCP server when not using an MCP toolId', async () =
     } as any),
     /requires server/i,
   );
+});
+
+test('call_tool passes parsed MCP JSON text results through as structured values', async () => {
+  const originalCallTool = mcpClient.callTool;
+
+  try {
+    (mcpClient as any).callTool = async () => mcpClient.normalizeMcpToolResult({
+      content: [{ type: 'text', text: '{"ok":true,"items":[{"name":"foxwarm"}]}' }],
+    });
+
+    const callResult = await call_tool({
+      toolId: 'mcp:github/search_repos',
+      args: { query: 'foxwarm' },
+    }, {
+      sessionId: 'main',
+      session: { agent: 'main' },
+    } as any);
+
+    assert.deepEqual(callResult, {
+      ok: true,
+      items: [{ name: 'foxwarm' }],
+    });
+  } finally {
+    (mcpClient as any).callTool = originalCallTool;
+  }
+});
+
+test('legacy call_mcp wrapper returns normalized MCP values without re-stringifying', async () => {
+  const originalCallTool = mcpClient.callTool;
+
+  try {
+    (mcpClient as any).callTool = async () => mcpClient.normalizeMcpToolResult({
+      content: [{ type: 'text', text: '[{"name":"foxwarm"}]' }],
+    });
+
+    const result = await call_mcp({
+      server: 'github',
+      tool: 'search_repos',
+      args: { query: 'foxwarm' },
+    });
+
+    assert.deepEqual(result, [{ name: 'foxwarm' }]);
+  } finally {
+    (mcpClient as any).callTool = originalCallTool;
+  }
 });
 
 test('search_tools and call_tool cover remote node tools', async () => {

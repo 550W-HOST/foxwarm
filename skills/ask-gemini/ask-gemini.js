@@ -66,7 +66,7 @@ function buildMissingKeyGuidance() {
   return [
     'Gemini API key is not configured yet.',
     '',
-    'To enable the bundled ask_gemini skill, configure one of these options:',
+    'To enable the bundled ask-gemini skill, configure one of these options:',
     '',
     '1. Environment variable',
     '   export GEMINI_API_KEY="YOUR_GEMINI_API_KEY"',
@@ -83,7 +83,7 @@ function buildMissingKeyGuidance() {
     '   export GEMINI_MODEL="gemini-2.5-flash"',
     '',
     'Then retry:',
-    '   node skills/ask_gemini/ask-gemini.js "What\'s the latest TypeScript stable version?"',
+    '   node skills/ask-gemini/ask-gemini.js "What\'s the latest TypeScript stable version?"',
   ].join('\n');
 }
 
@@ -92,9 +92,9 @@ function printUsage() {
     'Usage: ask-gemini.js [--check-config] <question>',
     '',
     'Examples:',
-    '  node skills/ask_gemini/ask-gemini.js "Summarize this week\'s major AI model releases"',
-    '  echo "What\'s new in Node.js 24?" | node skills/ask_gemini/ask-gemini.js',
-    '  node skills/ask_gemini/ask-gemini.js --check-config',
+    '  node skills/ask-gemini/ask-gemini.js "Summarize this week\'s major AI model releases"',
+    '  echo "What\'s new in Node.js 24?" | node skills/ask-gemini/ask-gemini.js',
+    '  node skills/ask-gemini/ask-gemini.js --check-config',
   ].join('\n'));
 }
 
@@ -150,7 +150,7 @@ async function main() {
       process.exit(2);
     }
 
-    console.log(`ask_gemini is configured (${apiKeySource || 'configured'}).`);
+    console.log(`ask-gemini is configured (${apiKeySource || 'configured'}).`);
     process.exit(0);
   }
 
@@ -225,7 +225,7 @@ async function main() {
         `Gemini API ${status}: ${message}`,
         '',
         'Check that your Gemini API key is valid and has access to the Gemini API.',
-        'If this is your first time using ask_gemini on this machine, configure a key with one of these:',
+        'If this is your first time using ask-gemini on this machine, configure a key with one of these:',
         '  export GEMINI_API_KEY="YOUR_GEMINI_API_KEY"',
         '  export GOOGLE_API_KEY="YOUR_GEMINI_API_KEY"',
         '  printf \'%s\\n\' "YOUR_GEMINI_API_KEY" > ~/.secrets/gemini_api_key',

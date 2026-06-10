@@ -1,5 +1,5 @@
 ---
-name: subagent_explorer
+name: subagent-explorer
 description: "Use for focused read-only codebase investigation, side questions, and parallel research. Do not load this inside a child that has already been assigned an explorer task."
 ---
 
@@ -75,7 +75,7 @@ Scope:
 
 Rules:
 - Read-only investigation. Do not edit files, change git state, restart services, install packages, or modify configuration.
-- Do not load the `subagent_explorer` skill; the assignment already contains what you need.
+- Do not load the `subagent-explorer` skill; the assignment already contains what you need.
 - Do not create child sessions.
 - Use tools to inspect code/tests/logs as needed, but keep the investigation focused.
 Report back with `send_to_session({ sessionId: "<PARENT_SESSION_ID>", message: "..." })`.

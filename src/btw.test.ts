@@ -96,11 +96,13 @@ test('/btw command acks immediately and writes async result as display-only hist
   const toolNamesBefore = tools.modelFacingDefinitions.map(def => def.name);
   let tempHistoryAtCall: Message[] = [];
   let requestPartsAtCall: MessagePart[] | null = null;
+  let tempPromptCacheKeyAtCall: string | undefined;
 
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
 
   try {
     const session = await createTestSession(sessionId);
+    const sourcePromptCacheKey = session.promptCacheKey;
     const originalFirstMessage = structuredClone(session.history[0]);
     const broadcasts: string[] = [];
     session.broadcast = (text: string) => { broadcasts.push(String(text)); };
@@ -108,10 +110,11 @@ test('/btw command acks immediately and writes async result as display-only hist
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void> }) => {
       requestPartsAtCall = structuredClone(parts);
       tempHistoryAtCall = structuredClone(activeSession.history);
+      tempPromptCacheKeyAtCall = activeSession.promptCacheKey;
       chatStarted.resolve();
       await chatGate.promise;
       await appendTempConversation(activeSession, parts, 'btw text answer', options);
-      return { text: 'btw text answer', allParts: [{ text: 'btw text answer' }] };
+      return { text: 'btw text answer', modelId: 'anthropic/claude-sonnet-4-5', allParts: [{ text: 'btw text answer' }] };
     };
 
     const replies: string[] = [];
@@ -130,6 +133,7 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.deepEqual(during.history[0], originalFirstMessage);
     assert.equal(tempHistoryAtCall.length, 1);
     assert.deepEqual(tempHistoryAtCall[0], originalFirstMessage);
+    assert.equal(tempPromptCacheKeyAtCall, sourcePromptCacheKey);
     assert.ok(requestPartsAtCall?.some(part => typeof part.system === 'string' && part.system.includes('Do not call tools in BTW mode')));
     assert.ok(requestPartsAtCall?.some(part => part.text === 'side question'));
 
@@ -145,12 +149,14 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.equal(after.history[1].role, 'model');
     assert.equal(after.history[1].modelVisible, false);
     assert.equal(after.history[1].__meta?.noticeType, 'btw');
+    assert.equal(after.history[1].__meta?.modelId, 'anthropic/claude-sonnet-4-5');
     assert.match(after.history[1].parts[0].text || '', /\[BTW result\]/);
     assert.match(after.history[1].parts[0].text || '', /btw text answer/);
     assert.equal(broadcasts.length, 1);
     assert.match(broadcasts[0], /\[BTW result\]/);
     assert.match(broadcasts[0], /btw text answer/);
     assert.equal(after.history.some(message => message.role === 'user' && message.parts.some(part => part.text === 'side question')), false);
+    assert.equal(after.promptCacheKey, sourcePromptCacheKey);
     assert.match(formatSessionMessagesPreview(sessionId, after.history, 0, after.history.length), /model \[display-only\]:/);
 
     const toolPreview = await toolsSessionAgent.tool_get_session_messages({ sessionId }, { sessionId, session: after } as any);
@@ -297,6 +303,7 @@ test('manual compact drops display-only messages outside the force-kept range an
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   const sessionId = makeId('btw_compact_display_only');
   let compactPrompt = '';
+  let compactPromptCacheKeyAtCall: string | undefined;
 
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
 
@@ -315,6 +322,9 @@ test('manual compact drops display-only messages outside the force-kept range an
       currentNode: 'master',
     });
     const session = await sessionManager.getSession(sessionId);
+    session.promptCacheKey = 'cccccccc-dddd-eeee-ffff-000000000000';
+    await sessionManager.saveSession(sessionId);
+    const originalPromptCacheKey = session.promptCacheKey;
     await sessionManager.appendSessionMessage(session, createDisplayOnlyModelMessage('display only secret before compact range', { noticeType: 'test' }));
     await sessionManager.appendSessionMessage(session, {
       role: 'user',
@@ -327,8 +337,9 @@ test('manual compact drops display-only messages outside the force-kept range an
     });
     await sessionManager.appendSessionMessage(session, createDisplayOnlyModelMessage('display only secret after compact range', { noticeType: 'test' }));
 
-    (llm as any).chat = async (parts: MessagePart[] | null) => {
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
       compactPrompt = parts?.map(part => part.system || part.text || '').join('\n') || '';
+      compactPromptCacheKeyAtCall = activeSession.promptCacheKey;
       const toolCall = {
         id: 'compact_plan_1',
         name: 'submit_compact_plan',
@@ -352,6 +363,7 @@ test('manual compact drops display-only messages outside the force-kept range an
 
     const compacted = await sessionManager.getSession(sessionId);
     const rendered = JSON.stringify(compacted.history);
+    assert.equal(compactPromptCacheKeyAtCall, originalPromptCacheKey);
     assert.doesNotMatch(compactPrompt, /display only secret before compact range/);
     assert.doesNotMatch(compactPrompt, /display only secret inside compact range/);
     assert.doesNotMatch(compactPrompt, /display only secret after compact range/);
@@ -360,6 +372,8 @@ test('manual compact drops display-only messages outside the force-kept range an
     assert.doesNotMatch(rendered, /display only secret/);
     assert.match(rendered, /summary of visible before and visible after/);
     assert.equal(compacted.history.some(message => message.modelVisible === false), false);
+    assert.match(compacted.promptCacheKey || '', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.notEqual(compacted.promptCacheKey, originalPromptCacheKey);
   } finally {
     (llm as any).chat = originalChat;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;

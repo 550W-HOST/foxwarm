@@ -13,7 +13,7 @@ import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalEndTurnReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
-import { Message, MessagePart, QueueItem, QueueSource, Session } from './types';
+import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
 
 function formatCurrentTimeForPrompt(date: Date): string {
@@ -119,6 +119,89 @@ export class MessageRouter {
       conversationId: getConversationId(ctx),
       username: ctx.username,
       senderId: ctx.senderId,
+      weworkStreamId: ctx.weworkStreamId,
+    };
+  }
+
+  private getSourceStreamKey(source?: QueueSource): string | undefined {
+    if (!source?.weworkStreamId) {
+      return undefined;
+    }
+    return `${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.weworkStreamId}`;
+  }
+
+  private getTurnChannelOptions(sourceCtx?: ChannelContext, source?: QueueSource): Record<string, any> {
+    const streamId = sourceCtx?.weworkStreamId || source?.weworkStreamId;
+    if (!streamId) {
+      return {};
+    }
+    const channelId = sourceCtx ? getChannelId(sourceCtx) : (source?.channelId || source?.platform);
+    const conversationId = sourceCtx ? getConversationId(sourceCtx) : (source?.conversationId || source?.channelUserId);
+    if (!channelId || !conversationId) {
+      return { weworkStreamId: streamId };
+    }
+    return {
+      weworkStreamId: streamId,
+      weworkStreamChannelId: channelId,
+      weworkStreamConversationId: conversationId,
+    };
+  }
+
+  private mergeTurnOptions(turnOptions: Record<string, any>, options?: any): any {
+    return Object.keys(turnOptions).length > 0
+      ? { ...turnOptions, ...(options || {}) }
+      : options;
+  }
+
+  private getTurnTargetChannel(turnOptions: Record<string, any>): { channelId: string; conversationId: string } | undefined {
+    if (!turnOptions.weworkStreamChannelId || !turnOptions.weworkStreamConversationId) {
+      return undefined;
+    }
+    return {
+      channelId: turnOptions.weworkStreamChannelId,
+      conversationId: turnOptions.weworkStreamConversationId,
+    };
+  }
+
+  private emitTurnProgress(
+    broadcast: Session['broadcast'] | undefined,
+    turnOptions: Record<string, any>,
+    progress: ChannelTurnProgress,
+  ): void {
+    if (!broadcast || !turnOptions.weworkStreamId) {
+      return;
+    }
+    broadcast('', {
+      allowEmptyBroadcast: true,
+      channelTurnProgress: progress,
+      ...(this.getTurnTargetChannel(turnOptions) ? { targetChannel: this.getTurnTargetChannel(turnOptions) } : {}),
+    });
+  }
+
+  private getTurnToolCalls(toolCalls: FunctionCall[], iteration: number): FunctionCall[] {
+    return toolCalls.map((call, index) => ({
+      ...call,
+      id: call.id || `tool_${iteration}_${index}`,
+    }));
+  }
+
+  private getToolResultProgress(toolResultMsg: Message): ChannelTurnToolResult[] {
+    return toolResultMsg.parts
+      .filter(part => part.functionResponse?.tool_use_id)
+      .map(part => ({
+        id: part.functionResponse!.tool_use_id,
+        name: part.functionResponse!.name || 'tool',
+        status: part.functionResponse!.response?.error !== undefined && part.functionResponse!.response?.error !== null ? 'error' : 'success',
+      }));
+  }
+
+  private buildToolBroadcast(broadcast: Session['broadcast'] | undefined, turnOptions: Record<string, any>): Session['broadcast'] | undefined {
+    if (!broadcast || !turnOptions.weworkStreamChannelId) {
+      return broadcast;
+    }
+    return (text: string, options?: any) => {
+      const excludePlatforms = Array.from(new Set([...(options?.excludePlatforms || []), turnOptions.weworkStreamChannelId]));
+      broadcast(text, { ...(options || {}), excludePlatforms });
     };
   }
 
@@ -146,8 +229,17 @@ export class MessageRouter {
     return preparedParts;
   }
 
-  private prepareTurnParts(session: Session, sessionId: string, parts: MessagePart[], source?: QueueSource): MessagePart[] {
-    const finalParts = this.prepareUserParts(parts, source);
+  private buildChannelUserQueueItem(ctx: ChannelContext, message: ChannelMessage): QueueItem {
+    const source = this.snapshotSource(ctx);
+    return {
+      type: 'user',
+      source,
+      parts: this.prepareUserParts(message.parts, source),
+    };
+  }
+
+  private prepareTurnParts(session: Session, sessionId: string, parts: MessagePart[]): MessagePart[] {
+    const finalParts = [...parts];
 
     const now = Date.now();
     const timeSinceLastMessage = now - (session.meta.lastMessageTime || now);
@@ -164,30 +256,37 @@ export class MessageRouter {
     return finalParts;
   }
 
-  private drainLeadingQueuedMessageParts(session: Session): MessagePart[] {
+  private drainLeadingQueuedMessageParts(session: Session): { parts: MessagePart[]; broadcastSource?: QueueSource } {
     const queuedParts: MessagePart[] = [];
+    let broadcastSource: QueueSource | undefined;
+    let streamKey: string | undefined;
 
     while (session.queue[0]
       && session.queue[0].type !== 'compact'
       && session.queue[0].type !== 'compact-commit'
       && !session.queue[0].message) {
+      const nextStreamKey = this.getSourceStreamKey(session.queue[0].source);
+      if (queuedParts.length > 0 && streamKey !== nextStreamKey) {
+        break;
+      }
       const item = session.queue.shift();
       if (!item?.parts) continue;
 
-      if (item.source) {
-        queuedParts.push(...this.prepareUserParts(item.parts, item.source));
-        continue;
+      if (!broadcastSource && item.source) {
+        broadcastSource = item.source;
+        streamKey = nextStreamKey;
       }
 
       queuedParts.push(...item.parts);
     }
 
-    return queuedParts;
+    return { parts: queuedParts, broadcastSource };
   }
 
   private async consumeLeadingQueuedTurnInputs(
     session: Session,
     pendingParts: MessagePart[] | null,
+    turnStreamKey?: string,
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
     let mergedParts = pendingParts;
     let consumedInput = false;
@@ -195,6 +294,14 @@ export class MessageRouter {
     while (session.queue[0]
       && session.queue[0].type !== 'compact'
       && session.queue[0].type !== 'compact-commit') {
+      const queuedStreamKey = this.getSourceStreamKey(session.queue[0].source);
+      // A different WeWork stream id already has its own passive card. Leave it
+      // queued so the next turn's broadcasts update/finish that card instead
+      // of merging its text into the current stream card.
+      if (queuedStreamKey && queuedStreamKey !== turnStreamKey) {
+        break;
+      }
+
       const item = session.queue.shift();
       if (!item) {
         continue;
@@ -216,13 +323,9 @@ export class MessageRouter {
       }
 
       consumedInput = true;
-      const preparedParts = item.source
-        ? this.prepareUserParts(item.parts, item.source)
-        : [...item.parts];
-
       mergedParts = mergedParts?.length
-        ? [...mergedParts, ...preparedParts]
-        : preparedParts;
+        ? [...mergedParts, ...item.parts]
+        : [...item.parts];
     }
 
     return {
@@ -277,15 +380,16 @@ export class MessageRouter {
       return true;
     }
 
-    const queuedParts = this.drainLeadingQueuedMessageParts(session);
-    if (queuedParts.length === 0) {
+    const queuedTurn = this.drainLeadingQueuedMessageParts(session);
+    if (queuedTurn.parts.length === 0) {
       return false;
     }
 
     await this.runSessionTurn(session.id, {
-      parts: queuedParts,
+      parts: queuedTurn.parts,
       session,
       preclaimed: true,
+      source: queuedTurn.broadcastSource,
     });
     return true;
   }
@@ -449,14 +553,16 @@ export class MessageRouter {
     await sessionManager.appendSessionMessage(session, reminder);
   }
 
-  private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean): Promise<void> {
+  private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean, turnOptions?: Record<string, any>): Promise<boolean> {
     if (!alreadyBroadcasted && shouldBroadcastChannelText(response)) {
-      await this.sendSessionReply(session, sourceCtx, response, { excludePlatforms: ['webui'] });
+      await this.sendSessionReply(session, sourceCtx, response, this.mergeTurnOptions(turnOptions || {}, { excludePlatforms: ['webui'], turnFinal: true }));
+      return true;
     }
+    return false;
   }
 
-  private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any): Promise<void> {
-    await this.sendSessionReply(session, sourceCtx, `Error: ${error?.message || 'Unknown error'}`);
+  private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any, turnOptions?: Record<string, any>): Promise<void> {
+    await this.sendSessionReply(session, sourceCtx, `Error: ${error?.message || 'Unknown error'}`, this.mergeTurnOptions(turnOptions || {}, { turnFinal: true }));
   }
 
   private async maybeCreateGuestSessionForUnauthorizedMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session } | null> {
@@ -534,8 +640,9 @@ export class MessageRouter {
       return false;
     }
 
+    const normalizedMessageText = this.stripConfiguredSelfMention(ctx, messageText);
     const mentionCommandRegex = /^(?:@[a-zA-Z_\-.]+\s+)?(\/[a-zA-Z_\-.]+)(?:\s+(.*))?$/s;
-    const commandMatch = messageText.match(mentionCommandRegex);
+    const commandMatch = normalizedMessageText.match(mentionCommandRegex);
     if (!commandMatch) return false;
 
     const command = commandMatch[1];
@@ -544,14 +651,32 @@ export class MessageRouter {
     try {
       const handled = await this.commandHandler(ctx, command, args);
       if (!handled) {
-        await ctx.reply(`Unknown command: ${command}`);
+        await ctx.reply(`Unknown command: ${command}`, { turnFinal: true });
       }
     } catch (e: any) {
-      await ctx.reply(`Command error: ${e.message}`);
+      await ctx.reply(`Command error: ${e.message}`, { turnFinal: true });
       logger.error({ err: e }, 'Command error');
     }
 
     return true;
+  }
+
+  private stripConfiguredSelfMention(ctx: ChannelContext, messageText: string): string {
+    const selfName = typeof ctx.selfName === 'string' ? ctx.selfName.trim() : '';
+    if (!selfName) {
+      return messageText;
+    }
+
+    const mentionPrefix = `@${selfName}`;
+    if (!messageText.startsWith(mentionPrefix)) {
+      return messageText;
+    }
+
+    const rest = messageText.slice(mentionPrefix.length);
+    if (!/^\s+/.test(rest)) {
+      return messageText;
+    }
+    return rest.replace(/^\s+/, '');
   }
 
   private async resolveSessionForIncomingMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session }> {
@@ -586,7 +711,11 @@ export class MessageRouter {
 
     await maybeRefreshStaleSessionSnapshot(session, sessionManager.refreshSessionSnapshot);
 
-    const broadcast = session.broadcast;
+    const turnChannelOptions = this.getTurnChannelOptions(options.sourceCtx, options.source);
+    const turnStreamKey = this.getSourceStreamKey(options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined));
+    const broadcast = session.broadcast
+      ? (text: string, broadcastOptions?: any) => session.broadcast!(text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
+      : undefined;
 
     logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.message?.parts?.length ?? options.parts?.length ?? 0 }, 'Session turn processing');
 
@@ -600,8 +729,7 @@ export class MessageRouter {
         : this.prepareTurnParts(
           session,
           sessionId,
-          options.parts || [],
-          options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined)
+          options.parts || []
         );
       if (options.message) {
         await sessionManager.appendSessionMessage(session, options.message);
@@ -620,7 +748,7 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts);
+        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnStreamKey);
         parts = queuedBeforeLlm.parts;
 
         if (session.stopping) {
@@ -634,6 +762,8 @@ export class MessageRouter {
             : '_[Execution stopped by user]_';
           break;
         }
+
+        this.emitTurnProgress(broadcast, turnChannelOptions, { type: 'llm-start' });
 
         let result;
         try {
@@ -665,19 +795,36 @@ export class MessageRouter {
           break;
         }
 
-        if (shouldBroadcastChannelText(result.text) && broadcast) {
-          broadcast(result.text, { parse_mode: 'Markdown', excludePlatforms: ['webui'] });
+        const turnToolCalls = this.getTurnToolCalls(result.toolCalls, iteration);
+
+        const hasBroadcastableToolText = shouldBroadcastChannelText(result.text);
+        if (hasBroadcastableToolText && broadcast) {
+          const excludePlatforms = Array.from(new Set([
+            'webui',
+            ...(turnChannelOptions.weworkStreamChannelId ? [turnChannelOptions.weworkStreamChannelId] : []),
+          ]));
+          broadcast(result.text, { parse_mode: 'Markdown', excludePlatforms });
           lastTextBroadcasted = true;
         }
+
+        this.emitTurnProgress(broadcast, turnChannelOptions, {
+          type: 'tool-calls-start',
+          calls: turnToolCalls.map(call => ({ id: call.id, name: call.name })),
+          ...(hasBroadcastableToolText ? { text: result.text } : {}),
+        });
 
         const toolContext = {
           sessionId: session.id,
           session,
-          broadcast,
+          broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
         };
-        const toolResultMsg = await llm.executeTools(result.toolCalls, toolContext, session);
+        const toolResultMsg = await llm.executeTools(turnToolCalls, toolContext, session);
 
         await this.appendToolMessage(session, toolResultMsg.parts);
+        this.emitTurnProgress(broadcast, turnChannelOptions, {
+          type: 'tool-calls-finish',
+          results: this.getToolResultProgress(toolResultMsg),
+        });
 
         const managedStateAfterTools = getManagedSessionState(session);
         if (managedStateAfterTools?.currentStep?.runMode === 'tool') {
@@ -717,7 +864,7 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null);
+        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
         parts = queuedAfterTools.parts;
 
         if (result.usage) {
@@ -757,7 +904,17 @@ export class MessageRouter {
       }
 
       await this.maybeQueueChildReminder(session);
-      await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted);
+      const finalSent = await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted, turnChannelOptions);
+      if (!finalSent && turnChannelOptions.weworkStreamId && broadcast) {
+        broadcast('', {
+          turnFinal: true,
+          allowEmptyBroadcast: true,
+          targetChannel: {
+            channelId: turnChannelOptions.weworkStreamChannelId,
+            conversationId: turnChannelOptions.weworkStreamConversationId,
+          },
+        });
+      }
       await this.maybeAppendGoalEndTurnReminder(session);
       if (!stoppedByUser) {
         await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
@@ -767,7 +924,7 @@ export class MessageRouter {
       const errorText = `Error: ${e?.message || 'Unknown error'}`;
       await this.appendTerminalModelMessage(session, errorText);
       await this.maybeQueueChildReminder(session);
-      await this.sendSessionError(session, options.sourceCtx, e);
+      await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions);
       await this.maybeAppendGoalEndTurnReminder(session);
     } finally {
       if (!getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
@@ -824,7 +981,7 @@ export class MessageRouter {
       }
 
       if (!resolvedSession && !this.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
-        await ctx.reply(this.buildUnauthorizedMessage(ctx));
+        await ctx.reply(this.buildUnauthorizedMessage(ctx), { turnFinal: true });
         return;
       }
     }
@@ -845,32 +1002,23 @@ export class MessageRouter {
       };
     }
 
+    const queueItem = this.buildChannelUserQueueItem(ctx, message);
+
     if (isManagedSessionActive(session)) {
-      await sessionManager.enqueueSessionItem(sessionId, {
-        type: 'user',
-        source: this.snapshotSource(ctx),
-        parts: message.parts,
-      });
+      await sessionManager.enqueueSessionItem(sessionId, queueItem);
       await this.sendSessionReply(session, ctx, '🧭 Session is under managed control; your message was queued for its manager.');
       return;
     }
 
     if (session.busy) {
       logger.info({ channelId: getChannelId(ctx), channelType: getChannelType(ctx), user: ctx.username }, 'Session busy, queueing message');
-      await sessionManager.enqueueSessionItem(sessionId, {
-        type: 'user',
-        source: this.snapshotSource(ctx),
-        parts: message.parts,
-      });
-      await this.sendSessionReply(session, ctx, '⏳ Request queued, currently processing another message...');
+      await sessionManager.enqueueSessionItem(sessionId, queueItem);
+      // Intentionally no user-facing busy/queued notice: the message remains
+      // queued and will be processed when the current turn finishes.
       return;
     }
 
-    await sessionManager.enqueueSessionItem(sessionId, {
-      type: 'user',
-      source: this.snapshotSource(ctx),
-      parts: message.parts,
-    });
+    await sessionManager.enqueueSessionItem(sessionId, queueItem);
     await this.processSessionQueue(sessionId);
   }
 

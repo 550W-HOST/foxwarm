@@ -23,7 +23,7 @@ export async function tool_write_memory(args: ToolArgs, ctx: ToolContext) {
     const agentName = ctx.session?.agent || 'main';
     const relativePath = normalizeMemoryRelativePath(filePath);
     const fullPath = resolveAgentMemoryPath(relativePath, agentName);
-    await writeResolvedPath(fullPath, content, false, `Memory file already exists: ${relativePath}. write_memory only creates new files; use edit_memory to modify an existing memory file.`);
+    await writeResolvedPath(fullPath, content, false, `Memory file already exists: ${relativePath}. write_memory only creates new files; use edit_memory to modify an existing memory file.`, { createDirs: true });
     return `Memory file created: ${relativePath}`;
 }
 

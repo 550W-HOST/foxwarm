@@ -92,7 +92,7 @@ interface Session {
 - `agent`：当前 session 绑定的 agent
 - `aliases`：旧 ID / 别名，便于 move/rename 后兼容解析
 - `persistentMemorySnapshot`：当前 prompt snapshot
-- `systemPromptFiles`：可选文件列表；设置后，仅替换 snapshot 中的 memory 文件来源，其他系统注入（如 skills catalog）仍保留。相对路径按 agent 工作目录解析。
+- `systemPromptFiles`：可选文件列表；设置后，仅替换 snapshot 中的 memory 文件来源，其他系统注入（如 skills catalog）仍保留。相对路径按 agent 工作目录解析；文件可用 session-specific frontmatter 继续筛选。
 - `currentNode`：当前工具执行 node，默认 `master`
 - `isolated`：是否限制为当前 node / 相关会话树使用
 - `model`：session 层覆盖的模型 key
@@ -103,18 +103,21 @@ interface Session {
 Foxwarm 会把当前 session 可见的长期记忆预组装成 `persistentMemorySnapshot`。
 其来源通常是：
 
-1. `agents/main/memory/00_SYSTEM.md` 这一层全局系统 memory
+1. `agents/00_SYSTEM.md` 这一层框架级系统提示（如果不存在，则兼容 fallback 到 legacy `agents/main/memory/00_SYSTEM.md`）
 2. inherited agent memory
 3. 当前 agent 自身 memory
 4. visible skills catalog（技能目录摘要，不是完整技能文档）
 
 补充说明：
 
-- `agents/main/memory/00_SYSTEM.md` 是特殊文件，会作为框架层系统提示注入所有 agent
+- `agents/00_SYSTEM.md` 是特殊文件，会作为框架层系统提示注入所有 agent；`agents/main/memory/00_SYSTEM.md` 仅作为过渡兼容 fallback
 - 默认的 per-agent memory 加载会跳过各 agent 自己目录下的 `00_SYSTEM.md`
 - 因此普通 agent 自己的长期记忆应放在 `MEMORY.md` / `SOUL.md` / `USER.md` 或其他普通 `.md` 文件里，而不是依赖自定义 `00_SYSTEM.md`
+- 普通 memory `.md` 可以在文件开头使用 YAML frontmatter：`include-session` / `exclude-session`（string 或 string[]）。glob 按 canonical session id 整串匹配，`exclude-session` 优先；省略 `include-session` 表示默认注入。frontmatter 解析失败会 warn，但仍注入正文；缺少 closing delimiter 时按普通 markdown 注入。
 
-如果 session 设置了 `systemPromptFiles`，则只替换 memory 文件来源为该数组列出的文件；相对路径按 agent 工作目录解析。skills catalog、目录信息、压缩历史提示等非-memory 注入仍保留。
+如果 session 设置了 `systemPromptFiles`，则只替换 memory 文件来源为该数组列出的文件；相对路径按 agent 工作目录解析，仍会应用 session-specific frontmatter。skills catalog、目录信息、压缩历史提示等非-memory 注入仍保留。
+
+动态注入的 `EARLIER CONTEXT RECALL` 会简要说明 layered context / CTX-BLOCK：长会话的早期内容会被归档并 compact 成分层摘要，可用 `recall` 逐层展开；这套机制是可追溯的会话历史，不等同于 agent memory。普通过程信息、临时进展、已完成细节不需要为了“保留上下文”写进 memory；memory 应只保存长期稳定规则、偏好、环境事实和已确认设计决策。
 
 当 agent memory / inherit / skills 变化时，相关 session snapshot 会刷新。
 

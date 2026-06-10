@@ -4,4 +4,5 @@ export * from './nodeFileTransfer';
 export * from './execCwd';
 export * from './persistentExec';
 export * from './tokenCount';
+export * from './fileToolCore';
 export * from './nodeTools';

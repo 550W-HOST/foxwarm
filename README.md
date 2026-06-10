@@ -297,6 +297,42 @@ channels:
 
 You can configure Weixin from WebUI Setup without manually editing the token: click **Start Weixin login**, scan the QR code or open the pairing link shown by Setup, then click **Check login**. On success, Setup writes the token to `state/config.yaml` and hot-reloads channels.
 
+Example WeWork/企业微信 intelligent bot channel with opt-in streaming aggregation:
+
+```yaml
+channels:
+  wework-aibot:
+    type: wework
+    enabled: true
+    # Optional legacy/group-robot webhook used for proactive webhook sends and
+    # media upload/download by media_id. Intelligent-bot short-connection
+    # callbacks do not require this because replies use per-message response_url
+    # or passive stream replies.
+    webhookUrl: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+    # Intelligent-bot short-connection callback listener. Configure this URL in
+    # WeWork with the matching Token / EncodingAESKey. This is sufficient for
+    # receiving intelligent-bot callbacks even when webhookUrl is omitted.
+    token: "callback-token"
+    encodingAESKey: "callback-encoding-aes-key"
+    listenPort: 3003
+    listenPath: "/wework/aibot"
+    # Optional bot/self display name. If inbound text starts with
+    # "@企业微信机器人" followed by whitespace, that prefix is stripped before
+    # slash-command parsing so Chinese WeWork mentions can still run commands.
+    selfName: "企业微信机器人"
+    aibot:
+      # When true, incoming intelligent-bot messages use WeWork stream replies:
+      # model/tool-loop broadcasts are aggregated into one stream card and the
+      # final assistant message marks the stream as finished.
+      stream: true
+      # Optional WebSocket/long-connection API mode. This can receive callbacks
+      # without a public webhook URL and pushes stream updates proactively.
+      websocket:
+        enabled: false
+        botId: "BOTID"
+        secret: "LONG_CONNECTION_SECRET"
+```
+
 WebUI Setup can edit channels and then reload them without restarting Foxwarm. The reload flow stops registered managed channels and starts the enabled/configured channels again.
 
 Managed channel types currently include:

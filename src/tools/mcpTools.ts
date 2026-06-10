@@ -1,8 +1,5 @@
-import path from 'path';
-import fs from 'fs-extra';
-import { ToolArgs, WORKSPACE } from './helpers';
+import { ToolArgs } from './helpers';
 import * as mcpClient from '../mcpClient';
-import { estimateTokenCount } from '../tokenCount';
 import { resolveObjectArgWithJsonFallback, requireStringMapObject } from '../jsonObjectArgs';
 
 export async function tool_mcp_config(args: ToolArgs) {
@@ -44,20 +41,7 @@ export async function tool_call_mcp(args: ToolArgs) {
         }
     }
 
-    const result = await mcpClient.callTool(server, tool, toolArgs || {});
-    const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-    const tokens = estimateTokenCount(text);
-
-    if (tokens > 10000) {
-        const tempDir = path.join(WORKSPACE, '.temp');
-        await fs.ensureDir(tempDir);
-        const logFileName = `mcp_${Date.now()}.log`;
-        const logPath = path.join(tempDir, logFileName);
-        await fs.writeFile(logPath, text);
-        return `[OUTPUT TOO LONG (~${tokens} tokens)]. Full output saved to: ${logPath}`;
-    }
-
-    return text;
+    return await mcpClient.callTool(server, tool, toolArgs || {});
 }
 
 export async function tool_search_mcp_tools(args: ToolArgs) {

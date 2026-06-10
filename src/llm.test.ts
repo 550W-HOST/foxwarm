@@ -107,6 +107,7 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
       },
     ]);
     assert.equal(result.text, 'anthropic ok');
+    assert.equal(result.modelId, 'anthropic/claude-sonnet-4-5');
     assert.deepEqual(result.allParts, [{ text: 'anthropic ok' }]);
     assert.deepEqual(result.usage, {
       inputTokens: 7,
@@ -118,7 +119,7 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
   }
 });
 
-test('chat stores each model request usage on its assistant message metadata', async () => {
+test('chat stores each model request usage and model id on its assistant message metadata', async () => {
   const originalPost = axios.post;
   const appendedMessages: Message[] = [];
   let callCount = 0;
@@ -198,6 +199,8 @@ test('chat stores each model request usage on its assistant message metadata', a
 
     const assistantMessages = appendedMessages.filter(message => message.role === 'model');
     assert.equal(assistantMessages.length, 2);
+    assert.equal(assistantMessages[0].__meta?.modelId, 'anthropic/claude-sonnet-4-5');
+    assert.equal(assistantMessages[1].__meta?.modelId, 'anthropic/claude-sonnet-4-5');
     assert.deepEqual(assistantMessages[0].__meta?.usage, {
       inputTokens: 12,
       outputTokens: 5,
@@ -209,6 +212,7 @@ test('chat stores each model request usage on its assistant message metadata', a
       cachedTokens: 4,
     });
     assert.equal(appendedMessages.find(message => message.role === 'user')?.__meta?.usage, undefined);
+    assert.equal(appendedMessages.find(message => message.role === 'user')?.__meta?.modelId, undefined);
     assert.deepEqual(session.stats, {
       totalCachedTokens: 6,
       totalInputTokens: 32,

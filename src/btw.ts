@@ -26,6 +26,11 @@ function cloneSessionForBtw(session: Session): Session {
     history: cloneMessageArray(session.history),
     systemPromptFiles: session.systemPromptFiles ? [...session.systemPromptFiles] : undefined,
     persistentMemorySnapshot: session.persistentMemorySnapshot,
+    // BTW side requests reuse the real session's prompt-cache routing key.
+    // The model-facing prefix/schema is copied from the real session, and the
+    // temporary BTW prompt only appends to that prefix; generating a fresh key
+    // here would unnecessarily miss the existing KV/prompt cache.
+    promptCacheKey: session.promptCacheKey,
     stats: {
       totalCachedTokens: session.stats?.totalCachedTokens || 0,
       totalInputTokens: session.stats?.totalInputTokens || 0,
@@ -97,11 +102,12 @@ function formatBtwError(error: any): string {
   return `⚠️ [BTW error]\n${message}`;
 }
 
-async function appendBtwResult(sessionId: string, payloadText: string): Promise<string> {
+async function appendBtwResult(sessionId: string, payloadText: string, meta: Record<string, any> = {}): Promise<string> {
   const session = await sessionManager.getSession(sessionId);
   const text = formatBtwPayload(payloadText);
   await sessionManager.appendSessionMessage(session, createDisplayOnlyModelMessage(text, {
     noticeType: 'btw',
+    ...meta,
   }));
 
   if (session.broadcast) {
@@ -113,6 +119,11 @@ async function appendBtwResult(sessionId: string, payloadText: string): Promise<
 
 export async function runBtwRequest(sessionId: string, message: string): Promise<{ text: string; toolDenied: boolean }> {
   const sourceSession = await sessionManager.getSession(sessionId);
+  const previousPromptCacheKey = sourceSession.promptCacheKey;
+  llm.ensurePromptCacheKey(sourceSession);
+  if (sourceSession.promptCacheKey !== previousPromptCacheKey) {
+    await sessionManager.saveSession(sourceSession.id);
+  }
   const tempSession = cloneSessionForBtw(sourceSession);
   const requestId = randomUUID();
   const appendToTempHistory = async (newMessage: Message) => {
@@ -121,6 +132,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
 
   let payloadText: string;
   let toolDenied = false;
+  let modelId: string | undefined;
 
   try {
     logger.info({ sessionId, requestId }, 'BTW background request started');
@@ -129,6 +141,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
       notifySessionEvents: false,
       registerAbortController: false,
     });
+    modelId = result.modelId;
 
     if (result.toolCalls?.length) {
       toolDenied = true;
@@ -142,7 +155,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
     payloadText = formatBtwError(error);
   }
 
-  const text = await appendBtwResult(sessionId, payloadText);
+  const text = await appendBtwResult(sessionId, payloadText, modelId ? { modelId } : {});
   logger.info({ sessionId, requestId, toolDenied }, 'BTW background request finished');
   return { text, toolDenied };
 }

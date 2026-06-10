@@ -1,9 +1,9 @@
 ---
-name: node_setup
+name: node-setup
 description: "Use for Foxwarm node setup and troubleshooting: node pairing/approval flow, bootstrap scripts, sandbox nodes, and binding/unbinding isolated agents to nodes."
 ---
 
-# node_setup
+# node-setup
 
 Use this skill when you need to explain, bootstrap, or troubleshoot a Foxwarm **node**.
 
@@ -421,7 +421,7 @@ For testing, it must point at `/app/test`, not `/app`.
 
 ## Related skill
 
-Use **`agent_management`** when the task is mainly about:
+Use **`agent-management`** when the task is mainly about:
 
 - why agent rename/delete behave the way they do
 - safe agent migration / cleanup

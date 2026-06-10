@@ -82,6 +82,10 @@ export interface Message {
   __meta?: {
     timestamp?: number;
     seq?: number;
+    /** Canonical provider-prefixed model id used to create this model message. */
+    modelId?: string;
+    /** Token usage reported for the model call that produced this model message. */
+    usage?: TokenUsage;
     [key: string]: any;
   };
 }
@@ -102,6 +106,22 @@ export interface ModelStreamToolCall {
   id?: string;
   name?: string;
 }
+
+export type ChannelTurnToolStatus = 'running' | 'success' | 'error';
+
+export interface ChannelTurnToolRef {
+  id: string;
+  name: string;
+}
+
+export interface ChannelTurnToolResult extends ChannelTurnToolRef {
+  status: Exclude<ChannelTurnToolStatus, 'running'>;
+}
+
+export type ChannelTurnProgress =
+  | { type: 'llm-start' }
+  | { type: 'tool-calls-start'; calls: ChannelTurnToolRef[]; text?: string }
+  | { type: 'tool-calls-finish'; results: ChannelTurnToolResult[] };
 
 export interface SessionStreamEvent {
   type: 'model-stream-reset' | 'model-stream-update' | 'toolscript-progress';
@@ -165,6 +185,7 @@ export interface QueueSource {
   conversationId?: string; // Preferred channel-side conversation target id
   username?: string;
   senderId?: string;
+  weworkStreamId?: string; // WeWork intelligent-bot stream id for binding channel broadcasts to the originating turn
 }
 
 export interface QueueItem {
@@ -230,6 +251,8 @@ export interface IndexingState {
 // LLM types
 export interface ChatResult {
   text: string;
+  /** Canonical provider-prefixed model id used for the LLM request. */
+  modelId?: string;
   usage?: TokenUsage;
   toolCalls?: Array<FunctionCall>;
   allParts?: MessagePart[];

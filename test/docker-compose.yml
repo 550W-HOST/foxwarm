@@ -5,14 +5,14 @@
 # - service name (foxwarm-test)
 # - ports (3002:3001 → 3003:3001, etc.)
 
-name: foxwarm-toolscript-managed-session-test
+name: foxwarm-test
 
 services:
-  foxwarm-toolscript-managed-session:
+  foxwarm-test:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: foxwarm-toolscript-managed-session-test
+    container_name: foxwarm-test
     ports:
       - "3002:3001" # TODO: before merging to main, remember to revisit/revert this test-env-only port tweak.
     volumes:

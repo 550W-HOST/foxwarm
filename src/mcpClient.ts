@@ -443,6 +443,70 @@ async function withServerConnection<T>(serverName: string, config: McpServerConf
   }
 }
 
+function tryParseJsonObjectOrArray(text: string): any | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const looksLikeJsonObjectOrArray = (trimmed.startsWith('{') && trimmed.endsWith('}'))
+    || (trimmed.startsWith('[') && trimmed.endsWith(']'));
+  if (!looksLikeJsonObjectOrArray) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed !== null && typeof parsed === 'object') {
+      return parsed;
+    }
+  } catch {
+    // Keep non-JSON text as-is.
+  }
+  return undefined;
+}
+
+function isPlainTextContentBlock(content: any): content is { type: 'text'; text: string } {
+  if (!content || typeof content !== 'object' || Array.isArray(content)) {
+    return false;
+  }
+  const keys = Object.keys(content);
+  return content.type === 'text'
+    && typeof content.text === 'string'
+    && keys.every(key => key === 'type' || key === 'text');
+}
+
+function hasPreservableMcpResultMetadata(result: Record<string, any>): boolean {
+  for (const key of Object.keys(result)) {
+    if (key === 'content') {
+      continue;
+    }
+    if (key === 'isError' && result.isError !== true) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+export function normalizeMcpToolResult(result: any): any {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return result;
+  }
+
+  if (hasPreservableMcpResultMetadata(result)) {
+    return result;
+  }
+
+  const content = result.content;
+  if (!Array.isArray(content) || content.length !== 1 || !isPlainTextContentBlock(content[0])) {
+    return result;
+  }
+
+  const parsed = tryParseJsonObjectOrArray(content[0].text);
+  return parsed !== undefined ? parsed : content[0].text;
+}
+
 export async function listTools(serverName?: string) {
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
@@ -454,12 +518,7 @@ export async function callTool(serverName: string | undefined, tool: string, arg
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
     const result = await client.callTool({ name: tool, arguments: args || {} });
-    // Unwrap single text content for cleaner output
-    const content = result.content;
-    if (Array.isArray(content) && content.length === 1 && content[0].type === 'text') {
-      return { output: content[0].text };
-    }
-    return result;
+    return normalizeMcpToolResult(result);
   });
 }
 

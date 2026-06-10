@@ -395,10 +395,6 @@ export class TUIChannel implements Channel {
           // Display command response as system message (temporary, not saved to history)
           this.displayMessage('system', replyText);
         } else {
-          // Filter out queue messages for cleaner TUI experience
-          if (replyText.includes('⏳ Request queued') || replyText.includes('currently processing another message')) {
-            return; // Don't display queue notifications in TUI
-          }
           this.displayMessage('assistant', replyText);
         }
       },

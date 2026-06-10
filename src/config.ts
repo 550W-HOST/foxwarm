@@ -29,6 +29,19 @@ export type WeWorkConfig = {
   encodingAESKey?: string;
   listenPort?: number;
   listenPath?: string;
+  selfName?: string;
+  aibot?: {
+    stream?: boolean;
+    streamMaxContentBytes?: number;
+    websocket?: {
+      enabled?: boolean;
+      botId?: string;
+      secret?: string;
+      url?: string;
+      heartbeatMs?: number;
+      reconnectMs?: number;
+    };
+  };
   allowedUsers?: string[];
   guestAgent?: GuestAgentConfig;
 };
@@ -259,6 +272,8 @@ export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const DB_DIR = path.join(STATE_DIR, 'db');
 export const SESSIONS_DIR = path.join(STATE_DIR, 'sessions');
 export const SESSIONS_BLOB_DIR = path.join(STATE_DIR, 'sessions-blob');
+export const AGENTS_SYSTEM_PROMPT_PATH = path.join(AGENTS_DIR, '00_SYSTEM.md');
+export const AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH = path.join(BASE_DIR, 'templates', 'agents', '00_SYSTEM.md');
 export const MAIN_AGENT_DIR = path.join(AGENTS_DIR, 'main');
 export const MAIN_AGENT_MEMORY_DIR = path.join(MAIN_AGENT_DIR, 'memory');
 

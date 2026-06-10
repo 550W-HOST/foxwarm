@@ -6,20 +6,81 @@
 import axios from 'axios';
 import express from 'express';
 import fs from 'fs-extra';
+import WebSocket from 'ws';
 import xml2js from 'xml2js';
 import crypto from 'crypto';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { buildSavedFileText, saveInboundChannelFile } from '../channelFiles';
 import { logger } from '../common';
-import { MessagePart } from '../types';
+import type { WeWorkConfig } from '../config';
+import type { ChannelTurnProgress, MessagePart } from '../types';
+import {
+  buildWeWorkStreamResponse,
+  DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES,
+  WeWorkStreamAggregator,
+  WeWorkStreamSnapshot,
+} from './weworkStreamAggregator';
 
-export interface WeWorkWebhookConfig {
-  webhookUrl?: string;  // 企业微信群机器人 webhook URL
-  token?: string;      // 企业微信应用的 Token
-  encodingAESKey?: string; // 企业微信应用的 EncodingAESKey
-  listenPort?: number; // 监听端口，用于接收消息（如果企业微信支持回调）
-  listenPath?: string; // 监听路径
+export type WeWorkWebhookConfig = WeWorkConfig;
+
+type WeWorkWebhookConstructorConfig = WeWorkWebhookConfig & {
   name?: string;
+};
+
+type WeWorkInboundDelivery =
+  | { mode: 'webhook'; responseUrl?: string }
+  | { mode: 'websocket'; reqId: string };
+
+type WeWorkInboundProcessResult = {
+  handled: boolean;
+  passiveResponse?: any;
+};
+
+type PendingWebSocketRequest = {
+  cmd: string;
+  resolve: (value: any) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+const DEFAULT_WEWORK_DEDUP_TTL_MS = 15 * 60 * 1000;
+const DEFAULT_WEWORK_WEBSOCKET_ACK_TIMEOUT_MS = 10000;
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+export function isWeWorkChannelConfigReady(config: Partial<WeWorkWebhookConfig> | undefined): boolean {
+  if (!config) {
+    return false;
+  }
+  const webhookConfigured = isNonEmptyString(config.webhookUrl);
+  const callbackConfigured = !!config.listenPort
+    && isNonEmptyString(config.listenPath)
+    && isNonEmptyString(config.token)
+    && isNonEmptyString(config.encodingAESKey);
+  const websocketConfigured = !!config.aibot?.websocket?.enabled
+    && isNonEmptyString(config.aibot.websocket.botId)
+    && isNonEmptyString(config.aibot.websocket.secret);
+  return webhookConfigured || callbackConfigured || websocketConfigured;
+}
+
+function normalizeWeWorkAesKey(aesKey: string): Buffer {
+  const trimmed = aesKey.trim();
+  const padded = trimmed.length % 4 === 0 ? trimmed : `${trimmed}${'='.repeat(4 - (trimmed.length % 4))}`;
+  return Buffer.from(padded, 'base64');
+}
+
+function decryptWeWorkAesBuffer(buffer: Buffer, aesKey: string): Buffer {
+  const key = normalizeWeWorkAesKey(aesKey);
+  const decipher = crypto.createDecipheriv('aes-256-cbc', key, key.slice(0, 16));
+  decipher.setAutoPadding(false);
+  const decrypted = Buffer.concat([decipher.update(buffer), decipher.final()]);
+  const pad = decrypted[decrypted.length - 1];
+  if (!pad || pad < 1 || pad > 32) {
+    return decrypted;
+  }
+  return decrypted.subarray(0, decrypted.length - pad);
 }
 
 class WeWorkCrypto {
@@ -30,7 +91,7 @@ class WeWorkCrypto {
   constructor(token: string, encodingAESKey: string) {
     this.token = token;
     this.encodingAESKey = encodingAESKey;
-    this.aesKey = Buffer.from(encodingAESKey + '=', 'base64');
+    this.aesKey = normalizeWeWorkAesKey(encodingAESKey);
   }
 
   private stripPkcs7Padding(buffer: Buffer): Buffer {
@@ -39,6 +100,15 @@ class WeWorkCrypto {
       return buffer;
     }
     return buffer.subarray(0, buffer.length - pad);
+  }
+
+  private addPkcs7Padding(buffer: Buffer): Buffer {
+    const blockSize = 32;
+    let pad = blockSize - (buffer.length % blockSize);
+    if (pad === 0) {
+      pad = blockSize;
+    }
+    return Buffer.concat([buffer, Buffer.alloc(pad, pad)]);
   }
 
   private decryptAes(buffer: Buffer): Buffer {
@@ -60,13 +130,38 @@ class WeWorkCrypto {
     return this.decryptAes(buffer);
   }
 
+  encryptCallbackMessage(plaintext: string, timestamp: string, nonce: string, receiveId = ''): { encrypt: string; msgsignature: string; timestamp: number; nonce: string } {
+    const msg = Buffer.from(plaintext, 'utf8');
+    const msgLen = Buffer.alloc(4);
+    msgLen.writeUInt32BE(msg.length, 0);
+    const raw = Buffer.concat([
+      crypto.randomBytes(16),
+      msgLen,
+      msg,
+      Buffer.from(receiveId, 'utf8'),
+    ]);
+    const cipher = crypto.createCipheriv('aes-256-cbc', this.aesKey, this.aesKey.slice(0, 16));
+    cipher.setAutoPadding(false);
+    const encrypted = Buffer.concat([cipher.update(this.addPkcs7Padding(raw)), cipher.final()]).toString('base64');
+    return {
+      encrypt: encrypted,
+      msgsignature: this.sign(timestamp, nonce, encrypted),
+      timestamp: Number(timestamp),
+      nonce,
+    };
+  }
+
+  private sign(timestamp: string, nonce: string, encryptedMsg: string): string {
+    const tmpArr = [this.token, timestamp, nonce, encryptedMsg].sort();
+    const tmpStr = tmpArr.join('');
+    return crypto.createHash('sha1').update(tmpStr).digest('hex');
+  }
+
   verifySignature(signature: string | undefined, timestamp: string, nonce: string, encryptedMsg: string): boolean {
     if (!signature) {
       return false;
     }
-    const tmpArr = [this.token, timestamp, nonce, encryptedMsg].sort();
-    const tmpStr = tmpArr.join('');
-    const hash = crypto.createHash('sha1').update(tmpStr).digest('hex');
+    const hash = this.sign(timestamp, nonce, encryptedMsg);
     return hash === signature;
   }
 }
@@ -75,21 +170,39 @@ export class WeWorkWebhookChannel implements Channel {
   readonly name: string;
   readonly platform = 'wework';
   private readonly channelId: string;
+  private readonly config: WeWorkWebhookConstructorConfig;
   
   private webhookUrl: string;
   private token?: string;
   private encodingAESKey?: string;
   private crypto?: WeWorkCrypto;
+  private readonly streamEnabled: boolean;
+  private readonly streamAggregator: WeWorkStreamAggregator;
+  private readonly websocketConfig?: NonNullable<NonNullable<WeWorkWebhookConfig['aibot']>['websocket']>;
+  private ws?: WebSocket;
+  private readonly pendingWsRequests = new Map<string, PendingWebSocketRequest>();
+  private readonly wsRequestChains = new Map<string, Promise<any>>();
+  private heartbeatTimer?: ReturnType<typeof setInterval>;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private readonly processedMsgIds = new Map<string, { processedAt: number; result: WeWorkInboundProcessResult }>();
+  private readonly dedupTtlMs = DEFAULT_WEWORK_DEDUP_TTL_MS;
+  private stopped = false;
   private messageHandler?: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>;
   private app?: express.Application;
   private server?: any;
 
-  constructor(config: WeWorkWebhookConfig) {
-    this.name = config.name || 'wework';
+  constructor(config: WeWorkWebhookConstructorConfig, name?: string) {
+    this.config = config;
+    this.name = name || config.name || 'wework';
     this.channelId = this.name;
     this.webhookUrl = config.webhookUrl || '';
     this.token = config.token;
     this.encodingAESKey = config.encodingAESKey;
+    this.streamEnabled = !!config.aibot?.stream;
+    this.streamAggregator = new WeWorkStreamAggregator({
+      maxContentBytes: config.aibot?.streamMaxContentBytes || DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES,
+    });
+    this.websocketConfig = config.aibot?.websocket;
     
     // Initialize crypto if we have the required keys
     if (this.token && this.encodingAESKey) {
@@ -145,114 +258,18 @@ export class WeWorkWebhookChannel implements Channel {
           return res.json({ code: 0, msg: 'success' });
         }
 
-        const body = normalized.body;
-        const isAIBot = normalized.isAIBot;
+        const result = await this.processInboundBody(normalized.body, {
+          mode: 'webhook',
+          responseUrl: normalized.body?.response_url,
+        }, normalized.isAIBot);
 
-        // Handle different message formats from WeWork
-        let content = '';
-        let userId = 'unknown';
-        let userName = 'unknown';
-        let chatType = 'unknown'; // 'single' = 私聊, 'group' = 群聊
-        let chatId = '';
-        let replyWebhookUrl = this.webhookUrl;
-        let responseUrl = '';
-        let parts: MessagePart[] | null = null;
-
-        // Check for standard webhook format (msgtype)
-        if (typeof body.msgtype === 'string' && body.from?.userid) {
-          userId = body.from?.userid || 'unknown';
-          userName = body.from?.name || userId;
-          chatType = body.chattype || 'unknown';
-          chatId = body.chatid || '';
-          responseUrl = body.response_url || '';
-
-          parts = await this.buildInboundMessageParts(body, chatId || userId, responseUrl || replyWebhookUrl, {
-            isAIBot: isAIBot || !!responseUrl,
-          });
-          content = parts?.map(part => part.text).filter(Boolean).join('\n') || '';
-        }
-        // Check for XML format (from decrypted messages) - handle both direct and wrapped formats
-        else if (body.xml?.From?.UserId || body.From?.UserId) {
-          const xmlData = body.xml || body;
-          userId = xmlData.From.UserId;
-          userName = xmlData.From.Name || userId;
-          chatType = xmlData.ChatType || 'unknown';
-          chatId = xmlData.ChatId || '';
-          replyWebhookUrl = xmlData.WebhookUrl || this.webhookUrl;
-
-          parts = await this.buildInboundMessageParts(xmlData, chatId || userId, replyWebhookUrl, { isAIBot: false });
-          content = parts?.map(part => part.text).filter(Boolean).join('\n') || '';
-        }
-
-        // Only process if we have content and user info
-        if ((parts?.length || content) && userId !== 'unknown') {
-          logger.debug({ content, userId, userName, chatType, chatId }, 'Processing WeWork message');
-          
-          // Get WebhookUrl from message for reply (already set above)
-          logger.debug({ replyWebhookUrl: replyWebhookUrl.substring(0, 60) + '...', chatType, chatId }, 'Using WebhookUrl for reply');
-          
-          // 使用 chatId 作为 channelUserId，这样每个会话（群聊/私聊）都有独立的 channel
-          // 如果没有 chatId，fallback 到 userId
-          const channelUserId = chatId || userId;
-          
-          if (this.messageHandler) {
-            const ctx: ChannelContext = {
-              channelId: this.channelId,
-              channelType: this.platform,
-              channelUserId: channelUserId,
-              conversationId: channelUserId,
-              username: userName,
-              platform: 'wework',
-              senderId: userId, // 发送者用户ID，用于权限检查
-              preferDirectReply: !!responseUrl,
-              reply: async (text: string) => {
-                logger.debug({ channelUserId, text: text.substring(0, 100), chatType, chatId }, 'Sending reply via WeWork');
-                if (responseUrl) {
-                  await this.sendAIBotResponse(responseUrl, text);
-                  return;
-                }
-
-                await this.sendMessage(channelUserId, text, {
-                  webhookUrl: replyWebhookUrl,
-                  chatId: chatId,
-                  chatType: chatType
-                });
-              },
-              sendTyping: async () => {
-                // WeWork webhook doesn't support typing indicator
-              }
-            };
-
-            const message: ChannelMessage = {
-              parts: parts && parts.length ? parts : [{ text: content }],
-              channelUserId: channelUserId,
-              conversationId: channelUserId,
-              username: userName
-            };
-
-            this.messageHandler(ctx, message);
-          } else {
-            logger.warn('No message handler configured for WeWork channel');
-          }
-        } else {
-          const xmlData = body.xml || body;
-          logger.debug({ 
-            msgtype: body.msgtype,
-            hasText: !!body.text,
-            hasContent: !!body.text?.content,
-            hasXml: !!body.xml,
-            hasFrom: !!xmlData.From,
-            hasXmlContent: !!(xmlData.Content || xmlData.Text?.Content),
-            msgType: xmlData.MsgType,
-            content,
-            userId,
-            bodyKeys: Object.keys(body),
-            xmlKeys: Object.keys(xmlData),
-            fullBody: body
-          }, 'Received WeWork webhook without processable content');
-        }
-
-        if (isAIBot || responseUrl) {
+        if (result.passiveResponse) {
+          const responseBody = this.buildPassiveHttpResponse(result.passiveResponse, normalized.encrypted ? {
+            timestamp: normalized.timestamp,
+            nonce: normalized.nonce,
+          } : undefined);
+          res.status(200).json(responseBody);
+        } else if (normalized.isAIBot || normalized.body?.response_url) {
           res.status(200).send('');
         } else {
           res.json({ code: 0, msg: 'success' });
@@ -277,11 +294,29 @@ export class WeWorkWebhookChannel implements Channel {
   }
 
   async start(): Promise<void> {
+    this.stopped = false;
     logger.info('WeWork Webhook channel initialized');
     logger.info({ webhookUrl: this.webhookUrl }, 'WeWork webhook URL configured');
+    if (this.websocketConfig?.enabled) {
+      this.connectWebSocket();
+    }
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    if (this.ws) {
+      this.ws.close();
+      this.ws = undefined;
+    }
+    this.rejectAllPendingWebSocketRequests(new Error('WeWork AIBot WebSocket stopped'));
     if (this.server) {
       this.server.close();
     }
@@ -289,6 +324,216 @@ export class WeWorkWebhookChannel implements Channel {
 
   onMessage(handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>): void {
     this.messageHandler = handler;
+  }
+
+  private newRequestId(): string {
+    if (typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  private getWebSocketUrl(): string {
+    return this.websocketConfig?.url || 'wss://openws.work.weixin.qq.com';
+  }
+
+  private connectWebSocket(): void {
+    const botId = this.websocketConfig?.botId;
+    const secret = this.websocketConfig?.secret;
+    if (!botId || !secret) {
+      logger.warn({ hasBotId: !!botId, hasSecret: !!secret }, 'WeWork AIBot WebSocket enabled but botId/secret is missing');
+      return;
+    }
+
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    const url = this.getWebSocketUrl();
+    logger.info({ url, channelId: this.channelId }, 'Connecting WeWork AIBot WebSocket');
+    const ws = new WebSocket(url);
+    this.ws = ws;
+
+    ws.on('open', () => {
+      logger.info({ channelId: this.channelId }, 'WeWork AIBot WebSocket connected');
+      this.sendWebSocketCommand('aibot_subscribe', {
+        bot_id: botId,
+        secret,
+      }).catch(err => {
+        logger.error({ err }, 'Failed to subscribe WeWork AIBot WebSocket');
+        ws.close();
+      });
+      this.startWebSocketHeartbeat();
+    });
+
+    ws.on('message', data => {
+      void this.handleWebSocketMessage(data).catch(err => {
+        logger.error({ err }, 'Failed to handle WeWork AIBot WebSocket message');
+      });
+    });
+
+    ws.on('close', (code, reason) => {
+      logger.warn({ code, reason: reason.toString(), channelId: this.channelId }, 'WeWork AIBot WebSocket closed');
+      if (this.ws === ws) {
+        this.ws = undefined;
+      }
+      this.stopWebSocketHeartbeat();
+      this.rejectAllPendingWebSocketRequests(new Error(`WeWork AIBot WebSocket closed (${code})`));
+      this.scheduleWebSocketReconnect();
+    });
+
+    ws.on('error', err => {
+      logger.error({ err, channelId: this.channelId }, 'WeWork AIBot WebSocket error');
+    });
+  }
+
+  private startWebSocketHeartbeat(): void {
+    this.stopWebSocketHeartbeat();
+    const intervalMs = this.websocketConfig?.heartbeatMs || 30000;
+    this.heartbeatTimer = setInterval(() => {
+      this.sendWebSocketCommand('ping').catch(err => {
+        logger.warn({ err }, 'Failed to send WeWork AIBot heartbeat');
+      });
+    }, intervalMs);
+  }
+
+  private stopWebSocketHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+  }
+
+  private scheduleWebSocketReconnect(): void {
+    if (this.stopped || !this.websocketConfig?.enabled || this.reconnectTimer) {
+      return;
+    }
+    const delayMs = this.websocketConfig?.reconnectMs || 5000;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      this.connectWebSocket();
+    }, delayMs);
+  }
+
+  private sendWebSocketCommand(cmd: string, body?: any, reqId: string = this.newRequestId()): Promise<any> {
+    const previous = this.wsRequestChains.get(reqId) || Promise.resolve();
+    const run = previous
+      .catch(() => {})
+      .then(() => this.sendWebSocketCommandNow(cmd, body, reqId));
+    const chain = run.catch(() => {}).finally(() => {
+      if (this.wsRequestChains.get(reqId) === chain) {
+        this.wsRequestChains.delete(reqId);
+      }
+    });
+    this.wsRequestChains.set(reqId, chain);
+    return run;
+  }
+
+  private sendWebSocketCommandNow(cmd: string, body?: any, reqId: string = this.newRequestId()): Promise<any> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('WeWork AIBot WebSocket is not connected'));
+    }
+    const payload: any = {
+      cmd,
+      headers: { req_id: reqId },
+    };
+    if (body !== undefined) {
+      payload.body = body;
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingWsRequests.delete(reqId);
+        reject(new Error(`WeWork AIBot command ${cmd} timed out waiting for ack`));
+      }, DEFAULT_WEWORK_WEBSOCKET_ACK_TIMEOUT_MS);
+
+      this.pendingWsRequests.set(reqId, { cmd, resolve, reject, timer });
+      this.ws!.send(JSON.stringify(payload), err => {
+        if (!err) {
+          return;
+        }
+        const pending = this.pendingWsRequests.get(reqId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingWsRequests.delete(reqId);
+        }
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
+    });
+  }
+
+  private resolveWebSocketAck(payload: any): boolean {
+    const reqId = typeof payload?.headers?.req_id === 'string' ? payload.headers.req_id : undefined;
+    if (!reqId) {
+      return false;
+    }
+    const pending = this.pendingWsRequests.get(reqId);
+    if (!pending) {
+      return false;
+    }
+
+    clearTimeout(pending.timer);
+    this.pendingWsRequests.delete(reqId);
+    logger.info({
+      channelId: this.channelId,
+      reqId,
+      command: pending.cmd,
+      errcode: payload.errcode,
+      errmsg: payload.errmsg,
+    }, 'Received WeWork AIBot WebSocket command ack');
+    if (payload.errcode !== undefined && payload.errcode !== 0) {
+      pending.reject(new Error(`WeWork AIBot command ${pending.cmd} failed: ${payload.errmsg || 'unknown'} (code: ${payload.errcode})`));
+    } else {
+      pending.resolve(payload);
+    }
+    return true;
+  }
+
+  private rejectAllPendingWebSocketRequests(error: Error): void {
+    this.wsRequestChains.clear();
+    for (const [reqId, pending] of Array.from(this.pendingWsRequests.entries())) {
+      clearTimeout(pending.timer);
+      this.pendingWsRequests.delete(reqId);
+      pending.reject(error);
+    }
+  }
+
+  private async handleWebSocketMessage(data: WebSocket.RawData): Promise<void> {
+    const raw = Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
+    let payload: any;
+    try {
+      payload = JSON.parse(raw);
+    } catch (err) {
+      logger.warn({ raw }, 'Received non-JSON WeWork AIBot WebSocket message');
+      return;
+    }
+
+    if (this.resolveWebSocketAck(payload)) {
+      return;
+    }
+
+    const cmd = payload?.cmd;
+    if (!cmd) {
+      logger.debug({ payload }, 'Received WeWork AIBot WebSocket command response');
+      return;
+    }
+
+    if (cmd === 'aibot_msg_callback') {
+      const reqId = payload.headers?.req_id || this.newRequestId();
+      await this.processInboundBody(payload.body, { mode: 'websocket', reqId }, true);
+      return;
+    }
+
+    if (cmd === 'aibot_event_callback') {
+      const eventType = payload.body?.event?.eventtype;
+      logger.info({ eventType, reqId: payload.headers?.req_id }, 'Received WeWork AIBot event callback');
+      if (eventType === 'disconnected_event') {
+        this.ws?.close();
+      }
+      return;
+    }
+
+    logger.debug({ cmd, payload }, 'Ignoring unsupported WeWork AIBot WebSocket command');
   }
 
   private getRequestString(value: unknown): string {
@@ -327,7 +572,7 @@ export class WeWorkWebhookChannel implements Channel {
     return this.parseXmlBody(trimmed);
   }
 
-  private async normalizeInboundBody(req: express.Request): Promise<{ body: any; isAIBot: boolean }> {
+  private async normalizeInboundBody(req: express.Request): Promise<{ body: any; isAIBot: boolean; encrypted?: boolean; timestamp?: string; nonce?: string }> {
     let body = req.body;
     const contentType = String(req.headers['content-type'] || '');
 
@@ -367,8 +612,240 @@ export class WeWorkWebhookChannel implements Channel {
 
     return {
       body: parsed,
-      isAIBot: typeof body?.encrypt === 'string' || typeof parsed?.response_url === 'string' || typeof parsed?.aibotid === 'string',
+      isAIBot: typeof parsed?.response_url === 'string' || typeof parsed?.aibotid === 'string' || parsed?.msgtype === 'stream',
+      encrypted: true,
+      timestamp,
+      nonce,
     };
+  }
+
+  private buildPassiveHttpResponse(payload: any, encrypted?: { timestamp?: string; nonce?: string }): any {
+    if (!encrypted?.timestamp || !encrypted?.nonce || !this.crypto) {
+      return payload;
+    }
+    return this.crypto.encryptCallbackMessage(JSON.stringify(payload), encrypted.timestamp, encrypted.nonce);
+  }
+
+  private shouldUseAIBotStream(isAIBot: boolean, delivery: WeWorkInboundDelivery): boolean {
+    if (!this.streamEnabled || !isAIBot) {
+      return false;
+    }
+    if (delivery.mode === 'websocket') {
+      return true;
+    }
+    return true;
+  }
+
+  private beginAIBotStream(conversationId: string, delivery: WeWorkInboundDelivery): WeWorkStreamSnapshot | undefined {
+    if (!conversationId) {
+      return undefined;
+    }
+    if (delivery.mode === 'websocket') {
+      return this.streamAggregator.begin(conversationId, { mode: 'websocket', reqId: delivery.reqId });
+    }
+    return this.streamAggregator.begin(conversationId, { mode: 'webhook', responseUrl: delivery.responseUrl });
+  }
+
+  private handleAIBotStreamRefresh(body: any): WeWorkInboundProcessResult {
+    const streamId = body?.stream?.id;
+    const snapshot = typeof streamId === 'string' ? this.streamAggregator.getByStreamId(streamId) : undefined;
+    if (!snapshot) {
+      logger.warn({ streamId }, 'Received WeWork stream refresh for unknown stream id');
+      return {
+        handled: true,
+        passiveResponse: {
+          msgtype: 'stream',
+          stream: {
+            id: streamId || `fw_missing_${Date.now().toString(36)}`,
+            finish: true,
+            content: '未找到对应的流式消息。',
+          },
+        },
+      };
+    }
+    return { handled: true, passiveResponse: buildWeWorkStreamResponse(snapshot) };
+  }
+
+  private cleanupProcessedMsgIds(now: number = Date.now()): void {
+    for (const [msgId, entry] of Array.from(this.processedMsgIds.entries())) {
+      if (now - entry.processedAt > this.dedupTtlMs) {
+        this.processedMsgIds.delete(msgId);
+      }
+    }
+  }
+
+  private getCallbackMsgId(body: any): string | undefined {
+    const msgId = body?.msgid || body?.MsgId || body?.xml?.MsgId;
+    return typeof msgId === 'string' && msgId.trim() ? msgId.trim() : undefined;
+  }
+
+  private rememberInboundResult(msgId: string | undefined, result: WeWorkInboundProcessResult): WeWorkInboundProcessResult {
+    if (msgId) {
+      this.processedMsgIds.set(msgId, { processedAt: Date.now(), result });
+    }
+    return result;
+  }
+
+  private async processInboundBody(body: any, delivery: WeWorkInboundDelivery, isAIBot: boolean): Promise<WeWorkInboundProcessResult> {
+    if (!body) {
+      return { handled: false };
+    }
+
+    this.cleanupProcessedMsgIds();
+    const callbackMsgId = this.getCallbackMsgId(body);
+
+    if (isAIBot && body.msgtype === 'stream') {
+      return this.handleAIBotStreamRefresh(body);
+    }
+
+    if (callbackMsgId) {
+      const duplicate = this.processedMsgIds.get(callbackMsgId);
+      if (duplicate) {
+        logger.info({ msgId: callbackMsgId }, 'Ignoring duplicate WeWork callback');
+        return duplicate.result;
+      }
+    }
+
+    // Handle different message formats from WeWork
+    let content = '';
+    let userId = 'unknown';
+    let userName = 'unknown';
+    let chatType = 'unknown'; // 'single' = 私聊, 'group' = 群聊
+    let chatId = '';
+    let replyWebhookUrl = this.webhookUrl;
+    let responseUrl = delivery.mode === 'webhook' ? (delivery.responseUrl || '') : '';
+    let parts: MessagePart[] | null = null;
+    let messageIsAIBot = isAIBot;
+
+    // Check for standard JSON AIBot/webhook format (msgtype)
+    if (typeof body.msgtype === 'string' && body.from?.userid) {
+      userId = body.from?.userid || 'unknown';
+      userName = body.from?.name || userId;
+      chatType = body.chattype || 'unknown';
+      chatId = body.chatid || '';
+      responseUrl = body.response_url || responseUrl;
+      messageIsAIBot = messageIsAIBot || !!responseUrl || !!body.aibotid;
+
+      parts = await this.buildInboundMessageParts(body, chatId || userId, responseUrl || replyWebhookUrl, {
+        isAIBot: messageIsAIBot,
+      });
+      content = parts?.map(part => part.text).filter(Boolean).join('\n') || '';
+    }
+    // Check for XML format (from decrypted messages) - handle both direct and wrapped formats
+    else if (body.xml?.From?.UserId || body.From?.UserId) {
+      const xmlData = body.xml || body;
+      userId = xmlData.From.UserId;
+      userName = xmlData.From.Name || userId;
+      chatType = xmlData.ChatType || 'unknown';
+      chatId = xmlData.ChatId || '';
+      replyWebhookUrl = xmlData.WebhookUrl || this.webhookUrl;
+
+      parts = await this.buildInboundMessageParts(xmlData, chatId || userId, replyWebhookUrl, { isAIBot: false });
+      content = parts?.map(part => part.text).filter(Boolean).join('\n') || '';
+    }
+
+    // Only process if we have content and user info
+    if ((parts?.length || content) && userId !== 'unknown') {
+      logger.info({
+        channelId: this.channelId,
+        deliveryMode: delivery.mode,
+        msgId: callbackMsgId,
+        msgtype: body.msgtype || (body.xml || body)?.MsgType,
+        aibotId: body.aibotid,
+        chatId,
+        conversationId: chatId || userId,
+        chatType,
+        userId,
+        userName,
+        userNameSource: userName && userName !== userId ? 'payload' : 'fallback-userid',
+        fromKeys: body.from && typeof body.from === 'object' ? Object.keys(body.from) : undefined,
+        hasResponseUrl: !!responseUrl,
+        isAIBot: messageIsAIBot,
+        contentLength: content.length,
+      }, 'Received WeWork inbound message metadata');
+
+      // 使用 chatId 作为 channelUserId，这样每个会话（群聊/私聊）都有独立的 channel
+      // 如果没有 chatId，fallback 到 userId
+      const channelUserId = chatId || userId;
+      const streamSnapshot = this.shouldUseAIBotStream(messageIsAIBot, delivery)
+        ? this.beginAIBotStream(channelUserId, delivery.mode === 'webhook' ? { mode: 'webhook', responseUrl } : delivery)
+        : undefined;
+
+      if (streamSnapshot?.delivery.mode === 'websocket') {
+        void this.pushWebSocketStream(streamSnapshot).catch(err => {
+          logger.error({ err, channelUserId }, 'Failed to send initial WeWork WebSocket stream response');
+        });
+      }
+
+      if (this.messageHandler) {
+        const ctx: ChannelContext = {
+          channelId: this.channelId,
+          channelType: this.platform,
+          channelUserId: channelUserId,
+          conversationId: channelUserId,
+          username: userName,
+          platform: 'wework',
+          senderId: userId, // 发送者用户ID，用于权限检查
+          weworkStreamId: streamSnapshot?.streamId,
+          selfName: isNonEmptyString(this.config.selfName) ? this.config.selfName.trim() : undefined,
+          preferDirectReply: !!responseUrl || !!streamSnapshot,
+          reply: async (text: string, options?: any) => {
+            logger.debug({ channelUserId, text: text.substring(0, 100), chatType, chatId }, 'Sending reply via WeWork');
+            if (streamSnapshot) {
+              await this.sendMessage(channelUserId, text, { ...options, webhookUrl: replyWebhookUrl, chatId, chatType, weworkStreamId: streamSnapshot.streamId, turnFinal: options?.turnFinal === true });
+              return;
+            }
+            if (responseUrl) {
+              await this.sendAIBotResponse(responseUrl, text);
+              return;
+            }
+
+            await this.sendMessage(channelUserId, text, {
+              ...options,
+              webhookUrl: replyWebhookUrl,
+              chatId: chatId,
+              chatType: chatType
+            });
+          },
+          sendTyping: async () => {
+            // WeWork webhook doesn't support typing indicator
+          }
+        };
+
+        const message: ChannelMessage = {
+          parts: parts && parts.length ? parts : [{ text: content }],
+          channelUserId: channelUserId,
+          conversationId: channelUserId,
+          username: userName
+        };
+
+        this.messageHandler(ctx, message);
+      } else {
+        logger.warn('No message handler configured for WeWork channel');
+      }
+
+      return this.rememberInboundResult(callbackMsgId, {
+        handled: true,
+        passiveResponse: streamSnapshot?.delivery.mode === 'webhook' ? buildWeWorkStreamResponse(streamSnapshot) : undefined,
+      });
+    }
+
+    const xmlData = body.xml || body;
+    logger.debug({
+      msgtype: body.msgtype,
+      hasText: !!body.text,
+      hasContent: !!body.text?.content,
+      hasXml: !!body.xml,
+      hasFrom: !!xmlData.From,
+      hasXmlContent: !!(xmlData.Content || xmlData.Text?.Content),
+      msgType: xmlData.MsgType,
+      content,
+      userId,
+      bodyKeys: Object.keys(body),
+      xmlKeys: Object.keys(xmlData),
+      fullBody: body
+    }, 'Received WeWork webhook without processable content');
+    return this.rememberInboundResult(callbackMsgId, { handled: false });
   }
 
   private extractWebhookKey(webhookUrl: string): string | undefined {
@@ -384,14 +861,28 @@ export class WeWorkWebhookChannel implements Channel {
     directUrl?: string;
     mediaId?: string;
     encrypted?: boolean;
+    aeskey?: string;
   }): Promise<Buffer> {
+    const maybeDecrypt = (buffer: Buffer): Buffer => {
+      if (!options.encrypted) {
+        return buffer;
+      }
+      if (options.aeskey) {
+        return decryptWeWorkAesBuffer(buffer, options.aeskey);
+      }
+      if (this.crypto) {
+        return this.crypto.decryptAttachment(buffer);
+      }
+      throw new Error('Encrypted WeWork media requires aeskey or callback encodingAESKey');
+    };
+
     if (options.directUrl) {
       const response = await axios.get(options.directUrl, {
         responseType: 'arraybuffer',
         timeout: 20000,
       });
       const buffer = Buffer.from(response.data);
-      return options.encrypted && this.crypto ? this.crypto.decryptAttachment(buffer) : buffer;
+      return maybeDecrypt(buffer);
     }
 
     if (options.mediaId) {
@@ -416,7 +907,7 @@ export class WeWorkWebhookChannel implements Channel {
       }
 
       const buffer = Buffer.from(response.data);
-      return options.encrypted && this.crypto ? this.crypto.decryptAttachment(buffer) : buffer;
+      return maybeDecrypt(buffer);
     }
 
     logger.warn({ options }, 'No WeWork media download source available');
@@ -452,6 +943,7 @@ export class WeWorkWebhookChannel implements Channel {
       webhookUrl: payload.response_url || this.webhookUrl,
       directUrl: url,
       encrypted: true,
+      aeskey: media.aeskey,
     });
     const saved = await saveInboundChannelFile({
       platform: this.platform,
@@ -631,6 +1123,102 @@ export class WeWorkWebhookChannel implements Channel {
     }
   }
 
+  private async pushWebSocketStream(snapshot: WeWorkStreamSnapshot): Promise<void> {
+    if (snapshot.delivery.mode !== 'websocket' || !snapshot.delivery.reqId) {
+      return;
+    }
+    await this.sendWebSocketCommand('aibot_respond_msg', buildWeWorkStreamResponse(snapshot), snapshot.delivery.reqId);
+  }
+
+  private getWebSocketChatType(options?: any): number | undefined {
+    if (options?.chat_type !== undefined) {
+      return Number(options.chat_type);
+    }
+    if (options?.chatType === 'single') return 1;
+    if (options?.chatType === 'group') return 2;
+    return undefined;
+  }
+
+  private async sendWebSocketProactiveMessage(userId: string, payload: any, options?: any): Promise<void> {
+    const body = {
+      chatid: options?.chatId || userId,
+      ...(this.getWebSocketChatType(options) !== undefined ? { chat_type: this.getWebSocketChatType(options) } : {}),
+      ...payload,
+    };
+    await this.sendWebSocketCommand('aibot_send_msg', body);
+  }
+
+  private async maybeAggregateStreamMessage(userId: string, text: string, options?: any): Promise<boolean> {
+    if (!this.streamEnabled) {
+      return false;
+    }
+
+    const streamId = typeof options?.weworkStreamId === 'string' ? options.weworkStreamId : undefined;
+    if (!streamId) {
+      return false;
+    }
+
+    const existing = this.streamAggregator.getByStreamId(streamId);
+    if (!existing) {
+      logger.warn({ streamId, userId }, 'Skipping WeWork stream-bound message because stream id is unknown or expired');
+      return true;
+    }
+    if (existing.conversationId !== userId) {
+      logger.warn({ streamId, expectedConversationId: existing.conversationId, actualConversationId: userId }, 'WeWork stream conversation mismatch, skipping aggregation');
+      return true;
+    }
+
+    const progress = this.normalizeChannelTurnProgress(options?.channelTurnProgress);
+    const snapshot = progress
+      ? this.streamAggregator.applyProgressByStreamId(streamId, progress)
+      : this.streamAggregator.appendByStreamId(streamId, text, { finish: !!options?.turnFinal });
+    if (!snapshot) {
+      return false;
+    }
+    if (snapshot.content === existing.content && snapshot.finish === existing.finish) {
+      return true;
+    }
+
+    if (snapshot.delivery.mode === 'websocket') {
+      await this.pushWebSocketStream(snapshot);
+    }
+    // Webhook mode is pull-based: WeWork fetches the latest snapshot through
+    // subsequent msgtype=stream callbacks, so updating local state is enough.
+    return true;
+  }
+
+  private normalizeChannelTurnProgress(value: unknown): ChannelTurnProgress | undefined {
+    if (!value || typeof value !== 'object') {
+      return undefined;
+    }
+    const progress = value as any;
+    if (progress.type === 'llm-start') {
+      return { type: 'llm-start' };
+    }
+    if (progress.type === 'tool-calls-start' && Array.isArray(progress.calls)) {
+      return {
+        type: 'tool-calls-start',
+        calls: progress.calls
+          .filter((call: any) => typeof call?.id === 'string' && call.id && typeof call?.name === 'string' && call.name)
+          .map((call: any) => ({ id: call.id, name: call.name })),
+        ...(typeof progress.text === 'string' && progress.text.trim() ? { text: progress.text } : {}),
+      };
+    }
+    if (progress.type === 'tool-calls-finish' && Array.isArray(progress.results)) {
+      return {
+        type: 'tool-calls-finish',
+        results: progress.results
+          .filter((result: any) => typeof result?.id === 'string' && result.id && typeof result?.name === 'string' && result.name)
+          .map((result: any) => ({
+            id: result.id,
+            name: result.name,
+            status: result.status === 'error' ? 'error' : 'success',
+          })),
+      };
+    }
+    return undefined;
+  }
+
   private buildMultipartBody(file: ChannelFile, buffer: Buffer, boundary: string): Buffer {
     const header = Buffer.from(
       `--${boundary}\r\n` +
@@ -673,11 +1261,35 @@ export class WeWorkWebhookChannel implements Channel {
 
   async sendMessage(userId: string, text: string, options?: any): Promise<void> {
     try {
+      const hasStreamBinding = typeof options?.weworkStreamId === 'string';
+      if (hasStreamBinding && !this.streamEnabled) {
+        logger.warn({ streamId: options.weworkStreamId, userId }, 'Skipping WeWork stream-bound message because stream aggregation is disabled on this channel');
+        return;
+      }
+
+      if (await this.maybeAggregateStreamMessage(userId, text, options)) {
+        return;
+      }
+
+      if (hasStreamBinding) {
+        logger.warn({ streamId: options.weworkStreamId, userId }, 'Skipping WeWork stream-bound message because it was not accepted by the stream aggregator');
+        return;
+      }
+
       // 企业微信群机器人支持多种消息类型，默认使用 markdown
       const messageType = options?.messageType || 'markdown';
       
       // Use provided webhookUrl or fall back to configured one
       const webhookUrl = options?.webhookUrl || this.webhookUrl;
+      if (!webhookUrl && this.websocketConfig?.enabled) {
+        const websocketPayload = {
+          msgtype: 'markdown',
+          markdown: { content: text },
+        };
+        await this.sendWebSocketProactiveMessage(userId, websocketPayload, options);
+        return;
+      }
+
       if (!webhookUrl) {
         throw new Error('WeWork webhookUrl is not configured for proactive sendMessage');
       }

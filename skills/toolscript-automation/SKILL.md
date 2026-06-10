@@ -1,9 +1,9 @@
 ---
-name: toolscript_automation
+name: toolscript-automation
 description: Use ToolScript when you want one script to orchestrate multiple tool calls, capture structured results, and optionally pause for agent input.
 ---
 
-# toolscript_automation
+# toolscript-automation
 
 Use this skill when a task is better expressed as a **small script that drives tools** instead of a normal one-shot tool loop.
 
