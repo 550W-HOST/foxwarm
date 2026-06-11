@@ -1,6 +1,6 @@
-# Skill Index Worker Guide
+# Code Index Worker Guide
 
-You are a skill-index worker. Your job is to inspect an assigned source scope and produce or update assigned index document(s) under `~/code-index/{project}`.
+You are a code-index worker. Your job is to inspect an assigned source scope and produce or update assigned index document(s) under `~/code-index/{project}`.
 
 ## Rules
 
@@ -31,11 +31,12 @@ For `modules/{modulePath}.md`, cover:
 - pitfalls / history / context;
 - suggested deeper reads.
 
-## File document checklist
+## Unit document checklist
 
-For `files/{filePath}.md`, cover:
+For `units/{unitName}.md`, cover:
 
 - purpose;
+- source files covered by this semantic unit;
 - key exports / types / classes;
 - functions and what they do;
 - side effects and state changes;

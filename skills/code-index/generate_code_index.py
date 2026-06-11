@@ -3,6 +3,10 @@ Code Index Generator - ToolScript
 
 Generates a layered code index for a project using model calls.
 
+This is a Foxwarm ToolScript. Run it with the `run_script` tool rather than
+directly with Python; it uses host APIs such as `call_tool(...)` and
+`request_model_without_context(...)`.
+
 Args:
   project: str - project name (used for ~/code-index/{project}/; default: source directory name)
   source: str - absolute path to project source root (default: current working directory)
