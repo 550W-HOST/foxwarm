@@ -143,6 +143,7 @@ type ModelStreamProgressSnapshot = {
 };
 
 const MODEL_STREAM_EVENT_THROTTLE_MS = 80;
+const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
 function newModelStreamId(iteration: number): string {
     return `ms_${iteration}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1405,7 +1406,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             try {
                 response = await axios.post(url, requestBody, {
                     headers: { ...headers, ...compressionHeaders, ...(modelEntry.extraHeaders || {}) },
-                    timeout: options.timeoutMs ?? 180000,
+                    timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
                     validateStatus: () => true,
                     signal: abortController.signal,
                     ...(useStreamingApi ? { responseType: 'stream' as const } : {}),
