@@ -22,6 +22,7 @@ const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
   'This session has been compacted.',
   'Compacted message placeholder:',
   'Compaction completed.',
+  '**COMPACTION COMPLETED.',
   'Manual compaction completed.',
 ];
 

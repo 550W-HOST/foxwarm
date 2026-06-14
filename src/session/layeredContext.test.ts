@@ -21,6 +21,7 @@ test('recognizes compact lifecycle system texts that should be ignored in compac
   assert.equal(isIgnoredCompactLifecycleSystemText('This session has been compacted. Messages before this are removed.'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('Compacted message placeholder: 4 message(s) from #1-#4 were removed from working history here.'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('Compaction completed. You can continue working now.'), true);
+  assert.equal(isIgnoredCompactLifecycleSystemText('**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.**'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('Manual compaction completed.'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('current time = 2026-03-18 00:00'), false);
 });
@@ -44,9 +45,10 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
   assert.equal(shouldIgnoreMessageInCompactCandidates(mixedContent), false);
 });
 
-test('formatCompactionCompletionMarker appends a bold session identity hint without changing the base message prefix', () => {
+test('formatCompactionCompletionMarker uses the bold completion identity hint without a duplicate prefix or newline', () => {
   const text = formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.', 'parent-456');
-  assert.equal(text, 'Compaction completed. You can continue working now.\n**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.**');
+  assert.equal(text, '**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.** You can continue working now.');
+  assert.equal(formatCompactionCompletionMarker('session-123', 'Compaction completed.', 'parent-456'), '**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.**');
   assert.equal(isIgnoredCompactLifecycleSystemText(text), true);
 });
 

@@ -231,7 +231,7 @@ async function main(): Promise<void> {
         const userTexts = activeSession.history
           .filter(message => message.role === 'user')
           .map(message => message.parts.map(part => part.system || part.text || '').join('\n'));
-        assert(userTexts.some(text => text === `Compaction completed.\n**COMPACTION COMPLETED. PARENT SESSION \`(none)\`. CURRENT SESSION ID IS \`${sessionId}\`.**`));
+        assert(userTexts.some(text => text === `**COMPACTION COMPLETED. PARENT SESSION \`(none)\`. CURRENT SESSION ID IS \`${sessionId}\`.**`));
         await appendStubModelMessage(activeSession, 'handled after compact boundary');
         return { text: 'handled after compact boundary' };
       };

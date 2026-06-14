@@ -824,9 +824,13 @@ async function finalizeCompaction(
 
 export function formatCompactionCompletionMarker(sessionId: string, completionMarker: string, parentSessionId?: string): string {
   const suffix = formatSessionIdentityHint({ parentSessionId, sessionId, variant: 'compact' });
-  return completionMarker.includes(suffix)
-    ? completionMarker
-    : `${completionMarker}\n${suffix}`;
+  const markerWithoutSuffix = completionMarker.includes(suffix)
+    ? completionMarker.replace(suffix, '')
+    : completionMarker;
+  const extraMarkerText = markerWithoutSuffix
+    .replace(/^\s*Compaction completed\.?\s*/i, '')
+    .trim();
+  return extraMarkerText ? `${suffix} ${extraMarkerText}` : suffix;
 }
 
 async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot): Promise<CompactJobResult> {
