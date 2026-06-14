@@ -203,7 +203,7 @@ export interface QueueItem {
 }
 
 export type ContextFrontierItem =
-  | { kind: 'message'; seq: number }
+  | { kind: 'message'; seq: number; preservedFromBlockId?: number }
   | { kind: 'block'; id: number; level: number; rawStartSeq: number; rawEndSeq: number };
 
 export interface Session {

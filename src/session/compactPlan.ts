@@ -15,6 +15,7 @@ export type CompactCandidateItem =
       endSeq: number;
       preview: string;
       estimatedTokens: number;
+      segmentId?: number;
     }
   | {
       kind: 'block';
@@ -26,7 +27,15 @@ export type CompactCandidateItem =
       preview: string;
       estimatedTokens: number;
       allowSingleBlockCompact?: boolean;
+      segmentId?: number;
     };
+
+export interface PreservedMessageCandidateItem {
+  seq: number;
+  key: string;
+  preservedFromBlockId?: number;
+  preview: string;
+}
 
 export interface LayeredCreateBlockPlan {
   level: number;
@@ -49,6 +58,8 @@ export interface ExtractedMemoryFact {
 export interface CompactPlan {
   createBlocks: LayeredCreateBlockPlan[];
   memoryFacts?: ExtractedMemoryFact[];
+  preserveMessages?: number[];
+  removePreservedMessages?: number[];
 }
 
 export interface CompactPlanValidationDetails {
@@ -68,13 +79,23 @@ export class CompactPlanValidationError extends Error {
 export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   name: COMPACT_PLAN_TOOL_NAME,
   defaultInject: true, // Keep compact/normal tool schemas stable for prompt-cache/KV-cache hits.
-  description: 'Submit layered-context block creation plan for older context items. Create one or more continuous same-level summary blocks; unmentioned older items stay verbatim in working history.',
+  description: 'Submit layered-context block creation/removal plan for older context items. Create continuous same-level summary blocks, optionally preserve a few covered raw messages verbatim, or remove previously preserved raw messages from working history. Unmentioned older items stay verbatim.',
   parameters: {
     type: 'object',
     properties: {
       createBlocksJson: {
         type: 'string',
-        description: 'JSON array string for createBlocks. Each item should be an object like {"level":1,"sourceKind":"message","sourceStart":10,"sourceEnd":12,"summary":"..."}.',
+        description: 'JSON array string for createBlocks. Each item should be an object like {"level":1,"sourceKind":"message","sourceStart":10,"sourceEnd":12,"summary":"..."}. Use [] when the only operation is removePreservedMessages.',
+      },
+      preserveMessages: {
+        type: 'array',
+        items: { type: 'number' },
+        description: 'Optional small list of raw message seq numbers to keep verbatim even though they are covered by a created message-source summary block. Preserved messages are extracted after the covering block in working history.',
+      },
+      removePreservedMessages: {
+        type: 'array',
+        items: { type: 'number' },
+        description: 'Optional list of previously preserved raw message seq numbers to remove from working history/frontier. This never deletes archive records or summary blocks, and can only target messages listed as preserved in the compact prompt.',
       },
       memoryFactsJson: {
         type: 'string',
@@ -115,6 +136,35 @@ function parseOptionalJsonArray(rawValue: unknown): unknown[] | null {
   }
 
   return null;
+}
+
+function normalizePositiveIntegerArray(rawArgs: Record<string, any>, key: 'preserveMessages' | 'removePreservedMessages', details: CompactPlanValidationDetails): number[] {
+  const rawValue = rawArgs[key];
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    return [];
+  }
+
+  const rawArray = parseOptionalJsonArray(rawValue);
+  if (!rawArray) {
+    details.createBlockErrors.push(`${key} must be an array of positive integer message seq numbers.`);
+    return [];
+  }
+
+  const result: number[] = [];
+  const seen = new Set<number>();
+  rawArray.forEach((value, index) => {
+    const numberValue = Number(value);
+    if (!Number.isInteger(numberValue) || numberValue < 1) {
+      details.createBlockErrors.push(`${key}[${index}] must be a positive integer message seq number.`);
+      return;
+    }
+    if (!seen.has(numberValue)) {
+      seen.add(numberValue);
+      result.push(numberValue);
+    }
+  });
+
+  return result;
 }
 
 export function normalizeMemoryFacts(rawArgs: Record<string, any>): ExtractedMemoryFact[] {
@@ -191,7 +241,7 @@ export function trimPreview(text: string, limit: number = DEFAULT_PREVIEW_CHAR_L
   return truncateUnicodeSafeWithEllipsis(normalized, limit, '…');
 }
 
-export function buildMessageCandidateItem(startSeq: number, endSeq: number, preview: string, estimatedTokens: number = estimateTokenCount(preview)): CompactCandidateItem {
+export function buildMessageCandidateItem(startSeq: number, endSeq: number, preview: string, estimatedTokens: number = estimateTokenCount(preview), segmentId?: number): CompactCandidateItem {
   return {
     kind: 'message',
     key: startSeq === endSeq ? `M#${startSeq}` : `M#${startSeq}-#${endSeq}`,
@@ -199,6 +249,7 @@ export function buildMessageCandidateItem(startSeq: number, endSeq: number, prev
     endSeq,
     preview,
     estimatedTokens,
+    ...(typeof segmentId === 'number' ? { segmentId } : {}),
   };
 }
 
@@ -210,6 +261,7 @@ export function buildBlockCandidateItem(
   summary: string,
   estimatedTokens: number = estimateTokenCount(summary),
   allowSingleBlockCompact: boolean = false,
+  segmentId?: number,
 ): CompactCandidateItem {
   return {
     kind: 'block',
@@ -221,6 +273,7 @@ export function buildBlockCandidateItem(
     preview: summary,
     estimatedTokens,
     allowSingleBlockCompact,
+    ...(typeof segmentId === 'number' ? { segmentId } : {}),
   };
 }
 
@@ -280,6 +333,10 @@ function canAppendToCandidateSegment(segment: CandidateSegment, item: CompactCan
   const previous = segment.items[segment.items.length - 1];
   if (!previous) {
     return true;
+  }
+
+  if ((previous.segmentId ?? 0) !== (item.segmentId ?? 0)) {
+    return false;
   }
 
   if (item.kind === 'message') {
@@ -344,9 +401,10 @@ export function buildCompactPromptText(options: {
   forcedKeptStartSeq?: number;
   forcedKeptEndSeq?: number;
   candidateItems: CompactCandidateItem[];
+  preservedMessages?: PreservedMessageCandidateItem[];
   guidance?: string;
 }): string {
-  const { forcedKeptCount, forcedKeptStartSeq, forcedKeptEndSeq, candidateItems, guidance } = options;
+  const { forcedKeptCount, forcedKeptStartSeq, forcedKeptEndSeq, candidateItems, preservedMessages = [], guidance } = options;
   const lines: string[] = [
     'COMPACTION STARTED: stop any previous task and focus only on layered-context compaction.',
     `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. No need to summarize/replace them.`,
@@ -355,6 +413,10 @@ export function buildCompactPromptText(options: {
   // Group candidates by legal compression boundaries instead of only by target level.
   // In particular, block ranges must not cross a different source level/source kind.
   const segments = buildCandidateSegments(candidateItems);
+
+  if (segments.length === 0) {
+    lines.push('No normal summary-block candidate segments are available in this compaction slice.');
+  }
 
   for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
     const segment = segments[segmentIndex];
@@ -376,13 +438,29 @@ export function buildCompactPromptText(options: {
     }
   }
 
+  if (preservedMessages.length > 0) {
+    lines.push(
+      'Previously preserved raw messages already covered by summary blocks:',
+      'These are still verbatim in working history for exact wording. If the summary block is now sufficient, remove them with removePreservedMessages: number[]. Do not summarize them again just to remove them.',
+    );
+    for (const item of preservedMessages) {
+      const preview = trimPreview(item.preview, EDGE_PREVIEW_CHAR_LIMIT) || '[empty message]';
+      const source = typeof item.preservedFromBlockId === 'number'
+        ? ` preserved from B#${item.preservedFromBlockId}`
+        : ' preserved from a prior summary block';
+      lines.push(`- ${item.key}${source}: ${preview}`);
+    }
+  }
+
   lines.push(
     `Review the older candidate items above and finish by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
     'Rules:',
-    '- Pass the plan via createBlocksJson as a JSON array string.',
+    '- Pass summary-block creations via createBlocksJson as a JSON array string. Use createBlocksJson: "[]" if you only need to remove previously preserved raw messages.',
     '- Optionally pass durable extracted facts via memoryFactsJson as a JSON array string. Memory facts are separate from block summaries; they are used only for long-term semantic search and invalid/omitted facts will be ignored.',
     '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
-    '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim.',
+    '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim unless listed in removePreservedMessages.',
+    '- Use preserveMessages for a small number of raw message seqs that must remain verbatim even though they are covered by a newly created message-source block. The system will extract them after the covering block in working history.',
+    '- Use removePreservedMessages only for messages listed in the "Previously preserved raw messages" section. This removes the raw message from working history/frontier only; it does not delete archive records or existing summary blocks.',
     '- Block compression is optional. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from createBlocksJson.',
     '- If a block/message still seems useful, you can leave it uncompressed by simply omitting it from createBlocksJson.',
     '- Treat each Segment header as a hard boundary: createBlocksJson ranges must stay inside one listed segment and must not cross different block levels or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
@@ -423,6 +501,10 @@ function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPla
       details.createBlockErrors.push(`createBlocksJson must be valid JSON: ${e.message}`);
       return [];
     }
+  }
+
+  if (rawCreateBlocks === undefined || rawCreateBlocks === null || rawCreateBlocks === '') {
+    return [];
   }
 
   if (!Array.isArray(rawCreateBlocks)) {
@@ -474,10 +556,12 @@ function findMessageRange(candidateItems: CompactCandidateItem[], sourceStart: n
   const startIndex = candidateItems.findIndex(item => item.kind === 'message' && item.startSeq === sourceStart);
   if (startIndex < 0) return null;
 
+  const startSegmentId = candidateItems[startIndex].segmentId ?? 0;
+
   let endIndex = startIndex - 1;
   for (let index = startIndex; index < candidateItems.length; index += 1) {
     const item = candidateItems[index];
-    if (item.kind !== 'message') {
+    if (item.kind !== 'message' || (item.segmentId ?? 0) !== startSegmentId) {
       break;
     }
     endIndex = index;
@@ -507,10 +591,12 @@ function findBlockRange(candidateItems: CompactCandidateItem[], level: number, s
   const startIndex = candidateItems.findIndex(item => item.kind === 'block' && item.id === sourceStart && item.level === childLevel);
   if (startIndex < 0) return null;
 
+  const startSegmentId = candidateItems[startIndex].segmentId ?? 0;
+
   let endIndex = startIndex - 1;
   for (let index = startIndex; index < candidateItems.length; index += 1) {
     const item = candidateItems[index];
-    if (item.kind !== 'block' || item.level !== childLevel) {
+    if (item.kind !== 'block' || item.level !== childLevel || (item.segmentId ?? 0) !== startSegmentId) {
       break;
     }
     endIndex = index;
@@ -522,18 +608,65 @@ function findBlockRange(candidateItems: CompactCandidateItem[], level: number, s
   return null;
 }
 
-function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidateItems: CompactCandidateItem[]): CompactPlanValidationDetails {
+type CompactPlanValidationOptions = {
+  removablePreservedMessages?: PreservedMessageCandidateItem[];
+};
+
+function getMessageCandidateCoveringSeq(candidateItems: CompactCandidateItem[], seq: number): Extract<CompactCandidateItem, { kind: 'message' }> | undefined {
+  return candidateItems.find((item): item is Extract<CompactCandidateItem, { kind: 'message' }> => (
+    item.kind === 'message' && item.startSeq <= seq && item.endSeq >= seq
+  ));
+}
+
+function isSeqCoveredByCreatedMessageBlock(createBlocks: LayeredCreateBlockPlan[], seq: number): boolean {
+  return createBlocks.some(block => block.sourceKind === 'message' && block.sourceStart <= seq && block.sourceEnd >= seq);
+}
+
+function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidateItems: CompactCandidateItem[], options: CompactPlanValidationOptions = {}): CompactPlanValidationDetails {
   const details: CompactPlanValidationDetails = {
     createBlockErrors: [],
   };
 
   const createBlocks = normalizeCreateBlocks(rawArgs, details);
+  const preserveMessages = normalizePositiveIntegerArray(rawArgs, 'preserveMessages', details);
+  const removePreservedMessages = normalizePositiveIntegerArray(rawArgs, 'removePreservedMessages', details);
   if (details.createBlockErrors.length > 0) {
     return details;
   }
 
-  if (createBlocks.length === 0) {
-    details.createBlockErrors.push('createBlocks must contain at least one block.');
+  if (createBlocks.length === 0 && removePreservedMessages.length === 0) {
+    details.createBlockErrors.push('createBlocks must contain at least one block unless removePreservedMessages removes previously preserved raw messages.');
+    return details;
+  }
+
+  const removeSet = new Set(removePreservedMessages);
+  for (const seq of preserveMessages) {
+    if (removeSet.has(seq)) {
+      details.createBlockErrors.push(`msg#${seq} cannot appear in both preserveMessages and removePreservedMessages.`);
+    }
+    const coveringCandidate = getMessageCandidateCoveringSeq(candidateItems, seq);
+    if (!coveringCandidate) {
+      details.createBlockErrors.push(`preserveMessages contains msg#${seq}, but that raw message is not present in the current compact message candidates.`);
+      continue;
+    }
+    if (coveringCandidate.startSeq !== coveringCandidate.endSeq) {
+      details.createBlockErrors.push(`preserveMessages contains msg#${seq}, but it is inside atomic candidate ${coveringCandidate.key}; do not preserve only part of a grouped tool call/response candidate.`);
+    }
+    if (!isSeqCoveredByCreatedMessageBlock(createBlocks, seq)) {
+      details.createBlockErrors.push(`preserveMessages contains msg#${seq}, but that message is not covered by any created message-source block. If you want it to stay verbatim outside compaction, leave it out of the compacted range instead.`);
+    }
+  }
+
+  if (removePreservedMessages.length > 0) {
+    const removableSeqs = new Set((options.removablePreservedMessages || []).map(item => item.seq));
+    for (const seq of removePreservedMessages) {
+      if (!removableSeqs.has(seq)) {
+        details.createBlockErrors.push(`removePreservedMessages contains msg#${seq}, but that message is not listed as a previously preserved raw message in the current compact candidates.`);
+      }
+    }
+  }
+
+  if (details.createBlockErrors.length > 0) {
     return details;
   }
 
@@ -570,15 +703,19 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
   return details;
 }
 
-export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateItems: CompactCandidateItem[]): CompactPlan {
-  const details = getCompactPlanValidationDetails(rawArgs, candidateItems);
+export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateItems: CompactCandidateItem[], options: CompactPlanValidationOptions = {}): CompactPlan {
+  const details = getCompactPlanValidationDetails(rawArgs, candidateItems, options);
   if (details.createBlockErrors.length > 0) {
     throw new CompactPlanValidationError(details);
   }
 
+  const noopDetails: CompactPlanValidationDetails = { createBlockErrors: [] };
+
   return {
-    createBlocks: normalizeCreateBlocks(rawArgs, { createBlockErrors: [] }),
+    createBlocks: normalizeCreateBlocks(rawArgs, noopDetails),
     memoryFacts: normalizeMemoryFacts(rawArgs),
+    preserveMessages: normalizePositiveIntegerArray(rawArgs, 'preserveMessages', noopDetails),
+    removePreservedMessages: normalizePositiveIntegerArray(rawArgs, 'removePreservedMessages', noopDetails),
   };
 }
 
@@ -587,6 +724,7 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
     'COMPACT PLAN INVALID.',
     error.message,
     'Use only ranges shown in one Segment header; do not cross segment boundaries, different block levels, or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
+    'Use preserveMessages only for raw messages covered by a newly created message-source block; use removePreservedMessages only for messages listed as previously preserved in the prompt.',
     `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. Do not read or write agent memory during compaction; use memoryFactsJson for durable facts instead.`,
   ].join(' ');
 }

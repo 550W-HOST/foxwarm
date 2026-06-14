@@ -12,6 +12,22 @@ function blockEntry(id: number, level: number, index: number): LayeredCompactCan
   };
 }
 
+function messageEntry(startSeq: number, endSeq: number, index: number, segmentId?: number): LayeredCompactCandidateEntry {
+  return {
+    item: {
+      kind: 'message',
+      key: startSeq === endSeq ? `M#${startSeq}` : `M#${startSeq}-#${endSeq}`,
+      startSeq,
+      endSeq,
+      preview: `message ${startSeq}`,
+      estimatedTokens: 10,
+      ...(typeof segmentId === 'number' ? { segmentId } : {}),
+    },
+    frontierStartIndex: index,
+    frontierEndIndex: index,
+  };
+}
+
 test('resolveCreateBlockRanges follows frontier order for non-consecutive block ids', () => {
   const entries = [
     blockEntry(11, 2, 0),
@@ -76,4 +92,21 @@ test('resolveCreateBlockRanges rejects block ranges that cross a different sourc
       summary: 'invalid cross-level summary',
     }],
   }, entries), /Unable to resolve layered compact block range 11-118/);
+});
+
+test('resolveCreateBlockRanges rejects message ranges across preserved-message segment boundaries', () => {
+  const entries = [
+    messageEntry(1, 1, 0, 1),
+    messageEntry(3, 3, 2, 2),
+  ];
+
+  assert.throws(() => resolveCreateBlockRanges({
+    createBlocks: [{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 3,
+      summary: 'invalid range across a preserved raw message boundary',
+    }],
+  }, entries), /Unable to resolve layered compact message range 1-3/);
 });

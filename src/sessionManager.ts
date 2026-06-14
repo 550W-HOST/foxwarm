@@ -23,6 +23,7 @@ import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetada
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
+import { formatSessionIdentityHint } from './session/identityHint';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
 
@@ -946,7 +947,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   // Add separator message
   appendedForkMessages.push({
     role: 'user',
-    parts: [systemPart('**HISTORY ABOVE IS INHERITED FROM PARENT SESSION FOR REFERENCE ONLY. FOLLOW THE INSTRUCTIONS BELOW**')],
+    parts: [systemPart(formatSessionIdentityHint({ parentSessionId: sourceSessionId, sessionId: newSessionId, variant: 'inherited' }))],
     __meta: { timestamp: Date.now() }
   });
 
@@ -1057,7 +1058,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
 
     const initialMessage: Message = {
       role: 'user',
-      parts: [systemPart(`You are a child session (new, empty context) with parent session \`${parentSessionId}\`. Your current session ID is \`${childSessionId}\`. ${buildChildCompletionInstruction(parentSessionId)}`)],
+      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId, sessionId: childSessionId, variant: 'new-child' })}\nYou are a child session (new, empty context). ${buildChildCompletionInstruction(parentSessionId)}`)],
       __meta: { timestamp: Date.now() }
     };
 

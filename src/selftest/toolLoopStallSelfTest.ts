@@ -598,7 +598,8 @@ async function main(): Promise<void> {
         sessionId,
         startSeq: 2,
         endSeq: 3,
-        previewLength: 200,
+        previewLength: 1000,
+        toolDetail: 'full',
       }, { sessionId, session });
 
       assert.match(String(output), /Archived messages for session/);

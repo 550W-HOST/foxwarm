@@ -169,6 +169,8 @@ test('filterCompactCandidateItemsByLevel does not let an unsupported single bloc
 test('submit compact plan opts into the normal model-facing tool schema', () => {
   assert.equal(COMPACT_PLAN_TOOL_DEFINITION.defaultInject, true);
   assert.ok(COMPACT_PLAN_TOOL_DEFINITION.parameters.properties.memoryFactsJson);
+  assert.ok(COMPACT_PLAN_TOOL_DEFINITION.parameters.properties.preserveMessages);
+  assert.ok(COMPACT_PLAN_TOOL_DEFINITION.parameters.properties.removePreservedMessages);
 });
 
 test('buildCompactPlanValidationFeedback does not suggest memory or archive helpers during compaction', () => {
@@ -244,6 +246,100 @@ test('validateCompactPlanArgs accepts optional memory facts without making them 
     context: 'User requested a mem0-inspired compact memory pipeline.',
     attributedTo: 'user',
   }]);
+});
+
+test('compact prompt lists preserved raw messages separately with removePreservedMessages guidance', () => {
+  const prompt = buildCompactPromptText({
+    forcedKeptCount: 0,
+    candidateItems: [buildMessageCandidateItem(1, 1, 'ordinary compact candidate')],
+    preservedMessages: [{
+      seq: 42,
+      key: 'M#42',
+      preservedFromBlockId: 7,
+      preview: 'Exact original task instruction to keep active.',
+    }],
+  });
+
+  assert.match(prompt, /Previously preserved raw messages already covered by summary blocks/);
+  assert.match(prompt, /M#42 preserved from B#7/);
+  assert.match(prompt, /removePreservedMessages: number\[\]/);
+  assert.match(prompt, /working history\/frontier only/i);
+});
+
+test('validateCompactPlanArgs accepts preserveMessages covered by a created message block', () => {
+  const plan = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 3,
+      summary: 'summary around a preserved original instruction',
+    }]),
+    preserveMessages: [2],
+  }, messageCandidates);
+
+  assert.deepStrictEqual(plan.preserveMessages, [2]);
+});
+
+test('validateCompactPlanArgs rejects preserveMessages not covered by created message blocks', () => {
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 2,
+      summary: 'summary for first two messages',
+    }]),
+    preserveMessages: [3],
+  }, messageCandidates), /not covered by any created message-source block/i);
+});
+
+test('validateCompactPlanArgs rejects preserving part of an atomic tool exchange candidate', () => {
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 10,
+      sourceEnd: 11,
+      summary: 'summary for atomic tool exchange',
+    }]),
+    preserveMessages: [11],
+  }, [buildMessageCandidateItem(10, 11, 'tool call and response')]), /inside atomic candidate M#10-#11/i);
+});
+
+test('validateCompactPlanArgs accepts removePreservedMessages only for listed preserved messages', () => {
+  const plan = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([]),
+    removePreservedMessages: [42],
+  }, [], {
+    removablePreservedMessages: [{ seq: 42, key: 'M#42', preservedFromBlockId: 7, preview: 'old exact wording' }],
+  });
+
+  assert.deepStrictEqual(plan.createBlocks, []);
+  assert.deepStrictEqual(plan.removePreservedMessages, [42]);
+
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([]),
+    removePreservedMessages: [43],
+  }, [], {
+    removablePreservedMessages: [{ seq: 42, key: 'M#42', preservedFromBlockId: 7, preview: 'old exact wording' }],
+  }), /not listed as a previously preserved raw message/i);
+});
+
+test('validateCompactPlanArgs rejects preserve/remove overlap', () => {
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 2,
+      summary: 'summary',
+    }]),
+    preserveMessages: [2],
+    removePreservedMessages: [2],
+  }, messageCandidates, {
+    removablePreservedMessages: [{ seq: 2, key: 'M#2', preservedFromBlockId: 7, preview: 'old exact wording' }],
+  }), /cannot appear in both preserveMessages and removePreservedMessages/i);
 });
 
 test('validateCompactPlanArgs ignores malformed optional memory facts without invalidating the compact plan', () => {

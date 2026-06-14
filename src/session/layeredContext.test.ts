@@ -44,9 +44,9 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
   assert.equal(shouldIgnoreMessageInCompactCandidates(mixedContent), false);
 });
 
-test('formatCompactionCompletionMarker appends the session id without changing the base message prefix', () => {
-  const text = formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.');
-  assert.equal(text, 'Compaction completed. You can continue working now. (session: `session-123`)');
+test('formatCompactionCompletionMarker appends a bold session identity hint without changing the base message prefix', () => {
+  const text = formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.', 'parent-456');
+  assert.equal(text, 'Compaction completed. You can continue working now.\n**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.**');
   assert.equal(isIgnoredCompactLifecycleSystemText(text), true);
 });
 
