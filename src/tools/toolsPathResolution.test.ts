@@ -5,7 +5,7 @@ import path from 'path';
 import { getAgentDir, getAgentMemoryDir } from '../config';
 import * as sessionManager from '../sessionManager';
 import { checkToolPermission } from '../isolatedCheck';
-import { read, write, edit, apply_patch, apply_patch_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, search_memory, search_vector } from '../tools';
+import { read, write, edit, apply_patch, apply_patch_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, callTool } from '../tools';
 
 test('submit_compact_plan is present in regular tool definitions and guarded outside compact flow', async () => {
   assert.ok(definitions.some(def => def.name === 'submit_compact_plan'));
@@ -18,10 +18,16 @@ test('apply_patch_memory is present in regular tool definitions', () => {
   assert.ok(definitions.some(def => def.name === 'apply_patch_memory'));
 });
 
-test('search_vector is the public vector-memory tool name while search_memory remains a runtime alias', () => {
-  assert.ok(definitions.some(def => def.name === 'search_vector'));
+test('vector retrieval is exposed through recall rather than a separate search_vector tool', async () => {
+  assert.equal(definitions.some(def => def.name === 'search_vector'), false);
   assert.equal(definitions.some(def => def.name === 'search_memory'), false);
-  assert.equal(search_vector, search_memory);
+  const recallDef = definitions.find(def => def.name === 'recall');
+  assert.ok(recallDef);
+  assert.ok((recallDef.parameters.properties as any).vector_query);
+  await assert.rejects(
+    () => callTool('search_vector', { query: 'anything' }, { sessionId: 'test-session' }),
+    /Unknown tool: search_vector/,
+  );
 });
 
 test('file tools resolve relative paths from session cwd', async () => {
