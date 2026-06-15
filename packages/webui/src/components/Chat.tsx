@@ -74,6 +74,7 @@ interface ChatProps {
   onBack?: () => void
   onOpenWorkspace?: () => void
   onOpenTerminal?: () => void
+  guestMode?: boolean
   sendKeyMode?: 'modEnter' | 'enter'
   groupTools?: boolean
   showUsageBadge?: boolean
@@ -182,7 +183,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenWorkspace, onOpenTerminal, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenWorkspace, onOpenTerminal, guestMode = false, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -239,6 +240,10 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   }, [sessionId])
 
   useEffect(() => {
+    if (guestMode) {
+      setAsrAvailable(false)
+      return
+    }
     let cancelled = false
 
     const fetchAsrStatus = async () => {
@@ -260,9 +265,14 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [guestMode])
 
   useEffect(() => {
+    if (guestMode) {
+      setModelOptions([])
+      setModelError(null)
+      return
+    }
     let cancelled = false
 
     const fetchModels = async () => {
@@ -286,7 +296,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [guestMode])
 
   useEffect(() => {
     if (!sessionBusy) {
@@ -561,6 +571,15 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   }, [fetchHistory, sessionId])
 
   const refreshSessionDebugData = useCallback(async () => {
+    if (guestMode) {
+      setSessionRecord(null)
+      setResolvedSessionFilePath(null)
+      setSessionFilePayload(null)
+      setDebugInfoError(null)
+      setDebugInfoLoading(false)
+      return
+    }
+
     setDebugInfoLoading(true)
     setDebugInfoError(null)
 
@@ -590,7 +609,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     } finally {
       setDebugInfoLoading(false)
     }
-  }, [sessionId])
+  }, [guestMode, sessionId])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -718,6 +737,9 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   }, [showFullTimeline, messages.length])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
+    if (guestMode) {
+      return null
+    }
     const snapshotText = typeof sessionFilePayload?.persistentMemorySnapshot === 'string'
       ? sessionFilePayload.persistentMemorySnapshot.trim()
       : ''
@@ -734,7 +756,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
         synthetic: 'persistentMemorySnapshot',
       },
     }
-  }, [sessionFilePayload])
+  }, [guestMode, sessionFilePayload])
 
   const visibleMessages = useMemo(() => {
     if (showFullTimeline || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
@@ -845,6 +867,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       try {
         const formData = new FormData()
         formData.append('file', file)
+        formData.append('sessionId', sessionId)
 
         const uploadRes = await fetch(`${API_BASE_PATH}/upload`, {
           method: 'POST',
@@ -1065,7 +1088,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
         subtitle={<span className="font-mono text-[12px]">session {sessionId}</span>}
         onBack={isMobile ? onBack : undefined}
         sticky
-        actions={(
+        actions={guestMode ? null : (
           <>
             <button
               onClick={onOpenWorkspace}
@@ -1167,6 +1190,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
         sessionId={sessionId}
         sessionMissing={sessionMissing}
         loading={loading}
+        guestMode={guestMode}
         asrAvailable={asrAvailable}
         modelOptions={modelOptions}
         currentModelKey={sessionRecord?.modelKey}
@@ -1246,6 +1270,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&
   prev.sessionDisplayName === next.sessionDisplayName &&
+  prev.guestMode === next.guestMode &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   prev.onOpenWorkspace === next.onOpenWorkspace &&
   prev.onOpenTerminal === next.onOpenTerminal

@@ -36,6 +36,10 @@ type WebUiSettings = {
   tabIcon: string
 }
 
+type AuthSession =
+  | { role: 'admin'; features?: Record<string, boolean> }
+  | { role: 'guest'; tokenId: string; sessionIds: string[]; label?: string | null; expiresAt?: number | null; features?: Record<string, boolean> }
+
 const LIGHT_THEME_COLOR = '#f3f4f6'
 const DARK_THEME_COLOR = '#111827'
 const ARCHITECTURE_HASH = 'agents'
@@ -354,6 +358,7 @@ function App() {
   const [groupTools, setGroupTools] = useState<boolean>(() => localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true')
   const [showUsageBadge, setShowUsageBadge] = useState<boolean>(() => localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false')
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null)
 
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
@@ -398,6 +403,35 @@ function App() {
   const currentContextSessionRecord = sessions.find((session) => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
   const currentView: AppView = route.view === 'agents' ? 'agents' : route.view === 'setup' ? 'setup' : 'session'
   const busyCount = useMemo(() => sessions.filter((session) => session.busy).length, [sessions])
+  const guestMode = authSession?.role === 'guest'
+  const guestSessionIds = authSession?.role === 'guest' ? authSession.sessionIds : []
+  const guestSessionIdSet = useMemo(() => new Set(guestSessionIds), [guestSessionIds.join('|')])
+  const guestSessions = useMemo(() => guestMode ? sessions.filter((session) => guestSessionIdSet.has(session.id)) : [], [guestMode, guestSessionIdSet, sessions])
+  const isGuestAllowedSession = (sessionId: string) => !guestMode || guestSessionIdSet.has(sessionId)
+
+  const fetchAuthSession = async () => {
+    try {
+      const res = await fetch(`${API_BASE_PATH}/auth/session`)
+      if (!res.ok) {
+        return
+      }
+      const data = await res.json()
+      if (data?.role === 'guest') {
+        setAuthSession({
+          role: 'guest',
+          tokenId: typeof data.tokenId === 'string' ? data.tokenId : '',
+          sessionIds: Array.isArray(data.sessionIds) ? data.sessionIds.filter((item: unknown): item is string => typeof item === 'string') : [],
+          label: typeof data.label === 'string' ? data.label : null,
+          expiresAt: typeof data.expiresAt === 'number' ? data.expiresAt : null,
+          features: data.features && typeof data.features === 'object' ? data.features : undefined,
+        })
+      } else if (data?.role === 'admin') {
+        setAuthSession({ role: 'admin', features: data.features && typeof data.features === 'object' ? data.features : undefined })
+      }
+    } catch (error) {
+      console.warn('Failed to load WebUI auth session', error)
+    }
+  }
 
   const fetchWebUiSettings = async () => {
     try {
@@ -517,6 +551,10 @@ function App() {
   }
 
   const fetchSetupStatus = async () => {
+    if (!authSession || authSession.role === 'guest') {
+      if (authSession?.role === 'guest') setSetupOobe(false)
+      return
+    }
     try {
       const res = await fetch(`${API_BASE_PATH}/setup/status`)
       if (!res.ok) return
@@ -533,6 +571,10 @@ function App() {
   }
 
   const fetchActiveTerminals = async () => {
+    if (guestMode) {
+      setActiveTerminals([])
+      return
+    }
     try {
       const res = await fetch(`${API_BASE_PATH}/terminals`)
       const data = await res.json().catch(() => ({}))
@@ -586,10 +628,9 @@ function App() {
   }
 
   useEffect(() => {
+    void fetchAuthSession()
     void fetchSessions()
-    void fetchSetupStatus()
     void fetchWebUiSettings()
-    void fetchActiveTerminals()
     connectGlobalSSE()
     return () => {
       globalSSERef.current?.close()
@@ -600,6 +641,12 @@ function App() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (!authSession) return
+    void fetchSetupStatus()
+    void fetchActiveTerminals()
+  }, [authSession?.role])
 
   useEffect(() => {
     allTabs.forEach((tab) => {
@@ -741,12 +788,14 @@ function App() {
     if (route.view !== 'tab') return
     if (flattenedTabIds.length > 0) return
 
-    const fallbackSessionId = loadStoredLastVisitedSession()
+    if (!authSession) return
+    const fallbackSessionId = guestMode ? guestSessionIds[0] : loadStoredLastVisitedSession()
+    if (!fallbackSessionId) return
     const tab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId), { preview: true })
     upsertTab(tab, { paneId: focusedPaneId || paneIds[0], activate: true })
     setRoute({ view: 'tab', tabId: tab.id })
     setTabHash(tab.id)
-  }, [route.view, flattenedTabIds.length, focusedPaneId, paneIds.join('|')])
+  }, [authSession, guestMode, guestSessionIds.join('|'), route.view, flattenedTabIds.length, focusedPaneId, paneIds.join('|')])
 
   const navigateToTab = (tabId: string) => {
     pendingRouteTabIdRef.current = tabId
@@ -765,6 +814,13 @@ function App() {
   }
 
   const openChatTab = (sessionId: string) => {
+    if (!isGuestAllowedSession(sessionId)) {
+      const fallbackSessionId = guestSessionIds[0]
+      if (fallbackSessionId && fallbackSessionId !== sessionId) {
+        openChatTab(fallbackSessionId)
+      }
+      return
+    }
     const title = sessionTitle(sessionId)
     const existingTab = findPreferredChatTab(sessionId)
 
@@ -791,6 +847,7 @@ function App() {
   }
 
   const openKeptChatTab = (sessionId: string) => {
+    if (!isGuestAllowedSession(sessionId)) return
     const title = sessionTitle(sessionId)
     const existingTab = findPreferredChatTab(sessionId)
 
@@ -815,7 +872,28 @@ function App() {
     navigateToTab(tab.id)
   }
 
+  useEffect(() => {
+    if (!guestMode || !authSession) return
+
+    for (const tab of allTabs) {
+      if (tab.type !== 'chat' || !guestSessionIdSet.has(tab.sessionId)) {
+        removeTab(tab.id)
+      }
+    }
+
+    const allowedChatTab = allTabs.find((tab) => tab.type === 'chat' && guestSessionIdSet.has(tab.sessionId))
+    const activeAllowed = focusedActiveTab?.type === 'chat' && guestSessionIdSet.has(focusedActiveTab.sessionId)
+    if (!activeAllowed) {
+      if (allowedChatTab) {
+        navigateToTab(allowedChatTab.id)
+      } else if (guestSessionIds[0]) {
+        openChatTab(guestSessionIds[0])
+      }
+    }
+  }, [guestMode, authSession, allTabs, focusedActiveTabId, guestSessionIds.join('|')])
+
   const openWorkspaceTab = (sessionId: string, options?: { nodeId?: string; path?: string }) => {
+    if (guestMode) return
     const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
     const nodeId = options?.nodeId || sessionRecord?.currentNode || 'master'
     const path = options?.path || sessionRecord?.cwd || '/'
@@ -825,6 +903,7 @@ function App() {
   }
 
   const openFileTab = (sessionId: string, nodeId: string, path: string) => {
+    if (guestMode) return
     const tab = makeFileTab(sessionId, nodeId, path)
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
@@ -859,6 +938,7 @@ function App() {
   }
 
   const openTerminalTab = (sessionId: string, options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string }) => {
+    if (guestMode) return
     if (options?.terminalId) {
       const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
       const terminal = activeTerminals.find((item) => item.id === options.terminalId)
@@ -1094,6 +1174,7 @@ function App() {
   }
 
   const handleCreateSession = () => {
+    if (guestMode) return
     fetch(`${API_BASE_PATH}/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1117,6 +1198,7 @@ function App() {
   }
 
   const openSetupView = () => {
+    if (guestMode) return
     setRoute({ view: 'setup' })
     window.location.hash = SETUP_HASH
     if (isMobile) {
@@ -1181,6 +1263,7 @@ function App() {
           onBack={onBack}
           onOpenWorkspace={() => openWorkspaceTab(tab.sessionId)}
           onOpenTerminal={() => openTerminalTab(tab.sessionId, { sourcePaneId })}
+            guestMode={guestMode}
           sendKeyMode={sendKeyMode}
           groupTools={groupTools}
           showUsageBadge={showUsageBadge}
@@ -1300,8 +1383,8 @@ function App() {
         activeTabId={pane.activeTabId}
         focused={focusedPaneId === paneId}
         emphasizeFocus={paneIds.length > 1}
-        dragEnabled={!isMobile}
-        showPaneControls={!isMobile}
+        dragEnabled={!isMobile && !guestMode}
+        showPaneControls={!isMobile && !guestMode}
         canClosePane={paneIds.length > 1}
         content={content}
         onFocusPane={handleFocus}
@@ -1478,6 +1561,53 @@ function App() {
       </DragOverlay>
     </DndContext>
   )
+
+  const renderGuestSessionSwitcher = () => {
+    if (!guestMode || guestSessions.length <= 1) return null
+    const selectedSessionId = guestSessionIdSet.has(currentContextSessionId) ? currentContextSessionId : guestSessions[0]?.id || ''
+    return (
+      <div className="shrink-0 border-b border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800">
+        <label className="flex items-center gap-2 text-gray-600 dark:text-gray-300">
+          <span className="shrink-0 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Guest session</span>
+          <select
+            value={selectedSessionId}
+            onChange={(event) => openChatTab(event.currentTarget.value)}
+            className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
+          >
+            {guestSessions.map((session) => (
+              <option key={session.id} value={session.id}>{session.displayName || session.id}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+    )
+  }
+
+  if (guestMode) {
+    const guestPaneId = focusedPaneId || paneIds[0]
+    const guestBody = guestSessionIds.length === 0 ? (
+      <div className="flex h-full items-center justify-center bg-gray-50 px-6 text-center text-sm text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+        This guest token is not bound to any sessions.
+      </div>
+    ) : isMobile ? (
+      guestPaneId ? renderPane(guestPaneId) : null
+    ) : (
+      <WorkbenchLayout
+        node={root}
+        renderPane={(paneId) => renderPane(paneId)}
+        onLayoutResize={updateSplitSizes}
+      />
+    )
+
+    return renderWorkbenchSurface(
+      <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 flex flex-col overflow-hidden bg-gray-100 dark:bg-gray-900">
+        {renderGuestSessionSwitcher()}
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {guestBody}
+        </div>
+      </div>
+    )
+  }
 
   if (isMobile) {
     if (route.view === 'setup') {

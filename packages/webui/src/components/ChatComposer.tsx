@@ -21,6 +21,7 @@ interface ChatComposerProps {
   sessionId: string
   sessionMissing: boolean
   loading: boolean
+  guestMode?: boolean
   asrAvailable: boolean
   modelOptions: ModelOption[]
   currentModelKey?: string
@@ -278,6 +279,7 @@ const ChatComposer = memo(function ChatComposer({
   sessionId,
   sessionMissing,
   loading,
+  guestMode = false,
   asrAvailable,
   modelOptions,
   currentModelKey,
@@ -338,6 +340,12 @@ const ChatComposer = memo(function ChatComposer({
   const lastReportedHeightRef = useRef<number | null>(null)
 
   useEffect(() => {
+    if (guestMode) {
+      setAvailableCommands([])
+      setCommandsLoading(false)
+      setCommandsError(null)
+      return
+    }
     let cancelled = false
 
     const fetchCommands = async () => {
@@ -372,7 +380,7 @@ const ChatComposer = memo(function ChatComposer({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [guestMode])
 
   useEffect(() => {
     const draftKey = `draft_${sessionId}`
@@ -474,7 +482,7 @@ const ChatComposer = memo(function ChatComposer({
     }
   }, [onHeightChange])
 
-  const slashCompletion = useMemo(() => getSlashCommandCompletion(input, availableCommands), [availableCommands, input])
+  const slashCompletion = useMemo(() => guestMode ? null : getSlashCommandCompletion(input, availableCommands), [availableCommands, guestMode, input])
   const slashCommandSuggestions = slashCompletion?.suggestions || []
   const slashCommandHints = slashCompletion?.hints || []
 
@@ -1122,7 +1130,7 @@ const ChatComposer = memo(function ChatComposer({
           style={{ maxHeight: '200px', fontSize: '16px' }}
           placeholder={sessionMissing
             ? 'Session not found'
-            : 'Ask Foxwarm anything, + to add files, / for commands'}
+            : guestMode ? 'Send a message' : 'Ask Foxwarm anything, + to add files, / for commands'}
         />
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pb-0.5">
@@ -1201,18 +1209,20 @@ const ChatComposer = memo(function ChatComposer({
                 </div>
               </>
             )}
-            <ModelSelector
-              options={modelOptions}
-              currentModelKey={currentModelKey}
-              sessionModel={sessionModel}
-              defaultModelKey={defaultModelKey}
-              childModelDefault={childModelDefault}
-              effectiveChildModelKey={effectiveChildModelKey}
-              busy={modelBusy}
-              error={modelError}
-              onChangeModel={onChangeModel}
-              onChangeChildModel={onChangeChildModel}
-            />
+            {!guestMode && (
+              <ModelSelector
+                options={modelOptions}
+                currentModelKey={currentModelKey}
+                sessionModel={sessionModel}
+                defaultModelKey={defaultModelKey}
+                childModelDefault={childModelDefault}
+                effectiveChildModelKey={effectiveChildModelKey}
+                busy={modelBusy}
+                error={modelError}
+                onChangeModel={onChangeModel}
+                onChangeChildModel={onChangeChildModel}
+              />
+            )}
           </div>
           <button
             type="submit"

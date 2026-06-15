@@ -20,6 +20,7 @@ export interface RouteHandler {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   handler: (req: express.Request, res: express.Response) => Promise<any>;
   noAuth?: boolean;
+  auth?: 'admin' | 'webui';
 }
 
 export interface WebSocketHandler {
@@ -27,12 +28,19 @@ export interface WebSocketHandler {
   handler: (ws: WebSocket, req: http.IncomingMessage) => Promise<void>;
 }
 
+export type HttpAuthContext =
+  | { role: 'admin' }
+  | { role: 'guest'; tokenId: string; sessionIds: string[]; label?: string; expiresAt?: number; features?: Record<string, any> };
+
+export type GuestTokenVerifier = (token: string) => HttpAuthContext | null | Promise<HttpAuthContext | null>;
+
 export class HttpServer {
   public app: express.Application;
   private httpServer: http.Server;
   private wsServer: WebSocketServer;
   private port: number;
   private token: string;
+  private guestTokenVerifier?: GuestTokenVerifier;
   private routes: RouteHandler[] = [];
   private webSocketHandlers: WebSocketHandler[] = [];
 
@@ -84,28 +92,60 @@ export class HttpServer {
   }
 
   checkToken(req: express.Request): boolean {
-    return this.checkTokenFromHeaders(req.headers.cookie, req.headers.authorization);
+    return this.checkAdminTokenFromHeaders(req.headers.cookie, req.headers.authorization);
   }
 
   checkIncomingToken(req: http.IncomingMessage): boolean {
-    return this.checkTokenFromHeaders(req.headers.cookie, req.headers.authorization);
+    return this.checkAdminTokenFromHeaders(req.headers.cookie, req.headers.authorization);
   }
 
-  private checkTokenFromHeaders(cookieHeader: string | undefined, authHeader: string | string[] | undefined): boolean {
-    // Check cookie first
-    const cookieToken = this.parseCookieToken(cookieHeader);
-    if (cookieToken === this.token) {
-      return true;
-    }
-    
-    // Check Authorization header
+  setGuestTokenVerifier(verifier: GuestTokenVerifier | undefined): void {
+    this.guestTokenVerifier = verifier;
+  }
+
+  async getAuthContext(req: express.Request): Promise<HttpAuthContext | null> {
+    return this.getAuthContextFromHeaders(req.headers.cookie, req.headers.authorization);
+  }
+
+  async getIncomingAuthContext(req: http.IncomingMessage): Promise<HttpAuthContext | null> {
+    return this.getAuthContextFromHeaders(req.headers.cookie, req.headers.authorization);
+  }
+
+  private extractBearerToken(authHeader: string | string[] | undefined): string | undefined {
     const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
     if (authValue && authValue.startsWith('Bearer ')) {
-      const auth = authValue.substring(7);
-      return auth === this.token;
+      return authValue.substring(7).trim();
     }
-    
-    return false;
+    return undefined;
+  }
+
+  private extractTokenFromHeaders(cookieHeader: string | undefined, authHeader: string | string[] | undefined): string | undefined {
+    return this.parseCookieToken(cookieHeader) || this.extractBearerToken(authHeader);
+  }
+
+  private checkAdminTokenFromHeaders(cookieHeader: string | undefined, authHeader: string | string[] | undefined): boolean {
+    return this.extractTokenFromHeaders(cookieHeader, authHeader) === this.token;
+  }
+
+  private async getAuthContextFromHeaders(cookieHeader: string | undefined, authHeader: string | string[] | undefined): Promise<HttpAuthContext | null> {
+    const token = this.extractTokenFromHeaders(cookieHeader, authHeader);
+    if (!token) {
+      return null;
+    }
+
+    if (token === this.token) {
+      return { role: 'admin' };
+    }
+
+    if (this.guestTokenVerifier) {
+      try {
+        return await this.guestTokenVerifier(token);
+      } catch (err) {
+        logger.warn({ err }, 'Guest token verifier failed');
+      }
+    }
+
+    return null;
   }
 
   private parseCookieToken(cookieHeader: string | undefined): string | undefined {
@@ -132,7 +172,9 @@ export class HttpServer {
       }
     };
 
-    const middlewares = route.noAuth ? [] : [this.authMiddleware];
+    const middlewares = route.noAuth
+      ? []
+      : [route.auth === 'webui' ? this.webUiAuthMiddleware : this.authMiddleware];
     
     this.app[route.method.toLowerCase() as 'get'](route.path, ...middlewares, handler);
     
@@ -140,10 +182,21 @@ export class HttpServer {
   }
 
   private authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (this.checkToken(req)) {
-      return next();
-    }
-    res.status(401).json({ error: 'Unauthorized' });
+    this.getAuthContext(req).then((auth) => {
+      if (auth?.role === 'admin') {
+        return next();
+      }
+      res.status(auth ? 403 : 401).json({ error: auth ? 'Forbidden' : 'Unauthorized' });
+    }).catch(next);
+  };
+
+  private webUiAuthMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    this.getAuthContext(req).then((auth) => {
+      if (auth) {
+        return next();
+      }
+      res.status(401).json({ error: 'Unauthorized' });
+    }).catch(next);
   };
 
   addWebSocket(path: string, handler: (ws: WebSocket, req: http.IncomingMessage) => Promise<void>): void {

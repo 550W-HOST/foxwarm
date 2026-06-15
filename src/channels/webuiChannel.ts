@@ -4,6 +4,7 @@
 
 import express from 'express';
 import http from 'http';
+import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
@@ -16,7 +17,7 @@ import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
 import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig } from '../config';
-import { httpServer } from '../httpServer';
+import { HttpAuthContext, httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
 import { requestLlmOnce } from '../llm';
@@ -25,6 +26,7 @@ import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrServic
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
+import { createWebUiGuestToken, verifyWebUiGuestToken } from '../webuiGuestTokens';
 
 type WorkspaceNodeEntry = {
   name: string;
@@ -36,6 +38,35 @@ type WorkspaceNodeEntry = {
 
 const MAX_INLINE_FILE_BYTES = 1024 * 1024;
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
+const WEBUI_UPLOAD_DIR = path.join(os.tmpdir(), 'foxwarm-uploads');
+
+const WEBUI_GUEST_FEATURES = {
+  chat: true,
+  attachments: true,
+  commands: false,
+  terminal: false,
+  workspace: false,
+  setup: false,
+  settings: false,
+  sessionManagement: false,
+  debug: false,
+  modelSelection: false,
+  sidebar: false,
+};
+
+const WEBUI_ADMIN_FEATURES = {
+  chat: true,
+  attachments: true,
+  commands: true,
+  terminal: true,
+  workspace: true,
+  setup: true,
+  settings: true,
+  sessionManagement: true,
+  debug: true,
+  modelSelection: true,
+  sidebar: true,
+};
 
 function isPlaceholderSecret(value: unknown): boolean {
   return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
@@ -256,6 +287,51 @@ export class WebUIChannel implements Channel {
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
   private globalSseClients: express.Response[] = []; // Global clients for session list updates
 
+  private async getAuthContext(req: express.Request): Promise<HttpAuthContext | null> {
+    return httpServer.getAuthContext(req);
+  }
+
+  private authSessionPayload(auth: HttpAuthContext) {
+    if (auth.role === 'admin') {
+      return { role: 'admin' as const, features: WEBUI_ADMIN_FEATURES };
+    }
+    return {
+      role: 'guest' as const,
+      tokenId: auth.tokenId,
+      sessionIds: auth.sessionIds,
+      label: auth.label || null,
+      expiresAt: auth.expiresAt || null,
+      features: WEBUI_GUEST_FEATURES,
+    };
+  }
+
+  private guestCanAccessSession(auth: HttpAuthContext, sessionId: string): boolean {
+    return auth.role === 'admin' || auth.sessionIds.includes(sessionId);
+  }
+
+  private async requireSessionAccess(req: express.Request, res: express.Response, sessionId: string): Promise<HttpAuthContext | null> {
+    const auth = await this.getAuthContext(req);
+    if (!auth) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return null;
+    }
+    if (!this.guestCanAccessSession(auth, sessionId)) {
+      res.status(403).json({ error: 'Forbidden: guest token is not bound to this session', code: 'GUEST_SESSION_NOT_ALLOWED' });
+      return null;
+    }
+    return auth;
+  }
+
+  private isSlashCommandText(text: string): boolean {
+    return /^\s*\/[A-Za-z_\-.]+(?:\s|$)/.test(text);
+  }
+
+  private isAllowedGuestUploadTempPath(filePath: string): boolean {
+    const resolved = path.resolve(filePath);
+    const uploadRoot = path.resolve(WEBUI_UPLOAD_DIR);
+    return resolved === uploadRoot || resolved.startsWith(`${uploadRoot}${path.sep}`);
+  }
+
   private resolveWorkspacePath(inputPath: unknown): string {
     if (typeof inputPath !== 'string' || inputPath.trim().length === 0) {
       throw new Error('path is required');
@@ -455,19 +531,24 @@ export class WebUIChannel implements Channel {
       return next();
     }
     
-    // Check token
-    if (!httpServer.checkToken(req)) {
-      // Serve login.html directly instead of redirect
-      const loginPath = path.join(BASE_DIR, 'packages', 'webui', 'public', 'login.html');
-      return res.sendFile(loginPath);
-    }
-    
-    next();
+    httpServer.getAuthContext(req).then((auth) => {
+      if (!auth) {
+        // Serve login.html directly instead of redirect
+        const loginPath = path.join(BASE_DIR, 'packages', 'webui', 'public', 'login.html');
+        return res.sendFile(loginPath);
+      }
+
+      next();
+    }).catch(next);
   };
 
   private setupRoutes() {
     // Add routes to HTTP server
     const httpServerInstance = httpServer;
+    httpServerInstance.setGuestTokenVerifier(async (token) => {
+      const guest = await verifyWebUiGuestToken(token);
+      return guest ? { ...guest, features: WEBUI_GUEST_FEATURES } : null;
+    });
     
     // External trigger endpoint
     if (this.enableTrigger) {
@@ -503,12 +584,83 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           const { token } = req.body;
           if (token === this.token) {
-            res.json({ success: true });
-          } else {
-            res.status(401).json({ error: 'Invalid token' });
+            res.json({ success: true, ...this.authSessionPayload({ role: 'admin' }) });
+            return;
           }
+
+          const guest = await verifyWebUiGuestToken(token);
+          if (guest) {
+            res.json({ success: true, ...this.authSessionPayload({ ...guest, features: WEBUI_GUEST_FEATURES }) });
+            return;
+          }
+
+          res.status(401).json({ error: 'Invalid token' });
         },
         noAuth: true,
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/auth/session',
+        method: 'GET',
+        auth: 'webui',
+        handler: async (req: express.Request, res: express.Response) => {
+          const auth = await this.getAuthContext(req);
+          if (!auth) {
+            return res.status(401).json({ error: 'Unauthorized' });
+          }
+          res.json(this.authSessionPayload(auth));
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/guest-tokens',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const rawSessionIds: string[] = Array.isArray(req.body?.sessionIds)
+              ? req.body.sessionIds
+                .map((item: unknown) => typeof item === 'string' ? item.trim() : '')
+                .filter((item: string) => item.length > 0)
+              : [];
+            const sessionIds: string[] = Array.from(new Set(rawSessionIds));
+            if (sessionIds.length === 0) {
+              return res.status(400).json({ error: 'sessionIds must be a non-empty array of existing session ids.' });
+            }
+
+            const missing: string[] = [];
+            for (const sessionId of sessionIds) {
+              if (!await sessionManager.getExistingSession(sessionId)) {
+                missing.push(sessionId);
+              }
+            }
+            if (missing.length > 0) {
+              return res.status(400).json({ error: 'Some sessionIds do not exist.', missingSessionIds: missing });
+            }
+
+            const now = Date.now();
+            let expiresAt: number | undefined;
+            if (typeof req.body?.expiresAt === 'number' && Number.isFinite(req.body.expiresAt)) {
+              expiresAt = req.body.expiresAt;
+            } else if (typeof req.body?.expiresInSeconds === 'number' && Number.isFinite(req.body.expiresInSeconds) && req.body.expiresInSeconds > 0) {
+              expiresAt = now + Math.floor(req.body.expiresInSeconds * 1000);
+            }
+
+            const label = typeof req.body?.label === 'string' ? req.body.label.trim() : undefined;
+            const { token, record } = await createWebUiGuestToken({ sessionIds, label, expiresAt, now });
+            res.json({
+              success: true,
+              token,
+              tokenId: record.tokenId,
+              sessionIds: record.sessionIds,
+              label: record.label || null,
+              expiresAt: record.expiresAt || null,
+              loginHash: `#token=${encodeURIComponent(token)}`,
+            });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to create guest token');
+            res.status(400).json({ error: e.message });
+          }
+        },
       });
 
       // Get available slash commands for WebUI autocomplete
@@ -539,6 +691,7 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/webui/settings',
         method: 'GET',
+        auth: 'webui',
         handler: async (_req: express.Request, res: express.Response) => {
           try {
             res.json({ settings: readWebUiSettings() });
@@ -805,14 +958,20 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions',
         method: 'GET',
+        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
           try {
+            const auth = await this.getAuthContext(req);
+            const allowedSessionIds = auth?.role === 'guest' ? new Set(auth.sessionIds) : null;
             const allSessions = sessionManager.getAllSessions();
+            const visibleSessions = allowedSessionIds
+              ? new Map(Array.from(allSessions.entries()).filter(([id]) => allowedSessionIds.has(id)))
+              : allSessions;
             
             // Build parent-to-children map
-            const childrenMap = buildChildrenMap(allSessions);
+            const childrenMap = buildChildrenMap(visibleSessions);
             
-            const sessions = Array.from(allSessions.entries())
+            const sessions = Array.from(visibleSessions.entries())
               .map(([id, session]) => ({
                 id,
                 agent: session.agent || 'main',
@@ -820,7 +979,7 @@ export class WebUIChannel implements Channel {
                 lastMessageTime: session.meta?.lastMessageTime ?? (session.history.length > 0 
                   ? session.history[session.history.length - 1].__meta?.timestamp || 0
                   : 0),
-                parentSessionId: session.parentSessionId || null,
+                parentSessionId: session.parentSessionId && (!allowedSessionIds || allowedSessionIds.has(session.parentSessionId)) ? session.parentSessionId : null,
                 childSessions: childrenMap.get(id) || [],
                 aliases: session.aliases || [],
                 busy: session.busy || false,
@@ -1131,9 +1290,12 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/history',
         method: 'GET',
+        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
+            const auth = await this.requireSessionAccess(req, res, sessionId);
+            if (!auth) return;
             const session = await sessionManager.getExistingSession(sessionId);
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
@@ -1390,15 +1552,12 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/stream',
         method: 'GET',
+        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
           const sessionId = req.params.sessionId as string;
 
-          // Check token from cookie or query parameter
-          if (!httpServer.checkToken(req)) {
-            logger.warn('SSE token validation failed');
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-          }
+          const auth = await this.requireSessionAccess(req, res, sessionId);
+          if (!auth) return;
           
           // Set SSE headers
           res.setHeader('Content-Type', 'text/event-stream');
@@ -1450,10 +1609,10 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions/stream',
         method: 'GET',
+        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
-          // Check token
-          if (!httpServer.checkToken(req)) {
-            logger.warn('Global SSE token validation failed');
+          const auth = await this.getAuthContext(req);
+          if (!auth) {
             res.status(401).json({ error: 'Unauthorized' });
             return;
           }
@@ -1497,20 +1656,20 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/upload',
         method: 'POST',
+        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const multer = require('multer');
-            const os = require('os');
             const crypto = require('crypto');
             
             // Setup multer for file upload
             const upload = multer({
-              dest: path.join(os.tmpdir(), 'foxwarm-uploads'),
+              dest: WEBUI_UPLOAD_DIR,
               limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
             });
             
             // Ensure upload directory exists
-            await fs.ensureDir(path.join(os.tmpdir(), 'foxwarm-uploads'));
+            await fs.ensureDir(WEBUI_UPLOAD_DIR);
             
             // Handle upload
             upload.single('file')(req, res, async (err: any) => {
@@ -1523,11 +1682,25 @@ export class WebUIChannel implements Channel {
                 res.status(400).json({ error: 'No file uploaded' });
                 return;
               }
+
+              const auth = await this.getAuthContext(req);
+              if (!auth) {
+                await fs.remove(req.file.path).catch(() => {});
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+              }
+
+              const uploadSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+              if (auth.role === 'guest' && (!uploadSessionId || !this.guestCanAccessSession(auth, uploadSessionId))) {
+                await fs.remove(req.file.path).catch(() => {});
+                res.status(uploadSessionId ? 403 : 400).json({ error: uploadSessionId ? 'Forbidden: guest token is not bound to this session' : 'sessionId is required for guest uploads' });
+                return;
+              }
               
               // Generate unique filename
               const ext = path.extname(req.file.originalname);
               const filename = `${crypto.randomBytes(16).toString('hex')}${ext}`;
-              const finalPath = path.join(os.tmpdir(), 'foxwarm-uploads', filename);
+              const finalPath = path.join(WEBUI_UPLOAD_DIR, filename);
               
               // Move file to final path
               await fs.move(req.file.path, finalPath, { overwrite: true });
@@ -1751,9 +1924,12 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/message',
         method: 'POST',
+        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
+            const auth = await this.requireSessionAccess(req, res, sessionId);
+            if (!auth) return;
             const { text, parts, filePaths, uploadedFiles } = req.body;
 
             const existingSession = await sessionManager.getExistingSession(sessionId);
@@ -1763,6 +1939,22 @@ export class WebUIChannel implements Channel {
 
             // Support both old format (text) and new format (parts)
             let finalParts = parts || (text ? [{ text }] : []);
+
+            if (auth.role === 'guest') {
+              if (!Array.isArray(finalParts)) {
+                return res.status(400).json({ error: 'Invalid message parts' });
+              }
+
+              const messageText = (typeof text === 'string' ? text : finalParts.map((p: any) => p?.text || '').join('\n')).trim();
+              if (this.isSlashCommandText(messageText)) {
+                return res.status(403).json({ error: 'Guest tokens cannot use slash commands.', code: 'GUEST_COMMANDS_DISABLED' });
+              }
+
+              const invalidPart = finalParts.find((part: any) => !part || typeof part !== 'object' || Array.isArray(part) || typeof part.text !== 'string' || Object.keys(part).some(key => key !== 'text'));
+              if (invalidPart) {
+                return res.status(400).json({ error: 'Guest messages may only include text parts; attachments must be uploaded through the WebUI upload endpoint.' });
+              }
+            }
             
             const ctx: ChannelContext = {
               channelId: 'webui',
@@ -1817,6 +2009,10 @@ export class WebUIChannel implements Channel {
                   ? entry
                   : (typeof entry?.path === 'string' ? entry.path : '');
                 if (!tempPath) continue;
+
+                if (auth.role === 'guest' && !this.isAllowedGuestUploadTempPath(tempPath)) {
+                  return res.status(403).json({ error: 'Guest uploads must use files returned by the WebUI upload endpoint.', code: 'GUEST_UPLOAD_PATH_FORBIDDEN' });
+                }
 
                 try {
                   const stats = await fs.stat(tempPath);
