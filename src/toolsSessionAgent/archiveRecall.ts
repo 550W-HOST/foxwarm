@@ -299,6 +299,67 @@ type RecallTargetSpec =
   | { kind: 'blockMessages'; id: number }
   | { kind: 'messages'; startSeq: number; endSeq: number };
 
+export type ContextBlockExpansionMode = 'detail' | 'messages';
+
+export interface ContextBlockExpansionResult {
+  sessionId: string;
+  blockId: number;
+  mode: ContextBlockExpansionMode;
+  target: string;
+  previewLength: number;
+  text: string;
+  block: {
+    id: number;
+    level: number;
+    sourceKind: ArchiveBlockRecord['sourceKind'];
+    sourceStart: number;
+    sourceEnd: number;
+    sourceBlockIds?: number[];
+    rawStartSeq: number;
+    rawEndSeq: number;
+    rawStartTimestamp?: number;
+    rawEndTimestamp?: number;
+    createdAt?: number;
+    inherited?: boolean;
+    sourceSessionId?: string;
+  };
+}
+
+function contextBlockExpansionError(message: string, statusCode: number, code: string): Error & { statusCode: number; code: string } {
+  const err = new Error(message) as Error & { statusCode: number; code: string };
+  err.statusCode = statusCode;
+  err.code = code;
+  return err;
+}
+
+function normalizeContextBlockExpansionMode(value: unknown): ContextBlockExpansionMode {
+  if (value === undefined || value === null || value === '') {
+    return 'detail';
+  }
+  if (value === 'detail' || value === 'messages') {
+    return value;
+  }
+  throw contextBlockExpansionError('mode must be one of: detail, messages.', 400, 'INVALID_CONTEXT_BLOCK_EXPANSION_MODE');
+}
+
+function buildContextBlockExpansionBlockPayload(block: ArchiveBlockRecord): ContextBlockExpansionResult['block'] {
+  return {
+    id: block.id,
+    level: block.level,
+    sourceKind: block.sourceKind,
+    sourceStart: block.sourceStart,
+    sourceEnd: block.sourceEnd,
+    ...(Array.isArray(block.sourceBlockIds) && block.sourceBlockIds.length > 0 ? { sourceBlockIds: [...block.sourceBlockIds] } : {}),
+    rawStartSeq: block.rawStartSeq,
+    rawEndSeq: block.rawEndSeq,
+    ...(typeof block.rawStartTimestamp === 'number' ? { rawStartTimestamp: block.rawStartTimestamp } : {}),
+    ...(typeof block.rawEndTimestamp === 'number' ? { rawEndTimestamp: block.rawEndTimestamp } : {}),
+    ...(typeof block.createdAt === 'number' ? { createdAt: block.createdAt } : {}),
+    ...(block.inherited !== undefined ? { inherited: block.inherited } : {}),
+    ...(typeof block.sourceSessionId === 'string' ? { sourceSessionId: block.sourceSessionId } : {}),
+  };
+}
+
 function buildRecallSyntaxHelp(detail: string): string {
   return `${detail}\n\nSupported recall target selectors:\n`
     + '- `overview` (or omit `target`) for available message/block ranges and examples\n'
@@ -424,6 +485,10 @@ function formatRecallNextHints(targetSessionId: string, includeSessionId: boolea
   }
 
   return `\n\nSuggestions (optional; not exhaustive):\n${examples.map(example => `- \`${example}\``).join('\n')}`;
+}
+
+function formatRecallNextHintsIfEnabled(enabled: boolean, targetSessionId: string, includeSessionId: boolean, targets: Array<string | undefined>): string {
+  return enabled ? formatRecallNextHints(targetSessionId, includeSessionId, targets) : '';
 }
 
 function getRecallPreviewBudget(count: number, previewLength: number): { requestedChars: number; overLimit: boolean; maxItemsWithinLimit: number } {
@@ -846,11 +911,13 @@ async function buildRecallBlockDetail(
   previewLength: number,
   includeSessionId: boolean,
   renderOptions: ContextPreviewRenderOptions,
+  options: { includeSuggestions?: boolean } = {},
 ): Promise<string> {
+  const includeSuggestions = options.includeSuggestions !== false;
   const block = await getRecallBlockById(targetSessionId, blockId);
   if (!block) {
     return `No CTX-BLOCK B#${blockId} found in session \`${targetSessionId}\`.`
-      + formatRecallNextHints(targetSessionId, includeSessionId, ['overview', 'blocks']);
+      + formatRecallNextHintsIfEnabled(includeSuggestions, targetSessionId, includeSessionId, ['overview', 'blocks']);
   }
 
   const range = await resolveRecallBlockMessageRange(targetSessionId, block);
@@ -877,7 +944,7 @@ async function buildRecallBlockDetail(
       totalMatched: messageResult.totalMatched,
       startSeq: messageResult.requestedRange.startSeq,
       endSeq: messageResult.requestedRange.endSeq,
-    }, renderOptions)}` + formatRecallNextHints(targetSessionId, includeSessionId, [
+    }, renderOptions)}` + formatRecallNextHintsIfEnabled(includeSuggestions, targetSessionId, includeSessionId, [
       'blocks',
       'overview',
     ]);
@@ -897,13 +964,13 @@ async function buildRecallBlockDetail(
       : '';
     return `${header.join('\n')}\n\nImmediate child blocks (${formatArchiveChildBlockReference(blockWithTime)}):\n${childSection}`
       + capNote
-      + formatRecallNextHints(targetSessionId, includeSessionId, [
+      + formatRecallNextHintsIfEnabled(includeSuggestions, targetSessionId, includeSessionId, [
         visibleChildRecords[0] ? `B#${visibleChildRecords[0].id}` : undefined,
         'blocks',
       ]);
   }
 
-  return header.join('\n') + formatRecallNextHints(targetSessionId, includeSessionId, [
+  return header.join('\n') + formatRecallNextHintsIfEnabled(includeSuggestions, targetSessionId, includeSessionId, [
     'overview',
   ]);
 }
@@ -914,11 +981,13 @@ async function buildRecallMessagesForBlock(
   previewLength: number,
   includeSessionId: boolean,
   renderOptions: ContextPreviewRenderOptions,
+  options: { includeSuggestions?: boolean } = {},
 ): Promise<string> {
+  const includeSuggestions = options.includeSuggestions !== false;
   const block = await getRecallBlockById(targetSessionId, blockId);
   if (!block) {
     return `No CTX-BLOCK B#${blockId} found in session \`${targetSessionId}\`.`
-      + formatRecallNextHints(targetSessionId, includeSessionId, ['overview', 'blocks']);
+      + formatRecallNextHintsIfEnabled(includeSuggestions, targetSessionId, includeSessionId, ['overview', 'blocks']);
   }
 
   const range = await resolveRecallBlockMessageRange(targetSessionId, block);
@@ -926,7 +995,7 @@ async function buildRecallMessagesForBlock(
   const rangeTimeSuffix = formatArchiveBlockTimeRange(blockWithTime);
   if (!range) {
     return `Could not determine the message log range covered by B#${blockId}. Inspect the block metadata first.`
-      + formatRecallNextHints(targetSessionId, includeSessionId, [`B#${blockId}`, 'overview']);
+      + formatRecallNextHintsIfEnabled(includeSuggestions, targetSessionId, includeSessionId, [`B#${blockId}`, 'overview']);
   }
 
   const result = await sessionManager.getArchivedMessages(targetSessionId, {
@@ -940,6 +1009,55 @@ async function buildRecallMessagesForBlock(
       startSeq: result.requestedRange.startSeq,
       endSeq: result.requestedRange.endSeq,
     }, renderOptions);
+}
+
+export async function renderContextBlockExpansion(args: {
+  sessionId: string;
+  blockId: number;
+  mode?: unknown;
+  previewLength?: unknown;
+}): Promise<ContextBlockExpansionResult> {
+  const targetSessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
+  if (!targetSessionId) {
+    throw contextBlockExpansionError('sessionId is required.', 400, 'SESSION_ID_REQUIRED');
+  }
+
+  const session = await sessionManager.getExistingSession(targetSessionId);
+  if (!session) {
+    throw contextBlockExpansionError(`Session \`${targetSessionId}\` not found.`, 404, 'SESSION_NOT_FOUND');
+  }
+
+  if (typeof args.blockId !== 'number' || !Number.isInteger(args.blockId) || args.blockId <= 0) {
+    throw contextBlockExpansionError('blockId must be a positive integer.', 400, 'INVALID_CONTEXT_BLOCK_ID');
+  }
+  const blockId = args.blockId;
+
+  const mode = normalizeContextBlockExpansionMode(args.mode);
+  const { budget: previewLength } = normalizeContextPreviewBudget(args.previewLength, RECALL_DEFAULT_PREVIEW_LENGTH);
+  const renderOptions: ContextPreviewRenderOptions = {
+    previewLength: args.previewLength,
+    defaultPreviewLength: RECALL_DEFAULT_PREVIEW_LENGTH,
+    toolDetail: 'names',
+  };
+
+  const block = await getRecallBlockById(targetSessionId, blockId);
+  if (!block) {
+    throw contextBlockExpansionError(`CTX-BLOCK B#${blockId} not found in session \`${targetSessionId}\`.`, 404, 'CTX_BLOCK_NOT_FOUND');
+  }
+
+  const text = mode === 'messages'
+    ? await buildRecallMessagesForBlock(targetSessionId, blockId, previewLength, false, renderOptions, { includeSuggestions: false })
+    : await buildRecallBlockDetail(targetSessionId, blockId, previewLength, false, renderOptions, { includeSuggestions: false });
+
+  return {
+    sessionId: targetSessionId,
+    blockId,
+    mode,
+    target: mode === 'messages' ? `msg:B#${blockId}` : `B#${blockId}`,
+    previewLength,
+    text,
+    block: buildContextBlockExpansionBlockPayload(block),
+  };
 }
 
 function normalizeRecallVectorLimit(value: unknown): number {

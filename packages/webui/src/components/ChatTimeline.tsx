@@ -18,6 +18,7 @@ import {
 } from './chatShared'
 import ImageParts from './ImageParts'
 import ReasoningCard from './ReasoningCard'
+import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import {
   InterleavedToolGroup,
   ToolCallsBlock,
@@ -35,6 +36,7 @@ const getMessageStableKey = (msg: Message, idx: number): string => {
 }
 
 interface ChatTimelineProps {
+  sessionId: string
   messages: Message[]
   isMobile: boolean
   groupTools: boolean
@@ -327,6 +329,7 @@ interface MessageRowProps {
   showToolGroupSummary: boolean
   groupExpanded: boolean
   onExpandGroup: (groupKey: string) => void
+  sessionId: string
 }
 
 const MessageRow = memo(function MessageRow({
@@ -345,6 +348,7 @@ const MessageRow = memo(function MessageRow({
   showToolGroupSummary,
   groupExpanded,
   onExpandGroup,
+  sessionId,
 }: MessageRowProps) {
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
   const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData), [msg.parts])
@@ -367,6 +371,8 @@ const MessageRow = memo(function MessageRow({
     : null
   const displayUsageCallCount = isCollapsedToolGroup && showToolGroupSummary && groupUsageCallCount > 0 ? groupUsageCallCount : undefined
   const allowOverflow = (displayUsage && !isMobile) || hasToolParts || isInToolGroup
+  const contextBlock = useMemo(() => msg.role === 'model' ? getContextBlockMetaFromMessage(msg) : null, [msg])
+  const firstTextPartIndex = useMemo(() => msg.parts.findIndex(p => typeof p.text === 'string' && p.text.trim()), [msg.parts])
 
   return (
     <div className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${shouldSkipMargin ? '' : 'mt-4'}`}>
@@ -410,6 +416,9 @@ const MessageRow = memo(function MessageRow({
                 }
                 return <ReasoningCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
               }
+              if (contextBlock && partIdx === firstTextPartIndex && part.text) {
+                return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} />
+              }
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
@@ -438,10 +447,11 @@ const MessageRow = memo(function MessageRow({
   prev.groupUsageCallCount === next.groupUsageCallCount &&
   prev.keepToolGroupExpanded === next.keepToolGroupExpanded &&
   prev.showToolGroupSummary === next.showToolGroupSummary &&
-  prev.groupExpanded === next.groupExpanded
+  prev.groupExpanded === next.groupExpanded &&
+  prev.sessionId === next.sessionId
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, groupTools, showUsageBadge }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
 
   const toolGroupMeta = useMemo(() => {
@@ -636,6 +646,7 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, groupTools
             showToolGroupSummary={toolGroupMeta.shouldRenderSummary[idx]}
             groupExpanded={expandedToolGroups.has(groupKey)}
             onExpandGroup={handleExpandGroup}
+            sessionId={sessionId}
           />
         )
       })}

@@ -9,8 +9,11 @@ type LoadedDeps = {
   tempRoot: string;
   sessionManager: typeof import('../sessionManager');
   toolsSessionAgent: typeof import('../toolsSessionAgent');
+  archiveRecall: typeof import('./archiveRecall');
   archive: typeof import('../session/archive');
   layeredContext: typeof import('../session/layeredContext');
+  httpServerModule: typeof import('../httpServer');
+  webuiChannel: typeof import('../channels/webuiChannel');
 };
 
 let depsPromise: Promise<LoadedDeps> | null = null;
@@ -38,15 +41,18 @@ async function loadDeps(): Promise<LoadedDeps> {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-archive-guard-'));
       process.env.FOXWARM_DATA_DIR = tempRoot;
 
-      const [sessionManager, toolsSessionAgent, archive, layeredContext] = await Promise.all([
+      const [sessionManager, toolsSessionAgent, archiveRecall, archive, layeredContext, httpServerModule, webuiChannel] = await Promise.all([
         import('../sessionManager'),
         import('../toolsSessionAgent'),
+        import('./archiveRecall'),
         import('../session/archive'),
         import('../session/layeredContext'),
+        import('../httpServer'),
+        import('../channels/webuiChannel'),
       ]);
 
       await sessionManager.loadSessions();
-      return { tempRoot, sessionManager, toolsSessionAgent, archive, layeredContext };
+      return { tempRoot, sessionManager, toolsSessionAgent, archiveRecall, archive, layeredContext, httpServerModule, webuiChannel };
     })();
   }
 
@@ -313,6 +319,136 @@ test('recall target selectors read block details and message ranges', async () =
   assert.doesNotMatch(singleMessage, /archived alpha/);
   assert.doesNotMatch(singleMessage, /archived gamma/);
   assert.doesNotMatch(singleMessage, /\n\nSuggestions/);
+});
+
+test('renderContextBlockExpansion returns WebUI detail/messages previews without mutating session state', async () => {
+  const deps = await loadDeps();
+  const sessionId = makeId('ctx_block_expand');
+  await createArchivedSession(deps, sessionId);
+  const session = await ensureSession(deps.sessionManager, sessionId);
+  session.contextFrontier = [
+    { kind: 'block', id: 4, level: 2, rawStartSeq: 1, rawEndSeq: 2 },
+    { kind: 'block', id: 3, level: 1, rawStartSeq: 3, rawEndSeq: 3 },
+  ];
+  session.history = [
+    deps.layeredContext.renderBlockMessage({
+      v: 1,
+      kind: 'block',
+      sessionId,
+      agent: 'main',
+      id: 4,
+      level: 2,
+      sourceKind: 'block',
+      sourceStart: 1,
+      sourceEnd: 2,
+      rawStartSeq: 1,
+      rawEndSeq: 2,
+      summary: 'parent alpha beta block',
+      createdAt: 5000,
+    }),
+  ];
+  await deps.sessionManager.saveSession(sessionId);
+
+  const before = await deps.sessionManager.getExistingSession(sessionId);
+  const beforeHistory = JSON.stringify(before?.history || []);
+  const beforeFrontier = JSON.stringify(before?.contextFrontier || []);
+
+  const detail = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 4, mode: 'detail', previewLength: 2000 });
+  assert.equal(detail.mode, 'detail');
+  assert.equal(detail.target, 'B#4');
+  assert.equal(detail.block.id, 4);
+  assert.match(detail.text, /Immediate child blocks/);
+  assert.match(detail.text, /block alpha/);
+  assert.match(detail.text, /block beta/);
+  assert.doesNotMatch(detail.text, /archived alpha/);
+  assert.doesNotMatch(detail.text, /Suggestions/);
+
+  const messages = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 4, mode: 'messages', previewLength: 2000 });
+  assert.equal(messages.mode, 'messages');
+  assert.equal(messages.target, 'msg:B#4');
+  assert.match(messages.text, /Messages covered by CTX-BLOCK B#4/);
+  assert.match(messages.text, /archived alpha/);
+  assert.match(messages.text, /archived beta/);
+  assert.doesNotMatch(messages.text, /archived gamma/);
+  assert.doesNotMatch(messages.text, /Suggestions/);
+
+  const after = await deps.sessionManager.getExistingSession(sessionId);
+  assert.equal(JSON.stringify(after?.history || []), beforeHistory);
+  assert.equal(JSON.stringify(after?.contextFrontier || []), beforeFrontier);
+});
+
+test('renderContextBlockExpansion reports invalid session/block', async () => {
+  const deps = await loadDeps();
+  const sessionId = makeId('ctx_block_invalid');
+  await createArchivedSession(deps, sessionId);
+  await ensureSession(deps.sessionManager, sessionId);
+
+  await assert.rejects(
+    () => deps.archiveRecall.renderContextBlockExpansion({ sessionId: `${sessionId}_missing`, blockId: 1 }),
+    /Session `.*_missing` not found/,
+  );
+  await assert.rejects(
+    () => deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 999 }),
+    /CTX-BLOCK B#999 not found/,
+  );
+  await assert.rejects(
+    () => deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 1.5 }),
+    /blockId must be a positive integer/,
+  );
+  await assert.rejects(
+    () => deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 1, mode: 'bad' }),
+    /mode must be one of: detail, messages/,
+  );
+});
+
+test('WebUI context block expansion route is admin-authenticated and read-only', async () => {
+  const deps = await loadDeps();
+  const sessionId = makeId('ctx_block_route');
+  await createArchivedSession(deps, sessionId);
+  const session = await ensureSession(deps.sessionManager, sessionId);
+  session.contextFrontier = [{ kind: 'block', id: 4, level: 2, rawStartSeq: 1, rawEndSeq: 2 }];
+  session.history = [];
+  await deps.sessionManager.saveSession(sessionId);
+  const before = await deps.sessionManager.getExistingSession(sessionId);
+  const beforeHistory = JSON.stringify(before?.history || []);
+  const beforeFrontier = JSON.stringify(before?.contextFrontier || []);
+
+  const port = 33180 + Math.floor(Math.random() * 1000);
+  const server = new deps.httpServerModule.HttpServer(port, 'secret-token');
+  deps.httpServerModule.setHttpServer(server);
+  new deps.webuiChannel.WebUIChannel({ router: {} as any, token: 'secret-token', enableTrigger: false, enableWebUI: true });
+  await server.start();
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const path = `/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/4/expand?mode=messages&previewLength=2000`;
+
+    const unauthorized = await fetch(`${baseUrl}${path}`);
+    assert.equal(unauthorized.status, 401);
+
+    const ok = await fetch(`${baseUrl}${path}`, { headers: { Authorization: 'Bearer secret-token' } });
+    assert.equal(ok.status, 200);
+    const payload = await ok.json() as any;
+    assert.equal(payload.sessionId, sessionId);
+    assert.equal(payload.blockId, 4);
+    assert.equal(payload.mode, 'messages');
+    assert.match(payload.text, /archived alpha/);
+
+    const invalidBlock = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/999/expand`, { headers: { Authorization: 'Bearer secret-token' } });
+    assert.equal(invalidBlock.status, 404);
+
+    const invalidBlockId = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/4.5/expand`, { headers: { Authorization: 'Bearer secret-token' } });
+    assert.equal(invalidBlockId.status, 400);
+
+    const invalidSession = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}_missing/context-blocks/4/expand`, { headers: { Authorization: 'Bearer secret-token' } });
+    assert.equal(invalidSession.status, 404);
+  } finally {
+    await server.stop();
+    deps.httpServerModule.setHttpServer(null);
+  }
+
+  const after = await deps.sessionManager.getExistingSession(sessionId);
+  assert.equal(JSON.stringify(after?.history || []), beforeHistory);
+  assert.equal(JSON.stringify(after?.contextFrontier || []), beforeFrontier);
 });
 
 test('recall renderer filters messages and centers previews around matches', async () => {

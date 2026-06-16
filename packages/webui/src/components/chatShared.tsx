@@ -157,6 +157,22 @@ export interface ModelStreamToolCall {
   name?: string
 }
 
+export interface ContextBlockMessageMeta {
+  id: number
+  level: number
+  rawStartSeq: number
+  rawEndSeq: number
+  sourceKind?: 'message' | 'block'
+  sourceStart?: number
+  sourceEnd?: number
+  sourceBlockIds?: number[]
+  rawStartTimestamp?: number
+  rawEndTimestamp?: number
+  createdAt?: number
+  sourceSessionId?: string
+  inherited?: boolean
+}
+
 export interface SessionStreamEvent {
   type: 'model-stream-reset' | 'model-stream-update' | 'toolscript-progress'
   streamId?: string
@@ -184,6 +200,9 @@ export interface Message {
   parts: MessagePart[]
   __meta?: {
     timestamp?: number
+    contextBlock?: ContextBlockMessageMeta
+    contextFrontierItem?: any
+    preservedFromBlockId?: number
     [key: string]: any
   }
 }
