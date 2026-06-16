@@ -321,7 +321,7 @@ test('recall target selectors read block details and message ranges', async () =
   assert.doesNotMatch(singleMessage, /\n\nSuggestions/);
 });
 
-test('renderContextBlockExpansion returns WebUI detail/messages previews without mutating session state', async () => {
+test('renderContextBlockExpansion returns structured child block/raw message items without mutating session state', async () => {
   const deps = await loadDeps();
   const sessionId = makeId('ctx_block_expand');
   await createArchivedSession(deps, sessionId);
@@ -353,24 +353,41 @@ test('renderContextBlockExpansion returns WebUI detail/messages previews without
   const beforeHistory = JSON.stringify(before?.history || []);
   const beforeFrontier = JSON.stringify(before?.contextFrontier || []);
 
-  const detail = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 4, mode: 'detail', previewLength: 2000 });
-  assert.equal(detail.mode, 'detail');
+  const detail = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 4, previewLength: 2000 });
+  assert.equal(detail.expansionKind, 'child-blocks');
   assert.equal(detail.target, 'B#4');
   assert.equal(detail.block.id, 4);
+  assert.equal(detail.totalItems, 2);
+  assert.equal(detail.items.length, 2);
+  assert.equal(detail.messages.length, 2);
+  assert.equal(detail.items[0].kind, 'block');
+  assert.equal(detail.items[0].block?.id, 1);
+  assert.equal(detail.items[0].message.role, 'model');
+  assert.equal(detail.items[0].message.__meta?.contextBlock?.id, 1);
+  assert.equal(detail.items[1].message.__meta?.contextBlock?.id, 2);
+  assert.match(detail.items[0].message.parts[0].text || '', /block alpha/);
+  assert.match(detail.items[1].message.parts[0].text || '', /block beta/);
+  assert.doesNotMatch(detail.items[0].message.parts[0].text || '', /archived alpha/);
   assert.match(detail.text, /Immediate child blocks/);
   assert.match(detail.text, /block alpha/);
   assert.match(detail.text, /block beta/);
   assert.doesNotMatch(detail.text, /archived alpha/);
   assert.doesNotMatch(detail.text, /Suggestions/);
 
-  const messages = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 4, mode: 'messages', previewLength: 2000 });
-  assert.equal(messages.mode, 'messages');
-  assert.equal(messages.target, 'msg:B#4');
-  assert.match(messages.text, /Messages covered by CTX-BLOCK B#4/);
-  assert.match(messages.text, /archived alpha/);
-  assert.match(messages.text, /archived beta/);
-  assert.doesNotMatch(messages.text, /archived gamma/);
-  assert.doesNotMatch(messages.text, /Suggestions/);
+  const raw = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 1, previewLength: 2000 });
+  assert.equal(raw.expansionKind, 'messages');
+  assert.equal(raw.target, 'B#1');
+  assert.equal(raw.totalItems, 1);
+  assert.equal(raw.items[0].kind, 'message');
+  assert.equal(raw.items[0].seq, 1);
+  assert.equal(raw.messages[0].role, 'user');
+  assert.equal(raw.messages[0].__meta?.seq, 1);
+  assert.match(raw.messages[0].parts[0].text || '', /archived alpha/);
+  assert.equal(raw.messages[0].__meta?.contextBlock, undefined);
+  assert.match(raw.text, /Source messages/);
+  assert.match(raw.text, /archived alpha/);
+  assert.doesNotMatch(raw.text, /archived beta/);
+  assert.doesNotMatch(raw.text, /Suggestions/);
 
   const after = await deps.sessionManager.getExistingSession(sessionId);
   assert.equal(JSON.stringify(after?.history || []), beforeHistory);
@@ -395,10 +412,6 @@ test('renderContextBlockExpansion reports invalid session/block', async () => {
     () => deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 1.5 }),
     /blockId must be a positive integer/,
   );
-  await assert.rejects(
-    () => deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 1, mode: 'bad' }),
-    /mode must be one of: detail, messages/,
-  );
 });
 
 test('WebUI context block expansion route is admin-authenticated and read-only', async () => {
@@ -420,7 +433,7 @@ test('WebUI context block expansion route is admin-authenticated and read-only',
   await server.start();
   try {
     const baseUrl = `http://127.0.0.1:${port}`;
-    const path = `/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/4/expand?mode=messages&previewLength=2000`;
+    const path = `/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/4/expand?previewLength=2000`;
 
     const unauthorized = await fetch(`${baseUrl}${path}`);
     assert.equal(unauthorized.status, 401);
@@ -430,8 +443,22 @@ test('WebUI context block expansion route is admin-authenticated and read-only',
     const payload = await ok.json() as any;
     assert.equal(payload.sessionId, sessionId);
     assert.equal(payload.blockId, 4);
-    assert.equal(payload.mode, 'messages');
-    assert.match(payload.text, /archived alpha/);
+    assert.equal(payload.expansionKind, 'child-blocks');
+    assert.equal(payload.totalItems, 2);
+    assert.equal(payload.messages.length, 2);
+    assert.equal(payload.items[0].kind, 'block');
+    assert.equal(payload.items[0].message.__meta.contextBlock.id, 1);
+    assert.match(payload.items[0].message.parts[0].text, /block alpha/);
+    assert.doesNotMatch(payload.items[0].message.parts[0].text, /archived alpha/);
+
+    const rawOk = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/1/expand?previewLength=2000`, { headers: { Authorization: 'Bearer secret-token' } });
+    assert.equal(rawOk.status, 200);
+    const rawPayload = await rawOk.json() as any;
+    assert.equal(rawPayload.expansionKind, 'messages');
+    assert.equal(rawPayload.totalItems, 1);
+    assert.equal(rawPayload.items[0].kind, 'message');
+    assert.equal(rawPayload.messages[0].__meta.seq, 1);
+    assert.match(rawPayload.messages[0].parts[0].text, /archived alpha/);
 
     const invalidBlock = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/999/expand`, { headers: { Authorization: 'Bearer secret-token' } });
     assert.equal(invalidBlock.status, 404);

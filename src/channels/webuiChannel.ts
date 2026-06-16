@@ -1180,7 +1180,6 @@ export class WebUIChannel implements Channel {
             const result = await renderContextBlockExpansion({
               sessionId,
               blockId,
-              mode: getSingleQueryValue(req.query.mode),
               previewLength: parseOptionalPositiveNumberQuery(req.query.previewLength, 'previewLength'),
             });
             res.json(result);

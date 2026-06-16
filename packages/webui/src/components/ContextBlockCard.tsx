@@ -1,16 +1,38 @@
-import { memo, useCallback, useMemo, useState } from 'react'
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Check, ChevronDown, ChevronRight, Code, Copy, Eye, FileJson } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
-import { copyTextToClipboard, type ContextBlockMessageMeta, type Message } from './chatShared'
+import {
+  IconToggleButton,
+  copyTextToClipboard,
+  handleMarkdownLinkClick,
+  renderMarkdown,
+  type ContextBlockMessageMeta,
+  type Message,
+  type ViewMode,
+} from './chatShared'
 
-export type ContextBlockExpansionMode = 'detail' | 'messages'
+export type ContextBlockExpansionKind = 'child-blocks' | 'messages'
+
+type ContextBlockExpansionItem = {
+  kind: 'block' | 'message'
+  message: Message
+  block?: ContextBlockMessageMeta
+  seq?: number
+  timestamp?: number
+  inherited?: boolean
+  sourceSessionId?: string
+}
 
 type ContextBlockExpansionResponse = {
   sessionId: string
   blockId: number
-  mode: ContextBlockExpansionMode
+  expansionKind: ContextBlockExpansionKind
   target: string
   previewLength: number
-  text: string
+  text?: string
+  items?: ContextBlockExpansionItem[]
+  messages?: Message[]
+  totalItems?: number
   block?: ContextBlockMessageMeta
 }
 
@@ -73,18 +95,15 @@ export const getContextBlockSummaryText = (text: string): string => {
   return prefix ? text.slice(prefix[0].length).trim() || text.trim() : text.trim()
 }
 
-const formatSeqRange = (start: number, end: number): string => (
-  start === end ? `raw#${start}` : `raw#${start}-#${end}`
-)
+const getExpansionMessages = (response?: ContextBlockExpansionResponse): Message[] => {
+  if (!response) return []
+  if (Array.isArray(response.messages)) return response.messages
+  if (Array.isArray(response.items)) return response.items.map((item) => item.message).filter(Boolean)
+  return []
+}
 
-const modeLabel = (mode: ContextBlockExpansionMode): string => (
-  mode === 'messages' ? 'Raw messages' : 'One level'
-)
-
-const modeDescription = (mode: ContextBlockExpansionMode): string => (
-  mode === 'messages'
-    ? 'Raw archived messages covered by this block.'
-    : 'Immediate source: child block summaries for higher-level blocks, or source message previews for message-backed blocks.'
+const expansionKindLabel = (kind?: ContextBlockExpansionKind): string => (
+  kind === 'messages' ? 'raw messages' : 'child blocks'
 )
 
 interface ContextBlockCardProps {
@@ -92,53 +111,56 @@ interface ContextBlockCardProps {
   messageKey: string
   block: ContextBlockMessageMeta
   text: string
+  message: Message
+  nestedDepth: number
+  renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
 }
 
-const ContextBlockCard = memo(function ContextBlockCard({ sessionId, messageKey, block, text }: ContextBlockCardProps) {
+const ContextBlockCard = memo(function ContextBlockCard({
+  sessionId,
+  messageKey,
+  block,
+  text,
+  message,
+  nestedDepth,
+  renderNestedMessages,
+}: ContextBlockCardProps) {
   const [expanded, setExpanded] = useState(false)
-  const [mode, setMode] = useState<ContextBlockExpansionMode>('detail')
-  const [expansions, setExpansions] = useState<Record<ContextBlockExpansionMode, ExpansionState>>({
-    detail: {},
-    messages: {},
-  })
+  const [expansion, setExpansion] = useState<ExpansionState>({})
+  const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const [copied, setCopied] = useState(false)
+  const copyResetTimeoutRef = useRef<number | null>(null)
 
-  const summary = useMemo(() => getContextBlockSummaryText(text), [text])
-  const current = expansions[mode] || {}
-  const sourceLabel = block.sourceKind
-    ? `${block.sourceKind}${typeof block.sourceStart === 'number' && typeof block.sourceEnd === 'number' ? ` ${block.sourceStart === block.sourceEnd ? `#${block.sourceStart}` : `#${block.sourceStart}-#${block.sourceEnd}`}` : ''}`
-    : 'archive'
+  const jsonText = useMemo(() => viewMode === 'json' ? JSON.stringify(message, null, 2) : '', [message, viewMode])
+  const html = useMemo(() => viewMode === 'rendered' ? renderMarkdown(text) : '', [text, viewMode])
+  const nestedMessages = useMemo(() => getExpansionMessages(expansion.response), [expansion.response])
 
-  const loadExpansion = useCallback(async (nextMode: ContextBlockExpansionMode) => {
+  useEffect(() => {
+    return () => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  const loadExpansion = useCallback(async () => {
     if (!sessionId || !block.id) return
-    setExpansions(prev => ({
-      ...prev,
-      [nextMode]: { ...(prev[nextMode] || {}), loading: true, error: null },
-    }))
+    setExpansion(prev => ({ ...prev, loading: true, error: null }))
 
     try {
-      const params = new URLSearchParams({
-        mode: nextMode,
-        previewLength: String(EXPANSION_PREVIEW_LENGTH),
-      })
+      const params = new URLSearchParams({ previewLength: String(EXPANSION_PREVIEW_LENGTH) })
       const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/context-blocks/${block.id}/expand?${params.toString()}`)
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
         throw new Error(payload?.error || `Failed to expand CTX-BLOCK (${response.status})`)
       }
-      if (!payload || typeof payload.text !== 'string') {
+      if (!payload || (!Array.isArray(payload.messages) && !Array.isArray(payload.items))) {
         throw new Error('Invalid CTX-BLOCK expansion response.')
       }
-      setExpansions(prev => ({
-        ...prev,
-        [nextMode]: { loading: false, error: null, response: payload as ContextBlockExpansionResponse },
-      }))
+      setExpansion({ loading: false, error: null, response: payload as ContextBlockExpansionResponse })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to expand CTX-BLOCK.'
-      setExpansions(prev => ({
-        ...prev,
-        [nextMode]: { ...(prev[nextMode] || {}), loading: false, error: message },
-      }))
+      setExpansion(prev => ({ ...prev, loading: false, error: message }))
     }
   }, [block.id, sessionId])
 
@@ -148,112 +170,86 @@ const ContextBlockCard = memo(function ContextBlockCard({ sessionId, messageKey,
       return
     }
     setExpanded(true)
-    const next = expansions[mode] || {}
-    if (!next.response && !next.loading) {
-      void loadExpansion(mode)
+    if (!expansion.response && !expansion.loading) {
+      void loadExpansion()
     }
-  }, [expanded, expansions, loadExpansion, mode])
-
-  const handleModeChange = useCallback((nextMode: ContextBlockExpansionMode) => {
-    setMode(nextMode)
-    const next = expansions[nextMode] || {}
-    if (expanded && !next.response && !next.loading) {
-      void loadExpansion(nextMode)
-    }
-  }, [expanded, expansions, loadExpansion])
+  }, [expanded, expansion.loading, expansion.response, loadExpansion])
 
   const handleRetry = useCallback(() => {
-    void loadExpansion(mode)
-  }, [loadExpansion, mode])
+    void loadExpansion()
+  }, [loadExpansion])
 
-  const handleCopy = useCallback(async () => {
-    const text = current.response?.text
-    if (!text) return
+  const handleCopy = useCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
     try {
       await copyTextToClipboard(text)
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 1500)
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+      }
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false)
+        copyResetTimeoutRef.current = null
+      }, 1500)
     } catch (error) {
-      console.error('Failed to copy CTX-BLOCK expansion:', error)
+      console.error('Failed to copy CTX-BLOCK text:', error)
     }
-  }, [current.response?.text])
+  }, [text])
+
+  const nestedKey = `${messageKey}-ctx-block-${block.sourceSessionId || 'local'}-${block.id}`
 
   return (
-    <div className="rounded-lg border border-amber-200 bg-amber-50/70 text-amber-950 shadow-sm dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-100">
-      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-amber-200/70 px-3 py-2 text-xs dark:border-amber-900/50">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2 font-semibold">
-            <span>CTX-BLOCK B#{block.id}</span>
-            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/60 dark:text-amber-100">L{block.level}</span>
-            <span className="text-amber-700 dark:text-amber-300">{formatSeqRange(block.rawStartSeq, block.rawEndSeq)}</span>
-          </div>
-          <div className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-300">
-            source: {sourceLabel}{block.inherited && block.sourceSessionId ? ` · inherited from ${block.sourceSessionId}` : ''}
-          </div>
+    <div className="min-w-0">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-2 rounded-lg cursor-text relative group">
+        <div className="absolute right-1 top-1 z-10 flex gap-0.5 opacity-70 transition-opacity group-hover:opacity-100">
+          <IconToggleButton onClick={handleToggle} active={expanded} title={expanded ? 'Collapse CTX-BLOCK' : `Expand CTX-BLOCK (${block.sourceKind === 'block' ? 'one level' : 'raw messages'})`}>
+            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </IconToggleButton>
+          <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
+            <Eye size={12} />
+          </IconToggleButton>
+          <IconToggleButton onClick={() => setViewMode('raw')} active={viewMode === 'raw'} title="Raw Text">
+            <Code size={12} />
+          </IconToggleButton>
+          <IconToggleButton onClick={() => setViewMode('json')} active={viewMode === 'json'} title="JSON">
+            <FileJson size={14} />
+          </IconToggleButton>
+          <IconToggleButton onClick={handleCopy} active={copied} title={copied ? 'Copied' : 'Copy Raw Text'}>
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+          </IconToggleButton>
         </div>
-        <button
-          type="button"
-          className="rounded border border-amber-300 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-100 dark:hover:bg-amber-900/50"
-          onClick={handleToggle}
-          aria-expanded={expanded}
-          aria-controls={`${messageKey}-ctx-block-${block.id}-expansion`}
-        >
-          {expanded ? 'Collapse' : 'Expand'}
-        </button>
-      </div>
 
-      <div className="px-3 py-2">
-        <div className="whitespace-pre-wrap text-sm leading-relaxed">{summary}</div>
+        {viewMode === 'rendered' ? (
+          <div
+            className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100 prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
+            dangerouslySetInnerHTML={{ __html: html }}
+            onClick={handleMarkdownLinkClick}
+          />
+        ) : viewMode === 'raw' ? (
+          <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 py-2">{text}</pre>
+        ) : (
+          <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto py-2">{jsonText}</pre>
+        )}
       </div>
 
       {expanded && (
-        <div id={`${messageKey}-ctx-block-${block.id}-expansion`} className="border-t border-amber-200/70 px-3 py-3 dark:border-amber-900/50">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex rounded-md border border-amber-300 bg-amber-100/60 p-0.5 text-[11px] dark:border-amber-800 dark:bg-amber-950/40">
-              {(['detail', 'messages'] as ContextBlockExpansionMode[]).map((entry) => (
-                <button
-                  key={entry}
-                  type="button"
-                  className={`rounded px-2 py-1 ${mode === entry ? 'bg-white text-amber-900 shadow-sm dark:bg-amber-900 dark:text-amber-50' : 'text-amber-700 hover:bg-white/60 dark:text-amber-300 dark:hover:bg-amber-900/50'}`}
-                  onClick={() => handleModeChange(entry)}
-                >
-                  {modeLabel(entry)}
-                </button>
-              ))}
-            </div>
-            {current.response?.text && (
-              <button
-                type="button"
-                className="rounded border border-amber-300 px-2 py-1 text-[11px] text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-100 dark:hover:bg-amber-900/50"
-                onClick={handleCopy}
-              >
-                {copied ? 'Copied' : 'Copy'}
-              </button>
-            )}
-          </div>
-
-          <div className="mb-2 rounded border border-amber-200 bg-white/70 px-2 py-1.5 text-[11px] text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
-            Temporary archive preview — not part of session history and not sent to the model. {modeDescription(mode)}
-          </div>
-
-          {current.loading && (
-            <div className="rounded bg-white/70 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">Loading CTX-BLOCK preview…</div>
+        <div className="mt-2 ml-3 min-w-0 border-l-2 border-blue-200 pl-3 pr-1 dark:border-blue-800">
+          {expansion.loading && (
+            <div className="py-1 text-xs text-gray-500 dark:text-gray-400">Loading {block.sourceKind === 'block' ? 'child blocks' : 'raw messages'}…</div>
           )}
-
-          {current.error && !current.loading && (
-            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-              <div>{current.error}</div>
-              <button type="button" className="mt-2 rounded border border-red-300 px-2 py-1 text-[11px] hover:bg-red-100 dark:border-red-800 dark:hover:bg-red-900/50" onClick={handleRetry}>
+          {expansion.error && !expansion.loading && (
+            <div className="py-1 text-xs text-red-600 dark:text-red-400">
+              <div>{expansion.error}</div>
+              <button type="button" className="mt-1 rounded border border-red-200 px-2 py-0.5 text-[11px] hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-950/40" onClick={handleRetry}>
                 Retry
               </button>
             </div>
           )}
-
-          {current.response?.text && !current.loading && (
-            <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap rounded border border-amber-200 bg-white/80 p-3 font-mono text-xs leading-5 text-slate-800 dark:border-amber-900/60 dark:bg-slate-950/70 dark:text-slate-100">
-              {current.response.text}
-            </pre>
+          {!expansion.loading && !expansion.error && expansion.response && nestedMessages.length === 0 && (
+            <div className="py-1 text-xs text-gray-500 dark:text-gray-400">No {expansionKindLabel(expansion.response.expansionKind)} found for this block.</div>
           )}
+          {!expansion.loading && nestedMessages.length > 0 && renderNestedMessages(nestedMessages, nestedKey, nestedDepth + 1)}
         </div>
       )}
     </div>

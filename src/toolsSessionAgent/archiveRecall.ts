@@ -1,5 +1,7 @@
 import * as sessionManager from '../sessionManager';
-import { formatArchiveBlockContextText, formatArchiveBlockTimeRange, getArchiveBlockEndTimestamp, getArchiveBlockStartTimestamp, type ArchiveBlockRecord } from '../session/layeredContext';
+import { formatArchiveBlockContextText, formatArchiveBlockTimeRange, getArchiveBlockEndTimestamp, getArchiveBlockStartTimestamp, renderBlockMessage, type ArchiveBlockRecord } from '../session/layeredContext';
+import type { ArchiveMessageRecord } from '../session/archive';
+import type { Message } from '../types';
 import * as vector from '../vector';
 import {
   createArchivedBlockContextPreviewItem,
@@ -299,30 +301,45 @@ type RecallTargetSpec =
   | { kind: 'blockMessages'; id: number }
   | { kind: 'messages'; startSeq: number; endSeq: number };
 
-export type ContextBlockExpansionMode = 'detail' | 'messages';
+export type ContextBlockExpansionKind = 'child-blocks' | 'messages';
+
+export interface ContextBlockExpansionBlockPayload {
+  id: number;
+  level: number;
+  sourceKind: ArchiveBlockRecord['sourceKind'];
+  sourceStart: number;
+  sourceEnd: number;
+  sourceBlockIds?: number[];
+  rawStartSeq: number;
+  rawEndSeq: number;
+  rawStartTimestamp?: number;
+  rawEndTimestamp?: number;
+  createdAt?: number;
+  inherited?: boolean;
+  sourceSessionId?: string;
+}
+
+export interface ContextBlockExpansionItem {
+  kind: 'block' | 'message';
+  message: Message;
+  block?: ContextBlockExpansionBlockPayload;
+  seq?: number;
+  timestamp?: number;
+  inherited?: boolean;
+  sourceSessionId?: string;
+}
 
 export interface ContextBlockExpansionResult {
   sessionId: string;
   blockId: number;
-  mode: ContextBlockExpansionMode;
+  expansionKind: ContextBlockExpansionKind;
   target: string;
   previewLength: number;
   text: string;
-  block: {
-    id: number;
-    level: number;
-    sourceKind: ArchiveBlockRecord['sourceKind'];
-    sourceStart: number;
-    sourceEnd: number;
-    sourceBlockIds?: number[];
-    rawStartSeq: number;
-    rawEndSeq: number;
-    rawStartTimestamp?: number;
-    rawEndTimestamp?: number;
-    createdAt?: number;
-    inherited?: boolean;
-    sourceSessionId?: string;
-  };
+  items: ContextBlockExpansionItem[];
+  messages: Message[];
+  totalItems: number;
+  block: ContextBlockExpansionBlockPayload;
 }
 
 function contextBlockExpansionError(message: string, statusCode: number, code: string): Error & { statusCode: number; code: string } {
@@ -332,17 +349,7 @@ function contextBlockExpansionError(message: string, statusCode: number, code: s
   return err;
 }
 
-function normalizeContextBlockExpansionMode(value: unknown): ContextBlockExpansionMode {
-  if (value === undefined || value === null || value === '') {
-    return 'detail';
-  }
-  if (value === 'detail' || value === 'messages') {
-    return value;
-  }
-  throw contextBlockExpansionError('mode must be one of: detail, messages.', 400, 'INVALID_CONTEXT_BLOCK_EXPANSION_MODE');
-}
-
-function buildContextBlockExpansionBlockPayload(block: ArchiveBlockRecord): ContextBlockExpansionResult['block'] {
+function buildContextBlockExpansionBlockPayload(block: ArchiveBlockRecord): ContextBlockExpansionBlockPayload {
   return {
     id: block.id,
     level: block.level,
@@ -355,6 +362,52 @@ function buildContextBlockExpansionBlockPayload(block: ArchiveBlockRecord): Cont
     ...(typeof block.rawStartTimestamp === 'number' ? { rawStartTimestamp: block.rawStartTimestamp } : {}),
     ...(typeof block.rawEndTimestamp === 'number' ? { rawEndTimestamp: block.rawEndTimestamp } : {}),
     ...(typeof block.createdAt === 'number' ? { createdAt: block.createdAt } : {}),
+    ...(block.inherited !== undefined ? { inherited: block.inherited } : {}),
+    ...(typeof block.sourceSessionId === 'string' ? { sourceSessionId: block.sourceSessionId } : {}),
+  };
+}
+
+function buildContextBlockExpansionMessageItem(record: ArchiveMessageRecord): ContextBlockExpansionItem {
+  const message = structuredClone(record.message) as Message;
+  message.__meta = {
+    ...(message.__meta || {}),
+    timestamp: message.__meta?.timestamp || record.timestamp,
+    seq: message.__meta?.seq || record.seq,
+    contextArchiveItem: {
+      kind: 'message',
+      seq: record.seq,
+      ...(record.inherited !== undefined ? { inherited: record.inherited } : {}),
+      ...(typeof record.sourceSessionId === 'string' ? { sourceSessionId: record.sourceSessionId } : {}),
+    },
+  };
+
+  return {
+    kind: 'message',
+    message,
+    seq: record.seq,
+    timestamp: record.timestamp,
+    ...(record.inherited !== undefined ? { inherited: record.inherited } : {}),
+    ...(typeof record.sourceSessionId === 'string' ? { sourceSessionId: record.sourceSessionId } : {}),
+  };
+}
+
+function buildContextBlockExpansionBlockItem(block: ArchiveBlockRecord): ContextBlockExpansionItem {
+  const message = renderBlockMessage(block);
+  message.__meta = {
+    ...(message.__meta || {}),
+    contextArchiveItem: {
+      kind: 'block',
+      id: block.id,
+      ...(block.inherited !== undefined ? { inherited: block.inherited } : {}),
+      ...(typeof block.sourceSessionId === 'string' ? { sourceSessionId: block.sourceSessionId } : {}),
+    },
+  };
+
+  return {
+    kind: 'block',
+    message,
+    block: buildContextBlockExpansionBlockPayload(block),
+    timestamp: block.createdAt,
     ...(block.inherited !== undefined ? { inherited: block.inherited } : {}),
     ...(typeof block.sourceSessionId === 'string' ? { sourceSessionId: block.sourceSessionId } : {}),
   };
@@ -1014,7 +1067,6 @@ async function buildRecallMessagesForBlock(
 export async function renderContextBlockExpansion(args: {
   sessionId: string;
   blockId: number;
-  mode?: unknown;
   previewLength?: unknown;
 }): Promise<ContextBlockExpansionResult> {
   const targetSessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
@@ -1032,7 +1084,6 @@ export async function renderContextBlockExpansion(args: {
   }
   const blockId = args.blockId;
 
-  const mode = normalizeContextBlockExpansionMode(args.mode);
   const { budget: previewLength } = normalizeContextPreviewBudget(args.previewLength, RECALL_DEFAULT_PREVIEW_LENGTH);
   const renderOptions: ContextPreviewRenderOptions = {
     previewLength: args.previewLength,
@@ -1045,17 +1096,34 @@ export async function renderContextBlockExpansion(args: {
     throw contextBlockExpansionError(`CTX-BLOCK B#${blockId} not found in session \`${targetSessionId}\`.`, 404, 'CTX_BLOCK_NOT_FOUND');
   }
 
-  const text = mode === 'messages'
-    ? await buildRecallMessagesForBlock(targetSessionId, blockId, previewLength, false, renderOptions, { includeSuggestions: false })
-    : await buildRecallBlockDetail(targetSessionId, blockId, previewLength, false, renderOptions, { includeSuggestions: false });
+  const range = await resolveRecallBlockMessageRange(targetSessionId, block);
+  const expansionKind: ContextBlockExpansionKind = block.sourceKind === 'block' ? 'child-blocks' : 'messages';
+  const items: ContextBlockExpansionItem[] = [];
+
+  if (expansionKind === 'child-blocks') {
+    const childBlocks = await getRecallChildBlocksForBlock(targetSessionId, block);
+    const visibleChildBlocks = await hydrateRecallBlockTimeRanges(targetSessionId, childBlocks);
+    items.push(...visibleChildBlocks.map(buildContextBlockExpansionBlockItem));
+  } else if (range) {
+    const result = await sessionManager.getArchivedMessages(targetSessionId, {
+      startSeq: range.startSeq,
+      endSeq: range.endSeq,
+    });
+    items.push(...(result.records as ArchiveMessageRecord[]).map(buildContextBlockExpansionMessageItem));
+  }
+
+  const text = await buildRecallBlockDetail(targetSessionId, blockId, previewLength, false, renderOptions, { includeSuggestions: false });
 
   return {
     sessionId: targetSessionId,
     blockId,
-    mode,
-    target: mode === 'messages' ? `msg:B#${blockId}` : `B#${blockId}`,
+    expansionKind,
+    target: `B#${blockId}`,
     previewLength,
     text,
+    items,
+    messages: items.map(item => item.message),
+    totalItems: items.length,
     block: buildContextBlockExpansionBlockPayload(block),
   };
 }
