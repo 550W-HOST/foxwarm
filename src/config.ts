@@ -272,8 +272,6 @@ export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const DB_DIR = path.join(STATE_DIR, 'db');
 export const SESSIONS_DIR = path.join(STATE_DIR, 'sessions');
 export const SESSIONS_BLOB_DIR = path.join(STATE_DIR, 'sessions-blob');
-export const MIGRATION_VERSION_FILE = path.join(STATE_DIR, 'migrationVersion.json');
-export const MIGRATION_BACKUP_DIR = path.join(STATE_DIR, 'migration-backup');
 export const AGENTS_SYSTEM_PROMPT_PATH = path.join(AGENTS_DIR, '00_SYSTEM.md');
 export const AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH = path.join(BASE_DIR, 'templates', 'agents', '00_SYSTEM.md');
 export const MAIN_AGENT_DIR = path.join(AGENTS_DIR, 'main');
@@ -311,7 +309,7 @@ export function getSessionBlockArchiveLogPath(sessionId: string): string {
   return path.join(SESSION_LOGS_DIR, `${sessionId}.blocks.jsonl`);
 }
 
-export function getSessionFrontierPath(sessionId: string): string {
+export function getLegacySessionFrontierPath(sessionId: string): string {
   return path.join(SESSIONS_DIR, `${sessionId}.frontier.json`);
 }
 

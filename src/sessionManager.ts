@@ -13,11 +13,11 @@ import * as llm from './llm';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getSessionFrontierPath } from './config';
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, getNextSessionMessageSeq } from './session/archive';
-import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, loadSessionFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
+import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
 import { ensureSessionBranch } from './session/archiveStore';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
@@ -26,7 +26,7 @@ import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
-import { runEmbeddedContextFrontierMigration } from './session/frontierMigration';
+import { runStartupMigrations } from './migrations';
 
 function systemPart(system: string): MessagePart {
   return { system };
@@ -527,7 +527,6 @@ export async function getSession(sessionId: string): Promise<Session> {
           session.persistentMemorySnapshot = historyData.persistentMemorySnapshot;
         }
         applySessionHistoryState(session, historyData);
-        await loadSessionFrontier(session);
         if (historyData.indexingState) {
           // Check if indexing was interrupted
           await resumeIndexingIfNeeded(sessionId, session);
@@ -1198,10 +1197,12 @@ export async function loadSessions(): Promise<void> {
     await sessionAgentMetadata.loadAgentMetadata();
     await loadChannels();
 
-    const migrationResult = await runEmbeddedContextFrontierMigration();
-    if (!migrationResult.skippedByVersion && (migrationResult.migratedFiles > 0 || migrationResult.failedFiles > 0)) {
-      const { failures: _failures, ...migrationSummary } = migrationResult;
-      logger.info({ migrationSummary }, 'Embedded context-frontier migration finished');
+    const migrationResults = await runStartupMigrations();
+    for (const migrationResult of migrationResults) {
+      if (!migrationResult.skippedByVersion && (migrationResult.migratedFiles > 0 || migrationResult.failedFiles > 0)) {
+        const { failures: _failures, ...migrationSummary } = migrationResult;
+        logger.info({ migrationSummary }, 'Startup migration finished');
+      }
     }
 
     const { data, source } = await loadSessionsMetadataSnapshot();
@@ -1816,7 +1817,7 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
     await fs.remove(sessionFile);
   }
 
-  const legacyFrontierFile = getSessionFrontierPath(sessionId);
+  const legacyFrontierFile = getLegacySessionFrontierPath(sessionId);
   if (await fs.pathExists(legacyFrontierFile)) {
     await fs.remove(legacyFrontierFile);
   }

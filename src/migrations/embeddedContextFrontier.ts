@@ -1,41 +1,19 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { logger } from '../common';
-import {
-  MIGRATION_BACKUP_DIR,
-  MIGRATION_VERSION_FILE,
-  SESSIONS_DIR,
-  STATE_DIR,
-} from '../config';
+import { SESSIONS_DIR, STATE_DIR } from '../config';
 import { ContextFrontierItem } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
 import {
   annotateHistoryWithContextFrontierMetadata,
   ArchiveBlockRecord,
-  createSessionFrontierStore,
-} from './layeredContext';
+} from '../session/layeredContext';
 import {
   createSessionHistoryStore,
-} from './metadataStore';
+} from '../session/metadataStore';
+import { createMigrationVersionStore, MIGRATION_BACKUP_DIR, MIGRATION_VERSION_FILE, MigrationVersionEntry, readMigrationVersionState } from './state';
 
 export const EMBEDDED_CONTEXT_FRONTIER_MIGRATION_ID = 'embedded-context-frontier-v1';
-
-type MigrationStatus = 'completed' | 'completed_with_failures';
-
-export type MigrationVersionEntry = {
-  status: MigrationStatus;
-  completedAt: number;
-  migratedFiles: number;
-  skippedFiles: number;
-  failedFiles: number;
-  backupRoot: string;
-  failures?: Array<{ filePath: string; reason: string }>;
-};
-
-export type MigrationVersionState = {
-  v: 1;
-  migrations: Record<string, MigrationVersionEntry>;
-};
 
 export type EmbeddedContextFrontierMigrationResult = {
   migrationId: string;
@@ -59,37 +37,33 @@ export type EmbeddedContextFrontierMigrationOptions = {
 
 const FAILURE_LOG_LIMIT = 20;
 
-function normalizeMigrationVersionState(raw: any): MigrationVersionState {
+type LegacyFrontierPayload = {
+  v: number;
+  sessionId?: string;
+  nextBlockId?: number;
+  frontier: ContextFrontierItem[];
+};
+
+function normalizeLegacyFrontierPayload(raw: any, filePath: string): LegacyFrontierPayload {
   if (!raw || typeof raw !== 'object') {
-    return { v: 1, migrations: {} };
+    throw new Error(`Invalid legacy layered context frontier payload in ${filePath}`);
   }
 
-  const migrations = raw.migrations && typeof raw.migrations === 'object'
-    ? raw.migrations
-    : {};
   return {
-    v: 1,
-    migrations,
+    ...raw,
+    v: typeof raw.v === 'number' ? raw.v : 1,
+    frontier: Array.isArray(raw.frontier) ? raw.frontier : [],
   };
 }
 
-export function createMigrationVersionStore(filePath: string = MIGRATION_VERSION_FILE): DiskJsonData<MigrationVersionState> {
-  return new DiskJsonData<MigrationVersionState>(filePath, {
+function createLegacyFrontierStore(filePath: string): DiskJsonData<LegacyFrontierPayload> {
+  return new DiskJsonData<LegacyFrontierPayload>(filePath, {
     backup: false,
-    normalizeLoadedData: normalizeMigrationVersionState,
+    normalizeLoadedData: normalizeLegacyFrontierPayload,
     onReadError: (err: unknown, candidatePath: string) => {
-      logger.warn({ err, candidatePath }, 'Failed to read migration version state');
+      logger.warn({ err, candidatePath }, 'Failed to read legacy layered context frontier');
     },
   });
-}
-
-async function readMigrationVersionState(store: DiskJsonData<MigrationVersionState>): Promise<MigrationVersionState> {
-  try {
-    return await store.readFromPath() || { v: 1, migrations: {} };
-  } catch (err) {
-    logger.warn({ err, filePath: store.filePath }, 'Ignoring unreadable migration version state and starting fresh');
-    return { v: 1, migrations: {} };
-  }
 }
 
 async function collectLegacyFrontierFiles(dir: string): Promise<string[]> {
@@ -160,7 +134,7 @@ async function migrateOneFrontierFile(
     throw new Error(`session history file not found for ${sessionId}`);
   }
 
-  const frontierStore = createSessionFrontierStore(frontierFilePath);
+  const frontierStore = createLegacyFrontierStore(frontierFilePath);
   const frontierData = await frontierStore.readFromPath(frontierFilePath);
   if (!frontierData || !Array.isArray(frontierData.frontier)) {
     throw new Error('invalid frontier payload');
@@ -174,7 +148,6 @@ async function migrateOneFrontierFile(
 
   const frontier = structuredClone(frontierData.frontier) as ContextFrontierItem[];
   const annotation = await annotateHistoryWithContextFrontierMetadata(sessionId, historyData.history, frontier, {
-    strict: true,
     readBlocksByIdRange: options.readBlocksByIdRange,
   });
   if (!annotation.matched) {

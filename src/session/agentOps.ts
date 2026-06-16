@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import * as llm from '../llm';
-import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, getSessionBlockArchiveLogPath, getSessionFrontierPath, SESSIONS_DIR } from '../config';
+import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, getSessionBlockArchiveLogPath, getLegacySessionFrontierPath, SESSIONS_DIR } from '../config';
 import { Session } from '../types';
 import { renameSessionArchiveStore } from './archiveStore';
 
@@ -132,8 +132,8 @@ async function renameSessionIdentity(options: {
     await fs.move(oldBlockArchive, newBlockArchive, { overwrite: true });
   }
 
-  const oldFrontierFile = getSessionFrontierPath(oldRealId);
-  const newFrontierFile = getSessionFrontierPath(targetSessionId);
+  const oldFrontierFile = getLegacySessionFrontierPath(oldRealId);
+  const newFrontierFile = getLegacySessionFrontierPath(targetSessionId);
   if (await fs.pathExists(oldFrontierFile)) {
     await fs.ensureDir(path.dirname(newFrontierFile));
     await fs.move(oldFrontierFile, newFrontierFile, { overwrite: true });

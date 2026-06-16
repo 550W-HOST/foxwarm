@@ -4,8 +4,8 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 
-import { EMBEDDED_CONTEXT_FRONTIER_MIGRATION_ID, runEmbeddedContextFrontierMigration } from './frontierMigration';
-import type { ArchiveBlockRecord } from './layeredContext';
+import { EMBEDDED_CONTEXT_FRONTIER_MIGRATION_ID, runEmbeddedContextFrontierMigration } from './embeddedContextFrontier';
+import type { ArchiveBlockRecord } from '../session/layeredContext';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-frontier-migration-'));
