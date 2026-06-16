@@ -86,6 +86,12 @@ export interface Message {
     modelId?: string;
     /** Token usage reported for the model call that produced this model message. */
     usage?: TokenUsage;
+    /** Structured CTX-BLOCK metadata for rendered layered-context block messages. */
+    contextBlock?: ContextBlockMessageMeta;
+    /** Structured active-frontier entry used to render this message, if known. */
+    contextFrontierItem?: ContextFrontierItem;
+    /** Present when a raw message is intentionally preserved after a covering block. */
+    preservedFromBlockId?: number;
     [key: string]: any;
   };
 }
@@ -143,6 +149,22 @@ export interface SessionGoalState {
   remindOnTurnEnd?: boolean;
   anchorSeq: number;
   updatedAt: number;
+}
+
+export interface ContextBlockMessageMeta {
+  id: number;
+  level: number;
+  rawStartSeq: number;
+  rawEndSeq: number;
+  sourceKind: 'message' | 'block';
+  sourceStart: number;
+  sourceEnd: number;
+  sourceBlockIds?: number[];
+  rawStartTimestamp?: number;
+  rawEndTimestamp?: number;
+  createdAt?: number;
+  sourceSessionId?: string;
+  inherited?: boolean;
 }
 
 // Session types

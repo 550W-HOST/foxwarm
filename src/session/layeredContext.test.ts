@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { createSessionFrontierStore, formatArchiveBlockContextText, formatArchiveBlockTimeRange, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import { annotateHistoryWithContextFrontierMetadata, createSessionFrontierStore, formatArchiveBlockContextText, formatArchiveBlockTimeRange, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 import { formatCompactionCompletionMarker } from './history';
 import { Message } from '../types';
 import { formatLocalTimeRange } from '../utils/localTime';
@@ -87,6 +87,9 @@ test('session frontier store uses lightweight no-backup writes', async () => {
 
 test('renderBlockMessage includes raw message local time range when available', () => {
   const record: any = {
+    sourceKind: 'message',
+    sourceStart: 10,
+    sourceEnd: 12,
     id: 3,
     level: 1,
     rawStartSeq: 10,
@@ -103,4 +106,66 @@ test('renderBlockMessage includes raw message local time range when available', 
   assert.equal(formatArchiveBlockTimeRange(record), ` time ${expectedRange}`);
   assert.equal(formatArchiveBlockContextText(record), expectedBlockText);
   assert.equal(message.parts[0].text, expectedBlockText);
+  assert.deepEqual(message.__meta?.contextBlock, {
+    id: 3,
+    level: 1,
+    rawStartSeq: 10,
+    rawEndSeq: 12,
+    sourceKind: 'message',
+    sourceStart: 10,
+    sourceEnd: 12,
+    rawStartTimestamp: record.rawStartTimestamp,
+    rawEndTimestamp: record.rawEndTimestamp,
+    createdAt: record.createdAt,
+  });
+  assert.deepEqual(message.__meta?.contextFrontierItem, {
+    kind: 'block',
+    id: 3,
+    level: 1,
+    rawStartSeq: 10,
+    rawEndSeq: 12,
+  });
+});
+
+test('annotateHistoryWithContextFrontierMetadata adds block and preserved raw metadata', async () => {
+  const history: Message[] = [
+    {
+      role: 'model',
+      parts: [{ text: '[CTX-BLOCK L1 B#7 raw#10-#12] block summary' }],
+      __meta: { timestamp: 2000 },
+    },
+    {
+      role: 'user',
+      parts: [{ text: 'exact preserved instruction' }],
+      __meta: { seq: 11, timestamp: 1000 },
+    },
+  ];
+
+  const result = await annotateHistoryWithContextFrontierMetadata('session-a', history, [
+    { kind: 'block', id: 7, level: 1, rawStartSeq: 10, rawEndSeq: 12 },
+    { kind: 'message', seq: 11, preservedFromBlockId: 7 },
+  ], {
+    readBlocksByIdRange: async () => [{
+      v: 1,
+      kind: 'block',
+      sessionId: 'session-a',
+      agent: 'main',
+      id: 7,
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 10,
+      sourceEnd: 12,
+      rawStartSeq: 10,
+      rawEndSeq: 12,
+      summary: 'block summary',
+      createdAt: 2000,
+    }],
+  });
+
+  assert.equal(result.matched, true);
+  assert.equal(result.history[0].__meta?.contextBlock?.id, 7);
+  assert.equal(result.history[0].__meta?.contextBlock?.sourceKind, 'message');
+  assert.deepEqual(result.history[0].__meta?.contextFrontierItem, { kind: 'block', id: 7, level: 1, rawStartSeq: 10, rawEndSeq: 12 });
+  assert.equal(result.history[1].__meta?.preservedFromBlockId, 7);
+  assert.deepEqual(result.history[1].__meta?.contextFrontierItem, { kind: 'message', seq: 11, preservedFromBlockId: 7 });
 });

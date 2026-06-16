@@ -13,11 +13,11 @@ import * as llm from './llm';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir } from './config';
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getSessionFrontierPath } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, getNextSessionMessageSeq } from './session/archive';
-import { appendMessagesToContextFrontier, loadSessionFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
+import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, loadSessionFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
 import { ensureSessionBranch } from './session/archiveStore';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
@@ -26,6 +26,7 @@ import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
+import { runEmbeddedContextFrontierMigration } from './session/frontierMigration';
 
 function systemPart(system: string): MessagePart {
   return { system };
@@ -566,8 +567,16 @@ export async function getSession(sessionId: string): Promise<Session> {
   if (session.nextMessageSeq === undefined) {
     session.nextMessageSeq = getNextSessionMessageSeq(session);
   }
-  if (session.contextFrontier && session.contextFrontier.length > 0 && session.history.length !== session.contextFrontier.length) {
-    session.history = await renderHistoryFromFrontier(session);
+  if (session.contextFrontier && session.contextFrontier.length > 0) {
+    if (session.history.length !== session.contextFrontier.length) {
+      session.history = await renderHistoryFromFrontier(session);
+    } else {
+      const annotation = await annotateHistoryWithContextFrontierMetadata(session.id, session.history, session.contextFrontier);
+      session.history = annotation.history;
+      if (!annotation.matched) {
+        logger.warn({ sessionId: session.id, warnings: annotation.warnings }, 'Loaded session context frontier did not exactly match rendered history; applied best-effort metadata annotations');
+      }
+    }
   }
 
   // Setup broadcast function
@@ -1127,7 +1136,6 @@ export async function saveSession(sessionId: string): Promise<void> {
     const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
     await fs.ensureDir(path.dirname(historyFile));
     await writeSessionHistoryAtomically(sessionId, serializeSessionHistoryPayload(session));
-    await saveSessionFrontier(session);
     
     // Save metadata (lightweight operation)
     await saveSessionsMetadata();
@@ -1189,6 +1197,12 @@ export async function loadSessions(): Promise<void> {
     // Load agent metadata first
     await sessionAgentMetadata.loadAgentMetadata();
     await loadChannels();
+
+    const migrationResult = await runEmbeddedContextFrontierMigration();
+    if (!migrationResult.skippedByVersion && (migrationResult.migratedFiles > 0 || migrationResult.failedFiles > 0)) {
+      const { failures: _failures, ...migrationSummary } = migrationResult;
+      logger.info({ migrationSummary }, 'Embedded context-frontier migration finished');
+    }
 
     const { data, source } = await loadSessionsMetadataSnapshot();
     if (source !== SESSIONS_FILE) {
@@ -1800,6 +1814,11 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
   const sessionFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
   if (await fs.pathExists(sessionFile)) {
     await fs.remove(sessionFile);
+  }
+
+  const legacyFrontierFile = getSessionFrontierPath(sessionId);
+  if (await fs.pathExists(legacyFrontierFile)) {
+    await fs.remove(legacyFrontierFile);
   }
   
   // Save metadata

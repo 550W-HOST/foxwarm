@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { createSessionHistoryStore, createSessionsMetadataStore } from './metadataStore';
+import { applySessionHistoryState, collectSessionHistoryFiles, createSessionHistoryStore, createSessionsMetadataStore, serializeSessionHistoryPayload } from './metadataStore';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-session-metadata-store-'));
@@ -93,5 +93,35 @@ test('session history store uses lightweight no-backup config and still round-tr
 
     const siblingFiles = await fs.readdir(path.dirname(filePath));
     assert.deepEqual(siblingFiles, ['alpha.json']);
+  });
+});
+
+test('session history payload embeds context frontier and recovery ignores legacy frontier files', async () => {
+  await withTempDir(async (dirPath) => {
+    const sessionsDir = path.join(dirPath, 'sessions');
+    await fs.ensureDir(sessionsDir);
+    const historyFilePath = path.join(sessionsDir, 'alpha.json');
+    const frontierFilePath = path.join(sessionsDir, 'alpha.frontier.json');
+    await fs.writeJson(historyFilePath, { history: [] });
+    await fs.writeJson(frontierFilePath, { v: 1, frontier: [{ kind: 'message', seq: 1 }] });
+
+    assert.deepEqual(await collectSessionHistoryFiles(sessionsDir), [historyFilePath]);
+
+    const session: any = {
+      id: 'alpha',
+      history: [{ role: 'user', parts: [{ text: 'hello' }], __meta: { seq: 1 } }],
+      persistentMemorySnapshot: 'snapshot',
+      stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+      busy: false,
+      queue: [],
+      meta: { lastMessageTime: 1 },
+      contextFrontier: [{ kind: 'message', seq: 1 }],
+    };
+    const payload = serializeSessionHistoryPayload(session);
+    assert.deepEqual(payload.contextFrontier, [{ kind: 'message', seq: 1 }]);
+
+    const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
+    applySessionHistoryState(target, payload);
+    assert.deepEqual(target.contextFrontier, [{ kind: 'message', seq: 1 }]);
   });
 });

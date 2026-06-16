@@ -24,6 +24,7 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'busyStartedAt',
   'nextMessageSeq',
   'nextBlockId',
+  'contextFrontier',
   'goalState',
   'compactThresholdTokens',
 ] as const;
@@ -101,10 +102,16 @@ function normalizeSessionHistoryPayload(raw: any, filePath: string): Record<stri
     throw new Error(`Invalid session history payload in ${filePath}`);
   }
 
-  return {
+  const normalized = {
     ...raw,
     history: Array.isArray(raw.history) ? raw.history : [],
   };
+
+  if (normalized.contextFrontier !== undefined && !Array.isArray(normalized.contextFrontier)) {
+    delete normalized.contextFrontier;
+  }
+
+  return normalized;
 }
 
 export function createSessionHistoryStore(filePath: string): DiskJsonData<Record<string, any>> {
@@ -166,7 +173,7 @@ export function createSessionsMetadataStore(filePath: string = SESSIONS_FILE): D
 
 export const sessionsMetadataStore = createSessionsMetadataStore();
 
-async function collectSessionHistoryFiles(dir: string): Promise<string[]> {
+export async function collectSessionHistoryFiles(dir: string): Promise<string[]> {
   if (!await fs.pathExists(dir)) {
     return [];
   }
@@ -179,14 +186,14 @@ async function collectSessionHistoryFiles(dir: string): Promise<string[]> {
       files.push(...await collectSessionHistoryFiles(fullPath));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith('.json')) {
+    if (entry.isFile() && entry.name.endsWith('.json') && !entry.name.endsWith('.frontier.json')) {
       files.push(fullPath);
     }
   }
   return files;
 }
 
-function deriveSessionIdFromHistoryFile(historyFilePath: string): string {
+export function deriveSessionIdFromHistoryFile(historyFilePath: string): string {
   return path.relative(SESSIONS_DIR, historyFilePath).replace(/\.json$/, '').split(path.sep).join('/');
 }
 
@@ -205,7 +212,7 @@ function inferSessionLastMessageTime(history: Message[], historyFilePath: string
   }
 }
 
-function buildRecoveredSessionMetadata(sessionId: string, historyData: Record<string, any>, history: Message[]): Record<string, any> {
+export function buildRecoveredSessionMetadata(sessionId: string, historyData: Record<string, any>, history: Message[]): Record<string, any> {
   const recovered = pickDefinedFields(historyData, SESSION_METADATA_FIELDS);
   const inferredAgent = historyData.agent || (sessionId.includes('/') ? sessionId.split('/').slice(0, -1).join('/') : 'main');
   const inferredNextSeq = typeof historyData.nextMessageSeq === 'number'
@@ -238,7 +245,7 @@ function buildRecoveredSessionMetadata(sessionId: string, historyData: Record<st
   };
 }
 
-async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
+export async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
   const data: any = { sessions: {} };
   const historyFiles = await collectSessionHistoryFiles(SESSIONS_DIR);
 
