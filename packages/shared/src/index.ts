@@ -6,3 +6,4 @@ export * from './persistentExec';
 export * from './tokenCount';
 export * from './fileToolCore';
 export * from './nodeTools';
+export * from './webuiToolRendering';
