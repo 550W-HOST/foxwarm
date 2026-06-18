@@ -175,6 +175,12 @@ const ContextBlockCard = memo(function ContextBlockCard({
     }
   }, [expanded, expansion.loading, expansion.response, loadExpansion])
 
+  const handleCollapseExpansion = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setExpanded(false)
+  }, [])
+
   const handleRetry = useCallback(() => {
     void loadExpansion()
   }, [loadExpansion])
@@ -202,10 +208,7 @@ const ContextBlockCard = memo(function ContextBlockCard({
   return (
     <div className="min-w-0">
       <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-2 rounded-lg cursor-text relative group">
-        <div className="absolute right-1 top-1 z-10 flex gap-0.5 opacity-70 transition-opacity group-hover:opacity-100">
-          <IconToggleButton onClick={handleToggle} active={expanded} title={expanded ? 'Collapse CTX-BLOCK' : `Expand CTX-BLOCK (${block.sourceKind === 'block' ? 'one level' : 'raw messages'})`}>
-            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </IconToggleButton>
+        <div className="absolute right-1 top-1 z-10 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
             <Eye size={12} />
           </IconToggleButton>
@@ -217,6 +220,9 @@ const ContextBlockCard = memo(function ContextBlockCard({
           </IconToggleButton>
           <IconToggleButton onClick={handleCopy} active={copied} title={copied ? 'Copied' : 'Copy Raw Text'}>
             {copied ? <Check size={12} /> : <Copy size={12} />}
+          </IconToggleButton>
+          <IconToggleButton onClick={handleToggle} active={expanded} title={expanded ? 'Collapse CTX-BLOCK' : `Expand CTX-BLOCK (${block.sourceKind === 'block' ? 'one level' : 'raw messages'})`}>
+            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           </IconToggleButton>
         </div>
 
@@ -234,22 +240,31 @@ const ContextBlockCard = memo(function ContextBlockCard({
       </div>
 
       {expanded && (
-        <div className="mt-2 ml-3 min-w-0 border-l-2 border-blue-200 pl-3 pr-1 dark:border-blue-800">
-          {expansion.loading && (
-            <div className="py-1 text-xs text-gray-500 dark:text-gray-400">Loading {block.sourceKind === 'block' ? 'child blocks' : 'raw messages'}…</div>
-          )}
-          {expansion.error && !expansion.loading && (
-            <div className="py-1 text-xs text-red-600 dark:text-red-400">
-              <div>{expansion.error}</div>
-              <button type="button" className="mt-1 rounded border border-red-200 px-2 py-0.5 text-[11px] hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-950/40" onClick={handleRetry}>
-                Retry
-              </button>
-            </div>
-          )}
-          {!expansion.loading && !expansion.error && expansion.response && nestedMessages.length === 0 && (
-            <div className="py-1 text-xs text-gray-500 dark:text-gray-400">No {expansionKindLabel(expansion.response.expansionKind)} found for this block.</div>
-          )}
-          {!expansion.loading && nestedMessages.length > 0 && renderNestedMessages(nestedMessages, nestedKey, nestedDepth + 1)}
+        <div className="relative mt-2 ml-3 min-w-0 pl-3 pr-1">
+          <button
+            type="button"
+            aria-label={`Collapse CTX-BLOCK B#${block.id} expansion`}
+            title="Collapse this CTX-BLOCK expansion"
+            className="absolute bottom-0 left-0 top-0 w-3 cursor-pointer appearance-none border-0 border-l-2 border-blue-200 bg-transparent p-0 transition-colors hover:border-blue-400 focus:outline-none focus-visible:border-blue-500 focus-visible:ring-1 focus-visible:ring-blue-400 dark:border-blue-800 dark:hover:border-blue-500 dark:focus-visible:border-blue-400"
+            onClick={handleCollapseExpansion}
+          />
+          <div className="min-w-0">
+            {expansion.loading && (
+              <div className="py-1 text-xs text-gray-500 dark:text-gray-400">Loading {block.sourceKind === 'block' ? 'child blocks' : 'raw messages'}…</div>
+            )}
+            {expansion.error && !expansion.loading && (
+              <div className="py-1 text-xs text-red-600 dark:text-red-400">
+                <div>{expansion.error}</div>
+                <button type="button" className="mt-1 rounded border border-red-200 px-2 py-0.5 text-[11px] hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-950/40" onClick={handleRetry}>
+                  Retry
+                </button>
+              </div>
+            )}
+            {!expansion.loading && !expansion.error && expansion.response && nestedMessages.length === 0 && (
+              <div className="py-1 text-xs text-gray-500 dark:text-gray-400">No {expansionKindLabel(expansion.response.expansionKind)} found for this block.</div>
+            )}
+            {!expansion.loading && nestedMessages.length > 0 && renderNestedMessages(nestedMessages, nestedKey, nestedDepth + 1)}
+          </div>
         </div>
       )}
     </div>
