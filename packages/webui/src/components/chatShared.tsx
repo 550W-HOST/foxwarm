@@ -555,6 +555,7 @@ export const parseAnsi = (text: string): ReactNode[] => {
 
 const toolIcons: Record<string, LucideIcon> = {
   reasoning: Brain,
+  'ctx-block': BookOpen,
   read: BookOpen,
   write: Pencil,
   edit: Pencil,

@@ -424,7 +424,7 @@ const MessageRow = memo(function MessageRow({
                 return <ReasoningCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
               }
               if (contextBlock && partIdx === firstTextPartIndex && part.text) {
-                return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} message={msg} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
+                return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
               }
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
             })}
