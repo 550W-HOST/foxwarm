@@ -1,6 +1,7 @@
 import { memo, type ReactNode, useCallback, useMemo, useState } from 'react'
 import { API_BASE_PATH } from '../config'
 import {
+  clampContentStyle,
   handleMarkdownLinkClick,
   renderMarkdown,
   ToolTag,
@@ -115,10 +116,29 @@ const formatSeqRange = (start: number, end: number): string => (
   start === end ? `raw#${start}` : `raw#${start}-#${end}`
 )
 
-const getCollapsedSummaryPreview = (summary: string): string => {
-  const compact = summary.replace(/\s+/g, ' ').trim()
-  if (!compact) return '[empty CTX-BLOCK summary]'
-  return compact.length > 220 ? `${compact.slice(0, 220)}…` : compact
+const pad2 = (value: number): string => String(value).padStart(2, '0')
+
+const formatTimezoneOffset = (date: Date): string => {
+  const totalMinutes = -date.getTimezoneOffset()
+  const sign = totalMinutes >= 0 ? '+' : '-'
+  const absoluteMinutes = Math.abs(totalMinutes)
+  const hours = Math.floor(absoluteMinutes / 60)
+  const minutes = absoluteMinutes % 60
+  return `${sign}${pad2(hours)}${pad2(minutes)}`
+}
+
+const formatBlockTimestamp = (timestamp?: number): string | null => {
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return null
+  const date = new Date(timestamp)
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())} ${formatTimezoneOffset(date)}`
+}
+
+const formatBlockTimeRange = (start?: number, end?: number): string | null => {
+  const startText = formatBlockTimestamp(start)
+  const endText = formatBlockTimestamp(end)
+  if (!startText) return endText
+  if (!endText || startText === endText) return startText
+  return `${startText} -> ${endText}`
 }
 
 interface ContextBlockCardProps {
@@ -142,7 +162,6 @@ const ContextBlockCard = memo(function ContextBlockCard({
   const [expansion, setExpansion] = useState<ExpansionState>({})
 
   const summary = useMemo(() => getContextBlockSummaryText(text), [text])
-  const summaryPreview = useMemo(() => getCollapsedSummaryPreview(summary), [summary])
   const summaryHtml = useMemo(() => renderMarkdown(summary), [summary])
   const nestedMessages = useMemo(() => getExpansionMessages(expansion.response), [expansion.response])
 
@@ -188,7 +207,8 @@ const ContextBlockCard = memo(function ContextBlockCard({
 
   const nestedKey = `${messageKey}-ctx-block-${block.sourceSessionId || 'local'}-${block.id}`
   const blockRange = formatSeqRange(block.rawStartSeq, block.rawEndSeq)
-  const blockMetaLabel = `L${block.level} · ${blockRange}`
+  const blockTimeRange = formatBlockTimeRange(block.rawStartTimestamp, block.rawEndTimestamp)
+  const blockMetaLabel = [`B#${block.id}`, `L${block.level}`, blockRange, blockTimeRange ? `time ${blockTimeRange}` : null].filter(Boolean).join(' · ')
 
   return (
     <div
@@ -205,40 +225,34 @@ const ContextBlockCard = memo(function ContextBlockCard({
         className={`${expanded ? 'mb-1' : ''} flex min-w-0 items-center gap-2 ${contextBlockHeaderClasses} ${expanded ? `cursor-pointer ${contextBlockHeaderHoverClasses}` : ''}`}
         onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
       >
-        <ToolTag name="ctx-block" label={`CTX-BLOCK B#${block.id}`} tone="neutral" />
-        <span className="shrink-0 text-[11px] font-medium text-slate-500 dark:text-slate-400">{blockMetaLabel}</span>
-        {!expanded && (
-          <span className="min-w-0 flex-1 truncate text-[13px] leading-[18px]" title={summaryPreview}>
-            {summaryPreview}
-          </span>
-        )}
+        <ToolTag name="ctx-block" label="CTX-BLOCK" tone="neutral" />
+        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-slate-500 dark:text-slate-400" title={blockMetaLabel}>{blockMetaLabel}</span>
       </div>
 
-      {expanded && (
-        <div className="min-w-0 space-y-2">
-          <div
-            className={`foxwarm-markdown prose max-w-none text-[13px] prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${contextBlockBodyClasses}`}
-            dangerouslySetInnerHTML={{ __html: summaryHtml }}
-            onClick={handleMarkdownLinkClick}
-          />
+      <div className="min-w-0 space-y-2">
+        <div
+          className={`foxwarm-markdown prose max-w-none text-[13px] prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${contextBlockBodyClasses}`}
+          dangerouslySetInnerHTML={{ __html: summaryHtml }}
+          onClick={expanded ? handleMarkdownLinkClick : undefined}
+          style={expanded ? undefined : clampContentStyle(3)}
+        />
 
-          {expansion.loading && (
-            <div className="py-1 text-xs text-gray-500 dark:text-gray-400">Loading {block.sourceKind === 'block' ? 'child blocks' : 'raw messages'}…</div>
-          )}
-          {expansion.error && !expansion.loading && (
-            <div className="py-1 text-xs text-red-600 dark:text-red-400">
-              <div>{expansion.error}</div>
-              <button type="button" className="mt-1 rounded border border-red-200 px-2 py-0.5 text-[11px] hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-950/40" onClick={handleRetry}>
-                Retry
-              </button>
-            </div>
-          )}
-          {!expansion.loading && !expansion.error && expansion.response && nestedMessages.length === 0 && (
-            <div className="py-1 text-xs text-gray-500 dark:text-gray-400">No {expansionKindLabel(expansion.response.expansionKind)} found for this block.</div>
-          )}
-          {!expansion.loading && nestedMessages.length > 0 && renderNestedMessages(nestedMessages, nestedKey, nestedDepth + 1)}
-        </div>
-      )}
+        {expanded && expansion.loading && (
+          <div className="py-1 text-xs text-gray-500 dark:text-gray-400">Loading {block.sourceKind === 'block' ? 'child blocks' : 'raw messages'}…</div>
+        )}
+        {expanded && expansion.error && !expansion.loading && (
+          <div className="py-1 text-xs text-red-600 dark:text-red-400">
+            <div>{expansion.error}</div>
+            <button type="button" className="mt-1 rounded border border-red-200 px-2 py-0.5 text-[11px] hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-950/40" onClick={handleRetry}>
+              Retry
+            </button>
+          </div>
+        )}
+        {expanded && !expansion.loading && !expansion.error && expansion.response && nestedMessages.length === 0 && (
+          <div className="py-1 text-xs text-gray-500 dark:text-gray-400">No {expansionKindLabel(expansion.response.expansionKind)} found for this block.</div>
+        )}
+        {expanded && !expansion.loading && nestedMessages.length > 0 && renderNestedMessages(nestedMessages, nestedKey, nestedDepth + 1)}
+      </div>
     </div>
   )
 })
