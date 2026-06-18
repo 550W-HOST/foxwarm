@@ -309,7 +309,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       const query = queryParts.join(' ').trim()
       if (!query) { ctx.reply('Usage: /search [--session <session-id>] [--agent <agent-name>] [--limit <n>] <query>'); return }
       try {
-        const result = await tools.search_vector({ query, limit, sessionId: targetSessionId, agentName: targetAgentName }, { sessionId, session })
+        const result = await tools.recall({ vector_query: query, limit, sessionId: targetSessionId, agentName: targetAgentName }, { sessionId, session })
         ctx.reply(result)
       } catch (e: any) { ctx.reply(`❌ Search failed: ${e.message}`) }
     }

@@ -119,6 +119,59 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
   }
 });
 
+test('chat strips session message __meta, including context block metadata, before provider request', async () => {
+  const originalPost = axios.post;
+  let capturedBody: any = null;
+  const session = createOpenAITestSession('context_block_meta_strip_session');
+  session.model = 'anthropic/claude-sonnet-4-5';
+  session.history.push({
+    role: 'model',
+    parts: [{ text: '[CTX-BLOCK L1 B#3 raw#1-#2] summary' }],
+    __meta: {
+      timestamp: 123,
+      contextBlock: {
+        id: 3,
+        level: 1,
+        rawStartSeq: 1,
+        rawEndSeq: 2,
+        sourceKind: 'message',
+        sourceStart: 1,
+        sourceEnd: 2,
+      },
+    },
+  });
+
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBody = data;
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: {
+        content: [{ type: 'text', text: 'ok' }],
+        usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0 },
+      },
+    };
+  };
+
+  try {
+    await chat(null, session, 0, {
+      appendMessage: async (message: Message) => { session.history.push(message); },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.deepEqual(capturedBody.messages, [{
+      role: 'assistant',
+      content: '[CTX-BLOCK L1 B#3 raw#1-#2] summary',
+    }]);
+    assert.equal(JSON.stringify(capturedBody).includes('contextBlock'), false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('chat stores each model request usage and model id on its assistant message metadata', async () => {
   const originalPost = axios.post;
   const appendedMessages: Message[] = [];

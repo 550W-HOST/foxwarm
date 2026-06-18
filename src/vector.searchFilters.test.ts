@@ -39,7 +39,7 @@ function makeBlockRecord(sessionId: string, id: number, rawStartSeq: number, raw
   };
 }
 
-test('search_vector regex filters and block boost work without breaking lineage boundaries', async () => {
+test('vector search filters, block boost, and recall vector_query source rendering respect lineage', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-vector-search-filters-'));
   process.env.FOXWARM_DATA_DIR = tempRoot;
 
@@ -61,6 +61,8 @@ test('search_vector regex filters and block boost work without breaking lineage 
     const config = await import('./config');
     const archiveStore = await import('./session/archiveStore');
     const vector = await import('./vector');
+    const sessionManager = await import('./sessionManager');
+    const toolsSessionAgent = await import('./toolsSessionAgent');
 
     const longNoiseA = 'x'.repeat(2200);
     const longNoiseB = 'y'.repeat(2200);
@@ -98,6 +100,7 @@ test('search_vector regex filters and block boost work without breaking lineage 
     }, { spaces: 2 });
 
     await archiveStore.initArchiveStore();
+    await sessionManager.loadSessions();
     await vector.init();
     await vector.waitForStartupArchiveVectorBackfill();
 
@@ -136,6 +139,21 @@ test('search_vector regex filters and block boost work without breaking lineage 
       preferBlocks: true,
     }) as any[];
     assert.equal(preferBlockResults[0]?.kind, 'block', 'preferBlocks should keep the block result at the top');
+
+    const recallVector = String(await toolsSessionAgent.tool_recall({
+      vector_query: 'alpha',
+      sessionId: 'child',
+      scope: 'current-session',
+      limit: 5,
+      query: 'useful',
+      previewLength: 2000,
+    }, { sessionId: 'child', session: { id: 'child', agent: 'test-agent' } } as any));
+    assert.match(recallVector, /Recall vector search for `alpha`/);
+    assert.match(recallVector, /source archive ranges loaded before preview/i);
+    assert.match(recallVector, /\[#3/);
+    assert.match(recallVector, /useful alpha detail/);
+    assert.doesNotMatch(recallVector, /\[chunk /, 'recall(vector_query) should render original archived messages, not vector chunks');
+    assert.doesNotMatch(recallVector, /send_to_session alpha noise/);
 
     await assert.rejects(
       () => vector.search('alpha', 5, false, { lineageSessions, includeRegex: '[' }),

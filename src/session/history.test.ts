@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSingleBlockCompactionStrandedBetweenHigherLevelBlocks, resolveCompactionSplitIndex } from './history';
+import { buildCreatedBlockFrontierItemsWithPreservedMessages, isSingleBlockCompactionStrandedBetweenHigherLevelBlocks, removePreservedMessageFrontierItems, resolveCompactionSplitIndex } from './history';
 import { ContextFrontierItem, Message } from '../types';
 
 function msg(role: Message['role'], parts: Message['parts']): Message {
@@ -71,4 +71,30 @@ test('isSingleBlockCompactionStrandedBetweenHigherLevelBlocks stays false withou
 
   assert.equal(isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(noRightHigher, 1), false);
   assert.equal(isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(edgeCase, 0), false);
+});
+
+test('buildCreatedBlockFrontierItemsWithPreservedMessages inserts preserved raw messages after their covering block', () => {
+  const items = buildCreatedBlockFrontierItemsWithPreservedMessages(
+    { id: 8, level: 1, rawStartSeq: 10, rawEndSeq: 20 },
+    [{ seq: 15 }, { seq: 12 }],
+  );
+
+  assert.deepStrictEqual(items, [
+    { kind: 'block', id: 8, level: 1, rawStartSeq: 10, rawEndSeq: 20 },
+    { kind: 'message', seq: 12, preservedFromBlockId: 8 },
+    { kind: 'message', seq: 15, preservedFromBlockId: 8 },
+  ]);
+});
+
+test('removePreservedMessageFrontierItems removes only preserved raw messages', () => {
+  const frontier: ContextFrontierItem[] = [
+    { kind: 'message', seq: 10 },
+    { kind: 'message', seq: 11, preservedFromBlockId: 3 },
+    { kind: 'block', id: 3, level: 1, rawStartSeq: 1, rawEndSeq: 12 },
+  ];
+
+  assert.deepStrictEqual(removePreservedMessageFrontierItems(frontier, new Set([10, 11])), [
+    { kind: 'message', seq: 10 },
+    { kind: 'block', id: 3, level: 1, rawStartSeq: 1, rawEndSeq: 12 },
+  ]);
 });

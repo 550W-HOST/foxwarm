@@ -52,7 +52,7 @@ import { tool_image_crop, tool_image_write_to_file } from './tools/imageTools';
 import { tool_browse_open, tool_browse_list, tool_browse_get, tool_browse_close, tool_browse_interact } from './tools/browserTools';
 import { tool_mcp_config, tool_call_mcp, tool_search_mcp_tools, tool_list_mcp_servers } from './tools/mcpTools';
 import { tool_copy_between_nodes, tool_remote_node, tool_list_nodes, tool_change_current_node, tool_node_bootstrap_info, tool_node_pair_approve, tool_node_pair_list } from './tools/nodeTools';
-import { tool_search_vector, tool_get_memory_context, resolveMemorySearchOptions, formatMemorySearchResults } from './tools/vectorTools';
+import { tool_get_memory_context, resolveMemorySearchOptions } from './tools/vectorTools';
 import { tool_search_tools, tool_call_tool, setDefinitionsRef } from './tools/unifiedSearch';
 import { definitions } from './tools/definitions';
 
@@ -62,7 +62,7 @@ fs.ensureDirSync(getAgentDir('main'));
 // --- Master-only tool names ---
 export const MASTER_ONLY_TOOL_NAMES = [
     'remote_node', 'list_nodes', 'node_tools',
-    'search_vector', 'search_memory', 'get_memory_context',
+    'get_memory_context',
     'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
     'copy_between_nodes',
     'image_crop', 'image_write_to_file',
@@ -137,8 +137,6 @@ export async function callTool(toolName: string, args: any, context: any): Promi
         node_bootstrap_info: tool_node_bootstrap_info,
         node_pair_approve: tool_node_pair_approve,
         node_pair_list: tool_node_pair_list,
-        search_vector: tool_search_vector,
-        search_memory: tool_search_vector,
         get_memory_context: tool_get_memory_context,
         search_tools: tool_search_tools,
         call_tool: tool_call_tool,
@@ -203,8 +201,6 @@ export const copy_between_nodes = tool_copy_between_nodes;
 export const image_crop = tool_image_crop;
 export const image_write_to_file = tool_image_write_to_file;
 export const exec = tool_exec;
-export const search_vector = tool_search_vector;
-export const search_memory = tool_search_vector;
 export const get_memory_context = tool_get_memory_context;
 export const create_child_session = tool_create_child_session;
 export const create_agent = tool_create_agent;
@@ -266,4 +262,4 @@ export { definitions };
 export const modelFacingDefinitions = definitions.filter(def => isToolDirectlyExposedToModel(def.name));
 
 // Re-export utilities used by other modules
-export { resolveMemorySearchOptions, formatMemorySearchResults };
+export { resolveMemorySearchOptions };

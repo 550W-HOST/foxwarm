@@ -47,11 +47,16 @@ async function maybeSyncSessionCwdFromExec(ctx: ToolContext, entry: { initialCwd
         return null;
     }
 
+    const defaultNote = 'This cwd will be used as the default cwd for subsequent exec/read/edit/write/apply_patch tool calls.';
     if (syncResult.previous) {
-        return `Working directory changed: \`${syncResult.previous}\` → \`${syncResult.current}\` (session cwd updated).`;
+        return `SESSION CWD CHANGED: \`${syncResult.previous}\` → \`${syncResult.current}\`. ${defaultNote}`;
     }
 
-    return `Working directory changed to \`${syncResult.current}\` (session cwd updated).`;
+    return `SESSION CWD CHANGED: \`${syncResult.current}\`. ${defaultNote}`;
+}
+
+function appendCwdNotice(result: string, cwdNotice: string | null): string {
+    return cwdNotice ? `${result}\n\n${cwdNotice}` : result;
 }
 
 export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
@@ -79,7 +84,7 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
         try {
             const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readFinishedExecWorkingDirectory(execEntry));
             const result = await buildForegroundExecResult(execEntry, status);
-            return cwdNotice ? `${cwdNotice}\n\n${result}` : result;
+            return appendCwdNotice(result, cwdNotice);
         } finally {
             await finalizeForegroundExec(execEntry.id);
         }
@@ -88,5 +93,5 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readLiveExecWorkingDirectory(execEntry));
     await markExecForBackgroundNotification(execEntry.id);
     const result = await buildBackgroundTimeoutResult(execEntry, timeoutSeconds);
-    return cwdNotice ? `${cwdNotice}\n\n${result}` : result;
+    return appendCwdNotice(result, cwdNotice);
 }

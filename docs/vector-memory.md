@@ -47,16 +47,18 @@ legacy JSONL archives 仍保留，用于兼容、双写与 bootstrap 导入。
 ### 搜索记忆
 
 ```ts
-search_vector({
-  query: 'project progress',
+recall({
+  vector_query: 'project progress',
   limit: 5,
 })
 ```
 
-现在 `search_vector` / `search_memory` 会混合检索：
+现在 `recall({ vector_query })` 会混合检索：
 
 - raw archive chunks
 - layered compact blocks
+
+命中后会先根据 vector row 元数据回查原始 archived message/block 范围，再走 recall 的统一 preview renderer（总 `previewLength` 预算、tool 折叠、query/includeRegex/excludeRegex 过滤）。旧的 `search_vector` / `search_memory` 工具已删除。
 
 ### 获取时间附近上下文
 

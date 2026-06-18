@@ -382,7 +382,7 @@ test('wait survives compact request and compact commit before timeout turn', asy
     assert.equal(session.queue.length, 0);
     assert.equal(observedTurns.length, 0);
     assert(session.history.some(message => message.parts.some(part => (part.text || '').includes('summary created while session was waiting'))));
-    assert(session.history.some(message => message.parts.some(part => (part.system || '').includes('Compaction completed.'))));
+    assert(session.history.some(message => message.parts.some(part => /COMPACTION COMPLETED/i.test(part.system || ''))));
 
     await sessionManager.queueSessionWaitTimeoutEvent(
       sessionId,

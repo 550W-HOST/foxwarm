@@ -546,15 +546,24 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(definitions.some(def => def.name === 'end_turn'), false);
 });
 
-test('recall model-facing schema only exposes target selector fields', () => {
+test('recall model-facing schema exposes target selectors and vector retrieval fields', () => {
   const recallDef = definitions.find(def => def.name === 'recall');
   assert.ok(recallDef);
   assert.equal(recallDef.defaultInject, true);
   assert.match(String(recallDef.description), /CTX-BLOCK/);
   assert.deepEqual(Object.keys(recallDef.parameters?.properties || {}).sort(), [
+    'agentName',
+    'excludeRegex',
+    'includeRegex',
+    'limit',
+    'preferBlocks',
     'previewLength',
+    'query',
+    'scope',
     'sessionId',
     'target',
+    'toolDetail',
+    'vector_query',
   ]);
   for (const legacyName of ['startSeq', 'endSeq', 'startId', 'endId', 'includeMessages', 'includeBlocks']) {
     assert.equal(Object.prototype.hasOwnProperty.call(recallDef.parameters?.properties || {}, legacyName), false);

@@ -371,9 +371,9 @@ Returns a **dict**:
 }
 ```
 
-### `call_tool("search_vector", {"query": "...", "limit": 5})`
+### `call_tool("recall", {"vector_query": "...", "limit": 5})`
 
-Returns a **dict** with search results from vector memory.
+Returns a **string** with vector-memory results rendered through recall. The vector hits are resolved back to original archived message/block ranges before previewing.
 
 ### `request_model_without_context(prompt)`
 

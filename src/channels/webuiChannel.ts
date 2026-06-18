@@ -25,6 +25,7 @@ import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrServic
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
+import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
 
 type WorkspaceNodeEntry = {
   name: string;
@@ -39,6 +40,25 @@ const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 
 function isPlaceholderSecret(value: unknown): boolean {
   return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
+}
+
+function getSingleQueryValue(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    return typeof value[0] === 'string' ? value[0] : undefined;
+  }
+  return typeof value === 'string' ? value : undefined;
+}
+
+function parseOptionalPositiveNumberQuery(value: unknown, label: string): number | undefined {
+  const raw = getSingleQueryValue(value);
+  if (raw === undefined || raw.trim() === '') {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive number.`);
+  }
+  return Math.floor(parsed);
 }
 
 
@@ -1142,6 +1162,33 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get history');
             res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/context-blocks/:blockId/expand',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const blockId = Number(req.params.blockId);
+            if (!Number.isInteger(blockId) || blockId <= 0) {
+              return res.status(400).json({ error: 'blockId must be a positive integer.', code: 'INVALID_CONTEXT_BLOCK_ID' });
+            }
+
+            const result = await renderContextBlockExpansion({
+              sessionId,
+              blockId,
+              previewLength: parseOptionalPositiveNumberQuery(req.query.previewLength, 'previewLength'),
+            });
+            res.json(result);
+          } catch (e: any) {
+            const statusCode = typeof e?.statusCode === 'number' ? e.statusCode : (e?.message?.includes('must be') ? 400 : 500);
+            if (statusCode >= 500) {
+              logger.error({ err: e }, 'Failed to expand context block');
+            }
+            res.status(statusCode).json({ error: e?.message || 'Failed to expand context block', code: e?.code || 'CTX_BLOCK_EXPANSION_FAILED' });
           }
         },
       });

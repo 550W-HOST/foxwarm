@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Eye, Code, FileJson, Copy, Check } from 'lucide-react'
 import {
   IconToggleButton,
@@ -18,6 +18,7 @@ import {
 } from './chatShared'
 import ImageParts from './ImageParts'
 import ReasoningCard from './ReasoningCard'
+import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import {
   InterleavedToolGroup,
   ToolCallsBlock,
@@ -29,16 +30,20 @@ import {
 const getMessageStableKey = (msg: Message, idx: number): string => {
   const meta = msg.__meta || {}
   if (meta.synthetic) return `synthetic-${String(meta.synthetic)}`
+  if (meta.contextBlock?.id) return `ctx-block-${String(meta.contextBlock.sourceSessionId || 'local')}-${String(meta.contextBlock.id)}`
+  if (meta.seq) return `seq-${String(meta.contextArchiveItem?.sourceSessionId || 'local')}-${String(meta.seq)}`
   if (meta.id) return `id-${String(meta.id)}`
   if (meta.timestamp !== undefined) return `ts-${String(meta.timestamp)}`
   return `idx-${idx}`
 }
 
 interface ChatTimelineProps {
+  sessionId: string
   messages: Message[]
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
+  nestedDepth?: number
 }
 
 const EMPTY_TOOL_TAG_ITEMS: ToolTagItem[] = []
@@ -327,6 +332,9 @@ interface MessageRowProps {
   showToolGroupSummary: boolean
   groupExpanded: boolean
   onExpandGroup: (groupKey: string) => void
+  sessionId: string
+  nestedDepth: number
+  renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
 }
 
 const MessageRow = memo(function MessageRow({
@@ -345,6 +353,9 @@ const MessageRow = memo(function MessageRow({
   showToolGroupSummary,
   groupExpanded,
   onExpandGroup,
+  sessionId,
+  nestedDepth,
+  renderNestedMessages,
 }: MessageRowProps) {
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
   const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData), [msg.parts])
@@ -367,19 +378,21 @@ const MessageRow = memo(function MessageRow({
     : null
   const displayUsageCallCount = isCollapsedToolGroup && showToolGroupSummary && groupUsageCallCount > 0 ? groupUsageCallCount : undefined
   const allowOverflow = (displayUsage && !isMobile) || hasToolParts || isInToolGroup
+  const contextBlock = useMemo(() => msg.role === 'model' ? getContextBlockMetaFromMessage(msg) : null, [msg])
+  const firstTextPartIndex = useMemo(() => msg.parts.findIndex(p => typeof p.text === 'string' && p.text.trim()), [msg.parts])
+  const marginClass = nestedDepth > 0 ? 'mt-2' : (shouldSkipMargin ? '' : 'mt-4')
+  const widthClass = systemLikeMessage
+    ? (nestedDepth > 0 ? 'w-full max-w-full' : 'w-full max-w-[80%]')
+    : msg.role === 'user'
+      ? (nestedDepth > 0 ? 'max-w-[85%]' : 'max-w-[80%]')
+      : isMobile || nestedDepth > 0
+        ? 'w-full'
+        : 'w-full max-w-[80%]'
 
   return (
-    <div className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${shouldSkipMargin ? '' : 'mt-4'}`}>
+    <div className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${marginClass}`}>
       <div
-        className={`${
-          systemLikeMessage
-            ? 'w-full max-w-[80%]'
-            : msg.role === 'user'
-              ? 'max-w-[80%]'
-              : isMobile
-                ? 'w-full'
-                : 'w-full max-w-[80%]'
-        } ${
+        className={`${widthClass} ${
           !systemLikeMessage && msg.role === 'user'
             ? 'bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
             : ''
@@ -410,6 +423,9 @@ const MessageRow = memo(function MessageRow({
                 }
                 return <ReasoningCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
               }
+              if (contextBlock && partIdx === firstTextPartIndex && part.text) {
+                return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
+              }
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
@@ -438,11 +454,26 @@ const MessageRow = memo(function MessageRow({
   prev.groupUsageCallCount === next.groupUsageCallCount &&
   prev.keepToolGroupExpanded === next.keepToolGroupExpanded &&
   prev.showToolGroupSummary === next.showToolGroupSummary &&
-  prev.groupExpanded === next.groupExpanded
+  prev.groupExpanded === next.groupExpanded &&
+  prev.sessionId === next.sessionId &&
+  prev.nestedDepth === next.nestedDepth &&
+  prev.renderNestedMessages === next.renderNestedMessages
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, groupTools, showUsageBadge }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
+
+  const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
+    <ChatTimeline
+      key={keyPrefix}
+      sessionId={sessionId}
+      messages={nestedMessages}
+      isMobile={isMobile}
+      groupTools={groupTools}
+      showUsageBadge={nextNestedDepth > 0 ? false : showUsageBadge}
+      nestedDepth={nextNestedDepth}
+    />
+  ), [groupTools, isMobile, sessionId, showUsageBadge])
 
   const toolGroupMeta = useMemo(() => {
     const messageKeys = messages.map((msg, idx) => getMessageStableKey(msg, idx))
@@ -636,6 +667,9 @@ const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, groupTools
             showToolGroupSummary={toolGroupMeta.shouldRenderSummary[idx]}
             groupExpanded={expandedToolGroups.has(groupKey)}
             onExpandGroup={handleExpandGroup}
+            sessionId={sessionId}
+            nestedDepth={nestedDepth}
+            renderNestedMessages={renderNestedMessages}
           />
         )
       })}

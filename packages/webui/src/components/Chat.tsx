@@ -1126,7 +1126,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
             </div>
           )}
           <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-            <ChatTimeline messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} />
+            <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} />
           </ToolScriptProgressContext.Provider>
           <ProcessingStatus
             sessionBusy={sessionBusy}

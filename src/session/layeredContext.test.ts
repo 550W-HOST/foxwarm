@@ -1,26 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'fs-extra';
-import os from 'os';
-import path from 'path';
-import { createSessionFrontierStore, formatArchiveBlockContextText, formatArchiveBlockTimeRange, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import { annotateHistoryWithContextFrontierMetadata, formatArchiveBlockContextText, formatArchiveBlockTimeRange, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 import { formatCompactionCompletionMarker } from './history';
 import { Message } from '../types';
 import { formatLocalTimeRange } from '../utils/localTime';
-
-async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
-  const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-frontier-store-'));
-  try {
-    await run(dirPath);
-  } finally {
-    await fs.remove(dirPath).catch(() => {});
-  }
-}
 
 test('recognizes compact lifecycle system texts that should be ignored in compact candidates', () => {
   assert.equal(isIgnoredCompactLifecycleSystemText('This session has been compacted. Messages before this are removed.'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('Compacted message placeholder: 4 message(s) from #1-#4 were removed from working history here.'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('Compaction completed. You can continue working now.'), true);
+  assert.equal(isIgnoredCompactLifecycleSystemText('**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.**'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('Manual compaction completed.'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('current time = 2026-03-18 00:00'), false);
 });
@@ -44,47 +33,18 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
   assert.equal(shouldIgnoreMessageInCompactCandidates(mixedContent), false);
 });
 
-test('formatCompactionCompletionMarker appends the session id without changing the base message prefix', () => {
-  const text = formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.');
-  assert.equal(text, 'Compaction completed. You can continue working now. (session: `session-123`)');
+test('formatCompactionCompletionMarker uses the bold completion identity hint without a duplicate prefix or newline', () => {
+  const text = formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.', 'parent-456');
+  assert.equal(text, '**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.** You can continue working now.');
+  assert.equal(formatCompactionCompletionMarker('session-123', 'Compaction completed.', 'parent-456'), '**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.**');
   assert.equal(isIgnoredCompactLifecycleSystemText(text), true);
-});
-
-test('session frontier store uses lightweight no-backup writes', async () => {
-  await withTempDir(async (dirPath) => {
-    const filePath = path.join(dirPath, 'session-a.frontier.json');
-    const store = createSessionFrontierStore(filePath);
-
-    assert.deepEqual(store.listCandidatePaths(), [filePath]);
-
-    await store.write({
-      v: 1,
-      sessionId: 'session-a',
-      nextBlockId: 4,
-      frontier: [
-        { kind: 'message', seq: 1 },
-        { kind: 'block', id: 3, level: 1, rawStartSeq: 1, rawEndSeq: 2 },
-      ],
-    });
-
-    const loaded = await store.readFromPath();
-    assert.deepEqual(loaded, {
-      v: 1,
-      sessionId: 'session-a',
-      nextBlockId: 4,
-      frontier: [
-        { kind: 'message', seq: 1 },
-        { kind: 'block', id: 3, level: 1, rawStartSeq: 1, rawEndSeq: 2 },
-      ],
-    });
-
-    const siblingFiles = await fs.readdir(dirPath);
-    assert.deepEqual(siblingFiles, ['session-a.frontier.json']);
-  });
 });
 
 test('renderBlockMessage includes raw message local time range when available', () => {
   const record: any = {
+    sourceKind: 'message',
+    sourceStart: 10,
+    sourceEnd: 12,
     id: 3,
     level: 1,
     rawStartSeq: 10,
@@ -101,4 +61,66 @@ test('renderBlockMessage includes raw message local time range when available', 
   assert.equal(formatArchiveBlockTimeRange(record), ` time ${expectedRange}`);
   assert.equal(formatArchiveBlockContextText(record), expectedBlockText);
   assert.equal(message.parts[0].text, expectedBlockText);
+  assert.deepEqual(message.__meta?.contextBlock, {
+    id: 3,
+    level: 1,
+    rawStartSeq: 10,
+    rawEndSeq: 12,
+    sourceKind: 'message',
+    sourceStart: 10,
+    sourceEnd: 12,
+    rawStartTimestamp: record.rawStartTimestamp,
+    rawEndTimestamp: record.rawEndTimestamp,
+    createdAt: record.createdAt,
+  });
+  assert.deepEqual(message.__meta?.contextFrontierItem, {
+    kind: 'block',
+    id: 3,
+    level: 1,
+    rawStartSeq: 10,
+    rawEndSeq: 12,
+  });
+});
+
+test('annotateHistoryWithContextFrontierMetadata adds block and preserved raw metadata', async () => {
+  const history: Message[] = [
+    {
+      role: 'model',
+      parts: [{ text: '[CTX-BLOCK L1 B#7 raw#10-#12] block summary' }],
+      __meta: { timestamp: 2000 },
+    },
+    {
+      role: 'user',
+      parts: [{ text: 'exact preserved instruction' }],
+      __meta: { seq: 11, timestamp: 1000 },
+    },
+  ];
+
+  const result = await annotateHistoryWithContextFrontierMetadata('session-a', history, [
+    { kind: 'block', id: 7, level: 1, rawStartSeq: 10, rawEndSeq: 12 },
+    { kind: 'message', seq: 11, preservedFromBlockId: 7 },
+  ], {
+    readBlocksByIdRange: async () => [{
+      v: 1,
+      kind: 'block',
+      sessionId: 'session-a',
+      agent: 'main',
+      id: 7,
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 10,
+      sourceEnd: 12,
+      rawStartSeq: 10,
+      rawEndSeq: 12,
+      summary: 'block summary',
+      createdAt: 2000,
+    }],
+  });
+
+  assert.equal(result.matched, true);
+  assert.equal(result.history[0].__meta?.contextBlock?.id, 7);
+  assert.equal(result.history[0].__meta?.contextBlock?.sourceKind, 'message');
+  assert.deepEqual(result.history[0].__meta?.contextFrontierItem, { kind: 'block', id: 7, level: 1, rawStartSeq: 10, rawEndSeq: 12 });
+  assert.equal(result.history[1].__meta?.preservedFromBlockId, 7);
+  assert.deepEqual(result.history[1].__meta?.contextFrontierItem, { kind: 'message', seq: 11, preservedFromBlockId: 7 });
 });

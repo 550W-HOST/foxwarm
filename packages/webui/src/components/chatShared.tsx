@@ -12,6 +12,7 @@ import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 export { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
 import { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
+import { parseSessionLinkText } from '../../../shared/src/webuiToolRendering'
 
 export const formatObject = formatCompactObjectPreview
 
@@ -157,6 +158,22 @@ export interface ModelStreamToolCall {
   name?: string
 }
 
+export interface ContextBlockMessageMeta {
+  id: number
+  level: number
+  rawStartSeq: number
+  rawEndSeq: number
+  sourceKind?: 'message' | 'block'
+  sourceStart?: number
+  sourceEnd?: number
+  sourceBlockIds?: number[]
+  rawStartTimestamp?: number
+  rawEndTimestamp?: number
+  createdAt?: number
+  sourceSessionId?: string
+  inherited?: boolean
+}
+
 export interface SessionStreamEvent {
   type: 'model-stream-reset' | 'model-stream-update' | 'toolscript-progress'
   streamId?: string
@@ -184,6 +201,9 @@ export interface Message {
   parts: MessagePart[]
   __meta?: {
     timestamp?: number
+    contextBlock?: ContextBlockMessageMeta
+    contextFrontierItem?: any
+    preservedFromBlockId?: number
     [key: string]: any
   }
 }
@@ -535,6 +555,7 @@ export const parseAnsi = (text: string): ReactNode[] => {
 
 const toolIcons: Record<string, LucideIcon> = {
   reasoning: Brain,
+  'ctx-block': BookOpen,
   read: BookOpen,
   write: Pencil,
   edit: Pencil,
@@ -591,40 +612,16 @@ export const SessionHashLink = ({ sessionId, className = '' }: { sessionId: stri
 )
 
 export const renderSystemTextWithSessionLinks = (text: string) => {
-  const result: ReactNode[] = []
-  const pattern = /(sessionId:\s*`([^`]+)`|session\s*`([^`]+)`)/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-
-  while ((match = pattern.exec(text)) !== null) {
-    const fullMatch = match[0]
-    const sessionId = match[2] || match[3]
-    const prefix = text.slice(lastIndex, match.index)
-
-    if (prefix) result.push(prefix)
-
-    if (fullMatch.startsWith('sessionId:')) {
-      result.push(
-        <span key={`session-link-${match.index}`}>
-          sessionId: <SessionHashLink sessionId={sessionId} />
-        </span>
-      )
-    } else {
-      result.push(
-        <span key={`session-link-${match.index}`}>
-          session <SessionHashLink sessionId={sessionId} />
-        </span>
-      )
+  return parseSessionLinkText(text).map((segment, index) => {
+    if (segment.type === 'text') {
+      return segment.text
     }
-
-    lastIndex = match.index + fullMatch.length
-  }
-
-  if (lastIndex < text.length) {
-    result.push(text.slice(lastIndex))
-  }
-
-  return result.length > 0 ? result : [text]
+    return (
+      <span key={`session-link-${index}`}>
+        {segment.text}<SessionHashLink sessionId={segment.sessionId} />
+      </span>
+    )
+  })
 }
 
 const normalizePatchNewlines = (text: string) => text.replace(/\r\n/g, '\n')

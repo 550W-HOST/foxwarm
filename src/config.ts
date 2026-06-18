@@ -309,7 +309,7 @@ export function getSessionBlockArchiveLogPath(sessionId: string): string {
   return path.join(SESSION_LOGS_DIR, `${sessionId}.blocks.jsonl`);
 }
 
-export function getSessionFrontierPath(sessionId: string): string {
+export function getLegacySessionFrontierPath(sessionId: string): string {
   return path.join(SESSIONS_DIR, `${sessionId}.frontier.json`);
 }
 

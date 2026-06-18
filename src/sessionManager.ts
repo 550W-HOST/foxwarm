@@ -13,18 +13,20 @@ import * as llm from './llm';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir } from './config';
+import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, getNextSessionMessageSeq } from './session/archive';
-import { appendMessagesToContextFrontier, loadSessionFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
+import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
 import { ensureSessionBranch } from './session/archiveStore';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
+import { formatSessionIdentityHint } from './session/identityHint';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
+import { runStartupMigrations } from './migrations';
 
 function systemPart(system: string): MessagePart {
   return { system };
@@ -525,7 +527,6 @@ export async function getSession(sessionId: string): Promise<Session> {
           session.persistentMemorySnapshot = historyData.persistentMemorySnapshot;
         }
         applySessionHistoryState(session, historyData);
-        await loadSessionFrontier(session);
         if (historyData.indexingState) {
           // Check if indexing was interrupted
           await resumeIndexingIfNeeded(sessionId, session);
@@ -565,8 +566,16 @@ export async function getSession(sessionId: string): Promise<Session> {
   if (session.nextMessageSeq === undefined) {
     session.nextMessageSeq = getNextSessionMessageSeq(session);
   }
-  if (session.contextFrontier && session.contextFrontier.length > 0 && session.history.length !== session.contextFrontier.length) {
-    session.history = await renderHistoryFromFrontier(session);
+  if (session.contextFrontier && session.contextFrontier.length > 0) {
+    if (session.history.length !== session.contextFrontier.length) {
+      session.history = await renderHistoryFromFrontier(session);
+    } else {
+      const annotation = await annotateHistoryWithContextFrontierMetadata(session.id, session.history, session.contextFrontier);
+      session.history = annotation.history;
+      if (!annotation.matched) {
+        logger.warn({ sessionId: session.id, warnings: annotation.warnings }, 'Loaded session context frontier did not exactly match rendered history; applied best-effort metadata annotations');
+      }
+    }
   }
 
   // Setup broadcast function
@@ -946,7 +955,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   // Add separator message
   appendedForkMessages.push({
     role: 'user',
-    parts: [systemPart('**HISTORY ABOVE IS INHERITED FROM PARENT SESSION FOR REFERENCE ONLY. FOLLOW THE INSTRUCTIONS BELOW**')],
+    parts: [systemPart(formatSessionIdentityHint({ parentSessionId: sourceSessionId, sessionId: newSessionId, variant: 'inherited' }))],
     __meta: { timestamp: Date.now() }
   });
 
@@ -1057,7 +1066,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
 
     const initialMessage: Message = {
       role: 'user',
-      parts: [systemPart(`You are a child session (new, empty context) with parent session \`${parentSessionId}\`. Your current session ID is \`${childSessionId}\`. ${buildChildCompletionInstruction(parentSessionId)}`)],
+      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId, sessionId: childSessionId, variant: 'new-child' })}\nYou are a child session (new, empty context). ${buildChildCompletionInstruction(parentSessionId)}`)],
       __meta: { timestamp: Date.now() }
     };
 
@@ -1126,7 +1135,6 @@ export async function saveSession(sessionId: string): Promise<void> {
     const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
     await fs.ensureDir(path.dirname(historyFile));
     await writeSessionHistoryAtomically(sessionId, serializeSessionHistoryPayload(session));
-    await saveSessionFrontier(session);
     
     // Save metadata (lightweight operation)
     await saveSessionsMetadata();
@@ -1188,6 +1196,14 @@ export async function loadSessions(): Promise<void> {
     // Load agent metadata first
     await sessionAgentMetadata.loadAgentMetadata();
     await loadChannels();
+
+    const migrationResults = await runStartupMigrations();
+    for (const migrationResult of migrationResults) {
+      if (!migrationResult.skippedByVersion && (migrationResult.migratedFiles > 0 || migrationResult.failedFiles > 0)) {
+        const { failures: _failures, ...migrationSummary } = migrationResult;
+        logger.info({ migrationSummary }, 'Startup migration finished');
+      }
+    }
 
     const { data, source } = await loadSessionsMetadataSnapshot();
     if (source !== SESSIONS_FILE) {
@@ -1799,6 +1815,11 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
   const sessionFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
   if (await fs.pathExists(sessionFile)) {
     await fs.remove(sessionFile);
+  }
+
+  const legacyFrontierFile = getLegacySessionFrontierPath(sessionId);
+  if (await fs.pathExists(legacyFrontierFile)) {
+    await fs.remove(legacyFrontierFile);
   }
   
   // Save metadata

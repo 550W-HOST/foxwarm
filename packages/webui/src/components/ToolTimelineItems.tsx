@@ -11,6 +11,7 @@ import {
   clampContentStyle,
   formatToolLabel,
   formatCompactObjectPreview,
+  renderSystemTextWithSessionLinks,
   parseApplyPatchPreview,
   type FunctionCall,
   type FunctionResponse,
@@ -22,6 +23,7 @@ import {
 } from './chatShared'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { formatToolResponsePayload } from '../../../shared/src/toolResponseFormatting'
+import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiToolRendering'
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
 import { buildWorkspaceDownloadUrl, triggerBrowserDownload } from './workspaceShared'
@@ -143,12 +145,17 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
 
 const isLegacyDiffToolName = (name: string): boolean => name === 'edit' || name === 'edit_memory'
 const isPatchToolName = (name: string): boolean => name === 'apply_patch' || name === 'apply_patch_memory'
+const isInterSessionToolName = (name: string): boolean => name === 'send_to_session' || name === 'create_child_session'
 
 const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
 )
 
-const renderToolCallPreview = (call: FunctionCall): ReactNode => {
+const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean } = {}): ReactNode => {
+  if (options.partial) {
+    return <span className="text-gray-500 dark:text-gray-400">streaming tool call…</span>
+  }
+
   if (call.name === 'read') {
     const extra = (call.args.startLine || call.args.endLine)
       ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
@@ -211,12 +218,29 @@ const renderToolCallPreview = (call: FunctionCall): ReactNode => {
     )
   }
 
+  if (call.name === 'create_child_session') {
+    const suffix = typeof call.args.suffix === 'string' && call.args.suffix.trim() ? call.args.suffix.trim() : '[auto]'
+    const mode = call.args.fork ? 'fork' : 'new'
+    const hasInitialMessage = typeof call.args.message === 'string' && call.args.message.trim().length > 0
+    return (
+      <span className="flex items-center gap-1 min-w-0" title={`create ${mode} child session ${suffix}${hasInitialMessage ? ' with initial message' : ''}`}>
+        <span className="shrink-0 text-gray-500 dark:text-gray-400">child</span>
+        <span className="truncate font-mono">{suffix}</span>
+        <span className="shrink-0 text-gray-500 dark:text-gray-400">({mode}{hasInitialMessage ? ', message' : ''})</span>
+      </span>
+    )
+  }
+
   const argsFormatted = formatCompactObjectPreview(call.args)
   const preview = argsFormatted.length > 200 ? `${argsFormatted.substring(0, 200)}...` : argsFormatted
   return <span className="truncate break-all">{preview}</span>
 }
 
-const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split') => {
+const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split', options: { partial?: boolean } = {}) => {
+  if (options.partial) {
+    return <div className="text-gray-500 dark:text-gray-400">Streaming tool call. Full arguments will appear after the model finishes emitting the call.</div>
+  }
+
   if (call.name === 'read') {
     const extra = (call.args.startLine || call.args.endLine)
       ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
@@ -311,6 +335,18 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     )
   }
 
+  if (call.name === 'create_child_session') {
+    const suffix = typeof call.args.suffix === 'string' && call.args.suffix.trim() ? call.args.suffix.trim() : '[auto]'
+    const mode = call.args.fork ? 'forked from parent' : 'new session'
+    const initialMessage = typeof call.args.message === 'string' ? call.args.message : ''
+    return (
+      <div className="space-y-1">
+        <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">Child suffix</span><span className="font-mono">{suffix}</span><span className="ml-1 text-gray-500 dark:text-gray-400">({mode})</span></div>
+        {initialMessage && <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">Initial message:</span>{initialMessage}</div>}
+      </div>
+    )
+  }
+
   return <div className="whitespace-pre-wrap break-all">{formatCompactObjectPreview(call.args)}</div>
 }
 
@@ -342,6 +378,11 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
 
   const download = getSendFileDownload(call, resp)
   const primaryText = formatToolResponseText(resp)
+  if (primaryText && isInterSessionToolName(resp.name)) {
+    const preview = truncatePreviewText(primaryText, 400)
+    return <div className="whitespace-pre-wrap break-all cursor-text">{renderSystemTextWithSessionLinks(expanded ? primaryText : preview)}</div>
+  }
+
   if (download) {
     const preview = truncatePreviewText(primaryText, 400)
     return (
@@ -481,11 +522,17 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const pairStatus = getToolPairStatus(responses, imageParts)
   const isError = pairStatus === 'error'
   const tagTone = pairStatus === 'error' ? 'error' : pairStatus === 'success' ? 'success' : 'neutral'
+  const partialToolCall = shouldUseStreamingToolPlaceholder({
+    modelMessageMeta: modelMessage?.__meta,
+    hasCall: !!call,
+    responseCount: responses.length,
+    imagePartCount: imageParts.length,
+  })
   const primaryResponse = responses[0]
   const primaryName = call?.name || primaryResponse?.name || (imageParts.length > 0 ? 'image' : 'tool')
   const primaryLabel = call ? getToolDisplayLabel(call) : primaryName
   const hasResponseContent = responses.length > 0 || imageParts.length > 0
-  const showDiffToggles = !!call && (isLegacyDiffToolName(call.name) || isPatchToolName(call.name))
+  const showDiffToggles = !!call && !partialToolCall && (isLegacyDiffToolName(call.name) || isPatchToolName(call.name))
 
   const responsePreview = useMemo(() => {
     const firstResponse = responses[0]
@@ -517,7 +564,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       onClick={onClick}
     >
       <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} />
-      {includeCallPreview && call && <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call)}</div>}
+      {includeCallPreview && call && <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call, { partial: partialToolCall })}</div>}
     </div>
   )
 
@@ -563,7 +610,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
                   </div>
                 )}
-                {renderToolCallExpandedContent(call, diffViewMode)}
+                {renderToolCallExpandedContent(call, diffViewMode, { partial: partialToolCall })}
               </div>
             )}
 

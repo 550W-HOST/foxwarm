@@ -133,10 +133,12 @@ block rows 带有：
 
 ### 搜索语义
 
-`search_vector` / `search_memory` 现在可以混搜：
+`recall({ vector_query })` 现在可以混搜：
 
 - 原始 raw chunks
 - layered compact blocks
+
+vector 命中只用于定位；对外展示会按命中元数据回查原始 archived message/block 范围，然后交给 recall 统一 preview renderer。旧的 `search_vector` / `search_memory` 工具已删除。
 
 而 `get_memory_context` 仍保持 **raw-only**，避免时间附近上下文被摘要块污染。
 
