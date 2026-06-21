@@ -914,15 +914,14 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       registerAbortController: false,
     });
 
-    if (!result.toolCalls?.length) {
-      throw new Error(`Compaction failed because the model did not call ${COMPACT_PLAN_TOOL_NAME}.`);
-    }
-
-    const onlyPlanCall = result.toolCalls.length === 1 && result.toolCalls[0].name === COMPACT_PLAN_TOOL_NAME;
+    const toolCalls = result.toolCalls || [];
+    const onlyPlanCall = toolCalls.length === 1 && toolCalls[0].name === COMPACT_PLAN_TOOL_NAME;
     if (!onlyPlanCall) {
-      const invalidToolName = result.toolCalls.find(call => call.name !== COMPACT_PLAN_TOOL_NAME)?.name || COMPACT_PLAN_TOOL_NAME;
-      logger.warn({ sessionId, invalidToolName, compactRoundsUsed }, 'Layered compact flow rejected a non-plan tool call; retrying with feedback');
-      const invalidToolNotice = invalidToolName === COMPACT_PLAN_TOOL_NAME
+      const invalidToolName = toolCalls.find(call => call.name !== COMPACT_PLAN_TOOL_NAME)?.name || COMPACT_PLAN_TOOL_NAME;
+      logger.warn({ sessionId, invalidToolName, toolCallCount: toolCalls.length, compactRoundsUsed }, 'Layered compact flow rejected a missing or non-plan tool call; retrying with feedback');
+      const invalidToolNotice = toolCalls.length === 0
+        ? `Compact planning must be submitted by calling ${COMPACT_PLAN_TOOL_NAME}; plain text/no tool call cannot complete compaction.`
+        : invalidToolName === COMPACT_PLAN_TOOL_NAME
         ? `Call ${COMPACT_PLAN_TOOL_NAME} exactly once, by itself.`
         : `Do not call \`${invalidToolName}\`; the only accepted tool call during compaction is ${COMPACT_PLAN_TOOL_NAME}.`;
       nextPromptParts = [{
@@ -956,7 +955,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   }
 
   if (!compactPlan) {
-    throw new Error(`Compaction failed because no valid ${COMPACT_PLAN_TOOL_NAME} plan was produced.`);
+    throw new Error(`Compaction skipped after ${compactRoundsUsed} compact planning round(s) because no valid plan was produced via ${COMPACT_PLAN_TOOL_NAME}.`);
   }
 
   const operations = resolveCreateBlockRanges(compactPlan, candidateEntries);
