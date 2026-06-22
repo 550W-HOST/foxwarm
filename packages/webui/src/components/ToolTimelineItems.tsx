@@ -22,7 +22,6 @@ import {
   type ToolViewMode,
 } from './chatShared'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
-import { formatToolResponsePayload } from '../../../shared/src/toolResponseFormatting'
 import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiToolRendering'
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
@@ -31,7 +30,7 @@ import DiffPreview from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
 
-const formatToolResponseText = (resp: { response: unknown }): string => formatToolResponsePayload(resp.response)
+const formatToolResponseText = (resp: { response: unknown }): string => formatCompactObjectPreview(resp.response)
 
 const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionResponse): { url: string; fileName?: string } | null => {
   if (resp.name !== 'send_file') {
@@ -356,8 +355,8 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
     const fileContent = typeof rawContent === 'string'
       ? rawContent
       : rawContent !== undefined
-        ? JSON.stringify(rawContent, null, 2)
-        : JSON.stringify(resp.response)
+        ? formatCompactObjectPreview(rawContent)
+        : formatToolResponseText(resp)
     return expanded
       ? <pre className="whitespace-pre-wrap text-xs overflow-x-auto cursor-text"><SyntaxHighlightedText text={fileContent} filePath={call?.args?.filePath} /></pre>
       : <div className="whitespace-pre-wrap break-all cursor-text">{fileContent ? <SyntaxHighlightedText text={truncatePreviewText(fileContent, 400)} filePath={call?.args?.filePath} /> : 'Completed'}</div>
@@ -370,10 +369,15 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   }
 
   if (resp.name === 'exec') {
-    const output = typeof resp.response?.output === 'string' ? resp.response.output : ''
-    const preview = truncatePreviewText(output, 400)
-    const displayStr = expanded ? output : preview
-    return <div className="whitespace-pre-wrap break-all cursor-text" style={{ lineHeight: '1.3em' }}><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
+    if (typeof resp.response?.output === 'string') {
+      const output = resp.response.output
+      const preview = truncatePreviewText(output, 400)
+      const displayStr = expanded ? output : preview
+      return <div className="whitespace-pre-wrap break-all cursor-text" style={{ lineHeight: '1.3em' }}><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
+    }
+    const raw = formatToolResponseText(resp)
+    const preview = truncatePreviewText(raw, 400)
+    return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? raw : preview}</div>
   }
 
   const download = getSendFileDownload(call, resp)
@@ -466,7 +470,7 @@ const stripToolScriptSubCallsFromResponse = (response: unknown): unknown => {
 
 const renderToolScriptResultContent = (resp: FunctionResponse, expanded: boolean): ReactNode | null => {
   const strippedResponse = stripToolScriptSubCallsFromResponse(resp.response)
-  const primaryText = formatToolResponsePayload(strippedResponse)
+  const primaryText = formatCompactObjectPreview(strippedResponse)
   if (!primaryText) {
     return null
   }
