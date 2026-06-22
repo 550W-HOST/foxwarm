@@ -104,18 +104,39 @@ export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
     throw new Error(`Unknown action: ${action}`);
 }
 
-export const tool_list_nodes = async (args: ToolArgs) => {
+async function resolveCurrentNodeForList(ctx?: ToolContext): Promise<string> {
+    if (typeof ctx?.session?.currentNode === 'string' && ctx.session.currentNode.trim()) {
+        return ctx.session.currentNode.trim();
+    }
+
+    if (ctx?.sessionId) {
+        return await nodesManager.getCurrentNode(ctx.sessionId) || 'master';
+    }
+
+    return 'master';
+}
+
+export const tool_list_nodes = async (_args: ToolArgs = {}, ctx?: ToolContext) => {
     const nodes = nodesManager.listNodes();
+    const currentNode = await resolveCurrentNodeForList(ctx);
     
     if (nodes.length === 0) {
-        return 'No nodes registered.';
+        return `No nodes registered. Current node: \`${currentNode}\`.`;
     }
     
-    let result = `Found ${nodes.length} node(s):\n\n`;
+    let result = `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n`;
+    let foundCurrentNode = false;
     for (const node of nodes) {
         const isMaster = node.id === 'master';
         const label = isMaster ? ' (local)' : ' (remote)';
-        result += `- \`${node.id}\`${label} - Last activity: ${new Date(node.lastActivity).toISOString()}\n`;
+        const currentMarker = node.id === currentNode ? ' ✅ current' : '';
+        if (node.id === currentNode) {
+            foundCurrentNode = true;
+        }
+        result += `- \`${node.id}\`${label}${currentMarker} - Last activity: ${new Date(node.lastActivity).toISOString()}\n`;
+    }
+    if (!foundCurrentNode) {
+        result += `\nCurrent node \`${currentNode}\` is not currently registered/connected.\n`;
     }
     
     return result;

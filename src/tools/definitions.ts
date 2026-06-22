@@ -821,7 +821,7 @@ export const definitions = [
         {
             name: 'list_nodes',
             defaultInject: true,
-            description: 'List all registered nodes.',
+            description: 'List all registered nodes and mark which node is current for this session.',
             parameters: {
                 type: 'object',
                 properties: {}
