@@ -1,6 +1,4 @@
 import * as Diff from 'diff'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
 import {
   Brain,
   BookOpen,
@@ -13,6 +11,7 @@ import type { LucideIcon } from 'lucide-react'
 export { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
 import { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
 import { parseSessionLinkText } from '../../../shared/src/webuiToolRendering'
+export { renderMarkdown, renderMarkdownWithSanitizer } from './markdownRenderer'
 
 export const formatObject = formatCompactObjectPreview
 
@@ -206,29 +205,6 @@ export interface Message {
     preservedFromBlockId?: number
     [key: string]: any
   }
-}
-
-marked.setOptions({
-  breaks: true,
-  gfm: true,
-})
-
-const sanitizeHtml = (html: string): string => {
-  return DOMPurify.sanitize(html, {
-    FORBID_TAGS: ['img', 'video', 'audio', 'iframe', 'embed', 'object', 'script', 'style'],
-    FORBID_ATTR: ['src', 'xlink:href', 'action', 'formaction'],
-    ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 's', 'code', 'pre', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td'],
-    ALLOWED_ATTR: ['class', 'href', 'target', 'rel'],
-    ALLOW_UNKNOWN_PROTOCOLS: false,
-    ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel):/i,
-  })
-}
-
-export const renderMarkdown = (text: string): string => {
-  const html = marked(text) as string
-  const sanitized = sanitizeHtml(html)
-  // Add target="_blank" and rel="noopener noreferrer" to all <a> tags
-  return sanitized.replace(/<a\s/g, '<a target="_blank" rel="noopener noreferrer" ')
 }
 
 /** Click handler for markdown containers: intercepts link clicks with a confirmation dialog */

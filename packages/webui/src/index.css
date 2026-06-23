@@ -206,4 +206,14 @@ input, textarea, select {
   .dark .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)):hover {
     color: rgb(191 219 254);
   }
+
+  .foxwarm-markdown :where(.katex-display):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 0.2rem;
+  }
+
+  .foxwarm-markdown :where(.katex-display > .katex):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    min-width: max-content;
+  }
 }
