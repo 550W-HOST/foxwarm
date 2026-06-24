@@ -74,7 +74,7 @@ foxwarm/
 - `state/models.yaml`：模型列表与默认模型
 - `agents/00_SYSTEM.md`：框架级系统提示（fresh init 从 `templates/agents/00_SYSTEM.md` 创建）
 - `agents/<agent>/memory/`：agent 长期记忆
-- `skills/<skill>/memory/`：附加给 agent 的 skill 文档
+- `skills/<skill>/SKILL.md`：skill 入口文档；其它参考资料应由 `SKILL.md` 显式链接
 - `templates/main/memory/`：main agent memory 首次初始化模板
 
 ## 常见开发任务
@@ -110,8 +110,7 @@ skills/
   my-skill/
     SKILL.md
     skill.json  # optional fallback metadata
-    memory/
-      README.md
+    references/  # optional, linked explicitly from SKILL.md
       METHOD.md
 ```
 

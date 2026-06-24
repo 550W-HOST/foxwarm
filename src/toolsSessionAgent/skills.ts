@@ -49,7 +49,7 @@ export async function tool_load_skill(args: ToolArgs, ctx?: ToolContext) {
   result += `\nMetadata: ${info.metadataPath}`;
 
   if (documents.length === 0) {
-    return result + '\n\n(No skill memory documents found.)';
+    return result + '\n\n(No skill documents found.)';
   }
 
   result += '\n\n';

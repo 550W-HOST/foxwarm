@@ -199,7 +199,7 @@ export const COMMANDS: Record<string, CommandDef> = {
             let resp = `🧩 *Skill:* \`${info.name}\``
             if (info.description) resp += `\n${info.description}`
             resp += `\nSource: \`${skills.formatSkillSourceLabel(info)}\`\nMetadata: \`${info.metadataPath}\``
-            if (documents.length === 0) { resp += '\n\n(No skill memory documents found.)' }
+            if (documents.length === 0) { resp += '\n\n(No skill documents found.)' }
             else { for (const doc of documents) { resp += `\n\nFILE: \`${doc.filePath}\`\n\n${doc.content}` } }
             ctx.reply(resp)
           } catch (e: any) { ctx.reply(`❌ Skill show failed: ${e.message}`) }

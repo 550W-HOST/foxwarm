@@ -17,7 +17,6 @@ export interface SkillInfo {
   metadataPath: string;
   mainDocumentPath?: string;
   manifestPath?: string;
-  memoryDir: string;
   documentFiles: string[];
   sourceType: 'agent-local' | 'agent-inherited' | 'global';
   sourceAgentName?: string;
@@ -49,6 +48,20 @@ type AgentMetadataSnapshot = {
   [key: string]: any;
 };
 
+const NON_SKILL_DISCOVERY_DIRS = new Set([
+  '.git',
+  'assets',
+  'build',
+  'dist',
+  'docs',
+  'evals',
+  'memory',
+  'node_modules',
+  'references',
+  'scripts',
+  'shared',
+]);
+
 export function validateSkillName(skillName: string): void {
   // Allow nested skills like "tencent/vision-analyzer"
   const parts = skillName.split('/');
@@ -77,10 +90,6 @@ function getAgentSkillsDir(agentName: string): string {
 
 function getSkillDirFromRoot(baseDir: string, skillName: string): string {
   return path.join(baseDir, skillName);
-}
-
-function getSkillMemoryDirFromRoot(baseDir: string, skillName: string): string {
-  return path.join(getSkillDirFromRoot(baseDir, skillName), 'memory');
 }
 
 async function readAgentMetadataSnapshot(): Promise<Record<string, AgentMetadataSnapshot>> {
@@ -230,7 +239,7 @@ async function readSkillMarkdownMetadata(markdownPath: string): Promise<ParsedMa
   return parseSkillMarkdownMetadata(content);
 }
 
-async function resolveSkillMetadata(skillName: string, skillDir: string, memoryDir: string): Promise<{
+async function resolveSkillMetadata(skillName: string, skillDir: string): Promise<{
   metadataPath: string;
   mainDocumentPath?: string;
   manifestPath?: string;
@@ -238,7 +247,6 @@ async function resolveSkillMetadata(skillName: string, skillDir: string, memoryD
 }> {
   const markdownCandidates = [
     path.join(skillDir, 'SKILL.md'),
-    path.join(memoryDir, 'SKILL.md'),
   ];
 
   let markdownPath: string | undefined;
@@ -268,7 +276,7 @@ async function resolveSkillMetadata(skillName: string, skillDir: string, memoryD
 
   if (!markdownPath && !manifestPath) {
     throw new Error(
-      `Skill "${skillName}" not found. Expected one of: ${path.join(skillDir, 'SKILL.md')}, ${path.join(memoryDir, 'SKILL.md')}, ${path.join(skillDir, 'skill.json')}.`
+      `Skill "${skillName}" not found. Expected one of: ${path.join(skillDir, 'SKILL.md')}, ${path.join(skillDir, 'skill.json')}.`
     );
   }
 
@@ -283,25 +291,11 @@ async function resolveSkillMetadata(skillName: string, skillDir: string, memoryD
   };
 }
 
-async function listSkillDocumentFiles(skillDir: string, memoryDir: string, mainDocumentPath?: string): Promise<string[]> {
+async function listSkillDocumentFiles(skillDir: string, mainDocumentPath?: string): Promise<string[]> {
   const files: string[] = [];
 
   if (mainDocumentPath) {
     files.push(path.relative(skillDir, mainDocumentPath));
-  }
-
-  if (await fs.pathExists(memoryDir)) {
-    const memoryEntries = await fs.readdir(memoryDir);
-    const memoryFiles = memoryEntries
-      .sort()
-      .filter(file => file.endsWith('.md'))
-      .map(file => path.join('memory', file));
-
-    for (const file of memoryFiles) {
-      if (!files.includes(file)) {
-        files.push(file);
-      }
-    }
   }
 
   return files;
@@ -309,14 +303,13 @@ async function listSkillDocumentFiles(skillDir: string, memoryDir: string, mainD
 
 async function getSkillInfoFromRoot(skillName: string, root: SkillSearchRoot): Promise<SkillInfo> {
   const dir = getSkillDirFromRoot(root.baseDir, skillName);
-  const memoryDir = getSkillMemoryDirFromRoot(root.baseDir, skillName);
 
   if (!await fs.pathExists(dir)) {
     throw new Error(`Skill "${skillName}" not found in ${formatSkillSourceLabel({ sourceType: root.sourceType, sourceAgentName: root.agentName })}.`);
   }
 
-  const { metadataPath, mainDocumentPath, manifestPath, manifest } = await resolveSkillMetadata(skillName, dir, memoryDir);
-  const documentFiles = await listSkillDocumentFiles(dir, memoryDir, mainDocumentPath);
+  const { metadataPath, mainDocumentPath, manifestPath, manifest } = await resolveSkillMetadata(skillName, dir);
+  const documentFiles = await listSkillDocumentFiles(dir, mainDocumentPath);
 
   return {
     name: skillName,
@@ -325,7 +318,6 @@ async function getSkillInfoFromRoot(skillName: string, root: SkillSearchRoot): P
     metadataPath,
     mainDocumentPath,
     manifestPath,
-    memoryDir,
     documentFiles,
     sourceType: root.sourceType,
     sourceAgentName: root.agentName,
@@ -364,7 +356,7 @@ export async function getSkillInfo(skillName: string, options: SkillResolveOptio
 /**
  * Recursively find all skill directories (containing SKILL.md or skill.json)
  */
-async function findSkillDirectories(baseDir: string, relativePath: string = ''): Promise<string[]> {
+async function findSkillDirectories(baseDir: string, relativePath: string = '', insideSkill: boolean = false): Promise<string[]> {
   const skillDirs: string[] = [];
   
   if (!await fs.pathExists(baseDir)) {
@@ -376,21 +368,25 @@ async function findSkillDirectories(baseDir: string, relativePath: string = ''):
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     if (entry.name === 'memory') continue;
+    // These are common companion/resource directories inside a skill. They may
+    // contain examples or docs with SKILL.md files, but the current skill format
+    // is SKILL.md-first: companion material must be linked explicitly from the
+    // parent SKILL.md and is not auto-discovered as a nested skill.
+    if (insideSkill && NON_SKILL_DISCOVERY_DIRS.has(entry.name)) continue;
     
     const entryPath = path.join(baseDir, entry.name);
     const skillName = relativePath ? `${relativePath}/${entry.name}` : entry.name;
     
     // Check if this directory is a skill (has SKILL.md or skill.json)
     const hasSkillMd = await fs.pathExists(path.join(entryPath, 'SKILL.md'));
-    const hasMemorySkillMd = await fs.pathExists(path.join(entryPath, 'memory', 'SKILL.md'));
     const hasSkillJson = await fs.pathExists(path.join(entryPath, 'skill.json'));
     
-    if (hasSkillMd || hasMemorySkillMd || hasSkillJson) {
+    if (hasSkillMd || hasSkillJson) {
       skillDirs.push(skillName);
     }
     
     // Always recurse into subdirectories to find nested skills
-    const nestedSkills = await findSkillDirectories(entryPath, skillName);
+    const nestedSkills = await findSkillDirectories(entryPath, skillName, insideSkill || hasSkillMd || hasSkillJson);
     skillDirs.push(...nestedSkills);
   }
   
