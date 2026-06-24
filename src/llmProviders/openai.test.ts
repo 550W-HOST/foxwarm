@@ -41,6 +41,29 @@ test('collectOpenAIChatCompletionsStream aggregates streamed text and usage', as
   assert.ok(progress.some(snapshot => snapshot.text === 'Hello'));
 });
 
+test('collectOpenAIChatCompletionsStream reports raw SSE body and blocks', async () => {
+  const stream = makeStream([
+    {
+      choices: [{ index: 0, delta: { role: 'assistant', content: 'Hi' }, finish_reason: 'stop' }],
+    },
+    '[DONE]',
+  ]);
+
+  let rawBody = '';
+  const rawBlocks: string[] = [];
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal, {
+    onRawChunk: chunk => { rawBody += chunk; },
+    onRawSseBlock: block => rawBlocks.push(block),
+  });
+
+  assert.equal(response.choices[0].message.content, 'Hi');
+  assert.match(rawBody, /data: .*"content":"Hi"/);
+  assert.match(rawBody, /data: \[DONE\]/);
+  assert.equal(rawBlocks.length, 2);
+  assert.match(rawBlocks[0], /"content":"Hi"/);
+  assert.equal(rawBlocks[1], 'data: [DONE]');
+});
+
 test('collectOpenAIChatCompletionsStream aggregates streamed tool calls', async () => {
   const stream = makeStream([
     {
@@ -169,6 +192,47 @@ test('collectOpenAIResponsesStream rebuilds streamed output items from SSE delta
   assert.ok(progress.some(snapshot => snapshot.reasoning === 'Thinking done'));
   assert.ok(progress.some(snapshot => snapshot.text === 'Hello'));
   assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
+});
+
+test('collectOpenAIResponsesStream reports raw SSE body and blocks', async () => {
+  const stream = makeStream([
+    {
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { type: 'message', role: 'assistant', content: [] },
+    },
+    {
+      type: 'response.content_part.added',
+      output_index: 0,
+      content_index: 0,
+      part: { type: 'output_text', text: '' },
+    },
+    {
+      type: 'response.output_text.delta',
+      output_index: 0,
+      content_index: 0,
+      delta: 'Hi',
+    },
+    {
+      type: 'response.completed',
+      response: { id: 'resp_raw', object: 'response', output: [] },
+    },
+    '[DONE]',
+  ]);
+
+  let rawBody = '';
+  const rawBlocks: string[] = [];
+  const response = await collectOpenAIResponsesStream(stream, new AbortController().signal, {
+    onRawChunk: chunk => { rawBody += chunk; },
+    onRawSseBlock: block => rawBlocks.push(block),
+  });
+
+  assert.equal(response.output[0].content[0].text, 'Hi');
+  assert.match(rawBody, /data: .*response\.output_text\.delta/);
+  assert.match(rawBody, /data: \[DONE\]/);
+  assert.equal(rawBlocks.length, 5);
+  assert.ok(rawBlocks.some(block => block.includes('response.output_text.delta')));
+  assert.equal(rawBlocks[rawBlocks.length - 1], 'data: [DONE]');
 });
 
 test('collectOpenAIResponsesStream rebuilds refusals when completed payload omits content', async () => {

@@ -9,6 +9,7 @@ import { formatAuthorizationInspection, inspectChannelAuthorizationFromContext }
 import { getAgentDir, getChannelConfigById, readAppConfigFile } from './config';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
 import { getManagedSessionState, isManagedSessionActive, setManagedSessionState } from './session/managedState';
+import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalEndTurnReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
@@ -62,6 +63,27 @@ async function generateGuestAgentName(baseAgentId: string): Promise<string> {
 
 export function shouldBroadcastChannelText(text: string | undefined | null): boolean {
   return typeof text === 'string' && text.trim().length > 0;
+}
+
+function formatRetryDelay(delayMs: number): string {
+  const seconds = Math.max(1, Math.ceil(delayMs / 1000));
+  return `${seconds} second${seconds === 1 ? '' : 's'}`;
+}
+
+function formatRetryStatus(event: llm.LlmRetryEvent, initial: boolean): string {
+  const statusPrefix = event.status ? `${event.status}: ` : '';
+  const reason = `${statusPrefix}${event.reason}`.trim();
+  const retryText = `Retry ${event.nextAttempt}/${event.maxRetries} in ${formatRetryDelay(event.delayMs)}...`;
+  if (initial) {
+    return `⚠️ [LLM retry] Attempt ${event.attempt}/${event.maxRetries} failed${reason ? `: ${reason}` : '.'} ${retryText}`;
+  }
+
+  return ` Attempt ${event.attempt}/${event.maxRetries} failed${reason ? `: ${reason}` : '.'} ${retryText}`;
+}
+
+function mergeExcludePlatforms(options: any, platforms: string[]): any {
+  const excludePlatforms = Array.from(new Set([...(options?.excludePlatforms || []), ...platforms]));
+  return { ...(options || {}), excludePlatforms };
 }
 
 export class MessageRouter {
@@ -202,6 +224,53 @@ export class MessageRouter {
     return (text: string, options?: any) => {
       const excludePlatforms = Array.from(new Set([...(options?.excludePlatforms || []), turnOptions.weworkStreamChannelId]));
       broadcast(text, { ...(options || {}), excludePlatforms });
+    };
+  }
+
+  private createLlmRetryNotifier(session: Session, broadcast: Session['broadcast'] | undefined): (event: llm.LlmRetryEvent) => Promise<void> {
+    let retryMessage: Message | null = null;
+
+    return async (event: llm.LlmRetryEvent) => {
+      const chunk = formatRetryStatus(event, retryMessage === null);
+      if (!retryMessage) {
+        retryMessage = createDisplayOnlyModelMessage(chunk, {
+          noticeType: 'llm-retry',
+          retry: {
+            attempt: event.attempt,
+            nextAttempt: event.nextAttempt,
+            maxRetries: event.maxRetries,
+            delayMs: event.delayMs,
+            kind: event.kind,
+            status: event.status,
+          },
+        });
+        await sessionManager.appendSessionMessage(session, retryMessage);
+      } else {
+        const existingText = retryMessage.parts[0]?.text || '';
+        retryMessage.parts[0] = {
+          ...(retryMessage.parts[0] || {}),
+          text: `${existingText}${chunk}`,
+        };
+        retryMessage.__meta = {
+          ...(retryMessage.__meta || {}),
+          timestamp: Date.now(),
+          updateExisting: true,
+          retry: {
+            attempt: event.attempt,
+            nextAttempt: event.nextAttempt,
+            maxRetries: event.maxRetries,
+            delayMs: event.delayMs,
+            kind: event.kind,
+            status: event.status,
+          },
+        };
+        await sessionManager.saveSession(session.id);
+        sessionManager.notifyHistoryUpdate(session.id, retryMessage);
+      }
+
+      if (broadcast) {
+        broadcast(chunk, mergeExcludePlatforms({ parse_mode: 'Markdown' }, ['webui']));
+      }
     };
   }
 
@@ -767,7 +836,9 @@ export class MessageRouter {
 
         let result;
         try {
-          result = await llm.chat(parts, session, iteration);
+          result = await llm.chat(parts, session, iteration, {
+            onRetry: this.createLlmRetryNotifier(session, broadcast),
+          });
         } catch (e: any) {
           if (session.stopping && llm.isAbortError(e)) {
             logger.info({ sessionId: session.id }, 'In-flight LLM request aborted by stop signal');

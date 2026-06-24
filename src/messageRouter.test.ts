@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MessageRouter, shouldBroadcastChannelText } from './messageRouter';
+import * as sessionManager from './sessionManager';
+import type { Message, Session } from './types';
 
 test('shouldBroadcastChannelText rejects empty or whitespace-only text', () => {
   assert.equal(shouldBroadcastChannelText(''), false);
@@ -160,6 +162,75 @@ test('MessageRouter emits turn progress as an empty targeted channel broadcast',
   assert.equal(events[0].options.allowEmptyBroadcast, true);
   assert.deepEqual(events[0].options.targetChannel, { channelId: 'wework-a', conversationId: 'chat-a' });
   assert.deepEqual(events[0].options.channelTurnProgress, { type: 'llm-start' });
+});
+
+test('MessageRouter LLM retry notifier appends one display-only message then updates it', async () => {
+  const router = new MessageRouter() as any;
+  const session: Session = {
+    id: 'retry_notice_session',
+    history: [],
+    persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false,
+    queue: [],
+    meta: { lastMessageTime: Date.now() },
+  } as Session;
+  const broadcasts: Array<{ text: string; options: any }> = [];
+  const historyUpdates: Message[] = [];
+  const originalAppend = sessionManager.appendSessionMessage;
+  const originalSave = sessionManager.saveSession;
+  const originalNotify = sessionManager.notifyHistoryUpdate;
+  let nextSeq = 1;
+
+  (sessionManager as any).appendSessionMessage = async (targetSession: Session, message: Message) => {
+    message.__meta = { ...(message.__meta || {}), timestamp: message.__meta?.timestamp || Date.now(), seq: nextSeq++ };
+    targetSession.history.push(message);
+    historyUpdates.push(message);
+  };
+  (sessionManager as any).saveSession = async () => {};
+  (sessionManager as any).notifyHistoryUpdate = (_sessionId: string, message: Message) => {
+    historyUpdates.push(message);
+  };
+
+  try {
+    const notify = router.createLlmRetryNotifier(
+      session,
+      (text: string, options?: any) => broadcasts.push({ text, options }),
+    );
+
+    await notify({
+      attempt: 1,
+      nextAttempt: 2,
+      maxRetries: 5,
+      delayMs: 2000,
+      kind: 'request-error',
+      reason: 'socket hang up',
+    });
+    await notify({
+      attempt: 2,
+      nextAttempt: 3,
+      maxRetries: 5,
+      delayMs: 5000,
+      kind: 'http-error',
+      status: '500 Internal Server Error',
+      reason: 'upstream bad gateway',
+    });
+
+    assert.equal(session.history.length, 1);
+    assert.equal(session.history[0].modelVisible, false);
+    assert.equal(session.history[0].__meta?.noticeType, 'llm-retry');
+    assert.equal(session.history[0].__meta?.updateExisting, true);
+    assert.match(session.history[0].parts[0].text || '', /Retry 2\/5 in 2 seconds/);
+    assert.match(session.history[0].parts[0].text || '', /Retry 3\/5 in 5 seconds/);
+    assert.equal(broadcasts.length, 2);
+    assert.deepEqual(broadcasts[0].options.excludePlatforms, ['webui']);
+    assert.equal(historyUpdates.length, 2);
+    assert.equal(historyUpdates[0].__meta?.seq, historyUpdates[1].__meta?.seq);
+  } finally {
+    (sessionManager as any).appendSessionMessage = originalAppend;
+    (sessionManager as any).saveSession = originalSave;
+    (sessionManager as any).notifyHistoryUpdate = originalNotify;
+  }
 });
 
 test('MessageRouter strips configured channel selfName mention before command parsing', async () => {

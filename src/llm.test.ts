@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
 
-import { chat, ensurePromptCacheKey, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { DEFAULT_LLM_MAX_RETRIES, chat, ensurePromptCacheKey, getLlmRetryDelayMs, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { LOGS_DIR } from './config';
+import { formatDate } from './logRotation';
 import type { Message, Session } from './types';
 import { containsLoneSurrogate } from './utils/unicode';
 import * as sessionManager from './sessionManager';
@@ -116,6 +118,156 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
     });
   } finally {
     (axios as any).post = originalPost;
+  }
+});
+
+test('requestLlmOnce logs raw stream body with parsed streaming response', async () => {
+  const originalPost = axios.post;
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const beforeFiles = new Set<string>();
+  const createdFiles: string[] = [];
+  const recentDir = path.join(LOGS_DIR, 'recent');
+  await fs.mkdir(recentDir, { recursive: true });
+  for (const file of await fs.readdir(recentDir).catch((): string[] => [])) beforeFiles.add(file);
+
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: { 'x-test': 'raw-stream' },
+    data: makeChatCompletionStream('raw-ok'),
+  });
+
+  try {
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+      systemPrompt: '',
+      model: 'openai/gpt-5.2-codex',
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const files = await fs.readdir(recentDir);
+    createdFiles.push(...files.filter(file => !beforeFiles.has(file)));
+    const responseFile = createdFiles.find(file => file.endsWith('_res.json'));
+    assert.ok(responseFile, 'expected response log file');
+    const logged = JSON.parse(await fs.readFile(path.join(recentDir, responseFile!), 'utf8'));
+    assert.equal(logged.body.choices[0].message.content, 'raw-ok');
+    assert.match(logged.rawStream.body, /data: .*raw-ok/);
+    assert.ok(logged.rawStream.sseBlocks.some((block: string) => block.includes('raw-ok')));
+  } finally {
+    (axios as any).post = originalPost;
+    await Promise.all(createdFiles.map(file => fs.rm(path.join(recentDir, file), { force: true }).catch(() => {})));
+  }
+});
+
+test('requestLlmOnce keeps failed raw stream attempts in moved error logs', async () => {
+  const originalPost = axios.post;
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const recentDir = path.join(LOGS_DIR, 'recent');
+  const errorDir = path.join(LOGS_DIR, `${formatDate()}-error`);
+  const beforeRecent = new Set<string>();
+  const beforeError = new Set<string>();
+  let newRecentFiles: string[] = [];
+  let newErrorFiles: string[] = [];
+  await fs.mkdir(recentDir, { recursive: true });
+  await fs.mkdir(errorDir, { recursive: true });
+  for (const file of await fs.readdir(recentDir).catch((): string[] => [])) beforeRecent.add(file);
+  for (const file of await fs.readdir(errorDir).catch((): string[] => [])) beforeError.add(file);
+
+  (axios as any).post = async () => {
+    const stream = new PassThrough();
+    process.nextTick(() => {
+      stream.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', content: 'partial-before-fail' }, finish_reason: null }] })}\n\n`);
+      stream.write(`data: ${JSON.stringify({ error: { message: 'stream exploded after partial' } })}\n\n`);
+      stream.end();
+    });
+    return { status: 200, statusText: 'OK', headers: {}, data: stream };
+  };
+
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'hello fail' }] }],
+      systemPrompt: '',
+      model: 'openai/gpt-5.2-codex',
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+      maxRetries: 1,
+    });
+
+    assert.match(result.text, /API request failed after 1 attempts/);
+    newRecentFiles = (await fs.readdir(recentDir).catch((): string[] => [])).filter(file => !beforeRecent.has(file));
+    assert.equal(newRecentFiles.some(file => file.endsWith('_res.json')), false, 'failed response log should move out of recent');
+    newErrorFiles = (await fs.readdir(errorDir)).filter(file => !beforeError.has(file));
+    const responseFile = newErrorFiles.find(file => file.endsWith('_res.json'));
+    assert.ok(responseFile, 'expected moved error response log');
+    const logged = JSON.parse(await fs.readFile(path.join(errorDir, responseFile!), 'utf8'));
+    assert.match(logged.attempts[0].error, /stream exploded after partial/);
+    assert.match(logged.attempts[0].rawStream.body, /partial-before-fail/);
+    assert.ok(logged.attempts[0].rawStream.sseBlocks.some((block: string) => block.includes('partial-before-fail')));
+  } finally {
+    (axios as any).post = originalPost;
+    await Promise.all(newRecentFiles.map(file => fs.rm(path.join(recentDir, file), { force: true }).catch(() => {})));
+    await Promise.all(newErrorFiles.map(file => fs.rm(path.join(errorDir, file), { force: true }).catch(() => {})));
+  }
+});
+
+test('requestLlmOnce retries 5 times by default with increasing retry delays', async () => {
+  const originalPost = axios.post;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const retryEvents: any[] = [];
+  const sleepDelays: number[] = [];
+  let callCount = 0;
+
+  (global as any).setTimeout = (callback: (...args: any[]) => void, delay?: number) => {
+    sleepDelays.push(Number(delay || 0));
+    queueMicrotask(callback);
+    return { __foxwarmImmediateTimer: true };
+  };
+  (global as any).clearTimeout = () => {};
+
+  (axios as any).post = async () => {
+    callCount++;
+    if (callCount < DEFAULT_LLM_MAX_RETRIES) {
+      throw new Error(`temporary failure ${callCount}`);
+    }
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: makeChatCompletionStream('retry-ok'),
+    };
+  };
+
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'hello retry' }] }],
+      systemPrompt: '',
+      model: 'openai/gpt-5.2-codex',
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+      onRetry: event => { retryEvents.push(event); },
+    });
+
+    assert.equal(result.text, 'retry-ok');
+    assert.equal(callCount, DEFAULT_LLM_MAX_RETRIES);
+    assert.deepEqual(retryEvents.map(event => event.nextAttempt), [2, 3, 4, 5]);
+    assert.deepEqual(retryEvents.map(event => event.delayMs), [
+      getLlmRetryDelayMs(1),
+      getLlmRetryDelayMs(2),
+      getLlmRetryDelayMs(3),
+      getLlmRetryDelayMs(4),
+    ]);
+    assert.deepEqual(sleepDelays, retryEvents.map(event => event.delayMs));
+  } finally {
+    (axios as any).post = originalPost;
+    (global as any).setTimeout = originalSetTimeout;
+    (global as any).clearTimeout = originalClearTimeout;
   }
 });
 
