@@ -30,9 +30,8 @@ This bundled Foxwarm version is adapted from the MIT-licensed upstream **Agent S
 
 - A skill's automatic entry point is `SKILL.md`.
 - Extra documentation belongs in ordinary companion files such as `references/*.md`, `scripts/*.py`, or `assets/*`, and must be linked from `SKILL.md`.
-- Do **not** create `memory/*.md` under a skill expecting it to be auto-loaded. Foxwarm skill loading is SKILL.md-first.
 - Generated Foxwarm skills should avoid private paths, credentials, machine-specific assumptions, and one-off project history.
-- If the user wants an agent's long-term operating rules, put those in that agent's `memory/`; if the user wants reusable procedure/knowledge, package it as a skill.
+- If the user wants an agent's long-term operating rules, put those in that agent's memory; if the user wants reusable procedure/knowledge, package it as a skill.
 
 ## Trigger examples
 
@@ -76,7 +75,7 @@ skill-name/
 └── LICENSE           # if redistributing substantial third-party content
 ```
 
-Complex skills may add `evals/`, `examples/`, or multiple component skills, but keep the main entry clear.
+Complex skills may add `evals/`, `examples/`, or other resources, but keep the main entry clear. If workflows are genuinely independent enough to load separately, create separate sibling skill directories rather than nesting one catalog skill inside another skill directory.
 
 ## Core workflow
 
@@ -133,7 +132,7 @@ Use companion docs when:
 - detailed methodology is useful but not always needed;
 - examples, schemas, or platform-specific notes would distract from the entry point.
 
-Use multiple component skills only when workflows are genuinely independent enough to load separately.
+Use multiple component skills only when workflows are genuinely independent enough to load separately; in that case, package them as separate sibling skills. A directory that already contains `SKILL.md` is a skill boundary, and files below it are resources for that skill.
 
 ### Phase 4: Detection and activation
 

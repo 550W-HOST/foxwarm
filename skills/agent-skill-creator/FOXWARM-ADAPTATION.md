@@ -9,7 +9,7 @@ This bundled skill adapts the upstream [Agent Skill Creator](https://github.com/
 - Upstream version: `6.0.0`
 - License: MIT; see `LICENSE`.
 
-The Foxwarm `SKILL.md` entry point was rewritten to fit Foxwarm's SKILL.md-first loader and tool terminology. Companion references and helper scripts are adapted from upstream and kept as explicit files linked from `SKILL.md`; no `memory/*.md` auto-loading is used.
+The Foxwarm `SKILL.md` entry point was rewritten to fit Foxwarm's SKILL.md-first loader and tool terminology. Companion references and helper scripts are adapted from upstream and kept as explicit files linked from `SKILL.md`.
 
 ## Foxwarm notes
 

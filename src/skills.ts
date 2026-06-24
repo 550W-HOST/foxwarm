@@ -1,10 +1,11 @@
 import fs from 'fs-extra';
 import path from 'path';
 import yaml from 'js-yaml';
+import type { Dirent } from 'fs';
 import { logger } from './common';
 import { AGENTS_FILE, getAgentDir, SKILLS_DIR } from './config';
 
-export interface SkillManifest {
+export interface SkillMetadata {
   name?: string;
   description?: string;
   [key: string]: any;
@@ -16,8 +17,9 @@ export interface SkillInfo {
   dir: string;
   metadataPath: string;
   mainDocumentPath?: string;
-  manifestPath?: string;
   documentFiles: string[];
+  resourceFiles: string[];
+  resourceFilesTruncated: boolean;
   sourceType: 'agent-local' | 'agent-inherited' | 'global';
   sourceAgentName?: string;
 }
@@ -28,7 +30,7 @@ export interface SkillDocument {
 }
 
 type ParsedMarkdownMetadata = {
-  metadata: SkillManifest;
+  metadata: SkillMetadata;
 };
 
 type SkillSourceType = SkillInfo['sourceType'];
@@ -43,24 +45,34 @@ type SkillResolveOptions = {
   agentName?: string;
 };
 
+type SkillInfoBuildOptions = {
+  includeResources?: boolean;
+};
+
 type AgentMetadataSnapshot = {
   inherit?: string;
   [key: string]: any;
 };
 
-const NON_SKILL_DISCOVERY_DIRS = new Set([
+const SKILL_DISCOVERY_SKIP_DIRS = new Set([
   '.git',
-  'assets',
   'build',
   'dist',
-  'docs',
-  'evals',
   'memory',
   'node_modules',
-  'references',
-  'scripts',
-  'shared',
+  '__pycache__',
 ]);
+
+const SKILL_RESOURCE_SKIP_DIRS = new Set([
+  '.git',
+  'build',
+  'dist',
+  'memory',
+  'node_modules',
+  '__pycache__',
+]);
+
+const DEFAULT_MAX_SKILL_RESOURCE_FILES = 200;
 
 export function validateSkillName(skillName: string): void {
   // Allow nested skills like "tencent/vision-analyzer"
@@ -142,17 +154,7 @@ async function getSkillSearchRoots(agentName: string = 'main'): Promise<SkillSea
   return roots;
 }
 
-async function readSkillManifest(skillDir: string): Promise<{ manifestPath: string; manifest: SkillManifest }> {
-  const manifestPath = path.join(skillDir, 'skill.json');
-  if (!await fs.pathExists(manifestPath)) {
-    throw new Error(`Skill manifest not found in "${skillDir}".`);
-  }
-
-  const manifest = await fs.readJson(manifestPath);
-  return { manifestPath, manifest };
-}
-
-function parseFrontMatter(content: string): { data: SkillManifest; body: string } | null {
+function parseFrontMatter(content: string): { data: SkillMetadata; body: string } | null {
   const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
   if (!match) return null;
 
@@ -162,7 +164,7 @@ function parseFrontMatter(content: string): { data: SkillManifest; body: string 
   }
 
   return {
-    data: data as SkillManifest,
+    data: data as SkillMetadata,
     body: content.slice(match[0].length),
   };
 }
@@ -242,52 +244,21 @@ async function readSkillMarkdownMetadata(markdownPath: string): Promise<ParsedMa
 async function resolveSkillMetadata(skillName: string, skillDir: string): Promise<{
   metadataPath: string;
   mainDocumentPath?: string;
-  manifestPath?: string;
-  manifest: SkillManifest;
+  metadata: SkillMetadata;
 }> {
-  const markdownCandidates = [
-    path.join(skillDir, 'SKILL.md'),
-  ];
-
-  let markdownPath: string | undefined;
-  let markdownManifest: SkillManifest = {};
-
-  for (const candidate of markdownCandidates) {
-    if (!await fs.pathExists(candidate)) continue;
-
-    markdownPath = candidate;
-    const parsed = await readSkillMarkdownMetadata(candidate);
-    markdownManifest = parsed.metadata;
-    break;
-  }
-
-  let manifestPath: string | undefined;
-  let jsonManifest: SkillManifest = {};
-
-  try {
-    const manifestInfo = await readSkillManifest(skillDir);
-    manifestPath = manifestInfo.manifestPath;
-    jsonManifest = manifestInfo.manifest;
-  } catch (e: any) {
-    if (!e.message?.includes('Skill manifest not found')) {
-      throw e;
-    }
-  }
-
-  if (!markdownPath && !manifestPath) {
+  const markdownPath = path.join(skillDir, 'SKILL.md');
+  if (!await fs.pathExists(markdownPath)) {
     throw new Error(
-      `Skill "${skillName}" not found. Expected one of: ${path.join(skillDir, 'SKILL.md')}, ${path.join(skillDir, 'skill.json')}.`
+      `Skill "${skillName}" not found. Expected: ${markdownPath}.`
     );
   }
 
+  const parsed = await readSkillMarkdownMetadata(markdownPath);
+
   return {
-    metadataPath: markdownPath || manifestPath!,
+    metadataPath: markdownPath,
     mainDocumentPath: markdownPath,
-    manifestPath,
-    manifest: {
-      ...jsonManifest,
-      ...markdownManifest,
-    },
+    metadata: parsed.metadata,
   };
 }
 
@@ -301,24 +272,98 @@ async function listSkillDocumentFiles(skillDir: string, mainDocumentPath?: strin
   return files;
 }
 
-async function getSkillInfoFromRoot(skillName: string, root: SkillSearchRoot): Promise<SkillInfo> {
+async function listSkillResourceFiles(skillDir: string, documentFiles: string[], maxFiles: number = DEFAULT_MAX_SKILL_RESOURCE_FILES): Promise<{ files: string[]; truncated: boolean }> {
+  const files: string[] = [];
+  let truncated = false;
+  const excludedFiles = new Set(documentFiles);
+
+  async function walk(currentDir: string, relativeDir: string = ''): Promise<void> {
+    if (truncated) return;
+
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch (e) {
+      logger.warn({ err: e, currentDir }, 'Failed to list skill resource directory');
+      return;
+    }
+
+    entries.sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    for (const entry of entries) {
+      if (truncated) return;
+      const relativePath = relativeDir ? path.join(relativeDir, entry.name) : entry.name;
+      const absolutePath = path.join(currentDir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (SKILL_RESOURCE_SKIP_DIRS.has(entry.name)) continue;
+        await walk(absolutePath, relativePath);
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      if (excludedFiles.has(relativePath)) continue;
+
+      if (files.length >= maxFiles) {
+        truncated = true;
+        return;
+      }
+      files.push(relativePath);
+    }
+  }
+
+  await walk(skillDir);
+  return { files, truncated };
+}
+
+async function isSkillDirectory(dir: string): Promise<boolean> {
+  return await fs.pathExists(path.join(dir, 'SKILL.md'));
+}
+
+async function findParentSkillBoundary(baseDir: string, skillName: string): Promise<string | undefined> {
+  const parts = skillName.split('/');
+  let currentDir = baseDir;
+
+  for (let i = 0; i < parts.length - 1; i++) {
+    currentDir = path.join(currentDir, parts[i]);
+    if (await isSkillDirectory(currentDir)) {
+      return parts.slice(0, i + 1).join('/');
+    }
+  }
+
+  return undefined;
+}
+
+async function getSkillInfoFromRoot(skillName: string, root: SkillSearchRoot, options: SkillInfoBuildOptions = {}): Promise<SkillInfo> {
   const dir = getSkillDirFromRoot(root.baseDir, skillName);
 
   if (!await fs.pathExists(dir)) {
     throw new Error(`Skill "${skillName}" not found in ${formatSkillSourceLabel({ sourceType: root.sourceType, sourceAgentName: root.agentName })}.`);
   }
 
-  const { metadataPath, mainDocumentPath, manifestPath, manifest } = await resolveSkillMetadata(skillName, dir);
+  const parentSkill = await findParentSkillBoundary(root.baseDir, skillName);
+  if (parentSkill) {
+    throw new Error(`Skill "${skillName}" is inside skill "${parentSkill}" and is treated as a bundled resource, not an independently loadable skill. Load "${parentSkill}" first, then read the referenced resource file if needed.`);
+  }
+
+  const { metadataPath, mainDocumentPath, metadata } = await resolveSkillMetadata(skillName, dir);
   const documentFiles = await listSkillDocumentFiles(dir, mainDocumentPath);
+  const resources = options.includeResources
+    ? await listSkillResourceFiles(dir, documentFiles)
+    : { files: [], truncated: false };
 
   return {
     name: skillName,
-    description: manifest.description,
+    description: metadata.description,
     dir,
     metadataPath,
     mainDocumentPath,
-    manifestPath,
     documentFiles,
+    resourceFiles: resources.files,
+    resourceFilesTruncated: resources.truncated,
     sourceType: root.sourceType,
     sourceAgentName: root.agentName,
   };
@@ -354,9 +399,11 @@ export async function getSkillInfo(skillName: string, options: SkillResolveOptio
 }
 
 /**
- * Recursively find all skill directories (containing SKILL.md or skill.json)
+ * Recursively find all skill directories (containing SKILL.md).
+ * A discovered skill directory is a boundary: nested SKILL.md files inside it
+ * are treated as bundled resources of the parent skill, not independent skills.
  */
-async function findSkillDirectories(baseDir: string, relativePath: string = '', insideSkill: boolean = false): Promise<string[]> {
+async function findSkillDirectories(baseDir: string, relativePath: string = ''): Promise<string[]> {
   const skillDirs: string[] = [];
   
   if (!await fs.pathExists(baseDir)) {
@@ -367,26 +414,18 @@ async function findSkillDirectories(baseDir: string, relativePath: string = '', 
   
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    if (entry.name === 'memory') continue;
-    // These are common companion/resource directories inside a skill. They may
-    // contain examples or docs with SKILL.md files, but the current skill format
-    // is SKILL.md-first: companion material must be linked explicitly from the
-    // parent SKILL.md and is not auto-discovered as a nested skill.
-    if (insideSkill && NON_SKILL_DISCOVERY_DIRS.has(entry.name)) continue;
+    if (SKILL_DISCOVERY_SKIP_DIRS.has(entry.name)) continue;
     
     const entryPath = path.join(baseDir, entry.name);
     const skillName = relativePath ? `${relativePath}/${entry.name}` : entry.name;
     
-    // Check if this directory is a skill (has SKILL.md or skill.json)
-    const hasSkillMd = await fs.pathExists(path.join(entryPath, 'SKILL.md'));
-    const hasSkillJson = await fs.pathExists(path.join(entryPath, 'skill.json'));
-    
-    if (hasSkillMd || hasSkillJson) {
+    // Check if this directory is a skill (has SKILL.md)
+    if (await isSkillDirectory(entryPath)) {
       skillDirs.push(skillName);
+      continue;
     }
     
-    // Always recurse into subdirectories to find nested skills
-    const nestedSkills = await findSkillDirectories(entryPath, skillName, insideSkill || hasSkillMd || hasSkillJson);
+    const nestedSkills = await findSkillDirectories(entryPath, skillName);
     skillDirs.push(...nestedSkills);
   }
   
@@ -418,7 +457,36 @@ export async function listSkills(options: SkillResolveOptions = {}): Promise<Ski
 }
 
 export async function loadSkillDocuments(skillName: string, options: SkillResolveOptions = {}): Promise<{ info: SkillInfo; documents: SkillDocument[] }> {
-  const info = await getSkillInfo(skillName, options);
+  validateSkillName(skillName);
+
+  const searchRoots = await getSkillSearchRoots(options.agentName || 'main');
+  let lastError: Error | undefined;
+
+  let info: SkillInfo | undefined;
+  for (const root of searchRoots) {
+    const dir = getSkillDirFromRoot(root.baseDir, skillName);
+    if (!await fs.pathExists(dir)) {
+      continue;
+    }
+
+    try {
+      info = await getSkillInfoFromRoot(skillName, root, { includeResources: true });
+      break;
+    } catch (e: any) {
+      lastError = e;
+      logger.warn({ err: e, skillName, sourceType: root.sourceType, sourceAgentName: root.agentName }, 'Skipping invalid skill during document loading');
+    }
+  }
+
+  if (!info) {
+    if (lastError) {
+      throw lastError;
+    }
+    throw new Error(
+      `Skill "${skillName}" not found. Searched agent-local, inherited-agent, and global skill directories${options.agentName ? ` for agent "${options.agentName}"` : ''}.`
+    );
+  }
+
   const documents: SkillDocument[] = [];
 
   for (const file of info.documentFiles) {

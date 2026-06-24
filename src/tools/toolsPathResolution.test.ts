@@ -432,3 +432,32 @@ test('isolated read remains restricted to the current agent directory on master'
     await fs.remove(outsidePath);
   }
 });
+
+test('isolated sessions may load visible skills for their own agent only', async () => {
+  const agentName = `isolated_skill_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const otherAgentName = `${agentName}_other`;
+  const sessionId = `${agentName}/session`;
+
+  try {
+    await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'sandbox-docker' } as any);
+    const session = await sessionManager.getSession(sessionId);
+    session.agent = agentName;
+
+    await assert.doesNotReject(() => checkToolPermission('list_skills', sessionId, 'master', {}));
+    await assert.doesNotReject(() => checkToolPermission('load_skill', sessionId, 'master', { skillName: 'code-index' }));
+
+    const ownListResult = await callTool('list_skills', {}, { sessionId, session });
+    assert.match(String(ownListResult), /Found \d+ skill/);
+
+    await assert.rejects(
+      () => callTool('list_skills', { agentName: otherAgentName }, { sessionId, session }),
+      /Isolated session cannot list skills for agent/,
+    );
+    await assert.rejects(
+      () => callTool('load_skill', { skillName: 'code-index', agentName: otherAgentName }, { sessionId, session }),
+      /Isolated session cannot load skills for agent/,
+    );
+  } finally {
+    await sessionManager.setAgentMetadata(agentName, { isolated: false } as any);
+  }
+});
