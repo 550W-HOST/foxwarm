@@ -12,6 +12,7 @@ Typical cases:
 - understanding what an agent is vs what a session is
 - creating a new agent cleanly
 - deciding where to put long-term instructions or project memory
+- bootstrapping collaboration rules and starter memory for agents that use child sessions
 - editing an agent's memory and knowing when snapshots must be refreshed
 - binding or unbinding an agent to an isolated node
 - moving work from one agent/session layout to another
@@ -69,26 +70,31 @@ Important details from current implementation:
 - the skills catalog injected into the snapshot is only a **catalog/summary**
 - full skill documents are loaded on demand with `load_skill`
 - session snapshots are cached per session, so editing memory on disk does not always change an already-open session immediately
-- the prompt snapshot also includes directory hints such as the current agent's `agent_memory` and `agent_folder` paths
+- the prompt snapshot also includes runtime hints such as the current agent folder and context-recall guidance
 
-## Special file: `agents/main/memory/00_SYSTEM.md`
+## Special file: `agents/00_SYSTEM.md`
 
 This file is special.
 
 Current prompt assembly injects:
 
-- `agents/main/memory/00_SYSTEM.md`
+- `agents/00_SYSTEM.md`
 
 as a framework-level system block for **all agents**.
+
+Older installations may still rely on the legacy fallback path:
+
+- `agents/main/memory/00_SYSTEM.md`
 
 Also important:
 
 - default agent memory loading explicitly skips `00_SYSTEM.md` in per-agent memory directories
-- that means ordinary agents should **not** create their own per-agent `00_SYSTEM.md` expecting it to behave like the main global one
+- that means ordinary agents should **not** create their own per-agent `00_SYSTEM.md` expecting it to behave like the global one
 
 So the guidance is:
 
-- treat `agents/main/memory/00_SYSTEM.md` as the framework/global system layer
+- treat `agents/00_SYSTEM.md` as the framework/global system layer
+- treat `agents/main/memory/00_SYSTEM.md` as a legacy compatibility fallback, not the preferred location for new installs
 - for agent-specific instructions, use normal memory files such as:
   - `MEMORY.md`
   - `SOUL.md`
@@ -107,6 +113,23 @@ That means:
 
 - renaming or moving a **session** is comparatively lightweight
 - changing an **agent** is heavier because agent identity is tied to workspace paths, memory location, metadata, and all sessions under it
+
+## Collaboration and memory bootstrapping
+
+If you are creating or configuring an agent that may use child sessions, do not improvise its collaboration rules from scratch.
+
+Read the reference docs next to this skill first:
+
+- `references/COLLABORATION-PATTERNS.md` — organizer/executor defaults, role detection, fork/non-fork/reuse guidance, handoff checklists, tunable preferences, and memory hygiene.
+- `references/memory-templates/` — copyable starter memory files for shared base agents and specialized agents.
+
+These reference files are intentionally not part of the normal `load_skill` payload. Keep this `SKILL.md` as the short entry point; read references explicitly when configuring agent memory.
+
+Recommended default: use an **Organizer / Executor** pattern inside each agent. The main/direct session coordinates scope, ownership, parallelism, and user-facing decisions; child sessions execute bounded tasks and report back through the required reply path.
+
+For multi-agent setups, put generic Organizer / Executor rules in a shared/base agent and let specialized agents inherit them. Each specialized agent should keep only domain-specific durable memory in its own memory files.
+
+Keep agent memory small. Long session history is already preserved by layered context, compaction summaries, archives, and `recall`; do not copy routine progress logs into `MEMORY.md`. As a rule of thumb, if an agent's `MEMORY.md` grows past about **500 lines**, it is probably carrying too much. Move reusable processes into skills, move knowledge/artifact notes into `agent-dir/docs/`, and keep only short pointers plus always-needed rules in memory.
 
 ## What isolated agents are for
 
