@@ -229,35 +229,45 @@ export async function applyPatchOperations(input: string, resolveOperationPath: 
     const operations = parseApplyPatchInput(input);
     const summaries: string[] = [];
 
-    for (const operation of operations) {
+    for (let idx = 0; idx < operations.length; idx++) {
+        const operation = operations[idx];
         const { fullPath, displayPath } = resolveOperationPath(operation.filePath);
 
-        if (operation.action === 'update') {
+        try {
+            if (operation.action === 'update') {
+                if (!await fs.pathExists(fullPath)) {
+                    throw new Error(`Cannot update missing file: ${displayPath}`);
+                }
+                const content = await fs.readFile(fullPath, 'utf8');
+                const updatedContent = applyUpdatePatch(content, operation.lines, displayPath);
+                await fs.writeFile(fullPath, updatedContent);
+                summaries.push(`Updated ${displayPath}`);
+                continue;
+            }
+
+            if (operation.action === 'add') {
+                if (await fs.pathExists(fullPath)) {
+                    throw new Error(`Cannot add file that already exists: ${displayPath}`);
+                }
+                await fs.ensureDir(path.dirname(fullPath));
+                await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
+                summaries.push(`Added ${displayPath}`);
+                continue;
+            }
+
             if (!await fs.pathExists(fullPath)) {
-                throw new Error(`Cannot update missing file: ${displayPath}`);
+                throw new Error(`Cannot delete missing file: ${displayPath}`);
             }
-            const content = await fs.readFile(fullPath, 'utf8');
-            const updatedContent = applyUpdatePatch(content, operation.lines, displayPath);
-            await fs.writeFile(fullPath, updatedContent);
-            summaries.push(`Updated ${displayPath}`);
-            continue;
+            await fs.remove(fullPath);
+            summaries.push(`Deleted ${displayPath}`);
+        } catch (err) {
+            const succeeded = summaries.length > 0
+                ? `\nOperations already applied (these changes are already on disk):\n${summaries.map(line => `- ${line}`).join('\n')}\n`
+                : '';
+            const remaining = operations.length - idx - 1;
+            const remainingHint = remaining > 0 ? `\n${remaining} remaining operation(s) were not applied.` : '';
+            throw new Error(`${(err as Error).message}${succeeded}${remainingHint}`);
         }
-
-        if (operation.action === 'add') {
-            if (await fs.pathExists(fullPath)) {
-                throw new Error(`Cannot add file that already exists: ${displayPath}`);
-            }
-            await fs.ensureDir(path.dirname(fullPath));
-            await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
-            summaries.push(`Added ${displayPath}`);
-            continue;
-        }
-
-        if (!await fs.pathExists(fullPath)) {
-            throw new Error(`Cannot delete missing file: ${displayPath}`);
-        }
-        await fs.remove(fullPath);
-        summaries.push(`Deleted ${displayPath}`);
     }
 
     return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;

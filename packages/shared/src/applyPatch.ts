@@ -17,6 +17,20 @@ interface ParserState {
 
 const END_PATCH = '*** End Patch';
 const END_FILE = '*** End of File';
+
+const FORMAT_HINT = `Expected apply_patch format:
+*** Begin Patch
+*** Update File: <path>
+@@ optional anchor
+ context line (prefix with space)
+-line to delete
++line to insert
+*** Add File: <path>
++new file content line
+*** Delete File: <path>
+*** End Patch
+For Update File: context lines start with space, deletions with '-', insertions with '+'. Use '@@' to start a new section. See the apply_patch tool description for full details.`;
+
 const FILE_HEADER_PREFIXES = [
   '*** Update File: ',
   '*** Add File: ',
@@ -54,10 +68,10 @@ export function extractPatchEnvelope(input: string): string {
   }
 
   if (!trimmed) {
-    throw new Error('Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope.');
+    throw new Error(`Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope.\n${FORMAT_HINT}`);
   }
 
-  throw new Error('Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope, or bare patch must start with *** Update File: / *** Add File: / *** Delete File:.');
+  throw new Error(`Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope, or bare patch must start with *** Update File: / *** Add File: / *** Delete File:.\n${FORMAT_HINT}`);
 }
 
 export function parseApplyPatchInput(input: string): ApplyPatchOperation[] {
@@ -79,7 +93,7 @@ export function parseApplyPatchInput(input: string): ApplyPatchOperation[] {
     const line = body[i];
     const match = /^\*\*\* (Update|Add|Delete) File: (.+)$/.exec(line);
     if (!match) {
-      throw new Error(`Invalid apply_patch input: expected file action header, got: ${line}`);
+      throw new Error(`Invalid apply_patch input: expected file action header (*** Update File: / *** Add File: / *** Delete File:), got: ${line}\n${FORMAT_HINT}`);
     }
 
     const action = match[1].toLowerCase() as 'update' | 'add' | 'delete';
@@ -207,7 +221,7 @@ function readSection(lines: string[], startIndex: number, filePath: string): {
     }
     if (raw === '***') break;
     if (raw.startsWith('***')) {
-      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${raw}`);
+      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${raw}\n${FORMAT_HINT}`);
     }
 
     index += 1;
@@ -222,7 +236,7 @@ function readSection(lines: string[], startIndex: number, filePath: string): {
     } else if (line[0] === ' ') {
       mode = 'keep';
     } else {
-      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${line}`);
+      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${line}. Each line must start with ' ' (context), '-' (delete), or '+' (insert).\n${FORMAT_HINT}`);
     }
 
     line = line.slice(1);

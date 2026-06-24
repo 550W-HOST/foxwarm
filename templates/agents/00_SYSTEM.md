@@ -37,6 +37,21 @@ You are running in Foxwarm, a custom agent framework.
 - Prompt snapshots are composed from inherited agent memory -> agent memory -> visible skills catalog (including agent-local, inherited, and global skills; full skill docs load on demand via `load_skill`)
 - Reuse knowledge with agents / `agent.inherit`; create a new **session** when you need a new thread without duplicating the agent
 
+--- APPLY_PATCH FORMAT ---
+The `apply_patch` tool edits files using a patch envelope. Each line in an Update File body must start with ` ` (space=context, must match existing content), `-` (delete), or `+` (insert). Use `@@` to separate sections. Example:
+```
+*** Begin Patch
+*** Update File: src/app.ts
+@@
+ old line to keep
+-line to remove
++new line to add
+*** Add File: src/new.ts
++file content here
+*** End Patch
+```
+`*** Delete File: <path>` (no body) deletes a file. Delete + Add same path = rewrite. For full rules and worked examples (context disambiguation, multi-section, `*** End of File`), load the `apply-patch-guide` skill.
+
 --- DIRECTORIES ---
 ```
 agents/{agent-name}/ ← current agent folder (actual paths are injected dynamically at runtime)

@@ -50,7 +50,33 @@ export const definitions = [
         {
             name: 'apply_patch',
             defaultInject: true,
-            description: 'This is a custom utility that makes it more convenient to add, remove, or edit code files. Paths in patch file headers resolve like other file tools: relative paths resolve from the current session cwd when set, otherwise from the current agent folder; absolute paths and ~/... are also accepted when allowed. Pass the patch command text as `input`. The expected format uses an apply_patch envelope with `*** Begin Patch` / `*** End Patch`, and file actions such as `*** Update File: path`, `*** Add File: path`, or `*** Delete File: path`. Update File bodies use a line-based patch format: optional `@@` / `@@ anchor` section markers, context lines prefixed with a single space, `-` deletions, `+` insertions, and optional `*** End of File`.',
+            description: `This is a custom utility that makes it more convenient to add, remove, or edit code files. Paths in patch file headers resolve like other file tools: relative paths resolve from the current session cwd when set, otherwise from the current agent folder; absolute paths and ~/... are also accepted when allowed. Pass the patch command text as \`input\`.
+
+The patch must be enclosed in \`*** Begin Patch\` / \`*** End Patch\`. Each file operation starts with a header line:
+- \`*** Update File: <path>\` — modify an existing file
+- \`*** Add File: <path>\` — create a new file (all body lines must start with \`+\`)
+- \`*** Delete File: <path>\` — delete a file (no body lines)
+
+For Update File, the body uses line-based diff syntax:
+- Lines starting with a single space \` \` are context (must match the existing file content)
+- Lines starting with \`-\` are deletions (must match existing content)
+- Lines starting with \`+\` are insertions (new content)
+- \`@@\` or \`@@ <anchor text>\` starts a new section (anchor text helps locate the position in the file)
+- \`*** End of File\` marks that the following context is at the end of the file
+
+Example:
+\`\`\`
+*** Begin Patch
+*** Update File: src/app.ts
+@@ function main()
+ import { foo } from './foo';
+-const old = 'removed';
++const newVar = 'added';
+ console.log(newVar);
+*** Add File: src/newfile.ts
++export const hello = 'world';
+*** End Patch
+\`\`\``,
             parameters: {
                 type: 'object',
                 properties: {
