@@ -289,6 +289,8 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
   reply += '- `/node` or `/node list` — list nodes and pending approvals\n'
   reply += '- `/node approve <pending-id> [node-id]` — approve a pending node\n'
   reply += '- `/node reject <pending-id>` — reject a pending node\n'
+  reply += '- `/node remove <node-id>` — remove an approved node and invalidate its credentials\n'
+  reply += '- `/node move <old-id> <new-id>` — rename an approved node id (node-side credentials must be updated)\n'
   reply += '- `/node pair-help` — show pairing/bootstrap help\n'
   reply += '- `/node <node-id>` — switch current node\n'
 

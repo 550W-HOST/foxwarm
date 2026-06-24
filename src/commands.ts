@@ -1,7 +1,7 @@
 import { getChannelId, getConversationId } from './channel';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
-import { approvePendingPairing, rejectPendingPairing } from './nodes/registry';
+import { approvePendingPairing, isReservedNodeId, moveApprovedNode, rejectPendingPairing, removeApprovedNode } from './nodes/registry';
 import * as sessionManager from './sessionManager';
 import * as skills from './skills';
 import * as tools from './tools';
@@ -236,7 +236,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/node': {
-    description: 'List nodes/pending approvals, approve/reject pairings, show pair-help, or switch node with `/node <node-id>`.',
+    description: 'Manage nodes: list, approve/reject pairings, remove/move approved nodes, pair-help, or switch with `/node <node-id>`.',
     requiresSession: true,
     autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
@@ -271,6 +271,43 @@ export const COMMANDS: Record<string, CommandDef> = {
           await rejectPendingPairing(pendingId)
           ctx.reply(`✅ Rejected pending pairing \`${pendingId}\``)
         } catch (e: any) { ctx.reply(`❌ Failed to reject pairing: ${e.message}`) }
+        return
+      }
+      if (args[0] === 'remove') {
+        const nodeId = args[1]
+        if (!nodeId) { ctx.reply('Usage: `/node remove <node-id>`'); return }
+        try {
+          const removed = await removeApprovedNode(nodeId)
+          const disconnected = nodesManager.disconnectNode(removed.nodeId, 'Node credentials removed by /node remove')
+          ctx.reply([
+            `✅ Removed approved node \`${removed.nodeId}\`.`,
+            `Runtime connection: \`${disconnected ? 'closed' : 'not online'}\`.`,
+            'The old node credentials are no longer valid; the node must be paired again before it can reconnect.',
+          ].join('\n'))
+        } catch (e: any) { ctx.reply(`❌ Failed to remove node: ${e.message}`) }
+        return
+      }
+      if (args[0] === 'move') {
+        const oldNodeId = args[1]
+        const newNodeId = args[2]
+        if (!oldNodeId || !newNodeId) { ctx.reply('Usage: `/node move <old-id> <new-id>`'); return }
+        try {
+          const onlineConflict = nodesManager.getNode(newNodeId)
+          if (isReservedNodeId(newNodeId)) {
+            throw new Error(`Node id \`${newNodeId}\` is reserved`)
+          }
+          if (onlineConflict && newNodeId !== oldNodeId) {
+            throw new Error(`Node id \`${newNodeId}\` is currently online/registered`)
+          }
+          const moved = await moveApprovedNode(oldNodeId, newNodeId)
+          const disconnected = nodesManager.disconnectNode(moved.oldNodeId, 'Node id moved by /node move; reconnect with the new node id')
+          ctx.reply([
+            `✅ Moved approved node \`${moved.oldNodeId}\` → \`${moved.newNodeId}\`.`,
+            'Auth token hash and metadata were preserved server-side.',
+            `Runtime connection: \`${disconnected ? 'old connection closed' : 'old node not online'}\`.`,
+            `Node-side credentials still store the old node id. Update the node credentials file to use nodeId \`${moved.newNodeId}\` with the existing authToken, then restart the node so it reconnects with the new id.`,
+          ].join('\n'))
+        } catch (e: any) { ctx.reply(`❌ Failed to move node: ${e.message}`) }
         return
       }
       // Switch node
