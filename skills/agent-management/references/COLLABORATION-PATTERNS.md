@@ -262,6 +262,15 @@ Agent memory is not a progress log.
 
 Long session history is already preserved by layered context, compaction summaries, archives, and `recall`. Therefore, memory should contain only information that should affect future behavior by default.
 
+Use progressive disclosure when deciding where knowledge belongs:
+
+- **Memory**: always-needed stable behavior, repeated preferences, durable environment facts, confirmed decisions, and short pointers.
+- **Agent docs**: detailed analysis, runbooks, historical notes, long design writeups, and artifacts that should be available but not injected by default.
+- **Skills**: reusable procedures/capabilities whose catalog entry is enough until the task needs full instructions.
+- **Skill resources**: detailed references, scripts, assets, examples, and evals that are read only after a loaded `SKILL.md` points to them or the task needs them.
+
+If a directory contains `SKILL.md`, treat it as a skill boundary. Nested files and subdirectories are resources of that skill, not more default memory.
+
 Keep in memory:
 
 - stable role and workflow rules;

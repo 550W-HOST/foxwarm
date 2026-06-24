@@ -57,6 +57,7 @@
 
 - Keep memory compact and durable.
 - Store stable rules, repeated preferences, durable environment facts, confirmed decisions, and pointers to important docs.
+- Use progressive disclosure: memory for always-needed rules/facts; skills for reusable procedures; skill resources for detailed references/scripts/assets/examples; `docs/` for detailed notes, runbooks, and artifacts.
 - Do not store secrets, credentials, one-off progress, completed-task logs, large pasted reports, or private personal information in shared/inherited memory.
 - Long session history is preserved by layered context, compaction summaries, archives, and recall.
 - If `MEMORY.md` grows past about 500 lines, split it: reusable process goes to skills; knowledge and history go to `agent-dir/docs/`; memory keeps only short pointers and always-needed rules.

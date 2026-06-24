@@ -69,8 +69,28 @@ Important details from current implementation:
 
 - the skills catalog injected into the snapshot is only a **catalog/summary**
 - full skill documents are loaded on demand with `load_skill`
+- `load_skill` returns the skill entry and may list supporting resource paths; those resources are not read until needed
 - session snapshots are cached per session, so editing memory on disk does not always change an already-open session immediately
 - the prompt snapshot also includes runtime hints such as the current agent folder and context-recall guidance
+
+## Progressive disclosure: where knowledge belongs
+
+Use progressive disclosure so future sessions see the right amount of knowledge at the right time:
+
+1. **Framework/system prompt** — universal rules every agent must know. Keep tiny and generic.
+2. **Agent memory** — always-needed stable behavior, repeated user preferences, durable environment facts, confirmed decisions, and short pointers. This is injected into prompt snapshots.
+3. **Agent docs** — detailed analysis, runbooks, historical notes, design writeups, and artifacts. These are available on disk but not injected by default.
+4. **Skills** — reusable workflows or capability packages. Only name + description are shown in the catalog until `load_skill` is called.
+5. **Skill resources** — references, scripts, assets, examples, evals, or other supporting files listed or linked by the skill entry. Read these only when needed.
+
+When deciding where to put information, ask:
+
+- Should every session under this agent behave differently because of this fact? Put a short durable version in memory.
+- Is it reusable across tasks or agents as a procedure/capability? Make or update a skill.
+- Is it detailed evidence, historical context, a long runbook, or an artifact? Put it in docs and link from memory or a skill.
+- Is it a helper file for one skill? Put it under that skill as a resource and link or list it from `SKILL.md`.
+
+If a directory contains `SKILL.md`, treat it as a skill boundary. Files and subdirectories inside it are supporting resources for that skill; do not expect nested `SKILL.md` files inside references, examples, scripts, docs, or assets to appear as separate catalog entries.
 
 ## Special file: `agents/00_SYSTEM.md`
 

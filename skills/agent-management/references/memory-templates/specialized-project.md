@@ -46,6 +46,7 @@ Read these on demand:
 ## Keep/drop policy
 
 - Keep this memory focused on currently actionable rules, durable facts, and doc pointers.
+- Use progressive disclosure: put always-needed facts here, reusable procedures in skills, detailed skill support files as skill resources, and long project notes/artifacts in `docs/`.
 - Do not store completed-task logs or routine progress here.
 - Move reusable procedures into skills.
 - Move detailed project history, design notes, and artifacts into `docs/` and keep a short pointer here.

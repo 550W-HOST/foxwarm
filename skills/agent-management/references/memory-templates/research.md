@@ -45,5 +45,6 @@ Read these on demand:
 ## Keep/drop policy
 
 - Keep durable goals, boundaries, strategic conclusions, current environment facts, and doc pointers.
+- Use progressive disclosure: memory for durable research direction, skills for reusable research/evaluation procedures, skill resources for detailed templates/scripts/examples, and `docs/` for experiment notes/artifacts.
 - Do not keep raw logs, temporary numbers, completed experiment chronology, secrets, or private external credentials.
 - If this file grows past about 500 lines, archive old detail into docs and keep a short current-state summary here.
