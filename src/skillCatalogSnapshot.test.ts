@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { COMMANDS } from './commands';
 import * as llm from './llm';
+import * as skillCore from './skills';
 import * as tools from './tools';
 import { tool_load_skill } from './toolsSessionAgent';
 import { getAgentDir } from './config';
@@ -17,12 +18,27 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
   const agentDir = getAgentDir(agentName);
   const skillName = 'visible-skill';
   const skillDir = path.join(agentDir, 'skills', skillName);
+  const memoryOnlySkillName = 'legacy-memory-only-skill';
+  const memoryOnlySkillDir = path.join(agentDir, 'skills', memoryOnlySkillName);
+  const jsonOnlySkillName = 'json-only-skill';
+  const jsonOnlySkillDir = path.join(agentDir, 'skills', jsonOnlySkillName);
+  const nestedResourceSkillName = `${skillName}/references/example-child`;
   const uniqueBody = 'UNIQUE FULL SKILL DOC CONTENT';
+  const legacyMemoryBody = 'LEGACY MEMORY DETAIL SHOULD NOT LOAD';
+  const memoryOnlyBody = 'LEGACY MEMORY SKILL SHOULD NOT BE DISCOVERED';
+  const nestedResourceBody = 'NESTED RESOURCE SKILL SHOULD BE A RESOURCE ONLY';
   const replies: string[] = [];
 
   await fs.ensureDir(path.join(skillDir, 'memory'));
   await fs.writeFile(path.join(skillDir, 'SKILL.md'), `---\nname: ${skillName}\ndescription: Analyze visible-skill tasks\n---\n# ${skillName}\n\n${uniqueBody}\n`, 'utf8');
-  await fs.writeFile(path.join(skillDir, 'memory', 'DETAILS.md'), 'Extra details', 'utf8');
+  await fs.writeFile(path.join(skillDir, 'memory', 'DETAILS.md'), legacyMemoryBody, 'utf8');
+  await fs.ensureDir(path.join(skillDir, 'references', 'example-child'));
+  await fs.writeFile(path.join(skillDir, 'references', 'example-child', 'SKILL.md'), `---\nname: example-child\ndescription: Should be listed as a resource only\n---\n# example-child\n\n${nestedResourceBody}\n`, 'utf8');
+  await fs.writeFile(path.join(skillDir, 'references', 'METHOD.md'), 'Resource method details', 'utf8');
+  await fs.ensureDir(path.join(memoryOnlySkillDir, 'memory'));
+  await fs.writeFile(path.join(memoryOnlySkillDir, 'memory', 'SKILL.md'), `---\nname: ${memoryOnlySkillName}\ndescription: Should not be visible\n---\n# ${memoryOnlySkillName}\n\n${memoryOnlyBody}\n`, 'utf8');
+  await fs.ensureDir(jsonOnlySkillDir);
+  await fs.writeJson(path.join(jsonOnlySkillDir, 'skill.json'), { name: jsonOnlySkillName, description: 'Should not be visible' });
 
   try {
     const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, systemPromptFiles: [] });
@@ -33,7 +49,38 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
 
     const loadedSkill = await tool_load_skill({ skillName, agentName }, {});
     assert.match(String(loadedSkill), new RegExp(uniqueBody));
+    assert.doesNotMatch(String(loadedSkill), new RegExp(legacyMemoryBody));
+    assert.doesNotMatch(String(loadedSkill), new RegExp(nestedResourceBody));
+    assert.match(String(loadedSkill), /Skill directory:/);
+    assert.match(String(loadedSkill), /Skill resources/);
+    assert.match(String(loadedSkill), /references\/METHOD\.md/);
+    assert.match(String(loadedSkill), /references\/example-child\/SKILL\.md/);
     assert.match(String(loadedSkill), /FILE:/);
+
+    const loadedDocuments = await skillCore.loadSkillDocuments(skillName, { agentName });
+    assert.deepEqual(loadedDocuments.info.documentFiles, ['SKILL.md']);
+    assert.deepEqual(loadedDocuments.documents.map(doc => path.relative(loadedDocuments.info.dir, doc.filePath)), ['SKILL.md']);
+    assert.ok(loadedDocuments.info.resourceFiles.includes('references/METHOD.md'));
+    assert.ok(loadedDocuments.info.resourceFiles.includes('references/example-child/SKILL.md'));
+    assert.ok(!loadedDocuments.info.resourceFiles.includes('memory/DETAILS.md'));
+
+    const skillNames = (await skillCore.listSkills({ agentName })).map(skill => skill.name);
+    assert.ok(skillNames.includes(skillName));
+    assert.ok(!skillNames.includes(memoryOnlySkillName));
+    assert.ok(!skillNames.includes(jsonOnlySkillName));
+    assert.ok(!skillNames.includes(nestedResourceSkillName));
+    await assert.rejects(
+      () => skillCore.loadSkillDocuments(memoryOnlySkillName, { agentName }),
+      /not found|Expected/i,
+    );
+    await assert.rejects(
+      () => skillCore.loadSkillDocuments(jsonOnlySkillName, { agentName }),
+      /not found|Expected/i,
+    );
+    await assert.rejects(
+      () => skillCore.loadSkillDocuments(nestedResourceSkillName, { agentName }),
+      /bundled resource|not independently loadable/i,
+    );
 
     assert.equal(tools.definitions.some(def => def.name === 'attach_agent_skill'), false);
     assert.equal(tools.definitions.some(def => def.name === 'detach_agent_skill'), false);

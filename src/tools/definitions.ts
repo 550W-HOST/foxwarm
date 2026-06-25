@@ -348,7 +348,7 @@ Example:
         {
             name: 'load_skill',
             defaultInject: true,
-            description: 'Load skill documentation content using the current session agent skill resolution (or an optionally specified agent). This only returns skill documents and metadata; it does not dynamically add tools.',
+            description: 'Load a skill entry document and supporting resource list using the current session agent skill resolution (or an optionally specified agent). Supporting resources are listed but not eagerly read; this does not dynamically add tools.',
             parameters: {
                 type: 'object',
                 properties: {

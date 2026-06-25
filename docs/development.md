@@ -74,7 +74,7 @@ foxwarm/
 - `state/models.yaml`：模型列表与默认模型
 - `agents/00_SYSTEM.md`：框架级系统提示（fresh init 从 `templates/agents/00_SYSTEM.md` 创建）
 - `agents/<agent>/memory/`：agent 长期记忆
-- `skills/<skill>/memory/`：附加给 agent 的 skill 文档
+- `skills/<skill>/SKILL.md`：skill 入口文档；其它参考资料应由 `SKILL.md` 显式链接
 - `templates/main/memory/`：main agent memory 首次初始化模板
 
 ## 常见开发任务
@@ -109,13 +109,12 @@ foxwarm/
 skills/
   my-skill/
     SKILL.md
-    skill.json  # optional fallback metadata
-    memory/
-      README.md
+    references/  # optional, linked explicitly from SKILL.md
       METHOD.md
 ```
 
 skill 会自动出现在可见 skills catalog 中；需要完整说明时，使用 `/skill show <skill>` 或 `load_skill` 按需加载。
+如果某个目录已经包含 `SKILL.md`，它就是一个 skill 边界；目录内部的 `references/`、`scripts/`、`assets/`、示例等都作为该 skill 的资源，不再继续扫描成独立 skill。`load_skill` 会返回入口文档，并在 header 中列出这些资源路径，agent 可按需读取。
 
 ## 调试
 
