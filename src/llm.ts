@@ -121,6 +121,30 @@ function getPromptCacheKeyForSessionId(sessionId?: string): string {
     return generatePromptCacheKey();
 }
 
+/**
+ * Recursively replace `${VAR_NAME}` placeholders in strings within an object.
+ * Only string values are processed; non-string values are left as-is.
+ * Supported variables are defined in the `vars` map (key = variable name without `${}`).
+ */
+function expandTemplateVariables<T>(obj: T, vars: Record<string, string>): T {
+    if (typeof obj === 'string') {
+        return obj.replace(/\$\{(\w+)\}/g, (match, varName: string) => {
+            return Object.prototype.hasOwnProperty.call(vars, varName) ? vars[varName] : match;
+        }) as unknown as T;
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(item => expandTemplateVariables(item, vars)) as unknown as T;
+    }
+    if (obj !== null && typeof obj === 'object') {
+        const result: Record<string, any> = {};
+        for (const [key, value] of Object.entries(obj)) {
+            result[key] = expandTemplateVariables(value, vars);
+        }
+        return result as unknown as T;
+    }
+    return obj;
+}
+
 type RequestLlmOnceOptions = {
     contents: Message[];
     systemPrompt: string;
@@ -1477,7 +1501,10 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         };
     }
 
-    const extraFields = modelEntry.extraFields || {};
+    const templateVars: Record<string, string> = {
+        SESSION_CACHE_KEY: promptCacheKey,
+    };
+    const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
     Object.assign(data, extraFields);
     if (useOpenAIResponsesApi && extraFields.reasoning && typeof extraFields.reasoning === 'object') {
         const { reasoning: extraReasoning } = extraFields;
@@ -1559,7 +1586,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             let attemptRawStreamLog: ReturnType<typeof createRawStreamLogCapture> | null = null;
             try {
                 response = await axios.post(url, requestBody, {
-                    headers: { ...headers, ...compressionHeaders, ...(modelEntry.extraHeaders || {}) },
+                    headers: { ...headers, ...compressionHeaders, ...expandTemplateVariables(modelEntry.extraHeaders || {}, templateVars) },
                     timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
                     validateStatus: () => true,
                     signal: abortController.signal,
