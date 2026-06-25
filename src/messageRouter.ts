@@ -73,12 +73,29 @@ function formatRetryDelay(delayMs: number): string {
 function formatRetryStatus(event: llm.LlmRetryEvent, initial: boolean): string {
   const statusPrefix = event.status ? `${event.status}: ` : '';
   const reason = `${statusPrefix}${event.reason}`.trim();
-  const retryText = `Retry ${event.nextAttempt}/${event.maxRetries} in ${formatRetryDelay(event.delayMs)}...`;
+  const retryText = event.final
+    ? 'No more retries.'
+    : `Retry in ${formatRetryDelay(event.delayMs || 0)}...`;
+  const attemptText = reason
+    ? `Attempt ${event.attempt}/${event.maxRetries} failed: ${reason}. ${retryText}`
+    : `Attempt ${event.attempt}/${event.maxRetries} failed. ${retryText}`;
   if (initial) {
-    return `⚠️ [LLM retry] Attempt ${event.attempt}/${event.maxRetries} failed${reason ? `: ${reason}` : '.'} ${retryText}`;
+    return `⚠️ [LLM retry]\n${attemptText}`;
   }
 
-  return ` Attempt ${event.attempt}/${event.maxRetries} failed${reason ? `: ${reason}` : '.'} ${retryText}`;
+  return `\n${attemptText}`;
+}
+
+function formatRetryChannelSnippet(event: llm.LlmRetryEvent): string {
+  const statusPrefix = event.status ? `${event.status}: ` : '';
+  const reason = `${statusPrefix}${event.reason}`.trim();
+  const retryText = event.final
+    ? 'No more retries.'
+    : `Retry in ${formatRetryDelay(event.delayMs || 0)}...`;
+  const failureText = reason
+    ? `Attempt ${event.attempt}/${event.maxRetries} failed: ${reason}.`
+    : `Attempt ${event.attempt}/${event.maxRetries} failed.`;
+  return `⚠️ [LLM retry]\n${failureText}\n${retryText}`;
 }
 
 function mergeExcludePlatforms(options: any, platforms: string[]): any {
@@ -240,7 +257,9 @@ export class MessageRouter {
             nextAttempt: event.nextAttempt,
             maxRetries: event.maxRetries,
             delayMs: event.delayMs,
+            final: event.final,
             kind: event.kind,
+            reason: event.reason,
             status: event.status,
           },
         });
@@ -260,7 +279,9 @@ export class MessageRouter {
             nextAttempt: event.nextAttempt,
             maxRetries: event.maxRetries,
             delayMs: event.delayMs,
+            final: event.final,
             kind: event.kind,
+            reason: event.reason,
             status: event.status,
           },
         };
@@ -269,7 +290,7 @@ export class MessageRouter {
       }
 
       if (broadcast) {
-        broadcast(chunk, mergeExcludePlatforms({ parse_mode: 'Markdown' }, ['webui']));
+        broadcast(formatRetryChannelSnippet(event), mergeExcludePlatforms({ parse_mode: 'Markdown' }, ['webui']));
       }
     };
   }
@@ -592,6 +613,9 @@ export class MessageRouter {
     if (lastMessage.role !== 'model' || lastMessage.parts.some(p => p.functionCall)) {
       return;
     }
+    if (lastMessage.modelVisible === false) {
+      return;
+    }
 
     const terminalText = lastMessage.parts.find(p => typeof p.text === 'string')?.text || '';
     if (terminalText.startsWith('Error:')) {
@@ -631,7 +655,21 @@ export class MessageRouter {
   }
 
   private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any, turnOptions?: Record<string, any>): Promise<void> {
-    await this.sendSessionReply(session, sourceCtx, `Error: ${error?.message || 'Unknown error'}`, this.mergeTurnOptions(turnOptions || {}, { turnFinal: true }));
+    const text = llm.isLlmRequestError(error)
+      ? `⚠️ LLM request failed: ${error?.message || 'Unknown error'}`
+      : `Error: ${error?.message || 'Unknown error'}`;
+    await this.sendSessionReply(session, sourceCtx, text, this.mergeTurnOptions(turnOptions || {}, { turnFinal: true }));
+  }
+
+  private sendEmptyTurnFinal(broadcast: Session['broadcast'] | undefined, turnOptions: Record<string, any>): void {
+    if (!turnOptions.weworkStreamId || !broadcast) {
+      return;
+    }
+    broadcast('', {
+      turnFinal: true,
+      allowEmptyBroadcast: true,
+      ...(this.getTurnTargetChannel(turnOptions) ? { targetChannel: this.getTurnTargetChannel(turnOptions) } : {}),
+    });
   }
 
   private async maybeCreateGuestSessionForUnauthorizedMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session } | null> {
@@ -976,15 +1014,8 @@ export class MessageRouter {
 
       await this.maybeQueueChildReminder(session);
       const finalSent = await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted, turnChannelOptions);
-      if (!finalSent && turnChannelOptions.weworkStreamId && broadcast) {
-        broadcast('', {
-          turnFinal: true,
-          allowEmptyBroadcast: true,
-          targetChannel: {
-            channelId: turnChannelOptions.weworkStreamChannelId,
-            conversationId: turnChannelOptions.weworkStreamConversationId,
-          },
-        });
+      if (!finalSent) {
+        this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
       }
       await this.maybeAppendGoalEndTurnReminder(session);
       if (!stoppedByUser) {
@@ -993,9 +1024,20 @@ export class MessageRouter {
     } catch (e: any) {
       logger.error(e, 'Error handling message');
       const errorText = `Error: ${e?.message || 'Unknown error'}`;
-      await this.appendTerminalModelMessage(session, errorText);
-      await this.maybeQueueChildReminder(session);
-      await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions);
+      if (!llm.isLlmRequestError(e)) {
+        await this.appendTerminalModelMessage(session, errorText);
+      }
+      if (llm.isLlmRequestError(e)) {
+        await this.maybeQueueChildReminder(session);
+        if (session.broadcast) {
+          this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
+        } else {
+          await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions);
+        }
+      } else {
+        await this.maybeQueueChildReminder(session);
+        await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions);
+      }
       await this.maybeAppendGoalEndTurnReminder(session);
     } finally {
       if (!getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
 
-import { DEFAULT_LLM_MAX_RETRIES, chat, ensurePromptCacheKey, getLlmRetryDelayMs, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { LOGS_DIR } from './config';
 import { formatDate } from './logRotation';
 import type { Message, Session } from './types';
@@ -172,6 +172,7 @@ test('requestLlmOnce keeps failed raw stream attempts in moved error logs', asyn
   const beforeError = new Set<string>();
   let newRecentFiles: string[] = [];
   let newErrorFiles: string[] = [];
+  const retryEvents: any[] = [];
   await fs.mkdir(recentDir, { recursive: true });
   await fs.mkdir(errorDir, { recursive: true });
   for (const file of await fs.readdir(recentDir).catch((): string[] => [])) beforeRecent.add(file);
@@ -188,17 +189,24 @@ test('requestLlmOnce keeps failed raw stream attempts in moved error logs', asyn
   };
 
   try {
-    const result = await requestLlmOnce({
-      contents: [{ role: 'user', parts: [{ text: 'hello fail' }] }],
-      systemPrompt: '',
-      model: 'openai/gpt-5.2-codex',
-      toolDefinitions: [],
-      notifySessionEvents: false,
-      registerAbortController: false,
-      maxRetries: 1,
-    });
+    await assert.rejects(
+      () => requestLlmOnce({
+        contents: [{ role: 'user', parts: [{ text: 'hello fail' }] }],
+        systemPrompt: '',
+        model: 'openai/gpt-5.2-codex',
+        toolDefinitions: [],
+        notifySessionEvents: false,
+        registerAbortController: false,
+        maxRetries: 1,
+        onRetry: event => { retryEvents.push(event); },
+      }),
+      (error: unknown) => error instanceof LlmRequestError && /API request failed after 1 attempts/.test(error.message),
+    );
 
-    assert.match(result.text, /API request failed after 1 attempts/);
+    assert.equal(retryEvents.length, 1);
+    assert.equal(retryEvents[0].final, true);
+    assert.equal(retryEvents[0].attempt, 1);
+    assert.equal(retryEvents[0].kind, 'request-error');
     newRecentFiles = (await fs.readdir(recentDir).catch((): string[] => [])).filter(file => !beforeRecent.has(file));
     assert.equal(newRecentFiles.some(file => file.endsWith('_res.json')), false, 'failed response log should move out of recent');
     newErrorFiles = (await fs.readdir(errorDir)).filter(file => !beforeError.has(file));
@@ -264,6 +272,44 @@ test('requestLlmOnce retries 5 times by default with increasing retry delays', a
       getLlmRetryDelayMs(4),
     ]);
     assert.deepEqual(sleepDelays, retryEvents.map(event => event.delayMs));
+  } finally {
+    (axios as any).post = originalPost;
+    (global as any).setTimeout = originalSetTimeout;
+    (global as any).clearTimeout = originalClearTimeout;
+  }
+});
+
+test('chat propagates final request failure without appending fake Error model text', async () => {
+  const originalPost = axios.post;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const retryEvents: any[] = [];
+  const session = createOpenAITestSession('chat_final_failure_session');
+
+  (global as any).setTimeout = (callback: (...args: any[]) => void, _delay?: number) => {
+    queueMicrotask(callback);
+    return { __foxwarmImmediateTimer: true };
+  };
+  (global as any).clearTimeout = () => {};
+  (axios as any).post = async () => {
+    throw new Error('persistent provider outage');
+  };
+
+  try {
+    await assert.rejects(
+      () => chat([{ text: 'please try' }], session, 0, {
+        appendMessage: async (message: Message) => { session.history.push(message); },
+        notifySessionEvents: false,
+        registerAbortController: false,
+        onRetry: event => { retryEvents.push(event); },
+      }),
+      (error: unknown) => error instanceof LlmRequestError && /persistent provider outage/.test(error.message),
+    );
+
+    assert.equal(retryEvents.length, DEFAULT_LLM_MAX_RETRIES);
+    assert.equal(retryEvents[retryEvents.length - 1].final, true);
+    assert.deepEqual(session.history.map(message => message.role), ['user']);
+    assert.equal(session.history.some(message => message.role === 'model' && /^Error:/.test(message.parts[0]?.text || '')), false);
   } finally {
     (axios as any).post = originalPost;
     (global as any).setTimeout = originalSetTimeout;

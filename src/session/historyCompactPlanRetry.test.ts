@@ -205,3 +205,46 @@ test('compact planning stops after bounded plain-text/no-tool retries without re
     }
   }
 });
+
+test('compact planning LLM final failure aborts without rewriting session history or queuing a compact result', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_llm_final_failure'));
+  const saveCounter = { count: 0 };
+  const originalChat = llm.chat;
+  const originalHistory = structuredClone(session.history);
+  const originalFrontier = structuredClone(session.contextFrontier);
+  const originalNextBlockId = session.nextBlockId;
+  const originalPromptCacheKey = session.promptCacheKey;
+  let callCount = 0;
+
+  try {
+    (llm as any).chat = async (): Promise<ChatResult> => {
+      callCount += 1;
+      throw new llm.LlmRequestError('API request failed after 5 attempts');
+    };
+
+    await assert.rejects(
+      () => sessionHistory.processSessionCompactionRequest(
+        makeDepsForSession(session, saveCounter),
+        session.id,
+        { keepPercent: 0.5 },
+        'await',
+      ),
+      (error: unknown) => error instanceof llm.LlmRequestError && /API request failed after 5 attempts/.test(error.message),
+    );
+
+    assert.equal(callCount, 1);
+    assert.deepEqual(session.history, originalHistory);
+    assert.deepEqual(session.contextFrontier, originalFrontier);
+    assert.equal(session.nextBlockId, originalNextBlockId);
+    assert.equal(session.promptCacheKey, originalPromptCacheKey);
+    assert.equal(session.historyVersion, 0);
+    assert.equal(sessionHistory.hasPendingCompactWork(session.id), false);
+  } finally {
+    (llm as any).chat = originalChat;
+    if (!SAVE_GENERATED_SESSION_LOGS) {
+      await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.jsonl`)).catch(() => {});
+      await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.blocks.jsonl`)).catch(() => {});
+    }
+  }
+});

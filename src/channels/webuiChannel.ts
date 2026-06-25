@@ -698,13 +698,10 @@ export class WebUIChannel implements Channel {
               maxRetries: 1,
               timeoutMs: 30000,
             });
-            if (/^\s*Error:/i.test(result.text || '')) {
-              return res.status(400).json({ success: false, error: result.text });
-            }
             res.json({ success: true, text: result.text, usage: result.usage || null });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to test models setup');
-            res.status(400).json({ error: e.message });
+            res.status(400).json({ success: false, error: e.message });
           }
         },
       });

@@ -139,13 +139,47 @@ type RequestLlmOnceOptions = {
 
 export type LlmRetryEvent = {
     attempt: number;
-    nextAttempt: number;
     maxRetries: number;
-    delayMs: number;
-    kind: 'http-error' | 'request-error';
+    nextAttempt?: number;
+    delayMs?: number;
+    final?: boolean;
+    kind: 'http-error' | 'request-error' | 'response-error';
     reason: string;
     status?: string;
 };
+
+export type LlmRequestErrorDetails = {
+    modelId?: string;
+    attempt?: number;
+    maxRetries?: number;
+    kind?: LlmRetryEvent['kind'];
+    status?: string;
+    attempts?: unknown[];
+};
+
+export class LlmRequestError extends Error {
+    readonly modelId?: string;
+    readonly attempt?: number;
+    readonly maxRetries?: number;
+    readonly kind?: LlmRetryEvent['kind'];
+    readonly status?: string;
+    readonly attempts?: unknown[];
+
+    constructor(message: string, details: LlmRequestErrorDetails = {}) {
+        super(message);
+        this.name = 'LlmRequestError';
+        this.modelId = details.modelId;
+        this.attempt = details.attempt;
+        this.maxRetries = details.maxRetries;
+        this.kind = details.kind;
+        this.status = details.status;
+        this.attempts = details.attempts;
+    }
+}
+
+export function isLlmRequestError(error: unknown): error is LlmRequestError {
+    return error instanceof LlmRequestError || (typeof error === 'object' && error !== null && (error as any).name === 'LlmRequestError');
+}
 
 type ModelStreamProgressSnapshot = {
     reasoning?: string;
@@ -1470,23 +1504,25 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         }, 'Sanitized lone surrogate code units from provider request payload');
     }
 
+    const maxRetries = Math.max(1, options.maxRetries ?? DEFAULT_LLM_MAX_RETRIES);
     const logFiles = await logRequest(data, iteration);
     const responseAttempts: any[] = [];
     const buildChatResult = (result: Omit<ChatResult, 'modelId'>): ChatResult => ({
         ...result,
         modelId,
     });
-    const returnWithLoggedFailure = async (text: string): Promise<ChatResult> => {
+    const throwWithLoggedFailure = async (message: string, details: LlmRequestErrorDetails = {}): Promise<never> => {
         await moveInteractionLogsToErrorDir(logFiles);
-        return buildChatResult({
-            text,
-            allParts: [{ text }],
+        throw new LlmRequestError(message, {
+            modelId,
+            maxRetries,
+            attempts: responseAttempts,
+            ...details,
         });
     };
 
     let response: AxiosResponse;
     let resp: any;
-    const maxRetries = Math.max(1, options.maxRetries ?? DEFAULT_LLM_MAX_RETRIES);
     const abortController = new AbortController();
     const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
     const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
@@ -1516,6 +1552,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     };
 
     const { requestBody, requestHeaders: compressionHeaders } = maybeCompressLlmRequestBody(data, modelEntry);
+    let completedAttempt = 0;
 
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -1551,18 +1588,26 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                             headers: responseLog.headers,
                             body: errorBody
                         }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
-                        if (attempt === maxRetries) {
-                            return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts`);
-                        }
                         const delayMs = getLlmRetryDelayMs(attempt);
-                        await notifyRetry({
+                        const retryEvent: LlmRetryEvent = {
                             attempt,
-                            nextAttempt: attempt + 1,
                             maxRetries,
-                            delayMs,
                             kind: 'http-error',
                             status: responseLog.status,
                             reason: summarizeRetryReason(errorBody || responseLog.status),
+                        };
+                        if (attempt === maxRetries) {
+                            await notifyRetry({ ...retryEvent, final: true });
+                            return throwWithLoggedFailure(`API request failed after ${maxRetries} attempts`, {
+                                attempt,
+                                kind: retryEvent.kind,
+                                status: retryEvent.status,
+                            });
+                        }
+                        await notifyRetry({
+                            ...retryEvent,
+                            nextAttempt: attempt + 1,
+                            delayMs,
                         });
                         await sleepWithSignal(delayMs, abortController.signal);
                         continue;
@@ -1620,24 +1665,37 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                         headers: responseLog.headers,
                         body: resp
                     }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
-                    if (attempt === maxRetries) {
-                        return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts`);
-                    }
                     const delayMs = getLlmRetryDelayMs(attempt);
-                    await notifyRetry({
+                    const retryEvent: LlmRetryEvent = {
                         attempt,
-                        nextAttempt: attempt + 1,
                         maxRetries,
-                        delayMs,
                         kind: 'http-error',
                         status: responseLog.status,
                         reason: summarizeRetryReason(resp?.error?.message || resp?.error || responseLog.status),
+                    };
+                    if (attempt === maxRetries) {
+                        await notifyRetry({ ...retryEvent, final: true });
+                        return throwWithLoggedFailure(`API request failed after ${maxRetries} attempts`, {
+                            attempt,
+                            kind: retryEvent.kind,
+                            status: retryEvent.status,
+                        });
+                    }
+                    await notifyRetry({
+                        ...retryEvent,
+                        nextAttempt: attempt + 1,
+                        delayMs,
                     });
                     await sleepWithSignal(delayMs, abortController.signal);
                     continue;
                 }
+                completedAttempt = attempt;
                 break;
             } catch (e: any) {
+                if (isLlmRequestError(e)) {
+                    throw e;
+                }
+
                 if (isAbortError(e)) {
                     responseAttempts.push({
                         attempt,
@@ -1662,18 +1720,26 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 });
                 await logResponse({ attempts: responseAttempts }, logFiles);
                 logger.error({ status: (e as AxiosResponse)?.status }, `LLM API Network Error (Attempt ${attempt}/${maxRetries})`);
-                if (attempt === maxRetries) {
-                    return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts: ${e?.message || e}`);
-                }
                 const delayMs = getLlmRetryDelayMs(attempt);
-                await notifyRetry({
+                const retryEvent: LlmRetryEvent = {
                     attempt,
-                    nextAttempt: attempt + 1,
                     maxRetries,
-                    delayMs,
                     kind: 'request-error',
                     reason: summarizeRetryReason(e),
                     status: (e as AxiosResponse)?.status ? String((e as AxiosResponse).status) : undefined,
+                };
+                if (attempt === maxRetries) {
+                    await notifyRetry({ ...retryEvent, final: true });
+                    return throwWithLoggedFailure(`API request failed after ${maxRetries} attempts: ${e?.message || e}`, {
+                        attempt,
+                        kind: retryEvent.kind,
+                        status: retryEvent.status,
+                    });
+                }
+                await notifyRetry({
+                    ...retryEvent,
+                    nextAttempt: attempt + 1,
+                    delayMs,
                 });
                 await sleepWithSignal(delayMs, abortController.signal);
             }
@@ -1692,7 +1758,17 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         const outputItems = Array.isArray(resp.output) ? resp.output : [];
 
         if (outputItems.length === 0) {
-            return returnWithLoggedFailure('Error: No response from OpenAI Responses API');
+            await notifyRetry({
+                attempt: completedAttempt || maxRetries,
+                maxRetries,
+                final: true,
+                kind: 'response-error',
+                reason: 'No response from OpenAI Responses API',
+            });
+            return throwWithLoggedFailure('No response from OpenAI Responses API', {
+                attempt: completedAttempt || undefined,
+                kind: 'response-error',
+            });
         }
 
         for (const item of outputItems) {
@@ -1744,9 +1820,16 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     } else if (useOpenAIChatCompletionsApi) {
         const choice = resp.choices?.[0];
         if (!choice) {
-            return buildChatResult({
-                text: 'Error: No response from OpenAI API',
-                allParts: [{ text: 'Error: No response from OpenAI API' }],
+            await notifyRetry({
+                attempt: completedAttempt || maxRetries,
+                maxRetries,
+                final: true,
+                kind: 'response-error',
+                reason: 'No response from OpenAI API',
+            });
+            return throwWithLoggedFailure('No response from OpenAI API', {
+                attempt: completedAttempt || undefined,
+                kind: 'response-error',
             });
         }
 

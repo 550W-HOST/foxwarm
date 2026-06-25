@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MessageRouter, shouldBroadcastChannelText } from './messageRouter';
 import * as sessionManager from './sessionManager';
+import * as llm from './llm';
 import type { Message, Session } from './types';
 
 test('shouldBroadcastChannelText rejects empty or whitespace-only text', () => {
@@ -204,7 +205,7 @@ test('MessageRouter LLM retry notifier appends one display-only message then upd
       maxRetries: 5,
       delayMs: 2000,
       kind: 'request-error',
-      reason: 'socket hang up',
+      reason: `socket hang up ${'detail '.repeat(20)}`,
     });
     await notify({
       attempt: 2,
@@ -215,18 +216,95 @@ test('MessageRouter LLM retry notifier appends one display-only message then upd
       status: '500 Internal Server Error',
       reason: 'upstream bad gateway',
     });
+    await notify({
+      attempt: 5,
+      maxRetries: 5,
+      final: true,
+      kind: 'request-error',
+      reason: 'final upstream timeout',
+    });
 
     assert.equal(session.history.length, 1);
     assert.equal(session.history[0].modelVisible, false);
     assert.equal(session.history[0].__meta?.noticeType, 'llm-retry');
     assert.equal(session.history[0].__meta?.updateExisting, true);
-    assert.match(session.history[0].parts[0].text || '', /Retry 2\/5 in 2 seconds/);
-    assert.match(session.history[0].parts[0].text || '', /Retry 3\/5 in 5 seconds/);
-    assert.equal(broadcasts.length, 2);
+    assert.equal(session.history[0].__meta?.retry?.final, true);
+    const noticeText = session.history[0].parts[0].text || '';
+    assert.match(noticeText, /^⚠️ \[LLM retry\]\nAttempt 1\/5 failed:/);
+    assert.match(noticeText, /\nAttempt 2\/5 failed: 500 Internal Server Error: upstream bad gateway\. Retry in 5 seconds/);
+    assert.match(noticeText, /\nAttempt 5\/5 failed: final upstream timeout\. No more retries\./);
+    assert.equal(broadcasts.length, 3);
     assert.deepEqual(broadcasts[0].options.excludePlatforms, ['webui']);
-    assert.equal(historyUpdates.length, 2);
-    assert.equal(historyUpdates[0].__meta?.seq, historyUpdates[1].__meta?.seq);
+    assert.match(broadcasts[0].text, /^⚠️ \[LLM retry\]\nAttempt 1\/5 failed:/);
+    assert.match(broadcasts[0].text, /\nRetry in 2 seconds\.\.\./);
+    assert.match(broadcasts[2].text, /No more retries/);
+    assert.equal(historyUpdates.length, 3);
+    assert.equal(historyUpdates[0].__meta?.seq, historyUpdates[2].__meta?.seq);
   } finally {
+    (sessionManager as any).appendSessionMessage = originalAppend;
+    (sessionManager as any).saveSession = originalSave;
+    (sessionManager as any).notifyHistoryUpdate = originalNotify;
+  }
+});
+
+test('MessageRouter LLM final failure keeps retry notice display-only without appending Error model text', async () => {
+  const router = new MessageRouter() as any;
+  router.continueWithQueuedWork = async () => false;
+  const broadcasts: Array<{ text: string; options: any }> = [];
+  const session: Session = {
+    id: 'retry_final_failure_session',
+    history: [],
+    persistentMemorySnapshot: 'system prompt',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false,
+    queue: [],
+    meta: { lastMessageTime: Date.now() },
+    broadcast: (text: string, options?: any) => { broadcasts.push({ text, options }); },
+  } as Session;
+  const originalChat = llm.chat;
+  const originalAppend = sessionManager.appendSessionMessage;
+  const originalSave = sessionManager.saveSession;
+  const originalNotify = sessionManager.notifyHistoryUpdate;
+  let nextSeq = 1;
+
+  (sessionManager as any).appendSessionMessage = async (targetSession: Session, message: Message) => {
+    message.__meta = { ...(message.__meta || {}), timestamp: message.__meta?.timestamp || Date.now(), seq: nextSeq++ };
+    targetSession.history.push(message);
+  };
+  (sessionManager as any).saveSession = async () => {};
+  (sessionManager as any).notifyHistoryUpdate = () => {};
+  (llm as any).chat = async (parts: any, activeSession: Session, _iteration: number, options?: { onRetry?: (event: llm.LlmRetryEvent) => Promise<void> | void }) => {
+    if (parts) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
+    await Promise.resolve(options?.onRetry?.({
+      attempt: 5,
+      maxRetries: 5,
+      final: true,
+      kind: 'request-error',
+      reason: 'upstream exhausted',
+    }));
+    throw new llm.LlmRequestError('API request failed after 5 attempts');
+  };
+
+  try {
+    await router.runSessionTurn(session.id, {
+      parts: [{ text: 'trigger final failure' }],
+      session,
+      preclaimed: true,
+    });
+
+    assert.equal(session.history.length, 2);
+    assert.equal(session.history[0].role, 'user');
+    assert.equal(session.history[1].modelVisible, false);
+    assert.equal(session.history[1].__meta?.noticeType, 'llm-retry');
+    assert.equal(session.history[1].__meta?.retry?.final, true);
+    assert.match(session.history[1].parts[0].text || '', /Attempt 5\/5 failed: upstream exhausted\. No more retries\./);
+    assert.equal(session.history.some(message => message.role === 'model' && message.modelVisible !== false && /^Error:/.test(message.parts[0]?.text || '')), false);
+    assert.equal(broadcasts.some(event => /API request failed|^Error:/m.test(event.text)), false);
+    assert.equal(broadcasts.some(event => /No more retries/.test(event.text)), true);
+  } finally {
+    (llm as any).chat = originalChat;
     (sessionManager as any).appendSessionMessage = originalAppend;
     (sessionManager as any).saveSession = originalSave;
     (sessionManager as any).notifyHistoryUpdate = originalNotify;

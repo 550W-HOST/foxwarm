@@ -769,7 +769,7 @@ async function main(): Promise<void> {
       assert.match(updated.history[3].parts[0].text || '', /recent tail should stay untouched/);
     });
 
-    await test('post-tool LLM failure leaves a visible terminal model message without auto-notifying parent', async () => {
+    await test('post-tool LLM failure leaves a display-only retry notice without auto-notifying parent', async () => {
       const parentId = makeSessionId('selftest_error_parent');
       const childId = makeSessionId('selftest_error_child');
       createdSessionIds.push(parentId, childId);
@@ -780,7 +780,7 @@ async function main(): Promise<void> {
 
       let childCallCount = 0;
       let parentCallCount = 0;
-      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, iteration = 0) => {
+      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, iteration = 0, options?: any) => {
         if (activeSession.id === childId) {
           childCallCount += 1;
           if (childCallCount === 1) {
@@ -790,7 +790,7 @@ async function main(): Promise<void> {
             return { text: '', toolCalls: [toolCall] };
           }
 
-          return originalChat(parts, activeSession, iteration);
+          return originalChat(parts, activeSession, iteration, options);
         }
 
         if (activeSession.id === parentId) {
@@ -821,7 +821,9 @@ async function main(): Promise<void> {
       const lastChild = childAfter.history[childAfter.history.length - 1];
       const lastChildText = lastChild.parts.find(part => typeof part.text === 'string')?.text || '';
       assert.strictEqual(lastChild.role, 'model');
-      assert(lastChildText.startsWith('Error: API request failed after 3 attempts'));
+      assert.strictEqual(lastChild.modelVisible, false);
+      assert.strictEqual(lastChild.__meta?.noticeType, 'llm-retry');
+      assert.match(lastChildText, /Attempt 5\/5 failed: simulated network failure\. No more retries\./);
       const parentAfter = await sessionManager.getSession(parentId);
       assert.strictEqual(parentAfter.queue.length, 0);
       assert(!parentAfter.history.some(msg => msg.parts.some(part => (part.text || '').includes(`Child session \`${childId}\` failed before reporting back.`))));
