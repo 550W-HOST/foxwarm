@@ -477,6 +477,8 @@ export function buildCompactPromptText(options: {
     '- Each block summary must be source-range-bound: summarize only the specified seq/id range it covers, including any user/inter-agent inputs, process, findings, and TODOs inside that range; do not borrow facts, later outcomes, or completions from force-kept items or any other outside range.',
     '- For example, if force-kept later context completed a task but the block source range only contains the unfinished earlier work, the summary must describe the task as unfinished/TODO rather than completed, so the compacted timeline stays correct.',
     '- Preserve decisions, rationale that still matters, constraints, active tasks, blockers, unresolved questions, and concrete identifiers (paths, commits, branches, nodes, URLs, session IDs, config names).',
+    '- Preserve the original task/goal as stated by the requester (user, parent session, another agent, etc.). Quote or closely paraphrase the original wording when the exact meaning matters.',
+    '- If the task contains requirements, terms, or context that are not yet fully understood at the time of the range, do not over-interpret them. Preserve the original phrasing or note it as "not yet resolved" so a later model can interpret it correctly when more context is available.',
     '- Mention when an earlier plan or decision was superseded by a later one if that matters for future work.',
     '',
     'A good summary often looks like one of these shapes (use as a style guide, not a rigid template):',
