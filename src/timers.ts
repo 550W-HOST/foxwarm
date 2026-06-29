@@ -4,6 +4,7 @@ import schedule, { Job } from 'node-schedule';
 import { TIMERS_FILE, getAgentDir } from './config';
 import { logger } from './common';
 import * as sessionManager from './sessionManager';
+import type { Session } from './types';
 import { DiskJsonData } from './utils/diskJsonData';
 import { formatLocalTimestamp } from './utils/localTime';
 
@@ -84,7 +85,7 @@ function buildTriggeredSessionName(prefix: string): string {
   return `${prefix}_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`;
 }
 
-function isCronTimer(timer: SessionTimer): boolean {
+export function isCronTimer(timer: SessionTimer): boolean {
   return typeof timer.cron === 'string' && timer.cron.trim().length > 0;
 }
 
@@ -299,17 +300,24 @@ function parseAbsoluteTime(at: unknown): number {
   throw new Error('`at` must be a valid absolute time (ISO string or epoch milliseconds).');
 }
 
-function normalizeCreateArgs(args: {
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function hasOwn(object: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function normalizeTimerScheduleArgs(args: {
   at?: unknown;
   afterSeconds?: unknown;
   cron?: unknown;
-  message?: unknown;
-  newSession?: unknown;
-  sessionPrefix?: unknown;
-  agentName?: unknown;
-  currentNode?: unknown;
-  model?: unknown;
-}) {
+}, options: { required: boolean }): { at?: number; cron?: string; scheduleProvided: boolean } {
   const hasAt = args.at !== undefined && args.at !== null && args.at !== '';
   const rawAfter = args.afterSeconds;
   const hasRawAfter = rawAfter !== undefined && rawAfter !== null && rawAfter !== '';
@@ -319,19 +327,23 @@ function normalizeCreateArgs(args: {
 
   // Some tool-calling paths may inject placeholder values like afterSeconds=0
   // or at='' for omitted optional fields. Treat those placeholders as absent when
-  // another real timer mode is present, but still validate them when they are the
-  // only provided trigger field.
-  if (!hasAfter && !hasAt && !hasCron && hasRawAfter) {
-    throw new Error('`afterSeconds` must be a positive number.');
+  // another real timer mode is present, but still validate genuinely bad values.
+  if (hasRawAfter && !hasAfter) {
+    if (parsedAfterSeconds !== 0 || (options.required && !hasAt && !hasCron)) {
+      throw new Error('`afterSeconds` must be a positive number.');
+    }
   }
 
   const specifiedCount = [hasAt, hasAfter, hasCron].filter(Boolean).length;
-  if (specifiedCount !== 1) {
+  if (options.required && specifiedCount !== 1) {
     throw new Error('Exactly one of `at`, `afterSeconds`, or `cron` is required.');
   }
+  if (!options.required && specifiedCount > 1) {
+    throw new Error('At most one of `at`, `afterSeconds`, or `cron` may be updated at a time.');
+  }
 
-  if (typeof args.message !== 'string' || !args.message.trim()) {
-    throw new Error('`message` is required.');
+  if (specifiedCount === 0) {
+    return { scheduleProvided: false };
   }
 
   let at: number | undefined;
@@ -346,9 +358,6 @@ function normalizeCreateArgs(args: {
 
   if (hasAfter) {
     const afterSeconds = parsedAfterSeconds!;
-    if (!Number.isFinite(afterSeconds) || afterSeconds <= 0) {
-      throw new Error('`afterSeconds` must be a positive number.');
-    }
     at = Date.now() + (afterSeconds * 1000);
   }
 
@@ -356,22 +365,111 @@ function normalizeCreateArgs(args: {
     cron = String(args.cron).trim();
   }
 
+  return { at, cron, scheduleProvided: true };
+}
+
+function normalizeCreateArgs(args: {
+  at?: unknown;
+  afterSeconds?: unknown;
+  cron?: unknown;
+  message?: unknown;
+  newSession?: unknown;
+  sessionPrefix?: unknown;
+  agentName?: unknown;
+  currentNode?: unknown;
+  model?: unknown;
+}) {
+  if (typeof args.message !== 'string' || !args.message.trim()) {
+    throw new Error('`message` is required.');
+  }
+
+  const schedule = normalizeTimerScheduleArgs(args, { required: true });
+
   return {
-    at,
-    cron,
+    at: schedule.at,
+    cron: schedule.cron,
     message: args.message.trim(),
     newSession: args.newSession === true,
     sessionPrefix: args.sessionPrefix === undefined ? undefined : normalizeSessionPrefix(String(args.sessionPrefix)),
-    agentName: args.agentName === undefined || args.agentName === null || args.agentName === ''
-      ? undefined
-      : String(args.agentName).trim(),
-    currentNode: args.currentNode === undefined || args.currentNode === null || args.currentNode === ''
-      ? undefined
-      : String(args.currentNode).trim(),
-    model: args.model === undefined || args.model === null || args.model === ''
-      ? undefined
-      : String(args.model).trim(),
+    agentName: normalizeOptionalString(args.agentName),
+    currentNode: normalizeOptionalString(args.currentNode),
+    model: normalizeOptionalString(args.model),
   };
+}
+
+function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Session | null, args: {
+  message?: unknown;
+  at?: unknown;
+  afterSeconds?: unknown;
+  cron?: unknown;
+  newSession?: unknown;
+  sessionPrefix?: unknown;
+  agentName?: unknown;
+  currentNode?: unknown;
+  model?: unknown;
+}): SessionTimer {
+  const schedule = normalizeTimerScheduleArgs(args, { required: false });
+  const hasMessageUpdate = hasOwn(args as Record<string, unknown>, 'message') && args.message !== undefined;
+  const newSessionProvided = hasOwn(args as Record<string, unknown>, 'newSession')
+    && args.newSession !== undefined
+    && args.newSession !== null;
+  const hasNewSessionFieldUpdate = ['sessionPrefix', 'agentName', 'currentNode', 'model']
+    .some(key => normalizeOptionalString((args as Record<string, unknown>)[key]) !== undefined);
+
+  if (!schedule.scheduleProvided && !hasMessageUpdate && !newSessionProvided && !hasNewSessionFieldUpdate) {
+    throw new Error('At least one timer field must be supplied to update.');
+  }
+
+  const updated: SessionTimer = { ...existing };
+  if (schedule.scheduleProvided) {
+    updated.at = schedule.at;
+    updated.cron = schedule.cron;
+    // Changing a timer's schedule starts a fresh schedule window. For cron
+    // timers, clear lastTriggeredAt so list/update summaries describe the new
+    // recurrence rather than implying the old schedule just fired.
+    updated.lastTriggeredAt = undefined;
+  }
+
+  if (hasMessageUpdate) {
+    if (typeof args.message !== 'string' || !args.message.trim()) {
+      throw new Error('`message` must be a non-empty string when supplied.');
+    }
+    updated.message = args.message.trim();
+  }
+
+  const finalNewSession = newSessionProvided ? args.newSession === true : existing.newSession === true;
+  updated.newSession = finalNewSession;
+
+  const newSessionOnlyFields = ['sessionPrefix', 'agentName', 'currentNode', 'model'];
+  if (!finalNewSession) {
+    const unexpected = newSessionOnlyFields.filter(key => normalizeOptionalString((args as Record<string, unknown>)[key]) !== undefined);
+    if (unexpected.length > 0) {
+      throw new Error(`${unexpected.join(', ')} may only be supplied when newSession=true.`);
+    }
+    updated.sessionPrefix = undefined;
+    updated.agentName = undefined;
+    updated.currentNode = undefined;
+    updated.model = undefined;
+    return updated;
+  }
+
+  const updatedSessionPrefix = normalizeOptionalString(args.sessionPrefix);
+  updated.sessionPrefix = updatedSessionPrefix !== undefined
+    ? normalizeSessionPrefix(updatedSessionPrefix)
+    : (existing.sessionPrefix || 'timer');
+
+  updated.agentName = normalizeOptionalString(args.agentName)
+    || existing.agentName
+    || ownerSession?.agent
+    || 'main';
+  updated.currentNode = normalizeOptionalString(args.currentNode)
+    || existing.currentNode
+    || ownerSession?.currentNode;
+  updated.model = normalizeOptionalString(args.model)
+    || existing.model
+    || ownerSession?.model;
+
+  return updated;
 }
 
 function validatePersistedTimer(raw: any): SessionTimer | null {
@@ -505,6 +603,60 @@ export async function createTimer(args: {
   }
 
   return toTimerView(timer);
+}
+
+export async function updateTimer(args: {
+  timerId: string;
+  sessionId?: string;
+  message?: unknown;
+  at?: unknown;
+  afterSeconds?: unknown;
+  cron?: unknown;
+  newSession?: unknown;
+  sessionPrefix?: unknown;
+  agentName?: unknown;
+  currentNode?: unknown;
+  model?: unknown;
+}): Promise<TimerView> {
+  if (typeof args.timerId !== 'string' || !args.timerId.trim()) {
+    throw new Error('timerId is required.');
+  }
+
+  const timerId = args.timerId.trim();
+  const existing = timers.get(timerId);
+  if (!existing || existing.waitTimeoutId) {
+    throw new Error(`Timer \`${timerId}\` not found.`);
+  }
+
+  if (args.sessionId && existing.sessionId !== args.sessionId) {
+    throw new Error(`Timer \`${timerId}\` does not belong to session \`${args.sessionId}\`.`);
+  }
+
+  const ownerSession = await sessionManager.getExistingSession(existing.sessionId);
+  if (!ownerSession) {
+    throw new Error(`Session \`${existing.sessionId}\` not found.`);
+  }
+
+  const updated = normalizeTimerUpdate(existing, ownerSession, args);
+  if (updated.newSession) {
+    const agentName = updated.agentName || ownerSession.agent || 'main';
+    if (!await fs.pathExists(getAgentDir(agentName))) {
+      throw new Error(`Agent \`${agentName}\` not found.`);
+    }
+  }
+
+  timers.set(timerId, updated);
+  try {
+    scheduleTimer(updated);
+    await saveTimers();
+  } catch (err) {
+    timers.set(timerId, existing);
+    cancelTimerJob(timerId);
+    scheduleTimer(existing);
+    throw err;
+  }
+
+  return toTimerView(updated);
 }
 
 export async function createWaitTimeoutTimer(args: {

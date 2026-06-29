@@ -36,7 +36,7 @@ export async function checkToolPermission(
     return;
   }
 
-  const timerTools = ['create_timer', 'list_timers', 'delete_timer'];
+  const timerTools = ['create_timer', 'list_timers', 'update_timer', 'delete_timer'];
   if (timerTools.includes(toolName)) {
     await checkTimerPermission(sessionId, {
       targetSessionId: toolArgs?.sessionId,

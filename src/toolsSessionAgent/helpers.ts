@@ -166,6 +166,17 @@ export function formatTimerSummary(timer: timers.TimerView): string {
   return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}\nMessage: ${timer.message}`;
 }
 
+export function formatTimerUpdateSummary(timer: timers.TimerView): string {
+  const mode = timer.mode === 'cron'
+    ? `cron: ${timer.cron}`
+    : `at: ${formatTimerTimestamp(timer.at)}`;
+  const target = timer.newSession
+    ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
+    : `session ${timer.sessionId}`;
+
+  return `Timer \`${timer.id}\` updated.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}\nMessage: ${timer.message}`;
+}
+
 export function detectMimeType(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   return MIME_TYPE_BY_EXT[ext] || 'application/octet-stream';

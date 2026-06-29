@@ -523,7 +523,6 @@ Example:
         },
         {
             name: 'create_timer',
-            defaultInject: true,
             description: 'Create a one-shot or recurring timer for a session. Timers persist across restarts and deliver structured system events when they fire.',
             parameters: {
                 type: 'object',
@@ -542,7 +541,6 @@ Example:
         },
         {
             name: 'list_timers',
-            defaultInject: true,
             description: 'List timers for a session. Defaults to the current session.',
             parameters: {
                 type: 'object',
@@ -552,8 +550,26 @@ Example:
             }
         },
         {
+            name: 'update_timer',
+            description: 'Update an existing timer without deleting and recreating it. Defaults to the current session scope. To change the schedule, pass exactly one of at, afterSeconds, or cron; omitted fields keep their current values.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    timerId: { type: 'string', description: 'Timer ID to update' },
+                    sessionId: { type: 'string', description: 'Owner session ID (optional, default: current session)' },
+                    at: { type: ['string', 'number'], description: 'New absolute trigger time as ISO string or epoch milliseconds (one-shot)' },
+                    afterSeconds: { type: 'number', description: 'Reschedule one-shot timer to trigger after N seconds from now' },
+                    cron: { type: 'string', description: 'New cron expression for recurring timers' },
+                    message: { type: 'string', description: 'New message delivered when the timer fires' },
+                    newSession: { type: 'boolean', description: 'If true, each trigger creates a new session instead of using the owner session; if false, clears new-session target fields' },
+                    sessionPrefix: { type: 'string', description: 'Prefix for newly created timer sessions (only with newSession=true)' },
+                    agentName: { type: 'string', description: 'Target agent for new timer-created sessions (only with newSession=true; default: owner session agent)' }
+                },
+                required: ['timerId']
+            }
+        },
+        {
             name: 'delete_timer',
-            defaultInject: true,
             description: 'Delete a timer by ID. Defaults to the current session scope.',
             parameters: {
                 type: 'object',
@@ -642,7 +658,7 @@ Example:
         {
             name: 'search_tools',
             defaultInject: true,
-            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
+            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool; for timer tools, load the timer-automation skill first. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
             parameters: {
                 type: 'object',
                 properties: {

@@ -45,6 +45,31 @@ test('search_tools returns structured builtin results with hidden/direct exposur
   assert.equal(Object.prototype.hasOwnProperty.call(readTool, 'inputSchema'), false);
 });
 
+test('timer tools are hidden by default but remain reachable through unified search/call', async () => {
+  for (const name of ['create_timer', 'list_timers', 'update_timer', 'delete_timer']) {
+    const definition = definitions.find(def => def.name === name);
+    assert.ok(definition, `${name} should exist`);
+    assert.equal(definition?.defaultInject, undefined, `${name} should not be injected by default`);
+    assert.equal(modelFacingDefinitions.some(def => def.name === name), false, `${name} should be hidden from model-facing tools`);
+  }
+
+  assert.equal(definitions.some(def => def.name === 'list_timer'), false);
+
+  const result: any = await search_tools({
+    query: 'timer',
+    sources: ['builtin'],
+    includeSchema: false,
+    limit: 50,
+  });
+
+  for (const name of ['create_timer', 'list_timers', 'update_timer', 'delete_timer']) {
+    const found = result.tools.find((tool: any) => tool.name === name);
+    assert.ok(found, `${name} should be discoverable`);
+    assert.equal(found.hidden, true);
+    assert.equal(found.directExposed, false);
+  }
+});
+
 test('search_tools multi-word queries rank tools matching more words higher', async () => {
   const result: any = await search_tools({
     query: 'session context',
@@ -527,6 +552,10 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
     'set_agent_inherit',
     'set_agent_isolated',
     'move_session',
+    'create_timer',
+    'list_timers',
+    'update_timer',
+    'delete_timer',
   ]) {
     assert.equal(modelFacingDefinitions.some(def => def.name === name), false, `${name} should be hidden from default model-facing tools`);
     assert.equal(definitions.some(def => def.name === name), true, `${name} should remain available for runtime compatibility`);

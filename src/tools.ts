@@ -33,6 +33,7 @@ import {
     tool_compact_session,
     tool_create_timer,
     tool_list_timers,
+    tool_update_timer,
     tool_delete_timer,
     tool_create_agent,
     tool_create_session,
@@ -71,7 +72,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'recall', 'delete_session',
     'update_session_name', 'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
     'compact_session',
-    'create_timer', 'list_timers', 'delete_timer',
+    'create_timer', 'list_timers', 'update_timer', 'delete_timer',
     'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
     'search_tools', 'call_tool',
     'run_script', 'start_toolscript_run', 'continue_script', 'list_toolscript_runs', 'get_toolscript_run', 'cancel_toolscript_run',
@@ -164,6 +165,7 @@ export async function callTool(toolName: string, args: any, context: any): Promi
         compact_session: tool_compact_session,
         create_timer: tool_create_timer,
         list_timers: tool_list_timers,
+        update_timer: tool_update_timer,
         delete_timer: tool_delete_timer,
         create_agent: tool_create_agent,
         create_session: tool_create_session,
@@ -231,6 +233,7 @@ export const stop_session = tool_stop_session;
 export const compact_session = tool_compact_session;
 export const create_timer = tool_create_timer;
 export const list_timers = tool_list_timers;
+export const update_timer = tool_update_timer;
 export const delete_timer = tool_delete_timer;
 export const browse_open = tool_browse_open;
 export const browse_list = tool_browse_list;

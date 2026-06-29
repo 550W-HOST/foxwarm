@@ -44,6 +44,7 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
     const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, systemPromptFiles: [] });
     assert.match(snapshot, /<available_skills>/);
     assert.match(snapshot, new RegExp(`<name>${skillName}</name>`));
+    assert.match(snapshot, /<name>timer-automation<\/name>/);
     assert.match(snapshot, /Analyze visible-skill tasks/);
     assert.doesNotMatch(snapshot, new RegExp(uniqueBody));
 
@@ -56,6 +57,14 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
     assert.match(String(loadedSkill), /references\/METHOD\.md/);
     assert.match(String(loadedSkill), /references\/example-child\/SKILL\.md/);
     assert.match(String(loadedSkill), /FILE:/);
+
+    const loadedTimerSkill = await tool_load_skill({ skillName: 'timer-automation', agentName }, {});
+    assert.match(String(loadedTimerSkill), /create_timer/);
+    assert.match(String(loadedTimerSkill), /update_timer/);
+    assert.match(String(loadedTimerSkill), /list_timers/);
+    assert.match(String(loadedTimerSkill), /day-of-month `L`/);
+    assert.match(String(loadedTimerSkill), /`W` .*not supported/);
+    assert.doesNotMatch(String(loadedTimerSkill), /memory\//);
 
     const loadedDocuments = await skillCore.loadSkillDocuments(skillName, { agentName });
     assert.deepEqual(loadedDocuments.info.documentFiles, ['SKILL.md']);
