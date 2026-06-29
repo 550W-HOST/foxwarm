@@ -55,10 +55,18 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /Segment 2: frontier-contiguous L1 block candidates -> L2 block\(s\)/);
   assert.match(prompt, /This segment has only one block, so normally leave it uncompressed/i);
   assert.match(prompt, /Treat each Segment header as a hard boundary/i);
+  assert.match(prompt, /Goal: Replace older context with compact, continuation-oriented summaries/i);
+  assert.match(prompt, /Block range rules \(must be followed to produce a valid plan\):/i);
+  assert.match(prompt, /Summary writing guidance:/i);
+  assert.match(prompt, /A good summary often looks like one of these shapes/i);
+  assert.match(prompt, /Memory facts:/i);
   assert.match(prompt, /Block compression is optional/i);
   assert.doesNotMatch(prompt, /Current session goal\/context/);
   assert.doesNotMatch(prompt, /Session goal reminder/);
   assert.match(prompt, /Preserve decisions/i);
+  assert.match(prompt, /Preserve the original task\/goal as stated by the requester/i);
+  assert.match(prompt, /do not over-interpret them/i);
+  assert.match(prompt, /not yet resolved/i);
   assert.doesNotMatch(prompt, /get_context_archive/);
   assert.doesNotMatch(prompt, /get_archived_messages/);
   assert.doesNotMatch(prompt, /get_archived_blocks/);
@@ -71,6 +79,8 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /user\/inter-agent inputs, process, findings, and TODOs inside that range/i);
   assert.match(prompt, /do not borrow facts, later outcomes, or completions from force-kept items or any other outside range/i);
   assert.match(prompt, /force-kept later context completed a task.*source range only contains the unfinished earlier work/is);
+  assert.match(prompt, /Active range: "Leading hypothesis is Y/i);
+  assert.match(prompt, /Blocked range: "Tried X but failed because Y/i);
   assert.match(prompt, /memoryFactsJson/);
   assert.match(prompt, /include them in memoryFactsJson/i);
   assert.match(prompt, /durable facts worth future retrieval/i);
