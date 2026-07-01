@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { parseSessionLinkText, shouldUseStreamingToolPlaceholder } from './webuiToolRendering'
 
 test('parseSessionLinkText linkifies create_child_session output and existing session references', () => {
-  const child = parseSessionLinkText('Child session created: `alphabot-dev/main_child` (new session)')
+  const child = parseSessionLinkText('Child session created: `alphabot-dev/task1` (new session)')
   assert.deepEqual(child, [
-    { type: 'session-link', text: 'Child session created: ', sessionId: 'alphabot-dev/main_child', kind: 'child-created' },
+    { type: 'session-link', text: 'Child session created: ', sessionId: 'alphabot-dev/task1', kind: 'child-created' },
     { type: 'text', text: ' (new session)' },
   ])
 

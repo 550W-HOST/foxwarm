@@ -61,6 +61,58 @@ test('send_to_session rejects self-sends', async () => {
   }
 });
 
+test('send_to_session resolves <parent> and <main> aliases before routing', async () => {
+  await sessionManager.loadSessions();
+  const agentName = makeSessionId('alias_agent');
+  const mainSessionId = `${agentName}/main`;
+  const childSessionId = `${agentName}/worker`;
+
+  try {
+    const main = await ensureSession(mainSessionId);
+    main.agent = agentName;
+    await sessionManager.saveSession(mainSessionId);
+
+    const child = await ensureSession(childSessionId);
+    child.agent = agentName;
+    child.parentSessionId = mainSessionId;
+    await sessionManager.saveSession(childSessionId);
+
+    const toParent = await tool_send_to_session(
+      { sessionId: '<parent>', message: 'child report' },
+      { sessionId: childSessionId, session: child },
+    );
+    assert.match(String(toParent), new RegExp(`Message sent to session \`${mainSessionId}\``));
+    assert.match(String(toParent), /requested `<parent>`/);
+    const refreshedMain = await sessionManager.getSession(mainSessionId);
+    assert.equal(refreshedMain.queue.length, 1);
+    assert.equal(refreshedMain.queue[0]?.sourceSessionId, childSessionId);
+
+    const toMain = await tool_send_to_session(
+      { sessionId: '<main>', message: 'also main' },
+      { sessionId: childSessionId, session: child },
+    );
+    assert.match(String(toMain), new RegExp(`Message sent to session \`${mainSessionId}\``));
+    assert.match(String(toMain), /requested `<main>`/);
+  } finally {
+    await sessionManager.deleteSession(childSessionId).catch(() => {});
+    await sessionManager.deleteSession(mainSessionId).catch(() => {});
+  }
+});
+
+test('send_to_session <parent> errors clearly when current session has no parent', async () => {
+  await sessionManager.loadSessions();
+  const sessionId = makeSessionId('alias_no_parent');
+  const session = await ensureSession(sessionId);
+  try {
+    await assert.rejects(
+      () => tool_send_to_session({ sessionId: '<parent>', message: 'hello' }, { sessionId, session }),
+      /Cannot resolve `<parent>`.*has no parent session/,
+    );
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
 test('set_goal returns concise output without echoing goal content or remindEvery', async () => {
   await sessionManager.loadSessions();
   const sessionId = makeSessionId('tool_result_goal');

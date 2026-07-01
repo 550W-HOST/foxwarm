@@ -5,4 +5,4 @@ export { tool_create_timer, tool_list_timers, tool_update_timer, tool_delete_tim
 export { tool_create_agent, tool_list_agents, tool_set_agent_inherit, tool_set_agent_isolated, tool_move_session, tool_create_session } from './toolsSessionAgent/agents';
 export { tool_list_skills, tool_load_skill } from './toolsSessionAgent/skills';
 export { tool_set_goal, tool_set_session_compact_threshold, tool_set_session_child_model, tool_update_session_snapshot } from './toolsSessionAgent/settings';
-export { tool_list_sessions, tool_delete_session, tool_update_session_name, tool_stop_session, tool_compact_session } from './toolsSessionAgent/sessionCrud';
+export { tool_session, tool_delete_session, tool_update_session_name, tool_stop_session, tool_compact_session } from './toolsSessionAgent/sessionCrud';

@@ -238,11 +238,11 @@ Example:
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. If handing off to the child is your final step for this turn, call wait afterward in the same response.',
+            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. If handing off to the child is your final step for this turn, call wait afterward in the same response. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',
             parameters: {
                 type: 'object',
                 properties: {
-                    suffix: { type: 'string', description: 'Suffix to append to session ID for identification (e.g., "task1", "research")' },
+                    suffix: { type: 'string', description: 'Suffix/session leaf for identification (e.g., "task1", "research"). For main sessions it replaces the `main` leaf; otherwise it is appended to the session ID.' },
                     fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: false', default: false },
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
                     node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' }
@@ -253,11 +253,11 @@ Example:
         {
             name: 'send_to_session',
             defaultInject: true,
-            description: 'Send a message to a specific agent/session. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call wait in parallel in the same response.',
+            description: 'Send a message to a specific agent/session. Literal sessionId `<main>` resolves to the current agent\'s main session; `<parent>` resolves to the current session\'s parent session and errors clearly if there is no parent. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call wait in parallel in the same response.',
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Target session ID' },
+                    sessionId: { type: 'string', description: 'Target session ID, or `<main>` for this agent\'s main session, or `<parent>` for this session\'s parent session.' },
                     message: { type: 'string', description: 'Message to send' }
                 },
                 required: ['sessionId', 'message']
@@ -311,12 +311,13 @@ Example:
             }
         },
         {
-            name: 'list_sessions',
+            name: 'session',
             defaultInject: true,
-            description: 'Get list of all sessions with basic info (ID, message count, last message time, channel status)',
+            description: 'Get current session status or list sessions. With no args or action="status", returns current session agent id/name, agent dir, session id, parent session id, token estimate, last usage, auto-compact threshold, current node, current cwd, and recent child sessions. With action="list", returns the old list_sessions-style session list and accepts the same pagination args.',
             parameters: {
                 type: 'object',
                 properties: {
+                    action: { type: 'string', enum: ['status', 'list'], description: 'Optional action. Omit or use "status" for current session status; use "list" to list sessions.' },
                     start: { type: 'number', description: 'Start index in the session list sorted by last activity desc. Default: 0' },
                     count: { type: 'number', description: 'Number of sessions to return. Default: 20' }
                 },

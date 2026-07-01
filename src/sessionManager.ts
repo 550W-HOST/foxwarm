@@ -265,9 +265,44 @@ export async function queueSessionWaitTimeoutEvent(sessionId: string, waitId: st
   });
 }
 
-async function allocateForkSessionId(sourceSessionId: string, suffix?: string): Promise<string> {
+async function allocateForkSessionId(sourceSessionId: string, suffix?: string, replaceMainLeaf = false): Promise<string> {
   const requestedSuffix = (suffix || 'fork').trim() || 'fork';
-  const baseId = `${sourceSessionId}_${requestedSuffix}`;
+  const baseId = replaceMainLeaf
+    ? buildChildSessionId(sourceSessionId, requestedSuffix)
+    : `${sourceSessionId}_${requestedSuffix}`;
+
+  if (!await getExistingSession(baseId)) {
+    return baseId;
+  }
+
+  let counter = 2;
+  while (true) {
+    const candidate = `${baseId}_${counter}`;
+    if (!await getExistingSession(candidate)) {
+      return candidate;
+    }
+    counter += 1;
+  }
+}
+
+function isMainSessionId(sessionId: string): boolean {
+  const parts = sessionId.split('/');
+  return parts[parts.length - 1] === 'main';
+}
+
+export function buildAgentMainSessionId(agentName: string): string {
+  return agentName === 'main' ? 'main' : `${agentName}/main`;
+}
+
+export function buildChildSessionId(parentSessionId: string, suffix: string): string {
+  return isMainSessionId(parentSessionId)
+    ? [...parentSessionId.split('/').slice(0, -1), suffix].join('/') || suffix
+    : `${parentSessionId}_${suffix}`;
+}
+
+async function allocateChildSessionId(parentSessionId: string, suffix: string): Promise<string> {
+  const requestedSuffix = (suffix || 'child').trim() || 'child';
+  const baseId = buildChildSessionId(parentSessionId, requestedSuffix);
 
   if (!await getExistingSession(baseId)) {
     return baseId;
@@ -880,7 +915,8 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  */
 export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
   const sourceSession = await getSession(sourceSessionId);
-  const newSessionId = await allocateForkSessionId(sourceSessionId, suffix);
+  const realSourceSessionId = sourceSession.id || sourceSessionId;
+  const newSessionId = await allocateForkSessionId(realSourceSessionId, suffix, isChildSession);
   const sourcePreviousPromptCacheKey = sourceSession.promptCacheKey;
   const promptCacheKey = llm.ensurePromptCacheKey(sourceSession);
   if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey) {
@@ -906,7 +942,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     nextMessageSeq: sourceSession.nextMessageSeq,
     nextBlockId: sourceSession.nextBlockId,
     contextFrontier: sourceSession.contextFrontier ? structuredClone(sourceSession.contextFrontier) : undefined,
-    parentSessionId: sourceSessionId,
+    parentSessionId: realSourceSessionId,
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
     verbose: sourceSession.verbose,
@@ -955,13 +991,13 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   // Add separator message
   appendedForkMessages.push({
     role: 'user',
-    parts: [systemPart(formatSessionIdentityHint({ parentSessionId: sourceSessionId, sessionId: newSessionId, variant: 'inherited' }))],
+    parts: [systemPart(formatSessionIdentityHint({ parentSessionId: realSourceSessionId, sessionId: newSessionId, variant: 'inherited' }))],
     __meta: { timestamp: Date.now() }
   });
 
   const systemMessage = isChildSession
-    ? `You are a child session forked from parent session \`${sourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${buildChildCompletionInstruction(sourceSessionId)}`
-    : `Session forked from ${sourceSessionId} by user command. Your current session ID is \`${newSessionId}\`.`;
+    ? `You are a child session forked from parent session \`${realSourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${buildChildCompletionInstruction(realSourceSessionId)}`
+    : `Session forked from ${realSourceSessionId} by user command. Your current session ID is \`${newSessionId}\`.`;
 
   appendedForkMessages.push({
     role: 'user',
@@ -981,13 +1017,13 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   sessions.set(newSessionId, forkedSession);
 
   await ensureSessionBranch(newSessionId, {
-    parentSessionId: sourceSessionId,
+    parentSessionId: realSourceSessionId,
     forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
     forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
   });
   await appendSessionMessages(forkedSession, appendedForkMessages);
 
-  logger.info({ sourceSessionId, newSessionId, isChildSession }, 'Session forked');
+  logger.info({ sourceSessionId: realSourceSessionId, newSessionId, isChildSession }, 'Session forked');
 
   return newSessionId;
 }
@@ -1029,7 +1065,8 @@ export async function createChildSession(parentSessionId: string, suffix: string
   } else {
     // Create new empty session
     const parentSession = await getSession(parentSessionId);
-    const childSessionId = `${parentSessionId}_${suffix}`;
+    const realParentSessionId = parentSession.id || parentSessionId;
+    const childSessionId = await allocateChildSessionId(realParentSessionId, suffix);
 
     const agentName = parentSession.agent || 'main';
     const snapshot = await llm.buildSessionSystemPromptSnapshot({
@@ -1058,7 +1095,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
       meta: { lastMessageTime: Date.now() },
       vectorIndexPosition: 0,
       nextMessageSeq: 1,
-      parentSessionId: parentSessionId,
+      parentSessionId: realParentSessionId,
       currentNode: options?.node || parentSession.currentNode || 'master',
       model: resolveSpawnedSessionModel(parentSession, options?.model),
       childModelDefault: parentSession.childModelDefault,
@@ -1066,14 +1103,14 @@ export async function createChildSession(parentSessionId: string, suffix: string
 
     const initialMessage: Message = {
       role: 'user',
-      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId, sessionId: childSessionId, variant: 'new-child' })}\nYou are a child session (new, empty context). ${buildChildCompletionInstruction(parentSessionId)}`)],
+      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId: realParentSessionId, sessionId: childSessionId, variant: 'new-child' })}\nYou are a child session (new, empty context). ${buildChildCompletionInstruction(realParentSessionId)}`)],
       __meta: { timestamp: Date.now() }
     };
 
     sessions.set(childSessionId, newSession);
     await appendSessionMessage(newSession, initialMessage);
 
-    logger.info({ parentSessionId, childSessionId, fork: false }, 'Child session created');
+    logger.info({ parentSessionId: realParentSessionId, childSessionId, fork: false }, 'Child session created');
     return childSessionId;
   }
 }
@@ -1100,8 +1137,8 @@ export async function updateChildSessionParentIds(oldParentSessionId: string, ne
   }, oldParentSessionId, newParentSessionId);
 }
 
-export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string): Promise<void> {
-  await sessionRelations.sendToSession({
+export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
+  return await sessionRelations.sendToSession({
     getExistingSession,
     getAgentMetadata,
     enqueueSessionItem,

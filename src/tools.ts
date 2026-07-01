@@ -15,7 +15,7 @@ import {
     tool_submit_compact_plan,
     tool_send_to_channel,
     tool_send_file,
-    tool_list_sessions,
+    tool_session,
     tool_list_agents,
     tool_list_skills,
     tool_load_skill,
@@ -68,7 +68,7 @@ export const MASTER_ONLY_TOOL_NAMES = [
     'copy_between_nodes',
     'image_crop', 'image_write_to_file',
     'create_child_session', 'send_to_session', 'wait', 'submit_compact_plan', 'send_to_channel', 'send_file',
-    'list_sessions', 'list_agents', 'list_skills', 'load_skill',
+    'session', 'list_agents', 'list_skills', 'load_skill',
     'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'recall', 'delete_session',
     'update_session_name', 'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
     'compact_session',
@@ -147,7 +147,7 @@ export async function callTool(toolName: string, args: any, context: any): Promi
         submit_compact_plan: tool_submit_compact_plan,
         send_to_channel: tool_send_to_channel,
         send_file: tool_send_file,
-        list_sessions: tool_list_sessions,
+        session: tool_session,
         list_agents: tool_list_agents,
         list_skills: tool_list_skills,
         load_skill: tool_load_skill,
@@ -215,7 +215,7 @@ export const wait = tool_wait;
 export const submit_compact_plan = tool_submit_compact_plan;
 export const send_to_channel = tool_send_to_channel;
 export const send_file = tool_send_file;
-export const list_sessions = tool_list_sessions;
+export const session = tool_session;
 export const list_agents = tool_list_agents;
 export const list_skills = tool_list_skills;
 export const load_skill = tool_load_skill;

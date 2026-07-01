@@ -82,7 +82,7 @@ export class NodesManager {
       'send_to_session',
       'wait',
       'submit_compact_plan',
-      'list_sessions',
+      'session',
       'list_skills',
       'load_skill',
       'get_session_messages',

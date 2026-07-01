@@ -145,6 +145,7 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
 const isLegacyDiffToolName = (name: string): boolean => name === 'edit' || name === 'edit_memory'
 const isPatchToolName = (name: string): boolean => name === 'apply_patch' || name === 'apply_patch_memory'
 const isInterSessionToolName = (name: string): boolean => name === 'send_to_session' || name === 'create_child_session'
+const isSpecialSessionAlias = (sessionId: string): boolean => sessionId === '<main>' || sessionId === '<parent>'
 
 const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
@@ -211,10 +212,18 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean 
     return (
       <span className="flex items-center gap-1 min-w-0" title={`${targetSessionId}: ${message}`}>
         <span className="shrink-0 text-gray-500 dark:text-gray-400">To</span>
-        <span className="shrink-0"><SessionHashLink sessionId={targetSessionId} /></span>
+        <span className="shrink-0">{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}</span>
         <span className="truncate">: {preview}</span>
       </span>
     )
+  }
+
+  if (call.name === 'session') {
+    const action = typeof call.args?.action === 'string' && call.args.action.trim() ? call.args.action.trim() : 'status'
+    const suffix = action === 'list'
+      ? ` start=${call.args?.start ?? 0} count=${call.args?.count ?? 20}`
+      : ''
+    return <span className="truncate font-mono">session {action}{suffix}</span>
   }
 
   if (call.name === 'create_child_session') {
@@ -328,10 +337,14 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
     return (
       <div className="space-y-1">
-        <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">To</span><SessionHashLink sessionId={targetSessionId} /><span>:</span></div>
+        <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">To</span>{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}<span>:</span></div>
         <div className="whitespace-pre-wrap break-all">{message}</div>
       </div>
     )
+  }
+
+  if (call.name === 'session') {
+    return <div className="whitespace-pre-wrap break-all">{formatCompactObjectPreview(call.args || { action: 'status' })}</div>
   }
 
   if (call.name === 'create_child_session') {

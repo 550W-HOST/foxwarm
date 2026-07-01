@@ -5,9 +5,9 @@ import { approvePendingPairing, isReservedNodeId, moveApprovedNode, rejectPendin
 import * as sessionManager from './sessionManager';
 import * as skills from './skills';
 import * as tools from './tools';
-import { estimateSessionSummary } from './tokenCount';
-import { CONTEXT_LIMIT, resolveModelConfig, APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, writeAppConfigFile, WEIXIN_CONFIG } from './config';
+import { APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
+import { buildSessionStatusInfo, formatSessionStatus } from './sessionStatus';
 import { BTW_USAGE, runBtwRequest } from './btw';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api';
 import { ensureNodePairingToken } from './nodes/bootstrapInfo';
@@ -95,30 +95,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: true,
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
-      const historyLen = session.history.length
-      const sessionSummary = estimateSessionSummary(session)
-      const tokenCount = sessionSummary.tokens
-      const imageCount = sessionSummary.imageCount
-      const { currentKey } = resolveModelConfig(session.model)
-      const node = session.currentNode || 'master'
-      const isolated = sessionManager.isSessionEffectivelyIsolated(session) ? ' (isolated)' : ''
-      const parent = session.parentSessionId ? `\n- parent: \`${session.parentSessionId}\`` : ''
-      const displayName = session.displayName ? `\n- name: ${session.displayName}` : ''
-      const agent = session.agent || 'main'
-      const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session)
-      const archived = session.archived ? '\n- 📦 archived' : ''
-
-      let resp = `📊 *Session Status*\n\n`
-      resp += `- id: \`${sessionId}\`${displayName}\n`
-      resp += `- agent: \`${agent}\`${parent}${archived}\n`
-      resp += `- model: \`${currentKey}\`\n`
-      resp += `- messages: ${historyLen}\n`
-      resp += `- tokens: ~${tokenCount.toLocaleString()} / ${CONTEXT_LIMIT.toLocaleString()}`
-      if (imageCount > 0) resp += ` (${imageCount} image${imageCount > 1 ? 's' : ''})`
-      resp += `\n`
-      resp += `- auto-compact threshold: ~${compactThreshold.toLocaleString()} tokens\n`
-      resp += `- node: \`${node}\`${isolated}\n`
-      ctx.reply(resp)
+      ctx.reply(formatSessionStatus(await buildSessionStatusInfo(sessionId, session)))
     }
   },
   '/session': {
