@@ -1635,7 +1635,7 @@ export async function appendSessionMessage(sessionOrId: Session | string, messag
 /**
  * Get list of all session IDs with basic info
  */
-export function listSessions(): Array<{ id: string; messageCount: number; lastMessageTime: number | null; hasChannel: boolean; displayName?: string; currentNode?: string; cwd?: string; isolated?: boolean; busy?: boolean; queueLength?: number }> {
+export function listSessions(): Array<{ id: string; messageCount: number; lastMessageTime: number | null; hasChannel: boolean; displayName?: string; currentNode?: string; cwd?: string; isolated?: boolean; busy?: boolean; queueLength?: number; parentSessionId?: string }> {
   const result = [];
   
   // Iterate through all sessions in memory (metadata is always loaded)
@@ -1656,7 +1656,8 @@ export function listSessions(): Array<{ id: string; messageCount: number; lastMe
       cwd: session.cwd,
       isolated: isSessionEffectivelyIsolated(session),
       busy: session.busy,
-      queueLength: session.queue?.length || 0
+      queueLength: session.queue?.length || 0,
+      parentSessionId: session.parentSessionId
     });
   }
   

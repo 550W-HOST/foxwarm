@@ -23,7 +23,22 @@ export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext)
   }
 
   const end = start + pageSessions.length;
-  let result = `Found ${total} session(s). Showing ${start + 1}-${end}.`;
+  const currentSessionId = ctx?.sessionId;
+  const currentSession = currentSessionId ? await sessionManager.getSession(currentSessionId) : undefined;
+  const parentSessionId = currentSession?.parentSessionId;
+
+  let result = '';
+  if (currentSessionId) {
+    result += `Current session: \`${currentSessionId}\`\n`;
+  }
+  if (parentSessionId) {
+    result += `Parent session: \`${parentSessionId}\`\n`;
+  }
+  if (result) {
+    result += '\n';
+  }
+
+  result += `Found ${total} session(s). Showing ${start + 1}-${end}.`;
   if (end < total) {
     result += ` Use \`start: ${end}\` to see the next page.`;
   }
@@ -37,7 +52,8 @@ export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext)
     const isolated = s.isolated ? ' isolated' : '';
     const busy = s.busy ? ' 🔄busy' : '';
     const queued = s.queueLength ? ` queue:${s.queueLength}` : '';
-    result += `${channel} \`${s.id}\`${displayName} - ${s.messageCount} messages - node: \`${node}\`${isolated}${busy}${queued} - Last: ${date}\n`;
+    const current = s.id === currentSessionId ? ' **CURRENT**' : '';
+    result += `${channel} \`${s.id}\`${displayName}${current} - ${s.messageCount} messages - node: \`${node}\`${isolated}${busy}${queued} - Last: ${date}\n`;
   }
 
   return result;
