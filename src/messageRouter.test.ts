@@ -121,8 +121,10 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
   const parts = router.prepareTurnParts(session, 'session-1', drained.parts);
 
   const sourcePrefixCount = parts.filter((part: any) => typeof part.system === 'string'
-    && part.system.startsWith('The following message is a direct user message via channel;')).length;
+    && part.system.startsWith('<foxwarm-message ')
+    && part.system.includes('type="channel"')).length;
   assert.equal(sourcePrefixCount, 1);
+  assert.equal(parts.some((part: any) => part.system === '</foxwarm-message>'), true);
 });
 
 test('MessageRouter queue draining keeps different WeWork stream ids separate', () => {

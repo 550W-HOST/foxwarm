@@ -745,7 +745,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
 
     return {
       role: 'tool',
-      parts: [{ text: `[SYSTEM: snapshot]\n${snapshotText}` }],
+      parts: [{ text: `<foxwarm-system kind="snapshot" hint="snapshot" />\n${snapshotText}` }],
       __meta: {
         timestamp: -1,
         synthetic: 'persistentMemorySnapshot',

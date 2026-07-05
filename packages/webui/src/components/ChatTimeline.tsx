@@ -174,7 +174,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: 
       <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
         <pre className="whitespace-pre-wrap font-sans" style={{ lineHeight: '1.5em' }}>
           {text.split('\n').map((line, lineIdx) => {
-            const isPrefix = /^\[(SYSTEM|FROM):/.test(line)
+            const isPrefix = isSystemLikeText(line)
             return (
               <span
                 key={lineIdx}

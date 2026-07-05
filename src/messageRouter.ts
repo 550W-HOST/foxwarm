@@ -16,6 +16,7 @@ import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
+import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag, parseFoxwarmTagLine } from './utils/promptWrappers';
 
 function formatCurrentTimeForPrompt(date: Date): string {
   return formatLocalTimestamp(date);
@@ -130,10 +131,25 @@ export class MessageRouter {
     const conversationId = source.conversationId || source.channelUserId;
     const channelTargetId = `${channelInstanceId}:${conversationId}`;
     if (channelType === 'webui') {
-      systemParts.push({ system: 'The following message is a direct user message via channel; channel_type: `webui`' });
+      systemParts.push({
+        system: formatFoxwarmMessageOpen({
+          type: 'channel',
+          channelType: 'webui',
+          hint: 'direct user message via channel',
+        }),
+      });
     } else {
-      const senderInfo = source.username ? `; sender: \`${source.username}\`` : '';
-      systemParts.push({ system: `The following message is a direct user message via channel; channel_instance_id: \`${channelInstanceId}\`; channel_type: \`${channelType}\`; conversation_id: \`${conversationId}\`; channel_target_id: \`${channelTargetId}\`${senderInfo}` });
+      systemParts.push({
+        system: formatFoxwarmMessageOpen({
+          type: 'channel',
+          channelInstanceId,
+          channelType,
+          conversationId,
+          channelTargetId,
+          sender: source.username,
+          hint: 'direct user message via channel',
+        }),
+      });
     }
 
     // Send-only channel notice
@@ -141,12 +157,20 @@ export class MessageRouter {
       const channelConfig = sessionManager.getChannelConfig(channelInstanceId, conversationId);
       logger.debug({ channelInstanceId, channelType, conversationId, channelConfig }, 'Channel config check for send-only');
       if (channelConfig?.mode === 'send-only') {
-        systemParts.push({ system: `Channel is in send-only mode. If you need to reply, call send_to_channel({channelTargetId: "${channelTargetId}", message: "..."}).` });
+        systemParts.unshift({
+          system: formatFoxwarmSystemTag({
+            kind: 'channel-mode',
+            mode: 'send-only',
+            channelTargetId,
+            hint: `Channel is in send-only mode. If you need to reply, call send_to_channel({channelTargetId: "${channelTargetId}", message: "..."}).`,
+          }),
+        });
         logger.info({ channelInstanceId, conversationId }, 'Send-only system part added');
       }
     }
 
     parts.unshift(...systemParts);
+    parts.push({ system: formatFoxwarmMessageClose() });
   }
 
   private snapshotSource(ctx: ChannelContext): QueueSource {
@@ -335,12 +359,25 @@ export class MessageRouter {
     const timeSinceLastMessage = now - (session.meta.lastMessageTime || now);
     if (timeSinceLastMessage > 10 * 60 * 1000) {
       const currentTime = formatCurrentTimeForPrompt(new Date());
-      finalParts.unshift({ system: `current time = ${currentTime}` });
+      finalParts.unshift({
+        system: formatFoxwarmSystemTag({
+          kind: 'time',
+          time: new Date().toISOString(),
+          localTime: currentTime,
+          hint: `current time = ${currentTime}`,
+        }),
+      });
     }
     session.meta.lastMessageTime = now;
 
     if (session.history.length === 0) {
-      finalParts.unshift({ system: `current session ID = ${sessionId}` });
+      finalParts.unshift({
+        system: formatFoxwarmSystemTag({
+          kind: 'session',
+          currentSessionId: sessionId,
+          hint: `current session ID = ${sessionId}`,
+        }),
+      });
     }
 
     return finalParts;
@@ -576,7 +613,16 @@ export class MessageRouter {
       if (isModelNoActionSignal(msg)) {
         hasNoAction = true;
       }
-      if (msg.parts?.some(p => typeof p.system === 'string' && (p.system.startsWith('FROM:') || p.system.startsWith('The following message is a direct user message via channel;')))) {
+      if (msg.parts?.some(p => {
+        if (typeof p.system !== 'string') {
+          return false;
+        }
+        if (p.system.startsWith('FROM:') || p.system.startsWith('The following message is a direct user message via channel;')) {
+          return true;
+        }
+        const tag = parseFoxwarmTagLine(p.system);
+        return tag?.tagName === 'foxwarm-message' && !tag.closing && tag.attrs.type === 'channel';
+      })) {
         hasUserFromPrefix = true;
       }
       if (msg.role === 'user') {

@@ -24,6 +24,7 @@ import {
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
+import { formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
 import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
 import { guardToolOutputForModel } from './toolOutputGuard';
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
@@ -910,7 +911,7 @@ export function fixToolCalls(contents: Message[]): Message[] {
             if (part.functionCall || part.functionResponse || part.inlineData || part.thinking) return false;
             if (part.system) return true;
             if (isSystemPayloadTextPart(part)) return true;
-            return typeof part.text === 'string' && part.text.startsWith('[SYSTEM:');
+            return typeof part.text === 'string' && (part.text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(part.text));
         });
     };
 
@@ -1024,7 +1025,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 
             // Handle system/meta parts by merging them back into user text for providers without developer messages
             if (part.system) {
-                content.push({ type: 'text', text: `[SYSTEM: ${part.system}]` });
+                content.push({ type: 'text', text: formatSystemPartForModel(part.system) });
             }
 
             // Handle text

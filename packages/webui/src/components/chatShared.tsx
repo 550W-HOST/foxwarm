@@ -268,15 +268,20 @@ export const copyTextToClipboard = async (text: string) => {
   }
 }
 
+export const FOXWARM_METADATA_LINE_RE = /^\s*<\/?foxwarm-(system|metadata|message)\b/i
+
+export const isFoxwarmMetadataLine = (text: string): boolean => FOXWARM_METADATA_LINE_RE.test(text)
+
 export const formatStructuredSystemText = (system: string): string => (
-  system.startsWith('FROM:') ? `[${system}]` : `[SYSTEM: ${system}]`
+  isFoxwarmMetadataLine(system) ? system : (system.startsWith('FROM:') ? `[${system}]` : `[SYSTEM: ${system}]`)
 )
 
 export const isSystemLikeText = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') || text.startsWith('[FROM:')
+  text.startsWith('[SYSTEM:') || text.startsWith('[FROM:') || isFoxwarmMetadataLine(text)
 )
 
 export const isLightweightStructuredSystem = (system: string): boolean => (
+  isFoxwarmMetadataLine(system) ||
   system.startsWith('FROM:') ||
   system.startsWith('The following message is a direct user message via channel;') ||
   system.startsWith('current time =') ||
@@ -284,6 +289,7 @@ export const isLightweightStructuredSystem = (system: string): boolean => (
 )
 
 export const isLightweightSystemTextLine = (text: string): boolean => (
+  isFoxwarmMetadataLine(text) ||
   text.startsWith('[FROM:') ||
   text.startsWith('[SYSTEM: The following message is a direct user message via channel;') ||
   text.startsWith('[SYSTEM: current time') ||
@@ -291,11 +297,11 @@ export const isLightweightSystemTextLine = (text: string): boolean => (
 )
 
 export const isHeavySystemTextLine = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') && !isLightweightSystemTextLine(text)
+  (text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(text)) && !isLightweightSystemTextLine(text)
 )
 
 export const isCollapsibleSystemText = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') && !isLightweightSystemTextLine(text)
+  (text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(text)) && !isLightweightSystemTextLine(text)
 )
 
 export const clampContentStyle = (lines: number, extraHeightRem = 0): CSSProperties => ({

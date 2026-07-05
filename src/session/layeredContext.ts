@@ -14,6 +14,7 @@ import {
   writeArchiveBlocks,
 } from './archiveStore';
 import { isModelVisibleMessage } from './messageVisibility';
+import { parseFoxwarmTagLine } from '../utils/promptWrappers';
 
 const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
   'This session has been compacted.',
@@ -66,6 +67,13 @@ export type ContextFrontierAnnotationOptions = {
 };
 
 export function isIgnoredCompactLifecycleSystemText(text: string): boolean {
+  const tag = parseFoxwarmTagLine(text);
+  if (tag?.tagName === 'foxwarm-system') {
+    const hint = tag.attrs.hint || '';
+    return tag.attrs.event === 'compact'
+      || tag.attrs.kind === 'session-boundary'
+      || COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES.some(prefix => hint.startsWith(prefix));
+  }
   return COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES.some(prefix => text.startsWith(prefix));
 }
 

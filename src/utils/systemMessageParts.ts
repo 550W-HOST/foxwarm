@@ -1,4 +1,5 @@
 import { MessagePart } from '../types';
+import { isFoxwarmMessageCloseLine } from './promptWrappers';
 
 export function buildSystemMessageParts(message: string): MessagePart[] {
   const normalized = message.replace(/\r\n?/g, '\n');
@@ -11,6 +12,17 @@ export function buildSystemMessageParts(message: string): MessagePart[] {
   const payload = normalized.slice(firstNewlineIndex + 1);
   if (!payload) {
     return [{ system: header }];
+  }
+
+  const payloadLines = payload.split('\n');
+  const lastPayloadLine = payloadLines[payloadLines.length - 1] || '';
+  if (isFoxwarmMessageCloseLine(lastPayloadLine)) {
+    const body = payloadLines.slice(0, -1).join('\n');
+    return [
+      { system: header },
+      ...(body ? [{ text: body, systemPayload: true }] : []),
+      { system: lastPayloadLine },
+    ];
   }
 
   return [

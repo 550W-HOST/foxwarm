@@ -7,6 +7,7 @@ import * as sessionManager from './sessionManager';
 import type { Session } from './types';
 import { DiskJsonData } from './utils/diskJsonData';
 import { formatLocalTimestamp } from './utils/localTime';
+import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag } from './utils/promptWrappers';
 
 export interface SessionTimer {
   id: string;
@@ -121,17 +122,29 @@ function getNextRunAt(timer: SessionTimer): number | null {
 
 export function buildTimerTriggeredMessage(timer: SessionTimer, firedAt: Date = new Date()): string {
   const label = isCronTimer(timer) ? 'Scheduled timer fired' : 'Timer fired';
-  const currentTimeLine = `Current time: ${formatLocalTimestamp(firedAt)}`;
+  const openTag = formatFoxwarmMessageOpen({
+    type: 'timer',
+    timerId: timer.id,
+    mode: getTimerMode(timer),
+    firedAt: firedAt.toISOString(),
+    localTime: formatLocalTimestamp(firedAt),
+    hint: label,
+  });
   return timer.message
-    ? `${label} (id: ${timer.id})\n${currentTimeLine}\n${timer.message}`
-    : `${label} (id: ${timer.id})\n${currentTimeLine}`;
+    ? `${openTag}\n${timer.message}\n${formatFoxwarmMessageClose()}`
+    : `${openTag}\n${formatFoxwarmMessageClose()}`;
 }
 
 export function buildWaitTimeoutMessage(timer: Pick<SessionTimer, 'waitTimeoutSeconds'>): string {
   const seconds = typeof timer.waitTimeoutSeconds === 'number' && Number.isFinite(timer.waitTimeoutSeconds)
     ? timer.waitTimeoutSeconds
     : 0;
-  return `[SYSTEM: wait timeout reached after ${seconds}s. No newer message or event triggered this session during the wait.]`;
+  return formatFoxwarmSystemTag({
+    kind: 'event',
+    type: 'wait-timeout',
+    seconds,
+    hint: `wait timeout reached after ${seconds}s. No newer message or event triggered this session during the wait.`,
+  });
 }
 
 function toTimerView(timer: SessionTimer): TimerView {

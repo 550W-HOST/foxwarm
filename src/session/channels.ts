@@ -3,6 +3,7 @@ import { logger } from '../common';
 import { CHANNELS_FILE } from '../config';
 import { Session, SessionBroadcast } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
+import { parseFoxwarmTagLine } from '../utils/promptWrappers';
 
 export type ChannelMode = 'send-only' | undefined;
 type LegacyChannelMode = 'push-only';
@@ -295,6 +296,14 @@ function findAttachedChannel(
 function parseSourceSystemPart(system?: string): { channelId: string; channelUserId: string; conversationId: string } | undefined {
   if (!system) return undefined;
 
+  const foxwarmTag = parseFoxwarmTagLine(system);
+  if (foxwarmTag?.tagName === 'foxwarm-message' && !foxwarmTag.closing && foxwarmTag.attrs.type === 'channel') {
+    const channelId = foxwarmTag.attrs.channelInstanceId || foxwarmTag.attrs.channelId || foxwarmTag.attrs.channelType;
+    const conversationId = foxwarmTag.attrs.conversationId || foxwarmTag.attrs.channelUserId;
+    if (!channelId || !conversationId) return undefined;
+    return { channelId, channelUserId: conversationId, conversationId };
+  }
+
   if (system.startsWith('FROM: ')) {
     const raw = system.slice('FROM: '.length);
     const firstColon = raw.indexOf(':');
@@ -350,7 +359,7 @@ export function getChannelBySession(sessionId: string, session?: Session): { cha
         const msg = session.history[i];
         if (msg.role !== 'user') continue;
 
-        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && (part.system.startsWith('FROM: ') || part.system.includes('channel_id: `') || part.system.includes('channel_instance_id: `')));
+        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && (part.system.startsWith('FROM: ') || part.system.includes('channel_id: `') || part.system.includes('channel_instance_id: `') || parseFoxwarmTagLine(part.system)?.attrs.type === 'channel'));
         const parsedChannel = parseSourceSystemPart(sourcePart?.system);
         const attachedChannel = findAttachedChannel(channels, parsedChannel);
         if (attachedChannel) {
