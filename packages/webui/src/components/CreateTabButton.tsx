@@ -1,17 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, FolderOpen, SquareTerminal } from 'lucide-react'
-
-type CreateTabKind = 'workspace' | 'terminal'
+import { ChevronDown, SquareTerminal } from 'lucide-react'
 
 interface CreateTabButtonProps {
-  kind: CreateTabKind
   defaultNodeId: string
   defaultPath: string
   sessionLabel: string
   onCreate: (options: { nodeId: string; path: string }) => void
 }
 
-export default function CreateTabButton({ kind, defaultNodeId, defaultPath, sessionLabel, onCreate }: CreateTabButtonProps) {
+export default function CreateTabButton({ defaultNodeId, defaultPath, sessionLabel, onCreate }: CreateTabButtonProps) {
   const [open, setOpen] = useState(false)
   const [nodeId, setNodeId] = useState(defaultNodeId || 'master')
   const [path, setPath] = useState(defaultPath || '')
@@ -38,9 +35,7 @@ export default function CreateTabButton({ kind, defaultNodeId, defaultPath, sess
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [open])
 
-  const isWorkspace = kind === 'workspace'
-  const Icon = isWorkspace ? FolderOpen : SquareTerminal
-  const label = isWorkspace ? 'Workspace' : 'Terminal'
+  const label = 'Terminal'
   const baseClass = 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
 
   const handleDefaultCreate = () => {
@@ -60,7 +55,7 @@ export default function CreateTabButton({ kind, defaultNodeId, defaultPath, sess
           className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${baseClass}`}
           title={`Create ${label.toLowerCase()} tab`}
         >
-          <Icon className="h-4 w-4" />
+          <SquareTerminal className="h-4 w-4" />
           <span>{label}</span>
         </button>
         <button
@@ -92,7 +87,7 @@ export default function CreateTabButton({ kind, defaultNodeId, defaultPath, sess
               <input
                 value={path}
                 onChange={(event) => setPath(event.target.value)}
-                placeholder={isWorkspace ? '/home/ldmbot/git/foxwarm' : '/tmp'}
+                placeholder="/tmp"
                 className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
               />
             </div>

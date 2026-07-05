@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useDndContext, useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { Bookmark, Copy, FileText, FolderOpen, MessageSquareText, Pin, PinOff, SquareTerminal, X } from 'lucide-react'
+import { Bookmark, Copy, MessageSquareText, Pin, PinOff, SquareTerminal, X } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import type { WorkbenchTab } from '../workbench/types'
 
@@ -32,8 +32,6 @@ interface TabContextMenuState {
 
 function TabIcon({ type }: { type: WorkbenchTab['type'] }) {
   if (type === 'chat') return <MessageSquareText className="h-4 w-4 shrink-0" />
-  if (type === 'workspace') return <FolderOpen className="h-4 w-4 shrink-0" />
-  if (type === 'file') return <FileText className="h-4 w-4 shrink-0" />
   return <SquareTerminal className="h-4 w-4 shrink-0" />
 }
 
@@ -83,7 +81,6 @@ function getTabCopyId(tab: WorkbenchTab) {
 }
 
 function getTabCopyPath(tab: WorkbenchTab) {
-  if (tab.type === 'workspace' || tab.type === 'file') return tab.path
   if (tab.type === 'terminal') return tab.cwd || null
   return null
 }

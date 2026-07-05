@@ -6,8 +6,6 @@ export type WorkbenchTabBase = {
 
 export type WorkbenchTab =
   | (WorkbenchTabBase & { type: 'chat'; sessionId: string; preview?: boolean })
-  | (WorkbenchTabBase & { type: 'workspace'; nodeId: string; path: string; contextSessionId?: string })
-  | (WorkbenchTabBase & { type: 'file'; nodeId: string; path: string; contextSessionId?: string })
   | (WorkbenchTabBase & { type: 'terminal'; terminalId?: string; nodeId?: string; cwd?: string; contextSessionId?: string; createMode?: 'new' | 'reuse' })
 
 export type WorkbenchPaneNode = {

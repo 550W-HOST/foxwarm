@@ -25,7 +25,6 @@ interface SidebarProps {
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectSetup: () => void
-  onCreateWorkspaceTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateSession: () => void
   onToggleCollapsed: () => void
@@ -53,7 +52,6 @@ export default function Sidebar({
   onKeepSession,
   onSelectArchitecture,
   onSelectSetup,
-  onCreateWorkspaceTab,
   onCreateTerminalTab,
   onCreateSession,
   onToggleCollapsed,
@@ -119,14 +117,6 @@ export default function Sidebar({
             </button>
           </div>
           <CreateTabButton
-            kind="workspace"
-            defaultNodeId={defaultNodeId}
-            defaultPath={defaultPath}
-            sessionLabel={sessionLabel}
-            onCreate={(options) => onCreateWorkspaceTab(options)}
-          />
-          <CreateTabButton
-            kind="terminal"
             defaultNodeId={defaultNodeId}
             defaultPath={defaultPath}
             sessionLabel={sessionLabel}

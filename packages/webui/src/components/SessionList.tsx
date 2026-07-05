@@ -25,7 +25,6 @@ interface SessionListProps {
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectSetup: () => void
-  onCreateWorkspaceTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateSession: () => void
 }
@@ -51,7 +50,6 @@ export default function SessionList({
   onKeepSession,
   onSelectArchitecture,
   onSelectSetup,
-  onCreateWorkspaceTab,
   onCreateTerminalTab,
   onCreateSession,
 }: SessionListProps) {
@@ -102,25 +100,13 @@ export default function SessionList({
           </button>
         </div>
 
-        <div className="mt-2 flex items-start gap-1">
-          <div className="flex-1 min-w-0">
-            <CreateTabButton
-              kind="workspace"
-              defaultNodeId={defaultNodeId}
-              defaultPath={defaultPath}
-              sessionLabel={sessionLabel}
-              onCreate={(options) => onCreateWorkspaceTab(options)}
-            />
-          </div>
-          <div className="flex-1 min-w-0">
-            <CreateTabButton
-              kind="terminal"
-              defaultNodeId={defaultNodeId}
-              defaultPath={defaultPath}
-              sessionLabel={sessionLabel}
-              onCreate={(options) => onCreateTerminalTab(options)}
-            />
-          </div>
+        <div className="mt-2">
+          <CreateTabButton
+            defaultNodeId={defaultNodeId}
+            defaultPath={defaultPath}
+            sessionLabel={sessionLabel}
+            onCreate={(options) => onCreateTerminalTab(options)}
+          />
         </div>
       </div>
       

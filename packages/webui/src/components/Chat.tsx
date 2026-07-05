@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Copy, FolderOpen, Menu, MessageSquareText, SquareTerminal, X } from 'lucide-react'
+import { Check, Copy, Menu, MessageSquareText, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
@@ -72,7 +72,6 @@ interface ChatProps {
   sessionId: string
   sessionDisplayName?: string
   onBack?: () => void
-  onOpenWorkspace?: () => void
   onOpenTerminal?: () => void
   sendKeyMode?: 'modEnter' | 'enter'
   groupTools?: boolean
@@ -182,7 +181,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenWorkspace, onOpenTerminal, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenTerminal, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -1086,14 +1085,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
         actions={(
           <>
             <button
-              onClick={onOpenWorkspace}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-              title="Open workspace"
-            >
-              <FolderOpen className="h-4 w-4" />
-              <span className="hidden md:inline">Open workspace</span>
-            </button>
-            <button
               onClick={onOpenTerminal}
               className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
               title="Open terminal"
@@ -1265,7 +1256,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   prev.sessionId === next.sessionId &&
   prev.sessionDisplayName === next.sessionDisplayName &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
-  prev.onOpenWorkspace === next.onOpenWorkspace &&
   prev.onOpenTerminal === next.onOpenTerminal
 ))
 

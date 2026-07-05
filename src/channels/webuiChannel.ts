@@ -9,7 +9,6 @@ import fs from 'fs-extra';
 import yaml from 'js-yaml';
 import { buildModelsConfigFromSetupForm, dumpSetupYaml, readRawAppConfigFile, readRawTextFileIfExists, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from '../setupConfig';
 import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
-import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { MessageRouter } from '../messageRouter';
@@ -27,15 +26,6 @@ import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
 
-type WorkspaceNodeEntry = {
-  name: string;
-  path: string;
-  isDirectory: boolean;
-  size: number;
-  modifiedAt: number;
-};
-
-const MAX_INLINE_FILE_BYTES = 1024 * 1024;
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 
 function isPlaceholderSecret(value: unknown): boolean {
@@ -223,20 +213,6 @@ function normalizeWebUiModelSelection(value: unknown): string | undefined {
   return normalized;
 }
 
-function createWorkspaceFileTooLargeError(filePath: string, size: number, maxSize: number): Error & { code: string; path: string; size: number; maxSize: number } {
-  const error = new Error(`File too large to open in WebUI editor (${size} bytes > ${maxSize} bytes). Please download it instead.`) as Error & {
-    code: string;
-    path: string;
-    size: number;
-    maxSize: number;
-  };
-  error.code = 'FILE_TOO_LARGE';
-  error.path = filePath;
-  error.size = size;
-  error.maxSize = maxSize;
-  return error;
-}
-
 // Extend Express Request to include cookies
 declare global {
   namespace Express {
@@ -276,183 +252,27 @@ export class WebUIChannel implements Channel {
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
   private globalSseClients: express.Response[] = []; // Global clients for session list updates
 
-  private resolveWorkspacePath(inputPath: unknown): string {
-    if (typeof inputPath !== 'string' || inputPath.trim().length === 0) {
-      throw new Error('path is required');
-    }
+  private async streamPathDownload(resolvedPath: string, res: express.Response): Promise<void> {
+    const stat = await fs.stat(resolvedPath);
 
-    return path.resolve(inputPath.trim());
-  }
-
-  private async listWorkspaceEntries(nodeId: string, inputPath: unknown): Promise<{ nodeId: string; path: string; entries: WorkspaceNodeEntry[] }> {
-    if (nodeId !== 'master') {
-      throw new Error('Workspace file APIs currently support only master in this MVP.');
-    }
-
-    const resolvedPath = this.resolveWorkspacePath(inputPath);
-    let stat: fs.Stats | null = null;
-    try {
-      stat = await fs.stat(resolvedPath);
-    } catch {
-      stat = null;
-    }
-    if (!stat) {
-      throw new Error(`Path not found: ${resolvedPath}`);
-    }
-    if (!stat.isDirectory()) {
-      throw new Error(`Path is not a directory: ${resolvedPath}`);
-    }
-
-    const dirents = await fs.readdir(resolvedPath, { withFileTypes: true });
-    const entries = await Promise.all(dirents.map(async (dirent) => {
-      const entryPath = path.join(resolvedPath, dirent.name);
-      let entryStat: fs.Stats | null = null;
-      try {
-        entryStat = await fs.stat(entryPath);
-      } catch {
-        entryStat = null;
-      }
-      return {
-        name: dirent.name,
-        path: entryPath,
-        isDirectory: dirent.isDirectory(),
-        size: entryStat?.size || 0,
-        modifiedAt: entryStat ? entryStat.mtimeMs : 0,
-      } as WorkspaceNodeEntry;
-    }));
-
-    entries.sort((a, b) => {
-      if (a.isDirectory !== b.isDirectory) {
-        return a.isDirectory ? -1 : 1;
-      }
-      return a.name.localeCompare(b.name);
-    });
-
-    return { nodeId, path: resolvedPath, entries };
-  }
-
-  private async readWorkspaceFile(nodeId: string, inputPath: unknown): Promise<{ nodeId: string; path: string; content: string; size: number; modifiedAt: number }> {
-    if (nodeId !== 'master') {
-      throw new Error('Workspace file APIs currently support only master in this MVP.');
-    }
-
-    const resolvedPath = this.resolveWorkspacePath(inputPath);
-    let stat: fs.Stats | null = null;
-    try {
-      stat = await fs.stat(resolvedPath);
-    } catch {
-      stat = null;
-    }
-    if (!stat) {
-      throw new Error(`Path not found: ${resolvedPath}`);
-    }
     if (!stat.isFile()) {
-      throw new Error(`Path is not a file: ${resolvedPath}`);
+      throw new Error('Path is not a file');
     }
-
-    if (stat.size > MAX_INLINE_FILE_BYTES) {
-      throw createWorkspaceFileTooLargeError(resolvedPath, stat.size, MAX_INLINE_FILE_BYTES);
-    }
-
-    const content = await fs.readFile(resolvedPath, 'utf8');
-    return {
-      nodeId,
-      path: resolvedPath,
-      content,
-      size: stat.size,
-      modifiedAt: stat.mtimeMs,
-    };
-  }
-
-  private async writeWorkspaceFile(nodeId: string, inputPath: unknown, content: unknown): Promise<{ nodeId: string; path: string; size: number; modifiedAt: number }> {
-    if (nodeId !== 'master') {
-      throw new Error('Workspace file APIs currently support only master in this MVP.');
-    }
-    if (typeof content !== 'string') {
-      throw new Error('content must be a string');
-    }
-
-    const resolvedPath = this.resolveWorkspacePath(inputPath);
-    await fs.ensureDir(path.dirname(resolvedPath));
-    await fs.writeFile(resolvedPath, content, 'utf8');
-    const stat = await fs.stat(resolvedPath);
-    return {
-      nodeId,
-      path: resolvedPath,
-      size: stat.size,
-      modifiedAt: stat.mtimeMs,
-    };
-  }
-
-  private async streamWorkspaceDownload(resolvedPath: string, res: express.Response, archiveFormat?: string): Promise<void> {
-    const stat = await fs.stat(resolvedPath);
-
-    if (stat.isFile()) {
-      await new Promise<void>((resolve, reject) => {
-        const fileName = path.basename(resolvedPath);
-        res.setHeader('Content-Type', 'application/octet-stream');
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`);
-
-        const stream = fs.createReadStream(resolvedPath);
-        stream.on('error', (err) => reject(err));
-        res.on('close', () => {
-          if (!res.writableEnded) {
-            stream.destroy();
-          }
-        });
-        res.on('finish', () => resolve());
-        stream.pipe(res);
-      });
-      return;
-    }
-
-    if (!stat.isDirectory()) {
-      throw new Error('Path is neither a file nor a directory');
-    }
-
-    if (archiveFormat && archiveFormat !== 'tgz' && archiveFormat !== 'tar.gz') {
-      throw new Error('Directory downloads currently support only archive=tgz');
-    }
-
-    const rawBaseName = path.basename(resolvedPath);
-    const parentDir = rawBaseName ? path.dirname(resolvedPath) : resolvedPath;
-    const archiveBaseName = rawBaseName || 'workspace';
-    const archiveName = `${archiveBaseName}.tar.gz`;
-    const tarArgs = rawBaseName
-      ? ['-czf', '-', '-C', parentDir, rawBaseName]
-      : ['-czf', '-', '-C', resolvedPath, '.'];
-
-    res.setHeader('Content-Type', 'application/gzip');
-    res.setHeader('Content-Disposition', `attachment; filename="${archiveName.replace(/"/g, '')}"`);
 
     await new Promise<void>((resolve, reject) => {
-      const tarProcess = spawn('tar', tarArgs, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      const fileName = path.basename(resolvedPath);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`);
 
-      let stderr = '';
-      tarProcess.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
-      });
-
-      tarProcess.on('error', (err) => {
-        reject(err);
-      });
-
+      const stream = fs.createReadStream(resolvedPath);
+      stream.on('error', (err) => reject(err));
       res.on('close', () => {
-        if (!res.writableEnded && !tarProcess.killed) {
-          tarProcess.kill('SIGTERM');
+        if (!res.writableEnded) {
+          stream.destroy();
         }
       });
-
-      tarProcess.stdout.pipe(res);
-      tarProcess.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        reject(new Error(stderr.trim() || `tar exited with code ${code}`));
-      });
+      res.on('finish', () => resolve());
+      stream.pipe(res);
     });
   }
 
@@ -960,55 +780,6 @@ export class WebUIChannel implements Channel {
             res.json({ success: true, sessionId: updated.id, ...buildWebUiModelStatus(updated) });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session child model');
-            res.status(400).json({ error: e.message });
-          }
-        },
-      });
-
-      httpServerInstance.addRoute({
-        path: '/api/fs/tree',
-        method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
-          try {
-            const nodeId = typeof req.query.nodeId === 'string' && req.query.nodeId.trim() ? req.query.nodeId.trim() : 'master';
-            const data = await this.listWorkspaceEntries(nodeId, req.query.path);
-            res.json(data);
-          } catch (e: any) {
-            logger.error({ err: e }, 'Failed to list workspace entries');
-            res.status(400).json({ error: e.message });
-          }
-        },
-      });
-
-      httpServerInstance.addRoute({
-        path: '/api/fs/read',
-        method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
-          try {
-            const nodeId = typeof req.query.nodeId === 'string' && req.query.nodeId.trim() ? req.query.nodeId.trim() : 'master';
-            const data = await this.readWorkspaceFile(nodeId, req.query.path);
-            res.json(data);
-          } catch (e: any) {
-            logger.error({ err: e }, 'Failed to read workspace file');
-            if (e?.code === 'FILE_TOO_LARGE') {
-              res.status(413).json({ error: e.message, code: e.code, path: e.path, size: e.size, maxSize: e.maxSize });
-              return;
-            }
-            res.status(400).json({ error: e.message });
-          }
-        },
-      });
-
-      httpServerInstance.addRoute({
-        path: '/api/fs/write',
-        method: 'POST',
-        handler: async (req: express.Request, res: express.Response) => {
-          try {
-            const nodeId = typeof req.body?.nodeId === 'string' && req.body.nodeId.trim() ? req.body.nodeId.trim() : 'master';
-            const data = await this.writeWorkspaceFile(nodeId, req.body?.path, req.body?.content);
-            res.json({ success: true, ...data });
-          } catch (e: any) {
-            logger.error({ err: e }, 'Failed to write workspace file');
             res.status(400).json({ error: e.message });
           }
         },
@@ -1989,12 +1760,10 @@ export class WebUIChannel implements Channel {
           return;
         }
 
-        const archiveFormat = typeof req.query.archive === 'string' ? req.query.archive.trim() : undefined;
-
         try {
-          await this.streamWorkspaceDownload(filePath, res, archiveFormat);
+          await this.streamPathDownload(filePath, res);
         } catch (err) {
-          logger.error({ err, filePath, archiveFormat }, 'Failed to send workspace download');
+          logger.error({ err, filePath }, 'Failed to send file download');
           if (!res.headersSent) {
             res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to send download' });
           }
