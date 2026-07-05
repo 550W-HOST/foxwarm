@@ -815,7 +815,7 @@ function validateManagedSessionInputParts(parts: MessagePart[]): MessagePart[] {
   });
 }
 
-function normalizeManagedSessionStepInput(positionalArgs: any[], kwargs: Record<string, any>): { parts?: MessagePart[]; message?: Message } {
+function normalizeManagedSessionStepInput(_positionalArgs: any[], kwargs: Record<string, any>): { parts?: MessagePart[]; message?: Message } {
   const rawParts = kwargs.parts;
   if (rawParts !== undefined) {
     const normalizedParts = normalizeMontyValue(rawParts);
@@ -1255,7 +1255,7 @@ async function requireSessionContext(ctx: ToolContext): Promise<{ sessionId: str
   return { sessionId, session };
 }
 
-async function readScriptSource(filePath: string, ctx: ToolContext, session: Session): Promise<{ scriptPath: string; code: string }> {
+async function readScriptSource(filePath: string, _ctx: ToolContext, session: Session): Promise<{ scriptPath: string; code: string }> {
   if (!filePath || typeof filePath !== 'string') {
     throw new Error('filePath is required');
   }

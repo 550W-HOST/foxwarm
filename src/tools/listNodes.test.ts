@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import * as sessionManager from '../sessionManager';
 import { nodesManager } from '../nodes/manager';
 import { list_nodes } from '../tools';
 

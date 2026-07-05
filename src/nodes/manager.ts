@@ -125,7 +125,7 @@ export class NodesManager {
   /**
    * Register a new node
    */
-  registerNode(ws: WebSocket, req: http.IncomingMessage, customNodeId?: string): string {
+  registerNode(ws: WebSocket, _req: http.IncomingMessage, customNodeId?: string): string {
     if (customNodeId && isReservedNodeId(customNodeId)) {
       throw new Error(`Node id \`${customNodeId}\` is reserved`);
     }
@@ -161,7 +161,7 @@ export class NodesManager {
   /**
    * Register a new node with capabilities (dynamic tools)
    */
-  registerNodeWithTools(ws: WebSocket, req: http.IncomingMessage, nodeType: string, capabilities: NodeCapabilities, customNodeId?: string): string {
+  registerNodeWithTools(ws: WebSocket, _req: http.IncomingMessage, nodeType: string, capabilities: NodeCapabilities, customNodeId?: string): string {
     if (customNodeId && isReservedNodeId(customNodeId)) {
       throw new Error(`Node id \`${customNodeId}\` is reserved`);
     }
@@ -292,7 +292,7 @@ export class NodesManager {
    * List all nodes
    */
   listNodes(): Array<{ id: string; lastActivity: number }> {
-    return Array.from(this.nodes.entries()).map(([id, node]) => ({
+    return Array.from(this.nodes.values()).map((node) => ({
       id: node.id,
       lastActivity: node.lastActivity
     }));
@@ -302,9 +302,9 @@ export class NodesManager {
    * List all nodes with their tool capabilities
    */
   listNodesWithTools(): Array<{ id: string; type: string; tools: ToolDefinition[] }> {
-    return Array.from(this.nodes.entries())
-      .filter(([id, node]) => node.type !== 'master' && node.capabilities)
-      .map(([id, node]) => ({
+    return Array.from(this.nodes.values())
+      .filter((node) => node.type !== 'master' && node.capabilities)
+      .map((node) => ({
         id: node.id,
         type: node.type,
         tools: node.capabilities?.tools || []

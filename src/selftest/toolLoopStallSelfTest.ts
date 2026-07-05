@@ -113,7 +113,7 @@ async function main(): Promise<void> {
     await test('session continues across apply_patch -> read -> exec -> final response', async () => {
       const sessionId = makeSessionId('selftest_tool_chain');
       createdSessionIds.push(sessionId);
-      const session = await ensureSession(sessionId);
+      await ensureSession(sessionId);
       const sampleFile = path.join(tempRoot, 'tool-chain.txt');
       await fs.writeFile(sampleFile, 'alpha\nomega\n');
 

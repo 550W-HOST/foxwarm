@@ -1,5 +1,4 @@
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from '../channel';
-import { inspectChannelAuthorizationFromContext, formatAuthorizationInspection } from '../channelAuth';
 import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses } from '../channelRuntime';
 import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes, listPendingPairings } from '../nodes/registry';

@@ -67,7 +67,7 @@ async function createTestSession(sessionId: string): Promise<Session> {
   return session;
 }
 
-async function appendTempConversation(activeSession: Session, parts: MessagePart[] | null, text: string, options?: { appendMessage?: (message: Message) => Promise<void> }): Promise<void> {
+async function appendTempConversation(parts: MessagePart[] | null, text: string, options?: { appendMessage?: (message: Message) => Promise<void> }): Promise<void> {
   if (parts) {
     await options?.appendMessage?.({ role: 'user', parts });
   }
@@ -113,7 +113,7 @@ test('/btw command acks immediately and writes async result as display-only hist
       tempPromptCacheKeyAtCall = activeSession.promptCacheKey;
       chatStarted.resolve();
       await chatGate.promise;
-      await appendTempConversation(activeSession, parts, 'btw text answer', options);
+      await appendTempConversation(parts, 'btw text answer', options);
       return { text: 'btw text answer', modelId: 'anthropic/claude-sonnet-4-5', allParts: [{ text: 'btw text answer' }] };
     };
 
@@ -160,11 +160,11 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.match(formatSessionMessagesPreview(sessionId, after.history, 0, after.history.length), /model \[display-only\]:/);
 
     const toolPreview = await toolsSessionAgent.tool_get_session_messages({ sessionId }, { sessionId, session: after } as any);
-    assert.match(toolPreview, /model \[display-only\]: \[display-only message hidden\]/);
+    assert.match(toolPreview, /model \[display-only\]:\s+\[display-only message hidden\]/);
     assert.doesNotMatch(toolPreview, /btw text answer/);
 
     const archivePreview = await toolsSessionAgent.tool_recall({ sessionId, target: 'msg#1-2' }, { sessionId, session: after } as any);
-    assert.match(archivePreview, /model \[display-only\]: \[display-only message hidden\]/);
+    assert.match(archivePreview, /model \[display-only\]:\s+\[display-only message hidden\]/);
     assert.doesNotMatch(archivePreview, /btw text answer/);
 
     assert.deepEqual(tools.modelFacingDefinitions.map(def => def.name), toolNamesBefore);
@@ -190,7 +190,7 @@ test('/btw does not execute tool calls returned by the model', async () => {
     const broadcasts: string[] = [];
     session.broadcast = (text: string) => { broadcasts.push(String(text)); };
 
-    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void> }) => {
+    (llm as any).chat = async (parts: MessagePart[] | null, _activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void> }) => {
       if (parts) {
         await options?.appendMessage?.({ role: 'user', parts });
       }

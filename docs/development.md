@@ -124,6 +124,14 @@ skill 会自动出现在可见 skills catalog 中；需要完整说明时，使�
 npm run build
 ```
 
+### 质量检查
+
+```bash
+npm run quality:unused
+```
+
+`quality:unused` 是只读 TypeScript 检查入口：root backend、`packages/shared`、`packages/cli-node` 会额外启用 `--noUnusedLocals --noUnusedParameters`；WebUI 使用自身 tsconfig 中已开启的 unused 检查。该命令不安装新依赖，也不生成构建产物。
+
 ### 日志
 
 ```bash

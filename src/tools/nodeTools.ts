@@ -187,7 +187,7 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
     return `Current node changed to \`${nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${defaultCwd}\`.`;
 };
 
-export const tool_node_bootstrap_info = async (args: ToolArgs = {}) => {
+export const tool_node_bootstrap_info = async (_args: ToolArgs = {}) => {
     const token = await ensureNodePairingToken();
     return buildNodeBootstrapInfo({ pairingToken: token });
 };

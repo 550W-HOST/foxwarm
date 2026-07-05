@@ -71,7 +71,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
   return message;
 }
 
-export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
+export async function tool_list_agents(_args: ToolArgs = {}, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'list_agents');
   const agentsDir = AGENTS_DIR;
 

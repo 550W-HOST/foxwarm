@@ -73,7 +73,7 @@ function sanitizeTerminalRecord(record: ManagedTerminal): TerminalRecord {
   };
 }
 
-async function buildRcFile(agentName: string, terminalId: string, cwdPath: string): Promise<string> {
+async function buildRcFile(agentName: string, terminalId: string): Promise<string> {
   const tempDir = path.join(getAgentDir(agentName), '.temp', 'terminals');
   await fs.ensureDir(tempDir);
   const rcFilePath = path.join(tempDir, `${terminalId}.bashrc`);
@@ -172,7 +172,7 @@ export async function createTerminal(options: {
   const tempDir = path.join(getAgentDir(agentName), '.temp', 'terminals');
   await fs.ensureDir(tempDir);
   const cwdPath = path.join(tempDir, `${terminalId}.cwd.txt`);
-  const rcFilePath = shell.includes('bash') ? await buildRcFile(agentName, terminalId, cwdPath) : undefined;
+  const rcFilePath = shell.includes('bash') ? await buildRcFile(agentName, terminalId) : undefined;
 
   const args = rcFilePath && shell.includes('bash')
     ? ['--rcfile', rcFilePath, '-i']

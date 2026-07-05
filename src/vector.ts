@@ -935,7 +935,7 @@ async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: numb
     };
 }
 
-async function appendIndexedBlocks(sessionId: string, lastIndexedBlockId: number, blockLines: ArchiveBlockRecord[]): Promise<{ lastIndexedBlockId: number; rowCount: number; blockCount: number; }> {
+async function appendIndexedBlocks(_sessionId: string, lastIndexedBlockId: number, blockLines: ArchiveBlockRecord[]): Promise<{ lastIndexedBlockId: number; rowCount: number; blockCount: number; }> {
     const targetBlocks = blockLines.filter(line => line.id > lastIndexedBlockId);
     if (targetBlocks.length === 0) {
         return {

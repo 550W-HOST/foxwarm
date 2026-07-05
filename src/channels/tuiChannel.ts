@@ -5,7 +5,6 @@
 
 import blessed from 'blessed';
 import { Channel, ChannelContext, ChannelMessage } from '../channel';
-import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
 
 export class TUIChannel implements Channel {
@@ -27,7 +26,6 @@ export class TUIChannel implements Channel {
   private statusUpdateInterval: NodeJS.Timeout | null = null;
   
   private messageHandler?: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>;
-  private commandHandler?: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>;
 
   constructor() {    
     this.screen = blessed.screen({
@@ -414,7 +412,7 @@ export class TUIChannel implements Channel {
     this.displayMessage('user', text);
     
     // Send message without waiting for response (like WebUI)
-    this.messageHandler(ctx, message).catch(e => {
+    this.messageHandler(ctx, message).catch(() => {
       this.displayMessage('assistant', 'Error: Failed to send message');
     });
   }
@@ -550,15 +548,15 @@ export class TUIChannel implements Channel {
     this.messageHandler = handler;
   }
 
-  onCommand(handler: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>): void {
-    this.commandHandler = handler;
+  onCommand(_handler: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>): void {
+    // TUI currently handles text input as normal messages; slash-command dispatch is not wired here.
   }
 
-  async sendMessage(userId: string, messageText: string, options?: any): Promise<void> {
+  async sendMessage(_userId: string, _messageText: string, _options?: any): Promise<void> {
     // Messages are displayed via reply() callback
   }
 
-  async sendTyping(userId: string): Promise<void> {
+  async sendTyping(_userId: string): Promise<void> {
     // No-op for TUI
   }
 

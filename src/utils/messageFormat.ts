@@ -52,7 +52,7 @@ function formatMultilineText(text: string, continuationPrefix: string = '> '): s
   ].join('\n');
 }
 
-export function formatPrefixedMultilineText(prefix: string, text: string, continuationPrefix: string = '> '): string {
+export function formatPrefixedMultilineText(prefix: string, text: string, _continuationPrefix: string = '> '): string {
   const normalized = text.trim();
   if (!normalized) {
     return prefix;

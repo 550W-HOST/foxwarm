@@ -15,7 +15,6 @@ export interface NodeToolContext {
 }
 
 type ToolArgs = Record<string, any>;
-const INLINE_OUTPUT_LIMIT = 10_000;
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

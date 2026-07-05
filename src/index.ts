@@ -26,14 +26,11 @@ import {
     HTTP_PORT,
     getDefaultChannelConfigByType,
     getNormalizedChannelConfigs,
-    MATRIX_CONFIG,
     MAIN_AGENT_MEMORY_DIR,
     NODE_TOKEN_FILE,
     ONBOOT_FILE,
     TELEGRAM_CONFIG,
     TOKEN_FILE,
-    WEIXIN_CONFIG,
-    WEWORK_CONFIG,
 } from './config';
 import type { TelegramConfig } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
