@@ -70,7 +70,7 @@ export class HttpServer {
     this.app.use(express.json());
     
     // Cookie parser
-    this.app.use((req, res, next) => {
+    this.app.use((req, _res, next) => {
       req.cookies = {};
       const cookieHeader = req.headers.cookie;
       if (cookieHeader) {

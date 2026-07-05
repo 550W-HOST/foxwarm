@@ -151,13 +151,15 @@ export async function resolvePermittedSessionTarget(
   deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getAgentMetadata'>,
   targetSessionId: string,
   fromSessionId?: string,
-): Promise<{ sourceSession?: Session; targetSession: Session }> {
+): Promise<{ sourceSession?: Session; targetSession: Session; requestedTargetSessionId: string; resolvedTargetSessionId: string }> {
   const sourceSession = fromSessionId ? await deps.getExistingSession(fromSessionId) : undefined;
   if (fromSessionId && !sourceSession) {
     throw new Error(`Session "${fromSessionId}" not found.`);
   }
 
-  const targetSession = await checkIsolatedPermission(deps, sourceSession, targetSessionId);
+  const requestedTargetSessionId = targetSessionId;
+  const resolvedTargetSessionId = resolveSpecialSessionTargetId(requestedTargetSessionId, sourceSession, fromSessionId);
+  const targetSession = await checkIsolatedPermission(deps, sourceSession, resolvedTargetSessionId);
 
   const sourceAgentMeta = sourceSession ? deps.getAgentMetadata(sourceSession.agent || 'main') : undefined;
   const targetAgentMeta = deps.getAgentMetadata(targetSession.agent || 'main');
@@ -166,7 +168,32 @@ export async function resolvePermittedSessionTarget(
     throw new Error('Isolated sessions can only communicate with themselves or their direct parent/child sessions.');
   }
 
-  return { sourceSession, targetSession };
+  return { sourceSession, targetSession, requestedTargetSessionId, resolvedTargetSessionId: targetSession.id };
+}
+
+function buildAgentMainSessionId(agentName: string): string {
+  return agentName === 'main' ? 'main' : `${agentName}/main`;
+}
+
+function resolveSpecialSessionTargetId(targetSessionId: string, sourceSession?: Session, fromSessionId?: string): string {
+  if (targetSessionId === '<main>') {
+    if (!sourceSession) {
+      throw new Error('Cannot resolve `<main>` without current session context.');
+    }
+    return buildAgentMainSessionId(sourceSession.agent || 'main');
+  }
+
+  if (targetSessionId === '<parent>') {
+    if (!sourceSession) {
+      throw new Error('Cannot resolve `<parent>` without current session context.');
+    }
+    if (!sourceSession.parentSessionId) {
+      throw new Error(`Cannot resolve \`<parent>\`: current session \`${sourceSession.id || fromSessionId || 'unknown'}\` has no parent session.`);
+    }
+    return sourceSession.parentSessionId;
+  }
+
+  return targetSessionId;
 }
 
 export async function sendToSession(
@@ -174,15 +201,16 @@ export async function sendToSession(
   targetSessionId: string,
   message: string,
   fromSessionId?: string
-): Promise<void> {
-  const { sourceSession: fromSession, targetSession } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
+): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
+  const { sourceSession: fromSession, targetSession, requestedTargetSessionId } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
   if (fromSession && fromSession.id === targetSession.id) {
-    throw new Error(`send_to_session target resolves to this same session: current_session_id=\`${fromSession.id}\`, requested_session_id=\`${targetSessionId}\`, resolved_session_id=\`${targetSession.id}\`. You are already in this session; check whether you meant to send to a parent/child/other session. If you meant to message the direct user in the current session rather than another agent, do not use send_to_session; generate ordinary assistant text instead.`);
+    throw new Error(`send_to_session target resolves to this same session: current_session_id=\`${fromSession.id}\`, requested_session_id=\`${requestedTargetSessionId}\`, resolved_session_id=\`${targetSession.id}\`. You are already in this session; check whether you meant to send to a parent/child/other session. If you meant to message the direct user in the current session rather than another agent, do not use send_to_session; generate ordinary assistant text instead.`);
   }
 
-  const replyTarget = fromSessionId || 'unknown-session';
-  const prefix = fromSessionId
-    ? `[SYSTEM: The following message is an inter-agent message from another session, not from the direct user; source_session_id: \`${fromSessionId}\`; reply_via: send_to_session({sessionId: \`${replyTarget}\`, message: "..."}).]`
+  const sourceSessionId = fromSession?.id || fromSessionId;
+  const replyTarget = sourceSessionId || 'unknown-session';
+  const prefix = sourceSessionId
+    ? `[SYSTEM: The following message is an inter-agent message from another session, not from the direct user; source_session_id: \`${sourceSessionId}\`; reply_via: send_to_session({sessionId: \`${replyTarget}\`, message: "..."}).]`
     : '[SYSTEM: The following message is system-delivered session content, not from the direct user.]';
 
   const combinedText = message
@@ -191,9 +219,14 @@ export async function sendToSession(
 
   const parts: MessagePart[] = [{ text: combinedText }];
 
-  await deps.enqueueSessionItem(targetSessionId, {
+  await deps.enqueueSessionItem(targetSession.id, {
     type: 'intersession',
     sourceSessionId: fromSession?.id,
     parts,
   });
+
+  return {
+    requestedSessionId: requestedTargetSessionId,
+    resolvedSessionId: targetSession.id,
+  };
 }

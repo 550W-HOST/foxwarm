@@ -82,7 +82,7 @@ export class NodesManager {
       'send_to_session',
       'wait',
       'submit_compact_plan',
-      'list_sessions',
+      'session',
       'list_skills',
       'load_skill',
       'get_session_messages',
@@ -125,7 +125,7 @@ export class NodesManager {
   /**
    * Register a new node
    */
-  registerNode(ws: WebSocket, req: http.IncomingMessage, customNodeId?: string): string {
+  registerNode(ws: WebSocket, _req: http.IncomingMessage, customNodeId?: string): string {
     if (customNodeId && isReservedNodeId(customNodeId)) {
       throw new Error(`Node id \`${customNodeId}\` is reserved`);
     }
@@ -161,7 +161,7 @@ export class NodesManager {
   /**
    * Register a new node with capabilities (dynamic tools)
    */
-  registerNodeWithTools(ws: WebSocket, req: http.IncomingMessage, nodeType: string, capabilities: NodeCapabilities, customNodeId?: string): string {
+  registerNodeWithTools(ws: WebSocket, _req: http.IncomingMessage, nodeType: string, capabilities: NodeCapabilities, customNodeId?: string): string {
     if (customNodeId && isReservedNodeId(customNodeId)) {
       throw new Error(`Node id \`${customNodeId}\` is reserved`);
     }
@@ -215,6 +215,53 @@ export class NodesManager {
   }
 
   /**
+   * Disconnect and unregister a remote node immediately.
+   * Used when persistent credentials are removed or moved so stale runtime
+   * WebSocket state cannot continue to execute tools under the old id.
+   */
+  disconnectNode(nodeId: string, reason = 'Node disconnected by server'): boolean {
+    if (nodeId === 'master') {
+      throw new Error('Cannot disconnect master node');
+    }
+
+    const node = this.nodes.get(nodeId);
+    if (!node) {
+      return false;
+    }
+
+    this.rejectPendingOperationsForNode(nodeId, reason);
+    this.nodes.delete(nodeId);
+
+    if (node.ws) {
+      try {
+        node.ws.close(1008, reason);
+      } catch (err) {
+        logger.warn({ err, nodeId }, 'Failed to close node WebSocket cleanly; terminating');
+        try {
+          node.ws.terminate();
+        } catch {}
+      }
+    }
+
+    logger.info({ nodeId, reason }, 'Node disconnected and unregistered');
+    return true;
+  }
+
+  private rejectPendingOperationsForNode(nodeId: string, reason: string): void {
+    for (const [callId, call] of this.toolCalls.entries()) {
+      if (call.node !== nodeId) continue;
+      this.toolCalls.delete(callId);
+      call.reject(reason);
+    }
+
+    for (const [transferId, transfer] of this.fileTransfers.entries()) {
+      if (transfer.nodeId !== nodeId) continue;
+      this.fileTransfers.delete(transferId);
+      transfer.reject(reason);
+    }
+  }
+
+  /**
    * Get current node for a session
    */
   async getCurrentNode(sessionId: string): Promise<string | null> {
@@ -245,7 +292,7 @@ export class NodesManager {
    * List all nodes
    */
   listNodes(): Array<{ id: string; lastActivity: number }> {
-    return Array.from(this.nodes.entries()).map(([id, node]) => ({
+    return Array.from(this.nodes.values()).map((node) => ({
       id: node.id,
       lastActivity: node.lastActivity
     }));
@@ -255,9 +302,9 @@ export class NodesManager {
    * List all nodes with their tool capabilities
    */
   listNodesWithTools(): Array<{ id: string; type: string; tools: ToolDefinition[] }> {
-    return Array.from(this.nodes.entries())
-      .filter(([id, node]) => node.type !== 'master' && node.capabilities)
-      .map(([id, node]) => ({
+    return Array.from(this.nodes.values())
+      .filter((node) => node.type !== 'master' && node.capabilities)
+      .map((node) => ({
         id: node.id,
         type: node.type,
         tools: node.capabilities?.tools || []

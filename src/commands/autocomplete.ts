@@ -168,6 +168,16 @@ export const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
     usage: '/node reject <pending-id>',
     children: [placeholderNode('<pending-id>', 'Pending pairing id')],
   }),
+  literalNode('remove', 'Remove an approved node and invalidate its credentials', {
+    usage: '/node remove <node-id>',
+    children: [placeholderNode('<node-id>', 'Approved node id to remove')],
+  }),
+  literalNode('move', 'Rename an approved node id while preserving its auth hash and metadata', {
+    usage: '/node move <old-id> <new-id>',
+    children: [placeholderNode('<old-id>', 'Existing approved node id', {
+      children: [placeholderNode('<new-id>', 'New sanitized node id')],
+    })],
+  }),
   literalNode('pair-help', 'Show node pairing/bootstrap help'),
   placeholderNode('<node-id>', 'Existing node id; omit it to list nodes'),
 ]

@@ -294,7 +294,7 @@ test('managed session notifies owner on inbox arrival and stale leases are recla
     await sessionManager.createEmptySession(parentId);
     await sessionManager.createEmptySession(childId);
 
-    const lease = await managedSessions.openManagedSession({ sessionId: childId, ownerSessionId: parentId });
+    await managedSessions.openManagedSession({ sessionId: childId, ownerSessionId: parentId });
     await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'wake owner' }], 'background');
 
     const ownerAfterWake = await sessionManager.getSession(parentId);

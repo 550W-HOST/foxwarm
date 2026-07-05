@@ -140,8 +140,7 @@ agents/
 skills/
   <skill>/
     SKILL.md
-    skill.json  # optional fallback metadata
-    memory/
+    references/  # optional, linked explicitly from SKILL.md
 
 state/
   token

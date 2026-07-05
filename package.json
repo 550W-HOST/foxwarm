@@ -5,6 +5,7 @@
   "main": "lib/index.js",
   "scripts": {
     "build": "npm --prefix packages/shared run build && npm --prefix packages/cli-node run build && rm -f lib/nodeClient.js lib/nodeClient.js.map lib/nodes/client.js lib/nodes/client.js.map lib/nodes/interactive-client.js lib/nodes/interactive-client.js.map && tsc",
+    "quality:unused": "node scripts/quality/unused-check.mjs",
     "build-all": "npm install && npm run build && npm --prefix packages/webui install && npm --prefix packages/webui run build",
     "start": "./scripts/start.sh",
     "start:notmux": "npm run build && node lib/index.js",

@@ -557,55 +557,6 @@ function getRecallPreviewBudget(count: number, previewLength: number): { request
   };
 }
 
-function buildRecallMessageChunkTargets(startSeq: number, endSeq: number, previewLength: number, maxChunks: number = 3): string[] {
-  const totalMessages = Math.max(1, endSeq - startSeq + 1);
-  const budget = getRecallPreviewBudget(totalMessages, previewLength);
-  const chunkSize = Math.max(1, budget.maxItemsWithinLimit);
-  const chunks: string[] = [];
-  let cursor = startSeq;
-  while (cursor <= endSeq && chunks.length < maxChunks) {
-    const chunkEnd = Math.min(endSeq, cursor + chunkSize - 1);
-    chunks.push(formatMessageLogRange(cursor, chunkEnd));
-    cursor = chunkEnd + 1;
-  }
-  return chunks;
-}
-
-function buildRecallMessageBudgetNotice(options: {
-  targetSessionId: string;
-  includeSessionId: boolean;
-  blockId?: number;
-  startSeq: number;
-  endSeq: number;
-  messageCount: number;
-  previewLength: number;
-  preferBlockFirst?: boolean;
-  rangeSuffix?: string;
-}): string {
-  const { targetSessionId, includeSessionId, blockId, startSeq, endSeq, messageCount, previewLength, preferBlockFirst, rangeSuffix = '' } = options;
-  const budget = getRecallPreviewBudget(messageCount, previewLength);
-  const rangeTarget = `${formatMessageLogRange(startSeq, endSeq)}${rangeSuffix}`;
-  const prefix = typeof blockId === 'number'
-    ? `CTX-BLOCK B#${blockId} covers ${rangeTarget} (${messageCount} message(s)).`
-    : `Target ${rangeTarget} matches ${messageCount} message(s).`;
-  const chunks = buildRecallMessageChunkTargets(startSeq, endSeq, previewLength)
-    .map(target => formatRecallExample(targetSessionId, includeSessionId, target));
-  const lowerPreview = Math.max(1, Math.floor(ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT / Math.max(2, messageCount)));
-  const suggestions = [
-    preferBlockFirst
-      ? 'If a covering CTX-BLOCK hierarchy is available, drill down through child blocks before expanding a broad message range.'
-      : undefined,
-    chunks.length > 0 ? `Try a narrower message chunk such as ${chunks.map(example => `\`${example}\``).join(' or ')}.` : undefined,
-    lowerPreview < previewLength ? `Or lower previewLength (for example ${lowerPreview}) for this message range.` : undefined,
-  ].filter(Boolean).join(' ');
-
-  return `${prefix} Estimated preview budget is ${messageCount} × ${previewLength} = ${budget.requestedChars} characters, exceeding the ${ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT}-character limit. ${suggestions}`.trim();
-}
-
-function throwRecallMessageBudgetError(options: Parameters<typeof buildRecallMessageBudgetNotice>[0]): never {
-  throw new Error(`${buildRecallMessageBudgetNotice(options)}\n\n${buildRecallSyntaxHelp('Message target is too broad for recall preview output. Prefer `B#N` CTX-BLOCK drill-down first when you have a block id; use message targets only for precise ranges.')}`);
-}
-
 function capRecallBlockSummaryRecords(records: ArchiveBlockRecord[], previewLength: number): {
   records: ArchiveBlockRecord[];
   capped: boolean;
@@ -661,15 +612,6 @@ function selectRecallFrontierBlocks(records: ArchiveBlockRecord[]): ArchiveBlock
   )));
 
   return sortArchiveBlocksByMessageRange(frontier);
-}
-
-function formatRecallBlockDirectoryLine(record: ArchiveBlockRecord, previewLength: number): string {
-  const origin = record.inherited ? ` [inherited from ${record.sourceSessionId || 'unknown'}]` : ' [local]';
-  const blockText = formatArchiveBlockContextText({
-    ...record,
-    summary: truncateUnicodeSafe(record.summary || '', previewLength) || '[empty summary]',
-  });
-  return `- ${blockText}${origin}`;
 }
 
 async function getRecallBlockById(sessionId: string, id: number): Promise<ArchiveBlockRecord | undefined> {
@@ -906,8 +848,8 @@ async function buildRecallMessagesByRange(
   targetSessionId: string,
   startSeq: number,
   endSeq: number,
-  previewLength: number,
-  includeSessionId: boolean,
+  _previewLength: number,
+  _includeSessionId: boolean,
   renderOptions: ContextPreviewRenderOptions,
 ): Promise<string> {
   const result = await sessionManager.getArchivedMessages(targetSessionId, { startSeq, endSeq });
@@ -927,7 +869,7 @@ async function buildRecallMessagesByRange(
 
 async function buildRecallFrontierBlocks(
   targetSessionId: string,
-  previewLength: number,
+  _previewLength: number,
   includeSessionId: boolean,
   renderOptions: ContextPreviewRenderOptions,
 ): Promise<string> {
@@ -975,7 +917,6 @@ async function buildRecallBlockDetail(
 
   const range = await resolveRecallBlockMessageRange(targetSessionId, block);
   const blockWithTime = await hydrateRecallBlockTimeRange(targetSessionId, block, range);
-  const rangeTimeSuffix = formatArchiveBlockTimeRange(blockWithTime);
   const blockText = formatArchiveBlockContextText({
     ...blockWithTime,
     summary: truncateUnicodeSafe(blockWithTime.summary || '', previewLength) || '[empty summary]',
@@ -1031,7 +972,7 @@ async function buildRecallBlockDetail(
 async function buildRecallMessagesForBlock(
   targetSessionId: string,
   blockId: number,
-  previewLength: number,
+  _previewLength: number,
   includeSessionId: boolean,
   renderOptions: ContextPreviewRenderOptions,
   options: { includeSuggestions?: boolean } = {},

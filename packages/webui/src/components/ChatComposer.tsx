@@ -1080,7 +1080,6 @@ const ChatComposer = memo(function ChatComposer({
           type="file"
           id="file-upload"
           multiple
-          accept="image/*,text/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.sh"
           onChange={(e) => {
             if (e.target.files) {
               setAttachments(prev => [...prev, ...Array.from(e.target.files!)])

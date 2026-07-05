@@ -448,19 +448,37 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
         if (data.type === 'message') {
           const msgTimestamp = data.message.__meta?.timestamp
           const isCommandResponse = data.message.__meta?.isCommandResponse
+          const isUpdateExisting = data.message.__meta?.updateExisting
 
           if (data.message.role === 'model') {
             setStreamingAssistantDraft(null)
           }
 
-          if (!isCommandResponse) {
+          if (!isCommandResponse && !isUpdateExisting) {
             if (msgTimestamp && msgTimestamp <= lastKnownTimestampRef.current) {
               return
             }
           }
 
           setMessages(prev => {
-            if (msgTimestamp && !isCommandResponse) {
+            const msgSeq = data.message.__meta?.seq
+            const msgId = data.message.__meta?.id
+            if (!isCommandResponse && (msgSeq || msgId)) {
+              const existingIndex = prev.findIndex(m => (
+                (msgSeq && m.__meta?.seq === msgSeq) ||
+                (msgId && m.__meta?.id === msgId)
+              ))
+              if (existingIndex !== -1) {
+                if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
+                  lastKnownTimestampRef.current = msgTimestamp
+                }
+                const next = [...prev]
+                next[existingIndex] = data.message
+                return next
+              }
+            }
+
+            if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
               const exists = prev.some(m => m.__meta?.timestamp === msgTimestamp)
               if (exists) {
                 return prev
@@ -487,7 +505,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
                   return !isLastUser
                 })
 
-                if (msgTimestamp && !isCommandResponse) {
+                if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
                   lastKnownTimestampRef.current = msgTimestamp
                 }
 
@@ -495,7 +513,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
               }
             }
 
-            if (msgTimestamp && !isCommandResponse) {
+            if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
               lastKnownTimestampRef.current = msgTimestamp
             }
             return [...prev, data.message]

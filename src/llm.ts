@@ -26,7 +26,7 @@ import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseF
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
 import { guardToolOutputForModel } from './toolOutputGuard';
-import { sanitizeLoneSurrogatesInPayload } from './utils/unicode';
+import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
 
 type LlmInteractionLogFiles = {
@@ -121,6 +121,30 @@ function getPromptCacheKeyForSessionId(sessionId?: string): string {
     return generatePromptCacheKey();
 }
 
+/**
+ * Recursively replace `${VAR_NAME}` placeholders in strings within an object.
+ * Only string values are processed; non-string values are left as-is.
+ * Supported variables are defined in the `vars` map (key = variable name without `${}`).
+ */
+function expandTemplateVariables<T>(obj: T, vars: Record<string, string>): T {
+    if (typeof obj === 'string') {
+        return obj.replace(/\$\{(\w+)\}/g, (match, varName: string) => {
+            return Object.prototype.hasOwnProperty.call(vars, varName) ? vars[varName] : match;
+        }) as unknown as T;
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(item => expandTemplateVariables(item, vars)) as unknown as T;
+    }
+    if (obj !== null && typeof obj === 'object') {
+        const result: Record<string, any> = {};
+        for (const [key, value] of Object.entries(obj)) {
+            result[key] = expandTemplateVariables(value, vars);
+        }
+        return result as unknown as T;
+    }
+    return obj;
+}
+
 type RequestLlmOnceOptions = {
     contents: Message[];
     systemPrompt: string;
@@ -134,7 +158,52 @@ type RequestLlmOnceOptions = {
     registerAbortController?: boolean;
     maxRetries?: number;
     timeoutMs?: number;
+    onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
 };
+
+export type LlmRetryEvent = {
+    attempt: number;
+    maxRetries: number;
+    nextAttempt?: number;
+    delayMs?: number;
+    final?: boolean;
+    kind: 'http-error' | 'request-error' | 'response-error';
+    reason: string;
+    status?: string;
+};
+
+export type LlmRequestErrorDetails = {
+    modelId?: string;
+    attempt?: number;
+    maxRetries?: number;
+    kind?: LlmRetryEvent['kind'];
+    status?: string;
+    attempts?: unknown[];
+};
+
+export class LlmRequestError extends Error {
+    readonly modelId?: string;
+    readonly attempt?: number;
+    readonly maxRetries?: number;
+    readonly kind?: LlmRetryEvent['kind'];
+    readonly status?: string;
+    readonly attempts?: unknown[];
+
+    constructor(message: string, details: LlmRequestErrorDetails = {}) {
+        super(message);
+        this.name = 'LlmRequestError';
+        this.modelId = details.modelId;
+        this.attempt = details.attempt;
+        this.maxRetries = details.maxRetries;
+        this.kind = details.kind;
+        this.status = details.status;
+        this.attempts = details.attempts;
+    }
+}
+
+export function isLlmRequestError(error: unknown): error is LlmRequestError {
+    return error instanceof LlmRequestError || (typeof error === 'object' && error !== null && (error as any).name === 'LlmRequestError');
+}
 
 type ModelStreamProgressSnapshot = {
     reasoning?: string;
@@ -144,6 +213,96 @@ type ModelStreamProgressSnapshot = {
 
 const MODEL_STREAM_EVENT_THROTTLE_MS = 80;
 const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+export const DEFAULT_LLM_MAX_RETRIES = 5;
+const LLM_RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000];
+const MAX_RAW_STREAM_LOG_CHARS = 5 * 1024 * 1024;
+
+export function getLlmRetryDelayMs(failedAttempt: number): number {
+    const index = Math.max(0, failedAttempt - 1);
+    if (index < LLM_RETRY_DELAYS_MS.length) {
+        return LLM_RETRY_DELAYS_MS[index];
+    }
+
+    const lastDelay = LLM_RETRY_DELAYS_MS[LLM_RETRY_DELAYS_MS.length - 1];
+    const multiplier = 2 ** (index - LLM_RETRY_DELAYS_MS.length + 1);
+    return Math.min(60_000, lastDelay * multiplier);
+}
+
+function summarizeRetryReason(value: unknown, maxGraphemes = 240): string {
+    const text = typeof value === 'string'
+        ? value
+        : value instanceof Error
+        ? value.message
+        : String(value || 'Unknown error');
+    return truncateUnicodeSafeWithEllipsis(text.replace(/\s+/g, ' ').trim(), maxGraphemes);
+}
+
+function createRawStreamLogCapture(maxChars = MAX_RAW_STREAM_LOG_CHARS) {
+    let rawBody = '';
+    let rawBodyChars = 0;
+    let rawBodyTruncated = false;
+    const sseBlocks: string[] = [];
+    let sseBlocksChars = 0;
+    let sseBlocksTruncated = false;
+
+    const appendText = (current: string, currentChars: number, text: string) => {
+        if (!text || currentChars >= maxChars) {
+            return {
+                next: current,
+                chars: currentChars,
+                truncated: !!text,
+            };
+        }
+
+        const remaining = maxChars - currentChars;
+        if (text.length <= remaining) {
+            return {
+                next: `${current}${text}`,
+                chars: currentChars + text.length,
+                truncated: false,
+            };
+        }
+
+        return {
+            next: `${current}${text.slice(0, remaining)}`,
+            chars: maxChars,
+            truncated: true,
+        };
+    };
+
+    return {
+        appendChunk(text: string) {
+            const appended = appendText(rawBody, rawBodyChars, text);
+            rawBody = appended.next;
+            rawBodyChars = appended.chars;
+            rawBodyTruncated = rawBodyTruncated || appended.truncated;
+        },
+        appendSseBlock(block: string) {
+            if (!block) return;
+            if (sseBlocksChars >= maxChars) {
+                sseBlocksTruncated = true;
+                return;
+            }
+
+            const remaining = maxChars - sseBlocksChars;
+            const stored = block.length <= remaining ? block : block.slice(0, remaining);
+            sseBlocks.push(stored);
+            sseBlocksChars += stored.length;
+            if (stored.length < block.length) {
+                sseBlocksTruncated = true;
+            }
+        },
+        snapshot() {
+            return {
+                format: 'sse',
+                body: rawBody,
+                sseBlocks,
+                truncated: rawBodyTruncated || sseBlocksTruncated,
+                maxChars,
+            };
+        },
+    };
+}
 
 function newModelStreamId(iteration: number): string {
     return `ms_${iteration}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -575,7 +734,8 @@ async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
     let combined = '';
     combined += 'The following skills provide specialized instructions for specific tasks.\n';
     combined += 'When a task matches a skill\'s description, call the load_skill tool\n';
-    combined += 'with the skill\'s name to load its full instructions:\n';
+    combined += 'with the skill\'s name to load its full instructions and resource list.\n';
+    combined += 'Read listed resources only when the loaded skill or current task needs them:\n';
     combined += '<available_skills>\n';
 
     for (const skill of visibleSkills) {
@@ -1140,6 +1300,7 @@ export async function chat(
         appendMessage?: (message: Message) => Promise<void>;
         notifySessionEvents?: boolean;
         registerAbortController?: boolean;
+        onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
     },
 ): Promise<ChatResult> {
     const appendMessage = async (message: Message) => {
@@ -1186,6 +1347,7 @@ export async function chat(
         toolDefinitions: availableToolDefinitions,
         notifySessionEvents: options?.notifySessionEvents,
         registerAbortController: options?.registerAbortController,
+        onRetry: options?.onRetry,
     });
 
     if (result.usage) {
@@ -1339,7 +1501,10 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         };
     }
 
-    const extraFields = modelEntry.extraFields || {};
+    const templateVars: Record<string, string> = {
+        SESSION_CACHE_KEY: promptCacheKey,
+    };
+    const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
     Object.assign(data, extraFields);
     if (useOpenAIResponsesApi && extraFields.reasoning && typeof extraFields.reasoning === 'object') {
         const { reasoning: extraReasoning } = extraFields;
@@ -1366,23 +1531,25 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         }, 'Sanitized lone surrogate code units from provider request payload');
     }
 
+    const maxRetries = Math.max(1, options.maxRetries ?? DEFAULT_LLM_MAX_RETRIES);
     const logFiles = await logRequest(data, iteration);
     const responseAttempts: any[] = [];
     const buildChatResult = (result: Omit<ChatResult, 'modelId'>): ChatResult => ({
         ...result,
         modelId,
     });
-    const returnWithLoggedFailure = async (text: string): Promise<ChatResult> => {
+    const throwWithLoggedFailure = async (message: string, details: LlmRequestErrorDetails = {}): Promise<never> => {
         await moveInteractionLogsToErrorDir(logFiles);
-        return buildChatResult({
-            text,
-            allParts: [{ text }],
+        throw new LlmRequestError(message, {
+            modelId,
+            maxRetries,
+            attempts: responseAttempts,
+            ...details,
         });
     };
 
     let response: AxiosResponse;
     let resp: any;
-    const maxRetries = Math.max(1, options.maxRetries ?? 3);
     const abortController = new AbortController();
     const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
     const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
@@ -1399,13 +1566,27 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         modelStreamEmitter.reset();
     }
 
+    const notifyRetry = async (event: LlmRetryEvent): Promise<void> => {
+        if (!options.onRetry) {
+            return;
+        }
+
+        try {
+            await options.onRetry(event);
+        } catch (error) {
+            logger.warn({ err: error, sessionId: options.sessionId, attempt: event.attempt }, 'LLM retry notification failed');
+        }
+    };
+
     const { requestBody, requestHeaders: compressionHeaders } = maybeCompressLlmRequestBody(data, modelEntry);
+    let completedAttempt = 0;
 
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            let attemptRawStreamLog: ReturnType<typeof createRawStreamLogCapture> | null = null;
             try {
                 response = await axios.post(url, requestBody, {
-                    headers: { ...headers, ...compressionHeaders, ...(modelEntry.extraHeaders || {}) },
+                    headers: { ...headers, ...compressionHeaders, ...expandTemplateVariables(modelEntry.extraHeaders || {}, templateVars) },
                     timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
                     validateStatus: () => true,
                     signal: abortController.signal,
@@ -1415,65 +1596,133 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 if (useStreamingApi) {
                     if (response.status !== 200) {
                         const errorBody = await readStreamAsText(response.data, abortController.signal);
-                        await logResponse({
+                        const responseLog = {
                             status: response.status + ' ' + response.statusText,
                             headers: response.headers,
                             body: errorBody
+                        };
+                        responseAttempts.push({
+                            attempt,
+                            kind: 'http-error',
+                            ...responseLog,
+                        });
+                        await logResponse({
+                            ...responseLog,
+                            attempts: responseAttempts,
                         }, logFiles);
                         logger.error({
-                            status: response.status + ' ' + response.statusText,
-                            headers: response.headers,
+                            status: responseLog.status,
+                            headers: responseLog.headers,
                             body: errorBody
                         }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
+                        const delayMs = getLlmRetryDelayMs(attempt);
+                        const retryEvent: LlmRetryEvent = {
+                            attempt,
+                            maxRetries,
+                            kind: 'http-error',
+                            status: responseLog.status,
+                            reason: summarizeRetryReason(errorBody || responseLog.status),
+                        };
                         if (attempt === maxRetries) {
-                            return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts`);
+                            await notifyRetry({ ...retryEvent, final: true });
+                            return throwWithLoggedFailure(`API request failed after ${maxRetries} attempts`, {
+                                attempt,
+                                kind: retryEvent.kind,
+                                status: retryEvent.status,
+                            });
                         }
-                        await sleepWithSignal(5000, abortController.signal);
+                        await notifyRetry({
+                            ...retryEvent,
+                            nextAttempt: attempt + 1,
+                            delayMs,
+                        });
+                        await sleepWithSignal(delayMs, abortController.signal);
                         continue;
                     }
 
+                    attemptRawStreamLog = createRawStreamLogCapture();
+                    const streamCollectOptions = {
+                        onProgress: shouldNotifySessionEvents
+                            ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
+                            : undefined,
+                        onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
+                        onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
+                    };
+
                     if (useOpenAIResponsesApi) {
-                        resp = await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, {
-                            onProgress: shouldNotifySessionEvents
-                                ? (snapshot) => modelStreamEmitter.emit(snapshot)
-                                : undefined,
-                        });
+                        resp = await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, streamCollectOptions);
                     } else {
-                        resp = await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, {
-                            onProgress: shouldNotifySessionEvents
-                                ? (snapshot) => modelStreamEmitter.emit(snapshot)
-                                : undefined,
-                        });
+                        resp = await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, streamCollectOptions);
                     }
 
                     await logResponse({
                         status: response.status + ' ' + response.statusText,
                         headers: response.headers,
-                        body: resp
+                        body: resp,
+                        rawStream: attemptRawStreamLog.snapshot(),
+                        ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),
                     }, logFiles);
                 } else {
                     resp = response.data;
                     await logResponse({
                         status: response.status + ' ' + response.statusText,
                         headers: response.headers,
-                        body: resp
+                        body: resp,
+                        ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),
                     }, logFiles);
                 }
 
                 if (response.status !== 200) {
-                    logger.error({
+                    const responseLog = {
                         status: response.status + ' ' + response.statusText,
                         headers: response.headers,
+                        body: resp,
+                    };
+                    responseAttempts.push({
+                        attempt,
+                        kind: 'http-error',
+                        ...responseLog,
+                    });
+                    await logResponse({
+                        ...responseLog,
+                        attempts: responseAttempts,
+                    }, logFiles);
+                    logger.error({
+                        status: responseLog.status,
+                        headers: responseLog.headers,
                         body: resp
                     }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
+                    const delayMs = getLlmRetryDelayMs(attempt);
+                    const retryEvent: LlmRetryEvent = {
+                        attempt,
+                        maxRetries,
+                        kind: 'http-error',
+                        status: responseLog.status,
+                        reason: summarizeRetryReason(resp?.error?.message || resp?.error || responseLog.status),
+                    };
                     if (attempt === maxRetries) {
-                        return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts`);
+                        await notifyRetry({ ...retryEvent, final: true });
+                        return throwWithLoggedFailure(`API request failed after ${maxRetries} attempts`, {
+                            attempt,
+                            kind: retryEvent.kind,
+                            status: retryEvent.status,
+                        });
                     }
-                    await sleepWithSignal(2000, abortController.signal);
+                    await notifyRetry({
+                        ...retryEvent,
+                        nextAttempt: attempt + 1,
+                        delayMs,
+                    });
+                    await sleepWithSignal(delayMs, abortController.signal);
                     continue;
                 }
+                completedAttempt = attempt;
                 break;
             } catch (e: any) {
+                if (isLlmRequestError(e)) {
+                    throw e;
+                }
+
                 if (isAbortError(e)) {
                     responseAttempts.push({
                         attempt,
@@ -1481,6 +1730,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                         error: e?.message || String(e),
                         code: e?.code,
                         name: e?.name,
+                        ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                     });
                     await logResponse({ attempts: responseAttempts }, logFiles);
                     await moveInteractionLogsToErrorDir(logFiles);
@@ -1489,17 +1739,36 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
 
                 responseAttempts.push({
                     attempt,
-                    kind: 'network-error',
+                    kind: 'request-error',
                     error: e?.message || String(e),
                     code: e?.code,
                     name: e?.name,
+                    ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                 });
                 await logResponse({ attempts: responseAttempts }, logFiles);
                 logger.error({ status: (e as AxiosResponse)?.status }, `LLM API Network Error (Attempt ${attempt}/${maxRetries})`);
+                const delayMs = getLlmRetryDelayMs(attempt);
+                const retryEvent: LlmRetryEvent = {
+                    attempt,
+                    maxRetries,
+                    kind: 'request-error',
+                    reason: summarizeRetryReason(e),
+                    status: (e as AxiosResponse)?.status ? String((e as AxiosResponse).status) : undefined,
+                };
                 if (attempt === maxRetries) {
-                    return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts: ${e?.message || e}`);
+                    await notifyRetry({ ...retryEvent, final: true });
+                    return throwWithLoggedFailure(`API request failed after ${maxRetries} attempts: ${e?.message || e}`, {
+                        attempt,
+                        kind: retryEvent.kind,
+                        status: retryEvent.status,
+                    });
                 }
-                await sleepWithSignal(2000, abortController.signal);
+                await notifyRetry({
+                    ...retryEvent,
+                    nextAttempt: attempt + 1,
+                    delayMs,
+                });
+                await sleepWithSignal(delayMs, abortController.signal);
             }
         }
     } finally {
@@ -1516,7 +1785,17 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         const outputItems = Array.isArray(resp.output) ? resp.output : [];
 
         if (outputItems.length === 0) {
-            return returnWithLoggedFailure('Error: No response from OpenAI Responses API');
+            await notifyRetry({
+                attempt: completedAttempt || maxRetries,
+                maxRetries,
+                final: true,
+                kind: 'response-error',
+                reason: 'No response from OpenAI Responses API',
+            });
+            return throwWithLoggedFailure('No response from OpenAI Responses API', {
+                attempt: completedAttempt || undefined,
+                kind: 'response-error',
+            });
         }
 
         for (const item of outputItems) {
@@ -1568,9 +1847,16 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     } else if (useOpenAIChatCompletionsApi) {
         const choice = resp.choices?.[0];
         if (!choice) {
-            return buildChatResult({
-                text: 'Error: No response from OpenAI API',
-                allParts: [{ text: 'Error: No response from OpenAI API' }],
+            await notifyRetry({
+                attempt: completedAttempt || maxRetries,
+                maxRetries,
+                final: true,
+                kind: 'response-error',
+                reason: 'No response from OpenAI API',
+            });
+            return throwWithLoggedFailure('No response from OpenAI API', {
+                attempt: completedAttempt || undefined,
+                kind: 'response-error',
             });
         }
 

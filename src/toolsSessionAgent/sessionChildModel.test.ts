@@ -151,6 +151,82 @@ test('create_child_session defaults to non-fork when fork is omitted', async () 
   }
 });
 
+test('create_child_session replaces main leaf for agent-qualified parents', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const agentName = makeId('child_main_agent');
+  const agentMainId = `${agentName}/main`;
+  const agentChildId = `${agentName}/task1`;
+
+  try {
+    const agentMain = await ensureSession(agentMainId, primary);
+    agentMain.agent = agentName;
+    await sessionManager.saveSession(agentMainId);
+
+    await tool_create_child_session({ suffix: 'task1', fork: false }, { sessionId: agentMainId, session: agentMain });
+    const agentChild = await sessionManager.getSession(agentChildId);
+    assert.equal(agentChild.parentSessionId, agentMainId);
+    assert.equal(agentChild.agent, agentName);
+  } finally {
+    for (const id of [agentChildId, agentMainId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
+test('child session id builder handles bare main and non-main parents', () => {
+  assert.equal(sessionManager.buildChildSessionId('main', 'task1'), 'task1');
+  assert.equal(sessionManager.buildChildSessionId('agent/main', 'task1'), 'agent/task1');
+  assert.equal(sessionManager.buildChildSessionId('agent/worker', 'task1'), 'agent/worker_task1');
+  assert.equal(sessionManager.buildChildSessionId('worker', 'task1'), 'worker_task1');
+});
+
+test('create_child_session from bare main uses suffix as child id', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const suffix = makeId('bare_main_child');
+  const childSessionId = suffix;
+  const existingMain = await sessionManager.getExistingSession('main');
+  const parent = existingMain || await ensureSession('main', primary);
+
+  try {
+    await tool_create_child_session({ suffix, fork: false }, { sessionId: 'main', session: parent });
+    const child = await sessionManager.getSession(childSessionId);
+    assert.equal(child.parentSessionId, 'main');
+  } finally {
+    await sessionManager.deleteSession(childSessionId).catch(() => {});
+    if (!existingMain) {
+      await sessionManager.deleteSession('main').catch(() => {});
+    }
+  }
+});
+
+test('forked create_child_session also replaces main leaf and preserves collision handling', async () => {
+  await sessionManager.loadSessions();
+  const agentName = makeId('fork_main_agent');
+  const parentSessionId = `${agentName}/main`;
+  const firstChildId = `${agentName}/research`;
+  const collisionChildId = `${firstChildId}_2`;
+
+  try {
+    const parent = await ensureSession(parentSessionId);
+    parent.agent = agentName;
+    await sessionManager.saveSession(parentSessionId);
+
+    await sessionManager.createChildSession(parentSessionId, 'research', true);
+    await sessionManager.createChildSession(parentSessionId, 'research', true);
+
+    const firstChild = await sessionManager.getSession(firstChildId);
+    const collisionChild = await sessionManager.getSession(collisionChildId);
+    assert.equal(firstChild.parentSessionId, parentSessionId);
+    assert.equal(collisionChild.parentSessionId, parentSessionId);
+  } finally {
+    for (const id of [collisionChildId, firstChildId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
 test('forked child sessions append inherited tool responses as tool-role messages', async () => {
   await sessionManager.loadSessions();
   const parentSessionId = makeId('fork_tool_role_parent');

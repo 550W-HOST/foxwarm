@@ -50,7 +50,33 @@ export const definitions = [
         {
             name: 'apply_patch',
             defaultInject: true,
-            description: 'This is a custom utility that makes it more convenient to add, remove, or edit code files. Paths in patch file headers resolve like other file tools: relative paths resolve from the current session cwd when set, otherwise from the current agent folder; absolute paths and ~/... are also accepted when allowed. Pass the patch command text as `input`. The expected format uses an apply_patch envelope with `*** Begin Patch` / `*** End Patch`, and file actions such as `*** Update File: path`, `*** Add File: path`, or `*** Delete File: path`. Update File bodies use a line-based patch format: optional `@@` / `@@ anchor` section markers, context lines prefixed with a single space, `-` deletions, `+` insertions, and optional `*** End of File`.',
+            description: `This is a custom utility that makes it more convenient to add, remove, or edit code files. Paths in patch file headers resolve like other file tools: relative paths resolve from the current session cwd when set, otherwise from the current agent folder; absolute paths and ~/... are also accepted when allowed. Pass the patch command text as \`input\`.
+
+The patch must be enclosed in \`*** Begin Patch\` / \`*** End Patch\`. Each file operation starts with a header line:
+- \`*** Update File: <path>\` — modify an existing file
+- \`*** Add File: <path>\` — create a new file (all body lines must start with \`+\`)
+- \`*** Delete File: <path>\` — delete a file (no body lines)
+
+For Update File, the body uses line-based diff syntax:
+- Lines starting with a single space \` \` are context (must match the existing file content)
+- Lines starting with \`-\` are deletions (must match existing content)
+- Lines starting with \`+\` are insertions (new content)
+- \`@@\` or \`@@ <anchor text>\` starts a new section (anchor text helps locate the position in the file)
+- \`*** End of File\` marks that the following context is at the end of the file
+
+Example:
+\`\`\`
+*** Begin Patch
+*** Update File: src/app.ts
+@@ function main()
+ import { foo } from './foo';
+-const old = 'removed';
++const newVar = 'added';
+ console.log(newVar);
+*** Add File: src/newfile.ts
++export const hello = 'world';
+*** End Patch
+\`\`\``,
             parameters: {
                 type: 'object',
                 properties: {
@@ -212,11 +238,11 @@ export const definitions = [
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. If handing off to the child is your final step for this turn, call wait afterward in the same response.',
+            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. If handing off to the child is your final step for this turn, call wait afterward in the same response. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',
             parameters: {
                 type: 'object',
                 properties: {
-                    suffix: { type: 'string', description: 'Suffix to append to session ID for identification (e.g., "task1", "research")' },
+                    suffix: { type: 'string', description: 'Suffix/session leaf for identification (e.g., "task1", "research"). For main sessions it replaces the `main` leaf; otherwise it is appended to the session ID.' },
                     fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: false', default: false },
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
                     node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' }
@@ -227,11 +253,11 @@ export const definitions = [
         {
             name: 'send_to_session',
             defaultInject: true,
-            description: 'Send a message to a specific agent/session. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call wait in parallel in the same response.',
+            description: 'Send a message to a specific agent/session. Literal sessionId `<main>` resolves to the current agent\'s main session; `<parent>` resolves to the current session\'s parent session and errors clearly if there is no parent. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call wait in parallel in the same response.',
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Target session ID' },
+                    sessionId: { type: 'string', description: 'Target session ID, or `<main>` for this agent\'s main session, or `<parent>` for this session\'s parent session.' },
                     message: { type: 'string', description: 'Message to send' }
                 },
                 required: ['sessionId', 'message']
@@ -285,12 +311,13 @@ export const definitions = [
             }
         },
         {
-            name: 'list_sessions',
+            name: 'session',
             defaultInject: true,
-            description: 'Get list of all sessions with basic info (ID, message count, last message time, channel status)',
+            description: 'Get current session status or list sessions. With no args or action="status", returns current session agent id/name, agent dir, session id, parent session id, token estimate, last usage, auto-compact threshold, current node, current cwd, and recent child sessions. With action="list", returns the old list_sessions-style session list and accepts the same pagination args.',
             parameters: {
                 type: 'object',
                 properties: {
+                    action: { type: 'string', enum: ['status', 'list'], description: 'Optional action. Omit or use "status" for current session status; use "list" to list sessions.' },
                     start: { type: 'number', description: 'Start index in the session list sorted by last activity desc. Default: 0' },
                     count: { type: 'number', description: 'Number of sessions to return. Default: 20' }
                 },
@@ -322,7 +349,7 @@ export const definitions = [
         {
             name: 'load_skill',
             defaultInject: true,
-            description: 'Load skill documentation content using the current session agent skill resolution (or an optionally specified agent). This only returns skill documents and metadata; it does not dynamically add tools.',
+            description: 'Load a skill entry document and supporting resource list using the current session agent skill resolution (or an optionally specified agent). Supporting resources are listed but not eagerly read; this does not dynamically add tools.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -497,7 +524,6 @@ export const definitions = [
         },
         {
             name: 'create_timer',
-            defaultInject: true,
             description: 'Create a one-shot or recurring timer for a session. Timers persist across restarts and deliver structured system events when they fire.',
             parameters: {
                 type: 'object',
@@ -516,7 +542,6 @@ export const definitions = [
         },
         {
             name: 'list_timers',
-            defaultInject: true,
             description: 'List timers for a session. Defaults to the current session.',
             parameters: {
                 type: 'object',
@@ -526,8 +551,26 @@ export const definitions = [
             }
         },
         {
+            name: 'update_timer',
+            description: 'Update an existing timer without deleting and recreating it. Defaults to the current session scope. To change the schedule, pass exactly one of at, afterSeconds, or cron; omitted fields keep their current values.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    timerId: { type: 'string', description: 'Timer ID to update' },
+                    sessionId: { type: 'string', description: 'Owner session ID (optional, default: current session)' },
+                    at: { type: ['string', 'number'], description: 'New absolute trigger time as ISO string or epoch milliseconds (one-shot)' },
+                    afterSeconds: { type: 'number', description: 'Reschedule one-shot timer to trigger after N seconds from now' },
+                    cron: { type: 'string', description: 'New cron expression for recurring timers' },
+                    message: { type: 'string', description: 'New message delivered when the timer fires' },
+                    newSession: { type: 'boolean', description: 'If true, each trigger creates a new session instead of using the owner session; if false, clears new-session target fields' },
+                    sessionPrefix: { type: 'string', description: 'Prefix for newly created timer sessions (only with newSession=true)' },
+                    agentName: { type: 'string', description: 'Target agent for new timer-created sessions (only with newSession=true; default: owner session agent)' }
+                },
+                required: ['timerId']
+            }
+        },
+        {
             name: 'delete_timer',
-            defaultInject: true,
             description: 'Delete a timer by ID. Defaults to the current session scope.',
             parameters: {
                 type: 'object',
@@ -616,7 +659,7 @@ export const definitions = [
         {
             name: 'search_tools',
             defaultInject: true,
-            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
+            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool; for timer tools, load the timer-automation skill first. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -821,7 +864,7 @@ export const definitions = [
         {
             name: 'list_nodes',
             defaultInject: true,
-            description: 'List all registered nodes.',
+            description: 'List all registered nodes and mark which node is current for this session.',
             parameters: {
                 type: 'object',
                 properties: {}

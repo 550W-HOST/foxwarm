@@ -6,6 +6,7 @@ import {
   call_mcp,
   call_tool,
   definitions,
+  MASTER_ONLY_TOOL_NAMES,
   mcp_config,
   modelFacingDefinitions,
   search_tools,
@@ -43,6 +44,31 @@ test('search_tools returns structured builtin results with hidden/direct exposur
   assert.ok(readTool);
   assert.equal(readTool.directExposed, true);
   assert.equal(Object.prototype.hasOwnProperty.call(readTool, 'inputSchema'), false);
+});
+
+test('timer tools are hidden by default but remain reachable through unified search/call', async () => {
+  for (const name of ['create_timer', 'list_timers', 'update_timer', 'delete_timer']) {
+    const definition = definitions.find(def => def.name === name);
+    assert.ok(definition, `${name} should exist`);
+    assert.equal(definition?.defaultInject, undefined, `${name} should not be injected by default`);
+    assert.equal(modelFacingDefinitions.some(def => def.name === name), false, `${name} should be hidden from model-facing tools`);
+  }
+
+  assert.equal(definitions.some(def => def.name === 'list_timer'), false);
+
+  const result: any = await search_tools({
+    query: 'timer',
+    sources: ['builtin'],
+    includeSchema: false,
+    limit: 50,
+  });
+
+  for (const name of ['create_timer', 'list_timers', 'update_timer', 'delete_timer']) {
+    const found = result.tools.find((tool: any) => tool.name === name);
+    assert.ok(found, `${name} should be discoverable`);
+    assert.equal(found.hidden, true);
+    assert.equal(found.directExposed, false);
+  }
 });
 
 test('search_tools multi-word queries rank tools matching more words higher', async () => {
@@ -527,6 +553,10 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
     'set_agent_inherit',
     'set_agent_isolated',
     'move_session',
+    'create_timer',
+    'list_timers',
+    'update_timer',
+    'delete_timer',
   ]) {
     assert.equal(modelFacingDefinitions.some(def => def.name === name), false, `${name} should be hidden from default model-facing tools`);
     assert.equal(definitions.some(def => def.name === name), true, `${name} should remain available for runtime compatibility`);
@@ -540,6 +570,10 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_write_to_file'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'submit_compact_plan'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'set_goal'), true);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'session'), true);
+  assert.equal(definitions.some(def => def.name === 'list_sessions'), false);
+  assert.equal(MASTER_ONLY_TOOL_NAMES.includes('session'), true);
+  assert.equal(MASTER_ONLY_TOOL_NAMES.includes('list_sessions'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'wait'), true);
   assert.equal(definitions.some(def => def.name === 'set_todo'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'end_turn'), false);
@@ -599,9 +633,19 @@ test('defaultInject metadata is the single source of truth for default model inj
   assert.equal(modelFacingDefinitions.some(def => def.name === 'browse_list'), false);
 });
 
-test('change_directory and compress_session are removed entirely', () => {
+test('change_directory, compress_session, and list_sessions are removed entirely', () => {
   assert.equal(definitions.some(def => def.name === 'change_directory'), false);
   assert.equal(definitions.some(def => def.name === 'compress_session'), false);
+  assert.equal(definitions.some(def => def.name === 'list_sessions'), false);
+});
+
+test('session tool schema exposes status/list actions and list pagination args', () => {
+  const definition = definitions.find(def => def.name === 'session');
+  assert.ok(definition);
+  assert.equal(definition.defaultInject, true);
+  assert.deepEqual((definition.parameters?.properties as any)?.action?.enum, ['status', 'list']);
+  assert.equal((definition.parameters?.properties as any)?.start?.type, 'number');
+  assert.equal((definition.parameters?.properties as any)?.count?.type, 'number');
 });
 
 test('builtin file/browser tool schemas no longer expose node selector parameters', () => {

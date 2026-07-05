@@ -61,6 +61,9 @@ test('/status shows image count instead of inflating image payload into size', a
       ],
     },
   ]);
+  session.cwd = '/tmp/status-command-cwd';
+  session.compactThresholdTokens = 1234;
+  session.stats.lastUsage = { cachedTokens: 1, inputTokens: 2, outputTokens: 3 };
 
   let replyText = '';
   const ctx: ChannelContext = {
@@ -77,5 +80,10 @@ test('/status shows image count instead of inflating image payload into size', a
 
   await COMMANDS['/status'].handler(ctx, [], session.id, session);
   assert.match(replyText, /Images: 1/);
+  assert.match(replyText, /agent dir:/);
+  assert.match(replyText, /last usage: cached=1, input=2, output=3, total=6/);
+  assert.match(replyText, /auto-compact threshold: ~1,234 tokens \(override: 1,234 tokens\)/);
+  assert.match(replyText, /current node: `master`/);
+  assert.match(replyText, /current cwd: `\/tmp\/status-command-cwd`/);
   assert.doesNotMatch(replyText, /30000|20000|10000/);
 });

@@ -85,12 +85,10 @@ function decryptWeWorkAesBuffer(buffer: Buffer, aesKey: string): Buffer {
 
 class WeWorkCrypto {
   private token: string;
-  private encodingAESKey: string;
   private aesKey: Buffer;
 
   constructor(token: string, encodingAESKey: string) {
     this.token = token;
-    this.encodingAESKey = encodingAESKey;
     this.aesKey = normalizeWeWorkAesKey(encodingAESKey);
   }
 
@@ -1412,7 +1410,7 @@ export class WeWorkWebhookChannel implements Channel {
     });
   }
 
-  async sendTyping(userId: string): Promise<void> {
+  async sendTyping(_userId: string): Promise<void> {
     // WeWork webhook doesn't support typing indicator
   }
 

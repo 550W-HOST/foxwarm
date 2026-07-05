@@ -70,6 +70,8 @@ export type OpenAIStreamProgressSnapshot = {
 
 type OpenAIStreamProgressOptions = {
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
+    onRawChunk?: (text: string) => void;
+    onRawSseBlock?: (block: string) => void;
 };
 
 function cleanSnapshotString(value: unknown): string | undefined {
@@ -737,6 +739,7 @@ export async function collectOpenAIResponsesStream(
                 return;
             }
 
+            options?.onRawChunk?.(text);
             buffer += text;
             buffer = buffer.replace(/\r\n/g, '\n');
 
@@ -744,6 +747,7 @@ export async function collectOpenAIResponsesStream(
             while (boundaryIndex !== -1) {
                 const block = buffer.slice(0, boundaryIndex);
                 buffer = buffer.slice(boundaryIndex + 2);
+                options?.onRawSseBlock?.(block);
 
                 try {
                     const event = parseSseEventBlock(block);
@@ -943,6 +947,7 @@ export async function collectOpenAIChatCompletionsStream(
                 return;
             }
 
+            options?.onRawChunk?.(text);
             buffer += text;
             buffer = buffer.replace(/\r\n/g, '\n');
 
@@ -950,6 +955,7 @@ export async function collectOpenAIChatCompletionsStream(
             while (boundaryIndex !== -1) {
                 const block = buffer.slice(0, boundaryIndex);
                 buffer = buffer.slice(boundaryIndex + 2);
+                options?.onRawSseBlock?.(block);
 
                 try {
                     const event = parseSseEventBlock(block);

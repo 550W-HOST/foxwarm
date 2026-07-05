@@ -22,7 +22,6 @@ import {
   type ToolViewMode,
 } from './chatShared'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
-import { formatToolResponsePayload } from '../../../shared/src/toolResponseFormatting'
 import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiToolRendering'
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
@@ -31,7 +30,7 @@ import DiffPreview from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
 
-const formatToolResponseText = (resp: { response: unknown }): string => formatToolResponsePayload(resp.response)
+const formatToolResponseText = (resp: { response: unknown }): string => formatCompactObjectPreview(resp.response)
 
 const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionResponse): { url: string; fileName?: string } | null => {
   if (resp.name !== 'send_file') {
@@ -146,6 +145,7 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
 const isLegacyDiffToolName = (name: string): boolean => name === 'edit' || name === 'edit_memory'
 const isPatchToolName = (name: string): boolean => name === 'apply_patch' || name === 'apply_patch_memory'
 const isInterSessionToolName = (name: string): boolean => name === 'send_to_session' || name === 'create_child_session'
+const isSpecialSessionAlias = (sessionId: string): boolean => sessionId === '<main>' || sessionId === '<parent>'
 
 const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
@@ -212,10 +212,18 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean 
     return (
       <span className="flex items-center gap-1 min-w-0" title={`${targetSessionId}: ${message}`}>
         <span className="shrink-0 text-gray-500 dark:text-gray-400">To</span>
-        <span className="shrink-0"><SessionHashLink sessionId={targetSessionId} /></span>
+        <span className="shrink-0">{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}</span>
         <span className="truncate">: {preview}</span>
       </span>
     )
+  }
+
+  if (call.name === 'session') {
+    const action = typeof call.args?.action === 'string' && call.args.action.trim() ? call.args.action.trim() : 'status'
+    const suffix = action === 'list'
+      ? ` start=${call.args?.start ?? 0} count=${call.args?.count ?? 20}`
+      : ''
+    return <span className="truncate font-mono">session {action}{suffix}</span>
   }
 
   if (call.name === 'create_child_session') {
@@ -329,10 +337,14 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
     return (
       <div className="space-y-1">
-        <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">To</span><SessionHashLink sessionId={targetSessionId} /><span>:</span></div>
+        <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">To</span>{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}<span>:</span></div>
         <div className="whitespace-pre-wrap break-all">{message}</div>
       </div>
     )
+  }
+
+  if (call.name === 'session') {
+    return <div className="whitespace-pre-wrap break-all">{formatCompactObjectPreview(call.args || { action: 'status' })}</div>
   }
 
   if (call.name === 'create_child_session') {
@@ -356,8 +368,8 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
     const fileContent = typeof rawContent === 'string'
       ? rawContent
       : rawContent !== undefined
-        ? JSON.stringify(rawContent, null, 2)
-        : JSON.stringify(resp.response)
+        ? formatCompactObjectPreview(rawContent)
+        : formatToolResponseText(resp)
     return expanded
       ? <pre className="whitespace-pre-wrap text-xs overflow-x-auto cursor-text"><SyntaxHighlightedText text={fileContent} filePath={call?.args?.filePath} /></pre>
       : <div className="whitespace-pre-wrap break-all cursor-text">{fileContent ? <SyntaxHighlightedText text={truncatePreviewText(fileContent, 400)} filePath={call?.args?.filePath} /> : 'Completed'}</div>
@@ -370,10 +382,15 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   }
 
   if (resp.name === 'exec') {
-    const output = typeof resp.response?.output === 'string' ? resp.response.output : ''
-    const preview = truncatePreviewText(output, 400)
-    const displayStr = expanded ? output : preview
-    return <div className="whitespace-pre-wrap break-all cursor-text" style={{ lineHeight: '1.3em' }}><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
+    if (typeof resp.response?.output === 'string') {
+      const output = resp.response.output
+      const preview = truncatePreviewText(output, 400)
+      const displayStr = expanded ? output : preview
+      return <div className="whitespace-pre-wrap break-all cursor-text" style={{ lineHeight: '1.3em' }}><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
+    }
+    const raw = formatToolResponseText(resp)
+    const preview = truncatePreviewText(raw, 400)
+    return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? raw : preview}</div>
   }
 
   const download = getSendFileDownload(call, resp)
@@ -466,7 +483,7 @@ const stripToolScriptSubCallsFromResponse = (response: unknown): unknown => {
 
 const renderToolScriptResultContent = (resp: FunctionResponse, expanded: boolean): ReactNode | null => {
   const strippedResponse = stripToolScriptSubCallsFromResponse(resp.response)
-  const primaryText = formatToolResponsePayload(strippedResponse)
+  const primaryText = formatCompactObjectPreview(strippedResponse)
   if (!primaryText) {
     return null
   }

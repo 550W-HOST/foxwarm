@@ -24,7 +24,7 @@ export async function maybeRefreshStaleSessionSnapshot(
   now: number = Date.now(),
 ): Promise<boolean> {
   const idleMs = getSessionIdleMs(session, now);
-  if (idleMs <= AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS) {
+  if (!shouldAutoRefreshSessionSnapshot(session, now)) {
     return false;
   }
 

@@ -1,13 +1,13 @@
 import { getChannelId, getConversationId } from './channel';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
-import { approvePendingPairing, rejectPendingPairing } from './nodes/registry';
+import { approvePendingPairing, isReservedNodeId, moveApprovedNode, rejectPendingPairing, removeApprovedNode } from './nodes/registry';
 import * as sessionManager from './sessionManager';
 import * as skills from './skills';
 import * as tools from './tools';
-import { estimateSessionSummary } from './tokenCount';
-import { CONTEXT_LIMIT, resolveModelConfig, APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, writeAppConfigFile, WEIXIN_CONFIG } from './config';
+import { APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
+import { buildSessionStatusInfo, formatSessionStatus } from './sessionStatus';
 import { BTW_USAGE, runBtwRequest } from './btw';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api';
 import { ensureNodePairingToken } from './nodes/bootstrapInfo';
@@ -95,30 +95,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: true,
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
-      const historyLen = session.history.length
-      const sessionSummary = estimateSessionSummary(session)
-      const tokenCount = sessionSummary.tokens
-      const imageCount = sessionSummary.imageCount
-      const { currentKey } = resolveModelConfig(session.model)
-      const node = session.currentNode || 'master'
-      const isolated = sessionManager.isSessionEffectivelyIsolated(session) ? ' (isolated)' : ''
-      const parent = session.parentSessionId ? `\n- parent: \`${session.parentSessionId}\`` : ''
-      const displayName = session.displayName ? `\n- name: ${session.displayName}` : ''
-      const agent = session.agent || 'main'
-      const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session)
-      const archived = session.archived ? '\n- 📦 archived' : ''
-
-      let resp = `📊 *Session Status*\n\n`
-      resp += `- id: \`${sessionId}\`${displayName}\n`
-      resp += `- agent: \`${agent}\`${parent}${archived}\n`
-      resp += `- model: \`${currentKey}\`\n`
-      resp += `- messages: ${historyLen}\n`
-      resp += `- tokens: ~${tokenCount.toLocaleString()} / ${CONTEXT_LIMIT.toLocaleString()}`
-      if (imageCount > 0) resp += ` (${imageCount} image${imageCount > 1 ? 's' : ''})`
-      resp += `\n`
-      resp += `- auto-compact threshold: ~${compactThreshold.toLocaleString()} tokens\n`
-      resp += `- node: \`${node}\`${isolated}\n`
-      ctx.reply(resp)
+      ctx.reply(formatSessionStatus(await buildSessionStatusInfo(sessionId, session)))
     }
   },
   '/session': {
@@ -199,7 +176,14 @@ export const COMMANDS: Record<string, CommandDef> = {
             let resp = `🧩 *Skill:* \`${info.name}\``
             if (info.description) resp += `\n${info.description}`
             resp += `\nSource: \`${skills.formatSkillSourceLabel(info)}\`\nMetadata: \`${info.metadataPath}\``
-            if (documents.length === 0) { resp += '\n\n(No skill memory documents found.)' }
+            resp += `\nSkill directory: \`${info.dir}\``
+            resp += '\nRelative paths in this skill are relative to the skill directory.'
+            if (info.resourceFiles.length > 0) {
+              resp += '\n\nResources (supporting files, not eagerly loaded):'
+              for (const file of info.resourceFiles) resp += `\n- \`${file}\``
+              if (info.resourceFilesTruncated) resp += '\n- ... (resource listing truncated)'
+            }
+            if (documents.length === 0) { resp += '\n\n(No skill documents found.)' }
             else { for (const doc of documents) { resp += `\n\nFILE: \`${doc.filePath}\`\n\n${doc.content}` } }
             ctx.reply(resp)
           } catch (e: any) { ctx.reply(`❌ Skill show failed: ${e.message}`) }
@@ -236,7 +220,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/node': {
-    description: 'List nodes/pending approvals, approve/reject pairings, show pair-help, or switch node with `/node <node-id>`.',
+    description: 'Manage nodes: list, approve/reject pairings, remove/move approved nodes, pair-help, or switch with `/node <node-id>`.',
     requiresSession: true,
     autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
@@ -271,6 +255,43 @@ export const COMMANDS: Record<string, CommandDef> = {
           await rejectPendingPairing(pendingId)
           ctx.reply(`✅ Rejected pending pairing \`${pendingId}\``)
         } catch (e: any) { ctx.reply(`❌ Failed to reject pairing: ${e.message}`) }
+        return
+      }
+      if (args[0] === 'remove') {
+        const nodeId = args[1]
+        if (!nodeId) { ctx.reply('Usage: `/node remove <node-id>`'); return }
+        try {
+          const removed = await removeApprovedNode(nodeId)
+          const disconnected = nodesManager.disconnectNode(removed.nodeId, 'Node credentials removed by /node remove')
+          ctx.reply([
+            `✅ Removed approved node \`${removed.nodeId}\`.`,
+            `Runtime connection: \`${disconnected ? 'closed' : 'not online'}\`.`,
+            'The old node credentials are no longer valid; the node must be paired again before it can reconnect.',
+          ].join('\n'))
+        } catch (e: any) { ctx.reply(`❌ Failed to remove node: ${e.message}`) }
+        return
+      }
+      if (args[0] === 'move') {
+        const oldNodeId = args[1]
+        const newNodeId = args[2]
+        if (!oldNodeId || !newNodeId) { ctx.reply('Usage: `/node move <old-id> <new-id>`'); return }
+        try {
+          const onlineConflict = nodesManager.getNode(newNodeId)
+          if (isReservedNodeId(newNodeId)) {
+            throw new Error(`Node id \`${newNodeId}\` is reserved`)
+          }
+          if (onlineConflict && newNodeId !== oldNodeId) {
+            throw new Error(`Node id \`${newNodeId}\` is currently online/registered`)
+          }
+          const moved = await moveApprovedNode(oldNodeId, newNodeId)
+          const disconnected = nodesManager.disconnectNode(moved.oldNodeId, 'Node id moved by /node move; reconnect with the new node id')
+          ctx.reply([
+            `✅ Moved approved node \`${moved.oldNodeId}\` → \`${moved.newNodeId}\`.`,
+            'Auth token hash and metadata were preserved server-side.',
+            `Runtime connection: \`${disconnected ? 'old connection closed' : 'old node not online'}\`.`,
+            `Node-side credentials still store the old node id. Update the node credentials file to use nodeId \`${moved.newNodeId}\` with the existing authToken, then restart the node so it reconnects with the new id.`,
+          ].join('\n'))
+        } catch (e: any) { ctx.reply(`❌ Failed to move node: ${e.message}`) }
         return
       }
       // Switch node

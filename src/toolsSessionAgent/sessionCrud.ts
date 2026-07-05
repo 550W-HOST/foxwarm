@@ -2,45 +2,28 @@ import * as sessionManager from '../sessionManager';
 import { COMPACT_PERCENT } from '../config';
 import { requireNotIsolated } from '../isolatedCheck';
 import { ToolArgs, ToolContext } from './helpers';
+import { buildSessionListOutput, buildSessionStatusInfo, formatSessionStatus } from '../sessionStatus';
 
-export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext) {
-  await requireNotIsolated(ctx, 'list_sessions');
-  const sessions = sessionManager.listSessions();
+export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
+  const action = typeof args.action === 'string' && args.action.trim()
+    ? args.action.trim().toLowerCase()
+    : 'status';
 
-  if (sessions.length === 0) {
-    return 'No sessions found.';
+  if (action === 'list') {
+    await requireNotIsolated(ctx, 'session list');
+    return buildSessionListOutput(args, ctx?.sessionId);
   }
 
-  const total = sessions.length;
-  const rawStart = typeof args.start === 'number' && !Number.isNaN(args.start) ? Math.trunc(args.start) : 0;
-  const rawCount = typeof args.count === 'number' && !Number.isNaN(args.count) ? Math.trunc(args.count) : 20;
-  const start = Math.max(0, Math.min(rawStart, total));
-  const count = Math.max(0, rawCount);
-  const pageSessions = sessions.slice(start, start + count);
-
-  if (pageSessions.length === 0) {
-    return `No sessions found in the requested range. Total sessions: ${total}.`;
+  if (action !== 'status') {
+    throw new Error('session.action must be "status" or "list".');
   }
 
-  const end = start + pageSessions.length;
-  let result = `Found ${total} session(s). Showing ${start + 1}-${end}.`;
-  if (end < total) {
-    result += ` Use \`start: ${end}\` to see the next page.`;
-  }
-  result += '\n\n';
-
-  for (const s of pageSessions) {
-    const date = s.lastMessageTime ? new Date(s.lastMessageTime).toISOString() : 'never';
-    const channel = s.hasChannel ? '📱' : '🤖';
-    const displayName = s.displayName ? ` (${s.displayName})` : '';
-    const node = s.currentNode || 'master';
-    const isolated = s.isolated ? ' isolated' : '';
-    const busy = s.busy ? ' 🔄busy' : '';
-    const queued = s.queueLength ? ` queue:${s.queueLength}` : '';
-    result += `${channel} \`${s.id}\`${displayName} - ${s.messageCount} messages - node: \`${node}\`${isolated}${busy}${queued} - Last: ${date}\n`;
+  const targetSessionId = ctx?.sessionId;
+  if (!targetSessionId) {
+    throw new Error('Cannot show session status without current session context.');
   }
 
-  return result;
+  return formatSessionStatus(await buildSessionStatusInfo(targetSessionId, ctx?.session));
 }
 
 export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {

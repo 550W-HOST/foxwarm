@@ -698,13 +698,10 @@ export class WebUIChannel implements Channel {
               maxRetries: 1,
               timeoutMs: 30000,
             });
-            if (/^\s*Error:/i.test(result.text || '')) {
-              return res.status(400).json({ success: false, error: result.text });
-            }
             res.json({ success: true, text: result.text, usage: result.usage || null });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to test models setup');
-            res.status(400).json({ error: e.message });
+            res.status(400).json({ success: false, error: e.message });
           }
         },
       });
@@ -825,7 +822,7 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions',
         method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
+        handler: async (_req: express.Request, res: express.Response) => {
           try {
             const allSessions = sessionManager.getAllSessions();
             
@@ -1097,7 +1094,7 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/agents/tree',
         method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
+        handler: async (_req: express.Request, res: express.Response) => {
           try {
             const allSessions = sessionManager.getAllSessions();
 
@@ -1944,7 +1941,7 @@ export class WebUIChannel implements Channel {
             path: '/login.html',
             method: 'GET',
             noAuth: true,
-            handler: async (req: express.Request, res: express.Response) => {
+            handler: async (_req: express.Request, res: express.Response) => {
               res.sendFile(loginPath);
             }
           });
@@ -2052,7 +2049,7 @@ export class WebUIChannel implements Channel {
   }
 
   // Channel interface implementation
-  async sendMessage(channelUserId: string, text: string, options?: any): Promise<void> {
+  async sendMessage(channelUserId: string, text: string, _options?: any): Promise<void> {
     // For WebUI, channelUserId is the sessionId
     // Use broadcastMessage for consistency (unified message system)
     logger.debug({ sessionId: channelUserId, textPreview: text.substring(0, 50) }, 'WebUI sendMessage called');
@@ -2101,7 +2098,7 @@ export class WebUIChannel implements Channel {
     }
   }
 
-  onMessage(handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>): void {
+  onMessage(_handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>): void {
     // WebUI handles messages internally via HTTP API
     // This is a no-op for WebUI
   }

@@ -153,9 +153,28 @@ function assertNodeIdAllowed(nodeId: string): void {
   if (!nodeId || !/^[a-zA-Z0-9_-]+$/.test(nodeId)) {
     throw new Error('Node id must match [a-zA-Z0-9_-]+')
   }
-  if (RESERVED_NODE_IDS.has(nodeId)) {
+  if (RESERVED_NODE_IDS.has(nodeId.toLowerCase())) {
     throw new Error(`Node id \`${nodeId}\` is reserved`)
   }
+}
+
+function normalizeExplicitNodeId(value: string): string {
+  const nodeId = value.trim()
+  assertNodeIdAllowed(nodeId)
+  return nodeId
+}
+
+function normalizeNewNodeId(value: string): string {
+  const nodeId = value.trim()
+  const sanitized = sanitizeNodeId(nodeId)
+  if (RESERVED_NODE_IDS.has(sanitized.toLowerCase()) || RESERVED_NODE_IDS.has(nodeId.toLowerCase())) {
+    throw new Error(`Node id \`${nodeId}\` is reserved`)
+  }
+  if (sanitized !== nodeId) {
+    throw new Error(`Node id \`${nodeId}\` must already be in sanitized form. Suggested id: \`${sanitized}\``)
+  }
+  assertNodeIdAllowed(nodeId)
+  return nodeId
 }
 
 async function allocateUniqueNodeId(base: string): Promise<string> {
@@ -182,7 +201,7 @@ export async function initializeNodeRegistry(): Promise<void> {
 }
 
 export function isReservedNodeId(nodeId: string): boolean {
-  return RESERVED_NODE_IDS.has(nodeId)
+  return RESERVED_NODE_IDS.has(nodeId.toLowerCase())
 }
 
 export async function createPendingPairing(input: {
@@ -227,6 +246,67 @@ export async function listApprovedNodes(): Promise<ApprovedNodeRecord[]> {
   await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
   return Object.values(data.approvedNodes).sort((a, b) => a.nodeId.localeCompare(b.nodeId))
+}
+
+export async function removeApprovedNode(nodeIdInput: string): Promise<ApprovedNodeRecord> {
+  const nodeId = normalizeExplicitNodeId(nodeIdInput)
+  await cleanupExpiredPendingPairings()
+  const data = await loadRegistry()
+  const record = data.approvedNodes[nodeId]
+  if (!record) {
+    throw new Error(`Approved node \`${nodeId}\` not found`)
+  }
+
+  delete data.approvedNodes[nodeId]
+  for (const [pendingId, pending] of Object.entries(data.pendingPairings)) {
+    if (pending.approvedNodeId === nodeId) {
+      delete data.pendingPairings[pendingId]
+    }
+  }
+
+  await saveRegistry()
+  return record
+}
+
+export async function moveApprovedNode(oldNodeIdInput: string, newNodeIdInput: string): Promise<{
+  oldNodeId: string
+  newNodeId: string
+  record: ApprovedNodeRecord
+}> {
+  const oldNodeId = normalizeExplicitNodeId(oldNodeIdInput)
+  const newNodeId = normalizeNewNodeId(newNodeIdInput)
+  if (oldNodeId === newNodeId) {
+    throw new Error('New node id must be different from the old node id')
+  }
+
+  await cleanupExpiredPendingPairings()
+  const data = await loadRegistry()
+  const record = data.approvedNodes[oldNodeId]
+  if (!record) {
+    throw new Error(`Approved node \`${oldNodeId}\` not found`)
+  }
+  if (data.approvedNodes[newNodeId]) {
+    throw new Error(`Node id \`${newNodeId}\` already exists`)
+  }
+
+  const movedRecord: ApprovedNodeRecord = {
+    ...record,
+    nodeId: newNodeId,
+    displayName: record.displayName === oldNodeId ? newNodeId : record.displayName,
+    updatedAt: Date.now(),
+  }
+  data.approvedNodes[newNodeId] = movedRecord
+  delete data.approvedNodes[oldNodeId]
+
+  for (const pending of Object.values(data.pendingPairings)) {
+    if (pending.approvedNodeId === oldNodeId) {
+      pending.approvedNodeId = newNodeId
+      pending.updatedAt = Date.now()
+    }
+  }
+
+  await saveRegistry()
+  return { oldNodeId, newNodeId, record: movedRecord }
 }
 
 function getPendingPairingExpiryTimestamp(record: PendingPairingRecord): number {

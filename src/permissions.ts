@@ -157,6 +157,8 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
     buildScopedPathToolRule(agentName, sessionId, 'edit_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
     buildScopedPathToolRule(agentName, sessionId, 'delete_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
     buildNodeToolRule(agentName, sessionId, 'apply_patch_memory', 'master'),
+    buildNodeToolRule(agentName, sessionId, 'list_skills', 'master'),
+    buildNodeToolRule(agentName, sessionId, 'load_skill', 'master'),
     ...allowedRuntimeNodes.flatMap(targetNode => [
       buildNodeToolRule(agentName, sessionId, 'read', targetNode),
       buildNodeToolRule(agentName, sessionId, 'write', targetNode),
@@ -217,6 +219,22 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
       session: sessionId,
       target_node: 'master',
       tool_name: 'recall',
+      action: 'accept',
+    },
+    {
+      agent: agentName,
+      session: sessionId,
+      target_node: 'master',
+      tool_name: 'session',
+      tool_args: { action: { oneOf: [undefined, null, '', 'status'] } },
+      action: 'accept',
+    },
+    {
+      agent: agentName,
+      session: sessionId,
+      target_node: 'master',
+      tool_name: 'session',
+      tool_args: { action: 'status' },
       action: 'accept',
     },
     {

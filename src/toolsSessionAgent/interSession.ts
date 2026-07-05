@@ -51,8 +51,10 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
     throw new Error('sessionId is required');
   }
 
-  await sessionManager.sendToSession(sessionId, message, fromSessionId);
-  const output = `Message sent to session \`${sessionId}\``;
+  const result = await sessionManager.sendToSession(sessionId, message, fromSessionId);
+  const output = result.resolvedSessionId !== result.requestedSessionId
+    ? `Message sent to session \`${result.resolvedSessionId}\` (requested \`${result.requestedSessionId}\`)`
+    : `Message sent to session \`${result.resolvedSessionId}\``;
   return noFurtherAssistantReply
     ? { ...buildEndTurnResult(), output }
     : output;

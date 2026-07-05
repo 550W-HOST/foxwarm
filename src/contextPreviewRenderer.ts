@@ -95,16 +95,6 @@ function normalizeFilterText(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function normalizeToolDetail(value: unknown): ContextPreviewToolDetail {
-  if (value === undefined || value === null || value === '') {
-    return DEFAULT_CONTEXT_TOOL_DETAIL;
-  }
-  if (value === 'names' || value === 'snippets' || value === 'full') {
-    return value;
-  }
-  throw new Error('toolDetail must be one of: names, snippets, full.');
-}
-
 export function normalizeContextPreviewBudget(
   value: unknown,
   defaultPreviewLength: number = DEFAULT_CONTEXT_PREVIEW_BUDGET,
