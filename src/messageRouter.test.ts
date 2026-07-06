@@ -121,8 +121,29 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
   const parts = router.prepareTurnParts(session, 'session-1', drained.parts);
 
   const sourcePrefixCount = parts.filter((part: any) => typeof part.system === 'string'
-    && part.system.startsWith('The following message is a direct user message via channel;')).length;
+    && part.system.startsWith('<foxwarm-message ')
+    && part.system.includes('type="channel"')).length;
   assert.equal(sourcePrefixCount, 1);
+  assert.equal(parts.some((part: any) => part.system === '</foxwarm-message>'), true);
+});
+
+test('MessageRouter turn metadata avoids redundant time and session hints', () => {
+  const router = new MessageRouter() as any;
+  const session: any = {
+    history: [],
+    meta: { lastMessageTime: Date.now() - 11 * 60 * 1000 },
+    queue: [],
+  };
+
+  const parts = router.prepareTurnParts(session, 'session-xml-1', [{ text: 'hello' }]);
+  const sessionPart = parts.find((part: any) => typeof part.system === 'string' && part.system.includes('kind="session"'));
+  const timePart = parts.find((part: any) => typeof part.system === 'string' && part.system.includes('kind="time"'));
+
+  assert.equal(sessionPart?.system, '<foxwarm-system kind="session" currentSessionId="session-xml-1" />');
+  assert.ok(timePart?.system.includes('localTime="'));
+  assert.ok(!timePart?.system.includes(' hint='));
+  assert.ok(!timePart?.system.includes(' time='));
+  assert.ok(!sessionPart?.system.includes(' hint='));
 });
 
 test('MessageRouter queue draining keeps different WeWork stream ids separate', () => {

@@ -268,15 +268,60 @@ export const copyTextToClipboard = async (text: string) => {
   }
 }
 
+export const FOXWARM_METADATA_LINE_RE = /^\s*<\/?foxwarm-(system|metadata|message)\b/i
+const FOXWARM_TAG_LINE_RE = /^\s*<\/?foxwarm-([a-zA-Z0-9_-]+)\b([^>]*)\/?\s*>\s*$/i
+
+export const isFoxwarmMetadataLine = (text: string): boolean => FOXWARM_METADATA_LINE_RE.test(text)
+
+export const parseFoxwarmMetadataLine = (text: string): { tagName: string; closing: boolean; attrs: Record<string, string> } | null => {
+  const match = text.match(FOXWARM_TAG_LINE_RE)
+  if (!match) return null
+
+  const attrs: Record<string, string> = {}
+  const attrRe = /([a-zA-Z_:][a-zA-Z0-9_.:-]*)\s*=\s*"([^"]*)"/g
+  let attrMatch: RegExpExecArray | null
+  while ((attrMatch = attrRe.exec(match[2] || '')) !== null) {
+    attrs[attrMatch[1]] = attrMatch[2]
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&')
+  }
+
+  return {
+    tagName: `foxwarm-${match[1].toLowerCase()}`,
+    closing: /^\s*<\//.test(text),
+    attrs,
+  }
+}
+
+export const isLightweightFoxwarmMetadataLine = (text: string): boolean => {
+  const tag = parseFoxwarmMetadataLine(text)
+  if (!tag) return false
+  if (tag.closing) return true
+  if (tag.tagName === 'foxwarm-message') return tag.attrs.type === 'channel'
+  if (tag.tagName === 'foxwarm-metadata') return true
+  if (tag.tagName !== 'foxwarm-system') return false
+
+  const kind = tag.attrs.kind || ''
+  const type = tag.attrs.type || ''
+  return kind === 'time'
+    || kind === 'session'
+    || kind === 'channel-mode'
+    || (kind === 'event' && (type === 'wait-timeout' || type === 'wait-all-pending'))
+}
+
 export const formatStructuredSystemText = (system: string): string => (
-  system.startsWith('FROM:') ? `[${system}]` : `[SYSTEM: ${system}]`
+  isFoxwarmMetadataLine(system) ? system : (system.startsWith('FROM:') ? `[${system}]` : `[SYSTEM: ${system}]`)
 )
 
 export const isSystemLikeText = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') || text.startsWith('[FROM:')
+  text.startsWith('[SYSTEM:') || text.startsWith('[FROM:') || isFoxwarmMetadataLine(text)
 )
 
 export const isLightweightStructuredSystem = (system: string): boolean => (
+  (isFoxwarmMetadataLine(system) && isLightweightFoxwarmMetadataLine(system)) ||
   system.startsWith('FROM:') ||
   system.startsWith('The following message is a direct user message via channel;') ||
   system.startsWith('current time =') ||
@@ -284,6 +329,7 @@ export const isLightweightStructuredSystem = (system: string): boolean => (
 )
 
 export const isLightweightSystemTextLine = (text: string): boolean => (
+  (isFoxwarmMetadataLine(text) && isLightweightFoxwarmMetadataLine(text)) ||
   text.startsWith('[FROM:') ||
   text.startsWith('[SYSTEM: The following message is a direct user message via channel;') ||
   text.startsWith('[SYSTEM: current time') ||
@@ -291,11 +337,11 @@ export const isLightweightSystemTextLine = (text: string): boolean => (
 )
 
 export const isHeavySystemTextLine = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') && !isLightweightSystemTextLine(text)
+  (text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(text)) && !isLightweightSystemTextLine(text)
 )
 
 export const isCollapsibleSystemText = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') && !isLightweightSystemTextLine(text)
+  (text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(text)) && !isLightweightSystemTextLine(text)
 )
 
 export const clampContentStyle = (lines: number, extraHeightRem = 0): CSSProperties => ({

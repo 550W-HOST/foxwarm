@@ -87,7 +87,7 @@ test('timers persistence uses lightweight no-backup writes', async () => {
   });
 });
 
-test('buildTimerTriggeredMessage adds current local time with numeric offset', () => {
+test('buildTimerTriggeredMessage wraps timer content in foxwarm-message metadata tag', () => {
   const firedAt = new Date(1_700_000_000_000);
   const offsetMinutes = -firedAt.getTimezoneOffset();
   const sign = offsetMinutes >= 0 ? '+' : '-';
@@ -102,9 +102,13 @@ test('buildTimerTriggeredMessage adds current local time with numeric offset', (
     cron: '0 * * * *',
   }, firedAt);
 
-  assert.match(message, /^Scheduled timer fired \(id: timer-1\)\nCurrent time: /);
-  assert.match(message, new RegExp(`${offset.replace('+', '\\+')}$`, 'm'));
-  assert.match(message, /\nrun nightly sync$/);
+  assert.match(message, /^<foxwarm-message /);
+  assert.match(message, /type="timer"/);
+  assert.match(message, /timerId="timer-1"/);
+  assert.match(message, /mode="cron"/);
+  assert.match(message, /hint="Scheduled timer fired"/);
+  assert.match(message, new RegExp(`localTime="[^"]*${offset.replace('+', '\\+')}"`));
+  assert.match(message, /\nrun nightly sync\n<\/foxwarm-message>$/);
   assert.doesNotMatch(message, /Asia\/Shanghai/);
 });
 

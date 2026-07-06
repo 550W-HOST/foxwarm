@@ -26,6 +26,7 @@ import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
+import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag } from './utils/promptWrappers';
 import { runStartupMigrations } from './migrations';
 
 function systemPart(system: string): MessagePart {
@@ -100,7 +101,12 @@ function getWaitAllPendingSessions(waitAll: SessionWaitAllState): string[] {
 }
 
 function buildWaitAllPendingReminder(pendingSessions: string[]): string {
-  return `[SYSTEM: waitAllSessions is still pending for: ${pendingSessions.map(sessionId => `\`${sessionId}\``).join(', ')}. This session was woken before every listed session sent a new message after the wait started.]`;
+  return formatFoxwarmSystemTag({
+    kind: 'event',
+    type: 'wait-all-pending',
+    pendingSessions: pendingSessions.join(','),
+    hint: `waitAllSessions is still pending for: ${pendingSessions.map(sessionId => `\`${sessionId}\``).join(', ')}. This session was woken before every listed session sent a new message after the wait started.`,
+  });
 }
 
 function buildWaitAllPendingReminderItem(pendingSessions: string[]): QueueItem | undefined {
@@ -1597,7 +1603,17 @@ export async function applyCompletedCompactJob(sessionId: string): Promise<boole
 export async function queueSessionEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
   await enqueueSessionItem(sessionId, {
     type,
-    parts: [{ text: message }]
+    parts: [
+      {
+        system: formatFoxwarmMessageOpen({
+          type,
+          eventType: type,
+          hint: `${type} session event`,
+        }),
+      },
+      { text: message },
+      { system: formatFoxwarmMessageClose() },
+    ],
   });
 }
 

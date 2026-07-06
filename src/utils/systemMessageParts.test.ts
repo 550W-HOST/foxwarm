@@ -28,3 +28,13 @@ test('buildSystemMessageParts keeps single-line messages as a single system part
   assert.deepEqual(parts, [{ system: 'retrying last request' }]);
   assert.equal(isSystemPayloadTextPart(parts[0]), false);
 });
+
+test('buildSystemMessageParts splits generated foxwarm-message closing tag back into a system part', () => {
+  const parts = buildSystemMessageParts('<foxwarm-message type="timer">\nrun nightly sync\n</foxwarm-message>');
+
+  assert.deepEqual(parts, [
+    { system: '<foxwarm-message type="timer">' },
+    { text: 'run nightly sync', systemPayload: true },
+    { system: '</foxwarm-message>' },
+  ]);
+});

@@ -1,6 +1,7 @@
 import { Message, MessagePart } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { truncateUnicodeSafe } from './unicode';
+import { isFoxwarmMessageCloseLine, parseFoxwarmTagLine } from './promptWrappers';
 
 export const DEFAULT_TOOL_CONTENT_CHAR_LIMIT = 200;
 
@@ -23,6 +24,18 @@ const EPHEMERAL_SYSTEM_PREFIXES = [
 ];
 
 function isEphemeralSystemText(text: string): boolean {
+  if (isFoxwarmMessageCloseLine(text)) {
+    return true;
+  }
+  const tag = parseFoxwarmTagLine(text);
+  if (tag?.tagName === 'foxwarm-system') {
+    return tag.attrs.kind === 'time'
+      || tag.attrs.kind === 'session'
+      || tag.attrs.kind === 'channel-mode';
+  }
+  if (tag?.tagName === 'foxwarm-message' && !tag.closing) {
+    return tag.attrs.type === 'channel';
+  }
   return EPHEMERAL_SYSTEM_PREFIXES.some(prefix => text.startsWith(prefix));
 }
 

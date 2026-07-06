@@ -4,6 +4,7 @@ import { Message, MessagePart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 import { appendImageGuidanceText } from '../toolImages';
+import { formatSystemPartForModel } from '../utils/promptWrappers';
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };
@@ -248,7 +249,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
             const allTextOnly = parts.every(p => (p.text !== undefined || p.system !== undefined) && !p.thinking && !p.functionCall && !p.functionResponse && !p.inlineData);
             if (allTextOnly) {
                 const mergedText = parts
-                    .map(p => p.system !== undefined ? `[SYSTEM: ${p.system}]` : p.text)
+                    .map(p => p.system !== undefined ? formatSystemPartForModel(p.system) : p.text)
                     .filter(Boolean)
                     .join('\n');
                 parts = [{ text: mergedText }];
@@ -261,7 +262,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
             }
 
             if (part.system) {
-                content.push({ type: 'text', text: `[SYSTEM: ${part.system}]` });
+                content.push({ type: 'text', text: formatSystemPartForModel(part.system) });
             }
 
             if (part.text) {
@@ -428,7 +429,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
             if (part.system) {
                 content.push({
                     type: role === 'assistant' ? 'output_text' : 'input_text',
-                    text: `[SYSTEM: ${part.system}]`
+                    text: formatSystemPartForModel(part.system)
                 });
             }
 

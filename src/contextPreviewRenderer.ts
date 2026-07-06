@@ -3,6 +3,7 @@ import { formatArchiveBlockContextText, type ArchiveBlockRecord } from './sessio
 import { formatModelVisibilitySuffix, redactDisplayOnlyMessageForModel } from './session/messageVisibility';
 import { stringifyFunctionCallArgs } from './toolCallArgs';
 import { truncateUnicodeSafe } from './utils/unicode';
+import { isFoxwarmMessageCloseLine, parseFoxwarmTagLine } from './utils/promptWrappers';
 
 export type ContextPreviewToolDetail = 'names' | 'snippets' | 'full';
 
@@ -48,6 +49,18 @@ const EPHEMERAL_SYSTEM_PREFIXES = [
 ];
 
 function isEphemeralSystemText(text: string): boolean {
+  if (isFoxwarmMessageCloseLine(text)) {
+    return true;
+  }
+  const tag = parseFoxwarmTagLine(text);
+  if (tag?.tagName === 'foxwarm-system') {
+    return tag.attrs.kind === 'time'
+      || tag.attrs.kind === 'session'
+      || tag.attrs.kind === 'channel-mode';
+  }
+  if (tag?.tagName === 'foxwarm-message' && !tag.closing) {
+    return tag.attrs.type === 'channel';
+  }
   return EPHEMERAL_SYSTEM_PREFIXES.some(prefix => text.startsWith(prefix));
 }
 

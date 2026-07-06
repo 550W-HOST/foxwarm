@@ -68,8 +68,6 @@ let originalFaviconLinks: OriginalFaviconLink[] | null = null
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const SetupView = lazy(() => import('./components/SetupView'))
 const TerminalView = lazy(() => import('./components/TerminalView'))
-const WorkspaceView = lazy(() => import('./components/WorkspaceView'))
-const FileEditorView = lazy(() => import('./components/FileEditorView'))
 
 function normalizeWebUiSettingsPayload(settings: unknown): WebUiSettings {
   const raw = settings && typeof settings === 'object' ? settings as Partial<WebUiSettings> : {}
@@ -236,11 +234,6 @@ function getHashState(): RouteState {
     return { view: 'tab', tabId: `chat:${sessionId}` }
   }
 
-  if (hash.startsWith('__workspace__:')) {
-    const sessionId = hash.slice('__workspace__:'.length) || loadStoredLastVisitedSession()
-    return { view: 'tab', tabId: `chat:${sessionId}` }
-  }
-
   if (hash.startsWith('__terminal__:')) {
     const remainder = hash.slice('__terminal__:'.length)
     const [sessionIdPart] = remainder.split('?')
@@ -271,28 +264,6 @@ function makeChatTab(sessionId: string, title: string, options?: { preview?: boo
     title,
     preview: !!options?.preview,
     pinned: options?.preview ? false : options?.pinned,
-  }
-}
-
-function makeWorkspaceTab(sessionId: string, nodeId: string, path: string): WorkbenchTab {
-  return {
-    id: `workspace:${nodeId}:${path}`,
-    type: 'workspace',
-    nodeId,
-    path,
-    contextSessionId: sessionId,
-    title: `Workspace · ${path}`,
-  }
-}
-
-function makeFileTab(sessionId: string, nodeId: string, path: string): WorkbenchTab {
-  return {
-    id: `file:${nodeId}:${path}`,
-    type: 'file',
-    nodeId,
-    path,
-    contextSessionId: sessionId,
-    title: path.split('/').pop() || path,
   }
 }
 
@@ -832,21 +803,6 @@ function App() {
     navigateToTab(tab.id)
   }
 
-  const openWorkspaceTab = (sessionId: string, options?: { nodeId?: string; path?: string }) => {
-    const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
-    const nodeId = options?.nodeId || sessionRecord?.currentNode || 'master'
-    const path = options?.path || sessionRecord?.cwd || '/'
-    const tab = makeWorkspaceTab(sessionId, nodeId, path)
-    upsertTab(tab, { activate: true })
-    navigateToTab(tab.id)
-  }
-
-  const openFileTab = (sessionId: string, nodeId: string, path: string) => {
-    const tab = makeFileTab(sessionId, nodeId, path)
-    upsertTab(tab, { activate: true })
-    navigateToTab(tab.id)
-  }
-
   const getPaneHeight = (paneId: string): number => {
     const paneElement = document.querySelector<HTMLElement>(`[data-pane-id="${paneId}"]`)
     return Math.round(paneElement?.getBoundingClientRect().height || 0)
@@ -1196,45 +1152,12 @@ function App() {
           sessionId={tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
-          onOpenWorkspace={() => openWorkspaceTab(tab.sessionId)}
           onOpenTerminal={() => openTerminalTab(tab.sessionId, { sourcePaneId })}
           sendKeyMode={sendKeyMode}
           groupTools={groupTools}
           showUsageBadge={showUsageBadge}
           onDraftEdited={() => handleChatDraftEdited(tab.id)}
         />
-      )
-    }
-
-    if (tab.type === 'workspace') {
-      const sessionId = tab.contextSessionId || currentContextSessionId
-      return (
-        <Suspense fallback={<LazyViewFallback label="Loading workspace…" />}>
-          <WorkspaceView
-            key={tab.id}
-            initialNodeId={tab.nodeId}
-            initialPath={tab.path}
-            onBack={onBack}
-            onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.path, sourcePaneId })}
-            onOpenFile={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
-          />
-        </Suspense>
-      )
-    }
-
-    if (tab.type === 'file') {
-      const sessionId = tab.contextSessionId || currentContextSessionId
-      return (
-        <Suspense fallback={<LazyViewFallback label="Loading file editor…" />}>
-          <FileEditorView
-            key={tab.id}
-            nodeId={tab.nodeId}
-            filePath={tab.path}
-            onBack={onBack}
-            onOpenTerminal={(cwd) => openTerminalTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.path.split('/').slice(0, -1).join('/') || '/', sourcePaneId })}
-            onOpenFileTab={(nodeId, path) => openFileTab(sessionId, nodeId, path)}
-          />
-        </Suspense>
       )
     }
 
@@ -1251,7 +1174,6 @@ function App() {
           onSessionsChanged={() => { void fetchSessions() }}
           onTerminalReady={(terminal) => handleTerminalReady(tab.id, terminal)}
           onTerminalClosed={handleTerminalClosed}
-          onOpenWorkspace={(cwd) => openWorkspaceTab(sessionId, { nodeId: tab.nodeId, path: cwd || tab.cwd || '/' })}
         />
       </Suspense>
     )
@@ -1305,7 +1227,7 @@ function App() {
         <div className="flex h-full items-center justify-center bg-gray-50 text-center text-sm text-gray-500 dark:bg-gray-950 dark:text-gray-400">
           <div className="max-w-sm space-y-2 px-6">
             <div className="text-base font-medium text-gray-700 dark:text-gray-200">Empty pane</div>
-            <div>Focus this pane and open a chat, workspace, file, or terminal from the sidebar/session list.</div>
+            <div>Focus this pane and open a chat or terminal from the sidebar/session list.</div>
           </div>
         </div>
       )
@@ -1536,7 +1458,6 @@ function App() {
             setShowSessionList(false)
           }}
           onSelectSetup={openSetupView}
-          onCreateWorkspaceTab={(options) => openWorkspaceTab(currentContextSessionId, options)}
           onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
           onCreateSession={handleCreateSession}
         />
@@ -1594,7 +1515,6 @@ function App() {
               window.location.hash = ARCHITECTURE_HASH
             }}
             onSelectSetup={openSetupView}
-            onCreateWorkspaceTab={(options) => openWorkspaceTab(currentContextSessionId, options)}
             onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
             onCreateSession={handleCreateSession}
             onToggleCollapsed={() => setSidebarCollapsed(true)}

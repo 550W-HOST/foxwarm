@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, FolderOpen } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -29,10 +29,9 @@ interface TerminalViewProps {
   onSessionsChanged?: () => void
   onTerminalReady?: (terminal: TerminalInfo) => void
   onTerminalClosed?: (terminalId: string) => void
-  onOpenWorkspace?: (cwd?: string) => void
 }
 
-export default function TerminalView({ sessionId, initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed, onOpenWorkspace }: TerminalViewProps) {
+export default function TerminalView({ sessionId, initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -311,16 +310,6 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
                 {error}
               </div>
             )}
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <button
-              onClick={() => onOpenWorkspace?.(terminalInfo?.cwd || requestedCwd)}
-              className="inline-flex h-6 items-center gap-1 rounded-md border border-gray-200 px-2 text-[11px] text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-              title="Open workspace"
-            >
-              <FolderOpen className="h-3 w-3" />
-              <span>Workspace</span>
-            </button>
           </div>
         </div>
       </div>

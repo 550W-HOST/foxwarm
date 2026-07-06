@@ -221,6 +221,50 @@ export function replacePaneWithSplit(node: WorkbenchLayoutNode, paneId: string, 
   })
 }
 
+function isSupportedWorkbenchTab(tab: unknown): tab is WorkbenchTab {
+  if (!tab || typeof tab !== 'object') return false
+  const raw = tab as Record<string, unknown>
+  if (typeof raw.id !== 'string' || typeof raw.title !== 'string') return false
+
+  if (raw.type === 'chat') {
+    return typeof raw.sessionId === 'string' && raw.sessionId.length > 0
+  }
+
+  if (raw.type === 'terminal') {
+    return true
+  }
+
+  return false
+}
+
+function filterLayoutToValidTabs(node: WorkbenchLayoutNode, validTabIds: Set<string>): WorkbenchLayoutNode | null {
+  if (isPaneNode(node)) {
+    const tabIds = Array.from(new Set(node.tabIds.filter((tabId) => validTabIds.has(tabId))))
+    if (tabIds.length === 0) {
+      return null
+    }
+    return createPaneNode(tabIds, node.activeTabId && tabIds.includes(node.activeTabId) ? node.activeTabId : tabIds[0], node.id)
+  }
+
+  const children: WorkbenchLayoutNode[] = []
+  const sizes: number[] = []
+  node.children.forEach((child, index) => {
+    const filteredChild = filterLayoutToValidTabs(child, validTabIds)
+    if (!filteredChild) return
+    children.push(filteredChild)
+    sizes.push(node.sizes[index] ?? 1)
+  })
+
+  if (children.length === 0) {
+    return null
+  }
+  if (children.length === 1) {
+    return children[0]
+  }
+
+  return createSplitNode(node.direction, children, sizes, node.id)
+}
+
 export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: WorkbenchLayoutNode): Record<string, WorkbenchTab> {
   const referencedIds = new Set<string>()
   const collect = (node: WorkbenchLayoutNode) => {
@@ -232,12 +276,13 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
   }
   collect(root)
 
-  return Object.fromEntries(Object.entries(tabsById).filter(([tabId]) => referencedIds.has(tabId)))
+  return Object.fromEntries(Object.entries(tabsById).filter(([tabId, tab]) => referencedIds.has(tabId) && isSupportedWorkbenchTab(tab)))
 }
 
 export function normalizePersistedWorkbenchState(state: WorkbenchPersistedState): WorkbenchPersistedState {
-  const root = normalizeLayoutNode(state.root)
-  const tabsById = sanitizeTabsById(state.tabsById, root)
+  const originalRoot = normalizeLayoutNode(state.root)
+  const tabsById = sanitizeTabsById(state.tabsById, originalRoot)
+  const root = normalizeLayoutNode(filterLayoutToValidTabs(originalRoot, new Set(Object.keys(tabsById))) || createPaneNode())
   const paneIds = getPaneIds(root)
   return {
     version: 4,

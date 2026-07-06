@@ -25,7 +25,7 @@ import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiToolRendering'
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
-import { buildWorkspaceDownloadUrl, triggerBrowserDownload } from './workspaceShared'
+import { buildPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
 import DiffPreview from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
@@ -52,7 +52,7 @@ const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionRespo
 
   const fileName = resolvedPath.split(/[\\/]/).filter(Boolean).pop()
   return {
-    url: buildWorkspaceDownloadUrl(resolvedPath),
+    url: buildPathDownloadUrl(resolvedPath),
     fileName,
   }
 }
