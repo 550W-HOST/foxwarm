@@ -52,7 +52,34 @@ test('foxwarm metadata recognizer and parser handle opening and closing tags', (
 test('formatSystemPartForModel converts legacy system strings without generating bracket wrapper', () => {
   assert.equal(
     formatSystemPartForModel('current time = now'),
-    '<foxwarm-system hint="current time = now" />',
+    '<foxwarm-system kind="time" localTime="now" />',
+  );
+  assert.equal(
+    formatSystemPartForModel('current session ID = demo/test'),
+    '<foxwarm-system kind="session" currentSessionId="demo/test" />',
+  );
+  assert.equal(
+    formatSystemPartForModel('Session goal reminder:\nShip it\nKeep going'),
+    '<foxwarm-system kind="goal-reminder" />\nShip it\nKeep going',
   );
   assert.equal(formatSystemPartForModel('<foxwarm-system kind="time" />'), '<foxwarm-system kind="time" />');
+});
+
+test('formatSystemPartForModel upgrades legacy session identity hints', () => {
+  assert.equal(
+    formatSystemPartForModel('**COMPACTION COMPLETED. PARENT SESSION `parent-1`. CURRENT SESSION ID IS `child-1`.** You can continue working now. Note: skill compacted away.'),
+    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-1" currentSessionId="child-1" />\nYou can continue working now. Note: skill compacted away.',
+  );
+  assert.equal(
+    formatSystemPartForModel('<foxwarm-system hint="**COMPACTION COMPLETED. PARENT SESSION `parent-1`. CURRENT SESSION ID IS `child-1`.** You can continue working now." />'),
+    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-1" currentSessionId="child-1" />\nYou can continue working now.',
+  );
+  assert.equal(
+    formatSystemPartForModel('**HISTORY ABOVE IS INHERITED FROM PARENT SESSION `parent-1`. CURRENT SESSION ID IS `child-1`.**'),
+    '<foxwarm-system kind="session-boundary" event="history-inherited" parentSessionId="parent-1" currentSessionId="child-1" />',
+  );
+  assert.equal(
+    formatSystemPartForModel('**NEW CHILD SESSION WITH PARENT SESSION `parent-1`. CURRENT SESSION ID IS `child-1`.**\nYou are a child session.'),
+    '<foxwarm-system kind="session-boundary" event="new-child" parentSessionId="parent-1" currentSessionId="child-1" />\nYou are a child session.',
+  );
 });

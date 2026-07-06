@@ -114,7 +114,9 @@ async function main(): Promise<void> {
             const userTexts = activeSession.history
               .filter(message => message.role === 'user')
               .map(message => message.parts.map(part => part.system || part.text || '').join('\n'));
-            assert.match(userTexts[0] || '', new RegExp(`current session ID = ${sessionId}\\nstart queue drain$`));
+            const firstUserText = userTexts[0] || '';
+            assert.match(firstUserText, /<foxwarm-system\b[^\n]*kind="session"[^\n]*currentSessionId=/);
+            assert.ok(firstUserText.endsWith('\nstart queue drain'));
             assert.deepStrictEqual(userTexts.slice(1), [
               'queued part before message',
               'queued message in the middle',
@@ -181,7 +183,9 @@ async function main(): Promise<void> {
         const userTexts = activeSession.history
           .filter(message => message.role === 'user')
           .map(message => message.parts.map(part => part.system || part.text || '').join('\n'));
-        assert.match(userTexts[0] || '', new RegExp(`current session ID = ${sessionId}\\nqueued part one$`));
+        const firstUserText = userTexts[0] || '';
+        assert.match(firstUserText, /<foxwarm-system\b[^\n]*kind="session"[^\n]*currentSessionId=/);
+        assert.ok(firstUserText.endsWith('\nqueued part one'));
         assert.deepStrictEqual(userTexts.slice(1), [
           'queued message two',
           'queued part three',
@@ -227,11 +231,12 @@ async function main(): Promise<void> {
         callIndex += 1;
 
         assert.strictEqual(callIndex, 1);
-        assert.match(renderedParts, new RegExp(`current session ID = ${sessionId}\\nbefore compact\\nafter compact$`));
+        assert.match(renderedParts, /<foxwarm-system\b[^\n]*kind="session"[^\n]*currentSessionId=/);
+        assert.ok(renderedParts.endsWith('\nbefore compact\nafter compact'));
         const userTexts = activeSession.history
           .filter(message => message.role === 'user')
           .map(message => message.parts.map(part => part.system || part.text || '').join('\n'));
-        assert(userTexts.some(text => text === `**COMPACTION COMPLETED. PARENT SESSION \`(none)\`. CURRENT SESSION ID IS \`${sessionId}\`.**`));
+        assert(userTexts.some(text => text === `<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="(none)" currentSessionId="${sessionId}" />`));
         await appendStubModelMessage(activeSession, 'handled after compact boundary');
         return { text: 'handled after compact boundary' };
       };

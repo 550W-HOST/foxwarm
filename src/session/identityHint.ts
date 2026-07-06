@@ -1,3 +1,5 @@
+import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
+
 export type SessionIdentityHintVariant = 'inherited' | 'compact' | 'new-child';
 
 export function formatSessionIdentityHint(options: {
@@ -11,13 +13,16 @@ export function formatSessionIdentityHint(options: {
   const sessionId = options.sessionId;
   const variant = options.variant || 'inherited';
 
-  if (variant === 'compact') {
-    return `**COMPACTION COMPLETED. PARENT SESSION \`${parentSessionId}\`. CURRENT SESSION ID IS \`${sessionId}\`.**`;
-  }
+  const event = variant === 'compact'
+    ? 'compact-completed'
+    : variant === 'new-child'
+      ? 'new-child'
+      : 'history-inherited';
 
-  if (variant === 'new-child') {
-    return `**NEW CHILD SESSION WITH PARENT SESSION \`${parentSessionId}\`. CURRENT SESSION ID IS \`${sessionId}\`.**`;
-  }
-
-  return `**HISTORY ABOVE IS INHERITED FROM PARENT SESSION \`${parentSessionId}\`. CURRENT SESSION ID IS \`${sessionId}\`.**`;
+  return formatFoxwarmSystemTag({
+    kind: 'session-boundary',
+    event,
+    parentSessionId,
+    currentSessionId: sessionId,
+  });
 }

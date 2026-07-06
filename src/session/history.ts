@@ -784,7 +784,7 @@ async function finalizeCompaction(
     completionText += `\nNote: The following skill(s) were loaded via load_skill but their content was compacted away: ${skillList}. If you still need them, call load_skill again.`;
   }
   const hasCompletionGoalReminder = !!session.goalState?.goal?.trim();
-  const completionParts: MessagePart[] = [{ system: completionText }];
+  const completionParts: MessagePart[] = buildSystemMessageParts(completionText);
   if (hasCompletionGoalReminder) {
     completionParts.push(...buildSystemMessageParts(formatSessionGoalReminderText(session.goalState.goal)));
   }
@@ -832,7 +832,7 @@ export function formatCompactionCompletionMarker(sessionId: string, completionMa
   const extraMarkerText = markerWithoutSuffix
     .replace(/^\s*Compaction completed\.?\s*/i, '')
     .trim();
-  return extraMarkerText ? `${suffix} ${extraMarkerText}` : suffix;
+  return extraMarkerText ? `${suffix}\n${extraMarkerText}` : suffix;
 }
 
 async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot): Promise<CompactJobResult> {
