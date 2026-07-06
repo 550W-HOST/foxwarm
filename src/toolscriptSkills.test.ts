@@ -10,6 +10,8 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.ok(names.includes('toolscript-automation'));
   assert.ok(names.includes('toolscript-managed-controller'));
   assert.ok(names.includes('agent-skill-creator'));
+  assert.ok(names.includes('web-search'));
+  assert.ok(!names.includes('ask-gemini'));
   assert.ok(!names.includes('agent-skill-creator/references/examples/weekly-crm-report'));
   assert.ok(!names.includes('agent-skill-creator/docs/superpowers/plans/2026-05-27-agent-skill-creator-v5-artifacts-first'));
 
@@ -31,4 +33,8 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.match(creator.documents[0].content, /Foxwarm-specific rules/);
   assert.ok(creator.info.resourceFiles.includes('references/examples/weekly-crm-report/SKILL.md'));
   assert.ok(creator.info.resourceFiles.includes('scripts/validate.py'));
+
+  const webSearch = await loadSkillDocuments('web-search', { agentName: 'main' });
+  assert.match(webSearch.documents[0].content, /formerly ask-gemini/);
+  assert.ok(webSearch.info.resourceFiles.includes('web-search.js'));
 });
