@@ -953,6 +953,50 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-textarea::placeholder 
   opacity: 0.8;
 }
 
+html[data-foxwarm-ui-style="550a"] .absolute.inset-x-0.bottom-0.z-20:has(.foxwarm-chat-composer-form) > .absolute.inset-0.bg-blue-100\/80 {
+  z-index: 1;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="submit"] {
+  height: 36px !important;
+  width: auto !important;
+  min-width: 58px;
+  padding: 0 11px !important;
+  border: 1px solid var(--foxwarm-550a-accent-dim) !important;
+  border-radius: var(--foxwarm-550a-radius) !important;
+  background-color: var(--foxwarm-550a-accent-dim) !important;
+  color: #fff !important;
+  box-shadow: 0 0 12px var(--foxwarm-550a-accent-glow) !important;
+  font-family: var(--foxwarm-550a-font) !important;
+  font-size: 12px !important;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="submit"] svg {
+  display: none !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="submit"]::after {
+  content: "SEND";
+  line-height: 1;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="submit"]:hover:not(:disabled) {
+  background-color: var(--foxwarm-550a-accent) !important;
+  border-color: var(--foxwarm-550a-accent) !important;
+  box-shadow: 0 0 16px var(--foxwarm-550a-accent-glow) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="submit"]:disabled {
+  background-color: var(--foxwarm-550a-input) !important;
+  border-color: var(--foxwarm-550a-border-panel) !important;
+  color: var(--foxwarm-550a-text-dim) !important;
+  box-shadow: none !important;
+  opacity: 0.72;
+}
+
 html[data-foxwarm-ui-style="550a"] .foxwarm-attachment-chip {
   background-color: var(--foxwarm-550a-panel) !important;
   border: 1px solid var(--foxwarm-550a-border-panel) !important;
@@ -985,7 +1029,11 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-attachment-chip button:hover {
 }
 
 html[data-foxwarm-ui-style="550a"] .foxwarm-user-message-bubble {
-  background: linear-gradient(135deg, var(--foxwarm-550a-accent-wash-strong), var(--foxwarm-550a-accent-wash)) !important;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--foxwarm-550a-panel) 78%, var(--foxwarm-550a-accent) 22%),
+    color-mix(in srgb, var(--foxwarm-550a-panel) 86%, var(--foxwarm-550a-accent-dim) 14%)
+  ) !important;
   border: 1px solid var(--foxwarm-550a-accent-dim) !important;
   border-radius: var(--foxwarm-550a-radius) !important;
   box-shadow: inset 0 0 0 1px rgba(238, 85, 85, 0.04), 0 0 14px var(--foxwarm-550a-accent-glow) !important;
