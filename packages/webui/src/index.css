@@ -1154,45 +1154,45 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview {
   border-color: var(--foxwarm-550a-border-panel) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-removed-count,
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-removed-header {
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-card .foxwarm-diff-removed-count,
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-header {
   color: var(--foxwarm-550a-orange) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-added-count,
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-added-header {
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-card .foxwarm-diff-added-count,
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-header {
   color: var(--foxwarm-550a-green) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-removed-line,
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-removed-header {
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-line,
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-header {
   background-color: var(--foxwarm-550a-diff-removed-surface) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-removed-token {
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-token {
   background-color: var(--foxwarm-550a-diff-removed-surface-strong) !important;
   color: var(--foxwarm-550a-orange) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-removed-token :where(*) {
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-token :where(*) {
   color: var(--foxwarm-550a-orange) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-added-line,
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-added-header {
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-line,
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-header {
   background-color: var(--foxwarm-550a-diff-added-surface) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-added-token {
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-token {
   background-color: var(--foxwarm-550a-diff-added-surface-strong) !important;
   color: var(--foxwarm-550a-green) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-added-token :where(*) {
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-token :where(*) {
   color: var(--foxwarm-550a-green) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-removed-header,
-html[data-foxwarm-ui-style="550a"] .foxwarm-diff-added-header {
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-header,
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-header {
   border-color: var(--foxwarm-550a-border-panel) !important;
 }
