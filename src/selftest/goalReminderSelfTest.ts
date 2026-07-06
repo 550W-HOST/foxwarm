@@ -293,13 +293,13 @@ async function main(): Promise<void> {
         assert.strictEqual(activeSession.id, sessionId);
         await appendStubUserMessage(activeSession, parts);
 
-        const lastUserSystems = activeSession.history
+        const lastUserPartsText = activeSession.history
           .slice()
           .reverse()
           .find(message => message.role === 'user')
-          ?.parts.filter(part => typeof part.system === 'string').map(part => part.system || '') || [];
+          ?.parts.map(part => part.system || part.text || '') || [];
 
-        if (lastUserSystems.some(systemText => systemText.includes('message ended without send_to_session call'))) {
+        if (lastUserPartsText.some(partText => partText.includes('message ended without send_to_session call'))) {
           await appendStubModelMessage(activeSession, '[NO_ACTION]');
           return { text: '[NO_ACTION]' };
         }

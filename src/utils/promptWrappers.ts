@@ -100,9 +100,94 @@ export function parseFoxwarmTagLine(text: string | undefined | null): { tagName:
   return { tagName, closing, attrs };
 }
 
+function formatWithOptionalPayload(tag: string, payload: string | undefined): string {
+  const trimmedPayload = payload?.trim();
+  return trimmedPayload ? `${tag}\n${trimmedPayload}` : tag;
+}
+
+function formatLegacySessionIdentityForModel(system: string): string | undefined {
+  const patterns: Array<{ event: string; re: RegExp }> = [
+    {
+      event: 'compact-completed',
+      re: /^\*\*COMPACTION COMPLETED\. PARENT SESSION `([^`]*)`\. CURRENT SESSION ID IS `([^`]*)`\.\*\*([\s\S]*)$/i,
+    },
+    {
+      event: 'new-child',
+      re: /^\*\*NEW CHILD SESSION WITH PARENT SESSION `([^`]*)`\. CURRENT SESSION ID IS `([^`]*)`\.\*\*([\s\S]*)$/i,
+    },
+    {
+      event: 'history-inherited',
+      re: /^\*\*HISTORY ABOVE IS INHERITED FROM PARENT SESSION `([^`]*)`\. CURRENT SESSION ID IS `([^`]*)`\.\*\*([\s\S]*)$/i,
+    },
+  ];
+
+  for (const pattern of patterns) {
+    const match = system.match(pattern.re);
+    if (match) {
+      return formatWithOptionalPayload(formatFoxwarmSystemTag({
+        kind: 'session-boundary',
+        event: pattern.event,
+        parentSessionId: match[1],
+        currentSessionId: match[2],
+      }), match[3]);
+    }
+  }
+
+  return undefined;
+}
+
+function formatLegacySystemTextForModel(system: string): string | undefined {
+  const legacyIdentity = formatLegacySessionIdentityForModel(system);
+  if (legacyIdentity) {
+    return legacyIdentity;
+  }
+
+  const currentTimeMatch = system.match(/^current time\s*=\s*(.+)$/i);
+  if (currentTimeMatch) {
+    return formatFoxwarmSystemTag({ kind: 'time', localTime: currentTimeMatch[1].trim() });
+  }
+
+  const currentSessionMatch = system.match(/^current session ID\s*=\s*(.+)$/i);
+  if (currentSessionMatch) {
+    return formatFoxwarmSystemTag({ kind: 'session', currentSessionId: currentSessionMatch[1].trim() });
+  }
+
+  const goalReminderMatch = system.match(/^Session goal reminder:\s*\n?([\s\S]*)$/i);
+  if (goalReminderMatch) {
+    return formatWithOptionalPayload(formatFoxwarmSystemTag({ kind: 'goal-reminder' }), goalReminderMatch[1]);
+  }
+
+  if (/^Reminder: message ended without send_to_session call\./i.test(system)) {
+    const parentSessionMatch = system.match(/send_to_session\(\{sessionId:\s*`([^`]*)`/);
+    return formatWithOptionalPayload(formatFoxwarmSystemTag({
+      kind: 'child-reminder',
+      event: 'missing-handoff',
+      parentSessionId: parentSessionMatch?.[1],
+    }), system);
+  }
+
+  const compactionCompletedMatch = system.match(/^Compaction completed\.?\s*([\s\S]*)$/i);
+  if (compactionCompletedMatch) {
+    return formatWithOptionalPayload(formatFoxwarmSystemTag({ kind: 'session-boundary', event: 'compact-completed' }), compactionCompletedMatch[1]);
+  }
+
+  return undefined;
+}
+
 export function formatSystemPartForModel(system: string): string {
   const trimmed = system.trim();
+  const legacyText = formatLegacySystemTextForModel(trimmed);
+  if (legacyText) {
+    return legacyText;
+  }
   if (isFoxwarmMetadataLine(trimmed)) {
+    const tag = parseFoxwarmTagLine(trimmed);
+    if (tag?.tagName === 'foxwarm-system' && !tag.attrs.kind && typeof tag.attrs.hint === 'string') {
+      const legacyHint = formatLegacySystemTextForModel(tag.attrs.hint.trim());
+      if (legacyHint) {
+        return legacyHint;
+      }
+    }
     return trimmed;
   }
   return formatFoxwarmSystemHint(system);

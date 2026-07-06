@@ -34,6 +34,7 @@ test('child instructions and reminders mention wait and the bracketed marker', (
   const completion = buildChildCompletionInstruction('parent/main');
   const reminder = buildChildReminder('parent/main');
 
+  assert.match(reminder, /^<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="parent\/main" \/>\nReminder:/);
   assert.match(completion, /\[NO_ACTION\]/);
   assert.match(reminder, /\[NO_ACTION\]/);
   assert.match(completion, /wait\(\{\}\)/);

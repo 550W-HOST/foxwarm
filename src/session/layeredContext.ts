@@ -15,6 +15,7 @@ import {
 } from './archiveStore';
 import { isModelVisibleMessage } from './messageVisibility';
 import { parseFoxwarmTagLine } from '../utils/promptWrappers';
+import { isSystemPayloadTextPart } from '../utils/systemMessageParts';
 
 const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
   'This session has been compacted.',
@@ -92,7 +93,7 @@ export function shouldIgnoreMessageInCompactCandidates(message: Message): boolea
   }
 
   const hasNonSystemContent = parts.some(part => (
-    (typeof part.text === 'string' && part.text.trim().length > 0)
+    (typeof part.text === 'string' && part.text.trim().length > 0 && !isSystemPayloadTextPart(part))
     || (typeof part.thinking === 'string' && part.thinking.trim().length > 0)
     || !!part.functionCall
     || !!part.functionResponse

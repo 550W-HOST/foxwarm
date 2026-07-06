@@ -55,7 +55,7 @@ test('framework root 00_SYSTEM takes precedence over legacy fallback and dynamic
   assert.match(rootSnapshot, /compacted into CTX-BLOCK summaries/);
   assert.match(rootSnapshot, /Compaction is system-initiated/);
   assert.match(rootSnapshot, /temporary compact thread/);
-  assert.match(rootSnapshot, /bold `COMPACTION COMPLETED` identity notice/);
+  assert.match(rootSnapshot, /foxwarm-system kind="session-boundary" event="compact-completed"/);
   assert.match(rootSnapshot, /Block levels are hierarchical/);
   assert.match(rootSnapshot, /not agent memory/);
   assert.match(rootSnapshot, /routine process notes/);

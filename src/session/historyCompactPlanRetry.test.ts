@@ -145,7 +145,7 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
     assert.match(prompts[1], /plain text\/no tool call cannot complete compaction/i);
     assert.match(prompts[1], /submit_compact_plan/);
     assert(session.history.some(message => message.parts.some(part => /summary after retrying a missing compact tool call/.test(part.text || ''))));
-    assert(session.history.some(message => message.parts.some(part => /COMPACTION COMPLETED/i.test(part.system || ''))));
+    assert(session.history.some(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"'))));
     assert.equal(session.contextFrontier?.[0]?.kind, 'block');
   } finally {
     (llm as any).chat = originalChat;

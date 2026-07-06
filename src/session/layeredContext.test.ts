@@ -10,6 +10,7 @@ test('recognizes compact lifecycle system texts that should be ignored in compac
   assert.equal(isIgnoredCompactLifecycleSystemText('Compacted message placeholder: 4 message(s) from #1-#4 were removed from working history here.'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('Compaction completed. You can continue working now.'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.**'), true);
+  assert.equal(isIgnoredCompactLifecycleSystemText('<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" />'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('Manual compaction completed.'), true);
   assert.equal(isIgnoredCompactLifecycleSystemText('current time = 2026-03-18 00:00'), false);
 });
@@ -22,6 +23,16 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
   };
   assert.equal(shouldIgnoreMessageInCompactCandidates(lifecycleOnly), true);
 
+  const foxwarmLifecycleWithPayload: Message = {
+    role: 'user',
+    parts: [
+      { system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" />' },
+      { text: 'You can continue working now.', systemPayload: true },
+    ],
+    __meta: { seq: 10 },
+  };
+  assert.equal(shouldIgnoreMessageInCompactCandidates(foxwarmLifecycleWithPayload), true);
+
   const mixedContent: Message = {
     role: 'user',
     parts: [
@@ -33,11 +44,11 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
   assert.equal(shouldIgnoreMessageInCompactCandidates(mixedContent), false);
 });
 
-test('formatCompactionCompletionMarker uses the bold completion identity hint without a duplicate prefix or newline', () => {
+test('formatCompactionCompletionMarker uses foxwarm metadata without a duplicate legacy prefix', () => {
   const text = formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.', 'parent-456');
-  assert.equal(text, '**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.** You can continue working now.');
-  assert.equal(formatCompactionCompletionMarker('session-123', 'Compaction completed.', 'parent-456'), '**COMPACTION COMPLETED. PARENT SESSION `parent-456`. CURRENT SESSION ID IS `session-123`.**');
-  assert.equal(isIgnoredCompactLifecycleSystemText(text), true);
+  assert.equal(text, '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" />\nYou can continue working now.');
+  assert.equal(formatCompactionCompletionMarker('session-123', 'Compaction completed.', 'parent-456'), '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" />');
+  assert.equal(isIgnoredCompactLifecycleSystemText(text.split('\n')[0]), true);
 });
 
 test('renderBlockMessage includes raw message local time range when available', () => {
