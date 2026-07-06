@@ -216,7 +216,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
   const reconnectDelayRef = useRef<number>(1000)
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const shouldAutoScrollRef = useRef<boolean>(true)
-  const pendingSentMessagesRef = useRef<string[]>([])
+  const pendingSentMessagesRef = useRef<Array<{ id: string; text: string }>>([])
+  const sendInFlightRef = useRef(false)
   const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
   const composerHeightRef = useRef<number | null>(null)
   const expandHistoryScrollRestoreRef = useRef<{ top: number; height: number } | null>(null)
@@ -491,24 +492,24 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
                 .trim()
 
               const pendingIndex = pendingSentMessagesRef.current.findIndex(pending =>
-                newMessageText.includes(pending) || pending.includes(newMessageText)
+                pending.text && (newMessageText.includes(pending.text) || pending.text.includes(newMessageText))
               )
 
               if (pendingIndex !== -1) {
-                pendingSentMessagesRef.current.splice(pendingIndex, 1)
-
-                const filtered = prev.filter((m) => {
-                  if (m.role !== 'user') return true
-                  const userMessages = prev.filter(msg => msg.role === 'user')
-                  const isLastUser = m === userMessages[userMessages.length - 1]
-                  return !isLastUser
-                })
+                const [pending] = pendingSentMessagesRef.current.splice(pendingIndex, 1)
+                const optimisticIndex = prev.findIndex((m) => m.__meta?.pendingId === pending.id)
 
                 if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
                   lastKnownTimestampRef.current = msgTimestamp
                 }
 
-                return [...filtered, data.message]
+                if (optimisticIndex !== -1) {
+                  const next = [...prev]
+                  next[optimisticIndex] = data.message
+                  return next
+                }
+
+                return [...prev, data.message]
               }
             }
 
@@ -843,15 +844,16 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
   }, [debugInfoText])
 
   const handleSend = useCallback(async ({ text, attachments }: { text: string; attachments: File[] }) => {
-    if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
+    if (sessionMissing || (!text.trim() && attachments.length === 0) || loading || sendInFlightRef.current) return false
 
+    sendInFlightRef.current = true
     setLoading(true)
     setStreamingAssistantDraft(null)
 
     const userMessage = text.trim()
     const files = [...attachments]
     const sendTimestamp = Date.now()
-    lastKnownTimestampRef.current = sendTimestamp
+    const pendingId = `pending-${sendTimestamp}-${Math.random().toString(36).slice(2)}`
 
     const parts: any[] = []
     let messageText = userMessage
@@ -895,27 +897,43 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
 
     const previewParts = messageText ? [{ text: messageText }] : parts
 
-    pendingSentMessagesRef.current.push(userMessage)
-    setMessages(prev => [...prev, { role: 'user', parts: previewParts }])
+    pendingSentMessagesRef.current.push({ id: pendingId, text: messageText.trim() || userMessage })
+    setMessages(prev => [...prev, {
+      role: 'user',
+      parts: previewParts,
+      __meta: {
+        timestamp: sendTimestamp,
+        temporary: true,
+        optimistic: true,
+        pendingId,
+      },
+    }])
 
     try {
-      fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ parts, uploadedFiles }),
-      }).catch(e => {
-        console.error('Failed to send message:', e)
-        setMessages(prev => [...prev, { role: 'model', parts: [{ text: 'Error: Failed to send message' }] }])
       })
 
-      setLoading(false)
+      if (!res.ok) {
+        throw new Error(`Failed to send message (${res.status})`)
+      }
+
       return true
     } catch (e) {
       console.error('Failed to send message:', e)
-      setLoading(false)
+      pendingSentMessagesRef.current = pendingSentMessagesRef.current.filter((pending) => pending.id !== pendingId)
+      setMessages(prev => [
+        ...prev.filter((message) => message.__meta?.pendingId !== pendingId),
+        { role: 'model', parts: [{ text: 'Error: Failed to send message' }] },
+      ])
       return false
+    } finally {
+      sendInFlightRef.current = false
+      setLoading(false)
     }
   }, [loading, sessionId, sessionMissing])
 

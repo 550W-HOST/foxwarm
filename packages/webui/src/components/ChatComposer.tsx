@@ -313,6 +313,7 @@ const ChatComposer = memo(function ChatComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  const submitInFlightRef = useRef(false)
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
@@ -336,6 +337,10 @@ const ChatComposer = memo(function ChatComposer({
     cancel: () => void
   } | null>(null)
   const lastReportedHeightRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    submitInFlightRef.current = false
+  }, [sessionId])
 
   useEffect(() => {
     let cancelled = false
@@ -523,10 +528,19 @@ const ChatComposer = memo(function ChatComposer({
 
   const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
-    if (sessionMissing || (!input.trim() && attachments.length === 0) || loading) return
+    if (sessionMissing || (!input.trim() && attachments.length === 0) || loading || submitInFlightRef.current) return
 
-    const accepted = await onSend({ text: input.trim(), attachments })
-    if (!accepted) return
+    submitInFlightRef.current = true
+    let accepted = false
+    try {
+      accepted = await onSend({ text: input.trim(), attachments })
+    } catch (error) {
+      console.error('Failed to send message:', error)
+    }
+    if (!accepted) {
+      submitInFlightRef.current = false
+      return
+    }
 
     setInput('')
     setAttachments([])
@@ -537,6 +551,7 @@ const ChatComposer = memo(function ChatComposer({
     requestAnimationFrame(() => {
       resizeTextarea(textareaRef.current)
       textareaRef.current?.focus()
+      submitInFlightRef.current = false
     })
   }, [attachments, input, loading, onSend, sessionId, sessionMissing])
 
