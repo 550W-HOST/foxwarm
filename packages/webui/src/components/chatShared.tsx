@@ -305,11 +305,9 @@ export const isLightweightFoxwarmMetadataLine = (text: string): boolean => {
   if (tag.tagName !== 'foxwarm-system') return false
 
   const kind = tag.attrs.kind || ''
-  const type = tag.attrs.type || ''
   return kind === 'time'
     || kind === 'session'
     || kind === 'channel-mode'
-    || (kind === 'event' && (type === 'wait-timeout' || type === 'wait-all-pending'))
 }
 
 export const formatStructuredSystemText = (system: string): string => (
