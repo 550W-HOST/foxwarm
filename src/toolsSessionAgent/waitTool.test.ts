@@ -95,7 +95,7 @@ async function withTempTimerStore(run: () => Promise<void>): Promise<void> {
 test('buildWaitTimeoutMessage uses fixed text and no custom timeout message', () => {
   assert.equal(
     buildWaitTimeoutMessage({ waitTimeoutSeconds: 7 }),
-    '<foxwarm-system kind="event" type="wait-timeout" seconds="7" hint="wait timeout reached after 7s. No newer message or event triggered this session during the wait." />',
+    '<foxwarm-system kind="event" type="wait-timeout" seconds="7">\nwait timeout reached after 7s. No newer message or event triggered this session during the wait.\n</foxwarm-system>',
   );
 });
 

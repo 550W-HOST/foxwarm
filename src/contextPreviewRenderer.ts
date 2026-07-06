@@ -3,7 +3,7 @@ import { formatArchiveBlockContextText, type ArchiveBlockRecord } from './sessio
 import { formatModelVisibilitySuffix, redactDisplayOnlyMessageForModel } from './session/messageVisibility';
 import { stringifyFunctionCallArgs } from './toolCallArgs';
 import { truncateUnicodeSafe } from './utils/unicode';
-import { isFoxwarmMessageCloseLine, parseFoxwarmTagLine } from './utils/promptWrappers';
+import { isFoxwarmMessageCloseLine, parseFoxwarmOpeningTag, parseFoxwarmWrappedContent } from './utils/promptWrappers';
 
 export type ContextPreviewToolDetail = 'names' | 'snippets' | 'full';
 
@@ -52,7 +52,7 @@ function isEphemeralSystemText(text: string): boolean {
   if (isFoxwarmMessageCloseLine(text)) {
     return true;
   }
-  const tag = parseFoxwarmTagLine(text);
+  const tag = parseFoxwarmOpeningTag(text);
   if (tag?.tagName === 'foxwarm-system') {
     return tag.attrs.kind === 'time'
       || tag.attrs.kind === 'session'
@@ -303,8 +303,15 @@ function formatToolNameList(message: Message): string[] {
 function formatMessageFullLines(message: Message, options: { toolDetail: ContextPreviewToolDetail; filters: CompiledPreviewFilters }): string[] {
   const lines: string[] = [];
   for (const part of message.parts || []) {
-    if (typeof part.system === 'string' && !isEphemeralSystemText(part.system)) {
-      lines.push(`[system] ${part.system}`);
+    if (typeof part.system === 'string') {
+      const wrapped = parseFoxwarmWrappedContent(part.system);
+      if (wrapped?.tagName === 'foxwarm-message' && wrapped.attrs.type === 'channel') {
+        if (wrapped.content.trim()) {
+          lines.push(wrapped.content.trim());
+        }
+      } else if (!isEphemeralSystemText(part.system)) {
+        lines.push(`[system] ${part.system}`);
+      }
     }
     if (typeof part.text === 'string' && part.text.trim() && !part.text.includes('--- RELEVANT MEMORY SNIPPETS (RAG) ---')) {
       lines.push(part.text.trim());
@@ -338,8 +345,15 @@ function formatMessageFullLines(message: Message, options: { toolDetail: Context
 function buildMessageSearchText(message: Message): string {
   const lines: string[] = [];
   for (const part of message.parts || []) {
-    if (typeof part.system === 'string' && !isEphemeralSystemText(part.system)) {
-      lines.push(`[system] ${part.system}`);
+    if (typeof part.system === 'string') {
+      const wrapped = parseFoxwarmWrappedContent(part.system);
+      if (wrapped?.tagName === 'foxwarm-message' && wrapped.attrs.type === 'channel') {
+        if (wrapped.content.trim()) {
+          lines.push(wrapped.content.trim());
+        }
+      } else if (!isEphemeralSystemText(part.system)) {
+        lines.push(`[system] ${part.system}`);
+      }
     }
     if (typeof part.text === 'string' && part.text.trim() && !part.text.includes('--- RELEVANT MEMORY SNIPPETS (RAG) ---')) {
       lines.push(part.text.trim());

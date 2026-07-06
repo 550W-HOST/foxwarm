@@ -16,7 +16,7 @@ import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
-import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag, parseFoxwarmTagLine } from './utils/promptWrappers';
+import { formatFoxwarmMessage, formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
 function formatCurrentTimeForPrompt(date: Date): string {
   return formatLocalTimestamp(date);
@@ -104,6 +104,24 @@ function mergeExcludePlatforms(options: any, platforms: string[]): any {
   return { ...(options || {}), excludePlatforms };
 }
 
+function getPlainTextOnlyContent(parts: MessagePart[]): string | undefined {
+  const chunks: string[] = [];
+  for (const part of parts) {
+    const hasOnlyText = typeof part.text === 'string'
+      && part.system === undefined
+      && part.thinking === undefined
+      && part.functionCall === undefined
+      && part.functionResponse === undefined
+      && part.inlineData === undefined
+      && (part as any).inlineDataRef === undefined;
+    if (!hasOnlyText) {
+      return undefined;
+    }
+    chunks.push(part.text || '');
+  }
+  return chunks.join('\n');
+}
+
 export class MessageRouter {
   private authorizedUsers: Map<string, boolean> = new Map();
   private processingSessions: Set<string> = new Set();
@@ -130,27 +148,21 @@ export class MessageRouter {
     const channelType = source.channelType || source.platform;
     const conversationId = source.conversationId || source.channelUserId;
     const channelTargetId = `${channelInstanceId}:${conversationId}`;
-    if (channelType === 'webui') {
-      systemParts.push({
-        system: formatFoxwarmMessageOpen({
-          type: 'channel',
-          channelType: 'webui',
-          hint: 'direct user message via channel',
-        }),
-      });
-    } else {
-      systemParts.push({
-        system: formatFoxwarmMessageOpen({
-          type: 'channel',
-          channelInstanceId,
-          channelType,
-          conversationId,
-          channelTargetId,
-          sender: source.username,
-          hint: 'direct user message via channel',
-        }),
-      });
-    }
+    const sourceAttrs = channelType === 'webui'
+      ? {
+        type: 'channel',
+        channelType: 'webui',
+        hint: 'direct user message via channel',
+      }
+      : {
+        type: 'channel',
+        channelInstanceId,
+        channelType,
+        conversationId,
+        channelTargetId,
+        sender: source.username,
+        hint: 'direct user message via channel',
+      };
 
     // Send-only channel notice
     if (conversationId) {
@@ -169,7 +181,13 @@ export class MessageRouter {
       }
     }
 
-    parts.unshift(...systemParts);
+    const textOnlyContent = getPlainTextOnlyContent(parts);
+    if (textOnlyContent !== undefined) {
+      parts.splice(0, parts.length, ...systemParts, { system: formatFoxwarmMessage(sourceAttrs, textOnlyContent) });
+      return;
+    }
+
+    parts.unshift(...systemParts, { system: formatFoxwarmMessageOpen(sourceAttrs) });
     parts.push({ system: formatFoxwarmMessageClose() });
   }
 
@@ -617,8 +635,8 @@ export class MessageRouter {
         if (p.system.startsWith('FROM:') || p.system.startsWith('The following message is a direct user message via channel;')) {
           return true;
         }
-        const tag = parseFoxwarmTagLine(p.system);
-        return tag?.tagName === 'foxwarm-message' && !tag.closing && tag.attrs.type === 'channel';
+        const tag = parseFoxwarmOpeningTag(p.system);
+        return tag?.tagName === 'foxwarm-message' && tag.attrs.type === 'channel';
       })) {
         hasUserFromPrefix = true;
       }

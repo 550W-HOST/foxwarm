@@ -3,6 +3,7 @@ export type FoxwarmAttributeValue = string | number | boolean | null | undefined
 const CONTROL_CHARS_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 const FOXWARM_METADATA_LINE_RE = /^\s*<\/?foxwarm-(?:system|metadata|message)\b/i;
 const FOXWARM_TAG_LINE_RE = /^\s*<\/?foxwarm-([a-zA-Z0-9_-]+)\b([^>]*)\/?\s*>\s*$/i;
+const FOXWARM_OPENING_TAG_RE = /^\s*<foxwarm-([a-zA-Z0-9_-]+)\b([^>]*)>\s*/i;
 const FOXWARM_MESSAGE_CLOSE_RE = /^\s*<\/foxwarm-message\s*>\s*$/i;
 
 export function escapeFoxwarmAttributeValue(value: FoxwarmAttributeValue): string {
@@ -51,6 +52,22 @@ export function formatFoxwarmSystemTag(attrs: Record<string, FoxwarmAttributeVal
   return attrText ? `<foxwarm-system ${attrText} />` : '<foxwarm-system />';
 }
 
+export function formatFoxwarmSystemOpen(attrs: Record<string, FoxwarmAttributeValue>): string {
+  const attrText = formatFoxwarmAttributes(attrs);
+  return attrText ? `<foxwarm-system ${attrText}>` : '<foxwarm-system>';
+}
+
+export function formatFoxwarmSystemClose(): string {
+  return '</foxwarm-system>';
+}
+
+export function formatFoxwarmSystem(attrs: Record<string, FoxwarmAttributeValue>, content?: string): string {
+  const normalizedContent = typeof content === 'string' ? content.trim() : '';
+  return normalizedContent
+    ? `${formatFoxwarmSystemOpen(attrs)}\n${normalizedContent}\n${formatFoxwarmSystemClose()}`
+    : formatFoxwarmSystemTag(attrs);
+}
+
 export function formatFoxwarmSystemHint(hint: string, attrs: Record<string, FoxwarmAttributeValue> = {}): string {
   return formatFoxwarmSystemTag({ ...attrs, hint });
 }
@@ -80,6 +97,16 @@ export function isFoxwarmTagLine(text: string | undefined | null): boolean {
   return typeof text === 'string' && FOXWARM_TAG_LINE_RE.test(text);
 }
 
+function parseFoxwarmAttrs(rawAttrs: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  const attrRe = /([a-zA-Z_:][a-zA-Z0-9_.:-]*)\s*=\s*"([^"]*)"/g;
+  let attrMatch: RegExpExecArray | null;
+  while ((attrMatch = attrRe.exec(rawAttrs)) !== null) {
+    attrs[attrMatch[1]] = unescapeFoxwarmAttributeValue(attrMatch[2]);
+  }
+  return attrs;
+}
+
 export function parseFoxwarmTagLine(text: string | undefined | null): { tagName: string; closing: boolean; attrs: Record<string, string> } | undefined {
   if (typeof text !== 'string') {
     return undefined;
@@ -90,19 +117,54 @@ export function parseFoxwarmTagLine(text: string | undefined | null): { tagName:
   }
   const closing = /^\s*<\//.test(text);
   const tagName = `foxwarm-${match[1].toLowerCase()}`;
-  const rawAttrs = match[2] || '';
-  const attrs: Record<string, string> = {};
-  const attrRe = /([a-zA-Z_:][a-zA-Z0-9_.:-]*)\s*=\s*"([^"]*)"/g;
-  let attrMatch: RegExpExecArray | null;
-  while ((attrMatch = attrRe.exec(rawAttrs)) !== null) {
-    attrs[attrMatch[1]] = unescapeFoxwarmAttributeValue(attrMatch[2]);
-  }
+  const attrs = parseFoxwarmAttrs(match[2] || '');
   return { tagName, closing, attrs };
 }
 
-function formatWithOptionalPayload(tag: string, payload: string | undefined): string {
-  const trimmedPayload = payload?.trim();
-  return trimmedPayload ? `${tag}\n${trimmedPayload}` : tag;
+export function parseFoxwarmOpeningTag(text: string | undefined | null): { tagName: string; closing: false; attrs: Record<string, string> } | undefined {
+  if (typeof text !== 'string') {
+    return undefined;
+  }
+  const match = text.match(FOXWARM_OPENING_TAG_RE);
+  if (!match) {
+    return undefined;
+  }
+  return {
+    tagName: `foxwarm-${match[1].toLowerCase()}`,
+    closing: false,
+    attrs: parseFoxwarmAttrs(match[2] || ''),
+  };
+}
+
+export function parseFoxwarmWrappedContent(text: string | undefined | null): { tagName: string; attrs: Record<string, string>; content: string } | undefined {
+  if (typeof text !== 'string') {
+    return undefined;
+  }
+  const match = text.match(/^\s*<foxwarm-([a-zA-Z0-9_-]+)\b([^>]*)>\s*\n?([\s\S]*)\n?\s*<\/foxwarm-\1\s*>\s*$/i);
+  if (!match) {
+    return undefined;
+  }
+  return {
+    tagName: `foxwarm-${match[1].toLowerCase()}`,
+    attrs: parseFoxwarmAttrs(match[2] || ''),
+    content: match[3] || '',
+  };
+}
+
+function normalizeSelfClosingSystemTagWithPayload(system: string): string | undefined {
+  const firstNewlineIndex = system.indexOf('\n');
+  if (firstNewlineIndex === -1) {
+    return undefined;
+  }
+  const firstLine = system.slice(0, firstNewlineIndex).trim();
+  if (!/\/\>\s*$/.test(firstLine)) {
+    return undefined;
+  }
+  const tag = parseFoxwarmTagLine(firstLine);
+  if (tag?.tagName !== 'foxwarm-system' || tag.closing) {
+    return undefined;
+  }
+  return formatFoxwarmSystem(tag.attrs, system.slice(firstNewlineIndex + 1));
 }
 
 function formatLegacySessionIdentityForModel(system: string): string | undefined {
@@ -124,12 +186,12 @@ function formatLegacySessionIdentityForModel(system: string): string | undefined
   for (const pattern of patterns) {
     const match = system.match(pattern.re);
     if (match) {
-      return formatWithOptionalPayload(formatFoxwarmSystemTag({
+      return formatFoxwarmSystem({
         kind: 'session-boundary',
         event: pattern.event,
         parentSessionId: match[1],
         currentSessionId: match[2],
-      }), match[3]);
+      }, match[3]);
     }
   }
 
@@ -137,6 +199,11 @@ function formatLegacySessionIdentityForModel(system: string): string | undefined
 }
 
 function formatLegacySystemTextForModel(system: string): string | undefined {
+  const normalizedSelfClosingWithPayload = normalizeSelfClosingSystemTagWithPayload(system);
+  if (normalizedSelfClosingWithPayload) {
+    return normalizedSelfClosingWithPayload;
+  }
+
   const legacyIdentity = formatLegacySessionIdentityForModel(system);
   if (legacyIdentity) {
     return legacyIdentity;
@@ -154,21 +221,44 @@ function formatLegacySystemTextForModel(system: string): string | undefined {
 
   const goalReminderMatch = system.match(/^Session goal reminder:\s*\n?([\s\S]*)$/i);
   if (goalReminderMatch) {
-    return formatWithOptionalPayload(formatFoxwarmSystemTag({ kind: 'goal-reminder' }), goalReminderMatch[1]);
+    return formatFoxwarmSystem({ kind: 'goal-reminder' }, goalReminderMatch[1]);
   }
 
   if (/^Reminder: message ended without send_to_session call\./i.test(system)) {
     const parentSessionMatch = system.match(/send_to_session\(\{sessionId:\s*`([^`]*)`/);
-    return formatWithOptionalPayload(formatFoxwarmSystemTag({
+    return formatFoxwarmSystem({
       kind: 'child-reminder',
       event: 'missing-handoff',
       parentSessionId: parentSessionMatch?.[1],
-    }), system);
+    }, system);
+  }
+
+  const backgroundFinishedMatch = system.match(/^Background Process Finished\s*\n?([\s\S]*)$/i);
+  if (backgroundFinishedMatch) {
+    return formatFoxwarmSystem({ kind: 'event', type: 'background-process-finished' }, backgroundFinishedMatch[1]);
+  }
+
+  if (/^session resumed after process restart$/i.test(system)) {
+    return formatFoxwarmSystem({ kind: 'event', type: 'session-resumed' }, system);
+  }
+
+  if (/^retrying last request$/i.test(system)) {
+    return formatFoxwarmSystem({ kind: 'event', type: 'retrying-last-request' }, system);
+  }
+
+  const managedWakeMatch = system.match(/^Managed session `([^`]*)` has (\d+) pending inbox item\(s\)\.([\s\S]*)$/i);
+  if (managedWakeMatch) {
+    return formatFoxwarmSystem({
+      kind: 'managed-session',
+      event: 'pending-inbox',
+      managedSessionId: managedWakeMatch[1],
+      pendingCount: managedWakeMatch[2],
+    }, system);
   }
 
   const compactionCompletedMatch = system.match(/^Compaction completed\.?\s*([\s\S]*)$/i);
   if (compactionCompletedMatch) {
-    return formatWithOptionalPayload(formatFoxwarmSystemTag({ kind: 'session-boundary', event: 'compact-completed' }), compactionCompletedMatch[1]);
+    return formatFoxwarmSystem({ kind: 'session-boundary', event: 'compact-completed' }, compactionCompletedMatch[1]);
   }
 
   return undefined;
@@ -187,8 +277,9 @@ export function formatSystemPartForModel(system: string): string {
       if (legacyHint) {
         return legacyHint;
       }
+      return formatFoxwarmSystem({ kind: 'system' }, tag.attrs.hint);
     }
     return trimmed;
   }
-  return formatFoxwarmSystemHint(system);
+  return formatFoxwarmSystem({ kind: 'system' }, system);
 }

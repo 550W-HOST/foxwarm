@@ -14,7 +14,7 @@ import {
   writeArchiveBlocks,
 } from './archiveStore';
 import { isModelVisibleMessage } from './messageVisibility';
-import { parseFoxwarmTagLine } from '../utils/promptWrappers';
+import { parseFoxwarmOpeningTag } from '../utils/promptWrappers';
 import { isSystemPayloadTextPart } from '../utils/systemMessageParts';
 
 const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
@@ -68,7 +68,7 @@ export type ContextFrontierAnnotationOptions = {
 };
 
 export function isIgnoredCompactLifecycleSystemText(text: string): boolean {
-  const tag = parseFoxwarmTagLine(text);
+  const tag = parseFoxwarmOpeningTag(text);
   if (tag?.tagName === 'foxwarm-system') {
     const hint = tag.attrs.hint || '';
     return tag.attrs.event === 'compact'

@@ -229,7 +229,7 @@ async function main(): Promise<void> {
 
       const parentAfter = await sessionManager.getSession(parentId);
       assert.strictEqual(parentAfter.busy, false);
-      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes('child-ok'))));
+      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => ((part.system || part.text || '')).includes('child-ok'))));
       assertLastModelText(parentAfter, 'parent observed child message');
       assert.strictEqual(parentAfter.queue.length, 0);
 
@@ -296,7 +296,7 @@ async function main(): Promise<void> {
       const parentAfter = await sessionManager.getSession(parentId);
       assert.strictEqual(parentCallCount, 1);
       assert.strictEqual(parentAfter.queue.length, 0);
-      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes('child-wait-ok'))));
+      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => ((part.system || part.text || '')).includes('child-wait-ok'))));
       assertLastModelText(parentAfter, 'parent received wait handoff');
     });
 
@@ -469,8 +469,8 @@ async function main(): Promise<void> {
       const compactCompletion = finalSession.history.find(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('event="compact-completed"')));
       const compactCompletionSystem = compactCompletion?.parts.find(part => typeof part.system === 'string')?.system || '';
       assert.match(compactCompletionSystem, /event="compact-completed"/);
-      assert(compactCompletion?.parts.some(part => part.system === '<foxwarm-system kind="goal-reminder" />'));
-      assert(compactCompletion?.parts.some(part => (part.text || '').includes('Keep the session goal alive across compaction')));
+      assert(compactCompletion?.parts.some(part => (part.system || '').includes('kind="goal-reminder"')));
+      assert(compactCompletion?.parts.some(part => (part.system || '').includes('Keep the session goal alive across compaction')));
       assert.strictEqual(compactCompletion?.__meta?.goalReminder, true);
       assert.strictEqual(finalSession.goalState?.anchorSeq, compactCompletion?.__meta?.seq);
       assert.strictEqual(finalSession.history.filter(msg => msg.__meta?.goalReminder === true).length, 1);
@@ -724,7 +724,7 @@ async function main(): Promise<void> {
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
       assert(finalSession.history.some(msg => msg.role === 'user'
         && msg.parts.some(part => (part.system || '').includes('event="compact-completed"'))
-        && msg.parts.some(part => (part.text || '').includes('You can continue working now.'))));
+        && msg.parts.some(part => (part.system || '').includes('You can continue working now.'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('continued before async compact commit'))));
     });
 

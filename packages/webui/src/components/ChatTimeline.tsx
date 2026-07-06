@@ -155,11 +155,22 @@ const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { sy
   return (
     <pre
       className={`whitespace-pre-wrap font-sans ${isUser ? 'text-white' : 'text-gray-500 dark:text-gray-400'}`}
-      style={{ fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }}
+      style={{ lineHeight: '1.3em' }}
     >
-      {systemText.split('\n').map((line, lineIdx) => (
-        <span key={lineIdx} style={{ display: 'block' }}>{renderSystemTextWithSessionLinks(line)}</span>
-      ))}
+      {systemText.split('\n').map((line, lineIdx) => {
+        const isMetaLine = isSystemLikeText(line)
+        return (
+          <span
+            key={lineIdx}
+            style={isMetaLine
+              ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+              : { display: 'block', fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+            }
+          >
+            {renderSystemTextWithSessionLinks(line)}
+          </span>
+        )
+      })}
     </pre>
   )
 })

@@ -124,7 +124,8 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
     && part.system.startsWith('<foxwarm-message ')
     && part.system.includes('type="channel"')).length;
   assert.equal(sourcePrefixCount, 1);
-  assert.equal(parts.some((part: any) => part.system === '</foxwarm-message>'), true);
+  const sourcePart = parts.find((part: any) => typeof part.system === 'string' && part.system.includes('type="channel"'));
+  assert.match(sourcePart?.system || '', /\n在吗\n<\/foxwarm-message>$/);
 });
 
 test('MessageRouter turn metadata avoids redundant time and session hints', () => {

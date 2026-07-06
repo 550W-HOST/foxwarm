@@ -26,8 +26,7 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
   const foxwarmLifecycleWithPayload: Message = {
     role: 'user',
     parts: [
-      { system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" />' },
-      { text: 'You can continue working now.', systemPayload: true },
+      { system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123">\nYou can continue working now.\n</foxwarm-system>' },
     ],
     __meta: { seq: 10 },
   };
@@ -46,7 +45,7 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
 
 test('formatCompactionCompletionMarker uses foxwarm metadata without a duplicate legacy prefix', () => {
   const text = formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.', 'parent-456');
-  assert.equal(text, '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" />\nYou can continue working now.');
+  assert.equal(text, '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123">\nYou can continue working now.\n</foxwarm-system>');
   assert.equal(formatCompactionCompletionMarker('session-123', 'Compaction completed.', 'parent-456'), '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" />');
   assert.equal(isIgnoredCompactLifecycleSystemText(text.split('\n')[0]), true);
 });

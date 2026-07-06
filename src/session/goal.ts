@@ -1,7 +1,7 @@
 import { Message, Session, SessionGoalState } from '../types';
 import { partsContainNoActionSignal } from './childSessionReminder';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
-import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
+import { formatFoxwarmSystem } from '../utils/promptWrappers';
 
 const GOAL_REMINDER_META_KEY = 'goalReminder';
 const GOAL_REMINDER_SYSTEM_KIND = 'goal-reminder';
@@ -162,7 +162,7 @@ function buildGoalReminderMessage(state: SessionGoalState, anchorSeq: number, ki
 }
 
 export function formatSessionGoalReminderText(goal: string): string {
-  return `${formatFoxwarmSystemTag({ kind: GOAL_REMINDER_SYSTEM_KIND })}\n${goal.trim()}\n${GOAL_REMINDER_GUIDANCE}`;
+  return formatFoxwarmSystem({ kind: GOAL_REMINDER_SYSTEM_KIND }, `${goal.trim()}\n${GOAL_REMINDER_GUIDANCE}`);
 }
 
 export function countNonReminderMessagesAfterSeq(session: Session, anchorSeq: number): number {

@@ -26,11 +26,11 @@ import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
-import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag } from './utils/promptWrappers';
+import { formatFoxwarmMessage, formatFoxwarmSystem, formatSystemPartForModel } from './utils/promptWrappers';
 import { runStartupMigrations } from './migrations';
 
 function systemPart(system: string): MessagePart {
-  return { system };
+  return { system: formatSystemPartForModel(system) };
 }
 
 const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
@@ -101,12 +101,11 @@ function getWaitAllPendingSessions(waitAll: SessionWaitAllState): string[] {
 }
 
 function buildWaitAllPendingReminder(pendingSessions: string[]): string {
-  return formatFoxwarmSystemTag({
+  return formatFoxwarmSystem({
     kind: 'event',
     type: 'wait-all-pending',
     pendingSessions: pendingSessions.join(','),
-    hint: `waitAllSessions is still pending for: ${pendingSessions.map(sessionId => `\`${sessionId}\``).join(', ')}. This session was woken before every listed session sent a new message after the wait started.`,
-  });
+  }, `waitAllSessions is still pending for: ${pendingSessions.map(sessionId => `\`${sessionId}\``).join(', ')}. This session was woken before every listed session sent a new message after the wait started.`);
 }
 
 function buildWaitAllPendingReminderItem(pendingSessions: string[]): QueueItem | undefined {
@@ -1353,7 +1352,7 @@ function isQueuedSystemEventItem(
   }
 
   const [part] = item.parts;
-  return typeof part?.system === 'string' && part.system === message;
+  return typeof part?.system === 'string' && part.system === formatSystemPartForModel(message);
 }
 
 export function hasTrailingQueuedSystemEvent(
@@ -1603,17 +1602,13 @@ export async function applyCompletedCompactJob(sessionId: string): Promise<boole
 export async function queueSessionEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
   await enqueueSessionItem(sessionId, {
     type,
-    parts: [
-      {
-        system: formatFoxwarmMessageOpen({
-          type,
-          eventType: type,
-          hint: `${type} session event`,
-        }),
-      },
-      { text: message },
-      { system: formatFoxwarmMessageClose() },
-    ],
+    parts: [{
+      system: formatFoxwarmMessage({
+        type,
+        eventType: type,
+        hint: `${type} session event`,
+      }, message),
+    }],
   });
 }
 

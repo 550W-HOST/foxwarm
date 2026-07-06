@@ -60,11 +60,11 @@ test('formatSystemPartForModel converts legacy system strings without generating
   );
   assert.equal(
     formatSystemPartForModel('Session goal reminder:\nShip it\nKeep going'),
-    '<foxwarm-system kind="goal-reminder" />\nShip it\nKeep going',
+    '<foxwarm-system kind="goal-reminder">\nShip it\nKeep going\n</foxwarm-system>',
   );
   assert.equal(
     formatSystemPartForModel('Reminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: `parent/main`, message: "..."}). If no action is needed, say `[NO_ACTION]`.'),
-    '<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="parent/main" />\nReminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: `parent/main`, message: "..."}). If no action is needed, say `[NO_ACTION]`.',
+    '<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="parent/main">\nReminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: `parent/main`, message: "..."}). If no action is needed, say `[NO_ACTION]`.\n</foxwarm-system>',
   );
   assert.equal(formatSystemPartForModel('<foxwarm-system kind="time" />'), '<foxwarm-system kind="time" />');
 });
@@ -72,15 +72,15 @@ test('formatSystemPartForModel converts legacy system strings without generating
 test('formatSystemPartForModel upgrades legacy session identity hints', () => {
   assert.equal(
     formatSystemPartForModel('**COMPACTION COMPLETED. PARENT SESSION `parent-1`. CURRENT SESSION ID IS `child-1`.** You can continue working now. Note: skill compacted away.'),
-    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-1" currentSessionId="child-1" />\nYou can continue working now. Note: skill compacted away.',
+    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-1" currentSessionId="child-1">\nYou can continue working now. Note: skill compacted away.\n</foxwarm-system>',
   );
   assert.equal(
     formatSystemPartForModel('<foxwarm-system hint="**COMPACTION COMPLETED. PARENT SESSION `parent-1`. CURRENT SESSION ID IS `child-1`.** You can continue working now." />'),
-    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-1" currentSessionId="child-1" />\nYou can continue working now.',
+    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-1" currentSessionId="child-1">\nYou can continue working now.\n</foxwarm-system>',
   );
   assert.equal(
     formatSystemPartForModel('<foxwarm-system hint="Reminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: `parent/main`, message: &quot;...&quot;})." />'),
-    '<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="parent/main" />\nReminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: `parent/main`, message: "..."}).',
+    '<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="parent/main">\nReminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: `parent/main`, message: "..."}).\n</foxwarm-system>',
   );
   assert.equal(
     formatSystemPartForModel('**HISTORY ABOVE IS INHERITED FROM PARENT SESSION `parent-1`. CURRENT SESSION ID IS `child-1`.**'),
@@ -88,6 +88,6 @@ test('formatSystemPartForModel upgrades legacy session identity hints', () => {
   );
   assert.equal(
     formatSystemPartForModel('**NEW CHILD SESSION WITH PARENT SESSION `parent-1`. CURRENT SESSION ID IS `child-1`.**\nYou are a child session.'),
-    '<foxwarm-system kind="session-boundary" event="new-child" parentSessionId="parent-1" currentSessionId="child-1" />\nYou are a child session.',
+    '<foxwarm-system kind="session-boundary" event="new-child" parentSessionId="parent-1" currentSessionId="child-1">\nYou are a child session.\n</foxwarm-system>',
   );
 });
