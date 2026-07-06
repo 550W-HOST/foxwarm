@@ -25,8 +25,12 @@ await esbuild.build({
 const {
   formatStructuredSystemText,
   isFoxwarmMetadataLine,
+  isHeavySystemTextLine,
+  isCollapsibleSystemText,
+  isLightweightStructuredSystem,
   isSystemLikeText,
   isLightweightSystemTextLine,
+  parseFoxwarmMetadataLine,
 } = await import(pathToFileURL(bundledPath).href)
 
 test('foxwarm metadata tags are recognized as system-like small metadata lines', () => {
@@ -45,9 +49,32 @@ test('foxwarm metadata tags are recognized as system-like small metadata lines',
   }
 })
 
+test('foxwarm snapshot system tags are system-like and collapsible, not lightweight', () => {
+  const selfClosing = '<foxwarm-system kind="snapshot" hint="snapshot" />'
+  const openTag = '<foxwarm-system kind="snapshot" hint="snapshot">'
+
+  for (const line of [selfClosing, openTag]) {
+    assert.equal(isFoxwarmMetadataLine(line), true)
+    assert.equal(isSystemLikeText(line), true)
+    assert.equal(isLightweightSystemTextLine(line), false)
+    assert.equal(isHeavySystemTextLine(line), true)
+    assert.equal(isCollapsibleSystemText(`${line}\nfull system prompt body`), true)
+    assert.equal(formatStructuredSystemText(line), line)
+  }
+
+  assert.equal(isLightweightStructuredSystem(selfClosing), false)
+  assert.deepEqual(parseFoxwarmMetadataLine(selfClosing), {
+    tagName: 'foxwarm-system',
+    closing: false,
+    attrs: { kind: 'snapshot', hint: 'snapshot' },
+  })
+})
+
 test('legacy system prefixes remain supported', () => {
   assert.equal(isSystemLikeText('[SYSTEM: current time = now]'), true)
   assert.equal(isSystemLikeText('[FROM: telegram:chat]'), true)
+  assert.equal(isHeavySystemTextLine('[SYSTEM: snapshot]'), true)
+  assert.equal(isCollapsibleSystemText('[SYSTEM: snapshot]\nfull system prompt body'), true)
   assert.equal(formatStructuredSystemText('current session ID = demo'), '[SYSTEM: current session ID = demo]')
 })
 
