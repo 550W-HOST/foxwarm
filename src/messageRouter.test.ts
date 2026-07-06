@@ -170,6 +170,26 @@ test('MessageRouter queue draining keeps different WeWork stream ids separate', 
   assert.equal(session.queue.length, 1);
 });
 
+test('MessageRouter queue draining stops before retry control items', async () => {
+  const router = new MessageRouter() as any;
+  const session: any = {
+    queue: [
+      { type: 'user', parts: [{ text: 'first input' }] },
+      { type: 'retry' },
+      { type: 'user', parts: [{ text: 'after retry' }] },
+    ],
+  };
+
+  const drained = router.drainLeadingQueuedMessageParts(session);
+  assert.deepEqual(drained.parts, [{ text: 'first input' }]);
+  assert.deepEqual(session.queue.map((item: any) => item.type), ['retry', 'user']);
+
+  const consumed = await router.consumeLeadingQueuedTurnInputs(session, [{ text: 'pending' }]);
+  assert.deepEqual(consumed.parts, [{ text: 'pending' }]);
+  assert.equal(consumed.consumedInput, false);
+  assert.deepEqual(session.queue.map((item: any) => item.type), ['retry', 'user']);
+});
+
 test('MessageRouter emits turn progress as an empty targeted channel broadcast', () => {
   const router = new MessageRouter() as any;
   const events: Array<{ text: string; options: any }> = [];
@@ -330,6 +350,50 @@ test('MessageRouter LLM final failure keeps retry notice display-only without ap
     (sessionManager as any).appendSessionMessage = originalAppend;
     (sessionManager as any).saveSession = originalSave;
     (sessionManager as any).notifyHistoryUpdate = originalNotify;
+  }
+});
+
+test('retrySession enqueues an internal retry item that reruns LLM without appending retry marker text', async () => {
+  const router = new MessageRouter() as any;
+  const sessionId = `retry_control_session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId) as Session;
+  session.history = [{ role: 'user', parts: [{ text: 'original failed request' }], __meta: { seq: 1, timestamp: Date.now() } }];
+  session.persistentMemorySnapshot = 'system prompt';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = false;
+  session.queue = [];
+  session.meta = { lastMessageTime: Date.now() };
+
+  const originalChat = llm.chat;
+  let chatCallCount = 0;
+  let seenParts: any = 'not-called';
+
+  sessionManager.setSessionTriggerCallback(() => {});
+  (llm as any).chat = async (parts: any, activeSession: Session) => {
+    chatCallCount += 1;
+    seenParts = parts;
+    activeSession.history.push({ role: 'model', parts: [{ text: 'retried response' }], __meta: { seq: 2, timestamp: Date.now() } });
+    return { text: 'retried response', allParts: [{ text: 'retried response' }] };
+  };
+
+  try {
+    await sessionManager.retrySession(sessionId);
+    assert.deepEqual(session.queue.map(item => item.type), ['retry']);
+
+    await router.processSessionQueue(sessionId);
+
+    assert.equal(chatCallCount, 1);
+    assert.equal(seenParts, null);
+    assert.equal(session.queue.length, 0);
+    assert.equal(session.busy, false);
+    assert.equal(session.history.some(message => message.parts.some(part => /retrying last request|retrying-last-request/.test(String(part.text || part.system || '')))), false);
+    assert.equal(session.history.some(message => message.role === 'user' && message.parts.some(part => /retry/i.test(String(part.text || part.system || '')))), false);
+    assert.equal(session.history.some(message => message.role === 'model' && message.parts.some(part => part.text === 'retried response')), true);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.setSessionTriggerCallback(() => {});
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
   }
 });
 

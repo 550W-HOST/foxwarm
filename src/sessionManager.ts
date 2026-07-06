@@ -1941,9 +1941,9 @@ export async function retrySession(sessionId: string): Promise<void> {
     throw new Error('Session is already busy');
   }
 
-  // Trigger session processing by adding a retry marker to queue
+  // Trigger session processing without adding model-visible retry text.
   logger.info({ sessionId }, 'Retrying session');
-  await queueSessionSystemEvent(sessionId, 'retrying last request', 'trigger');
+  await enqueueSessionItem(sessionId, { type: 'retry' });
 }
 
 /**

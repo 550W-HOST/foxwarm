@@ -406,6 +406,7 @@ export class MessageRouter {
     while (session.queue[0]
       && session.queue[0].type !== 'compact'
       && session.queue[0].type !== 'compact-commit'
+      && session.queue[0].type !== 'retry'
       && !session.queue[0].message) {
       const nextStreamKey = this.getSourceStreamKey(session.queue[0].source);
       if (queuedParts.length > 0 && streamKey !== nextStreamKey) {
@@ -435,7 +436,8 @@ export class MessageRouter {
 
     while (session.queue[0]
       && session.queue[0].type !== 'compact'
-      && session.queue[0].type !== 'compact-commit') {
+      && session.queue[0].type !== 'compact-commit'
+      && session.queue[0].type !== 'retry') {
       const queuedStreamKey = this.getSourceStreamKey(session.queue[0].source);
       // A different WeWork stream id already has its own passive card. Leave it
       // queued so the next turn's broadcasts update/finish that card instead
@@ -503,6 +505,16 @@ export class MessageRouter {
     await sessionManager.saveSession(session.id);
 
     if (session.queue[0]?.type === 'compact' || session.queue[0]?.type === 'compact-commit') {
+      const nextItem = session.queue.shift();
+      if (!nextItem) {
+        return false;
+      }
+
+      await this.processQueuedItem(session.id, session, nextItem);
+      return true;
+    }
+
+    if (session.queue[0]?.type === 'retry') {
       const nextItem = session.queue.shift();
       if (!nextItem) {
         return false;
@@ -601,6 +613,15 @@ export class MessageRouter {
   private async processQueuedItem(sessionId: string, session: Session, item: QueueItem): Promise<void> {
     if (item.type === 'compact' || item.type === 'compact-commit') {
       await this.runQueuedCompaction(sessionId, session, item);
+      return;
+    }
+
+    if (item.type === 'retry') {
+      await this.runSessionTurn(sessionId, {
+        parts: null,
+        session,
+        preclaimed: true,
+      });
       return;
     }
 
@@ -905,11 +926,13 @@ export class MessageRouter {
       let managedStepYieldReason: 'tool' | null = null;
       let parts = options.message
         ? null
-        : this.prepareTurnParts(
-          session,
-          sessionId,
-          options.parts || []
-        );
+        : options.parts === null
+          ? null
+          : this.prepareTurnParts(
+            session,
+            sessionId,
+            options.parts || []
+          );
       if (options.message) {
         await sessionManager.appendSessionMessage(session, options.message);
       }
