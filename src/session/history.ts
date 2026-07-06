@@ -23,6 +23,7 @@ import {
 import { Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
+import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatSessionGoalReminderText } from './goal';
 import { formatSessionIdentityHint } from './identityHint';
 import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
@@ -783,13 +784,14 @@ async function finalizeCompaction(
     completionText += `\nNote: The following skill(s) were loaded via load_skill but their content was compacted away: ${skillList}. If you still need them, call load_skill again.`;
   }
   const hasCompletionGoalReminder = !!session.goalState?.goal?.trim();
+  const completionParts: MessagePart[] = [{ system: completionText }];
   if (hasCompletionGoalReminder) {
-    completionText += `\n\n${formatSessionGoalReminderText(session.goalState.goal)}`;
+    completionParts.push(...buildSystemMessageParts(formatSessionGoalReminderText(session.goalState.goal)));
   }
 
   const completionMessage: Message = {
     role: 'user',
-    parts: [{ system: completionText }],
+    parts: completionParts,
     __meta: {
       timestamp: Date.now(),
       ...(hasCompletionGoalReminder ? { goalReminder: true, goalReminderKind: 'compact-completion' } : {}),

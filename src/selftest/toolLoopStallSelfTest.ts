@@ -468,8 +468,9 @@ async function main(): Promise<void> {
       assert.strictEqual(finalSession.goalState?.goal, 'Keep the session goal alive across compaction.');
       const compactCompletion = finalSession.history.find(msg => msg.role === 'user' && msg.parts.some(part => /COMPACTION COMPLETED/i.test(part.system || '')));
       const compactCompletionSystem = compactCompletion?.parts.find(part => typeof part.system === 'string')?.system || '';
-      assert.match(compactCompletionSystem, /Session goal reminder:/);
-      assert.match(compactCompletionSystem, /Keep the session goal alive across compaction/);
+      assert.match(compactCompletionSystem, /COMPACTION COMPLETED/);
+      assert(compactCompletion?.parts.some(part => part.system === '<foxwarm-system kind="goal-reminder" />'));
+      assert(compactCompletion?.parts.some(part => (part.text || '').includes('Keep the session goal alive across compaction')));
       assert.strictEqual(compactCompletion?.__meta?.goalReminder, true);
       assert.strictEqual(finalSession.goalState?.anchorSeq, compactCompletion?.__meta?.seq);
       assert.strictEqual(finalSession.history.filter(msg => msg.__meta?.goalReminder === true).length, 1);
@@ -573,7 +574,7 @@ async function main(): Promise<void> {
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('async compact summary'))));
       assert(finalSession.history.some(msg => msg.parts.some(part => (part.text || '').includes('tail message appended after async compact job started'))));
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => /COMPACTION COMPLETED/i.test(part.system || ''))));
-      assert(!finalSession.history.some(msg => msg.parts.some(part => (part.system || '').includes('Session goal reminder:'))));
+      assert(!finalSession.history.some(msg => msg.parts.some(part => (part.system || '').includes('kind="goal-reminder"'))));
     });
 
     await test('get_archived_messages reads archived session history by seq range', async () => {

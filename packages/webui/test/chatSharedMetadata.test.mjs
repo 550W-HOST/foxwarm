@@ -65,6 +65,21 @@ test('non-channel foxwarm-message wrappers are heavy system-like messages for le
   assert.equal(isHeavySystemTextLine(channelLine), false)
 })
 
+test('foxwarm system event tags are heavy system-like messages for left-side rendering', () => {
+  const lines = [
+    '<foxwarm-system kind="event" type="wait-timeout" seconds="120" hint="wait timeout reached after 120s" />',
+    '<foxwarm-system kind="event" type="wait-all-pending" pendingSessions="child-a" hint="waitAllSessions is still pending" />',
+  ]
+
+  for (const line of lines) {
+    assert.equal(isFoxwarmMetadataLine(line), true)
+    assert.equal(isSystemLikeText(line), true)
+    assert.equal(isLightweightSystemTextLine(line), false)
+    assert.equal(isHeavySystemTextLine(line), true)
+    assert.equal(isLightweightStructuredSystem(line), false)
+  }
+})
+
 test('foxwarm snapshot system tags are system-like and collapsible, not lightweight', () => {
   const selfClosing = '<foxwarm-system kind="snapshot" hint="snapshot" />'
   const openTag = '<foxwarm-system kind="snapshot" hint="snapshot">'

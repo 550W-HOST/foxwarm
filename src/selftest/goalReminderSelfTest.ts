@@ -176,7 +176,7 @@ async function main(): Promise<void> {
       assert.strictEqual(countGoalReminders(session), 2);
       const firstReminder = session.history.find(message => message.__meta?.goalReminder === true)!;
       assert.strictEqual(firstReminder.__meta?.goalReminder, true);
-      assert.match(firstReminder.parts[0].system || '', /Session goal reminder/);
+      assert.strictEqual(firstReminder.parts[0].system || '', '<foxwarm-system kind="goal-reminder" />');
       assert.match(firstReminder.parts[1].text || '', /- \[ \] ship feature/);
       const reminderSeqs = session.history
         .filter(message => message.__meta?.goalReminder === true)
@@ -359,7 +359,7 @@ async function main(): Promise<void> {
 
         const latestUser = activeSession.history.slice().reverse().find(message => message.role === 'user');
         const latestSystem = latestUser?.parts.find(part => typeof part.system === 'string')?.system || '';
-        if (latestSystem.includes('Session goal reminder')) {
+        if (latestSystem.includes('kind="goal-reminder"')) {
           reminderTurns += 1;
           await appendStubModelMessage(activeSession, 'Reminder processed');
           return { text: 'Reminder processed' };

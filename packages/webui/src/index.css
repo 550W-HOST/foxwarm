@@ -265,6 +265,14 @@ html[data-foxwarm-ui-style="550a"] {
   --foxwarm-550a-green-button-idle: rgba(85, 170, 85, 0.14);
   --foxwarm-550a-green-button-idle-hover: rgba(85, 170, 85, 0.22);
   --foxwarm-550a-green-button-active-text: #77bb99;
+  --foxwarm-550a-orange: #d08a45;
+  --foxwarm-550a-orange-border: #5a351c;
+  --foxwarm-550a-orange-surface: rgba(92, 48, 16, 0.34);
+  --foxwarm-550a-orange-surface-strong: rgba(140, 78, 28, 0.42);
+  --foxwarm-550a-diff-removed-surface: rgba(118, 64, 22, 0.46);
+  --foxwarm-550a-diff-removed-surface-strong: rgba(190, 112, 40, 0.52);
+  --foxwarm-550a-diff-added-surface: rgba(22, 82, 36, 0.48);
+  --foxwarm-550a-diff-added-surface-strong: rgba(70, 150, 78, 0.54);
   --foxwarm-550a-blue: #77aabb;
   --foxwarm-550a-blue-dim: #4f7f99;
   --foxwarm-550a-blue-border: #26445f;
@@ -321,6 +329,14 @@ html:not(.dark)[data-foxwarm-ui-style="550a"] {
   --foxwarm-550a-green-button-idle: #f0f8f0;
   --foxwarm-550a-green-button-idle-hover: #e0f0e0;
   --foxwarm-550a-green-button-active-text: #ffffff;
+  --foxwarm-550a-orange: #a8652a;
+  --foxwarm-550a-orange-border: #dec3a3;
+  --foxwarm-550a-orange-surface: rgba(250, 238, 220, 0.92);
+  --foxwarm-550a-orange-surface-strong: rgba(244, 216, 180, 0.94);
+  --foxwarm-550a-diff-removed-surface: #f6dfbf;
+  --foxwarm-550a-diff-removed-surface-strong: #edc487;
+  --foxwarm-550a-diff-added-surface: #dcefd6;
+  --foxwarm-550a-diff-added-surface-strong: #bfe3b5;
   --foxwarm-550a-blue: #3a6a9a;
   --foxwarm-550a-blue-dim: #2f587f;
   --foxwarm-550a-blue-border: #b8cad8;
@@ -1179,4 +1195,52 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons button.bg-blue-5
 
 html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons button:focus-visible {
   outline-color: var(--foxwarm-tool-action-color) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview {
+  background-color: var(--foxwarm-550a-input) !important;
+  border-color: var(--foxwarm-550a-border-panel) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-card .foxwarm-diff-removed-count,
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-header {
+  color: var(--foxwarm-550a-orange) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-card .foxwarm-diff-added-count,
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-header {
+  color: var(--foxwarm-550a-green) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-line,
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-header {
+  background-color: var(--foxwarm-550a-diff-removed-surface) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-token {
+  background-color: var(--foxwarm-550a-diff-removed-surface-strong) !important;
+  color: var(--foxwarm-550a-orange) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-token :where(*) {
+  color: var(--foxwarm-550a-orange) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-line,
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-header {
+  background-color: var(--foxwarm-550a-diff-added-surface) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-token {
+  background-color: var(--foxwarm-550a-diff-added-surface-strong) !important;
+  color: var(--foxwarm-550a-green) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-token :where(*) {
+  color: var(--foxwarm-550a-green) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-removed-header,
+html[data-foxwarm-ui-style="550a"] .foxwarm-diff-preview .foxwarm-diff-added-header {
+  border-color: var(--foxwarm-550a-border-panel) !important;
 }
