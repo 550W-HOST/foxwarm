@@ -366,24 +366,27 @@ test('retrySession enqueues an internal retry item that reruns LLM without appen
 
   const originalChat = llm.chat;
   let chatCallCount = 0;
-  let seenParts: any = 'not-called';
+  const seenParts: any[] = [];
 
   sessionManager.setSessionTriggerCallback(() => {});
   (llm as any).chat = async (parts: any, activeSession: Session) => {
     chatCallCount += 1;
-    seenParts = parts;
-    activeSession.history.push({ role: 'model', parts: [{ text: 'retried response' }], __meta: { seq: 2, timestamp: Date.now() } });
-    return { text: 'retried response', allParts: [{ text: 'retried response' }] };
+    seenParts.push(parts);
+    const text = parts === null ? 'retried response' : 'queued response';
+    activeSession.history.push({ role: 'model', parts: [{ text }], __meta: { seq: chatCallCount + 1, timestamp: Date.now() } });
+    return { text, allParts: [{ text }] };
   };
 
   try {
     await sessionManager.retrySession(sessionId);
-    assert.deepEqual(session.queue.map(item => item.type), ['retry']);
+    session.queue.push({ type: 'user', parts: [{ text: 'queued after retry' }] });
+    assert.deepEqual(session.queue.map(item => item.type), ['retry', 'user']);
 
     await router.processSessionQueue(sessionId);
 
-    assert.equal(chatCallCount, 1);
-    assert.equal(seenParts, null);
+    assert.equal(chatCallCount, 2);
+    assert.equal(seenParts[0], null);
+    assert.equal(seenParts[1].some((part: any) => part.text === 'queued after retry'), true);
     assert.equal(session.queue.length, 0);
     assert.equal(session.busy, false);
     assert.equal(session.history.some(message => message.parts.some(part => /retrying last request|retrying-last-request/.test(String(part.text || part.system || '')))), false);

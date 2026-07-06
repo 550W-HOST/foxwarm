@@ -621,6 +621,7 @@ export class MessageRouter {
         parts: null,
         session,
         preclaimed: true,
+        deferQueuedInputs: true,
       });
       return;
     }
@@ -899,6 +900,7 @@ export class MessageRouter {
       sendTyping?: boolean;
       session?: Session;
       preclaimed?: boolean;
+      deferQueuedInputs?: boolean;
     }
   ): Promise<void> {
     const session = options.session ?? await sessionManager.getSession(sessionId);
@@ -950,8 +952,10 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnStreamKey);
-        parts = queuedBeforeLlm.parts;
+        if (!options.deferQueuedInputs) {
+          const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnStreamKey);
+          parts = queuedBeforeLlm.parts;
+        }
 
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
@@ -1111,8 +1115,12 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
-        parts = queuedAfterTools.parts;
+        if (options.deferQueuedInputs) {
+          parts = null;
+        } else {
+          const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
+          parts = queuedAfterTools.parts;
+        }
 
         if (result.usage) {
           const currentSize = sessionManager.getUsageTotalTokens(result.usage);
