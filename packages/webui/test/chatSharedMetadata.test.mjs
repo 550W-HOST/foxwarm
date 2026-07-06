@@ -45,8 +45,24 @@ test('foxwarm metadata tags are recognized as system-like small metadata lines',
     assert.equal(isFoxwarmMetadataLine(line), true)
     assert.equal(isSystemLikeText(line), true)
     assert.equal(isLightweightSystemTextLine(line), true)
+    assert.equal(isHeavySystemTextLine(line), false)
     assert.equal(formatStructuredSystemText(line), line)
   }
+})
+
+test('non-channel foxwarm-message wrappers are heavy system-like messages for left-side rendering', () => {
+  for (const type of ['inter-agent', 'timer', 'trigger']) {
+    const line = `<foxwarm-message type="${type}">`
+    assert.equal(isFoxwarmMetadataLine(line), true)
+    assert.equal(isSystemLikeText(line), true)
+    assert.equal(isLightweightSystemTextLine(line), false)
+    assert.equal(isHeavySystemTextLine(line), true)
+    assert.equal(isCollapsibleSystemText(`${line}\nmessage body\n</foxwarm-message>`), true)
+  }
+
+  const channelLine = '<foxwarm-message type="channel">'
+  assert.equal(isLightweightSystemTextLine(channelLine), true)
+  assert.equal(isHeavySystemTextLine(channelLine), false)
 })
 
 test('foxwarm snapshot system tags are system-like and collapsible, not lightweight', () => {

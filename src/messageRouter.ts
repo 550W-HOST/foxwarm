@@ -362,9 +362,7 @@ export class MessageRouter {
       finalParts.unshift({
         system: formatFoxwarmSystemTag({
           kind: 'time',
-          time: new Date().toISOString(),
           localTime: currentTime,
-          hint: `current time = ${currentTime}`,
         }),
       });
     }
@@ -375,7 +373,6 @@ export class MessageRouter {
         system: formatFoxwarmSystemTag({
           kind: 'session',
           currentSessionId: sessionId,
-          hint: `current session ID = ${sessionId}`,
         }),
       });
     }

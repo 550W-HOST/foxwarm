@@ -300,7 +300,8 @@ export const isLightweightFoxwarmMetadataLine = (text: string): boolean => {
   const tag = parseFoxwarmMetadataLine(text)
   if (!tag) return false
   if (tag.closing) return true
-  if (tag.tagName === 'foxwarm-message' || tag.tagName === 'foxwarm-metadata') return true
+  if (tag.tagName === 'foxwarm-message') return tag.attrs.type === 'channel'
+  if (tag.tagName === 'foxwarm-metadata') return true
   if (tag.tagName !== 'foxwarm-system') return false
 
   const kind = tag.attrs.kind || ''
