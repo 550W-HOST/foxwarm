@@ -99,11 +99,13 @@ test('buildWaitTimeoutMessage uses fixed text and no custom timeout message', ()
   );
 });
 
-test('wait tool schema includes waitAllSessions', () => {
+test('wait tool schema includes waitAllSessions and waitExecIds', () => {
   const waitDefinition = definitions.find(definition => definition.name === 'wait');
   assert.ok(waitDefinition);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.type, 'array');
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.items?.type, 'string');
+  assert.equal(waitDefinition.parameters.properties.waitExecIds?.type, 'array');
+  assert.equal(waitDefinition.parameters.properties.waitExecIds?.items?.type, 'string');
 });
 
 test('waitAllSessions argument validation rejects invalid values, treats empty array as ordinary wait, and de-dupes duplicates', async () => {
@@ -441,6 +443,24 @@ test('wait with timeoutSeconds 0 works as no timeout', async () => {
       await cleanupSession(sessionId);
     }
   });
+});
+
+test('waitExecIds are stored as advisory runtime-state metadata', async () => {
+  const sessionId = makeSessionId('wait_exec_ids');
+  try {
+    const session = await sessionManager.getSession(sessionId);
+    const result = await tool_wait({ waitExecIds: [' exec-a ', 'exec-a', 'exec-b'] }, { sessionId, session });
+    assert.equal(result.output, 'ok');
+
+    const reloaded = await sessionManager.getSession(sessionId);
+    assert.deepEqual(reloaded.meta.wait?.waitExecIds, ['exec-a', 'exec-b']);
+    const runtimeState = sessionManager.buildSessionRuntimeState(reloaded);
+    assert.equal(runtimeState.state, 'waiting');
+    assert.equal(runtimeState.waiting?.waitingFor, 'exec');
+    assert.deepEqual(runtimeState.waiting?.waitExecIds, ['exec-a', 'exec-b']);
+  } finally {
+    await cleanupSession(sessionId);
+  }
 });
 
 test('wait with positive timeout schedules an internal timer that wakes the session', async () => {

@@ -28,6 +28,15 @@ import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
 import { formatFoxwarmMessage, formatFoxwarmSystem, formatSystemPartForModel } from './utils/promptWrappers';
 import { runStartupMigrations } from './migrations';
+import {
+  buildSessionRuntimeState,
+  clearActiveSessionRuntimeState,
+  formatSessionRuntimeStateSummary,
+  setActiveSessionRuntimeState,
+  setSessionRuntimeStateUpdateCallback,
+  type ActiveSessionRuntimeStateInput,
+  type SessionRuntimeState,
+} from './sessionRuntimeState';
 
 function systemPart(system: string): MessagePart {
   return { system: formatSystemPartForModel(system) };
@@ -40,6 +49,7 @@ export interface SessionWaitState {
   startedAt: number;
   reason?: string;
   timeoutSeconds?: number;
+  waitExecIds?: string[];
   waitAll?: SessionWaitAllState;
 }
 
@@ -230,6 +240,7 @@ export async function startSessionWait(sessionId: string, options: {
   reason?: string;
   timeoutSeconds?: number;
   waitAllSessions?: string[];
+  waitExecIds?: string[];
 } = {}): Promise<SessionWaitState> {
   const session = await getSession(sessionId);
   const existingWait = getSessionWaitState(session);
@@ -248,6 +259,9 @@ export async function startSessionWait(sessionId: string, options: {
   }
   if (typeof options.timeoutSeconds === 'number' && Number.isFinite(options.timeoutSeconds) && options.timeoutSeconds > 0) {
     state.timeoutSeconds = options.timeoutSeconds;
+  }
+  if (Array.isArray(options.waitExecIds) && options.waitExecIds.length > 0) {
+    state.waitExecIds = [...options.waitExecIds];
   }
   if (Array.isArray(options.waitAllSessions) && options.waitAllSessions.length > 0) {
     state.waitAll = {
@@ -650,6 +664,7 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
       session.busyStartedAt = Date.now();
     }
   } else {
+    clearActiveSessionRuntimeState(session.id);
     session.busyStartedAt = undefined;
   }
 
@@ -715,6 +730,11 @@ function getSessionHistoryDeps() {
 function notifySessionListUpdated() {
   onSessionListUpdated?.();
 }
+
+setSessionRuntimeStateUpdateCallback(() => notifySessionListUpdated());
+
+export { buildSessionRuntimeState, clearActiveSessionRuntimeState, formatSessionRuntimeStateSummary, setActiveSessionRuntimeState };
+export type { ActiveSessionRuntimeStateInput, SessionRuntimeState };
 
 function getAgentMetadataDeps() {
   return {
@@ -1683,7 +1703,7 @@ export async function appendSessionMessage(sessionOrId: Session | string, messag
 /**
  * Get list of all session IDs with basic info
  */
-export function listSessions(): Array<{ id: string; messageCount: number; lastMessageTime: number | null; hasChannel: boolean; displayName?: string; currentNode?: string; cwd?: string; isolated?: boolean; busy?: boolean; queueLength?: number; parentSessionId?: string }> {
+export function listSessions(): Array<{ id: string; messageCount: number; lastMessageTime: number | null; hasChannel: boolean; displayName?: string; currentNode?: string; cwd?: string; isolated?: boolean; busy?: boolean; queueLength?: number; parentSessionId?: string; runtimeState: SessionRuntimeState }> {
   const result = [];
   
   // Iterate through all sessions in memory (metadata is always loaded)
@@ -1705,7 +1725,8 @@ export function listSessions(): Array<{ id: string; messageCount: number; lastMe
       isolated: isSessionEffectivelyIsolated(session),
       busy: session.busy,
       queueLength: session.queue?.length || 0,
-      parentSessionId: session.parentSessionId
+      parentSessionId: session.parentSessionId,
+      runtimeState: buildSessionRuntimeState(session)
     });
   }
   
@@ -1848,6 +1869,8 @@ export async function setSessionCompactThreshold(sessionId: string, thresholdTok
  * Delete a session
  */
 export async function deleteSession(sessionId: string): Promise<boolean> {
+  clearActiveSessionRuntimeState(sessionId);
+
   if (!sessions.has(sessionId)) {
     return false;
   }

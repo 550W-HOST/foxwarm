@@ -333,6 +333,114 @@ test('MessageRouter LLM final failure keeps retry notice display-only without ap
   }
 });
 
+test('MessageRouter exposes requesting-model runtime state while LLM request is in flight', async () => {
+  const router = new MessageRouter() as any;
+  router.continueWithQueuedWork = async () => false;
+  const sessionId = `runtime_requesting_session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId) as Session;
+  session.history = [];
+  session.persistentMemorySnapshot = 'system prompt';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = true;
+  session.queue = [];
+  session.meta = { lastMessageTime: Date.now() };
+  const originalChat = llm.chat;
+  let releaseChat!: () => void;
+  const chatGate = new Promise<void>(resolve => { releaseChat = resolve; });
+  let chatStarted = false;
+
+  (llm as any).chat = async () => {
+    chatStarted = true;
+    await chatGate;
+    return { text: 'done' };
+  };
+
+  try {
+    const running = router.runSessionTurn(session.id, {
+      parts: [{ text: 'hello' }],
+      session,
+      preclaimed: true,
+    });
+
+    while (!chatStarted) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
+    const inFlight = sessionManager.buildSessionRuntimeState(session);
+    assert.equal(inFlight.state, 'requesting-model');
+    assert.equal(inFlight.active?.iteration, 0);
+
+    releaseChat();
+    await running;
+    assert.equal(sessionManager.buildSessionRuntimeState(session).state, 'idle');
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter exposes running-tool runtime state while tool batch is executing', async () => {
+  const router = new MessageRouter() as any;
+  router.continueWithQueuedWork = async () => false;
+  const sessionId = `runtime_tool_session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId) as Session;
+  session.history = [];
+  session.persistentMemorySnapshot = 'system prompt';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = true;
+  session.queue = [];
+  session.meta = { lastMessageTime: Date.now() };
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  let chatCount = 0;
+  let releaseTools!: () => void;
+  const toolGate = new Promise<void>(resolve => { releaseTools = resolve; });
+  let toolsStarted = false;
+
+  (llm as any).chat = async () => {
+    chatCount += 1;
+    if (chatCount === 1) {
+      return { text: '', toolCalls: [{ id: 'call-read', name: 'read', args: { filePath: 'README.md' } }] };
+    }
+    return { text: 'done' };
+  };
+  (llm as any).executeTools = async () => {
+    toolsStarted = true;
+    await toolGate;
+    return {
+      role: 'tool',
+      parts: [{ functionResponse: { tool_use_id: 'call-read', name: 'read', response: { output: 'ok' } } }],
+    };
+  };
+
+  try {
+    const running = router.runSessionTurn(session.id, {
+      parts: [{ text: 'use tool' }],
+      session,
+      preclaimed: true,
+    });
+
+    while (!toolsStarted) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
+    const inFlight = sessionManager.buildSessionRuntimeState(session);
+    assert.equal(inFlight.state, 'running-tool');
+    assert.equal(inFlight.tool?.name, 'read');
+    assert.equal(inFlight.tool?.total, 1);
+
+    releaseTools();
+    await running;
+    assert.equal(sessionManager.buildSessionRuntimeState(session).state, 'idle');
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
 test('MessageRouter strips configured channel selfName mention before command parsing', async () => {
   const router = new MessageRouter() as any;
   const calls: Array<{ command: string; args: string[] }> = [];

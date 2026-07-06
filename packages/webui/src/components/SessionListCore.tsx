@@ -3,6 +3,7 @@ import { useDraggable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
 import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
+import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 
 export interface Session {
   id: string
@@ -15,6 +16,7 @@ export interface Session {
   busy?: boolean
   busyStartedAt?: number | null
   queueLength?: number
+  runtimeState?: SessionRuntimeState
   displayName?: string
   archived?: boolean
   currentNode?: string
@@ -71,6 +73,34 @@ const getSessionFilterFields = (session: Session): string[] => {
 const sessionMatchesFilter = (session: Session, normalizedQuery: string): boolean => {
   if (!normalizedQuery) return true
   return getSessionFilterFields(session).some(field => field.toLowerCase().includes(normalizedQuery))
+}
+
+const getRuntimeBadgeTone = (session: Session): string => {
+  const state = getSessionRuntimeStateName(session)
+  if (state === 'requesting-model') return 'text-blue-600 dark:text-blue-300'
+  if (state === 'running-tool') return 'text-purple-600 dark:text-purple-300'
+  if (state === 'waiting') return 'text-amber-600 dark:text-amber-300'
+  return 'text-gray-500 dark:text-gray-400'
+}
+
+const RuntimeActivityDots = ({ state }: { state: string }) => {
+  const colorClass = state === 'running-tool'
+    ? 'bg-purple-500 dark:bg-purple-400'
+    : state === 'waiting'
+      ? 'bg-amber-500 dark:bg-amber-400'
+      : 'bg-blue-500 dark:bg-blue-400'
+
+  if (state === 'waiting') {
+    return <span className={`w-1.5 h-1.5 ${colorClass} rounded-full`} />
+  }
+
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      <span className={`w-1.5 h-1.5 ${colorClass} rounded-full animate-bounce`}></span>
+      <span className={`w-1.5 h-1.5 ${colorClass} rounded-full animate-bounce`} style={{ animationDelay: '0.1s' }}></span>
+      <span className={`w-1.5 h-1.5 ${colorClass} rounded-full animate-bounce`} style={{ animationDelay: '0.2s' }}></span>
+    </span>
+  )
 }
 
 const getStoredAuthToken = () => {
@@ -337,7 +367,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
       const children = childrenMap.get(sessionId) || []
       const total = children.reduce((sum, child) => {
-        const childBusy = child.busy ? 1 : 0
+        const childBusy = isSessionRuntimeActive(child) ? 1 : 0
         return sum + childBusy + countBusyDescendants(child.id)
       }, 0)
 
@@ -671,6 +701,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const displayId = getDisplayId(session, parentSession)
 
     const isCurrentSession = resolvedCurrentSessionId === session.id
+    const runtimeStateName = getSessionRuntimeStateName(session)
+    const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' : !!session.busy
 
     return (
       <div
@@ -703,15 +735,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </div>
             )}
             <div className="text-xs text-gray-500 dark:text-gray-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              {session.busy && (
+              {showRuntimeBadge && (
                 <>
-                  <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-300">
-                    <span className="inline-flex items-center gap-0.5">
-                      <span className="w-1.5 h-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce"></span>
-                      <span className="w-1.5 h-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></span>
-                      <span className="w-1.5 h-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
-                    </span>
-                    <span>busy</span>
+                  <span className={`inline-flex items-center gap-1 ${getRuntimeBadgeTone(session)}`} title={session.runtimeState?.note || undefined}>
+                    <RuntimeActivityDots state={runtimeStateName} />
+                    <span>{getSessionRuntimeSummary(session)}</span>
                   </span>
                   <span>•</span>
                 </>
@@ -756,7 +784,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   {descendantBusyCount > 0 && (
                     <>
                       <span>•</span>
-                      <span className="text-blue-600 dark:text-blue-300">{descendantBusyCount} busy</span>
+                      <span className="text-blue-600 dark:text-blue-300">{descendantBusyCount} active</span>
                     </>
                   )}
                 </button>

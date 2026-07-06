@@ -545,6 +545,11 @@ export class MessageRouter {
     session.queue.shift();
 
     try {
+      sessionManager.setActiveSessionRuntimeState(sessionId, {
+        state: 'requesting-model',
+        since: Date.now(),
+        active: { phase: 'compaction' },
+      });
       if (nextItem.type === 'compact-commit') {
         await sessionManager.applyCompletedCompactJob(sessionId);
       } else {
@@ -564,6 +569,11 @@ export class MessageRouter {
 
   private async runQueuedCompaction(sessionId: string, session: Session, item: QueueItem): Promise<void> {
     try {
+      sessionManager.setActiveSessionRuntimeState(sessionId, {
+        state: 'requesting-model',
+        since: Date.now(),
+        active: { phase: 'compaction' },
+      });
       if (item.type === 'compact-commit') {
         await sessionManager.applyCompletedCompactJob(sessionId);
       } else {
@@ -581,6 +591,7 @@ export class MessageRouter {
         return;
       }
 
+      sessionManager.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
       await sessionManager.saveSession(session.id);
@@ -932,6 +943,14 @@ export class MessageRouter {
         }
 
         this.emitTurnProgress(broadcast, turnChannelOptions, { type: 'llm-start' });
+        sessionManager.setActiveSessionRuntimeState(session.id, {
+          state: 'requesting-model',
+          since: Date.now(),
+          active: {
+            iteration,
+            phase: 'normal-turn',
+          },
+        });
 
         let result;
         try {
@@ -983,10 +1002,45 @@ export class MessageRouter {
           ...(hasBroadcastableToolText ? { text: result.text } : {}),
         });
 
+        sessionManager.setActiveSessionRuntimeState(session.id, {
+          state: 'running-tool',
+          since: Date.now(),
+          active: {
+            iteration,
+            phase: 'normal-turn',
+          },
+          tool: {
+            id: turnToolCalls[0]?.id,
+            name: turnToolCalls[0]?.name || 'tool',
+            index: 0,
+            total: turnToolCalls.length,
+            startedAt: Date.now(),
+          },
+        });
+
         const toolContext = {
           sessionId: session.id,
           session,
           broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
+          onToolStart: (tool: { id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
+            sessionManager.setActiveSessionRuntimeState(session.id, {
+              state: 'running-tool',
+              since: tool.startedAt || Date.now(),
+              active: {
+                iteration,
+                phase: 'normal-turn',
+              },
+              tool: {
+                id: tool.id,
+                name: tool.name,
+                index: tool.index,
+                total: tool.total,
+                executionNode: tool.executionNode,
+                argsPreview: tool.argsPreview,
+                startedAt: tool.startedAt || Date.now(),
+              },
+            });
+          },
         };
         const toolResultMsg = await llm.executeTools(turnToolCalls, toolContext, session);
 
@@ -1105,6 +1159,7 @@ export class MessageRouter {
         return;
       }
 
+      sessionManager.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
       await sessionManager.saveSession(session.id);
@@ -1216,6 +1271,7 @@ export class MessageRouter {
         return;
       }
 
+      sessionManager.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
       await sessionManager.saveSession(session.id);

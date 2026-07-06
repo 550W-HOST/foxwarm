@@ -86,6 +86,36 @@ export function normalizeWaitAllSessions(value: unknown): string[] | undefined {
   return normalized;
 }
 
+export function normalizeWaitExecIds(value: unknown): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error('waitExecIds must be an array of exec IDs.');
+  }
+
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      throw new Error('waitExecIds entries must be non-empty strings.');
+    }
+
+    const execId = entry.trim();
+    if (!execId) {
+      throw new Error('waitExecIds entries must be non-empty strings.');
+    }
+
+    if (!seen.has(execId)) {
+      seen.add(execId);
+      normalized.push(execId);
+    }
+  }
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export function normalizePositivePreviewLength(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)

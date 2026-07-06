@@ -4,6 +4,7 @@ import {
   buildEndTurnResult,
   normalizeWaitTimeoutSeconds,
   normalizeWaitAllSessions,
+  normalizeWaitExecIds,
   isNonEmptyString,
   prepareChannelFile,
   formatSendFileSessionResult,
@@ -64,12 +65,14 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   const { reason } = args || {};
   const timeoutSeconds = normalizeWaitTimeoutSeconds(args?.timeoutSeconds);
   const waitAllSessions = normalizeWaitAllSessions(args?.waitAllSessions);
+  const waitExecIds = normalizeWaitExecIds(args?.waitExecIds);
 
   if (ctx?.sessionId) {
     const waitState = await sessionManager.startSessionWait(ctx.sessionId, {
       reason: typeof reason === 'string' ? reason : undefined,
       timeoutSeconds,
       waitAllSessions,
+      waitExecIds,
     });
 
     if (timeoutSeconds !== undefined) {

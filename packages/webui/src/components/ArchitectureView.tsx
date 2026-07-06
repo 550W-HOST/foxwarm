@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
 import type { Session } from './SessionListCore'
+import { getRuntimeStateSummary, isSessionRuntimeActive } from '../sessionRuntimeState'
 
 interface ArchitectureViewProps {
   sessions: Session[]
@@ -13,8 +14,10 @@ const ROOT_CHILD_PREVIEW_COUNT = 10
 const CHILD_PREVIEW_COUNT = 8
 
 const sortSessions = (a: Session, b: Session) => {
-  if ((a.busy || false) !== (b.busy || false)) {
-    return a.busy ? -1 : 1
+  const aActive = isSessionRuntimeActive(a)
+  const bActive = isSessionRuntimeActive(b)
+  if (aActive !== bActive) {
+    return aActive ? -1 : 1
   }
   if ((a.queueLength || 0) !== (b.queueLength || 0)) {
     return (b.queueLength || 0) - (a.queueLength || 0)
@@ -114,7 +117,11 @@ function SessionNode({
   const totalTokens = tokenUsage.cachedTokens + tokenUsage.inputTokens + tokenUsage.outputTokens
   const sessionName = session.displayName || session.id
   const canExpand = children.length > 0
-  const statusText = `${session.busy ? 'busy' : 'idle'} ${session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}`
+  const isActive = isSessionRuntimeActive(session)
+  const statusText = session.runtimeState
+    ? getRuntimeStateSummary(session.runtimeState, !!session.busy)
+    : `${session.busy ? 'busy' : 'idle'} ${session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}`
+  const statusDuration = isActive ? formatBusyDuration(session.runtimeState?.since || session.busyStartedAt, now) : undefined
 
   const handleCardClick = () => {
     if (canExpand) {
@@ -172,7 +179,7 @@ function SessionNode({
         {/* Row 2: Metadata */}
         <div className="mt-1.5 flex items-center gap-x-3 text-xs text-gray-600 dark:text-gray-300">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 flex-1">
-            <span><span className="font-medium text-gray-900 dark:text-gray-100">status</span> {statusText}</span>
+            <span><span className="font-medium text-gray-900 dark:text-gray-100">status</span> {statusText}{statusDuration ? ` · ${statusDuration}` : ''}</span>
             <span><span className="font-medium text-gray-900 dark:text-gray-100">msgs</span> {session.messageCount || 0}</span>
             {children.length > 0 && <span><span className="font-medium text-gray-900 dark:text-gray-100">children</span> {children.length}</span>}
             <span><span className="font-medium text-gray-900 dark:text-gray-100">node</span> {session.currentNode || 'master'}</span>
@@ -253,7 +260,7 @@ export default function ArchitectureView({
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
-    const hasBusySession = sessions.some(session => session.busy)
+    const hasBusySession = sessions.some(session => isSessionRuntimeActive(session))
     if (!hasBusySession) return
 
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
@@ -270,9 +277,9 @@ export default function ArchitectureView({
       const existing = agentMap.get(agentName)
       if (existing) {
         existing.sessionCount++
-        if (session.busy) existing.busyCount++
+        if (isSessionRuntimeActive(session)) existing.busyCount++
       } else {
-        agentMap.set(agentName, { name: agentName, sessionCount: 1, busyCount: session.busy ? 1 : 0 })
+        agentMap.set(agentName, { name: agentName, sessionCount: 1, busyCount: isSessionRuntimeActive(session) ? 1 : 0 })
       }
     }
 
@@ -377,7 +384,7 @@ export default function ArchitectureView({
   }, [currentSession, normalizedParentMap])
 
   const summary = useMemo(() => {
-    const busyCount = sessions.filter(session => session.busy).length
+    const busyCount = sessions.filter(session => isSessionRuntimeActive(session)).length
     const queuedSessions = sessions.filter(session => (session.queueLength || 0) > 0)
     const queuedItems = queuedSessions.reduce((sum, session) => sum + (session.queueLength || 0), 0)
     const totalCachedTokens = sessions.reduce((sum, session) => sum + (session.tokenUsage?.cachedTokens || 0), 0)

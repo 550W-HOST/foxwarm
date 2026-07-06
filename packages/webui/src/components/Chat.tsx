@@ -9,6 +9,7 @@ import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
 import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
+import { isSessionRuntimeActive } from '../sessionRuntimeState'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
@@ -685,7 +686,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
           const data = await res.json()
           const currentSession = data.sessions.find((s: any) => s.id === sessionId)
           if (currentSession) {
-            setSessionBusy(currentSession.busy || false)
+            setSessionBusy(isSessionRuntimeActive(currentSession))
             setSessionQueueLength(currentSession.queueLength || 0)
           } else {
             setSessionBusy(false)
