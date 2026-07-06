@@ -1,4 +1,5 @@
 import { Message, MessagePart } from '../types';
+import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 
 export const NO_ACTION_MARKER = '[NO_ACTION]';
 const LEGACY_NO_ACTION_MARKER = 'NO_ACTION';
@@ -23,5 +24,5 @@ export function buildChildCompletionInstruction(parentSessionId: string): string
 }
 
 export function buildChildReminder(parentSessionId: string): string {
-  return `Reminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}). If that handoff is your final step, call send_to_session({...}) and wait({}) in parallel. If no action is needed, say \`${NO_ACTION_MARKER}\`. Next time, you can end your final message with \`${NO_ACTION_MARKER}\` to prevent this reminder.`;
+  return `${formatFoxwarmSystemTag({ kind: 'child-reminder', event: 'missing-handoff', parentSessionId })}\nReminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: \`${parentSessionId}\`, message: "..."}). If that handoff is your final step, call send_to_session({...}) and wait({}) in parallel. If no action is needed, say \`${NO_ACTION_MARKER}\`. Next time, you can end your final message with \`${NO_ACTION_MARKER}\` to prevent this reminder.`;
 }

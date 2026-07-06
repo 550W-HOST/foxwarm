@@ -157,6 +157,15 @@ function formatLegacySystemTextForModel(system: string): string | undefined {
     return formatWithOptionalPayload(formatFoxwarmSystemTag({ kind: 'goal-reminder' }), goalReminderMatch[1]);
   }
 
+  if (/^Reminder: message ended without send_to_session call\./i.test(system)) {
+    const parentSessionMatch = system.match(/send_to_session\(\{sessionId:\s*`([^`]*)`/);
+    return formatWithOptionalPayload(formatFoxwarmSystemTag({
+      kind: 'child-reminder',
+      event: 'missing-handoff',
+      parentSessionId: parentSessionMatch?.[1],
+    }), system);
+  }
+
   const compactionCompletedMatch = system.match(/^Compaction completed\.?\s*([\s\S]*)$/i);
   if (compactionCompletedMatch) {
     return formatWithOptionalPayload(formatFoxwarmSystemTag({ kind: 'session-boundary', event: 'compact-completed' }), compactionCompletedMatch[1]);
