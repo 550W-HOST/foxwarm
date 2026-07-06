@@ -1076,7 +1076,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   }, [messages])
 
   return (
-    <div ref={chatRootRef} className="relative flex h-full flex-col overflow-hidden">
+    <div ref={chatRootRef} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionId}
@@ -1136,8 +1136,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
         </div>
       )}
 
-      <div className="relative min-h-0 flex-1">
-        <div ref={messagesContainerRef} className="h-full overflow-y-auto p-4">
+      <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
+        <div ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-y-auto p-4">
           {hiddenMessageCount > 0 && !showFullTimeline && (
             <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
               Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
