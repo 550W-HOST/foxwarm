@@ -3,11 +3,14 @@ import { RefreshCw, Settings } from 'lucide-react'
 import ReloadAppButton from './ReloadAppButton'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
+type UiThemeStyle = 'default' | '550a'
 type SendKeyMode = 'modEnter' | 'enter'
 
 interface GlobalUiSettingsMenuProps {
   themeMode: ThemeMode
   onThemeChange: (mode: ThemeMode) => void
+  uiThemeStyle: UiThemeStyle
+  onUiThemeStyleChange: (style: UiThemeStyle) => void
   sendKeyMode: SendKeyMode
   onSendKeyModeChange: (mode: SendKeyMode) => void
   groupTools: boolean
@@ -26,6 +29,8 @@ interface GlobalUiSettingsMenuProps {
 export default function GlobalUiSettingsMenu({
   themeMode,
   onThemeChange,
+  uiThemeStyle,
+  onUiThemeStyleChange,
   sendKeyMode,
   onSendKeyModeChange,
   groupTools,
@@ -136,7 +141,27 @@ export default function GlobalUiSettingsMenu({
       {open && (
         <div className={`absolute ${menuAlignClass} top-full z-50 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100`}>
           <div className="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-            <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Theme</div>
+            <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Theme style</div>
+            <div className="flex gap-1">
+              {([
+                { value: 'default' as const, label: 'Default' },
+                { value: '550a' as const, label: '550A' },
+              ]).map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    onUiThemeStyleChange(option.value)
+                    setOpen(false)
+                  }}
+                  className={`flex-1 rounded px-2 py-1 text-xs ${uiThemeStyle === option.value ? (option.value === '550a' ? 'bg-red-500 text-white shadow-[0_0_12px_rgba(238,85,85,0.28)]' : 'bg-blue-500 text-white') : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="mb-2 mt-3 text-xs font-medium text-gray-500 dark:text-gray-400">Color mode</div>
             <div className="flex gap-1">
               {(['auto', 'light', 'dark'] as const).map((mode) => (
                 <button

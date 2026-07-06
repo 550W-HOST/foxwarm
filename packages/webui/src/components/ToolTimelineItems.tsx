@@ -575,28 +575,30 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const baseTextClass = 'font-mono text-gray-700 dark:text-gray-300'
   const hasBody = expanded || !!responsePreview || hasToolScriptProgress
 
+  const actionButtonsToneClass = `foxwarm-tool-action-buttons-${tagTone}`
+
   const header = (extraClass = '', onClick?: (e: MouseEvent<HTMLDivElement>) => void, includeCallPreview = false) => (
     <div
-      className={`flex items-center gap-2 min-w-0 ${toolHeaderToneClasses[tagTone]} ${extraClass}`.trim()}
+      className={`foxwarm-tool-header flex items-center gap-2 min-w-0 ${toolHeaderToneClasses[tagTone]} ${extraClass}`.trim()}
       onClick={onClick}
     >
-      <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} />
+      <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
       {includeCallPreview && call && <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call, { partial: partialToolCall })}</div>}
     </div>
   )
 
   return (
     <div
-      className={`text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? () => setExpanded(true) : undefined}
     >
       <ThreadLineButton
         expanded={expanded}
         onToggle={() => setExpanded(current => !current)}
         label={expanded ? `Collapse ${primaryName} tool` : `Expand ${primaryName} tool`}
-        className={toolThreadLineToneClasses[tagTone]}
+        className={`foxwarm-tool-thread-line ${toolThreadLineToneClasses[tagTone]}`}
       />
-      <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+      <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100`}>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>
@@ -622,7 +624,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
             {call && (
               <div className={`text-gray-700 dark:text-gray-300 ${showDiffToggles ? 'relative' : ''}`}>
                 {showDiffToggles && (
-                  <div className="absolute top-1 right-0 flex gap-1" onClick={(e) => e.stopPropagation()}>
+                  <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute top-1 right-0 flex gap-1`} onClick={(e) => e.stopPropagation()}>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
                   </div>

@@ -11,6 +11,8 @@ interface SidebarProps {
   currentSessionRecord?: Session
   themeMode: 'auto' | 'light' | 'dark'
   onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
+  uiThemeStyle: 'default' | '550a'
+  onUiThemeStyleChange: (style: 'default' | '550a') => void
   sendKeyMode: 'modEnter' | 'enter'
   onSendKeyModeChange: (mode: 'modEnter' | 'enter') => void
   groupTools: boolean
@@ -38,6 +40,8 @@ export default function Sidebar({
   currentSessionRecord,
   themeMode,
   onThemeChange,
+  uiThemeStyle,
+  onUiThemeStyleChange,
   sendKeyMode,
   onSendKeyModeChange,
   groupTools,
@@ -81,6 +85,8 @@ export default function Sidebar({
             <GlobalUiSettingsMenu
               themeMode={themeMode}
               onThemeChange={onThemeChange}
+              uiThemeStyle={uiThemeStyle}
+              onUiThemeStyleChange={onUiThemeStyleChange}
               sendKeyMode={sendKeyMode}
               onSendKeyModeChange={onSendKeyModeChange}
               groupTools={groupTools}
