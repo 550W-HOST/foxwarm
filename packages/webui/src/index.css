@@ -953,6 +953,46 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-textarea::placeholder 
   opacity: 0.8;
 }
 
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="submit"] {
+  height: 36px !important;
+  width: auto !important;
+  min-width: 58px;
+  padding: 0 11px !important;
+  border: 1px solid var(--foxwarm-550a-accent-dim) !important;
+  border-radius: var(--foxwarm-550a-radius) !important;
+  background-color: var(--foxwarm-550a-accent-dim) !important;
+  color: #fff !important;
+  box-shadow: 0 0 12px var(--foxwarm-550a-accent-glow) !important;
+  font-family: var(--foxwarm-550a-font) !important;
+  font-size: 12px !important;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="submit"] svg {
+  display: none !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="submit"]::after {
+  content: "SEND";
+  line-height: 1;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="submit"]:hover:not(:disabled) {
+  background-color: var(--foxwarm-550a-accent) !important;
+  border-color: var(--foxwarm-550a-accent) !important;
+  box-shadow: 0 0 16px var(--foxwarm-550a-accent-glow) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="submit"]:disabled {
+  background-color: var(--foxwarm-550a-input) !important;
+  border-color: var(--foxwarm-550a-border-panel) !important;
+  color: var(--foxwarm-550a-text-dim) !important;
+  box-shadow: none !important;
+  opacity: 0.72;
+}
+
 html[data-foxwarm-ui-style="550a"] .foxwarm-attachment-chip {
   background-color: var(--foxwarm-550a-panel) !important;
   border: 1px solid var(--foxwarm-550a-border-panel) !important;
