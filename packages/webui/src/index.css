@@ -962,6 +962,8 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-textarea {
   font-variant-ligatures: none;
   letter-spacing: 0;
   line-height: 1.5 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
 }
 
 html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-textarea::placeholder {
