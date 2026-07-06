@@ -13,6 +13,7 @@ import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
+type UiThemeStyle = 'default' | '550a'
 type AppView = 'session' | 'agents' | 'setup'
 type SendKeyMode = 'modEnter' | 'enter'
 
@@ -38,6 +39,8 @@ type WebUiSettings = {
 
 const LIGHT_THEME_COLOR = '#f3f4f6'
 const DARK_THEME_COLOR = '#111827'
+const THEME_550A_LIGHT_COLOR = '#f4f3ef'
+const THEME_550A_DARK_COLOR = '#0c0c0c'
 const ARCHITECTURE_HASH = 'agents'
 const SETUP_HASH = 'setup'
 const TAB_HASH_PREFIX = 'tab/'
@@ -45,6 +48,7 @@ const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
+const UI_THEME_STYLE_STORAGE_KEY = 'foxwarm_ui_theme_style_v1'
 const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
 const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
 const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
@@ -336,6 +340,10 @@ function App() {
     const saved = localStorage.getItem('themeMode')
     return saved === 'auto' || saved === 'light' || saved === 'dark' ? saved : 'auto'
   })
+  const [uiThemeStyle, setUiThemeStyle] = useState<UiThemeStyle>(() => {
+    const saved = localStorage.getItem(UI_THEME_STYLE_STORAGE_KEY)
+    return saved === '550a' ? '550a' : 'default'
+  })
   const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => {
     if (window.matchMedia) {
       return window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -444,12 +452,21 @@ function App() {
     } else {
       document.documentElement.classList.remove('dark')
     }
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', darkMode ? DARK_THEME_COLOR : LIGHT_THEME_COLOR)
-  }, [darkMode])
+    if (uiThemeStyle === '550a') {
+      document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
+    } else {
+      document.documentElement.removeAttribute('data-foxwarm-ui-style')
+    }
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', uiThemeStyle === '550a' ? (darkMode ? THEME_550A_DARK_COLOR : THEME_550A_LIGHT_COLOR) : darkMode ? DARK_THEME_COLOR : LIGHT_THEME_COLOR)
+  }, [darkMode, uiThemeStyle])
 
   useEffect(() => {
     localStorage.setItem('themeMode', themeMode)
   }, [themeMode])
+
+  useEffect(() => {
+    localStorage.setItem(UI_THEME_STYLE_STORAGE_KEY, uiThemeStyle)
+  }, [uiThemeStyle])
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth))
@@ -1499,6 +1516,8 @@ function App() {
           currentSessionRecord={currentContextSessionRecord}
           themeMode={themeMode}
           onThemeChange={setThemeMode}
+          uiThemeStyle={uiThemeStyle}
+          onUiThemeStyleChange={setUiThemeStyle}
           sendKeyMode={sendKeyMode}
           onSendKeyModeChange={setSendKeyMode}
           groupTools={groupTools}
@@ -1556,6 +1575,8 @@ function App() {
             currentSessionRecord={currentContextSessionRecord}
             themeMode={themeMode}
             onThemeChange={setThemeMode}
+            uiThemeStyle={uiThemeStyle}
+            onUiThemeStyleChange={setUiThemeStyle}
             sendKeyMode={sendKeyMode}
             onSendKeyModeChange={setSendKeyMode}
             groupTools={groupTools}

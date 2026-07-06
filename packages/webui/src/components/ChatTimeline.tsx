@@ -172,7 +172,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: 
   return (
     <div>
       <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
-        <pre className="whitespace-pre-wrap font-sans" style={{ lineHeight: '1.5em' }}>
+        <pre className="foxwarm-user-message-text whitespace-pre-wrap font-sans" style={{ lineHeight: '1.5em' }}>
           {text.split('\n').map((line, lineIdx) => {
             const isPrefix = /^\[(SYSTEM|FROM):/.test(line)
             return (
@@ -286,7 +286,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
   const paddingClass = viewMode === 'rendered' ? 'px-2' : 'px-2 py-2'
 
   return (
-    <div className={`bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${paddingClass} rounded-lg cursor-text relative group`}>
+    <div className={`foxwarm-assistant-message-card bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${paddingClass} rounded-lg cursor-text relative group`}>
       <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
         <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
@@ -305,12 +305,12 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
       {viewMode === 'rendered' ? (
         <MarkdownContent
           text={text}
-          className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100 prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
+          className="foxwarm-markdown foxwarm-assistant-message-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100 prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
         />
       ) : viewMode === 'raw' ? (
-        <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100">{text}</pre>
+        <pre className="foxwarm-assistant-message-raw whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100">{text}</pre>
       ) : (
-        <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto">{jsonText}</pre>
+        <pre className="foxwarm-assistant-message-raw whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto">{jsonText}</pre>
       )}
     </div>
   )
@@ -394,7 +394,7 @@ const MessageRow = memo(function MessageRow({
       <div
         className={`${widthClass} ${
           !systemLikeMessage && msg.role === 'user'
-            ? 'bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
+            ? 'foxwarm-user-message-bubble bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
             : ''
         } ${allowOverflow ? 'overflow-visible' : 'overflow-x-hidden'}`}
       >

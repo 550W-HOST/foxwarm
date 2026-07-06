@@ -1072,7 +1072,7 @@ const ChatComposer = memo(function ChatComposer({
 
         <form
           onSubmit={handleSubmit}
-          className={`rounded-[30px] border border-gray-200/90 bg-gray-50/75 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] backdrop-blur-[5px] transition focus-within:border-gray-300 focus-within:bg-white/92 dark:border-gray-700/90 dark:bg-gray-800/70 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800/92 ${
+          className={`foxwarm-chat-composer-form rounded-[30px] border border-gray-200/90 bg-gray-50/75 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] backdrop-blur-[5px] transition focus-within:border-gray-300 focus-within:bg-white/92 dark:border-gray-700/90 dark:bg-gray-800/70 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800/92 ${
             isDragging ? 'border-blue-400 dark:border-blue-500' : ''
           }`}
         >
@@ -1117,7 +1117,7 @@ const ChatComposer = memo(function ChatComposer({
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          className="mb-1.5 min-h-[60px] w-full resize-none overflow-y-auto border-0 bg-transparent px-3 py-1 text-[16px] leading-6 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-0 dark:text-white dark:placeholder:text-gray-500"
+          className="foxwarm-chat-composer-textarea mb-1.5 min-h-[60px] w-full resize-none overflow-y-auto border-0 bg-transparent px-3 py-1 text-[16px] leading-6 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-0 dark:text-white dark:placeholder:text-gray-500"
           style={{ maxHeight: '200px', fontSize: '16px' }}
           placeholder={sessionMissing
             ? 'Session not found'
@@ -1143,7 +1143,7 @@ const ChatComposer = memo(function ChatComposer({
                 attachments.map((file, idx) => (
                   <div
                     key={`${file.name}-${idx}`}
-                    className="inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-full border border-gray-200 bg-white px-3 text-[13px] shadow-sm dark:border-gray-700 dark:bg-gray-800"
+                    className="foxwarm-attachment-chip inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-full border border-gray-200 bg-white px-3 text-[13px] shadow-sm dark:border-gray-700 dark:bg-gray-800"
                   >
                     <Paperclip size={12} className="shrink-0 text-gray-400 dark:text-gray-500" />
                     <span className="truncate text-gray-700 dark:text-gray-300">{file.name}</span>

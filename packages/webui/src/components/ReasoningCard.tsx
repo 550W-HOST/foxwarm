@@ -95,29 +95,29 @@ const ReasoningCard = memo(function ReasoningCard({
 
   return (
     <div
-      className={`relative group pl-2 pr-2 text-xs ${reasoningSurfaceClasses[tone]} ${expanded ? 'pb-1' : ''} ${reasoningTextClasses[tone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      className={`foxwarm-reasoning-card foxwarm-reasoning-card-${tone} relative group pl-2 pr-2 text-xs ${reasoningSurfaceClasses[tone]} ${expanded ? 'pb-1' : ''} ${reasoningTextClasses[tone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? () => setExpanded(true) : undefined}
     >
       <ThreadLineButton
         expanded={expanded}
         onToggle={() => setExpanded(current => !current)}
         label={expanded ? 'Collapse reasoning' : 'Expand reasoning'}
-        className={reasoningLineToneClasses[tone]}
+        className={`foxwarm-reasoning-thread-line ${reasoningLineToneClasses[tone]}`}
       />
       <div
-        className={`${expanded ? 'mb-1' : ''} flex min-w-0 items-center gap-2 ${reasoningHeaderClasses[tone]} ${expanded ? `cursor-pointer ${reasoningHeaderHoverClasses[tone]}` : ''}`}
+        className={`foxwarm-reasoning-header ${expanded ? 'mb-1' : ''} flex min-w-0 items-center gap-2 ${reasoningHeaderClasses[tone]} ${expanded ? `cursor-pointer ${reasoningHeaderHoverClasses[tone]}` : ''}`}
         onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
       >
-        <ToolTag name="reasoning" label="Reasoning" tone="neutral" />
+        <ToolTag name="reasoning" label="Reasoning" tone="neutral" className="foxwarm-reasoning-tag" />
         {!expanded && (
-          <span className={`min-w-0 flex-1 truncate text-[13px] leading-[18px] ${collapsedPreview.isOpenAISummary ? 'font-semibold' : 'font-normal'}`} title={collapsedPreview.text}>
+          <span className={`foxwarm-reasoning-preview min-w-0 flex-1 truncate text-[13px] leading-[18px] ${collapsedPreview.isOpenAISummary ? 'font-semibold' : 'font-normal'}`} title={collapsedPreview.text}>
             {collapsedPreview.text}
           </span>
         )}
       </div>
       {expanded && (
         <div
-          className={`foxwarm-markdown prose max-w-none text-[13px] prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${reasoningBodyClasses[tone]}`}
+          className={`foxwarm-markdown foxwarm-reasoning-body prose max-w-none text-[13px] prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${reasoningBodyClasses[tone]}`}
           dangerouslySetInnerHTML={{ __html: html }}
           onClick={handleMarkdownLinkClick}
         />

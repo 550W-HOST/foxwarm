@@ -217,3 +217,918 @@ input, textarea, select {
     min-width: max-content;
   }
 }
+
+/* 550A theme style ---------------------------------------------------------
+ * Inspired by https://github.com/550W-HOST/cf550A: dense mono dashboard,
+ * CRT/grid background, muted gray text, thin panel borders, and a red accent
+ * glow. This is intentionally implemented as a runtime override layer so the
+ * default Tailwind-based Foxwarm UI remains unchanged.
+ */
+html[data-foxwarm-ui-style="550a"] {
+  color-scheme: dark;
+  --foxwarm-550a-font: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, 'Noto Sans Mono CJK SC', 'Sarasa Mono SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace;
+  --foxwarm-550a-code-font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, 'Noto Sans Mono CJK SC', 'Sarasa Mono SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace;
+  --foxwarm-default-font: ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  --foxwarm-550a-font-ui: 13px;
+  --foxwarm-550a-font-ui-small: 11.5px;
+  --foxwarm-550a-font-control: 12.5px;
+  --foxwarm-550a-font-message: 15px;
+  --foxwarm-550a-font-composer: 16px;
+  --foxwarm-550a-font-code: 12.5px;
+  --foxwarm-550a-line-ui: 1.45;
+  --foxwarm-550a-line-message: 1.65;
+  --foxwarm-550a-line-code: 1.55;
+  --foxwarm-550a-accent: #ee5555;
+  --foxwarm-550a-accent-dim: #bb4444;
+  --foxwarm-550a-accent-glow: rgba(238, 85, 85, 0.3);
+  --foxwarm-550a-accent-wash: rgba(238, 85, 85, 0.12);
+  --foxwarm-550a-accent-wash-strong: rgba(238, 85, 85, 0.18);
+  --foxwarm-550a-bg: #0c0c0c;
+  --foxwarm-550a-bg-edge: #080808;
+  --foxwarm-550a-panel: #111111;
+  --foxwarm-550a-input: #0a0a0a;
+  --foxwarm-550a-hover: #181818;
+  --foxwarm-550a-border: #1e1e1e;
+  --foxwarm-550a-border-panel: #252525;
+  --foxwarm-550a-border-hover: #444444;
+  --foxwarm-550a-text: #999999;
+  --foxwarm-550a-text-dim: #555555;
+  --foxwarm-550a-text-bright: #cccccc;
+  --foxwarm-550a-green: #55aa55;
+  --foxwarm-550a-green-dim: #3a7a3a;
+  --foxwarm-550a-green-border: #1a3a28;
+  --foxwarm-550a-green-surface: rgba(10, 31, 10, 0.82);
+  --foxwarm-550a-green-surface-strong: rgba(18, 50, 18, 0.86);
+  --foxwarm-550a-green-glow: rgba(85, 170, 85, 0.24);
+  --foxwarm-550a-green-deep: #1a3a28;
+  --foxwarm-550a-green-deep-hover: #214a32;
+  --foxwarm-550a-green-button-idle: rgba(85, 170, 85, 0.14);
+  --foxwarm-550a-green-button-idle-hover: rgba(85, 170, 85, 0.22);
+  --foxwarm-550a-green-button-active-text: #77bb99;
+  --foxwarm-550a-blue: #77aabb;
+  --foxwarm-550a-blue-dim: #4f7f99;
+  --foxwarm-550a-blue-border: #26445f;
+  --foxwarm-550a-blue-surface: rgba(12, 24, 36, 0.78);
+  --foxwarm-550a-blue-surface-strong: rgba(26, 53, 85, 0.78);
+  --foxwarm-550a-blue-glow: rgba(119, 170, 187, 0.20);
+  --foxwarm-550a-fail: #8866ee;
+  --foxwarm-550a-fail-border: #3a2a64;
+  --foxwarm-550a-fail-deep: #251a3f;
+  --foxwarm-550a-fail-deep-hover: #312552;
+  --foxwarm-550a-fail-button-idle: rgba(136, 102, 238, 0.14);
+  --foxwarm-550a-fail-button-idle-hover: rgba(136, 102, 238, 0.22);
+  --foxwarm-550a-fail-button-active-text: #b8a6ff;
+  --foxwarm-550a-fail-glow: rgba(136, 102, 238, 0.24);
+  --foxwarm-550a-radius: 3px;
+  --foxwarm-550a-grid-background:
+    linear-gradient(rgba(238, 85, 85, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(238, 85, 85, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    var(--foxwarm-550a-bg);
+  --foxwarm-app-background: var(--foxwarm-550a-bg);
+  --foxwarm-scrollbar-track: var(--foxwarm-550a-bg);
+  --foxwarm-scrollbar-thumb: #2a2a2a;
+  --foxwarm-scrollbar-thumb-hover: #3a3a3a;
+}
+
+html:not(.dark)[data-foxwarm-ui-style="550a"] {
+  color-scheme: light;
+  --foxwarm-550a-accent: #cc3333;
+  --foxwarm-550a-accent-dim: #aa3333;
+  --foxwarm-550a-accent-glow: rgba(204, 51, 51, 0.15);
+  --foxwarm-550a-accent-wash: rgba(204, 51, 51, 0.07);
+  --foxwarm-550a-accent-wash-strong: rgba(204, 51, 51, 0.12);
+  --foxwarm-550a-bg: #f4f3ef;
+  --foxwarm-550a-bg-edge: #edece7;
+  --foxwarm-550a-panel: #ffffff;
+  --foxwarm-550a-input: #fafaf8;
+  --foxwarm-550a-hover: #eeeeea;
+  --foxwarm-550a-border: #e8e4dc;
+  --foxwarm-550a-border-panel: #dddddd;
+  --foxwarm-550a-border-hover: #bbbbbb;
+  --foxwarm-550a-text: #444444;
+  --foxwarm-550a-text-dim: #999999;
+  --foxwarm-550a-text-bright: #222222;
+  --foxwarm-550a-green: #3a7a3a;
+  --foxwarm-550a-green-dim: #2a6a2a;
+  --foxwarm-550a-green-border: #c0e0c0;
+  --foxwarm-550a-green-surface: rgba(240, 248, 240, 0.88);
+  --foxwarm-550a-green-surface-strong: rgba(224, 240, 224, 0.92);
+  --foxwarm-550a-green-glow: rgba(58, 122, 58, 0.12);
+  --foxwarm-550a-green-deep: #2a6040;
+  --foxwarm-550a-green-deep-hover: #34704b;
+  --foxwarm-550a-green-button-idle: #f0f8f0;
+  --foxwarm-550a-green-button-idle-hover: #e0f0e0;
+  --foxwarm-550a-green-button-active-text: #ffffff;
+  --foxwarm-550a-blue: #3a6a9a;
+  --foxwarm-550a-blue-dim: #2f587f;
+  --foxwarm-550a-blue-border: #b8cad8;
+  --foxwarm-550a-blue-surface: rgba(237, 244, 248, 0.92);
+  --foxwarm-550a-blue-surface-strong: rgba(221, 235, 245, 0.94);
+  --foxwarm-550a-blue-glow: rgba(58, 106, 154, 0.13);
+  --foxwarm-550a-fail: #6d57c8;
+  --foxwarm-550a-fail-border: #c9bff0;
+  --foxwarm-550a-fail-deep: #6b4fa0;
+  --foxwarm-550a-fail-deep-hover: #7a5db4;
+  --foxwarm-550a-fail-button-idle: #f3f0fb;
+  --foxwarm-550a-fail-button-idle-hover: #e9e2f7;
+  --foxwarm-550a-fail-button-active-text: #ffffff;
+  --foxwarm-550a-fail-glow: rgba(107, 79, 160, 0.14);
+  --foxwarm-550a-grid-background:
+    linear-gradient(rgba(204, 51, 51, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(204, 51, 51, 0.05) 1px, transparent 1px),
+    linear-gradient(rgba(0, 0, 0, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.035) 1px, transparent 1px),
+    var(--foxwarm-550a-bg);
+  --foxwarm-app-background: var(--foxwarm-550a-bg);
+  --foxwarm-scrollbar-track: var(--foxwarm-550a-bg);
+  --foxwarm-scrollbar-thumb: #cccccc;
+  --foxwarm-scrollbar-thumb-hover: #aaaaaa;
+}
+
+html[data-foxwarm-ui-style="550a"],
+html[data-foxwarm-ui-style="550a"] body,
+html[data-foxwarm-ui-style="550a"] #root {
+  background: var(--foxwarm-550a-grid-background);
+  background-size: 72px 72px, 72px 72px, 18px 18px, 18px 18px, auto;
+  background-position: -1px -1px;
+  color: var(--foxwarm-550a-text);
+  font-family: var(--foxwarm-550a-font);
+}
+
+html[data-foxwarm-ui-style="550a"] body,
+html[data-foxwarm-ui-style="550a"] #root {
+  font-size: var(--foxwarm-550a-font-ui);
+  line-height: var(--foxwarm-550a-line-ui);
+}
+
+html[data-foxwarm-ui-style="550a"] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.06) 2px,
+    rgba(0, 0, 0, 0.06) 4px
+  );
+}
+
+html:not(.dark)[data-foxwarm-ui-style="550a"] body::after {
+  content: none;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  button,
+  input,
+  textarea,
+  select
+) {
+  font-family: var(--foxwarm-550a-font) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  code,
+  pre,
+  kbd,
+  samp,
+  .font-mono
+) {
+  font-family: var(--foxwarm-550a-code-font-family) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(button, input, select) {
+  font-size: var(--foxwarm-550a-font-control);
+  line-height: var(--foxwarm-550a-line-ui);
+}
+
+html[data-foxwarm-ui-style="550a"] .text-xs {
+  font-size: var(--foxwarm-550a-font-ui-small) !important;
+  line-height: 1.35 !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .text-sm {
+  font-size: var(--foxwarm-550a-font-control) !important;
+  line-height: var(--foxwarm-550a-line-ui) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .text-base {
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .text-lg {
+  font-size: 15px !important;
+  line-height: 1.45 !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .text-xl {
+  font-size: 16px !important;
+  line-height: 1.35 !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .text-2xl {
+  font-size: 18px !important;
+  line-height: 1.3 !important;
+}
+
+html[data-foxwarm-ui-style="550a"] button {
+  letter-spacing: 0.04em;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-safe-area-shell,
+html[data-foxwarm-ui-style="550a"] .foxwarm-viewport-shell,
+html[data-foxwarm-ui-style="550a"] .foxwarm-fixed-viewport-shell {
+  background: var(--foxwarm-550a-grid-background) !important;
+  background-size: 72px 72px, 72px 72px, 18px 18px, 18px 18px, auto !important;
+  background-position: -1px -1px !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-message-region,
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-messages {
+  background: var(--foxwarm-550a-grid-background) !important;
+  background-size: 72px 72px, 72px 72px, 18px 18px, 18px 18px, auto !important;
+  background-position: -1px -1px !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .bg-white,
+  .bg-white\/90,
+  .dark\:bg-gray-800,
+  .dark\:bg-gray-800\/70,
+  .dark\:bg-gray-800\/80,
+  .dark\:bg-gray-800\/92,
+  .dark\:bg-gray-800\/95
+) {
+  background-color: var(--foxwarm-550a-panel) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .bg-gray-50,
+  .bg-gray-50\/75,
+  .dark\:bg-gray-950,
+  .dark\:bg-gray-900,
+  .dark\:bg-gray-900\/20,
+  .dark\:bg-gray-900\/30,
+  .dark\:bg-gray-900\/50,
+  .dark\:bg-gray-900\/80,
+  .dark\:bg-gray-900\/95
+) {
+  background-color: var(--foxwarm-550a-input) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .bg-gray-100,
+  .bg-gray-200,
+  .bg-gray-300,
+  .dark\:bg-gray-700,
+  .dark\:bg-gray-700\/60,
+  .dark\:bg-gray-700\/70,
+  .dark\:bg-gray-700\/90,
+  .dark\:bg-gray-600
+) {
+  background-color: var(--foxwarm-550a-hover) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .hover\:bg-gray-50:hover,
+  .hover\:bg-gray-100:hover,
+  .hover\:bg-gray-200:hover,
+  .hover\:bg-gray-300:hover,
+  .dark\:hover\:bg-gray-600:hover,
+  .dark\:hover\:bg-gray-700:hover,
+  .dark\:hover\:bg-gray-800:hover,
+  .dark\:hover\:bg-gray-800\/80:hover,
+  .dark\:hover\:bg-white\/10:hover,
+  .hover\:bg-black\/5:hover
+) {
+  background-color: var(--foxwarm-550a-hover) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .focus-within\:bg-white\/92:focus-within,
+  .dark\:focus-within\:bg-gray-800\/92:focus-within
+) {
+  background-color: var(--foxwarm-550a-panel) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .bg-blue-500,
+  .bg-blue-600,
+  .bg-blue-700,
+  .dark\:bg-blue-400,
+  .dark\:bg-blue-500,
+  .dark\:bg-blue-600,
+  .bg-red-500
+) {
+  background-color: var(--foxwarm-550a-accent-dim) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 12px var(--foxwarm-550a-accent-glow);
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  button.bg-gray-900:not(:disabled),
+  button.dark\:bg-gray-100:not(:disabled),
+  button.dark\:bg-gray-200:not(:disabled),
+  button.dark\:bg-white:not(:disabled)
+) {
+  background-color: var(--foxwarm-550a-accent-dim) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 12px var(--foxwarm-550a-accent-glow);
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .hover\:bg-blue-600:hover,
+  .hover\:bg-blue-500:hover,
+  .hover\:bg-blue-700:hover,
+  .dark\:hover\:bg-blue-500:hover
+) {
+  background-color: var(--foxwarm-550a-accent) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .dark\:hover\:bg-blue-700:hover
+) {
+  background-color: var(--foxwarm-550a-accent) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .group:hover :is(
+  .group-hover\:bg-blue-400,
+  .dark\:group-hover\:bg-blue-500
+) {
+  background-color: var(--foxwarm-550a-accent) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  button.hover\:bg-black:hover:not(:disabled),
+  button.hover\:bg-gray-700:hover:not(:disabled),
+  button.dark\:hover\:bg-white:hover:not(:disabled)
+) {
+  background-color: var(--foxwarm-550a-accent) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .bg-blue-50,
+  .bg-blue-50\/55,
+  .bg-blue-50\/70,
+  .bg-blue-100,
+  .bg-blue-100\/80,
+  .bg-blue-200\/60,
+  .bg-blue-500\/5,
+  .bg-blue-500\/10,
+  .dark\:bg-blue-500\/10,
+  .dark\:bg-blue-700\/60,
+  .dark\:bg-blue-800\/20,
+  .dark\:bg-blue-900\/10,
+  .dark\:bg-blue-900\/20,
+  .dark\:bg-blue-900\/30,
+  .dark\:bg-blue-900\/40,
+  .dark\:bg-blue-950\/20,
+  .dark\:bg-blue-950\/40,
+  .bg-sky-50\/80,
+  .dark\:bg-sky-900\/20,
+  .hover\:bg-blue-100:hover,
+  .hover\:bg-blue-400\/40:hover,
+  .dark\:hover\:bg-blue-900\/30:hover,
+  .dark\:hover\:bg-blue-950\/30:hover,
+  .hover\:bg-blue-50:hover
+) {
+  background-color: var(--foxwarm-550a-accent-wash) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .bg-purple-50,
+  .dark\:hover\:bg-purple-950\/30:hover,
+  .hover\:bg-purple-50:hover
+) {
+  background-color: rgba(136, 102, 238, 0.14) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .border-gray-100,
+  .border-gray-200,
+  .border-gray-200\/90,
+  .border-gray-300,
+  .border-gray-700,
+  .dark\:border-gray-600,
+  .dark\:border-gray-700,
+  .dark\:border-gray-700\/90,
+  .dark\:border-gray-800
+) {
+  border-color: var(--foxwarm-550a-border-panel) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .border-blue-200,
+  .border-blue-300,
+  .border-blue-400,
+  .border-blue-400\/70,
+  .border-blue-500,
+  .dark\:border-blue-500,
+  .dark\:border-blue-500\/60,
+  .dark\:border-blue-700,
+  .dark\:border-blue-800,
+  .dark\:border-blue-800\/80,
+  .dark\:border-blue-900\/50,
+  .dark\:border-blue-900\/60,
+  .focus\:border-blue-400:focus,
+  .focus\:border-blue-500:focus,
+  .dark\:focus\:border-blue-500:focus,
+  .focus-within\:border-gray-300:focus-within,
+  .dark\:focus-within\:border-gray-600:focus-within
+) {
+  border-color: var(--foxwarm-550a-accent-dim) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .ring-blue-300,
+  .ring-blue-500,
+  .dark\:ring-blue-700,
+  .focus\:ring-blue-500:focus,
+  .focus\:ring-blue-500\/20:focus,
+  .focus\:ring-blue-500\/40:focus,
+  .focus\:ring-2:focus
+) {
+  --tw-ring-color: rgba(238, 85, 85, 0.28) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .focus-visible\:outline-blue-500:focus-visible
+) {
+  outline-color: var(--foxwarm-550a-accent-dim) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .text-white,
+  .text-gray-900,
+  .text-gray-800,
+  .dark\:text-white,
+  .dark\:text-gray-100,
+  .dark\:text-gray-200
+) {
+  color: var(--foxwarm-550a-text-bright) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .text-gray-700,
+  .text-gray-600,
+  .dark\:text-gray-300
+) {
+  color: var(--foxwarm-550a-text) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .text-gray-500,
+  .text-gray-400,
+  .dark\:text-gray-400,
+  .dark\:text-gray-500
+) {
+  color: var(--foxwarm-550a-text-dim) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .text-blue-200,
+  .text-blue-300,
+  .text-blue-900,
+  .text-blue-800,
+  .text-blue-700,
+  .text-blue-600,
+  .text-blue-500,
+  .text-blue-950,
+  .text-sky-700,
+  .dark\:text-blue-100,
+  .dark\:text-blue-200,
+  .dark\:text-blue-300,
+  .dark\:text-blue-400
+) {
+  color: var(--foxwarm-550a-accent) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .dark\:text-blue-700,
+  .dark\:text-sky-300,
+  .hover\:text-blue-500:hover,
+  .hover\:text-blue-600:hover,
+  .hover\:text-blue-700:hover,
+  .hover\:text-blue-950:hover,
+  .dark\:hover\:text-blue-200:hover,
+  .dark\:hover\:text-blue-300:hover,
+  .dark\:hover\:text-blue-400:hover,
+  .focus-visible\:text-blue-500:focus-visible,
+  .dark\:focus-visible\:text-blue-400:focus-visible
+) {
+  color: var(--foxwarm-550a-accent) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .text-green-600,
+  .text-green-500,
+  .text-green-800,
+  .text-emerald-300,
+  .text-emerald-400,
+  .text-emerald-500,
+  .text-emerald-700,
+  .dark\:text-green-300,
+  .dark\:text-green-400,
+  .dark\:text-emerald-300,
+  .dark\:text-emerald-400,
+  .dark\:text-emerald-700,
+  .hover\:text-emerald-500:hover,
+  .dark\:hover\:text-emerald-400:hover,
+  .focus-visible\:text-emerald-500:focus-visible,
+  .dark\:focus-visible\:text-emerald-400:focus-visible
+) {
+  color: var(--foxwarm-550a-green) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .bg-green-50,
+  .bg-green-100,
+  .dark\:bg-green-900\/20,
+  .bg-emerald-50\/55,
+  .dark\:bg-emerald-900\/10
+) {
+  background-color: var(--foxwarm-550a-green-surface) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .bg-emerald-100\/80,
+  .dark\:bg-emerald-800\/20
+) {
+  background-color: var(--foxwarm-550a-green-surface-strong) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .border-green-100,
+  .border-green-200,
+  .border-green-300,
+  .dark\:border-green-800,
+  .dark\:border-green-900\/40,
+  .border-emerald-200,
+  .border-emerald-300,
+  .dark\:border-emerald-700,
+  .dark\:border-emerald-800
+) {
+  border-color: var(--foxwarm-550a-green-border) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-card {
+  background-color: var(--foxwarm-550a-blue-surface) !important;
+  color: var(--foxwarm-550a-text) !important;
+  box-shadow: inset 0 0 0 1px rgba(119, 170, 187, 0.03) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-card-processing {
+  background-color: var(--foxwarm-550a-blue-surface-strong) !important;
+  box-shadow: inset 0 0 0 1px rgba(119, 170, 187, 0.06), 0 0 12px var(--foxwarm-550a-blue-glow) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-thread-line {
+  color: var(--foxwarm-550a-blue) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-header {
+  background-color: var(--foxwarm-550a-blue-surface-strong) !important;
+  color: var(--foxwarm-550a-blue) !important;
+  box-shadow: inset 0 1px 0 var(--foxwarm-550a-blue-border), inset 0 -1px 0 var(--foxwarm-550a-blue-border) !important;
+  text-shadow: 0 0 4px var(--foxwarm-550a-blue-glow);
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-card .foxwarm-reasoning-header:hover {
+  color: var(--foxwarm-550a-text-bright) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-tag {
+  background-color: var(--foxwarm-550a-input) !important;
+  border-color: var(--foxwarm-550a-blue-border) !important;
+  color: var(--foxwarm-550a-blue) !important;
+  box-shadow: 0 0 6px var(--foxwarm-550a-blue-glow) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-preview {
+  color: var(--foxwarm-550a-text-bright) !important;
+  font-family: var(--foxwarm-550a-font) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-body {
+  color: var(--foxwarm-550a-text) !important;
+  font-family: var(--foxwarm-550a-font) !important;
+  font-size: var(--foxwarm-550a-font-control) !important;
+  line-height: var(--foxwarm-550a-line-code) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-body :where(p, li, blockquote, td, th):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: var(--foxwarm-550a-text) !important;
+  line-height: var(--foxwarm-550a-line-code) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-body :where(h1, h2, h3, h4, strong):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: var(--foxwarm-550a-blue) !important;
+  text-shadow: 0 0 4px var(--foxwarm-550a-blue-glow);
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-body :where(code):not(:where([class~="not-prose"], [class~="not-prose"] *)),
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-body :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  background-color: var(--foxwarm-550a-input) !important;
+  border-color: var(--foxwarm-550a-blue-border) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .bg-blue-500,
+  .bg-blue-600,
+  .bg-blue-700,
+  .dark\:bg-blue-400,
+  .dark\:bg-blue-500,
+  .dark\:bg-blue-600,
+  .bg-red-500
+) {
+  color: #ffffff !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .placeholder\:text-gray-400::placeholder,
+html[data-foxwarm-ui-style="550a"] .dark\:placeholder\:text-gray-500::placeholder {
+  color: var(--foxwarm-550a-text-dim) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .rounded,
+  .rounded-md,
+  .rounded-lg,
+  .rounded-xl,
+  .rounded-2xl,
+  .rounded-\[30px\]
+) {
+  border-radius: var(--foxwarm-550a-radius) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(
+  .shadow-sm,
+  .shadow,
+  .shadow-lg,
+  .shadow-xl,
+  .shadow-2xl
+) {
+  --tw-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+  --tw-shadow-colored: 0 2px 8px var(--tw-shadow-color) !important;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] :is(button, a, label) {
+  transition-duration: 150ms;
+}
+
+html[data-foxwarm-ui-style="550a"] button:hover:not(:disabled),
+html[data-foxwarm-ui-style="550a"] label:hover {
+  border-color: var(--foxwarm-550a-border-hover);
+}
+
+html[data-foxwarm-ui-style="550a"] button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-markdown {
+  font-family: var(--foxwarm-default-font) !important;
+  --tw-prose-headings: var(--foxwarm-550a-text-bright);
+  --tw-prose-body: var(--foxwarm-550a-text-bright);
+  --tw-prose-bold: var(--foxwarm-550a-text-bright);
+  --tw-prose-links: var(--foxwarm-550a-accent);
+  --tw-prose-code: var(--foxwarm-550a-text-bright);
+  --tw-prose-quotes: var(--foxwarm-550a-text);
+  --tw-prose-hr: var(--foxwarm-550a-border-panel);
+  --tw-prose-th-borders: var(--foxwarm-550a-border-panel);
+  --tw-prose-td-borders: var(--foxwarm-550a-border-panel);
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: var(--foxwarm-550a-accent);
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-markdown :where(code):not(:where([class~="not-prose"], [class~="not-prose"] *)),
+html[data-foxwarm-ui-style="550a"] pre {
+  background-color: var(--foxwarm-550a-input) !important;
+  border-color: var(--foxwarm-550a-border-panel) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] h1.text-xl,
+html[data-foxwarm-ui-style="550a"] h1.text-2xl {
+  color: var(--foxwarm-550a-accent) !important;
+  text-shadow: 0 0 12px var(--foxwarm-550a-accent-glow);
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form {
+  background-color: color-mix(in srgb, var(--foxwarm-550a-input) 88%, transparent) !important;
+  border-color: var(--foxwarm-550a-border-panel) !important;
+  border-radius: var(--foxwarm-550a-radius) !important;
+  box-shadow: inset 0 0 0 1px rgba(238, 85, 85, 0.02), 0 10px 24px rgba(0, 0, 0, 0.18) !important;
+  backdrop-filter: none !important;
+}
+
+html:not(.dark)[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form {
+  background-color: rgba(255, 255, 255, 0.88) !important;
+  box-shadow: inset 0 0 0 1px rgba(204, 51, 51, 0.03), 0 8px 18px rgba(75, 55, 35, 0.08) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form:focus-within {
+  background-color: var(--foxwarm-550a-panel) !important;
+  border-color: var(--foxwarm-550a-accent-dim) !important;
+  box-shadow: 0 0 0 1px var(--foxwarm-550a-accent-dim), 0 0 18px var(--foxwarm-550a-accent-glow) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-textarea {
+  color: var(--foxwarm-550a-text-bright) !important;
+  caret-color: var(--foxwarm-550a-accent);
+  font-family: var(--foxwarm-default-font) !important;
+  font-size: var(--foxwarm-550a-font-composer) !important;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  line-height: 1.5 !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-textarea::placeholder {
+  color: var(--foxwarm-550a-text-dim) !important;
+  opacity: 0.8;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-attachment-chip {
+  background-color: var(--foxwarm-550a-panel) !important;
+  border: 1px solid var(--foxwarm-550a-border-panel) !important;
+  border-radius: var(--foxwarm-550a-radius) !important;
+  box-shadow: none !important;
+  color: var(--foxwarm-550a-text) !important;
+  font-family: var(--foxwarm-550a-font) !important;
+  letter-spacing: 0.02em;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-attachment-chip:hover {
+  background-color: var(--foxwarm-550a-hover) !important;
+  border-color: var(--foxwarm-550a-border-hover) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-attachment-chip svg {
+  color: var(--foxwarm-550a-text-dim) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-attachment-chip span {
+  color: var(--foxwarm-550a-text) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-attachment-chip button {
+  color: var(--foxwarm-550a-text-dim) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-attachment-chip button:hover {
+  color: var(--foxwarm-550a-accent) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-user-message-bubble {
+  background: linear-gradient(135deg, var(--foxwarm-550a-accent-wash-strong), var(--foxwarm-550a-accent-wash)) !important;
+  border: 1px solid var(--foxwarm-550a-accent-dim) !important;
+  border-radius: var(--foxwarm-550a-radius) !important;
+  box-shadow: inset 0 0 0 1px rgba(238, 85, 85, 0.04), 0 0 14px var(--foxwarm-550a-accent-glow) !important;
+  color: var(--foxwarm-550a-text-bright) !important;
+  font-size: var(--foxwarm-550a-font-message) !important;
+  line-height: var(--foxwarm-550a-line-message) !important;
+}
+
+html:not(.dark)[data-foxwarm-ui-style="550a"] .foxwarm-user-message-bubble {
+  box-shadow: inset 0 0 0 1px rgba(204, 51, 51, 0.04), 0 4px 14px rgba(204, 51, 51, 0.08) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-user-message-bubble pre,
+html[data-foxwarm-ui-style="550a"] .foxwarm-user-message-bubble .foxwarm-user-message-text {
+  background: transparent !important;
+  border: 0 !important;
+  color: inherit !important;
+  font-family: var(--foxwarm-default-font) !important;
+  font-size: inherit;
+  letter-spacing: normal;
+  line-height: var(--foxwarm-550a-line-message) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-user-message-bubble button {
+  color: var(--foxwarm-550a-accent) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-assistant-message-card {
+  font-size: var(--foxwarm-550a-font-message) !important;
+  line-height: var(--foxwarm-550a-line-message) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-assistant-message-markdown {
+  font-family: var(--foxwarm-default-font) !important;
+  font-size: var(--foxwarm-550a-font-message) !important;
+  line-height: var(--foxwarm-550a-line-message) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-assistant-message-markdown :where(p, li, blockquote, td, th):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  line-height: var(--foxwarm-550a-line-message) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-assistant-message-markdown :where(code):not(:where([class~="not-prose"], [class~="not-prose"] *)),
+html[data-foxwarm-ui-style="550a"] .foxwarm-assistant-message-markdown :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)),
+html[data-foxwarm-ui-style="550a"] .foxwarm-assistant-message-raw {
+  font-family: var(--foxwarm-550a-code-font-family) !important;
+  font-size: var(--foxwarm-550a-font-code) !important;
+  line-height: var(--foxwarm-550a-line-code) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-body {
+  color: var(--foxwarm-550a-text) !important;
+  font-family: var(--foxwarm-550a-font) !important;
+  font-size: var(--foxwarm-550a-font-control) !important;
+  line-height: var(--foxwarm-550a-line-code) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-body :where(p, li, blockquote, td, th):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: var(--foxwarm-550a-text) !important;
+  line-height: var(--foxwarm-550a-line-code) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-body :where(h1, h2, h3, h4, strong):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: var(--foxwarm-550a-blue) !important;
+  text-shadow: 0 0 4px var(--foxwarm-550a-blue-glow);
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-body :where(code):not(:where([class~="not-prose"], [class~="not-prose"] *)),
+html[data-foxwarm-ui-style="550a"] .foxwarm-reasoning-body :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  background-color: var(--foxwarm-550a-input) !important;
+  border-color: var(--foxwarm-550a-blue-border) !important;
+  font-family: var(--foxwarm-550a-code-font-family) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons {
+  --foxwarm-tool-action-idle-bg: var(--foxwarm-550a-green-button-idle);
+  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-550a-green-button-idle-hover);
+  --foxwarm-tool-action-border: var(--foxwarm-550a-green-border);
+  --foxwarm-tool-action-color: var(--foxwarm-550a-green);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-550a-green-deep);
+  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-550a-green-deep-hover);
+  --foxwarm-tool-action-active-color: var(--foxwarm-550a-green-button-active-text);
+  --foxwarm-tool-action-glow: var(--foxwarm-550a-green-glow);
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons-neutral {
+  --foxwarm-tool-action-idle-bg: var(--foxwarm-550a-input);
+  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-550a-hover);
+  --foxwarm-tool-action-border: var(--foxwarm-550a-border-panel);
+  --foxwarm-tool-action-color: var(--foxwarm-550a-text-dim);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-550a-hover);
+  --foxwarm-tool-action-active-hover-bg: color-mix(in srgb, var(--foxwarm-550a-hover) 82%, var(--foxwarm-550a-text-bright));
+  --foxwarm-tool-action-active-color: var(--foxwarm-550a-text-bright);
+  --foxwarm-tool-action-glow: transparent;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons-success {
+  --foxwarm-tool-action-idle-bg: var(--foxwarm-550a-green-button-idle);
+  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-550a-green-button-idle-hover);
+  --foxwarm-tool-action-border: var(--foxwarm-550a-green-border);
+  --foxwarm-tool-action-color: var(--foxwarm-550a-green);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-550a-green-deep);
+  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-550a-green-deep-hover);
+  --foxwarm-tool-action-active-color: var(--foxwarm-550a-green-button-active-text);
+  --foxwarm-tool-action-glow: var(--foxwarm-550a-green-glow);
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons-error {
+  --foxwarm-tool-action-idle-bg: var(--foxwarm-550a-fail-button-idle);
+  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-550a-fail-button-idle-hover);
+  --foxwarm-tool-action-border: var(--foxwarm-550a-fail-border);
+  --foxwarm-tool-action-color: var(--foxwarm-550a-fail);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-550a-fail-deep);
+  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-550a-fail-deep-hover);
+  --foxwarm-tool-action-active-color: var(--foxwarm-550a-fail-button-active-text);
+  --foxwarm-tool-action-glow: var(--foxwarm-550a-fail-glow);
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons button {
+  background-color: var(--foxwarm-tool-action-idle-bg) !important;
+  border: 1px solid var(--foxwarm-tool-action-border) !important;
+  color: var(--foxwarm-tool-action-color) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foxwarm-tool-action-color) 8%, transparent) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons button:hover:not(:disabled) {
+  background-color: var(--foxwarm-tool-action-idle-hover-bg) !important;
+  border-color: var(--foxwarm-tool-action-color) !important;
+  color: var(--foxwarm-550a-text-bright) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons button.bg-blue-500 {
+  background-color: var(--foxwarm-tool-action-active-bg) !important;
+  border-color: var(--foxwarm-tool-action-color) !important;
+  color: var(--foxwarm-tool-action-active-color) !important;
+  box-shadow: 0 0 8px var(--foxwarm-tool-action-glow) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons button.bg-blue-500:hover:not(:disabled) {
+  background-color: var(--foxwarm-tool-action-active-hover-bg) !important;
+  color: var(--foxwarm-tool-action-active-color) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons button:focus-visible {
+  outline-color: var(--foxwarm-tool-action-color) !important;
+}
