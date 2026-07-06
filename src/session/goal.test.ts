@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Session } from '../types';
 import { DEFAULT_GOAL_REMIND_EVERY, maybeBuildGoalEndTurnReminderMessage, maybeBuildGoalReminderMessage, resolveSessionGoalRemindEvery, resolveSessionGoalRemindOnTurnEnd, setSessionGoal } from './goal';
 
-test('goal reminder uses a system header part plus a plain text payload part', () => {
+test('goal reminder uses a foxwarm-system metadata part plus a plain text payload part', () => {
   const session = {
     history: [{ role: 'model', parts: [{ text: 'progress update' }], __meta: { seq: 1, timestamp: 1 } }],
     nextMessageSeq: 2,
@@ -19,7 +19,7 @@ test('goal reminder uses a system header part plus a plain text payload part', (
   const reminder = maybeBuildGoalReminderMessage(session);
   assert.ok(reminder);
   assert.deepEqual(reminder.parts, [
-    { system: 'Session goal reminder:' },
+    { system: '<foxwarm-system kind="goal-reminder" />' },
     {
       text: 'Ship feature without losing compacted context\nKeep this long-term goal in mind when deciding what to do next.',
       systemPayload: true,
