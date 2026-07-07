@@ -1,5 +1,5 @@
 export type SessionRuntimeStateName = 'requesting-model' | 'running-tool' | 'waiting' | 'idle'
-export type SessionRuntimeWaitingFor = 'sessions' | 'exec' | 'timer' | 'manual'
+export type SessionRuntimeWaitingFor = 'sessions' | 'exec' | 'timer'
 
 export interface SessionRuntimeState {
   state: SessionRuntimeStateName

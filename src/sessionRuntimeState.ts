@@ -1,7 +1,7 @@
 import type { Session } from './types';
 
 export type SessionRuntimeStateName = 'requesting-model' | 'running-tool' | 'waiting' | 'idle';
-export type SessionRuntimeWaitingFor = 'sessions' | 'exec' | 'timer' | 'manual';
+export type SessionRuntimeWaitingFor = 'sessions' | 'exec' | 'timer';
 export type SessionRuntimeActivePhase = 'normal-turn' | 'compaction' | 'managed-step' | 'unknown';
 
 export interface SessionRuntimeActiveDetails {
@@ -102,8 +102,6 @@ function deriveWaitingDetails(session: Session): SessionRuntimeWaitingDetails | 
     waitingFor = 'exec';
   } else if (timeoutSeconds !== undefined) {
     waitingFor = 'timer';
-  } else if (reason) {
-    waitingFor = 'manual';
   }
 
   if (!waitingFor) {
