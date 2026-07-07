@@ -95,7 +95,7 @@ test('buildSessionRuntimeState derives waitAll pending sessions', () => {
   assert.equal(formatSessionRuntimeStateSummary(runtimeState), 'waiting:sessions 1/2');
 });
 
-test('bare wait derives idle while explicit waits derive waiting states', () => {
+test('bare and reason-only waits derive idle while explicit waits derive waiting states', () => {
   const generic = makeSession({
     meta: { lastMessageTime: Date.now(), wait: { id: 'generic-wait', startedAt: 2000 } },
   } as Partial<Session>);
@@ -104,14 +104,13 @@ test('bare wait derives idle while explicit waits derive waiting states', () => 
   assert.equal(genericRuntime.waiting, undefined);
   assert.equal(formatSessionRuntimeStateSummary(genericRuntime), 'idle');
 
-  const manualWait = makeSession({
-    meta: { lastMessageTime: Date.now(), wait: { id: 'manual-wait', startedAt: 2500, reason: 'waiting for operator' } },
+  const reasonOnlyWait = makeSession({
+    meta: { lastMessageTime: Date.now(), wait: { id: 'reason-only-wait', startedAt: 2500, reason: 'waiting for operator' } },
   } as Partial<Session>);
-  const manualRuntime = buildSessionRuntimeState(manualWait);
-  assert.equal(manualRuntime.state, 'waiting');
-  assert.equal(manualRuntime.waiting?.waitingFor, 'manual');
-  assert.equal(manualRuntime.waiting?.reason, 'waiting for operator');
-  assert.equal(formatSessionRuntimeStateSummary(manualRuntime), 'waiting:manual');
+  const reasonOnlyRuntime = buildSessionRuntimeState(reasonOnlyWait);
+  assert.equal(reasonOnlyRuntime.state, 'idle');
+  assert.equal(reasonOnlyRuntime.waiting, undefined);
+  assert.equal(formatSessionRuntimeStateSummary(reasonOnlyRuntime), 'idle');
 
   const execWait = makeSession({
     meta: { lastMessageTime: Date.now(), wait: { id: 'exec-wait', startedAt: 3000, waitExecIds: ['exec-1', 'exec-2'] } },
