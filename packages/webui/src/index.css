@@ -1020,6 +1020,50 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form button[type="subm
   opacity: 0.72;
 }
 
+html[data-foxwarm-ui-style="550a"] .foxwarm-session-delete-modal-actions {
+  gap: 8px !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-session-delete-cancel-button,
+html[data-foxwarm-ui-style="550a"] .foxwarm-session-delete-confirm-button {
+  min-width: 82px;
+  border-radius: var(--foxwarm-550a-radius) !important;
+  font-family: var(--foxwarm-550a-font) !important;
+  font-size: 12px !important;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1 !important;
+  text-transform: uppercase;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-session-delete-cancel-button {
+  background-color: var(--foxwarm-550a-input) !important;
+  border: 1px solid var(--foxwarm-550a-border-panel) !important;
+  box-shadow: none !important;
+  color: var(--foxwarm-550a-text) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-session-delete-cancel-button:hover {
+  background-color: var(--foxwarm-550a-hover) !important;
+  border-color: var(--foxwarm-550a-border-hover) !important;
+  color: var(--foxwarm-550a-text-bright) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-session-delete-confirm-button {
+  background-color: var(--foxwarm-550a-accent-dim) !important;
+  border: 1px solid var(--foxwarm-550a-accent-dim) !important;
+  box-shadow: 0 0 12px var(--foxwarm-550a-accent-glow) !important;
+  color: #ffffff !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-session-delete-confirm-button:hover {
+  background-color: var(--foxwarm-550a-accent) !important;
+  border-color: var(--foxwarm-550a-accent) !important;
+  box-shadow: 0 0 16px var(--foxwarm-550a-accent-glow) !important;
+  color: #ffffff !important;
+}
+
 html[data-foxwarm-ui-style="550a"] .foxwarm-attachment-chip {
   background-color: var(--foxwarm-550a-panel) !important;
   border: 1px solid var(--foxwarm-550a-border-panel) !important;
