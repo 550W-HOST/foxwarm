@@ -38,10 +38,12 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
   const wsRef = useRef<WebSocket | null>(null)
   const terminalIdRef = useRef<string | null>(null)
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
+  const fitAndNotifyResizeRef = useRef<(() => void) | null>(null)
   const onSessionsChangedRef = useRef(onSessionsChanged)
   const onTerminalReadyRef = useRef(onTerminalReady)
   const onTerminalClosedRef = useRef(onTerminalClosed)
   const suppressCloseCallbackRef = useRef(false)
+  const suppressInputForwardRef = useRef(false)
 
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
@@ -70,6 +72,8 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
   }, [onTerminalClosed])
 
   useEffect(() => {
+    let disposed = false
+    const scheduledFitHandles: number[] = []
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 14,
@@ -86,12 +90,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
     xtermRef.current = term
     fitAddonRef.current = fitAddon
 
-    if (hostRef.current) {
-      term.open(hostRef.current)
-      fitAddon.fit()
-    }
-
-    resizeObserverRef.current = new ResizeObserver(() => {
+    const fitAndNotifyResize = () => {
       try {
         fitAddon.fit()
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -104,13 +103,50 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
       } catch {
         // ignore fit errors during hidden/unmounted states
       }
+    }
+
+    fitAndNotifyResizeRef.current = fitAndNotifyResize
+
+    const scheduleFit = () => {
+      fitAndNotifyResize()
+      scheduledFitHandles.push(window.setTimeout(fitAndNotifyResize, 50))
+      scheduledFitHandles.push(window.setTimeout(fitAndNotifyResize, 250))
+      window.requestAnimationFrame(() => {
+        if (!disposed) {
+          fitAndNotifyResize()
+        }
+      })
+    }
+
+    if (hostRef.current) {
+      term.open(hostRef.current)
+      scheduleFit()
+    }
+
+    resizeObserverRef.current = new ResizeObserver(() => {
+      fitAndNotifyResize()
     })
 
     if (hostRef.current) {
       resizeObserverRef.current.observe(hostRef.current)
     }
 
+    const fontsReady = (document as any).fonts?.ready
+    if (fontsReady && typeof fontsReady.then === 'function') {
+      fontsReady.then(() => {
+        if (!disposed) {
+          fitAndNotifyResize()
+        }
+      }).catch(() => {})
+    }
+
+    window.addEventListener('resize', fitAndNotifyResize)
+
     return () => {
+      disposed = true
+      scheduledFitHandles.forEach((handle) => window.clearTimeout(handle))
+      fitAndNotifyResizeRef.current = null
+      window.removeEventListener('resize', fitAndNotifyResize)
       resizeObserverRef.current?.disconnect()
       resizeObserverRef.current = null
       wsRef.current?.close()
@@ -127,6 +163,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
 
     let disposed = false
     let inputDisposable: { dispose: () => void } | null = null
+    let binaryDisposable: { dispose: () => void } | null = null
 
     setStatus('connecting')
     setError(null)
@@ -198,19 +235,24 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 
-        inputDisposable = term.onData((input) => {
+        const forwardInput = (input: string) => {
+          if (suppressInputForwardRef.current) {
+            return
+          }
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'input', data: input }))
           }
+        }
+
+        inputDisposable = term.onData((input) => {
+          forwardInput(input)
+        })
+        binaryDisposable = term.onBinary((input) => {
+          forwardInput(input)
         })
 
         ws.onopen = () => {
-          try {
-            fitAddonRef.current?.fit()
-            ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-          } catch {
-            // ignore
-          }
+          fitAndNotifyResizeRef.current?.()
         }
 
         ws.onmessage = (event) => {
@@ -218,13 +260,20 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
             const payload = JSON.parse(event.data)
             if (payload.type === 'ready') {
               term.reset()
-              if (typeof payload.backlog === 'string' && payload.backlog.length > 0) {
-                term.write(payload.backlog)
-              }
               suppressCloseCallbackRef.current = false
               setTerminalInfo(payload.terminal)
               setStatus('ready')
               onTerminalReadyRef.current?.(payload.terminal)
+              suppressInputForwardRef.current = true
+              const finishReadyReplay = () => {
+                suppressInputForwardRef.current = false
+                fitAndNotifyResizeRef.current?.()
+              }
+              if (typeof payload.backlog === 'string' && payload.backlog.length > 0) {
+                term.write(payload.backlog, finishReadyReplay)
+              } else {
+                finishReadyReplay()
+              }
               return
             }
 
@@ -275,7 +324,9 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
 
     return () => {
       disposed = true
+      suppressInputForwardRef.current = false
       inputDisposable?.dispose()
+      binaryDisposable?.dispose()
       wsRef.current?.close()
       wsRef.current = null
     }
