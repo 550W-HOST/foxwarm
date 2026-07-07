@@ -7,7 +7,7 @@ import * as sessionManager from './sessionManager';
 import type { Session } from './types';
 import { DiskJsonData } from './utils/diskJsonData';
 import { formatLocalTimestamp } from './utils/localTime';
-import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag } from './utils/promptWrappers';
+import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystem } from './utils/promptWrappers';
 
 export interface SessionTimer {
   id: string;
@@ -139,12 +139,11 @@ export function buildWaitTimeoutMessage(timer: Pick<SessionTimer, 'waitTimeoutSe
   const seconds = typeof timer.waitTimeoutSeconds === 'number' && Number.isFinite(timer.waitTimeoutSeconds)
     ? timer.waitTimeoutSeconds
     : 0;
-  return formatFoxwarmSystemTag({
+  return formatFoxwarmSystem({
     kind: 'event',
     type: 'wait-timeout',
     seconds,
-    hint: `wait timeout reached after ${seconds}s. No newer message or event triggered this session during the wait.`,
-  });
+  }, `wait timeout reached after ${seconds}s. No newer message or event triggered this session during the wait.`);
 }
 
 function toTimerView(timer: SessionTimer): TimerView {

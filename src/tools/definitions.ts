@@ -276,6 +276,11 @@ Example:
                         type: 'array',
                         description: 'Optional list of session IDs. Omit or pass [] for ordinary wait. When provided, wait until every listed session has sent at least one new message to this session after the wait starts; unrelated messages/events and timeout still wake normally with a pending reminder.',
                         items: { type: 'string', description: 'Session ID that must report before this wait-all condition is satisfied.' }
+                    },
+                    waitExecIds: {
+                        type: 'array',
+                        description: 'Optional list of background exec IDs this session is waiting for. This is advisory/runtime-state metadata for UI/status; omit for ordinary wait. Generic wait({}) remains valid and means waiting for any new message or event.',
+                        items: { type: 'string', description: 'Background exec ID to label as an expected wake source.' }
                     }
                 }
             }

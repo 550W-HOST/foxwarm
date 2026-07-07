@@ -195,7 +195,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/stop': {
-    description: 'Stop current run',
+    description: 'Stop current run without draining queued items',
     requiresSession: true,
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
@@ -204,6 +204,24 @@ export const COMMANDS: Record<string, CommandDef> = {
         const { abortedInFlight } = await sessionManager.requestSessionStop(sessionId)
         ctx.reply(abortedInFlight ? '🛑 Stop signal sent. The in-flight LLM request was aborted.' : '🛑 Stop signal sent. The session will stop after the current tool call completes.')
       } catch (e: any) { ctx.reply(`❌ Stop failed: ${e.message}`) }
+    }
+  },
+  '/dequeue': {
+    description: 'Run queued items, stopping the current run first if needed',
+    requiresSession: true,
+    handler: async (ctx, _args, sessionId) => {
+      if (!sessionId) return
+      try {
+        const { queuedItems, stoppedCurrent, abortedInFlight } = await sessionManager.requestSessionDequeue(sessionId)
+        if (queuedItems === 0) { ctx.reply('⚠️ No queued items to run.'); return }
+        if (stoppedCurrent) {
+          ctx.reply(abortedInFlight
+            ? `▶️ Running ${queuedItems} queued item${queuedItems > 1 ? 's' : ''}. The in-flight LLM request was aborted first.`
+            : `▶️ Running ${queuedItems} queued item${queuedItems > 1 ? 's' : ''} after the current tool call stops.`)
+          return
+        }
+        ctx.reply(`▶️ Running ${queuedItems} queued item${queuedItems > 1 ? 's' : ''}.`)
+      } catch (e: any) { ctx.reply(`❌ Dequeue failed: ${e.message}`) }
     }
   },
   '/retry': {

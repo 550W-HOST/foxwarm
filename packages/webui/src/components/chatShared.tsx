@@ -274,7 +274,8 @@ const FOXWARM_TAG_LINE_RE = /^\s*<\/?foxwarm-([a-zA-Z0-9_-]+)\b([^>]*)\/?\s*>\s*
 export const isFoxwarmMetadataLine = (text: string): boolean => FOXWARM_METADATA_LINE_RE.test(text)
 
 export const parseFoxwarmMetadataLine = (text: string): { tagName: string; closing: boolean; attrs: Record<string, string> } | null => {
-  const match = text.match(FOXWARM_TAG_LINE_RE)
+  const firstLine = text.split('\n')[0] || text
+  const match = firstLine.match(FOXWARM_TAG_LINE_RE)
   if (!match) return null
 
   const attrs: Record<string, string> = {}
@@ -291,7 +292,7 @@ export const parseFoxwarmMetadataLine = (text: string): { tagName: string; closi
 
   return {
     tagName: `foxwarm-${match[1].toLowerCase()}`,
-    closing: /^\s*<\//.test(text),
+    closing: /^\s*<\//.test(firstLine),
     attrs,
   }
 }

@@ -1,7 +1,7 @@
 import { Message, MessagePart } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { truncateUnicodeSafe } from './unicode';
-import { isFoxwarmMessageCloseLine, parseFoxwarmTagLine } from './promptWrappers';
+import { isFoxwarmMessageCloseLine, parseFoxwarmOpeningTag, parseFoxwarmWrappedContent } from './promptWrappers';
 
 export const DEFAULT_TOOL_CONTENT_CHAR_LIMIT = 200;
 
@@ -27,7 +27,7 @@ function isEphemeralSystemText(text: string): boolean {
   if (isFoxwarmMessageCloseLine(text)) {
     return true;
   }
-  const tag = parseFoxwarmTagLine(text);
+  const tag = parseFoxwarmOpeningTag(text);
   if (tag?.tagName === 'foxwarm-system') {
     return tag.attrs.kind === 'time'
       || tag.attrs.kind === 'session'
@@ -108,6 +108,14 @@ function formatPartLines(message: Message, part: MessagePart, options: Required<
   const isBodyRole = message.role === 'user' || message.role === 'model';
 
   if (typeof part.system === 'string') {
+    const wrapped = parseFoxwarmWrappedContent(part.system);
+    if (wrapped?.tagName === 'foxwarm-message' && wrapped.attrs.type === 'channel') {
+      const content = wrapped.content.trim();
+      if (content) {
+        lines.push(formatMultilineText(content, options.continuationPrefix));
+      }
+      return lines;
+    }
     if (!options.skipEphemeralSystem || !isEphemeralSystemText(part.system)) {
       lines.push(`[system] ${part.system}`);
     }

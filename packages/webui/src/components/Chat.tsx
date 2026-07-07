@@ -9,6 +9,7 @@ import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
 import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
+import { isSessionRuntimeActive } from '../sessionRuntimeState'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
@@ -685,7 +686,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
           const data = await res.json()
           const currentSession = data.sessions.find((s: any) => s.id === sessionId)
           if (currentSession) {
-            setSessionBusy(currentSession.busy || false)
+            setSessionBusy(isSessionRuntimeActive(currentSession))
             setSessionQueueLength(currentSession.queueLength || 0)
           } else {
             setSessionBusy(false)
@@ -919,6 +920,40 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
     }
   }, [loading, sessionId, sessionMissing])
 
+  const sendSessionCommand = useCallback(async (command: string) => {
+    if (sessionMissing) return
+    try {
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: command }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || `Command failed (${response.status})`)
+      }
+    } catch (error) {
+      console.error(`Failed to send ${command}:`, error)
+      setMessages(prev => [...prev, {
+        role: 'model',
+        parts: [{ text: `Error: ${error instanceof Error ? error.message : `Failed to send ${command}`}` }],
+        __meta: { temporary: true, timestamp: Date.now() },
+      }])
+    }
+  }, [sessionId, sessionMissing])
+
+  const handleStop = useCallback(() => {
+    void sendSessionCommand('/stop')
+  }, [sendSessionCommand])
+
+  const handleRunQueued = useCallback(() => {
+    void sendSessionCommand('/dequeue')
+  }, [sendSessionCommand])
+
+  const handleRetryFinalFailure = useCallback(() => {
+    void sendSessionCommand('/retry')
+  }, [sendSessionCommand])
+
   const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
     const formData = new FormData()
     formData.append('audio', file)
@@ -1135,13 +1170,15 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
             </div>
           )}
           <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-            <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} />
+            <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onRetryFinalFailure={handleRetryFinalFailure} />
           </ToolScriptProgressContext.Provider>
           <ProcessingStatus
             sessionBusy={sessionBusy}
             sessionQueueLength={sessionQueueLength}
             loading={loading}
             isMobile={isMobile}
+            onStop={handleStop}
+            onRunQueued={handleRunQueued}
           />
           <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
         </div>

@@ -16,7 +16,7 @@ import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
-import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag, parseFoxwarmTagLine } from './utils/promptWrappers';
+import { formatFoxwarmMessage, formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
 function formatCurrentTimeForPrompt(date: Date): string {
   return formatLocalTimestamp(date);
@@ -104,6 +104,24 @@ function mergeExcludePlatforms(options: any, platforms: string[]): any {
   return { ...(options || {}), excludePlatforms };
 }
 
+function getPlainTextOnlyContent(parts: MessagePart[]): string | undefined {
+  const chunks: string[] = [];
+  for (const part of parts) {
+    const hasOnlyText = typeof part.text === 'string'
+      && part.system === undefined
+      && part.thinking === undefined
+      && part.functionCall === undefined
+      && part.functionResponse === undefined
+      && part.inlineData === undefined
+      && (part as any).inlineDataRef === undefined;
+    if (!hasOnlyText) {
+      return undefined;
+    }
+    chunks.push(part.text || '');
+  }
+  return chunks.join('\n');
+}
+
 export class MessageRouter {
   private authorizedUsers: Map<string, boolean> = new Map();
   private processingSessions: Set<string> = new Set();
@@ -130,27 +148,21 @@ export class MessageRouter {
     const channelType = source.channelType || source.platform;
     const conversationId = source.conversationId || source.channelUserId;
     const channelTargetId = `${channelInstanceId}:${conversationId}`;
-    if (channelType === 'webui') {
-      systemParts.push({
-        system: formatFoxwarmMessageOpen({
-          type: 'channel',
-          channelType: 'webui',
-          hint: 'direct user message via channel',
-        }),
-      });
-    } else {
-      systemParts.push({
-        system: formatFoxwarmMessageOpen({
-          type: 'channel',
-          channelInstanceId,
-          channelType,
-          conversationId,
-          channelTargetId,
-          sender: source.username,
-          hint: 'direct user message via channel',
-        }),
-      });
-    }
+    const sourceAttrs = channelType === 'webui'
+      ? {
+        type: 'channel',
+        channelType: 'webui',
+        hint: 'direct user message via channel',
+      }
+      : {
+        type: 'channel',
+        channelInstanceId,
+        channelType,
+        conversationId,
+        channelTargetId,
+        sender: source.username,
+        hint: 'direct user message via channel',
+      };
 
     // Send-only channel notice
     if (conversationId) {
@@ -169,7 +181,13 @@ export class MessageRouter {
       }
     }
 
-    parts.unshift(...systemParts);
+    const textOnlyContent = getPlainTextOnlyContent(parts);
+    if (textOnlyContent !== undefined) {
+      parts.splice(0, parts.length, ...systemParts, { system: formatFoxwarmMessage(sourceAttrs, textOnlyContent) });
+      return;
+    }
+
+    parts.unshift(...systemParts, { system: formatFoxwarmMessageOpen(sourceAttrs) });
     parts.push({ system: formatFoxwarmMessageClose() });
   }
 
@@ -388,6 +406,7 @@ export class MessageRouter {
     while (session.queue[0]
       && session.queue[0].type !== 'compact'
       && session.queue[0].type !== 'compact-commit'
+      && session.queue[0].type !== 'retry'
       && !session.queue[0].message) {
       const nextStreamKey = this.getSourceStreamKey(session.queue[0].source);
       if (queuedParts.length > 0 && streamKey !== nextStreamKey) {
@@ -417,7 +436,8 @@ export class MessageRouter {
 
     while (session.queue[0]
       && session.queue[0].type !== 'compact'
-      && session.queue[0].type !== 'compact-commit') {
+      && session.queue[0].type !== 'compact-commit'
+      && session.queue[0].type !== 'retry') {
       const queuedStreamKey = this.getSourceStreamKey(session.queue[0].source);
       // A different WeWork stream id already has its own passive card. Leave it
       // queued so the next turn's broadcasts update/finish that card instead
@@ -494,6 +514,16 @@ export class MessageRouter {
       return true;
     }
 
+    if (session.queue[0]?.type === 'retry') {
+      const nextItem = session.queue.shift();
+      if (!nextItem) {
+        return false;
+      }
+
+      await this.processQueuedItem(session.id, session, nextItem);
+      return true;
+    }
+
     if (session.queue[0]?.message) {
       const nextItem = session.queue.shift();
       if (!nextItem) {
@@ -527,6 +557,11 @@ export class MessageRouter {
     session.queue.shift();
 
     try {
+      sessionManager.setActiveSessionRuntimeState(sessionId, {
+        state: 'requesting-model',
+        since: Date.now(),
+        active: { phase: 'compaction' },
+      });
       if (nextItem.type === 'compact-commit') {
         await sessionManager.applyCompletedCompactJob(sessionId);
       } else {
@@ -546,6 +581,11 @@ export class MessageRouter {
 
   private async runQueuedCompaction(sessionId: string, session: Session, item: QueueItem): Promise<void> {
     try {
+      sessionManager.setActiveSessionRuntimeState(sessionId, {
+        state: 'requesting-model',
+        since: Date.now(),
+        active: { phase: 'compaction' },
+      });
       if (item.type === 'compact-commit') {
         await sessionManager.applyCompletedCompactJob(sessionId);
       } else {
@@ -563,6 +603,7 @@ export class MessageRouter {
         return;
       }
 
+      sessionManager.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
       await sessionManager.saveSession(session.id);
@@ -572,6 +613,16 @@ export class MessageRouter {
   private async processQueuedItem(sessionId: string, session: Session, item: QueueItem): Promise<void> {
     if (item.type === 'compact' || item.type === 'compact-commit') {
       await this.runQueuedCompaction(sessionId, session, item);
+      return;
+    }
+
+    if (item.type === 'retry') {
+      await this.runSessionTurn(sessionId, {
+        parts: null,
+        session,
+        preclaimed: true,
+        deferQueuedInputs: true,
+      });
       return;
     }
 
@@ -617,8 +668,8 @@ export class MessageRouter {
         if (p.system.startsWith('FROM:') || p.system.startsWith('The following message is a direct user message via channel;')) {
           return true;
         }
-        const tag = parseFoxwarmTagLine(p.system);
-        return tag?.tagName === 'foxwarm-message' && !tag.closing && tag.attrs.type === 'channel';
+        const tag = parseFoxwarmOpeningTag(p.system);
+        return tag?.tagName === 'foxwarm-message' && tag.attrs.type === 'channel';
       })) {
         hasUserFromPrefix = true;
       }
@@ -849,6 +900,7 @@ export class MessageRouter {
       sendTyping?: boolean;
       session?: Session;
       preclaimed?: boolean;
+      deferQueuedInputs?: boolean;
     }
   ): Promise<void> {
     const session = options.session ?? await sessionManager.getSession(sessionId);
@@ -869,6 +921,7 @@ export class MessageRouter {
 
     logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.message?.parts?.length ?? options.parts?.length ?? 0 }, 'Session turn processing');
 
+    let stoppedByUser = false;
     try {
       if (options.sendTyping && options.sourceCtx) {
         await options.sourceCtx.sendTyping();
@@ -876,11 +929,13 @@ export class MessageRouter {
       let managedStepYieldReason: 'tool' | null = null;
       let parts = options.message
         ? null
-        : this.prepareTurnParts(
-          session,
-          sessionId,
-          options.parts || []
-        );
+        : options.parts === null
+          ? null
+          : this.prepareTurnParts(
+            session,
+            sessionId,
+            options.parts || []
+          );
       if (options.message) {
         await sessionManager.appendSessionMessage(session, options.message);
       }
@@ -888,7 +943,6 @@ export class MessageRouter {
       let finalResponse = '';
       let finalUsage = null;
       let lastTextBroadcasted = false;
-      let stoppedByUser = false;
       while (iteration < 500) {
         const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
         if (pendingCompaction === 'stop') {
@@ -898,8 +952,10 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnStreamKey);
-        parts = queuedBeforeLlm.parts;
+        if (!options.deferQueuedInputs) {
+          const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnStreamKey);
+          parts = queuedBeforeLlm.parts;
+        }
 
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
@@ -914,6 +970,14 @@ export class MessageRouter {
         }
 
         this.emitTurnProgress(broadcast, turnChannelOptions, { type: 'llm-start' });
+        sessionManager.setActiveSessionRuntimeState(session.id, {
+          state: 'requesting-model',
+          since: Date.now(),
+          active: {
+            iteration,
+            phase: 'normal-turn',
+          },
+        });
 
         let result;
         try {
@@ -965,10 +1029,45 @@ export class MessageRouter {
           ...(hasBroadcastableToolText ? { text: result.text } : {}),
         });
 
+        sessionManager.setActiveSessionRuntimeState(session.id, {
+          state: 'running-tool',
+          since: Date.now(),
+          active: {
+            iteration,
+            phase: 'normal-turn',
+          },
+          tool: {
+            id: turnToolCalls[0]?.id,
+            name: turnToolCalls[0]?.name || 'tool',
+            index: 0,
+            total: turnToolCalls.length,
+            startedAt: Date.now(),
+          },
+        });
+
         const toolContext = {
           sessionId: session.id,
           session,
           broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
+          onToolStart: (tool: { id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
+            sessionManager.setActiveSessionRuntimeState(session.id, {
+              state: 'running-tool',
+              since: tool.startedAt || Date.now(),
+              active: {
+                iteration,
+                phase: 'normal-turn',
+              },
+              tool: {
+                id: tool.id,
+                name: tool.name,
+                index: tool.index,
+                total: tool.total,
+                executionNode: tool.executionNode,
+                argsPreview: tool.argsPreview,
+                startedAt: tool.startedAt || Date.now(),
+              },
+            });
+          },
         };
         const toolResultMsg = await llm.executeTools(turnToolCalls, toolContext, session);
 
@@ -1016,8 +1115,12 @@ export class MessageRouter {
           continue;
         }
 
-        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
-        parts = queuedAfterTools.parts;
+        if (options.deferQueuedInputs) {
+          parts = null;
+        } else {
+          const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
+          parts = queuedAfterTools.parts;
+        }
 
         if (result.usage) {
           const currentSize = sessionManager.getUsageTotalTokens(result.usage);
@@ -1083,10 +1186,16 @@ export class MessageRouter {
       }
       await this.maybeAppendGoalEndTurnReminder(session);
     } finally {
-      if (!getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
+      const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;
+      if (session.meta?.runQueuedAfterStop) {
+        delete session.meta.runQueuedAfterStop;
+      }
+
+      if ((!stoppedByUser || runQueuedAfterStop) && !getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
         return;
       }
 
+      sessionManager.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
       await sessionManager.saveSession(session.id);
@@ -1198,6 +1307,7 @@ export class MessageRouter {
         return;
       }
 
+      sessionManager.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
       await sessionManager.saveSession(session.id);

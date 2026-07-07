@@ -176,8 +176,8 @@ async function main(): Promise<void> {
       assert.strictEqual(countGoalReminders(session), 2);
       const firstReminder = session.history.find(message => message.__meta?.goalReminder === true)!;
       assert.strictEqual(firstReminder.__meta?.goalReminder, true);
-      assert.strictEqual(firstReminder.parts[0].system || '', '<foxwarm-system kind="goal-reminder" />');
-      assert.match(firstReminder.parts[1].text || '', /- \[ \] ship feature/);
+      assert.match(firstReminder.parts[0].system || '', /^<foxwarm-system kind="goal-reminder">/);
+      assert.match(firstReminder.parts[0].system || '', /- \[ \] ship feature/);
       const reminderSeqs = session.history
         .filter(message => message.__meta?.goalReminder === true)
         .map(message => message.__meta?.goalAnchorSeq);

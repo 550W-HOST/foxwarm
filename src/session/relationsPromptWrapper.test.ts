@@ -30,7 +30,7 @@ test('sendToSession wraps inter-agent content in foxwarm-message with escaped at
 
   assert.ok(enqueued);
   assert.equal(enqueued.type, 'intersession');
-  assert.equal(enqueued.parts?.[0]?.system, '<foxwarm-message type="inter-agent" sourceSessionId="source&quot;&lt;&amp;" replyTargetSessionId="source&quot;&lt;&amp;" replyVia="send_to_session" hint="inter-agent message from another session, not direct end-user input">');
-  assert.equal(enqueued.parts?.[1]?.text, 'raw <tag> & </foxwarm-message> stays raw');
-  assert.equal(enqueued.parts?.[2]?.system, '</foxwarm-message>');
+  assert.deepEqual(enqueued.parts, [{
+    system: '<foxwarm-message type="inter-agent" sourceSessionId="source&quot;&lt;&amp;" replyTargetSessionId="source&quot;&lt;&amp;" replyVia="send_to_session" hint="inter-agent message from another session, not direct end-user input">\nraw <tag> & </foxwarm-message> stays raw\n</foxwarm-message>',
+  }]);
 });

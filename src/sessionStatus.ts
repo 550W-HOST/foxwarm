@@ -3,6 +3,7 @@ import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { estimateSessionSummary } from './tokenCount';
 import type { Session, TokenUsage } from './types';
+import { formatSessionRuntimeStateSummary, type SessionRuntimeState } from './sessionRuntimeState';
 
 type SessionListItem = ReturnType<typeof sessionManager.listSessions>[number];
 
@@ -34,6 +35,7 @@ export interface SessionStatusInfo {
   isolated: boolean;
   busy: boolean;
   queueLength: number;
+  runtimeState: SessionRuntimeState;
   childSessions: SessionListItem[];
 }
 
@@ -83,9 +85,12 @@ export function formatSessionListRow(s: SessionListItem, currentSessionId?: stri
   const node = s.currentNode || 'master';
   const isolated = s.isolated ? ' isolated' : '';
   const busy = s.busy ? ' 🔄busy' : '';
+  const runtime = s.runtimeState && s.runtimeState.state !== 'idle'
+    ? ` state:${formatSessionRuntimeStateSummary(s.runtimeState)}`
+    : '';
   const queued = s.queueLength ? ` queue:${s.queueLength}` : '';
   const current = s.id === currentSessionId ? ' **CURRENT**' : '';
-  return `${channel} \`${s.id}\`${displayName}${current} - ${s.messageCount} messages - node: \`${node}\`${isolated}${busy}${queued} - Last: ${date}`;
+  return `${channel} \`${s.id}\`${displayName}${current} - ${s.messageCount} messages - node: \`${node}\`${isolated}${runtime || busy}${queued} - Last: ${date}`;
 }
 
 export async function buildSessionListOutput(args: Record<string, any> = {}, currentSessionId?: string): Promise<string> {
@@ -175,6 +180,7 @@ export async function buildSessionStatusInfo(sessionId: string, suppliedSession?
     isolated: sessionManager.isSessionEffectivelyIsolated(session),
     busy: !!session.busy,
     queueLength: session.queue?.length || 0,
+    runtimeState: sessionManager.buildSessionRuntimeState(session),
     childSessions,
   };
 }
@@ -193,6 +199,14 @@ export function formatSessionStatus(info: SessionStatusInfo): string {
   const isolated = info.isolated ? ' (isolated)' : '';
   const busy = info.busy ? '\n- busy: yes' : '';
   const queue = info.queueLength ? `\n- queue: ${info.queueLength}` : '';
+  const runtimeState = formatSessionRuntimeStateSummary(info.runtimeState);
+  const waitReason = info.runtimeState.waiting?.reason ? `\n- wait reason: ${info.runtimeState.waiting.reason}` : '';
+  const pendingSessions = info.runtimeState.waiting?.pendingSessions?.length
+    ? `\n- pending wait sessions: ${info.runtimeState.waiting.pendingSessions.map(sessionId => `\`${sessionId}\``).join(', ')}`
+    : '';
+  const waitExecIds = info.runtimeState.waiting?.waitExecIds?.length
+    ? `\n- wait exec ids: ${info.runtimeState.waiting.waitExecIds.map(execId => `\`${execId}\``).join(', ')}`
+    : '';
 
   let result = '📊 *Session Status*\n\n';
   result += `- session id: \`${info.sessionId}\`${displayName}\n`;
@@ -205,7 +219,8 @@ export function formatSessionStatus(info: SessionStatusInfo): string {
   result += `- last message: ${formatDate(info.lastMessageTime)}\n`;
   result += `- auto-compact threshold: ~${formatNumber(info.autoCompactThresholdTokens)} tokens (${thresholdSource})\n`;
   result += `- current node: \`${info.currentNode.id}\` (${nodeStatus}${nodeType}${nodeActivity})${isolated}\n`;
-  result += `- current cwd: ${info.defaultCwdDescription}${busy}${queue}\n`;
+  result += `- current cwd: ${info.defaultCwdDescription}\n`;
+  result += `- runtime state: ${runtimeState}${busy}${queue}${waitReason}${pendingSessions}${waitExecIds}\n`;
 
   if (info.childSessions.length > 0) {
     result += '\nRecent child sessions (max 10):\n';

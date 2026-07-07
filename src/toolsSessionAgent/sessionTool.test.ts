@@ -63,6 +63,7 @@ test('session status action reports current identity, usage, cwd, node, compact 
     assert.match(status, /auto-compact threshold: ~7,654 tokens \(override: 7,654 tokens\)/);
     assert.match(status, /current node: `master` \(connected, type=`master`/);
     assert.match(status, /current cwd: `\/tmp\/status-cwd`/);
+    assert.match(status, /runtime state: idle/);
     assert.match(status, /Recent child sessions/);
     assert.ok(status.includes(`\`${childSessionId}\``));
 

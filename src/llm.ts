@@ -1149,7 +1149,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         return result.error !== undefined && result.error !== null;
     };
     
-    for (const call of functionCalls) {
+    for (const [index, call] of functionCalls.entries()) {
         const toolFn = (tools as any)[call.name];
         const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         
@@ -1214,6 +1214,17 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const forceMaster = tools.isMasterOnlyToolName(call.name);
         const executionNode = forceMaster ? 'master' : targetNode;
         const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
+        const toolStartedAt = Date.now();
+        const argsPreview = argStr.length > 500 ? `${argStr.slice(0, 500)}…` : argStr;
+        await Promise.resolve(toolContext.onToolStart?.({
+            id: toolId,
+            name: call.name,
+            index,
+            total: functionCalls.length,
+            executionNode,
+            argsPreview,
+            startedAt: toolStartedAt,
+        }));
 
         // Check isolated session tool permission (includes path access check for master)
         try {

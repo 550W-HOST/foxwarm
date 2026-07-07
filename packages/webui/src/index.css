@@ -199,6 +199,11 @@ input, textarea, select {
     text-decoration-style: solid;
   }
 
+  .foxwarm-markdown :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+
   .dark .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
     color: rgb(147 197 253);
   }

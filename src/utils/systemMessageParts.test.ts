@@ -3,38 +3,35 @@ import assert from 'node:assert/strict';
 
 import { buildSystemMessageParts, isSystemPayloadTextPart } from './systemMessageParts';
 
-test('buildSystemMessageParts keeps scheduled timer header in system part and payload in plain text part', () => {
+test('buildSystemMessageParts wraps legacy timer-style system text into one system part', () => {
   const parts = buildSystemMessageParts('Scheduled timer fired (id: timer-1)\nrun nightly sync');
-
   assert.deepEqual(parts, [
-    { system: 'Scheduled timer fired (id: timer-1)' },
-    { text: 'run nightly sync', systemPayload: true },
+    { system: '<foxwarm-system kind="system">\nScheduled timer fired (id: timer-1)\nrun nightly sync\n</foxwarm-system>' },
   ]);
-  assert.equal(isSystemPayloadTextPart(parts[1]), true);
 });
 
-test('buildSystemMessageParts keeps background process header separate from multiline payload', () => {
+test('buildSystemMessageParts wraps background process payload in one foxwarm-system part', () => {
   const parts = buildSystemMessageParts('Background Process Finished\ncommand: `npm run build`\nExit code: 0');
-
   assert.deepEqual(parts, [
-    { system: 'Background Process Finished' },
-    { text: 'command: `npm run build`\nExit code: 0', systemPayload: true },
+    { system: '<foxwarm-system kind="event" type="background-process-finished">\ncommand: `npm run build`\nExit code: 0\n</foxwarm-system>' },
   ]);
 });
 
-test('buildSystemMessageParts keeps single-line messages as a single system part', () => {
+test('buildSystemMessageParts canonicalizes single-line system messages as one wrapped system part', () => {
   const parts = buildSystemMessageParts('retrying last request');
-
-  assert.deepEqual(parts, [{ system: 'retrying last request' }]);
-  assert.equal(isSystemPayloadTextPart(parts[0]), false);
+  assert.deepEqual(parts, [
+    { system: '<foxwarm-system kind="event" type="retrying-last-request">\nretrying last request\n</foxwarm-system>' },
+  ]);
 });
 
-test('buildSystemMessageParts splits generated foxwarm-message closing tag back into a system part', () => {
+test('buildSystemMessageParts keeps generated foxwarm-message body inside one system part', () => {
   const parts = buildSystemMessageParts('<foxwarm-message type="timer">\nrun nightly sync\n</foxwarm-message>');
-
   assert.deepEqual(parts, [
-    { system: '<foxwarm-message type="timer">' },
-    { text: 'run nightly sync', systemPayload: true },
-    { system: '</foxwarm-message>' },
+    { system: '<foxwarm-message type="timer">\nrun nightly sync\n</foxwarm-message>' },
   ]);
+});
+
+test('isSystemPayloadTextPart still recognizes legacy split payload parts', () => {
+  assert.equal(isSystemPayloadTextPart({ text: 'payload', systemPayload: true }), true);
+  assert.equal(isSystemPayloadTextPart({ text: 'ordinary' }), false);
 });

@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import { getSessionHistoryFilePath, getSessionHistoryStore } from './metadataStore';
 import { AgentMetadata } from './agentMetadata';
 import { MessagePart, QueueItem, Session } from '../types';
-import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen } from '../utils/promptWrappers';
+import { formatFoxwarmMessage } from '../utils/promptWrappers';
 
 type SessionRelationsDeps = {
   getExistingSession: (sessionId: string) => Promise<Session | null>;
@@ -210,26 +210,20 @@ export async function sendToSession(
 
   const sourceSessionId = fromSession?.id || fromSessionId;
   const replyTarget = sourceSessionId || 'unknown-session';
-  const parts: MessagePart[] = [
-    {
-      system: sourceSessionId
-        ? formatFoxwarmMessageOpen({
-          type: 'inter-agent',
-          sourceSessionId,
-          replyTargetSessionId: replyTarget,
-          replyVia: 'send_to_session',
-          hint: 'inter-agent message from another session, not direct end-user input',
-        })
-        : formatFoxwarmMessageOpen({
-          type: 'system-delivered',
-          hint: 'system-delivered session content, not direct end-user input',
-        }),
-    },
-  ];
-  if (message) {
-    parts.push({ text: message });
-  }
-  parts.push({ system: formatFoxwarmMessageClose() });
+  const parts: MessagePart[] = [{
+    system: sourceSessionId
+      ? formatFoxwarmMessage({
+        type: 'inter-agent',
+        sourceSessionId,
+        replyTargetSessionId: replyTarget,
+        replyVia: 'send_to_session',
+        hint: 'inter-agent message from another session, not direct end-user input',
+      }, message || '')
+      : formatFoxwarmMessage({
+        type: 'system-delivered',
+        hint: 'system-delivered session content, not direct end-user input',
+      }, message || ''),
+  }];
 
   await deps.enqueueSessionItem(targetSession.id, {
     type: 'intersession',

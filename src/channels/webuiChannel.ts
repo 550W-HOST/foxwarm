@@ -663,6 +663,7 @@ export class WebUIChannel implements Channel {
                 busy: session.busy || false,
                 busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
                 queueLength: session.queue?.length || 0,
+                runtimeState: sessionManager.buildSessionRuntimeState(session),
                 displayName: session.displayName || null,
                 archived: session.archived || false,
                 currentNode: session.currentNode || 'master',

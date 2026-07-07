@@ -63,12 +63,16 @@ test('non-channel foxwarm-message wrappers are heavy system-like messages for le
   const channelLine = '<foxwarm-message type="channel">'
   assert.equal(isLightweightSystemTextLine(channelLine), true)
   assert.equal(isHeavySystemTextLine(channelLine), false)
+
+  const fullChannelWrapper = '<foxwarm-message type="channel">\nhello\n</foxwarm-message>'
+  assert.equal(isLightweightStructuredSystem(fullChannelWrapper), true)
+  assert.equal(isHeavySystemTextLine(fullChannelWrapper), false)
 })
 
 test('foxwarm system event tags are heavy system-like messages for left-side rendering', () => {
   const lines = [
-    '<foxwarm-system kind="event" type="wait-timeout" seconds="120" hint="wait timeout reached after 120s" />',
-    '<foxwarm-system kind="event" type="wait-all-pending" pendingSessions="child-a" hint="waitAllSessions is still pending" />',
+    '<foxwarm-system kind="event" type="wait-timeout" seconds="120">\nwait timeout reached after 120s\n</foxwarm-system>',
+    '<foxwarm-system kind="event" type="wait-all-pending" pendingSessions="child-a">\nwaitAllSessions is still pending\n</foxwarm-system>',
   ]
 
   for (const line of lines) {

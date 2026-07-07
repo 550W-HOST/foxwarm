@@ -211,7 +211,7 @@ export interface QueueSource {
 }
 
 export interface QueueItem {
-  type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact' | 'compact-commit';
+  type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'retry' | 'compact' | 'compact-commit';
   source?: QueueSource;
   sourceSessionId?: string;
   parts?: MessagePart[];

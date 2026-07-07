@@ -24,8 +24,8 @@ import { Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierIt
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
+import { formatFoxwarmSystem } from '../utils/promptWrappers';
 import { formatSessionGoalReminderText } from './goal';
-import { formatSessionIdentityHint } from './identityHint';
 import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
 
@@ -825,14 +825,17 @@ async function finalizeCompaction(
 }
 
 export function formatCompactionCompletionMarker(sessionId: string, completionMarker: string, parentSessionId?: string): string {
-  const suffix = formatSessionIdentityHint({ parentSessionId, sessionId, variant: 'compact' });
-  const markerWithoutSuffix = completionMarker.includes(suffix)
-    ? completionMarker.replace(suffix, '')
-    : completionMarker;
+  const legacySuffixRe = /^\s*\*\*COMPACTION COMPLETED\. PARENT SESSION `[^`]*`\. CURRENT SESSION ID IS `[^`]*`\.\*\*\s*/i;
+  const markerWithoutSuffix = completionMarker.replace(legacySuffixRe, '');
   const extraMarkerText = markerWithoutSuffix
     .replace(/^\s*Compaction completed\.?\s*/i, '')
     .trim();
-  return extraMarkerText ? `${suffix}\n${extraMarkerText}` : suffix;
+  return formatFoxwarmSystem({
+    kind: 'session-boundary',
+    event: 'compact-completed',
+    parentSessionId: parentSessionId || '(none)',
+    currentSessionId: sessionId,
+  }, extraMarkerText);
 }
 
 async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot): Promise<CompactJobResult> {

@@ -180,17 +180,16 @@ test('OpenAI serializers preserve raw tool argument text exactly', () => {
   assert.equal(functionCallItem.arguments, rawArgsText);
 });
 
-test('OpenAI serializers keep foxwarm system tag separate from payload text', () => {
+test('OpenAI serializers preserve single foxwarm system wrappers with payload text', () => {
   const history = [{
     role: 'user' as const,
     parts: [
-      { system: 'Scheduled timer fired (id: timer-1)' },
-      { text: 'run nightly sync', systemPayload: true },
+      { system: '<foxwarm-system kind="event" type="background-process-finished">\ncommand: `npm run build`\nExit code: 0\n</foxwarm-system>' },
     ],
   }];
 
   const chatMessages = convertToOpenAIFormat(history);
-  assert.equal(chatMessages[0].content, '<foxwarm-system hint="Scheduled timer fired (id: timer-1)" />\nrun nightly sync');
+  assert.equal(chatMessages[0].content, '<foxwarm-system kind="event" type="background-process-finished">\ncommand: `npm run build`\nExit code: 0\n</foxwarm-system>');
   assert.doesNotMatch(chatMessages[0].content, /\[SYSTEM:/);
 
   const responsesItems = convertToOpenAIResponsesFormat(history);
@@ -198,8 +197,7 @@ test('OpenAI serializers keep foxwarm system tag separate from payload text', ()
     type: 'message',
     role: 'user',
     content: [
-      { type: 'input_text', text: '<foxwarm-system hint="Scheduled timer fired (id: timer-1)" />' },
-      { type: 'input_text', text: 'run nightly sync' },
+      { type: 'input_text', text: '<foxwarm-system kind="event" type="background-process-finished">\ncommand: `npm run build`\nExit code: 0\n</foxwarm-system>' },
     ],
   }]);
 });

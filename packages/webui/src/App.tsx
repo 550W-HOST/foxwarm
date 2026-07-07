@@ -8,6 +8,7 @@ import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
 import type { Session } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
+import { isSessionRuntimeActive } from './sessionRuntimeState'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
@@ -376,7 +377,7 @@ function App() {
     : focusedActiveTab?.contextSessionId || loadStoredLastVisitedSession()
   const currentContextSessionRecord = sessions.find((session) => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
   const currentView: AppView = route.view === 'agents' ? 'agents' : route.view === 'setup' ? 'setup' : 'session'
-  const busyCount = useMemo(() => sessions.filter((session) => session.busy).length, [sessions])
+  const busyCount = useMemo(() => sessions.filter((session) => isSessionRuntimeActive(session)).length, [sessions])
 
   const fetchWebUiSettings = async () => {
     try {

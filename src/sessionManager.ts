@@ -26,11 +26,20 @@ import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
-import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag } from './utils/promptWrappers';
+import { formatFoxwarmMessage, formatFoxwarmSystem, formatSystemPartForModel } from './utils/promptWrappers';
 import { runStartupMigrations } from './migrations';
+import {
+  buildSessionRuntimeState,
+  clearActiveSessionRuntimeState,
+  formatSessionRuntimeStateSummary,
+  setActiveSessionRuntimeState,
+  setSessionRuntimeStateUpdateCallback,
+  type ActiveSessionRuntimeStateInput,
+  type SessionRuntimeState,
+} from './sessionRuntimeState';
 
 function systemPart(system: string): MessagePart {
-  return { system };
+  return { system: formatSystemPartForModel(system) };
 }
 
 const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
@@ -40,6 +49,7 @@ export interface SessionWaitState {
   startedAt: number;
   reason?: string;
   timeoutSeconds?: number;
+  waitExecIds?: string[];
   waitAll?: SessionWaitAllState;
 }
 
@@ -101,12 +111,11 @@ function getWaitAllPendingSessions(waitAll: SessionWaitAllState): string[] {
 }
 
 function buildWaitAllPendingReminder(pendingSessions: string[]): string {
-  return formatFoxwarmSystemTag({
+  return formatFoxwarmSystem({
     kind: 'event',
     type: 'wait-all-pending',
     pendingSessions: pendingSessions.join(','),
-    hint: `waitAllSessions is still pending for: ${pendingSessions.map(sessionId => `\`${sessionId}\``).join(', ')}. This session was woken before every listed session sent a new message after the wait started.`,
-  });
+  }, `waitAllSessions is still pending for: ${pendingSessions.map(sessionId => `\`${sessionId}\``).join(', ')}. This session was woken before every listed session sent a new message after the wait started.`);
 }
 
 function buildWaitAllPendingReminderItem(pendingSessions: string[]): QueueItem | undefined {
@@ -231,6 +240,7 @@ export async function startSessionWait(sessionId: string, options: {
   reason?: string;
   timeoutSeconds?: number;
   waitAllSessions?: string[];
+  waitExecIds?: string[];
 } = {}): Promise<SessionWaitState> {
   const session = await getSession(sessionId);
   const existingWait = getSessionWaitState(session);
@@ -249,6 +259,9 @@ export async function startSessionWait(sessionId: string, options: {
   }
   if (typeof options.timeoutSeconds === 'number' && Number.isFinite(options.timeoutSeconds) && options.timeoutSeconds > 0) {
     state.timeoutSeconds = options.timeoutSeconds;
+  }
+  if (Array.isArray(options.waitExecIds) && options.waitExecIds.length > 0) {
+    state.waitExecIds = [...options.waitExecIds];
   }
   if (Array.isArray(options.waitAllSessions) && options.waitAllSessions.length > 0) {
     state.waitAll = {
@@ -469,9 +482,39 @@ export async function requestSessionStop(sessionId: string): Promise<{ abortedIn
   }
 
   session.stopping = true;
+  if (session.meta?.runQueuedAfterStop) {
+    delete session.meta.runQueuedAfterStop;
+  }
   const abortedInFlight = abortSessionInFlight(sessionId);
   await saveSession(sessionId);
   return { abortedInFlight };
+}
+
+export async function requestSessionDequeue(sessionId: string): Promise<{
+  queuedItems: number;
+  stoppedCurrent: boolean;
+  abortedInFlight: boolean;
+}> {
+  const session = await getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
+
+  const queuedItems = session.queue?.length || 0;
+  if (queuedItems === 0) {
+    return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
+  }
+
+  if (session.busy) {
+    session.stopping = true;
+    session.meta.runQueuedAfterStop = true;
+    const abortedInFlight = abortSessionInFlight(sessionId);
+    await saveSession(sessionId);
+    return { queuedItems, stoppedCurrent: true, abortedInFlight };
+  }
+
+  await triggerSessionProcessing(sessionId);
+  return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
 }
 
 export async function prepareSessionForDestructiveAction(sessionId: string): Promise<{
@@ -651,6 +694,7 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
       session.busyStartedAt = Date.now();
     }
   } else {
+    clearActiveSessionRuntimeState(session.id);
     session.busyStartedAt = undefined;
   }
 
@@ -716,6 +760,11 @@ function getSessionHistoryDeps() {
 function notifySessionListUpdated() {
   onSessionListUpdated?.();
 }
+
+setSessionRuntimeStateUpdateCallback(() => notifySessionListUpdated());
+
+export { buildSessionRuntimeState, clearActiveSessionRuntimeState, formatSessionRuntimeStateSummary, setActiveSessionRuntimeState };
+export type { ActiveSessionRuntimeStateInput, SessionRuntimeState };
 
 function getAgentMetadataDeps() {
   return {
@@ -1353,7 +1402,7 @@ function isQueuedSystemEventItem(
   }
 
   const [part] = item.parts;
-  return typeof part?.system === 'string' && part.system === message;
+  return typeof part?.system === 'string' && part.system === formatSystemPartForModel(message);
 }
 
 export function hasTrailingQueuedSystemEvent(
@@ -1603,17 +1652,13 @@ export async function applyCompletedCompactJob(sessionId: string): Promise<boole
 export async function queueSessionEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
   await enqueueSessionItem(sessionId, {
     type,
-    parts: [
-      {
-        system: formatFoxwarmMessageOpen({
-          type,
-          eventType: type,
-          hint: `${type} session event`,
-        }),
-      },
-      { text: message },
-      { system: formatFoxwarmMessageClose() },
-    ],
+    parts: [{
+      system: formatFoxwarmMessage({
+        type,
+        eventType: type,
+        hint: `${type} session event`,
+      }, message),
+    }],
   });
 }
 
@@ -1688,7 +1733,7 @@ export async function appendSessionMessage(sessionOrId: Session | string, messag
 /**
  * Get list of all session IDs with basic info
  */
-export function listSessions(): Array<{ id: string; messageCount: number; lastMessageTime: number | null; hasChannel: boolean; displayName?: string; currentNode?: string; cwd?: string; isolated?: boolean; busy?: boolean; queueLength?: number; parentSessionId?: string }> {
+export function listSessions(): Array<{ id: string; messageCount: number; lastMessageTime: number | null; hasChannel: boolean; displayName?: string; currentNode?: string; cwd?: string; isolated?: boolean; busy?: boolean; queueLength?: number; parentSessionId?: string; runtimeState: SessionRuntimeState }> {
   const result = [];
   
   // Iterate through all sessions in memory (metadata is always loaded)
@@ -1710,7 +1755,8 @@ export function listSessions(): Array<{ id: string; messageCount: number; lastMe
       isolated: isSessionEffectivelyIsolated(session),
       busy: session.busy,
       queueLength: session.queue?.length || 0,
-      parentSessionId: session.parentSessionId
+      parentSessionId: session.parentSessionId,
+      runtimeState: buildSessionRuntimeState(session)
     });
   }
   
@@ -1853,6 +1899,8 @@ export async function setSessionCompactThreshold(sessionId: string, thresholdTok
  * Delete a session
  */
 export async function deleteSession(sessionId: string): Promise<boolean> {
+  clearActiveSessionRuntimeState(sessionId);
+
   if (!sessions.has(sessionId)) {
     return false;
   }
@@ -1923,9 +1971,9 @@ export async function retrySession(sessionId: string): Promise<void> {
     throw new Error('Session is already busy');
   }
 
-  // Trigger session processing by adding a retry marker to queue
+  // Trigger session processing without adding model-visible retry text.
   logger.info({ sessionId }, 'Retrying session');
-  await queueSessionSystemEvent(sessionId, 'retrying last request', 'trigger');
+  await enqueueSessionItem(sessionId, { type: 'retry' });
 }
 
 /**

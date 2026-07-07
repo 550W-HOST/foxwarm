@@ -1,5 +1,6 @@
 import { PanelLeftOpen, Plus } from 'lucide-react'
 import type { Session } from './SessionListCore'
+import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
 
 interface CollapsedSidebarProps {
   sessions: Session[]
@@ -53,6 +54,14 @@ export default function CollapsedSidebar({
         {rootSessions.slice(0, 20).map((session) => {
           const isActive = session.id === currentSession
           const initial = getSessionInitial(session)
+          const runtimeState = getSessionRuntimeStateName(session)
+          const activeRuntime = isSessionRuntimeActive(session)
+          const showRuntimeIndicator = activeRuntime || runtimeState === 'waiting'
+          const indicatorColor = runtimeState === 'running-tool'
+            ? 'bg-purple-500'
+            : runtimeState === 'waiting'
+              ? 'bg-amber-500'
+              : 'bg-blue-500'
           return (
             <button
               key={session.id}
@@ -66,8 +75,8 @@ export default function CollapsedSidebar({
               }`}
             >
               {initial}
-              {session.busy && (
-                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-blue-500 ring-1 ring-white dark:ring-gray-800" />
+              {showRuntimeIndicator && (
+                <span className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-white dark:ring-gray-800 ${indicatorColor}`} />
               )}
             </button>
           )

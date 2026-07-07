@@ -611,6 +611,7 @@ test('wait is the model-facing pause tool and end_turn is removed', () => {
   assert.equal(waitDef.defaultInject, true);
   assert.equal((waitDef.parameters?.properties as any)?.reason?.type, 'string');
   assert.equal((waitDef.parameters?.properties as any)?.timeoutSeconds?.type, 'number');
+  assert.equal((waitDef.parameters?.properties as any)?.waitExecIds?.type, 'array');
   assert.equal(Object.prototype.hasOwnProperty.call(waitDef.parameters?.properties || {}, 'timeoutMessage'), false);
   assert.equal(definitions.some(def => def.name === 'end_turn'), false);
 });

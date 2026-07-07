@@ -3,6 +3,7 @@ import { logger } from './common';
 import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
+import { formatFoxwarmSystem } from './utils/promptWrappers';
 import type { ChatResult, FunctionCall, Message, MessagePart, Session } from './types';
 
 export const BTW_USAGE = 'Usage: /btw <message>';
@@ -61,7 +62,7 @@ function cloneSessionForBtw(session: Session): Session {
 
 function buildBtwRequestParts(message: string): MessagePart[] {
   return [
-    { system: BTW_SIDE_REQUEST_PROMPT },
+    { system: formatFoxwarmSystem({ kind: 'btw', type: 'side-request' }, BTW_SIDE_REQUEST_PROMPT) },
     { text: message },
   ];
 }

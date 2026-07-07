@@ -43,6 +43,7 @@ interface ChatTimelineProps {
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
+  onRetryFinalFailure?: () => void
   nestedDepth?: number
 }
 
@@ -151,15 +152,30 @@ const MarkdownContent = memo(function MarkdownContent({ text, className }: { tex
   return <div className={className} dangerouslySetInnerHTML={{ __html: html }} onClick={handleMarkdownLinkClick} />
 })
 
+const isFinalLlmRetryNotice = (message: Message): boolean => (
+  message.__meta?.noticeType === 'llm-retry' && message.__meta?.retry?.final === true
+)
+
 const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { systemText: string; isUser: boolean }) {
   return (
     <pre
       className={`whitespace-pre-wrap font-sans ${isUser ? 'text-white' : 'text-gray-500 dark:text-gray-400'}`}
-      style={{ fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }}
+      style={{ lineHeight: '1.3em' }}
     >
-      {systemText.split('\n').map((line, lineIdx) => (
-        <span key={lineIdx} style={{ display: 'block' }}>{renderSystemTextWithSessionLinks(line)}</span>
-      ))}
+      {systemText.split('\n').map((line, lineIdx) => {
+        const isMetaLine = isSystemLikeText(line)
+        return (
+          <span
+            key={lineIdx}
+            style={isMetaLine
+              ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+              : { display: 'block', fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+            }
+          >
+            {renderSystemTextWithSessionLinks(line)}
+          </span>
+        )
+      })}
     </pre>
   )
 })
@@ -251,7 +267,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { text: string; message: Message }) {
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, showRetryButton, onRetry }: { text: string; message: Message; showRetryButton?: boolean; onRetry?: () => void }) {
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
@@ -312,6 +328,17 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
       ) : (
         <pre className="foxwarm-assistant-message-raw whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto">{jsonText}</pre>
       )}
+      {showRetryButton && (
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRetry?.() }}
+            className="rounded border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 transition-colors hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50 dark:focus:ring-red-800"
+          >
+            Retry
+          </button>
+        </div>
+      )}
     </div>
   )
 })
@@ -334,6 +361,7 @@ interface MessageRowProps {
   onExpandGroup: (groupKey: string) => void
   sessionId: string
   nestedDepth: number
+  onRetryFinalFailure?: () => void
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
 }
 
@@ -355,6 +383,7 @@ const MessageRow = memo(function MessageRow({
   onExpandGroup,
   sessionId,
   nestedDepth,
+  onRetryFinalFailure,
   renderNestedMessages,
 }: MessageRowProps) {
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
@@ -426,7 +455,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIdx === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
               }
-              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
+              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} showRetryButton={isFinalLlmRetryNotice(msg)} onRetry={onRetryFinalFailure} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
@@ -457,10 +486,11 @@ const MessageRow = memo(function MessageRow({
   prev.groupExpanded === next.groupExpanded &&
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
+  prev.onRetryFinalFailure === next.onRetryFinalFailure &&
   prev.renderNestedMessages === next.renderNestedMessages
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, nestedDepth = 0 }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onRetryFinalFailure, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
@@ -471,9 +501,10 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       isMobile={isMobile}
       groupTools={groupTools}
       showUsageBadge={nextNestedDepth > 0 ? false : showUsageBadge}
+      onRetryFinalFailure={onRetryFinalFailure}
       nestedDepth={nextNestedDepth}
     />
-  ), [groupTools, isMobile, sessionId, showUsageBadge])
+  ), [groupTools, isMobile, onRetryFinalFailure, sessionId, showUsageBadge])
 
   const toolGroupMeta = useMemo(() => {
     const messageKeys = messages.map((msg, idx) => getMessageStableKey(msg, idx))
@@ -669,6 +700,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             onExpandGroup={handleExpandGroup}
             sessionId={sessionId}
             nestedDepth={nestedDepth}
+            onRetryFinalFailure={onRetryFinalFailure}
             renderNestedMessages={renderNestedMessages}
           />
         )
