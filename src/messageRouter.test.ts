@@ -400,6 +400,98 @@ test('retrySession enqueues an internal retry item that reruns LLM without appen
   }
 });
 
+test('stop signal preserves queued work until a later trigger', async () => {
+  const router = new MessageRouter() as any;
+  const sessionId = `stop_preserve_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId) as Session;
+  session.history = [];
+  session.persistentMemorySnapshot = 'system prompt';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = false;
+  session.queue = [];
+  session.meta = { lastMessageTime: Date.now() };
+
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  const seenParts: any[] = [];
+
+  (llm as any).chat = async (parts: any) => {
+    seenParts.push(parts);
+    if (seenParts.length === 1) {
+      const toolCall = { id: 'stop-tool', name: 'read', args: { filePath: 'README.md' } };
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    return { text: 'queued response', allParts: [{ text: 'queued response' }] };
+  };
+  (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(sessionId, { type: 'user', parts: [{ text: 'queued after stop' }] });
+    await sessionManager.requestSessionStop(sessionId);
+    return { parts: [{ functionResponse: { tool_use_id: 'stop-tool', name: 'read', response: { output: 'stopped' } } }] };
+  };
+
+  try {
+    await router.runSessionTurn(sessionId, { parts: [{ text: 'start current turn' }], session });
+
+    assert.equal(seenParts.length, 1);
+    assert.deepEqual(session.queue.map(item => item.type), ['user']);
+    assert.equal(session.busy, false);
+
+    await router.processSessionQueue(sessionId);
+    assert.equal(seenParts.length, 2);
+    assert.equal(seenParts[1].some((part: any) => part.text === 'queued after stop'), true);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('dequeue signal stops the current turn and immediately continues queued work', async () => {
+  const router = new MessageRouter() as any;
+  const sessionId = `dequeue_continue_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId) as Session;
+  session.history = [];
+  session.persistentMemorySnapshot = 'system prompt';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = false;
+  session.queue = [];
+  session.meta = { lastMessageTime: Date.now() };
+
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  const seenParts: any[] = [];
+
+  (llm as any).chat = async (parts: any) => {
+    seenParts.push(parts);
+    if (seenParts.length === 1) {
+      const toolCall = { id: 'dequeue-tool', name: 'read', args: { filePath: 'README.md' } };
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    return { text: 'queued response', allParts: [{ text: 'queued response' }] };
+  };
+  (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(sessionId, { type: 'user', parts: [{ text: 'queued for dequeue' }] });
+    await sessionManager.requestSessionDequeue(sessionId);
+    return { parts: [{ functionResponse: { tool_use_id: 'dequeue-tool', name: 'read', response: { output: 'dequeued' } } }] };
+  };
+
+  try {
+    await router.runSessionTurn(sessionId, { parts: [{ text: 'start current turn' }], session });
+
+    assert.equal(seenParts.length, 2);
+    assert.equal(seenParts[1].some((part: any) => part.text === 'queued for dequeue'), true);
+    assert.equal(session.queue.length, 0);
+    assert.equal(session.busy, false);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
 test('MessageRouter exposes requesting-model runtime state while LLM request is in flight', async () => {
   const router = new MessageRouter() as any;
   router.continueWithQueuedWork = async () => false;

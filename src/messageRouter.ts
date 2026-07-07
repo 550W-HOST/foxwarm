@@ -921,6 +921,7 @@ export class MessageRouter {
 
     logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.message?.parts?.length ?? options.parts?.length ?? 0 }, 'Session turn processing');
 
+    let stoppedByUser = false;
     try {
       if (options.sendTyping && options.sourceCtx) {
         await options.sourceCtx.sendTyping();
@@ -942,7 +943,6 @@ export class MessageRouter {
       let finalResponse = '';
       let finalUsage = null;
       let lastTextBroadcasted = false;
-      let stoppedByUser = false;
       while (iteration < 500) {
         const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
         if (pendingCompaction === 'stop') {
@@ -1186,7 +1186,12 @@ export class MessageRouter {
       }
       await this.maybeAppendGoalEndTurnReminder(session);
     } finally {
-      if (!getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
+      const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;
+      if (session.meta?.runQueuedAfterStop) {
+        delete session.meta.runQueuedAfterStop;
+      }
+
+      if ((!stoppedByUser || runQueuedAfterStop) && !getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
         return;
       }
 

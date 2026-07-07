@@ -482,9 +482,39 @@ export async function requestSessionStop(sessionId: string): Promise<{ abortedIn
   }
 
   session.stopping = true;
+  if (session.meta?.runQueuedAfterStop) {
+    delete session.meta.runQueuedAfterStop;
+  }
   const abortedInFlight = abortSessionInFlight(sessionId);
   await saveSession(sessionId);
   return { abortedInFlight };
+}
+
+export async function requestSessionDequeue(sessionId: string): Promise<{
+  queuedItems: number;
+  stoppedCurrent: boolean;
+  abortedInFlight: boolean;
+}> {
+  const session = await getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
+
+  const queuedItems = session.queue?.length || 0;
+  if (queuedItems === 0) {
+    return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
+  }
+
+  if (session.busy) {
+    session.stopping = true;
+    session.meta.runQueuedAfterStop = true;
+    const abortedInFlight = abortSessionInFlight(sessionId);
+    await saveSession(sessionId);
+    return { queuedItems, stoppedCurrent: true, abortedInFlight };
+  }
+
+  await triggerSessionProcessing(sessionId);
+  return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
 }
 
 export async function prepareSessionForDestructiveAction(sessionId: string): Promise<{
