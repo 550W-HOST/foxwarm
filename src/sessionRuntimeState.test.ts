@@ -95,14 +95,23 @@ test('buildSessionRuntimeState derives waitAll pending sessions', () => {
   assert.equal(formatSessionRuntimeStateSummary(runtimeState), 'waiting:sessions 1/2');
 });
 
-test('generic wait and waitExecIds derive any-event and exec waiting states', () => {
+test('bare wait derives idle while explicit waits derive waiting states', () => {
   const generic = makeSession({
     meta: { lastMessageTime: Date.now(), wait: { id: 'generic-wait', startedAt: 2000 } },
   } as Partial<Session>);
   const genericRuntime = buildSessionRuntimeState(generic);
-  assert.equal(genericRuntime.state, 'waiting');
-  assert.equal(genericRuntime.waiting?.waitingFor, 'any-event');
-  assert.equal(formatSessionRuntimeStateSummary(genericRuntime), 'waiting:any-event');
+  assert.equal(genericRuntime.state, 'idle');
+  assert.equal(genericRuntime.waiting, undefined);
+  assert.equal(formatSessionRuntimeStateSummary(genericRuntime), 'idle');
+
+  const manualWait = makeSession({
+    meta: { lastMessageTime: Date.now(), wait: { id: 'manual-wait', startedAt: 2500, reason: 'waiting for operator' } },
+  } as Partial<Session>);
+  const manualRuntime = buildSessionRuntimeState(manualWait);
+  assert.equal(manualRuntime.state, 'waiting');
+  assert.equal(manualRuntime.waiting?.waitingFor, 'manual');
+  assert.equal(manualRuntime.waiting?.reason, 'waiting for operator');
+  assert.equal(formatSessionRuntimeStateSummary(manualRuntime), 'waiting:manual');
 
   const execWait = makeSession({
     meta: { lastMessageTime: Date.now(), wait: { id: 'exec-wait', startedAt: 3000, waitExecIds: ['exec-1', 'exec-2'] } },

@@ -420,6 +420,7 @@ test('wait without timeout works and does not schedule a timeout wake', async ()
       assert.equal(reloaded.queue.length, 0);
       assert.equal(typeof reloaded.meta.wait?.id, 'string');
       assert.equal(reloaded.meta.wait?.timeoutSeconds, undefined);
+      assert.equal(sessionManager.buildSessionRuntimeState(reloaded).state, 'idle');
     } finally {
       await cleanupSession(sessionId);
     }

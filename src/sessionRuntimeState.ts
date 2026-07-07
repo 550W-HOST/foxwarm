@@ -1,7 +1,7 @@
 import type { Session } from './types';
 
 export type SessionRuntimeStateName = 'requesting-model' | 'running-tool' | 'waiting' | 'idle';
-export type SessionRuntimeWaitingFor = 'sessions' | 'exec' | 'timer' | 'any-event' | 'manual';
+export type SessionRuntimeWaitingFor = 'sessions' | 'exec' | 'timer' | 'manual';
 export type SessionRuntimeActivePhase = 'normal-turn' | 'compaction' | 'managed-step' | 'unknown';
 
 export interface SessionRuntimeActiveDetails {
@@ -94,19 +94,26 @@ function deriveWaitingDetails(session: Session): SessionRuntimeWaitingDetails | 
     ? wait.startedAt
     : Date.now();
 
-  let waitingFor: SessionRuntimeWaitingFor = 'any-event';
+  const reason = typeof wait.reason === 'string' && wait.reason.trim() ? wait.reason.trim() : undefined;
+  let waitingFor: SessionRuntimeWaitingFor | undefined;
   if (waitAllSessions?.length) {
     waitingFor = 'sessions';
   } else if (waitExecIds?.length) {
     waitingFor = 'exec';
   } else if (timeoutSeconds !== undefined) {
     waitingFor = 'timer';
+  } else if (reason) {
+    waitingFor = 'manual';
+  }
+
+  if (!waitingFor) {
+    return undefined;
   }
 
   return {
     waitId: wait.id,
     waitingFor,
-    reason: typeof wait.reason === 'string' && wait.reason.trim() ? wait.reason.trim() : undefined,
+    reason,
     waitAllSessions,
     satisfiedSessions: waitAllSessions?.length ? satisfiedSessions : undefined,
     pendingSessions,

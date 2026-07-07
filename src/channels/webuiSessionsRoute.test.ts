@@ -9,7 +9,7 @@ function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-test('WebUI sessions route includes runtimeState while preserving busy fields', async () => {
+test('WebUI sessions route treats bare wait as idle while preserving busy fields', async () => {
   const sessionId = makeSessionId('webui_runtime_state');
   const session = await sessionManager.getSession(sessionId);
   session.agent = 'main';
@@ -22,7 +22,7 @@ test('WebUI sessions route includes runtimeState while preserving busy fields', 
   session.meta = {
     lastMessageTime: Date.now(),
     wait: {
-      id: 'webui-wait-any-event',
+      id: 'webui-bare-wait',
       startedAt: Date.now() - 1000,
     },
   } as Session['meta'];
@@ -45,9 +45,9 @@ test('WebUI sessions route includes runtimeState while preserving busy fields', 
     assert.equal(listed.busy, false);
     assert.equal(listed.busyStartedAt, null);
     assert.equal(listed.queueLength, 0);
-    assert.equal(listed.runtimeState.state, 'waiting');
+    assert.equal(listed.runtimeState.state, 'idle');
     assert.equal(listed.runtimeState.busy, false);
-    assert.equal(listed.runtimeState.waiting.waitingFor, 'any-event');
+    assert.equal(listed.runtimeState.waiting, undefined);
   } finally {
     await server.stop();
     setHttpServer(null);
