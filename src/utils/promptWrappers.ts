@@ -186,12 +186,16 @@ function formatLegacySessionIdentityForModel(system: string): string | undefined
   for (const pattern of patterns) {
     const match = system.match(pattern.re);
     if (match) {
-      return formatFoxwarmSystem({
+      const attrs = {
         kind: 'session-boundary',
         event: pattern.event,
         parentSessionId: match[1],
         currentSessionId: match[2],
-      }, match[3]);
+      };
+      const payload = match[3]?.trim();
+      return pattern.event === 'compact-completed'
+        ? formatFoxwarmSystemTag({ ...attrs, hint: payload || undefined })
+        : formatFoxwarmSystem(attrs, payload);
     }
   }
 
@@ -258,7 +262,8 @@ function formatLegacySystemTextForModel(system: string): string | undefined {
 
   const compactionCompletedMatch = system.match(/^Compaction completed\.?\s*([\s\S]*)$/i);
   if (compactionCompletedMatch) {
-    return formatFoxwarmSystem({ kind: 'session-boundary', event: 'compact-completed' }, compactionCompletedMatch[1]);
+    const payload = compactionCompletedMatch[1]?.trim();
+    return formatFoxwarmSystemTag({ kind: 'session-boundary', event: 'compact-completed', hint: payload || undefined });
   }
 
   return undefined;

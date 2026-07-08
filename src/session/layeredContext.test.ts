@@ -26,7 +26,7 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
   const foxwarmLifecycleWithPayload: Message = {
     role: 'user',
     parts: [
-      { system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123">\nYou can continue working now.\n</foxwarm-system>' },
+      { system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" hint="You can continue working now." />' },
     ],
     __meta: { seq: 10 },
   };
@@ -45,9 +45,13 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
 
 test('formatCompactionCompletionMarker uses foxwarm metadata without a duplicate legacy prefix', () => {
   const text = formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.', 'parent-456');
-  assert.equal(text, '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123">\nYou can continue working now.\n</foxwarm-system>');
+  assert.equal(text, '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" hint="You can continue working now." />');
   assert.equal(formatCompactionCompletionMarker('session-123', 'Compaction completed.', 'parent-456'), '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" />');
-  assert.equal(isIgnoredCompactLifecycleSystemText(text.split('\n')[0]), true);
+  assert.equal(
+    formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.', 'parent-456', ['code-index']),
+    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" hint="You can continue working now. Note: The following skill(s) were loaded via load_skill but their content was compacted away: `code-index`. If you still need them, call load_skill again." />'
+  );
+  assert.equal(isIgnoredCompactLifecycleSystemText(text), true);
 });
 
 test('renderBlockMessage includes raw message local time range when available', () => {
