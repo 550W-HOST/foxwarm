@@ -3,6 +3,7 @@
  */
 
 import express from 'express';
+import crypto from 'crypto';
 import http from 'http';
 import path from 'path';
 import fs from 'fs-extra';
@@ -25,8 +26,13 @@ import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClie
 import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
+import type { Message, MessagePart, QueueItem } from '../types';
+import { formatFoxwarmMessage } from '../utils/promptWrappers';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
+const MAX_QUEUED_PREVIEW_ITEMS = 20;
+const MAX_QUEUED_PREVIEW_TEXT_CHARS = 4000;
+const MAX_QUEUED_PREVIEW_INLINE_DATA_CHARS = 200_000;
 
 function isPlaceholderSecret(value: unknown): boolean {
   return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
@@ -49,6 +55,143 @@ function parseOptionalPositiveNumberQuery(value: unknown, label: string): number
     throw new Error(`${label} must be a positive number.`);
   }
   return Math.floor(parsed);
+}
+
+function truncateQueuedPreviewText(value: string): string {
+  if (value.length <= MAX_QUEUED_PREVIEW_TEXT_CHARS) {
+    return value;
+  }
+  return `${value.slice(0, MAX_QUEUED_PREVIEW_TEXT_CHARS)}\n… [preview truncated]`;
+}
+
+function sanitizeQueuedPreviewPart(part: MessagePart): MessagePart | null {
+  const sanitized: MessagePart = { ...part };
+
+  if (typeof sanitized.text === 'string') {
+    sanitized.text = truncateQueuedPreviewText(sanitized.text);
+  }
+  if (typeof sanitized.system === 'string') {
+    sanitized.system = truncateQueuedPreviewText(sanitized.system);
+  }
+  if (typeof sanitized.thinking === 'string') {
+    sanitized.thinking = truncateQueuedPreviewText(sanitized.thinking);
+  }
+
+  if (sanitized.inlineData?.data && sanitized.inlineData.data.length > MAX_QUEUED_PREVIEW_INLINE_DATA_CHARS) {
+    const mimeType = sanitized.inlineData.mimeType || sanitized.inlineData.mime_type || 'attachment';
+    delete sanitized.inlineData;
+    delete (sanitized as any).inlineDataRef;
+    return { text: `[${mimeType} attachment preview omitted]` };
+  }
+
+  return sanitized;
+}
+
+function sanitizeQueuedPreviewParts(parts: MessagePart[] | undefined): MessagePart[] {
+  if (!Array.isArray(parts)) {
+    return [];
+  }
+  return parts
+    .map(sanitizeQueuedPreviewPart)
+    .filter((part): part is MessagePart => !!part);
+}
+
+function hashQueuedPreviewItem(index: number, item: QueueItem): string {
+  const hash = crypto.createHash('sha1');
+  hash.update(String(index));
+  hash.update('\0');
+  hash.update(item.type || 'unknown');
+  hash.update('\0');
+  hash.update(JSON.stringify({
+    source: item.source,
+    sourceSessionId: item.sourceSessionId,
+    parts: item.parts,
+    message: item.message,
+  }, (_key, value) => (
+    typeof value === 'string' && value.length > 1000 ? `${value.slice(0, 1000)}…` : value
+  )).slice(0, 20_000));
+  return hash.digest('hex').slice(0, 12);
+}
+
+function hasSystemPart(parts: MessagePart[]): boolean {
+  return parts.some(part => typeof part.system === 'string' && part.system.trim().length > 0);
+}
+
+function buildNonUserQueuedPreviewParts(item: QueueItem, parts: MessagePart[]): MessagePart[] {
+  if (hasSystemPart(parts)) {
+    return parts;
+  }
+
+  const text = parts
+    .map(part => part.text || part.thinking || '')
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+  if (!text) {
+    return [];
+  }
+
+  return [{
+    system: formatFoxwarmMessage({
+      type: item.type || 'background',
+      ...(item.sourceSessionId ? { sourceSessionId: item.sourceSessionId } : {}),
+      hint: 'queued session event preview',
+    }, truncateQueuedPreviewText(text)),
+  }];
+}
+
+function buildQueuedPreviewMessage(item: QueueItem, index: number): Message | null {
+  if (item.type === 'compact' || item.type === 'compact-commit' || item.type === 'retry') {
+    return null;
+  }
+
+  const synthetic = `queued-${index}-${item.type}-${hashQueuedPreviewItem(index, item)}`;
+  const queuedMeta = {
+    ...(item.message?.__meta || {}),
+    synthetic,
+    temporary: true,
+    queuedPreview: true,
+    queueIndex: index,
+    queueType: item.type,
+  };
+
+  if (item.message) {
+    return {
+      ...item.message,
+      parts: sanitizeQueuedPreviewParts(item.message.parts),
+      __meta: queuedMeta,
+    };
+  }
+
+  const sanitizedParts = sanitizeQueuedPreviewParts(item.parts);
+  const parts = item.type === 'user'
+    ? sanitizedParts
+    : buildNonUserQueuedPreviewParts(item, sanitizedParts);
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  return {
+    role: 'user',
+    parts,
+    __meta: queuedMeta,
+  };
+}
+
+function buildQueuedPreviewMessages(queue: QueueItem[] | undefined): Message[] {
+  if (!Array.isArray(queue) || queue.length === 0) {
+    return [];
+  }
+
+  const messages: Message[] = [];
+  for (let index = 0; index < queue.length && messages.length < MAX_QUEUED_PREVIEW_ITEMS; index++) {
+    const message = buildQueuedPreviewMessage(queue[index], index);
+    if (message) {
+      messages.push(message);
+    }
+  }
+  return messages;
 }
 
 
@@ -927,7 +1070,14 @@ export class WebUIChannel implements Channel {
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
-            res.json({ messages: session.history });
+            const queuedMessages = buildQueuedPreviewMessages(session.queue);
+            res.json({
+              messages: session.history,
+              queuedMessages,
+              queueLength: session.queue?.length || 0,
+              queuedPreviewLimit: MAX_QUEUED_PREVIEW_ITEMS,
+              queuedPreviewOmittedCount: Math.max(0, (session.queue?.length || 0) - queuedMessages.length),
+            });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get history');
             res.status(500).json({ error: e.message });

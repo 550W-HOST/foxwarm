@@ -10,6 +10,7 @@ import { copyTextToClipboard } from './chatShared'
 import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive } from '../sessionRuntimeState'
+import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
@@ -188,6 +189,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
   const [loading, setLoading] = useState(false)
   const [sessionBusy, setSessionBusy] = useState(false)
   const [sessionQueueLength, setSessionQueueLength] = useState(0)
+  const [queuedMessages, setQueuedMessages] = useState<Message[]>([])
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
@@ -218,6 +220,9 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const shouldAutoScrollRef = useRef<boolean>(true)
   const pendingSentMessagesRef = useRef<string[]>([])
+  const sessionBusyRef = useRef(false)
+  const sessionQueueLengthRef = useRef(0)
+  const queuedMessagesRef = useRef<Message[]>([])
   const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
   const composerHeightRef = useRef<number | null>(null)
   const expandHistoryScrollRestoreRef = useRef<{ top: number; height: number } | null>(null)
@@ -225,7 +230,20 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
   useEffect(() => {
     setStreamingAssistantDraft(null)
     setToolScriptProgress({})
+    setQueuedMessages([])
   }, [sessionId])
+
+  useEffect(() => {
+    sessionBusyRef.current = sessionBusy
+  }, [sessionBusy])
+
+  useEffect(() => {
+    sessionQueueLengthRef.current = sessionQueueLength
+  }, [sessionQueueLength])
+
+  useEffect(() => {
+    queuedMessagesRef.current = queuedMessages
+  }, [queuedMessages])
 
   useEffect(() => {
     setShowDebugInfo(false)
@@ -369,6 +387,8 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
       if (res.status === 404) {
         setSessionMissing(true)
         setMessages([])
+        setQueuedMessages([])
+        setSessionQueueLength(0)
         lastKnownTimestampRef.current = 0
         return
       }
@@ -377,6 +397,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
         const data = await res.json()
         setSessionMissing(false)
         setMessages(data.messages || [])
+        const nextQueuedMessages = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+        setQueuedMessages(nextQueuedMessages)
+        if (typeof data.queueLength === 'number') {
+          setSessionQueueLength(data.queueLength)
+        }
         setStreamingAssistantDraft(null)
         const lastMsg = data.messages?.[data.messages.length - 1]
         if (lastMsg?.__meta?.timestamp) {
@@ -452,6 +477,12 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
 
           if (data.message.role === 'model') {
             setStreamingAssistantDraft(null)
+          }
+
+          if (sessionQueueLengthRef.current > 0 || queuedMessagesRef.current.length > 0) {
+            window.setTimeout(() => {
+              void fetchHistory()
+            }, 100)
           }
 
           if (!isCommandResponse && !isUpdateExisting) {
@@ -686,11 +717,21 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
           const data = await res.json()
           const currentSession = data.sessions.find((s: any) => s.id === sessionId)
           if (currentSession) {
-            setSessionBusy(isSessionRuntimeActive(currentSession))
-            setSessionQueueLength(currentSession.queueLength || 0)
+            const nextBusy = isSessionRuntimeActive(currentSession)
+            const nextQueueLength = currentSession.queueLength || 0
+            const previousQueueLength = sessionQueueLengthRef.current
+            setSessionBusy(nextBusy)
+            setSessionQueueLength(nextQueueLength)
+            if (
+              nextQueueLength !== previousQueueLength ||
+              (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)
+            ) {
+              void fetchHistory()
+            }
           } else {
             setSessionBusy(false)
             setSessionQueueLength(0)
+            setQueuedMessages([])
           }
         }
       } catch (e) {
@@ -702,7 +743,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
     const interval = setInterval(fetchBusyStatus, 2000)
 
     return () => clearInterval(interval)
-  }, [sessionId])
+  }, [fetchHistory, sessionId])
 
   useEffect(() => {
     if (messages.length > 0) {
@@ -791,6 +832,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
       sessionMissing,
       sessionBusy,
       sessionQueueLength,
+      queuedPreviewCount: queuedMessages.length,
       groupTools,
       showUsageBadge,
       sendKeyBehavior: sendKeyMode === 'enter' ? 'Enter sends; Shift+Enter inserts a new line.' : 'Ctrl/Cmd+Enter sends; Enter inserts a new line.',
@@ -805,6 +847,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
     loading,
     messages,
     modelBusy,
+    queuedMessages.length,
     reconnectCountdown,
     resolvedSessionFilePath,
     sessionBusy,
@@ -896,8 +939,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
 
     const previewParts = messageText ? [{ text: messageText }] : parts
 
-    pendingSentMessagesRef.current.push(userMessage)
-    setMessages(prev => [...prev, { role: 'user', parts: previewParts }])
+    const appendOptimistic = shouldAppendOptimisticMessage(sessionBusyRef.current, sessionQueueLengthRef.current)
+    if (appendOptimistic) {
+      pendingSentMessagesRef.current.push(userMessage)
+      setMessages(prev => [...prev, { role: 'user', parts: previewParts }])
+    }
 
     try {
       fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
@@ -906,10 +952,21 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ parts, uploadedFiles }),
-      }).catch(e => {
-        console.error('Failed to send message:', e)
-        setMessages(prev => [...prev, { role: 'model', parts: [{ text: 'Error: Failed to send message' }] }])
       })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`Failed to send message (${response.status})`)
+          }
+          if (!appendOptimistic) {
+            window.setTimeout(() => {
+              void fetchHistory()
+            }, 100)
+          }
+        })
+        .catch(e => {
+          console.error('Failed to send message:', e)
+          setMessages(prev => [...prev, { role: 'model', parts: [{ text: 'Error: Failed to send message' }] }])
+        })
 
       setLoading(false)
       return true
@@ -918,7 +975,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
       setLoading(false)
       return false
     }
-  }, [loading, sessionId, sessionMissing])
+  }, [fetchHistory, loading, sessionId, sessionMissing])
 
   const sendSessionCommand = useCallback(async (command: string) => {
     if (sessionMissing) return
@@ -1180,6 +1237,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
             onStop={handleStop}
             onRunQueued={handleRunQueued}
           />
+          {queuedMessages.length > 0 && (
+            <div className="foxwarm-queued-preview" data-queued-preview="true" aria-label="Queued messages">
+              <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onRetryFinalFailure={handleRetryFinalFailure} />
+            </div>
+          )}
           <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
         </div>
 
