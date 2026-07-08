@@ -7,6 +7,10 @@ import { logger } from './common';
 
 const VSCODE_WEB_ROUTE = '/vscode-web';
 const VSCODE_WEB_API_PREFIX = '/api/vscode-web/fs';
+const VSCODE_WEB_STATIC_ROUTE = `${VSCODE_WEB_ROUTE}/static`;
+const VSCODE_WEB_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-fs`;
+const VSCODE_WEB_ASSET_DIR_ENV = 'FOXWARM_VSCODE_WEB_ASSET_DIR';
+const DEFAULT_VSCODE_WEB_ASSET_DIR = path.join(BASE_DIR, 'packages', 'vscode-web', 'assets', 'vscode-web');
 const MAX_WRITE_BYTES = 50 * 1024 * 1024;
 const MAX_READ_BYTES = 50 * 1024 * 1024;
 
@@ -190,8 +194,192 @@ function registerAuthenticatedStatic(httpServer: HttpServer, mountPath: string, 
   }, express.static(directory));
 }
 
+function registerAuthenticatedDynamicStatic(httpServer: HttpServer, mountPath: string, resolveDirectory: () => string | undefined): void {
+  httpServer.app.use(mountPath, (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!httpServer.checkToken(req)) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const directory = resolveDirectory();
+    if (!directory) {
+      res.status(404).json({ error: 'VS Code Web assets are not prepared' });
+      return;
+    }
+    express.static(directory)(req, res, next);
+  });
+}
+
+function resolveVscodeWebAssetDir(): string {
+  const configured = process.env[VSCODE_WEB_ASSET_DIR_ENV]?.trim();
+  if (!configured) {
+    return DEFAULT_VSCODE_WEB_ASSET_DIR;
+  }
+  return path.isAbsolute(configured) ? configured : path.resolve(BASE_DIR, configured);
+}
+
+function getPreparedVscodeWebAssetDir(): string | undefined {
+  const assetDir = resolveVscodeWebAssetDir();
+  const requiredFiles = [
+    'out/vs/loader.js',
+    'out/vs/workbench/workbench.web.main.css',
+    'out/vs/workbench/workbench.web.main.js',
+  ];
+  return requiredFiles.every((relativePath) => fs.existsSync(path.join(assetDir, relativePath))) ? assetDir : undefined;
+}
+
+function getRequestOrigin(req: express.Request): string {
+  const forwardedProto = getSingleQueryValue(req.headers['x-forwarded-proto']) ?? req.protocol;
+  const forwardedHost = getSingleQueryValue(req.headers['x-forwarded-host']) ?? req.get('host') ?? 'localhost';
+  return `${forwardedProto}://${forwardedHost}`;
+}
+
+function toUriComponents(uriString: string) {
+  const parsed = new URL(uriString);
+  return {
+    scheme: parsed.protocol.slice(0, -1),
+    authority: parsed.host,
+    path: parsed.pathname,
+    query: parsed.search ? parsed.search.slice(1) : '',
+    fragment: parsed.hash ? parsed.hash.slice(1) : '',
+  };
+}
+
+function toFoxwarmFolderUriComponents(folderUriString: string) {
+  if (!folderUriString.startsWith('foxwarm://')) {
+    throw new VscodeWebFsError('InvalidPath', 'folderUri must use the foxwarm:// scheme.');
+  }
+  return toUriComponents(folderUriString);
+}
+
+function escapeHtmlAttribute(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;');
+}
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function buildWorkbenchConfiguration(req: express.Request) {
+  const origin = getRequestOrigin(req);
+  const requestedFolderUri = getSingleQueryValue(req.query.folderUri) ?? 'foxwarm://node/master/home/ldmbot/git/foxwarm/';
+  const baseUrl = `${origin}${VSCODE_WEB_STATIC_ROUTE}`;
+  const extensionUri = `${origin}${VSCODE_WEB_EXTENSION_ROUTE}`;
+  const routeUrl = `${origin}${VSCODE_WEB_ROUTE}`;
+  return {
+    baseUrl,
+    configuration: {
+      folderUri: toFoxwarmFolderUriComponents(requestedFolderUri),
+      callbackRoute: `${VSCODE_WEB_ROUTE}/callback`,
+      productConfiguration: {
+        enableTelemetry: false,
+        // The official static workbench needs these product URLs for web
+        // extension host / webview resources. Keeping them under the same
+        // authenticated origin avoids a code-server style backend extension host.
+        webEndpointUrlTemplate: baseUrl,
+        webviewContentExternalBaseUrlTemplate: `${baseUrl}/out/vs/workbench/contrib/webview/browser/pre/`,
+      },
+      additionalBuiltinExtensions: [toUriComponents(extensionUri)],
+    },
+    routeUrl,
+  };
+}
+
+function buildVscodeWorkbenchHtml(req: express.Request): string {
+  const { baseUrl, configuration, routeUrl } = buildWorkbenchConfiguration(req);
+  const escapedConfiguration = escapeHtmlAttribute(configuration);
+  const escapedBaseUrl = escapeHtmlText(baseUrl);
+  const jsBaseUrl = JSON.stringify(baseUrl).replace(/</g, '\\u003c');
+  const jsRouteUrl = JSON.stringify(routeUrl).replace(/</g, '\\u003c');
+  const jsCallbackRoute = JSON.stringify(`${VSCODE_WEB_ROUTE}/callback`);
+  return `<!doctype html>
+<html>
+<head>
+  <script>performance.mark('code/didStartRenderer');</script>
+  <meta charset="utf-8" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Foxwarm Code" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+  <meta id="vscode-workbench-web-configuration" data-settings="${escapedConfiguration}" />
+  <meta id="vscode-workbench-builtin-extensions" data-settings="[]" />
+  <link rel="icon" href="${escapedBaseUrl}/favicon.ico" type="image/x-icon" />
+  <link rel="manifest" href="${escapedBaseUrl}/manifest.json" />
+  <link data-name="vs/workbench/workbench.web.main" rel="stylesheet" href="${escapedBaseUrl}/out/vs/workbench/workbench.web.main.css" />
+  <title>Foxwarm VS Code Web</title>
+</head>
+<body aria-label=""></body>
+<script src="${escapedBaseUrl}/out/vs/loader.js"></script>
+<script src="${escapedBaseUrl}/out/vs/webPackagePaths.js"></script>
+<script>
+  const baseUrl = ${jsBaseUrl};
+  if (!self.webPackagePaths) {
+    self.webPackagePaths = {};
+  } else {
+    Object.keys(self.webPackagePaths).forEach(function (key) {
+      self.webPackagePaths[key] = baseUrl + '/node_modules/' + key + '/' + self.webPackagePaths[key];
+    });
+  }
+  require.config({
+    baseUrl: baseUrl + '/out',
+    recordStats: true,
+    trustedTypesPolicy: window.trustedTypes?.createPolicy('amdLoader', {
+      createScriptURL(value) {
+        if (value.startsWith(baseUrl)) {
+          return value;
+        }
+        throw new Error('Invalid script url: ' + value);
+      }
+    }),
+    paths: self.webPackagePaths
+  });
+</script>
+<script>performance.mark('code/willLoadWorkbenchMain');</script>
+<script src="${escapedBaseUrl}/out/nls.messages.js"></script>
+<script src="${escapedBaseUrl}/out/vs/workbench/workbench.web.main.nls.js"></script>
+<script src="${escapedBaseUrl}/out/vs/workbench/workbench.web.main.js"></script>
+<script>
+  require(['vs/workbench/workbench.web.main'], function (workbench) {
+    const configElement = document.getElementById('vscode-workbench-web-configuration');
+    const config = JSON.parse(configElement.getAttribute('data-settings'));
+    const workspace = config.folderUri ? { folderUri: workbench.URI.revive(config.folderUri) } : undefined;
+    const callbackEmitter = new workbench.Emitter();
+    const workspaceProvider = {
+      trusted: true,
+      workspace,
+      async open(nextWorkspace, options) {
+        let target = ${jsRouteUrl};
+        if (nextWorkspace && nextWorkspace.folderUri) {
+          target += '?folderUri=' + encodeURIComponent(nextWorkspace.folderUri.toString(true));
+        }
+        if (options?.reuse) {
+          window.location.href = target;
+          return true;
+        }
+        return !!window.open(target);
+      }
+    };
+    const urlCallbackProvider = {
+      onCallback: callbackEmitter.event,
+      create() {
+        return workbench.URI.parse(window.location.href).with({ path: ${jsCallbackRoute} });
+      }
+    };
+    workbench.create(document.body, { ...config, workspaceProvider, urlCallbackProvider });
+  });
+</script>
+</html>`;
+}
+
 function buildVscodeWebPlaceholderHtml(): string {
   const escapedApiPrefix = VSCODE_WEB_API_PREFIX.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const escapedAssetDir = escapeHtmlText(resolveVscodeWebAssetDir());
   return `<!doctype html>
 <html>
 <head>
@@ -205,8 +393,8 @@ function buildVscodeWebPlaceholderHtml(): string {
 </head>
 <body>
   <h1>Foxwarm VS Code Web spike route</h1>
-  <p>This route is reserved for a self-hosted official VS Code for the Web build. The static VS Code workbench assets are not vendored in this spike skeleton yet.</p>
-  <p>The browser filesystem extension is served from <code>${VSCODE_WEB_ROUTE}/extensions/foxwarm-fs/</code>.</p>
+  <p>This route is reserved for a self-hosted official VS Code for the Web build. Prepare static VS Code Web assets at <code>${escapedAssetDir}</code> or set <code>${VSCODE_WEB_ASSET_DIR_ENV}</code> to enable the workbench bootstrap.</p>
+  <p>The browser filesystem extension is served from <code>${VSCODE_WEB_EXTENSION_ROUTE}/</code>.</p>
   <p>The filesystem API prefix is <code>${escapedApiPrefix}</code>.</p>
   <p>Intended workspace URI shape: <code>foxwarm://node/master/home/ldmbot/git/foxwarm/</code>.</p>
 </body>
@@ -216,15 +404,34 @@ function buildVscodeWebPlaceholderHtml(): string {
 export function registerVscodeWebRoutes(httpServer: HttpServer): void {
   const extensionDir = path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-fs');
   if (fs.existsSync(extensionDir)) {
-    registerAuthenticatedStatic(httpServer, `${VSCODE_WEB_ROUTE}/extensions/foxwarm-fs`, extensionDir);
+    registerAuthenticatedStatic(httpServer, VSCODE_WEB_EXTENSION_ROUTE, extensionDir);
   }
+
+  registerAuthenticatedDynamicStatic(httpServer, VSCODE_WEB_STATIC_ROUTE, getPreparedVscodeWebAssetDir);
 
   httpServer.addRoute({
     path: VSCODE_WEB_ROUTE,
     method: 'GET',
+    handler: async (req, res) => {
+      try {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        if (getPreparedVscodeWebAssetDir()) {
+          res.send(buildVscodeWorkbenchHtml(req));
+        } else {
+          res.send(buildVscodeWebPlaceholderHtml());
+        }
+      } catch (error) {
+        sendFsError(res, error);
+      }
+    },
+  });
+
+  httpServer.addRoute({
+    path: `${VSCODE_WEB_ROUTE}/callback`,
+    method: 'GET',
     handler: async (_req, res) => {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(buildVscodeWebPlaceholderHtml());
+      res.send('<!doctype html><meta charset="utf-8"><title>Foxwarm VS Code Web callback</title><script>window.close();</script>');
     },
   });
 
