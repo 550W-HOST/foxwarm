@@ -1085,9 +1085,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             </button>
           )}
         </div>
-        <div className="px-1 text-[11px] text-gray-400 dark:text-gray-500">
-          Drag by the grip: top/bottom reorders, center assigns child, root zone detaches.
-        </div>
         {isFiltering && (
           <div className="px-1 text-xs text-gray-500 dark:text-gray-400">
             {visibleSessions.length} {visibleSessions.length === 1 ? 'match' : 'matches'} · clear search to reorganize the tree
