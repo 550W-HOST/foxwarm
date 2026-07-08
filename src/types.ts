@@ -244,6 +244,7 @@ export interface Session {
   meta: SessionMeta;
   displayName?: string; // User-defined display name for the session
   archived?: boolean; // Whether the session is archived
+  sidebarOrder?: number; // Optional WebUI sidebar sibling ordering key; lower sorts first within a parent group
   currentNode?: string; // Current node ID for tool execution (default: 'master')
   cwd?: string; // Default working directory for exec/terminal-style operations on currentNode
   model?: string; // Model key for this session (default: global)

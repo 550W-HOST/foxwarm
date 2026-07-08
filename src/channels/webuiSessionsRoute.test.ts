@@ -134,3 +134,93 @@ test('WebUI history route returns queued preview messages separately from commit
     await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });
+
+test('WebUI move route reparents, detaches, reorders, and rejects parent cycles', async () => {
+  const rootAId = makeSessionId('webui_move_root_a');
+  const rootBId = makeSessionId('webui_move_root_b');
+  const childId = makeSessionId('webui_move_child');
+  const nestedId = makeSessionId('webui_move_nested');
+
+  for (const [index, sessionId] of [rootAId, rootBId, childId, nestedId].entries()) {
+    const session = await sessionManager.getSession(sessionId);
+    session.agent = 'main';
+    session.history = [];
+    session.persistentMemorySnapshot = '';
+    session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+    session.busy = false;
+    session.queue = [];
+    session.meta = { lastMessageTime: Date.now() - index * 1000 } as Session['meta'];
+    await sessionManager.saveSession(sessionId);
+  }
+
+  const port = 35250 + Math.floor(Math.random() * 500);
+  const server = new HttpServer(port, 'move-token');
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token: 'move-token', enableTrigger: false, enableWebUI: true });
+  await server.start();
+
+  const postMove = async (sessionId: string, body: Record<string, unknown>) => {
+    return fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/move`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer move-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  };
+
+  try {
+    let res = await postMove(childId, { parentSessionId: rootAId, position: 'first' });
+    assert.equal(res.status, 200);
+    let payload = await res.json() as any;
+    assert.equal(payload.sessionId, childId);
+    assert.equal(payload.parentSessionId, rootAId);
+    assert.equal(typeof payload.sidebarOrder, 'number');
+
+    res = await postMove(nestedId, { parentSessionId: rootAId, afterSessionId: childId });
+    assert.equal(res.status, 200);
+
+    const childAfterAssign = await sessionManager.getSession(childId);
+    const nestedAfterAssign = await sessionManager.getSession(nestedId);
+    assert.equal(childAfterAssign.parentSessionId, rootAId);
+    assert.equal(nestedAfterAssign.parentSessionId, rootAId);
+    assert.ok((childAfterAssign.sidebarOrder || 0) < (nestedAfterAssign.sidebarOrder || 0));
+
+    res = await postMove(nestedId, { parentSessionId: rootAId, beforeSessionId: childId });
+    assert.equal(res.status, 200);
+    const childAfterReorder = await sessionManager.getSession(childId);
+    const nestedAfterReorder = await sessionManager.getSession(nestedId);
+    assert.ok((nestedAfterReorder.sidebarOrder || 0) < (childAfterReorder.sidebarOrder || 0));
+
+    res = await postMove(rootAId, { parentSessionId: nestedId, position: 'first' });
+    assert.equal(res.status, 400);
+    payload = await res.json() as any;
+    assert.equal(payload.code, 'PARENT_CYCLE_NOT_ALLOWED');
+
+    res = await postMove(childId, { parentSessionId: rootAId, position: 'middle' });
+    assert.equal(res.status, 400);
+    payload = await res.json() as any;
+    assert.equal(payload.code, 'INVALID_MOVE_POSITION');
+
+    res = await postMove(childId, { beforeSessionId: nestedId, afterSessionId: rootBId });
+    assert.equal(res.status, 400);
+    payload = await res.json() as any;
+    assert.equal(payload.code, 'MULTIPLE_MOVE_ANCHORS');
+
+    res = await postMove(childId, { parentSessionId: null, beforeSessionId: rootBId });
+    assert.equal(res.status, 200);
+    const childAfterDetach = await sessionManager.getSession(childId);
+    const rootBAfterDetach = await sessionManager.getSession(rootBId);
+    assert.equal(childAfterDetach.parentSessionId, undefined);
+    assert.ok((childAfterDetach.sidebarOrder || 0) < (rootBAfterDetach.sidebarOrder || 0));
+  } finally {
+    await server.stop();
+    setHttpServer(null);
+    for (const sessionId of [rootAId, rootBId, childId, nestedId]) {
+      const session = await sessionManager.getExistingSession(sessionId);
+      if (session) session.busy = false;
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+  }
+});

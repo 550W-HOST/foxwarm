@@ -6,7 +6,7 @@ import Sidebar from './components/Sidebar'
 import CollapsedSidebar from './components/CollapsedSidebar'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
-import type { Session } from './components/SessionListCore'
+import type { Session, SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
 import { useWorkbenchStore } from './workbench/store'
@@ -1084,6 +1084,25 @@ function App() {
     })
   }
 
+  const handleMoveSession = async (sessionId: string, move: SessionMoveRequest) => {
+    try {
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(move),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to move session')
+      }
+      await fetchSessions()
+    } catch (error) {
+      console.error('Failed to move session:', error)
+      window.alert(`Failed to move session: ${error instanceof Error ? error.message : String(error)}`)
+      await fetchSessions()
+    }
+  }
+
   const handleBackToList = () => {
     window.location.hash = ''
     setShowSessionList(true)
@@ -1276,7 +1295,15 @@ function App() {
     const activeId = String(event.active.id)
     const overId = event.over?.id ? String(event.over.id) : null
     const activeData = event.active.data.current as { type?: string; paneId?: string; pinned?: boolean; sessionId?: string } | undefined
-    const overData = event.over?.data.current as { type?: string; paneId?: string; pinned?: boolean; edge?: 'left' | 'right' | 'top' | 'bottom' } | undefined
+    const overData = event.over?.data.current as {
+      type?: string
+      paneId?: string
+      pinned?: boolean
+      edge?: 'left' | 'right' | 'top' | 'bottom'
+      sessionId?: string
+      parentSessionId?: string | null
+      position?: 'first' | 'last'
+    } | undefined
 
     setDraggingItem(null)
 
@@ -1306,6 +1333,38 @@ function App() {
 
     if (activeData.type === 'session') {
       const draggedSessionId = activeData.sessionId || activeId
+      if (overData?.type === 'sidebar-root-drop') {
+        void handleMoveSession(draggedSessionId, { parentSessionId: null, position: overData.position || 'first' })
+        return
+      }
+
+      if (overData?.type === 'sidebar-session-child' && overData.sessionId) {
+        if (overData.sessionId !== draggedSessionId) {
+          void handleMoveSession(draggedSessionId, { parentSessionId: overData.sessionId, position: overData.position || 'first' })
+        }
+        return
+      }
+
+      if (overData?.type === 'sidebar-session-before' && overData.sessionId) {
+        if (overData.sessionId !== draggedSessionId) {
+          void handleMoveSession(draggedSessionId, {
+            parentSessionId: overData.parentSessionId ?? null,
+            beforeSessionId: overData.sessionId,
+          })
+        }
+        return
+      }
+
+      if (overData?.type === 'sidebar-session-after' && overData.sessionId) {
+        if (overData.sessionId !== draggedSessionId) {
+          void handleMoveSession(draggedSessionId, {
+            parentSessionId: overData.parentSessionId ?? null,
+            afterSessionId: overData.sessionId,
+          })
+        }
+        return
+      }
+
       if (overData?.type === 'tab' && overData.paneId) {
         openPersistentChatTab(draggedSessionId, { paneId: overData.paneId, beforeTabId: overId, pinned: !!overData.pinned })
         return
@@ -1388,6 +1447,10 @@ function App() {
       collisionDetection={(args) => {
         const collisions = pointerWithin(args)
         const priorityByType: Record<string, number> = {
+          'sidebar-session-before': 0,
+          'sidebar-session-after': 0,
+          'sidebar-session-child': 1,
+          'sidebar-root-drop': 1,
           tab: 0,
           'tab-row': 1,
           'pane-edge': 2,
@@ -1431,7 +1494,7 @@ function App() {
     }
 
     if (showSessionList) {
-      return (
+      return renderWorkbenchSurface(
         <SessionList
           sessions={sessions}
           currentSession={currentContextSessionId}
@@ -1461,7 +1524,7 @@ function App() {
           onSelectSetup={openSetupView}
           onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
           onCreateSession={handleCreateSession}
-        />
+        />,
       )
     }
 
