@@ -40,6 +40,9 @@ test('tool output guard truncates oversized output field and preserves metadata'
   assert.equal(result.outputTruncated, true);
   assert.equal(result.outputOriginalLengthChars, longOutput.length);
   assert.match(result.output, /TOOL OUTPUT TOO LONG: output field/);
+  assert.match(result.output, /\[foxwarm: line too long \(/);
+  assert.match(result.output, /Foxwarm placeholders above .* are not original output content/);
+  assert.match(result.output, /Original output: 1 line\(s\), 45000 character\(s\)\./);
   assert.equal(path.isAbsolute(result.outputFullPath), true);
   assert.match(result.output, /Node: master/);
   assert.match(result.output, new RegExp(`Path: ${result.outputFullPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));

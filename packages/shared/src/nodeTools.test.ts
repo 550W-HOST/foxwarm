@@ -72,7 +72,7 @@ test('node exec expands cwd ~ on the executing node', async () => {
       { command: 'pwd', cwd: '~', timeout: 5 },
       { sessionId: 'shared-node-test-home', session: { agent: agentName, currentNode: 'test-node' }, runtimeNodeId: 'test-node' },
     );
-    assert.equal(String(result).trim(), os.homedir());
+    assert.match(String(result), new RegExp(`^${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
   } finally {
     await cleanupAgent(agentName);
   }
