@@ -28,6 +28,7 @@ import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, w
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
 import type { Message, MessagePart, QueueItem } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
+import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
@@ -479,6 +480,8 @@ export class WebUIChannel implements Channel {
 
     // WebUI API endpoints
     if (this.enableWebUI) {
+      registerVscodeWebRoutes(httpServerInstance);
+
       // Auth endpoint
       httpServerInstance.addRoute({
         path: '/api/auth',

@@ -1,0 +1,21 @@
+{
+  "name": "@foxwarm/vscode-web-foxwarm-fs",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "foxwarm",
+  "license": "MIT",
+  "browser": "./dist/extension.js",
+  "activationEvents": [
+    "onFileSystem:foxwarm"
+  ],
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0"
+  }
+}
