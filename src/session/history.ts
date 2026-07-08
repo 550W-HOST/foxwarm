@@ -24,7 +24,7 @@ import { Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierIt
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
-import { formatFoxwarmSystem } from '../utils/promptWrappers';
+import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatSessionGoalReminderText } from './goal';
 import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
@@ -778,11 +778,7 @@ async function finalizeCompaction(
   });
   session.history = await renderHistoryFromFrontier(session, newFrontier);
 
-  let completionText = formatCompactionCompletionMarker(sessionId, completionMarker, session.parentSessionId);
-  if (compactedSkillNames.length > 0) {
-    const skillList = compactedSkillNames.map(s => `\`${s}\``).join(', ');
-    completionText += `\nNote: The following skill(s) were loaded via load_skill but their content was compacted away: ${skillList}. If you still need them, call load_skill again.`;
-  }
+  const completionText = formatCompactionCompletionMarker(sessionId, completionMarker, session.parentSessionId, compactedSkillNames);
   const hasCompletionGoalReminder = !!session.goalState?.goal?.trim();
   const completionParts: MessagePart[] = buildSystemMessageParts(completionText);
   if (hasCompletionGoalReminder) {
@@ -824,18 +820,29 @@ async function finalizeCompaction(
   }
 }
 
-export function formatCompactionCompletionMarker(sessionId: string, completionMarker: string, parentSessionId?: string): string {
+export function formatCompactionCompletionMarker(sessionId: string, completionMarker: string, parentSessionId?: string, compactedSkillNames: string[] = []): string {
   const legacySuffixRe = /^\s*\*\*COMPACTION COMPLETED\. PARENT SESSION `[^`]*`\. CURRENT SESSION ID IS `[^`]*`\.\*\*\s*/i;
   const markerWithoutSuffix = completionMarker.replace(legacySuffixRe, '');
   const extraMarkerText = markerWithoutSuffix
     .replace(/^\s*Compaction completed\.?\s*/i, '')
     .trim();
-  return formatFoxwarmSystem({
+
+  const hintParts: string[] = [];
+  if (extraMarkerText) {
+    hintParts.push(extraMarkerText);
+  }
+  if (compactedSkillNames.length > 0) {
+    const skillList = compactedSkillNames.map(s => `\`${s}\``).join(', ');
+    hintParts.push(`Note: The following skill(s) were loaded via load_skill but their content was compacted away: ${skillList}. If you still need them, call load_skill again.`);
+  }
+
+  return formatFoxwarmSystemTag({
     kind: 'session-boundary',
     event: 'compact-completed',
     parentSessionId: parentSessionId || '(none)',
     currentSessionId: sessionId,
-  }, extraMarkerText);
+    hint: hintParts.length > 0 ? hintParts.join(' ') : undefined,
+  });
 }
 
 async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot): Promise<CompactJobResult> {

@@ -72,11 +72,11 @@ test('formatSystemPartForModel converts legacy system strings without generating
 test('formatSystemPartForModel upgrades legacy session identity hints', () => {
   assert.equal(
     formatSystemPartForModel('**COMPACTION COMPLETED. PARENT SESSION `parent-1`. CURRENT SESSION ID IS `child-1`.** You can continue working now. Note: skill compacted away.'),
-    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-1" currentSessionId="child-1">\nYou can continue working now. Note: skill compacted away.\n</foxwarm-system>',
+    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-1" currentSessionId="child-1" hint="You can continue working now. Note: skill compacted away." />',
   );
   assert.equal(
     formatSystemPartForModel('<foxwarm-system hint="**COMPACTION COMPLETED. PARENT SESSION `parent-1`. CURRENT SESSION ID IS `child-1`.** You can continue working now." />'),
-    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-1" currentSessionId="child-1">\nYou can continue working now.\n</foxwarm-system>',
+    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-1" currentSessionId="child-1" hint="You can continue working now." />',
   );
   assert.equal(
     formatSystemPartForModel('<foxwarm-system hint="Reminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: `parent/main`, message: &quot;...&quot;})." />'),
