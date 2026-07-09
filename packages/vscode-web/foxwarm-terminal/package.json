@@ -1,0 +1,35 @@
+{
+  "name": "@foxwarm/vscode-web-foxwarm-terminal",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "foxwarm",
+  "license": "MIT",
+  "browser": "./dist/extension.js",
+  "activationEvents": [
+    "onTerminalProfile:foxwarm-terminal"
+  ],
+  "contributes": {
+    "terminal": {
+      "profiles": [
+        {
+          "id": "foxwarm-terminal",
+          "title": "Foxwarm Terminal",
+          "icon": "terminal"
+        }
+      ]
+    }
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "extensionKind": [
+    "web"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0"
+  }
+}

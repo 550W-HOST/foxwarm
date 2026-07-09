@@ -25,7 +25,6 @@ type RouteState =
 
 type TerminalRegistryRecord = {
   id: string
-  sessionId: string
   cwd: string
   nodeId: string
   shell: string
@@ -275,13 +274,12 @@ function formatTerminalTabTitle(cwd: string, nodeId?: string): string {
   return nodeId && nodeId !== 'master' ? `${lastSegment} · ${nodeId}` : lastSegment
 }
 
-function makeTerminalDraftTab(sessionId: string, nodeId: string, cwd: string): WorkbenchTab {
+function makeTerminalDraftTab(nodeId: string, cwd: string): WorkbenchTab {
   return {
     id: `terminal-draft:${Date.now()}:${Math.random().toString(16).slice(2)}`,
     type: 'terminal',
     nodeId,
     cwd,
-    contextSessionId: sessionId,
     createMode: 'new',
     title: formatTerminalTabTitle(cwd, nodeId),
   }
@@ -294,7 +292,6 @@ function makeTerminalTabFromRecord(record: TerminalRegistryRecord): WorkbenchTab
     terminalId: record.id,
     nodeId: record.nodeId,
     cwd: record.cwd,
-    contextSessionId: record.sessionId,
     title: formatTerminalTabTitle(record.cwd, record.nodeId),
   }
 }
@@ -374,7 +371,7 @@ function App() {
 
   const currentContextSessionId = focusedActiveTab?.type === 'chat'
     ? focusedActiveTab.sessionId
-    : focusedActiveTab?.contextSessionId || loadStoredLastVisitedSession()
+    : loadStoredLastVisitedSession()
   const currentContextSessionRecord = sessions.find((session) => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
   const currentView: AppView = route.view === 'agents' ? 'agents' : route.view === 'setup' ? 'setup' : 'session'
   const busyCount = useMemo(() => sessions.filter((session) => isSessionRuntimeActive(session)).length, [sessions])
@@ -630,7 +627,7 @@ function App() {
       }
 
       const nextTitle = formatTerminalTabTitle(terminal.cwd, terminal.nodeId)
-      if (tab.title !== nextTitle || tab.cwd !== terminal.cwd || tab.nodeId !== terminal.nodeId || tab.contextSessionId !== terminal.sessionId || tab.createMode) {
+      if (tab.title !== nextTitle || tab.cwd !== terminal.cwd || tab.nodeId !== terminal.nodeId || tab.createMode) {
         updateTab(tab.id, (current) => current.type === 'terminal'
           ? {
               ...current,
@@ -638,7 +635,6 @@ function App() {
               cwd: terminal.cwd,
               nodeId: terminal.nodeId,
               terminalId: terminal.id,
-              contextSessionId: terminal.sessionId,
               createMode: undefined,
             }
           : current)
@@ -652,8 +648,7 @@ function App() {
       }
 
       const matchingDraft = terminalDraftTabs.find((tab) => (
-        tab.contextSessionId === terminal.sessionId
-        && (tab.nodeId || 'master') === terminal.nodeId
+        (tab.nodeId || 'master') === terminal.nodeId
         && (tab.cwd || '/') === terminal.cwd
       ))
 
@@ -697,7 +692,7 @@ function App() {
   }, [focusedActiveTabId])
 
   useEffect(() => {
-    const sessionId = focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : focusedActiveTab?.contextSessionId
+    const sessionId = focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : undefined
     if (sessionId) {
       localStorage.setItem(LAST_VISITED_SESSION_STORAGE_KEY, sessionId)
     }
@@ -832,7 +827,7 @@ function App() {
     return paneTabs[0]
   }
 
-  const openTerminalTab = (sessionId: string, options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string }) => {
+  const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string }) => {
     if (options?.terminalId) {
       const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
       const terminal = activeTerminals.find((item) => item.id === options.terminalId)
@@ -844,9 +839,8 @@ function App() {
       return
     }
 
-    const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
-    const nodeId = options?.nodeId || sessionRecord?.currentNode || 'master'
-    const path = options?.path || sessionRecord?.cwd || '/'
+    const nodeId = options?.nodeId || 'master'
+    const path = options?.path || '/'
 
     const sourcePaneId = options?.sourcePaneId || focusedPaneId || null
 
@@ -861,7 +855,7 @@ function App() {
       }
 
       if (getPaneHeight(sourcePaneId) > 700) {
-        const draftTab = makeTerminalDraftTab(sessionId, nodeId, path)
+        const draftTab = makeTerminalDraftTab(nodeId, path)
         const createdPaneId = splitPaneWithNewTab(sourcePaneId, draftTab, 'bottom')
         if (createdPaneId) {
           navigateToTab(draftTab.id)
@@ -870,7 +864,7 @@ function App() {
       }
     }
 
-    const tab = makeTerminalDraftTab(sessionId, nodeId, path)
+    const tab = makeTerminalDraftTab(nodeId, path)
     upsertTab(tab, { paneId: sourcePaneId || undefined, activate: true })
     navigateToTab(tab.id)
   }
@@ -985,7 +979,7 @@ function App() {
     }
   }
 
-  const handleTerminalReady = (draftTabId: string, terminal: { id: string; sessionId: string; cwd: string; nodeId?: string }) => {
+  const handleTerminalReady = (draftTabId: string, terminal: { id: string; cwd: string; nodeId?: string }) => {
     // Keep createMode='new' until activeTerminals reconciliation sees this terminal id,
     // so the missing-terminal cleanup path does not immediately remove the just-opened tab.
     updateTab(draftTabId, (current) => current.type === 'terminal'
@@ -994,11 +988,11 @@ function App() {
           terminalId: terminal.id,
           nodeId: terminal.nodeId || 'master',
           cwd: terminal.cwd,
-          contextSessionId: terminal.sessionId,
           title: formatTerminalTabTitle(terminal.cwd, terminal.nodeId || 'master'),
         }
       : current)
     navigateToTab(draftTabId)
+    void fetchActiveTerminals()
   }
 
   const startSidebarResize = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -1125,7 +1119,7 @@ function App() {
     const helper = {
       sendMessage: (message: string) => {
         const activeTab = focusedActiveTab
-        const sessionId = activeTab?.type === 'chat' ? activeTab.sessionId : activeTab?.contextSessionId
+        const sessionId = activeTab?.type === 'chat' ? activeTab.sessionId : loadStoredLastVisitedSession()
         if (!sessionId) return
         void fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
           method: 'POST',
@@ -1153,7 +1147,7 @@ function App() {
           sessionId={tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
-          onOpenTerminal={() => openTerminalTab(tab.sessionId, { sourcePaneId })}
+          onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
           sendKeyMode={sendKeyMode}
           groupTools={groupTools}
           showUsageBadge={showUsageBadge}
@@ -1162,17 +1156,15 @@ function App() {
       )
     }
 
-    const sessionId = tab.contextSessionId || currentContextSessionId
     return (
       <Suspense fallback={<LazyViewFallback label="Loading terminal…" />}>
         <TerminalView
           key={tab.id}
-          sessionId={sessionId}
           initialCwd={tab.cwd}
           initialTerminalId={tab.terminalId}
           createMode={tab.createMode || 'reuse'}
           onBack={onBack}
-          onSessionsChanged={() => { void fetchSessions() }}
+          onSessionsChanged={() => { void fetchActiveTerminals() }}
           onTerminalReady={(terminal) => handleTerminalReady(tab.id, terminal)}
           onTerminalClosed={handleTerminalClosed}
         />
@@ -1459,7 +1451,7 @@ function App() {
             setShowSessionList(false)
           }}
           onSelectSetup={openSetupView}
-          onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
+          onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
           onCreateSession={handleCreateSession}
         />
       )
@@ -1516,7 +1508,7 @@ function App() {
               window.location.hash = ARCHITECTURE_HASH
             }}
             onSelectSetup={openSetupView}
-            onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
+            onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
             onCreateSession={handleCreateSession}
             onToggleCollapsed={() => setSidebarCollapsed(true)}
             isPeek={false}

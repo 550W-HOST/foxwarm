@@ -937,8 +937,7 @@ export class WebUIChannel implements Channel {
         method: 'GET',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId.trim() ? req.query.sessionId.trim() : undefined;
-            const terminals = await listTerminalRecords({ sessionId });
+            const terminals = await listTerminalRecords();
             res.json({ terminals });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to list terminals');
@@ -952,17 +951,12 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
             const nodeId = typeof req.body?.nodeId === 'string' && req.body.nodeId.trim() ? req.body.nodeId.trim() : undefined;
-            const cwd = typeof req.body?.cwd === 'string' && req.body.cwd.trim() ? req.body.cwd.trim() : undefined;
+            const cwd = typeof req.body?.cwd === 'string' && req.body.cwd.trim() ? req.body.cwd.trim() : '';
             const cols = typeof req.body?.cols === 'number' ? req.body.cols : undefined;
             const rows = typeof req.body?.rows === 'number' ? req.body.rows : undefined;
 
-            if (!sessionId) {
-              throw new Error('sessionId is required');
-            }
-
-            const terminal = await createTerminal({ sessionId, nodeId, cwd, cols, rows });
+            const terminal = await createTerminal({ nodeId, cwd, cols, rows });
             res.json({
               success: true,
               terminal,

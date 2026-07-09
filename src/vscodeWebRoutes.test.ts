@@ -54,6 +54,11 @@ test('VS Code Web route, extension assets, and filesystem API require the WebUI 
     const extensionManifest = await extensionWithCookie.json() as { name?: string };
     assert.equal(extensionManifest.name, '@foxwarm/vscode-web-foxwarm-fs');
 
+    const terminalExtensionWithCookie = await fetch(`${baseUrl}/vscode-web/extensions/foxwarm-terminal/package.json`, { headers: cookieHeaders() });
+    assert.equal(terminalExtensionWithCookie.status, 200);
+    const terminalExtensionManifest = await terminalExtensionWithCookie.json() as { name?: string };
+    assert.equal(terminalExtensionManifest.name, '@foxwarm/vscode-web-foxwarm-terminal');
+
     const fsNoAuth = await fetch(`${baseUrl}/api/vscode-web/fs/stat?nodeId=master&path=${encodeURIComponent(__filename)}`);
     assert.equal(fsNoAuth.status, 401);
 
@@ -102,6 +107,7 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
         assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
         assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.css/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-fs/);
+        assert.match(html, /\/vscode-web\/extensions\/foxwarm-terminal/);
         assert.match(html, /&quot;scheme&quot;:&quot;foxwarm&quot;/);
         assert.match(html, /&quot;authority&quot;:&quot;node&quot;/);
         assert.match(html, /&quot;path&quot;:&quot;\/master\/tmp\/hello%20world&quot;/);

@@ -8,7 +8,8 @@ import { logger } from './common';
 const VSCODE_WEB_ROUTE = '/vscode-web';
 const VSCODE_WEB_API_PREFIX = '/api/vscode-web/fs';
 const VSCODE_WEB_STATIC_ROUTE = `${VSCODE_WEB_ROUTE}/static`;
-const VSCODE_WEB_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-fs`;
+const VSCODE_WEB_FS_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-fs`;
+const VSCODE_WEB_TERMINAL_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-terminal`;
 const VSCODE_WEB_ASSET_DIR_ENV = 'FOXWARM_VSCODE_WEB_ASSET_DIR';
 const VSCODE_WEB_DEFAULT_FOLDER_URI_ENV = 'FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI';
 const DEFAULT_VSCODE_WEB_ASSET_DIR = path.join(BASE_DIR, 'packages', 'vscode-web', 'assets', 'vscode-web');
@@ -285,7 +286,8 @@ function buildWorkbenchConfiguration(req: express.Request) {
   const origin = getRequestOrigin(req);
   const requestedFolderUri = getSingleQueryValue(req.query.folderUri) ?? getDefaultFolderUri();
   const baseUrl = `${origin}${VSCODE_WEB_STATIC_ROUTE}`;
-  const extensionUri = `${origin}${VSCODE_WEB_EXTENSION_ROUTE}`;
+  const fsExtensionUri = `${origin}${VSCODE_WEB_FS_EXTENSION_ROUTE}`;
+  const terminalExtensionUri = `${origin}${VSCODE_WEB_TERMINAL_EXTENSION_ROUTE}`;
   return {
     baseUrl,
     configuration: {
@@ -299,7 +301,7 @@ function buildWorkbenchConfiguration(req: express.Request) {
         webEndpointUrlTemplate: baseUrl,
         webviewContentExternalBaseUrlTemplate: `${baseUrl}/out/vs/workbench/contrib/webview/browser/pre/`,
       },
-      additionalBuiltinExtensions: [toUriComponents(extensionUri)],
+      additionalBuiltinExtensions: [toUriComponents(fsExtensionUri), toUriComponents(terminalExtensionUri)],
     },
   };
 }
@@ -447,7 +449,8 @@ function buildVscodeWebPlaceholderHtml(): string {
 <body>
   <h1>Foxwarm VS Code Web spike route</h1>
   <p>This route is reserved for a self-hosted official VS Code for the Web build. Prepare static VS Code Web assets at <code>${escapedAssetDir}</code> or set <code>${VSCODE_WEB_ASSET_DIR_ENV}</code> to enable the workbench bootstrap.</p>
-  <p>The browser filesystem extension is served from <code>${VSCODE_WEB_EXTENSION_ROUTE}/</code>.</p>
+  <p>The browser filesystem extension is served from <code>${VSCODE_WEB_FS_EXTENSION_ROUTE}/</code>.</p>
+  <p>The browser terminal extension is served from <code>${VSCODE_WEB_TERMINAL_EXTENSION_ROUTE}/</code>.</p>
   <p>The filesystem API prefix is <code>${escapedApiPrefix}</code>.</p>
   <p>Intended workspace URI shape: <code>foxwarm://node/master/home/ldmbot/git/foxwarm/</code>.</p>
 </body>
@@ -455,9 +458,14 @@ function buildVscodeWebPlaceholderHtml(): string {
 }
 
 export function registerVscodeWebRoutes(httpServer: HttpServer): void {
-  const extensionDir = path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-fs');
-  if (fs.existsSync(extensionDir)) {
-    registerAuthenticatedStatic(httpServer, VSCODE_WEB_EXTENSION_ROUTE, extensionDir);
+  const extensionRoutes = [
+    { route: VSCODE_WEB_FS_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-fs') },
+    { route: VSCODE_WEB_TERMINAL_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-terminal') },
+  ];
+  for (const extension of extensionRoutes) {
+    if (fs.existsSync(extension.dir)) {
+      registerAuthenticatedStatic(httpServer, extension.route, extension.dir);
+    }
   }
 
   registerAuthenticatedDynamicStatic(httpServer, VSCODE_WEB_STATIC_ROUTE, getPreparedVscodeWebAssetDir);
