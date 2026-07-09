@@ -272,6 +272,19 @@ function createTerminalProfile() {
     pty: new FoxwarmPseudoterminal(target)
   });
 }
+function openNewTerminal() {
+  const terminal = vscode.window.createTerminal(createTerminalProfile().options);
+  terminal.show();
+  return terminal;
+}
+function toggleTerminal() {
+  const activeTerminal = vscode.window.activeTerminal;
+  if (activeTerminal) {
+    activeTerminal.show();
+    return;
+  }
+  openNewTerminal();
+}
 function activate(context) {
   terminalApiBase = deriveTerminalRouteBase(context.extensionUri, TERMINAL_API_PREFIX);
   terminalStreamBase = deriveTerminalRouteBase(context.extensionUri, TERMINAL_STREAM_PREFIX);
@@ -280,10 +293,8 @@ function activate(context) {
     vscode.window.registerTerminalProfileProvider("foxwarm-terminal", {
       provideTerminalProfile: () => createTerminalProfile()
     }),
-    vscode.commands.registerCommand("foxwarm-terminal.newTerminal", () => {
-      const terminal = vscode.window.createTerminal(createTerminalProfile().options);
-      terminal.show();
-    })
+    vscode.commands.registerCommand("foxwarm-terminal.newTerminal", () => openNewTerminal()),
+    vscode.commands.registerCommand("foxwarm-terminal.toggleTerminal", toggleTerminal)
   );
   console.log(`Foxwarm terminal profile registered. apiBase=${terminalApiBase} streamBase=${terminalStreamBase}`);
 }

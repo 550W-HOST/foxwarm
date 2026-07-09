@@ -7,7 +7,8 @@
   "browser": "./dist/extension.js",
   "activationEvents": [
     "onTerminalProfile:foxwarm-terminal",
-    "onCommand:foxwarm-terminal.newTerminal"
+    "onCommand:foxwarm-terminal.newTerminal",
+    "onCommand:foxwarm-terminal.toggleTerminal"
   ],
   "contributes": {
     "commands": [
@@ -16,6 +17,20 @@
         "title": "Foxwarm: New Terminal",
         "category": "Foxwarm",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "foxwarm-terminal.toggleTerminal",
+        "title": "Foxwarm: Toggle Terminal",
+        "category": "Foxwarm",
+        "icon": "$(terminal)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "foxwarm-terminal.toggleTerminal",
+        "key": "ctrl+`",
+        "mac": "ctrl+`",
+        "when": "virtualWorkspace == foxwarm"
       }
     ],
     "terminal": {
@@ -24,15 +39,6 @@
           "id": "foxwarm-terminal",
           "title": "Foxwarm Terminal",
           "icon": "terminal"
-        }
-      ]
-    },
-    "menus": {
-      "statusBar/remoteIndicator": [
-        {
-          "command": "foxwarm-terminal.newTerminal",
-          "when": "virtualWorkspace == foxwarm",
-          "group": "virtualfs_90_foxwarm_1_open@2"
         }
       ]
     }
