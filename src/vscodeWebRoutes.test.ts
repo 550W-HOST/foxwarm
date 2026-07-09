@@ -3,10 +3,13 @@ import test from 'node:test';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { HttpServer } from './httpServer';
 import { registerVscodeWebRoutes } from './vscodeWebRoutes';
 
 const TEST_TOKEN = 'secret-token';
+const execFileAsync = promisify(execFile);
 
 async function withServer(fn: (server: HttpServer, baseUrl: string) => Promise<void>) {
   const port = 33180 + Math.floor(Math.random() * 1000);
@@ -59,6 +62,11 @@ test('VS Code Web route, extension assets, and filesystem API require the WebUI 
     const terminalExtensionManifest = await terminalExtensionWithCookie.json() as { name?: string };
     assert.equal(terminalExtensionManifest.name, '@foxwarm/vscode-web-foxwarm-terminal');
 
+    const scmExtensionWithCookie = await fetch(`${baseUrl}/vscode-web/extensions/foxwarm-scm/package.json`, { headers: cookieHeaders() });
+    assert.equal(scmExtensionWithCookie.status, 200);
+    const scmExtensionManifest = await scmExtensionWithCookie.json() as { name?: string };
+    assert.equal(scmExtensionManifest.name, '@foxwarm/vscode-web-foxwarm-scm');
+
     const fsNoAuth = await fetch(`${baseUrl}/api/vscode-web/fs/stat?nodeId=master&path=${encodeURIComponent(__filename)}`);
     assert.equal(fsNoAuth.status, 401);
 
@@ -108,6 +116,7 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
         assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.css/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-fs/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-terminal/);
+        assert.match(html, /\/vscode-web\/extensions\/foxwarm-scm/);
         assert.match(html, /&quot;scheme&quot;:&quot;foxwarm&quot;/);
         assert.match(html, /&quot;authority&quot;:&quot;node\+master&quot;/);
         assert.match(html, /&quot;path&quot;:&quot;\/tmp\/hello%20world&quot;/);
@@ -146,6 +155,7 @@ test('VS Code Web workbench bootstrap honors forwarded base path prefixes', asyn
         assert.match(html, /\/proxy-prefix\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-terminal/);
+        assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-scm/);
         assert.match(html, /&quot;webEndpointUrlTemplate&quot;:&quot;https:\/\/example\.test\/proxy-prefix\/vscode-web\/static&quot;/);
         assert.match(html, /&quot;path&quot;:&quot;\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs&quot;/);
         assert.match(html, /&quot;callbackRoute&quot;:&quot;\/proxy-prefix\/vscode-web\/callback&quot;/);
@@ -189,4 +199,55 @@ test('VS Code Web workbench bootstrap can use relative assets from a trailing-sl
       process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = previousAssetDir;
     }
   }
+});
+
+test('VS Code Web git API reports status and returns base/working content', async () => {
+  await withTempDir(async (repoPath) => {
+    await execFileAsync('git', ['init'], { cwd: repoPath });
+    await execFileAsync('git', ['config', 'user.email', 'foxwarm-test@example.invalid'], { cwd: repoPath });
+    await execFileAsync('git', ['config', 'user.name', 'Foxwarm Test'], { cwd: repoPath });
+    await fs.writeFile(path.join(repoPath, 'tracked.txt'), 'before\n');
+    await execFileAsync('git', ['add', 'tracked.txt'], { cwd: repoPath });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: repoPath });
+
+    await fs.writeFile(path.join(repoPath, 'tracked.txt'), 'after\n');
+    await fs.writeFile(path.join(repoPath, 'new.txt'), 'new file\n');
+
+    await withServer(async (_server, baseUrl) => {
+      const statusNoAuth = await fetch(`${baseUrl}/api/vscode-web/git/status?nodeId=master&workspace=${encodeURIComponent(repoPath)}`);
+      assert.equal(statusNoAuth.status, 401);
+
+      const status = await fetch(`${baseUrl}/api/vscode-web/git/status?nodeId=master&workspace=${encodeURIComponent(repoPath)}`, { headers: bearerHeaders() });
+      assert.equal(status.status, 200);
+      const payload = await status.json() as { changes: Array<{ path: string; kind: string; indexStatus: string; workingTreeStatus: string }> };
+      assert.deepEqual(payload.changes.map((change) => [change.path, change.kind]).sort(), [['new.txt', 'untracked'], ['tracked.txt', 'modified']]);
+
+      const base = await fetch(`${baseUrl}/api/vscode-web/git/content?nodeId=master&workspace=${encodeURIComponent(repoPath)}&path=tracked.txt&side=base`, { headers: bearerHeaders() });
+      assert.equal(base.status, 200);
+      assert.equal(await base.text(), 'before\n');
+
+      const working = await fetch(`${baseUrl}/api/vscode-web/git/content?nodeId=master&workspace=${encodeURIComponent(repoPath)}&path=tracked.txt&side=working`, { headers: bearerHeaders() });
+      assert.equal(working.status, 200);
+      assert.equal(await working.text(), 'after\n');
+
+      const addedBase = await fetch(`${baseUrl}/api/vscode-web/git/content?nodeId=master&workspace=${encodeURIComponent(repoPath)}&path=new.txt&side=base`, { headers: bearerHeaders() });
+      assert.equal(addedBase.status, 200);
+      assert.equal(await addedBase.text(), '');
+    });
+  });
+});
+
+test('VS Code Web git API rejects unsupported nodes and path traversal', async () => {
+  await withTempDir(async (repoPath) => {
+    await execFileAsync('git', ['init'], { cwd: repoPath });
+    await withServer(async (_server, baseUrl) => {
+      const unsupportedNode = await fetch(`${baseUrl}/api/vscode-web/git/status?nodeId=worker&workspace=${encodeURIComponent(repoPath)}`, { headers: bearerHeaders() });
+      assert.equal(unsupportedNode.status, 400);
+      assert.equal((await unsupportedNode.json() as { code?: string }).code, 'UnsupportedNode');
+
+      const traversal = await fetch(`${baseUrl}/api/vscode-web/git/content?nodeId=master&workspace=${encodeURIComponent(repoPath)}&path=..%2Fsecret&side=working`, { headers: bearerHeaders() });
+      assert.equal(traversal.status, 400);
+      assert.equal((await traversal.json() as { code?: string }).code, 'InvalidPath');
+    });
+  });
 });

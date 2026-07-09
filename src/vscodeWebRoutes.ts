@@ -1,20 +1,25 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs-extra';
+import { spawn } from 'child_process';
 import type { HttpServer } from './httpServer';
 import { BASE_DIR } from './config';
 import { logger } from './common';
 
 const VSCODE_WEB_ROUTE = '/vscode-web';
 const VSCODE_WEB_API_PREFIX = '/api/vscode-web/fs';
+const VSCODE_WEB_GIT_API_PREFIX = '/api/vscode-web/git';
 const VSCODE_WEB_STATIC_ROUTE = `${VSCODE_WEB_ROUTE}/static`;
 const VSCODE_WEB_FS_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-fs`;
 const VSCODE_WEB_TERMINAL_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-terminal`;
+const VSCODE_WEB_SCM_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-scm`;
 const VSCODE_WEB_ASSET_DIR_ENV = 'FOXWARM_VSCODE_WEB_ASSET_DIR';
 const VSCODE_WEB_DEFAULT_FOLDER_URI_ENV = 'FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI';
 const DEFAULT_VSCODE_WEB_ASSET_DIR = path.join(BASE_DIR, 'packages', 'vscode-web', 'assets', 'vscode-web');
 const MAX_WRITE_BYTES = 50 * 1024 * 1024;
 const MAX_READ_BYTES = 50 * 1024 * 1024;
+const MAX_GIT_OUTPUT_BYTES = 10 * 1024 * 1024;
+const MAX_GIT_CONTENT_BYTES = 10 * 1024 * 1024;
 
 const VSCODE_FILE_TYPE = {
   Unknown: 0,
@@ -33,6 +38,7 @@ type FsErrorCode =
   | 'InvalidPath'
   | 'UnsupportedNode'
   | 'PayloadTooLarge'
+  | 'GitError'
   | 'Unknown';
 
 class VscodeWebFsError extends Error {
@@ -63,6 +69,8 @@ function statusForErrorCode(code: FsErrorCode): number {
       return 413;
     case 'Unavailable':
       return 503;
+    case 'GitError':
+      return 422;
     default:
       return 500;
   }
@@ -184,6 +192,158 @@ function sendFsError(res: express.Response, error: unknown): void {
   const anyError = error as any;
   logger.error({ err: error }, 'VS Code Web filesystem route failed');
   res.status(500).json({ error: anyError?.message || 'Internal Server Error', code: 'Unknown' });
+}
+
+function normalizeWorkspacePath(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new VscodeWebFsError('InvalidPath', 'workspace is required.');
+  }
+  const workspace = normalizeRealPath(value);
+  return workspace;
+}
+
+function normalizeGitRelativePath(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new VscodeWebFsError('InvalidPath', 'path is required.');
+  }
+  if (value.includes('\0')) {
+    throw new VscodeWebFsError('InvalidPath', 'path must not contain NUL bytes.');
+  }
+  const normalized = path.posix.normalize(value.replace(/\\/g, '/'));
+  if (normalized === '.' || normalized.startsWith('../') || normalized === '..' || path.posix.isAbsolute(normalized)) {
+    throw new VscodeWebFsError('InvalidPath', 'path must be a relative path inside the workspace.');
+  }
+  return normalized;
+}
+
+function resolveWorkspaceChild(workspace: string, relativePath: string): string {
+  const fullPath = path.resolve(workspace, relativePath);
+  const relative = path.relative(workspace, fullPath);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new VscodeWebFsError('InvalidPath', 'path escapes the workspace.');
+  }
+  return fullPath;
+}
+
+function getGitRequestBase(req: express.Request): { nodeId: string; workspace: string } {
+  const nodeId = normalizeNodeId(getSingleQueryValue(req.query.nodeId) ?? req.body?.nodeId);
+  const workspace = normalizeWorkspacePath(getSingleQueryValue(req.query.workspace) ?? req.body?.workspace);
+  return { nodeId, workspace };
+}
+
+function getGitFileRequest(req: express.Request): { nodeId: string; workspace: string; relativePath: string; fullPath: string } {
+  const { nodeId, workspace } = getGitRequestBase(req);
+  const relativePath = normalizeGitRelativePath(getSingleQueryValue(req.query.path) ?? req.body?.path);
+  const fullPath = resolveWorkspaceChild(workspace, relativePath);
+  return { nodeId, workspace, relativePath, fullPath };
+}
+
+function runGit(workspace: string, args: string[], options: { maxStdoutBytes?: number; timeoutMs?: number } = {}): Promise<Buffer> {
+  const maxStdoutBytes = options.maxStdoutBytes ?? MAX_GIT_OUTPUT_BYTES;
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', ['-c', `safe.directory=${workspace}`, '-C', workspace, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let settled = false;
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      if (!settled) {
+        settled = true;
+        reject(new VscodeWebFsError('GitError', `git ${args[0] || ''} timed out.`));
+      }
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > maxStdoutBytes) {
+        child.kill('SIGKILL');
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          reject(new VscodeWebFsError('PayloadTooLarge', `git output exceeds ${maxStdoutBytes} bytes.`));
+        }
+        return;
+      }
+      stdoutChunks.push(chunk);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes <= 64 * 1024) {
+        stderrChunks.push(chunk);
+      }
+    });
+    child.on('error', (error) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(new VscodeWebFsError('GitError', error.message));
+      }
+    });
+    child.on('close', (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve(Buffer.concat(stdoutChunks));
+        return;
+      }
+      const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
+      reject(new VscodeWebFsError('GitError', stderr || `git ${args[0] || ''} failed with exit code ${code}.`));
+    });
+  });
+}
+
+function classifyGitStatus(indexStatus: string, workingTreeStatus: string, oldPath?: string): string {
+  const xy = `${indexStatus}${workingTreeStatus}`;
+  if (xy.includes('U')) return 'conflicted';
+  if (oldPath || xy.includes('R')) return 'renamed';
+  if (xy === '??') return 'untracked';
+  if (xy.includes('A')) return 'added';
+  if (xy.includes('D')) return 'deleted';
+  if (xy.includes('M') || xy.includes('T') || xy.includes('C')) return 'modified';
+  return 'unknown';
+}
+
+function parseGitStatusPorcelainV2(raw: Buffer): Array<{ path: string; oldPath?: string; indexStatus: string; workingTreeStatus: string; kind: string }> {
+  const records = raw.toString('utf8').split('\0').filter(Boolean);
+  const changes: Array<{ path: string; oldPath?: string; indexStatus: string; workingTreeStatus: string; kind: string }> = [];
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i];
+    if (record.startsWith('? ')) {
+      changes.push({ path: record.slice(2), indexStatus: '?', workingTreeStatus: '?', kind: 'untracked' });
+      continue;
+    }
+    if (record.startsWith('! ')) {
+      continue;
+    }
+    if (record.startsWith('1 ')) {
+      const parts = record.split(' ');
+      const xy = parts[1] || '..';
+      const relativePath = parts.slice(8).join(' ');
+      if (relativePath) {
+        changes.push({ path: relativePath, indexStatus: xy[0] || '.', workingTreeStatus: xy[1] || '.', kind: classifyGitStatus(xy[0] || '.', xy[1] || '.') });
+      }
+      continue;
+    }
+    if (record.startsWith('2 ')) {
+      const parts = record.split(' ');
+      const xy = parts[1] || '..';
+      const relativePath = parts.slice(9).join(' ');
+      const oldPath = records[i + 1];
+      if (oldPath !== undefined) {
+        i += 1;
+      }
+      if (relativePath) {
+        changes.push({ path: relativePath, oldPath, indexStatus: xy[0] || '.', workingTreeStatus: xy[1] || '.', kind: classifyGitStatus(xy[0] || '.', xy[1] || '.', oldPath) });
+      }
+    }
+  }
+  return changes;
 }
 
 function registerAuthenticatedStatic(httpServer: HttpServer, mountPath: string, directory: string): void {
@@ -318,10 +478,12 @@ function buildWorkbenchConfiguration(req: express.Request) {
   const staticBasePath = getExternalPath(req, VSCODE_WEB_STATIC_ROUTE);
   const fsExtensionPath = getExternalPath(req, VSCODE_WEB_FS_EXTENSION_ROUTE);
   const terminalExtensionPath = getExternalPath(req, VSCODE_WEB_TERMINAL_EXTENSION_ROUTE);
+  const scmExtensionPath = getExternalPath(req, VSCODE_WEB_SCM_EXTENSION_ROUTE);
   const callbackRoute = `${getExternalRouteBasePath(req)}/callback`;
   const baseUrl = `${origin}${staticBasePath}`;
   const fsExtensionUri = `${origin}${fsExtensionPath}`;
   const terminalExtensionUri = `${origin}${terminalExtensionPath}`;
+  const scmExtensionUri = `${origin}${scmExtensionPath}`;
   return {
     baseUrl,
     staticBasePath,
@@ -337,7 +499,7 @@ function buildWorkbenchConfiguration(req: express.Request) {
         webEndpointUrlTemplate: baseUrl,
         webviewContentExternalBaseUrlTemplate: `${baseUrl}/out/vs/workbench/contrib/webview/browser/pre/`,
       },
-      additionalBuiltinExtensions: [toUriComponents(fsExtensionUri), toUriComponents(terminalExtensionUri)],
+      additionalBuiltinExtensions: [toUriComponents(fsExtensionUri), toUriComponents(terminalExtensionUri), toUriComponents(scmExtensionUri)],
       configurationDefaults: {
         'terminal.integrated.defaultProfile.linux': 'Foxwarm Terminal',
         'terminal.integrated.defaultProfile.osx': 'Foxwarm Terminal',
@@ -496,6 +658,7 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
     config.additionalBuiltinExtensions = [
       toUriComponents(extensionUrl('extensions/foxwarm-fs')),
       toUriComponents(extensionUrl('extensions/foxwarm-terminal')),
+      toUriComponents(extensionUrl('extensions/foxwarm-scm')),
     ];
     create(document.body, {
       ...config,
@@ -531,6 +694,7 @@ function buildVscodeWebPlaceholderHtml(): string {
   <p>This route is reserved for a self-hosted official VS Code for the Web build. Prepare static VS Code Web assets at <code>${escapedAssetDir}</code> or set <code>${VSCODE_WEB_ASSET_DIR_ENV}</code> to enable the workbench bootstrap.</p>
   <p>The browser filesystem extension is served from <code>${VSCODE_WEB_FS_EXTENSION_ROUTE}/</code>.</p>
   <p>The browser terminal extension is served from <code>${VSCODE_WEB_TERMINAL_EXTENSION_ROUTE}/</code>.</p>
+  <p>The browser source-control extension is served from <code>${VSCODE_WEB_SCM_EXTENSION_ROUTE}/</code>.</p>
   <p>The filesystem API prefix is <code>${escapedApiPrefix}</code>.</p>
   <p>Intended workspace URI shape: <code>foxwarm://node+master/home/ldmbot/git/foxwarm/</code>.</p>
 </body>
@@ -541,6 +705,7 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
   const extensionRoutes = [
     { route: VSCODE_WEB_FS_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-fs') },
     { route: VSCODE_WEB_TERMINAL_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-terminal') },
+    { route: VSCODE_WEB_SCM_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-scm') },
   ];
   for (const extension of extensionRoutes) {
     if (fs.existsSync(extension.dir)) {
@@ -731,6 +896,78 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
         }
         await fs.rename(oldPath, newPath);
         res.json({ success: true });
+      } catch (error) {
+        sendFsError(res, error);
+      }
+    },
+  });
+
+  httpServer.addRoute({
+    path: `${VSCODE_WEB_GIT_API_PREFIX}/status`,
+    method: 'GET',
+    handler: async (req, res) => {
+      try {
+        const { nodeId, workspace } = getGitRequestBase(req);
+        const topLevel = (await runGit(workspace, ['rev-parse', '--show-toplevel'], { maxStdoutBytes: 1024 * 1024 })).toString('utf8').trim();
+        const rawStatus = await runGit(workspace, ['status', '--porcelain=v2', '-z', '-uall'], { maxStdoutBytes: MAX_GIT_OUTPUT_BYTES });
+        res.json({
+          nodeId,
+          workspace,
+          topLevel,
+          changes: parseGitStatusPorcelainV2(rawStatus),
+        });
+      } catch (error) {
+        sendFsError(res, error);
+      }
+    },
+  });
+
+  httpServer.addRoute({
+    path: `${VSCODE_WEB_GIT_API_PREFIX}/content`,
+    method: 'GET',
+    handler: async (req, res) => {
+      try {
+        const { workspace, relativePath, fullPath } = getGitFileRequest(req);
+        const side = getSingleQueryValue(req.query.side) ?? 'base';
+        const ref = getSingleQueryValue(req.query.ref) ?? 'HEAD';
+        let content: Buffer;
+        if (side === 'working') {
+          try {
+            const stat = await fs.stat(fullPath);
+            if (!stat.isFile()) {
+              content = Buffer.alloc(0);
+            } else {
+              if (stat.size > MAX_GIT_CONTENT_BYTES) {
+                throw new VscodeWebFsError('PayloadTooLarge', `File exceeds ${MAX_GIT_CONTENT_BYTES} bytes: ${fullPath}`);
+              }
+              content = await fs.readFile(fullPath);
+            }
+          } catch (error: any) {
+            if (error instanceof VscodeWebFsError) {
+              throw error;
+            }
+            if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
+              content = Buffer.alloc(0);
+            } else {
+              throw error;
+            }
+          }
+        } else if (side === 'base') {
+          try {
+            content = await runGit(workspace, ['show', `${ref}:${relativePath}`], { maxStdoutBytes: MAX_GIT_CONTENT_BYTES });
+          } catch (error) {
+            if (error instanceof VscodeWebFsError && error.code === 'GitError') {
+              content = Buffer.alloc(0);
+            } else {
+              throw error;
+            }
+          }
+        } else {
+          throw new VscodeWebFsError('InvalidPath', 'side must be `base` or `working`.');
+        }
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(content);
       } catch (error) {
         sendFsError(res, error);
       }

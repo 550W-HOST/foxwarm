@@ -9,6 +9,7 @@ It is intentionally separate from `packages/webui` so the VS Code workbench and 
 - Dedicated authenticated filesystem API prefix: `/api/vscode-web/fs`.
 - Browser web extension: `foxwarm-fs`, served from `/vscode-web/extensions/foxwarm-fs/`.
 - Browser web extension: `foxwarm-terminal`, served from `/vscode-web/extensions/foxwarm-terminal/`.
+- Browser web extension: `foxwarm-scm`, served from `/vscode-web/extensions/foxwarm-scm/`.
 - Optional official VS Code Web static assets served from `/vscode-web/static/` when prepared.
 - URI shape: `foxwarm://node+<nodeId>/<absolute-path>`.
   - `node` is the namespace/type layer.
@@ -53,6 +54,18 @@ Current MVP behavior:
 `foxwarm-fs` also contributes a `Foxwarm: Open Folder...` command and a remote-indicator menu item for virtual `foxwarm` workspaces. It prompts for an absolute path on the current node and reopens the workbench with that path as the workspace root.
 
 `foxwarm-terminal` contributes `Foxwarm: New Terminal`, `Foxwarm: Toggle Terminal`, and `Foxwarm: Open Terminal in Editor Area`. The toggle command is bound to <kbd>Ctrl</kbd>+<kbd>`</kbd> inside `foxwarm` virtual workspaces so opening the terminal via the terminal shortcut creates a Foxwarm backend PTY when none exists. When a terminal already exists, the command delegates to VS Code's native `workbench.action.terminal.toggleTerminal`. The bottom-left remote/virtual-workspace menu intentionally only exposes workspace/target actions such as `Foxwarm: Open Folder...`, not terminal creation. Explorer resource context menus include `Open in Foxwarm Terminal`, which opens a backend PTY in the selected directory (or the containing directory for a file).
+
+## Source control MVP
+
+`foxwarm-scm` contributes a read-only Source Control provider for `foxwarm` workspaces. It calls authenticated Git API routes under `/api/vscode-web/git/*` to list working tree changes and opens diff editors comparing `HEAD` with working tree content through read-only `foxwarm-git:` virtual documents.
+
+Current MVP behavior:
+
+- Supports only `nodeId=master`.
+- Shows a single `Changes` resource group for working tree status.
+- Provides `Foxwarm SCM: Refresh Git Status`.
+- Opens `HEAD ↔ Working Tree` diffs for modified, added, deleted, renamed, and untracked files where possible.
+- Does not implement staging, committing, pushing, branch management, credentials, blame, history graph, or file watchers.
 
 ## Preparing official VS Code Web assets
 

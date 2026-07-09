@@ -1,0 +1,47 @@
+{
+  "name": "@foxwarm/vscode-web-foxwarm-scm",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "foxwarm",
+  "license": "MIT",
+  "browser": "./dist/extension.js",
+  "activationEvents": [
+    "*"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "foxwarm-scm.refresh",
+        "title": "Refresh Git Status",
+        "category": "Foxwarm SCM",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "foxwarm-scm.openChange",
+        "title": "Open Change",
+        "category": "Foxwarm SCM"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "foxwarm-scm.refresh",
+          "group": "navigation@10"
+        }
+      ]
+    }
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "extensionKind": [
+    "web"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0"
+  }
+}
