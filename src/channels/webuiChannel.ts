@@ -23,7 +23,7 @@ import { requestLlmOnce } from '../llm';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from '../weixin/api';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
-import { getSessionHistoryFilePath, readSessionHistorySnapshot, writeSessionHistoryAtomically } from '../session/metadataStore';
+import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
 import type { Message, MessagePart, QueueItem } from '../types';
@@ -33,7 +33,6 @@ const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
 const MAX_QUEUED_PREVIEW_TEXT_CHARS = 4000;
 const MAX_QUEUED_PREVIEW_INLINE_DATA_CHARS = 200_000;
-const WEBUI_SIDEBAR_ORDER_META_KEY = 'webuiSidebarOrder';
 
 function isPlaceholderSecret(value: unknown): boolean {
   return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
@@ -394,20 +393,8 @@ function buildChildrenMap(allSessions: Map<string, any>): Map<string, string[]> 
 }
 
 function getWebUiSidebarOrder(session: any): number | undefined {
-  const value = typeof session?.sidebarOrder === 'number'
-    ? session.sidebarOrder
-    : session?.meta?.[WEBUI_SIDEBAR_ORDER_META_KEY];
+  const value = session?.sidebarOrder;
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function ensureSessionMeta(session: any): Record<string, any> {
-  if (!session.meta || typeof session.meta !== 'object') {
-    session.meta = { lastMessageTime: Date.now() };
-  }
-  if (typeof session.meta.lastMessageTime !== 'number') {
-    session.meta.lastMessageTime = Date.now();
-  }
-  return session.meta;
 }
 
 function getSessionTreeParentId(session: any): string | null {
@@ -444,42 +431,8 @@ function getWebUiSidebarSiblings(parentSessionId: string | null, excludeSessionI
 
 function writeWebUiSidebarOrder(sessions: any[]): void {
   sessions.forEach((session, index) => {
-    const order = (index + 1) * 1000;
-    session.sidebarOrder = order;
-    const meta = ensureSessionMeta(session);
-    if (meta[WEBUI_SIDEBAR_ORDER_META_KEY] !== undefined) {
-      delete meta[WEBUI_SIDEBAR_ORDER_META_KEY];
-    }
+    session.sidebarOrder = (index + 1) * 1000;
   });
-}
-
-async function persistWebUiSidebarOrderHistory(sessions: any[]): Promise<void> {
-  await Promise.all(sessions.map(async (session): Promise<void> => {
-    try {
-      if (!session?.id) return;
-      const order = getWebUiSidebarOrder(session);
-      if (order === undefined) return;
-
-      const historyData = await readSessionHistorySnapshot(session.id).catch((_error: unknown): null => null);
-      if (!historyData) return;
-
-      const nextHistoryData = {
-        ...historyData,
-        sidebarOrder: order,
-        meta: historyData.meta && typeof historyData.meta === 'object'
-          ? { ...historyData.meta }
-          : historyData.meta,
-      } as Record<string, any>;
-
-      if (nextHistoryData.meta && typeof nextHistoryData.meta === 'object') {
-        delete nextHistoryData.meta[WEBUI_SIDEBAR_ORDER_META_KEY];
-      }
-
-      await writeSessionHistoryAtomically(session.id, nextHistoryData);
-    } catch (error) {
-      logger.warn({ err: error, sessionId: session?.id }, 'Failed to mirror WebUI sidebar order into session history file');
-    }
-  }));
 }
 
 async function resolveOptionalSessionId(sessionId: unknown, label: string): Promise<string | null | undefined> {
@@ -984,9 +937,7 @@ export class WebUIChannel implements Channel {
             }
 
             const rootSiblings = getWebUiSidebarSiblings(null, session.id);
-            const orderedRootSessions = [session, ...rootSiblings];
-            writeWebUiSidebarOrder(orderedRootSessions);
-            await persistWebUiSidebarOrderHistory(orderedRootSessions);
+            writeWebUiSidebarOrder([session, ...rootSiblings]);
             await sessionManager.saveSessionsMetadata();
 
             this.broadcastSessionListUpdate();
@@ -1376,6 +1327,7 @@ export class WebUIChannel implements Channel {
               return;
             }
 
+            const updateOrder = body.updateOrder !== false;
             const requestedPosition = body.position === undefined || body.position === null || body.position === ''
               ? undefined
               : body.position;
@@ -1393,6 +1345,15 @@ export class WebUIChannel implements Channel {
               res.status(400).json({
                 error: 'position cannot be combined with beforeSessionId or afterSessionId.',
                 code: 'POSITION_WITH_ANCHOR_NOT_ALLOWED',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            if (!updateOrder && (requestedPosition !== undefined || beforeSessionId || afterSessionId)) {
+              res.status(400).json({
+                error: 'updateOrder=false can only be used for parent-only moves.',
+                code: 'ORDER_ANCHOR_WITH_UPDATE_ORDER_DISABLED',
                 sessionId: movingSession.id,
               });
               return;
@@ -1452,12 +1413,22 @@ export class WebUIChannel implements Channel {
               return;
             }
 
-            const orderTouchedSessions = new Map<string, any>();
+            if (!updateOrder) {
+              this.broadcastSessionListUpdate();
+              res.json({
+                success: true,
+                sessionId: latestMovingSession.id,
+                parentSessionId: getSessionTreeParentId(latestMovingSession),
+                previousParentSessionId,
+                beforeSessionId: null,
+                afterSessionId: null,
+                sidebarOrder: getWebUiSidebarOrder(latestMovingSession) || null,
+              });
+              return;
+            }
 
             if (previousParentSessionId !== targetParentSessionId) {
-              const previousSiblings = getWebUiSidebarSiblings(previousParentSessionId, latestMovingSession.id);
-              writeWebUiSidebarOrder(previousSiblings);
-              previousSiblings.forEach(session => orderTouchedSessions.set(session.id, session));
+              writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, latestMovingSession.id));
             }
 
             const targetSiblingsWithoutMoving = getWebUiSidebarSiblings(targetParentSessionId, latestMovingSession.id);
@@ -1494,9 +1465,7 @@ export class WebUIChannel implements Channel {
             const targetSiblings = [...targetSiblingsWithoutMoving];
             targetSiblings.splice(Math.max(0, Math.min(insertIndex, targetSiblings.length)), 0, latestMovingSession);
             writeWebUiSidebarOrder(targetSiblings);
-            targetSiblings.forEach(session => orderTouchedSessions.set(session.id, session));
 
-            await persistWebUiSidebarOrderHistory(Array.from(orderTouchedSessions.values()));
             await sessionManager.saveSessionsMetadata();
             this.broadcastSessionListUpdate();
 
@@ -1609,16 +1578,13 @@ export class WebUIChannel implements Channel {
 
             const result = await sessionManager.setSessionParent(sessionId, targetParentId);
             const movedSession = await sessionManager.getExistingSession(result.childSessionId);
-            const orderTouchedSessions = new Map<string, any>();
 
             if (movedSession) {
               const previousParentSessionId = result.previousParentSessionId || null;
               const nextParentSessionId = result.parentSessionId || null;
 
               if (previousParentSessionId !== nextParentSessionId) {
-                const previousSiblings = getWebUiSidebarSiblings(previousParentSessionId, movedSession.id);
-                writeWebUiSidebarOrder(previousSiblings);
-                previousSiblings.forEach(session => orderTouchedSessions.set(session.id, session));
+                writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, movedSession.id));
               }
 
               const targetSiblingsWithoutMoving = getWebUiSidebarSiblings(nextParentSessionId, movedSession.id);
@@ -1629,10 +1595,8 @@ export class WebUIChannel implements Channel {
               const targetSiblings = [...targetSiblingsWithoutMoving];
               targetSiblings.splice(insertIndex, 0, movedSession);
               writeWebUiSidebarOrder(targetSiblings);
-              targetSiblings.forEach(session => orderTouchedSessions.set(session.id, session));
             }
 
-            await persistWebUiSidebarOrderHistory(Array.from(orderTouchedSessions.values()));
             await sessionManager.saveSessionsMetadata();
 
             this.broadcastSessionListUpdate();

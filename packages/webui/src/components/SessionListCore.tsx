@@ -47,7 +47,12 @@ export interface SessionMoveRequest {
   beforeSessionId?: string | null
   afterSessionId?: string | null
   position?: 'first' | 'last'
+  updateOrder?: boolean
 }
+
+type SessionListViewMode = 'default' | 'time' | 'flat-time'
+
+const SESSION_LIST_VIEW_MODE_KEY = 'foxwarm_session_list_view_mode_v1'
 
 interface ContextMenuState {
   sessionId: string
@@ -61,6 +66,32 @@ const FOXWARM_TOKEN_KEY = 'foxwarm_token'
 const LEGACY_TOKEN_KEY = 'alphabot_token'
 const DEFAULT_VISIBLE_CHILDREN = 5
 const MORE_VISIBLE_CHILDREN_STEP = 10
+const DEFAULT_VISIBLE_ROOTS = 50
+const MORE_VISIBLE_ROOTS_STEP = 50
+
+const SESSION_LIST_VIEW_MODES: SessionListViewMode[] = ['default', 'time', 'flat-time']
+
+const SESSION_LIST_VIEW_MODE_LABELS: Record<SessionListViewMode, string> = {
+  default: 'Default',
+  time: 'Time',
+  'flat-time': 'Flat',
+}
+
+const SESSION_LIST_VIEW_MODE_TITLES: Record<SessionListViewMode, string> = {
+  default: 'Default: use saved sidebar order when present, otherwise sort by recent activity. Dragging can reorder and change parents.',
+  time: 'Time: ignore saved sidebar order and sort by recent activity. Dragging can change parents but not reorder siblings.',
+  'flat-time': 'Flat time: ignore saved sidebar order and parent tree; show all sessions at the top level by recent activity.',
+}
+
+const loadStoredSessionListViewMode = (): SessionListViewMode => {
+  const stored = localStorage.getItem(SESSION_LIST_VIEW_MODE_KEY)
+  return SESSION_LIST_VIEW_MODES.includes(stored as SessionListViewMode) ? stored as SessionListViewMode : 'default'
+}
+
+const getNextSessionListViewMode = (mode: SessionListViewMode): SessionListViewMode => {
+  const index = SESSION_LIST_VIEW_MODES.indexOf(mode)
+  return SESSION_LIST_VIEW_MODES[(index + 1) % SESSION_LIST_VIEW_MODES.length] || 'default'
+}
 
 const getSidebarOrder = (session: Session): number | undefined => {
   return typeof session.sidebarOrder === 'number' && Number.isFinite(session.sidebarOrder)
@@ -234,14 +265,14 @@ function SidebarDropZone({
   )
 }
 
-function SidebarRootDropZone({ visible, disabled }: { visible: boolean; disabled?: boolean }) {
+function SidebarRootDropZone({ visible, disabled, allowOrder }: { visible: boolean; disabled?: boolean; allowOrder: boolean }) {
   const { setNodeRef, isOver } = useDroppable({
     id: 'sidebar-root-drop',
     disabled: disabled || !visible,
     data: {
       type: 'sidebar-root-drop',
       parentSessionId: null,
-      position: 'first',
+      ...(allowOrder ? { position: 'first' } : { updateOrder: false }),
     },
   })
 
@@ -271,54 +302,66 @@ function SessionRowDropLayer({
   session,
   parentSessionId,
   disabled,
+  allowReorder,
+  allowParentDrop,
 }: {
   session: Session
   parentSessionId: string | null
   disabled?: boolean
+  allowReorder: boolean
+  allowParentDrop: boolean
 }) {
+  if (!allowReorder && !allowParentDrop) return null
+
   return (
     <div className={`pointer-events-none absolute inset-0 z-10 rounded ${disabled ? 'hidden' : ''}`}>
-      <SidebarDropZone
-        id={`sidebar-session-before:${session.id}`}
-        disabled={disabled}
-        data={{
-          type: 'sidebar-session-before',
-          sessionId: session.id,
-          parentSessionId,
-        }}
-        className="pointer-events-none absolute inset-x-0 top-0 h-[28%]"
-      >
-        {(isOver) => isOver ? <div className="absolute inset-x-2 top-0 h-0.5 rounded-full bg-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.18)]" /> : null}
-      </SidebarDropZone>
-      <SidebarDropZone
-        id={`sidebar-session-child:${session.id}`}
-        disabled={disabled}
-        data={{
-          type: 'sidebar-session-child',
-          sessionId: session.id,
-          parentSessionId: session.id,
-          position: 'first',
-        }}
-        className="pointer-events-none absolute inset-x-0 top-[28%] bottom-[28%]"
-      >
-        {(isOver) => isOver ? (
-          <div className="absolute inset-x-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-md border border-blue-300 bg-blue-50/95 px-2 py-1 text-[11px] font-medium text-blue-700 shadow-sm dark:border-blue-500/60 dark:bg-blue-950/95 dark:text-blue-200">
-            Assign as child
-          </div>
-        ) : null}
-      </SidebarDropZone>
-      <SidebarDropZone
-        id={`sidebar-session-after:${session.id}`}
-        disabled={disabled}
-        data={{
-          type: 'sidebar-session-after',
-          sessionId: session.id,
-          parentSessionId,
-        }}
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-[28%]"
-      >
-        {(isOver) => isOver ? <div className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.18)]" /> : null}
-      </SidebarDropZone>
+      {allowReorder && (
+        <SidebarDropZone
+          id={`sidebar-session-before:${session.id}`}
+          disabled={disabled}
+          data={{
+            type: 'sidebar-session-before',
+            sessionId: session.id,
+            parentSessionId,
+          }}
+          className="pointer-events-none absolute inset-x-0 top-0 h-[28%]"
+        >
+          {(isOver) => isOver ? <div className="absolute inset-x-2 top-0 h-0.5 rounded-full bg-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.18)]" /> : null}
+        </SidebarDropZone>
+      )}
+      {allowParentDrop && (
+        <SidebarDropZone
+          id={`sidebar-session-child:${session.id}`}
+          disabled={disabled}
+          data={{
+            type: 'sidebar-session-child',
+            sessionId: session.id,
+            parentSessionId: session.id,
+            ...(allowReorder ? { position: 'first' } : { updateOrder: false }),
+          }}
+          className="pointer-events-none absolute inset-x-0 top-[28%] bottom-[28%]"
+        >
+          {(isOver) => isOver ? (
+            <div className="absolute inset-x-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-md border border-blue-300 bg-blue-50/95 px-2 py-1 text-[11px] font-medium text-blue-700 shadow-sm dark:border-blue-500/60 dark:bg-blue-950/95 dark:text-blue-200">
+              Assign as child
+            </div>
+          ) : null}
+        </SidebarDropZone>
+      )}
+      {allowReorder && (
+        <SidebarDropZone
+          id={`sidebar-session-after:${session.id}`}
+          disabled={disabled}
+          data={{
+            type: 'sidebar-session-after',
+            sessionId: session.id,
+            parentSessionId,
+          }}
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-[28%]"
+        >
+          {(isOver) => isOver ? <div className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.18)]" /> : null}
+        </SidebarDropZone>
+      )}
     </div>
   )
 }
@@ -354,7 +397,7 @@ function DraggableSessionRow({
     <button
       type="button"
       className="mr-1.5 mt-0.5 inline-flex h-6 w-5 shrink-0 cursor-grab items-center justify-center rounded text-gray-300 opacity-0 transition hover:bg-gray-200 hover:text-gray-600 active:cursor-grabbing group-hover:opacity-100 group-focus-within:opacity-100 dark:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-      title="Drag to reorder, assign as child, detach, or open in a pane"
+      title="Drag in the sidebar or open in a pane"
       aria-label={`Drag ${title}`}
       onClick={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
@@ -387,6 +430,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
   const [filterText, setFilterText] = useState('')
+  const [viewMode, setViewMode] = useState<SessionListViewMode>(loadStoredSessionListViewMode)
+  const [visibleRootCount, setVisibleRootCount] = useState(DEFAULT_VISIBLE_ROOTS)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
@@ -399,14 +444,20 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const activeDragData = active?.data.current as { type?: string; sessionId?: string } | undefined
   const draggingSessionId = activeDragData?.type === 'session' ? activeDragData.sessionId || null : null
 
+  const allowSidebarOrder = viewMode === 'default'
+  const allowParentDrop = viewMode !== 'flat-time'
+  const isFlatTimeMode = viewMode === 'flat-time'
+
   const sortSessions = (a: Session, b: Session) => {
     if (a.archived && !b.archived) return 1
     if (!a.archived && b.archived) return -1
-    const aOrder = getSidebarOrder(a)
-    const bOrder = getSidebarOrder(b)
-    if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) return aOrder - bOrder
-    if (aOrder !== undefined && bOrder === undefined) return -1
-    if (aOrder === undefined && bOrder !== undefined) return 1
+    if (allowSidebarOrder) {
+      const aOrder = getSidebarOrder(a)
+      const bOrder = getSidebarOrder(b)
+      if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) return aOrder - bOrder
+      if (aOrder !== undefined && bOrder === undefined) return -1
+      if (aOrder === undefined && bOrder !== undefined) return 1
+    }
     const timeDelta = (b.lastMessageTime || 0) - (a.lastMessageTime || 0)
     if (timeDelta !== 0) return timeDelta
     return a.id.localeCompare(b.id)
@@ -473,6 +524,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const visibleParentMap = useMemo(() => {
     const map = new Map<string, string | null>()
 
+    if (isFlatTimeMode) {
+      for (const session of visibleSessions) {
+        map.set(session.id, null)
+      }
+      return map
+    }
+
     for (const session of visibleSessions) {
       let parentId = normalizedParentMap.get(session.id) || null
 
@@ -484,7 +542,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }, [visibleSessions, normalizedParentMap, visibleSessionIds])
+  }, [visibleSessions, normalizedParentMap, visibleSessionIds, isFlatTimeMode])
 
   const childrenMap = useMemo(() => {
     const map = new Map<string, Session[]>()
@@ -504,7 +562,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }, [visibleSessions, visibleParentMap])
+  }, [visibleSessions, visibleParentMap, viewMode])
 
   const descendantBusyCountMap = useMemo(() => {
     const map = new Map<string, number>()
@@ -533,8 +591,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   const rootSessions = useMemo(
     () => visibleSessions.filter(session => !visibleParentMap.get(session.id)).sort(sortSessions),
-    [visibleSessions, visibleParentMap]
+    [visibleSessions, visibleParentMap, viewMode]
   )
+
+  const visibleRootSessions = rootSessions.slice(0, visibleRootCount)
+  const hiddenRootCount = rootSessions.length - visibleRootSessions.length
 
   const resolvedCurrentSessionId = currentSession ? resolveSessionId(currentSession) || currentSession : undefined
 
@@ -550,6 +611,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
     return false
   }
+
+  useEffect(() => {
+    localStorage.setItem(SESSION_LIST_VIEW_MODE_KEY, viewMode)
+    setVisibleRootCount(DEFAULT_VISIBLE_ROOTS)
+  }, [viewMode, normalizedFilterQuery])
 
   useEffect(() => {
     if (!resolvedCurrentSessionId) return
@@ -617,6 +683,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       newExpanded.add(sessionId)
     }
     setExpandedSessions(newExpanded)
+  }
+
+  const cycleViewMode = () => {
+    setViewMode(current => getNextSessionListViewMode(current))
+  }
+
+  const toggleShowMoreRoots = () => {
+    setVisibleRootCount(current => current >= rootSessions.length ? DEFAULT_VISIBLE_ROOTS : current + MORE_VISIBLE_ROOTS_STEP)
   }
 
   const toggleShowMore = (sessionId: string) => {
@@ -871,6 +945,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       : false
     const disableSidebarDrop = !draggingSessionId
       || isFiltering
+      || !allowParentDrop && !allowSidebarOrder
       || draggingSessionId === session.id
       || isDescendantOf(session.id, draggingSessionId)
       || targetParentWouldCreateCycle
@@ -899,6 +974,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 session={session}
                 parentSessionId={rowParentSessionId}
                 disabled={disableSidebarDrop}
+                allowReorder={allowSidebarOrder}
+                allowParentDrop={allowParentDrop}
               />
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
                 {dragHandle}
@@ -1063,38 +1140,67 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   return (
     <>
       <div className="sticky top-0 z-10 mb-1 space-y-1 bg-white/95 dark:bg-gray-800/95">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-          <input
-            type="search"
-            value={filterText}
-            onChange={(e) => setFilterText(e.currentTarget.value)}
-            placeholder="Search sessions"
-            aria-label="Search sessions"
-            className="w-full rounded-lg border border-gray-200 bg-white py-1 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
-          />
-          {filterText && (
-            <button
-              type="button"
-              onClick={() => setFilterText('')}
-              className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-              aria-label="Clear session search"
-              title="Clear search"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
+        <div className="flex items-center gap-1.5">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+            <input
+              type="search"
+              value={filterText}
+              onChange={(e) => setFilterText(e.currentTarget.value)}
+              placeholder="Search sessions"
+              aria-label="Search sessions"
+              className="w-full rounded-lg border border-gray-200 bg-white py-1 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
+            />
+            {filterText && (
+              <button
+                type="button"
+                onClick={() => setFilterText('')}
+                className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                aria-label="Clear session search"
+                title="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={cycleViewMode}
+            className="shrink-0 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 transition hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-blue-500/70 dark:hover:text-blue-200"
+            title={`${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
+            aria-label={`Session list mode: ${SESSION_LIST_VIEW_MODE_LABELS[viewMode]}`}
+          >
+            {SESSION_LIST_VIEW_MODE_LABELS[viewMode]}
+          </button>
         </div>
-        {isFiltering && (
+        {(isFiltering || viewMode !== 'default') && (
           <div className="px-1 text-xs text-gray-500 dark:text-gray-400">
-            {visibleSessions.length} {visibleSessions.length === 1 ? 'match' : 'matches'} · clear search to reorganize the tree
+            {isFiltering ? `${visibleSessions.length} ${visibleSessions.length === 1 ? 'match' : 'matches'} · ` : ''}{SESSION_LIST_VIEW_MODE_TITLES[viewMode]}
           </div>
         )}
-        <SidebarRootDropZone visible={!!draggingSessionId} disabled={isFiltering} />
+        <SidebarRootDropZone visible={!!draggingSessionId && allowParentDrop} disabled={isFiltering} allowOrder={allowSidebarOrder} />
       </div>
 
       {rootSessions.length > 0 ? (
-        rootSessions.map(session => renderSession(session))
+        <>
+          {visibleRootSessions.map(session => renderSession(session))}
+          {hiddenRootCount > 0 && (
+            <button
+              onClick={toggleShowMoreRoots}
+              className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            >
+              {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
+            </button>
+          )}
+          {hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
+            <button
+              onClick={toggleShowMoreRoots}
+              className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            >
+              ▲ Show less
+            </button>
+          )}
+        </>
       ) : (
         <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
           {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}

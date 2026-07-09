@@ -13,7 +13,6 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'indexingState',
   'historyVersion',
   'displayName',
-  'sidebarOrder',
   'currentNode',
   'cwd',
   'model',

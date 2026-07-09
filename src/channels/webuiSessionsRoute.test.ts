@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { HttpServer, setHttpServer } from '../httpServer';
 import * as sessionManager from '../sessionManager';
 import { WebUIChannel } from './webuiChannel';
+import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from '../session/metadataStore';
 import type { Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 
@@ -178,6 +179,11 @@ test('WebUI move route reparents, detaches, reorders, and rejects parent cycles'
     assert.equal(payload.parentSessionId, rootAId);
     assert.equal(typeof payload.sidebarOrder, 'number');
 
+    let metadata = (await loadSessionsMetadataSnapshot()).data as any;
+    let childHistory = await readSessionHistorySnapshot(childId) as any;
+    assert.equal(typeof metadata.sessions[childId].sidebarOrder, 'number');
+    assert.equal(Object.prototype.hasOwnProperty.call(childHistory, 'sidebarOrder'), false);
+
     res = await postMove(nestedId, { parentSessionId: rootAId, afterSessionId: childId });
     assert.equal(res.status, 200);
 
@@ -192,6 +198,20 @@ test('WebUI move route reparents, detaches, reorders, and rejects parent cycles'
     const childAfterReorder = await sessionManager.getSession(childId);
     const nestedAfterReorder = await sessionManager.getSession(nestedId);
     assert.ok((nestedAfterReorder.sidebarOrder || 0) < (childAfterReorder.sidebarOrder || 0));
+    childHistory = await readSessionHistorySnapshot(childId) as any;
+    assert.equal(Object.prototype.hasOwnProperty.call(childHistory, 'sidebarOrder'), false);
+
+    const childOrderBeforeParentOnlyMove = childAfterReorder.sidebarOrder;
+    res = await postMove(childId, { parentSessionId: rootBId, updateOrder: false });
+    assert.equal(res.status, 200);
+    const childAfterParentOnlyMove = await sessionManager.getSession(childId);
+    assert.equal(childAfterParentOnlyMove.parentSessionId, rootBId);
+    assert.equal(childAfterParentOnlyMove.sidebarOrder, childOrderBeforeParentOnlyMove);
+
+    res = await postMove(childId, { parentSessionId: rootAId, updateOrder: false, position: 'first' });
+    assert.equal(res.status, 400);
+    payload = await res.json() as any;
+    assert.equal(payload.code, 'ORDER_ANCHOR_WITH_UPDATE_ORDER_DISABLED');
 
     res = await postMove(rootAId, { parentSessionId: nestedId, position: 'first' });
     assert.equal(res.status, 400);
@@ -214,6 +234,11 @@ test('WebUI move route reparents, detaches, reorders, and rejects parent cycles'
     const rootBAfterDetach = await sessionManager.getSession(rootBId);
     assert.equal(childAfterDetach.parentSessionId, undefined);
     assert.ok((childAfterDetach.sidebarOrder || 0) < (rootBAfterDetach.sidebarOrder || 0));
+
+    metadata = (await loadSessionsMetadataSnapshot()).data as any;
+    childHistory = await readSessionHistorySnapshot(childId) as any;
+    assert.equal(typeof metadata.sessions[childId].sidebarOrder, 'number');
+    assert.equal(Object.prototype.hasOwnProperty.call(childHistory, 'sidebarOrder'), false);
   } finally {
     await server.stop();
     setHttpServer(null);

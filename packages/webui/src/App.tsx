@@ -1303,6 +1303,7 @@ function App() {
       sessionId?: string
       parentSessionId?: string | null
       position?: 'first' | 'last'
+      updateOrder?: boolean
     } | undefined
 
     setDraggingItem(null)
@@ -1334,13 +1335,17 @@ function App() {
     if (activeData.type === 'session') {
       const draggedSessionId = activeData.sessionId || activeId
       if (overData?.type === 'sidebar-root-drop') {
-        void handleMoveSession(draggedSessionId, { parentSessionId: null, position: overData.position || 'first' })
+        void handleMoveSession(draggedSessionId, overData.updateOrder === false
+          ? { parentSessionId: null, updateOrder: false }
+          : { parentSessionId: null, position: overData.position || 'first' })
         return
       }
 
       if (overData?.type === 'sidebar-session-child' && overData.sessionId) {
         if (overData.sessionId !== draggedSessionId) {
-          void handleMoveSession(draggedSessionId, { parentSessionId: overData.sessionId, position: overData.position || 'first' })
+          void handleMoveSession(draggedSessionId, overData.updateOrder === false
+            ? { parentSessionId: overData.sessionId, updateOrder: false }
+            : { parentSessionId: overData.sessionId, position: overData.position || 'first' })
         }
         return
       }
