@@ -280,7 +280,7 @@ function openNewTerminal() {
 function toggleTerminal() {
   const activeTerminal = vscode.window.activeTerminal;
   if (activeTerminal) {
-    activeTerminal.show();
+    void vscode.commands.executeCommand("workbench.action.terminal.toggleTerminal");
     return;
   }
   openNewTerminal();

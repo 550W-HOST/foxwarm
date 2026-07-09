@@ -52,7 +52,7 @@ Current MVP behavior:
 
 `foxwarm-fs` also contributes a `Foxwarm: Open Folder...` command and a remote-indicator menu item for virtual `foxwarm` workspaces. It prompts for an absolute path on the current node and reopens the workbench with that path as the workspace root.
 
-`foxwarm-terminal` contributes `Foxwarm: New Terminal` and `Foxwarm: Toggle Terminal`. The toggle command is bound to <kbd>Ctrl</kbd>+<kbd>`</kbd> inside `foxwarm` virtual workspaces so opening the terminal via the usual shortcut creates a Foxwarm backend PTY when none exists. The bottom-left remote/virtual-workspace menu intentionally only exposes workspace/target actions such as `Foxwarm: Open Folder...`, not terminal creation.
+`foxwarm-terminal` contributes `Foxwarm: New Terminal` and `Foxwarm: Toggle Terminal`. The toggle command is bound to <kbd>Ctrl</kbd>+<kbd>`</kbd> inside `foxwarm` virtual workspaces so opening the terminal via the terminal shortcut creates a Foxwarm backend PTY when none exists. When a terminal already exists, the command delegates to VS Code's native `workbench.action.terminal.toggleTerminal`. The bottom-left remote/virtual-workspace menu intentionally only exposes workspace/target actions such as `Foxwarm: Open Folder...`, not terminal creation.
 
 ## Preparing official VS Code Web assets
 
