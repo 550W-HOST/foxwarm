@@ -988,25 +988,25 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
       {/* Delete Confirmation Dialog */}
       {deleteConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md mx-4">
-            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
+        <div className="foxwarm-session-delete-modal-backdrop fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="foxwarm-session-delete-modal bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md mx-4">
+            <h3 className="foxwarm-session-delete-modal-title text-lg font-semibold mb-4 text-gray-900 dark:text-white">
               Delete Session
             </h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
-              Are you sure you want to delete session <span className="font-mono text-sm">{deleteConfirm}</span>?
+            <p className="foxwarm-session-delete-modal-body text-gray-600 dark:text-gray-400 mb-6">
+              Are you sure you want to delete session <span className="foxwarm-session-delete-session-id font-mono text-sm">{deleteConfirm}</span>?
               This action cannot be undone.
             </p>
-            <div className="flex justify-end gap-3">
+            <div className="foxwarm-session-delete-modal-actions flex justify-end gap-3">
               <button
                 onClick={() => setDeleteConfirm(null)}
-                className="px-4 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                className="foxwarm-session-delete-cancel-button px-4 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
               >
                 Cancel
               </button>
               <button
                 onClick={() => deleteSession(deleteConfirm)}
-                className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700"
+                className="foxwarm-session-delete-confirm-button px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700"
               >
                 Delete
               </button>
