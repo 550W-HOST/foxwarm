@@ -18,6 +18,8 @@ type TerminalTarget = {
   cwd: string;
 };
 
+type TerminalLocationOption = vscode.TerminalLocation | vscode.TerminalEditorLocationOptions | vscode.TerminalSplitLocationOptions;
+
 const TERMINAL_API_PREFIX = '/api/terminals';
 const TERMINAL_STREAM_PREFIX = '/api/terminals/stream';
 
@@ -213,16 +215,24 @@ function getCurrentTarget(): TerminalTarget {
   return { nodeId: target.nodeId, cwd: target.realPath };
 }
 
-function createTerminalProfile(): vscode.TerminalProfile {
-  const target = getCurrentTarget();
+function ensureSupportedTarget(target: TerminalTarget): TerminalTarget {
+  if (target.nodeId !== 'master') {
+    throw new Error(`Foxwarm terminal MVP supports only node \`master\` (target uses \`${target.nodeId}\`).`);
+  }
+  return target;
+}
+
+function createTerminalProfile(target: TerminalTarget = getCurrentTarget(), location?: TerminalLocationOption): vscode.TerminalProfile {
+  const supportedTarget = ensureSupportedTarget(target);
   return new vscode.TerminalProfile({
     name: 'Foxwarm Terminal',
-    pty: new FoxwarmPseudoterminal(target),
+    pty: new FoxwarmPseudoterminal(supportedTarget),
+    location,
   });
 }
 
-function openNewTerminal(): vscode.Terminal {
-  const terminal = vscode.window.createTerminal(createTerminalProfile().options);
+function openNewTerminal(target: TerminalTarget = getCurrentTarget(), location?: TerminalLocationOption): vscode.Terminal {
+  const terminal = vscode.window.createTerminal(createTerminalProfile(target, location).options);
   terminal.show();
   return terminal;
 }
@@ -236,6 +246,33 @@ function toggleTerminal(): void {
   openNewTerminal();
 }
 
+function dirname(realPath: string): string {
+  const normalized = realPath.replace(/\/+$|^$/g, '') || '/';
+  if (normalized === '/') {
+    return '/';
+  }
+  const index = normalized.lastIndexOf('/');
+  return index <= 0 ? '/' : normalized.slice(0, index);
+}
+
+async function getTargetForResource(uri: vscode.Uri | undefined): Promise<TerminalTarget> {
+  if (!uri || uri.scheme !== 'foxwarm') {
+    return getCurrentTarget();
+  }
+  const target = parseFoxwarmUri(uri);
+  const stat = await vscode.workspace.fs.stat(uri).catch(() => undefined);
+  const cwd = stat?.type === vscode.FileType.Directory ? target.realPath : dirname(target.realPath);
+  return ensureSupportedTarget({ nodeId: target.nodeId, cwd });
+}
+
+async function openHere(uri?: vscode.Uri): Promise<void> {
+  openNewTerminal(await getTargetForResource(uri));
+}
+
+function openInEditorArea(): void {
+  openNewTerminal(getCurrentTarget(), vscode.TerminalLocation.Editor);
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   terminalApiBase = deriveTerminalRouteBase(context.extensionUri, TERMINAL_API_PREFIX);
   terminalStreamBase = deriveTerminalRouteBase(context.extensionUri, TERMINAL_STREAM_PREFIX);
@@ -246,6 +283,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('foxwarm-terminal.newTerminal', () => openNewTerminal()),
     vscode.commands.registerCommand('foxwarm-terminal.toggleTerminal', toggleTerminal),
+    vscode.commands.registerCommand('foxwarm-terminal.openInEditorArea', openInEditorArea),
+    vscode.commands.registerCommand('foxwarm-terminal.openHere', openHere),
   );
   console.log(`Foxwarm terminal profile registered. apiBase=${terminalApiBase} streamBase=${terminalStreamBase}`);
 }

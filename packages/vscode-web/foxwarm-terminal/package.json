@@ -8,19 +8,33 @@
   "activationEvents": [
     "onTerminalProfile:foxwarm-terminal",
     "onCommand:foxwarm-terminal.newTerminal",
-    "onCommand:foxwarm-terminal.toggleTerminal"
+    "onCommand:foxwarm-terminal.toggleTerminal",
+    "onCommand:foxwarm-terminal.openInEditorArea",
+    "onCommand:foxwarm-terminal.openHere"
   ],
   "contributes": {
     "commands": [
       {
         "command": "foxwarm-terminal.newTerminal",
-        "title": "Foxwarm: New Terminal",
+        "title": "New Terminal",
         "category": "Foxwarm",
         "icon": "$(terminal)"
       },
       {
         "command": "foxwarm-terminal.toggleTerminal",
-        "title": "Foxwarm: Toggle Terminal",
+        "title": "Toggle Terminal",
+        "category": "Foxwarm",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "foxwarm-terminal.openInEditorArea",
+        "title": "Open Terminal in Editor Area",
+        "category": "Foxwarm",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "foxwarm-terminal.openHere",
+        "title": "Open in Foxwarm Terminal",
         "category": "Foxwarm",
         "icon": "$(terminal)"
       }
@@ -33,6 +47,15 @@
         "when": "virtualWorkspace == foxwarm"
       }
     ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "foxwarm-terminal.openHere",
+          "when": "resourceScheme == foxwarm",
+          "group": "navigation@20"
+        }
+      ]
+    },
     "terminal": {
       "profiles": [
         {
