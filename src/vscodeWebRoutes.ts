@@ -10,6 +10,7 @@ const VSCODE_WEB_API_PREFIX = '/api/vscode-web/fs';
 const VSCODE_WEB_STATIC_ROUTE = `${VSCODE_WEB_ROUTE}/static`;
 const VSCODE_WEB_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-fs`;
 const VSCODE_WEB_ASSET_DIR_ENV = 'FOXWARM_VSCODE_WEB_ASSET_DIR';
+const VSCODE_WEB_DEFAULT_FOLDER_URI_ENV = 'FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI';
 const DEFAULT_VSCODE_WEB_ASSET_DIR = path.join(BASE_DIR, 'packages', 'vscode-web', 'assets', 'vscode-web');
 const MAX_WRITE_BYTES = 50 * 1024 * 1024;
 const MAX_READ_BYTES = 50 * 1024 * 1024;
@@ -220,11 +221,25 @@ function resolveVscodeWebAssetDir(): string {
 function getPreparedVscodeWebAssetDir(): string | undefined {
   const assetDir = resolveVscodeWebAssetDir();
   const requiredFiles = [
-    'out/vs/loader.js',
-    'out/vs/workbench/workbench.web.main.css',
-    'out/vs/workbench/workbench.web.main.js',
+    'out/nls.messages.js',
+    'out/vs/workbench/workbench.web.main.internal.css',
+    'out/vs/workbench/workbench.web.main.internal.js',
   ];
   return requiredFiles.every((relativePath) => fs.existsSync(path.join(assetDir, relativePath))) ? assetDir : undefined;
+}
+
+function getDefaultFolderUri(): string {
+  const configured = process.env[VSCODE_WEB_DEFAULT_FOLDER_URI_ENV]?.trim();
+  if (configured) {
+    return configured;
+  }
+  if (fs.existsSync('/app/package.json')) {
+    return 'foxwarm://node/master/app/';
+  }
+  if (fs.existsSync('/home/ldmbot/git/foxwarm/package.json')) {
+    return 'foxwarm://node/master/home/ldmbot/git/foxwarm/';
+  }
+  return 'foxwarm://node/master/';
 }
 
 function getRequestOrigin(req: express.Request): string {
@@ -268,10 +283,9 @@ function escapeHtmlText(value: string): string {
 
 function buildWorkbenchConfiguration(req: express.Request) {
   const origin = getRequestOrigin(req);
-  const requestedFolderUri = getSingleQueryValue(req.query.folderUri) ?? 'foxwarm://node/master/home/ldmbot/git/foxwarm/';
+  const requestedFolderUri = getSingleQueryValue(req.query.folderUri) ?? getDefaultFolderUri();
   const baseUrl = `${origin}${VSCODE_WEB_STATIC_ROUTE}`;
   const extensionUri = `${origin}${VSCODE_WEB_EXTENSION_ROUTE}`;
-  const routeUrl = `${origin}${VSCODE_WEB_ROUTE}`;
   return {
     baseUrl,
     configuration: {
@@ -287,16 +301,14 @@ function buildWorkbenchConfiguration(req: express.Request) {
       },
       additionalBuiltinExtensions: [toUriComponents(extensionUri)],
     },
-    routeUrl,
   };
 }
 
 function buildVscodeWorkbenchHtml(req: express.Request): string {
-  const { baseUrl, configuration, routeUrl } = buildWorkbenchConfiguration(req);
+  const { baseUrl, configuration } = buildWorkbenchConfiguration(req);
   const escapedConfiguration = escapeHtmlAttribute(configuration);
   const escapedBaseUrl = escapeHtmlText(baseUrl);
-  const jsBaseUrl = JSON.stringify(baseUrl).replace(/</g, '\\u003c');
-  const jsRouteUrl = JSON.stringify(routeUrl).replace(/</g, '\\u003c');
+  const jsBaseUrl = JSON.stringify(baseUrl).replace(/</g, '\u003c');
   const jsCallbackRoute = JSON.stringify(`${VSCODE_WEB_ROUTE}/callback`);
   return `<!doctype html>
 <html>
@@ -308,71 +320,112 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
   <meta name="apple-mobile-web-app-title" content="Foxwarm Code" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
   <meta id="vscode-workbench-web-configuration" data-settings="${escapedConfiguration}" />
-  <meta id="vscode-workbench-builtin-extensions" data-settings="[]" />
+  <meta id="vscode-workbench-auth-session" data-settings="" />
   <link rel="icon" href="${escapedBaseUrl}/favicon.ico" type="image/x-icon" />
-  <link rel="manifest" href="${escapedBaseUrl}/manifest.json" />
-  <link data-name="vs/workbench/workbench.web.main" rel="stylesheet" href="${escapedBaseUrl}/out/vs/workbench/workbench.web.main.css" />
+  <link rel="manifest" href="${escapedBaseUrl}/manifest.json" crossorigin="use-credentials" />
+  <link data-name="vs/workbench/workbench.web.main" rel="stylesheet" href="${escapedBaseUrl}/out/vs/workbench/workbench.web.main.internal.css" />
   <title>Foxwarm VS Code Web</title>
 </head>
 <body aria-label=""></body>
-<script src="${escapedBaseUrl}/out/vs/loader.js"></script>
-<script src="${escapedBaseUrl}/out/vs/webPackagePaths.js"></script>
 <script>
   const baseUrl = ${jsBaseUrl};
-  if (!self.webPackagePaths) {
-    self.webPackagePaths = {};
-  } else {
-    Object.keys(self.webPackagePaths).forEach(function (key) {
-      self.webPackagePaths[key] = baseUrl + '/node_modules/' + key + '/' + self.webPackagePaths[key];
-    });
-  }
-  require.config({
-    baseUrl: baseUrl + '/out',
-    recordStats: true,
-    trustedTypesPolicy: window.trustedTypes?.createPolicy('amdLoader', {
-      createScriptURL(value) {
-        if (value.startsWith(baseUrl)) {
-          return value;
-        }
-        throw new Error('Invalid script url: ' + value);
-      }
-    }),
-    paths: self.webPackagePaths
-  });
+  globalThis._VSCODE_FILE_ROOT = baseUrl + '/out/';
 </script>
 <script>performance.mark('code/willLoadWorkbenchMain');</script>
-<script src="${escapedBaseUrl}/out/nls.messages.js"></script>
-<script src="${escapedBaseUrl}/out/vs/workbench/workbench.web.main.nls.js"></script>
-<script src="${escapedBaseUrl}/out/vs/workbench/workbench.web.main.js"></script>
-<script>
-  require(['vs/workbench/workbench.web.main'], function (workbench) {
+<script type="module" src="${escapedBaseUrl}/out/nls.messages.js"></script>
+<script type="module">
+  import { create, Emitter, URI } from '${escapedBaseUrl}/out/vs/workbench/workbench.web.main.internal.js';
+
+  class WorkspaceProvider {
+    constructor(workspace, payload) {
+      this.workspace = workspace;
+      this.payload = payload;
+      this.trusted = true;
+    }
+
+    static create(config) {
+      const query = new URL(document.location.href).searchParams;
+      let workspace;
+      let foundWorkspace = false;
+      let payload = Object.create(null);
+      for (const [key, value] of query.entries()) {
+        if (key === 'folder' || key === 'folderUri') {
+          workspace = { folderUri: URI.parse(value) };
+          foundWorkspace = true;
+        } else if (key === 'workspace') {
+          workspace = { workspaceUri: URI.parse(value) };
+          foundWorkspace = true;
+        } else if (key === 'ew') {
+          workspace = undefined;
+          foundWorkspace = true;
+        } else if (key === 'payload') {
+          try {
+            payload = JSON.parse(value);
+          } catch (error) {
+            console.error(error);
+          }
+        }
+      }
+      if (!foundWorkspace) {
+        if (config.folderUri) {
+          workspace = { folderUri: URI.revive(config.folderUri) };
+        } else if (config.workspaceUri) {
+          workspace = { workspaceUri: URI.revive(config.workspaceUri) };
+        }
+      }
+      return new WorkspaceProvider(workspace, payload);
+    }
+
+    async open(workspace, options) {
+      const targetHref = new URL(document.location.pathname, document.location.origin);
+      if (!workspace) {
+        targetHref.searchParams.set('ew', 'true');
+      } else if ('folderUri' in workspace) {
+        targetHref.searchParams.set('folder', workspace.folderUri.toString(true));
+      } else if ('workspaceUri' in workspace) {
+        targetHref.searchParams.set('workspace', workspace.workspaceUri.toString(true));
+      }
+      if (options?.payload) {
+        targetHref.searchParams.set('payload', JSON.stringify(options.payload));
+      }
+      if (options?.reuse) {
+        window.location.href = targetHref.toString();
+        return true;
+      }
+      return !!window.open(targetHref.toString());
+    }
+  }
+
+  class LocalStorageURLCallbackProvider {
+    constructor(callbackRoute) {
+      this.callbackRoute = callbackRoute;
+      this.emitter = new Emitter();
+      this.onCallback = this.emitter.event;
+    }
+
+    create() {
+      return URI.parse(window.location.href).with({ path: this.callbackRoute });
+    }
+
+    dispose() {
+      this.emitter.dispose();
+    }
+  }
+
+  try {
     const configElement = document.getElementById('vscode-workbench-web-configuration');
     const config = JSON.parse(configElement.getAttribute('data-settings'));
-    const workspace = config.folderUri ? { folderUri: workbench.URI.revive(config.folderUri) } : undefined;
-    const callbackEmitter = new workbench.Emitter();
-    const workspaceProvider = {
-      trusted: true,
-      workspace,
-      async open(nextWorkspace, options) {
-        let target = ${jsRouteUrl};
-        if (nextWorkspace && nextWorkspace.folderUri) {
-          target += '?folderUri=' + encodeURIComponent(nextWorkspace.folderUri.toString(true));
-        }
-        if (options?.reuse) {
-          window.location.href = target;
-          return true;
-        }
-        return !!window.open(target);
-      }
-    };
-    const urlCallbackProvider = {
-      onCallback: callbackEmitter.event,
-      create() {
-        return workbench.URI.parse(window.location.href).with({ path: ${jsCallbackRoute} });
-      }
-    };
-    workbench.create(document.body, { ...config, workspaceProvider, urlCallbackProvider });
-  });
+    create(document.body, {
+      ...config,
+      workspaceProvider: WorkspaceProvider.create(config),
+      urlCallbackProvider: new LocalStorageURLCallbackProvider(${jsCallbackRoute}),
+    });
+  } catch (error) {
+    console.error('Failed to bootstrap Foxwarm VS Code Web', error);
+    const pre = document.createElement('pre');
+    pre.textContent = String(error?.stack || error);
+    document.body.appendChild(pre);
+  }
 </script>
 </html>`;
 }

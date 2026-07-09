@@ -83,27 +83,24 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
   try {
     await withTempDir(async (dirPath) => {
       process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
-      await fs.outputFile(path.join(dirPath, 'out/vs/loader.js'), 'window.require={config(){}};');
-      await fs.outputFile(path.join(dirPath, 'out/vs/webPackagePaths.js'), 'self.webPackagePaths={};');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.css'), 'body{}');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.nls.js'), '');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.js'), '');
       await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
+      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
+      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
 
       await withServer(async (_server, baseUrl) => {
-        const noAuthStatic = await fetch(`${baseUrl}/vscode-web/static/out/vs/loader.js`);
+        const noAuthStatic = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`);
         assert.equal(noAuthStatic.status, 401);
 
-        const staticWithCookie = await fetch(`${baseUrl}/vscode-web/static/out/vs/loader.js`, { headers: cookieHeaders() });
+        const staticWithCookie = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`, { headers: cookieHeaders() });
         assert.equal(staticWithCookie.status, 200);
-        assert.match(await staticWithCookie.text(), /window\.require/);
 
         const folderUri = 'foxwarm://node/master/tmp/hello%20world';
         const workbench = await fetch(`${baseUrl}/vscode-web?folderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
         assert.equal(workbench.status, 200);
         const html = await workbench.text();
         assert.match(html, /vscode-workbench-web-configuration/);
-        assert.match(html, /\/vscode-web\/static\/out\/vs\/loader\.js/);
+        assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
+        assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.css/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-fs/);
         assert.match(html, /&quot;scheme&quot;:&quot;foxwarm&quot;/);
         assert.match(html, /&quot;authority&quot;:&quot;node&quot;/);

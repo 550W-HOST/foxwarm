@@ -20,6 +20,12 @@ Example workspace folder URI:
 foxwarm://node/master/home/ldmbot/git/foxwarm/
 ```
 
+In the Docker test environment the backend sees the repository at `/app`, so use:
+
+```text
+foxwarm://node/master/app/
+```
+
 ## Authentication
 
 All VS Code Web routes use the same token mechanism as the main WebUI:
@@ -49,7 +55,7 @@ At runtime the route can also read assets from another directory:
 FOXWARM_VSCODE_WEB_ASSET_DIR=/path/to/vscode-web-assets npm run start:notmux
 ```
 
-When the required static files exist (`out/vs/loader.js`, `out/vs/workbench/workbench.web.main.css`, `out/vs/workbench/workbench.web.main.js`), `/vscode-web` emits a VS Code Web workbench bootstrap that includes `foxwarm-fs` as an additional browser builtin extension and opens the requested `folderUri` query parameter, defaulting to the example URI above.
+When the required static files exist (`out/nls.messages.js`, `out/vs/workbench/workbench.web.main.internal.css`, `out/vs/workbench/workbench.web.main.internal.js`), `/vscode-web` emits a VS Code Web workbench bootstrap that includes `foxwarm-fs` as an additional browser builtin extension and opens the requested `folderUri` query parameter. The default folder URI can be overridden with `FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI`; otherwise the route prefers `/app` when running in the Docker test environment and falls back to the host checkout path when present.
 
 ## Not in scope yet
 
