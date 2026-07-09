@@ -249,6 +249,36 @@ function getRequestOrigin(req: express.Request): string {
   return `${forwardedProto}://${forwardedHost}`;
 }
 
+function normalizeForwardedPrefix(value: string | undefined): string {
+  if (!value) {
+    return '';
+  }
+  const firstValue = value.split(',')[0]?.trim() || '';
+  if (!firstValue || firstValue === '/') {
+    return '';
+  }
+  const withSlash = firstValue.startsWith('/') ? firstValue : `/${firstValue}`;
+  return withSlash.replace(/\/+$/, '');
+}
+
+function getExternalRouteBasePath(req: express.Request): string {
+  const prefix = normalizeForwardedPrefix(getSingleQueryValue(req.headers['x-forwarded-prefix']));
+  return `${prefix}${VSCODE_WEB_ROUTE}`;
+}
+
+function getExternalPath(req: express.Request, routePath: string): string {
+  const prefix = normalizeForwardedPrefix(getSingleQueryValue(req.headers['x-forwarded-prefix']));
+  return `${prefix}${routePath}`;
+}
+
+function shouldUseRelativeAssetPaths(req: express.Request): boolean {
+  if (normalizeForwardedPrefix(getSingleQueryValue(req.headers['x-forwarded-prefix']))) {
+    return false;
+  }
+  const requestPath = (req.originalUrl || req.url || '').split('?')[0] || '';
+  return requestPath.endsWith('/');
+}
+
 function toUriComponents(uriString: string) {
   const parsed = new URL(uriString);
   return {
@@ -285,14 +315,20 @@ function escapeHtmlText(value: string): string {
 function buildWorkbenchConfiguration(req: express.Request) {
   const origin = getRequestOrigin(req);
   const requestedFolderUri = getSingleQueryValue(req.query.folderUri) ?? getDefaultFolderUri();
-  const baseUrl = `${origin}${VSCODE_WEB_STATIC_ROUTE}`;
-  const fsExtensionUri = `${origin}${VSCODE_WEB_FS_EXTENSION_ROUTE}`;
-  const terminalExtensionUri = `${origin}${VSCODE_WEB_TERMINAL_EXTENSION_ROUTE}`;
+  const staticBasePath = getExternalPath(req, VSCODE_WEB_STATIC_ROUTE);
+  const fsExtensionPath = getExternalPath(req, VSCODE_WEB_FS_EXTENSION_ROUTE);
+  const terminalExtensionPath = getExternalPath(req, VSCODE_WEB_TERMINAL_EXTENSION_ROUTE);
+  const callbackRoute = `${getExternalRouteBasePath(req)}/callback`;
+  const baseUrl = `${origin}${staticBasePath}`;
+  const fsExtensionUri = `${origin}${fsExtensionPath}`;
+  const terminalExtensionUri = `${origin}${terminalExtensionPath}`;
   return {
     baseUrl,
+    staticBasePath,
+    callbackRoute,
     configuration: {
       folderUri: toFoxwarmFolderUriComponents(requestedFolderUri),
-      callbackRoute: `${VSCODE_WEB_ROUTE}/callback`,
+      callbackRoute,
       productConfiguration: {
         enableTelemetry: false,
         // The official static workbench needs these product URLs for web
@@ -307,11 +343,12 @@ function buildWorkbenchConfiguration(req: express.Request) {
 }
 
 function buildVscodeWorkbenchHtml(req: express.Request): string {
-  const { baseUrl, configuration } = buildWorkbenchConfiguration(req);
+  const { baseUrl, staticBasePath, callbackRoute, configuration } = buildWorkbenchConfiguration(req);
   const escapedConfiguration = escapeHtmlAttribute(configuration);
-  const escapedBaseUrl = escapeHtmlText(baseUrl);
+  const assetBasePath = shouldUseRelativeAssetPaths(req) ? './static' : staticBasePath;
+  const escapedAssetBasePath = escapeHtmlText(assetBasePath);
   const jsBaseUrl = JSON.stringify(baseUrl).replace(/</g, '\u003c');
-  const jsCallbackRoute = JSON.stringify(`${VSCODE_WEB_ROUTE}/callback`);
+  const jsCallbackRoute = JSON.stringify(callbackRoute);
   return `<!doctype html>
 <html>
 <head>
@@ -323,20 +360,36 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
   <meta id="vscode-workbench-web-configuration" data-settings="${escapedConfiguration}" />
   <meta id="vscode-workbench-auth-session" data-settings="" />
-  <link rel="icon" href="${escapedBaseUrl}/favicon.ico" type="image/x-icon" />
-  <link rel="manifest" href="${escapedBaseUrl}/manifest.json" crossorigin="use-credentials" />
-  <link data-name="vs/workbench/workbench.web.main" rel="stylesheet" href="${escapedBaseUrl}/out/vs/workbench/workbench.web.main.internal.css" />
+  <link rel="icon" href="${escapedAssetBasePath}/favicon.ico" type="image/x-icon" />
+  <link rel="manifest" href="${escapedAssetBasePath}/manifest.json" crossorigin="use-credentials" />
+  <link data-name="vs/workbench/workbench.web.main" rel="stylesheet" href="${escapedAssetBasePath}/out/vs/workbench/workbench.web.main.internal.css" />
   <title>Foxwarm VS Code Web</title>
 </head>
 <body aria-label=""></body>
 <script>
-  const baseUrl = ${jsBaseUrl};
+  const serverBaseUrl = ${jsBaseUrl};
+  const routeBaseUrl = (() => {
+    const url = new URL(window.location.href);
+    url.search = '';
+    url.hash = '';
+    if (!url.pathname.endsWith('/')) {
+      url.pathname += '/';
+    }
+    return url;
+  })();
+  const trimTrailingSlash = (value) => value.endsWith('/') ? value.slice(0, -1) : value;
+  const baseUrl = trimTrailingSlash(new URL('static', routeBaseUrl).toString()) || serverBaseUrl;
   globalThis._VSCODE_FILE_ROOT = baseUrl + '/out/';
+  globalThis.__foxwarmVscodeWeb = { baseUrl, routeBaseUrl: routeBaseUrl.toString() };
 </script>
 <script>performance.mark('code/willLoadWorkbenchMain');</script>
-<script type="module" src="${escapedBaseUrl}/out/nls.messages.js"></script>
+<script type="module" src="${escapedAssetBasePath}/out/nls.messages.js"></script>
 <script type="module">
-  import { create, Emitter, URI } from '${escapedBaseUrl}/out/vs/workbench/workbench.web.main.internal.js';
+  import { create, Emitter, URI } from '${escapedAssetBasePath}/out/vs/workbench/workbench.web.main.internal.js';
+
+  const { baseUrl, routeBaseUrl: routeBaseUrlString } = globalThis.__foxwarmVscodeWeb;
+  const routeBaseUrl = new URL(routeBaseUrlString);
+  const trimTrailingSlash = (value) => value.endsWith('/') ? value.slice(0, -1) : value;
 
   class WorkspaceProvider {
     constructor(workspace, payload) {
@@ -417,10 +470,32 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
   try {
     const configElement = document.getElementById('vscode-workbench-web-configuration');
     const config = JSON.parse(configElement.getAttribute('data-settings'));
+    const toUriComponents = (uriString) => {
+      const parsed = new URL(uriString);
+      return {
+        scheme: parsed.protocol.slice(0, -1),
+        authority: parsed.host,
+        path: parsed.pathname,
+        query: parsed.search ? parsed.search.slice(1) : '',
+        fragment: parsed.hash ? parsed.hash.slice(1) : '',
+      };
+    };
+    const routePath = trimTrailingSlash(routeBaseUrl.pathname);
+    const extensionUrl = (extensionPath) => trimTrailingSlash(new URL(extensionPath, routeBaseUrl).toString());
+    config.callbackRoute = routePath + '/callback';
+    config.productConfiguration = {
+      ...config.productConfiguration,
+      webEndpointUrlTemplate: baseUrl,
+      webviewContentExternalBaseUrlTemplate: baseUrl + '/out/vs/workbench/contrib/webview/browser/pre/',
+    };
+    config.additionalBuiltinExtensions = [
+      toUriComponents(extensionUrl('extensions/foxwarm-fs')),
+      toUriComponents(extensionUrl('extensions/foxwarm-terminal')),
+    ];
     create(document.body, {
       ...config,
       workspaceProvider: WorkspaceProvider.create(config),
-      urlCallbackProvider: new LocalStorageURLCallbackProvider(${jsCallbackRoute}),
+      urlCallbackProvider: new LocalStorageURLCallbackProvider(config.callbackRoute || ${jsCallbackRoute}),
     });
   } catch (error) {
     console.error('Failed to bootstrap Foxwarm VS Code Web', error);

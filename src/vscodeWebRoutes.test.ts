@@ -121,3 +121,71 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
     }
   }
 });
+
+test('VS Code Web workbench bootstrap honors forwarded base path prefixes', async () => {
+  const previousAssetDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
+  try {
+    await withTempDir(async (dirPath) => {
+      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
+      await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
+      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
+      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
+
+      await withServer(async (_server, baseUrl) => {
+        const workbench = await fetch(`${baseUrl}/vscode-web`, {
+          headers: cookieHeaders({
+            'x-forwarded-prefix': '/proxy-prefix',
+            'x-forwarded-proto': 'https',
+            'x-forwarded-host': 'example.test',
+          }),
+        });
+        assert.equal(workbench.status, 200);
+        const html = await workbench.text();
+        assert.match(html, /\/proxy-prefix\/vscode-web\/static\/out\/nls\.messages\.js/);
+        assert.match(html, /\/proxy-prefix\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
+        assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs/);
+        assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-terminal/);
+        assert.match(html, /&quot;webEndpointUrlTemplate&quot;:&quot;https:\/\/example\.test\/proxy-prefix\/vscode-web\/static&quot;/);
+        assert.match(html, /&quot;path&quot;:&quot;\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs&quot;/);
+        assert.match(html, /&quot;callbackRoute&quot;:&quot;\/proxy-prefix\/vscode-web\/callback&quot;/);
+        assert.doesNotMatch(html, /https:\/\/example\.test\/vscode-web\/static/);
+        assert.doesNotMatch(html, /href="\/vscode-web\/static/);
+      });
+    });
+  } finally {
+    if (previousAssetDir === undefined) {
+      delete process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
+    } else {
+      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = previousAssetDir;
+    }
+  }
+});
+
+test('VS Code Web workbench bootstrap can use relative assets from a trailing-slash route', async () => {
+  const previousAssetDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
+  try {
+    await withTempDir(async (dirPath) => {
+      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
+      await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
+      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
+      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
+
+      await withServer(async (_server, baseUrl) => {
+        const workbench = await fetch(`${baseUrl}/vscode-web/`, { headers: cookieHeaders() });
+        assert.equal(workbench.status, 200);
+        const html = await workbench.text();
+        assert.match(html, /href="\.\/static\/favicon\.ico"/);
+        assert.match(html, /src="\.\/static\/out\/nls\.messages\.js"/);
+        assert.match(html, /import \{ create, Emitter, URI \} from '\.\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js'/);
+        assert.match(html, /new URL\('static', routeBaseUrl\)/);
+        assert.match(html, /extensionUrl\('extensions\/foxwarm-terminal'\)/);
+      });
+    });
+  } finally {
+    if (previousAssetDir === undefined) {
+      delete process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
+    } else {
+      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = previousAssetDir;
+    }
+  }
+});
