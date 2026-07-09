@@ -52,8 +52,20 @@ function parseFoxwarmUri(uri) {
   if (uri.scheme !== "foxwarm") {
     throw new Error(`Unsupported URI scheme \`${uri.scheme}\`; expected \`foxwarm\`.`);
   }
+  if (uri.authority.startsWith("node+")) {
+    const nodeId2 = decodePathSegment(uri.authority.slice("node+".length));
+    if (!nodeId2) {
+      throw new Error(`Missing node id in foxwarm URI \`${uri.toString(true)}\`.`);
+    }
+    const realPathSegments2 = uri.path.split("/").filter(Boolean).map(decodePathSegment);
+    return {
+      namespace: "node",
+      nodeId: nodeId2,
+      realPath: `/${realPathSegments2.join("/")}`
+    };
+  }
   if (uri.authority !== "node") {
-    throw new Error(`Unsupported foxwarm URI namespace \`${uri.authority}\`; expected \`node\`.`);
+    throw new Error(`Unsupported foxwarm URI authority \`${uri.authority}\`; expected \`node+<nodeId>\`.`);
   }
   const rawSegments = uri.path.split("/").filter(Boolean);
   if (rawSegments.length === 0) {
@@ -80,7 +92,7 @@ function buildFoxwarmNodeUriString(nodeId, realPath) {
   }
   const encodedNodeId = encodeURIComponent(nodeId);
   const encodedPath = realPath.split("/").map((segment, index) => index === 0 ? "" : encodeURIComponent(segment)).join("/");
-  return `foxwarm://node/${encodedNodeId}${encodedPath}`;
+  return `foxwarm://node+${encodedNodeId}${encodedPath}`;
 }
 
 // src/provider.ts
@@ -227,15 +239,52 @@ var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
 };
 
 // src/extension.ts
+function getCurrentNodeId() {
+  const folder = vscode2.workspace.workspaceFolders?.[0];
+  if (!folder) {
+    return "master";
+  }
+  try {
+    return parseFoxwarmUri(folder.uri).nodeId;
+  } catch {
+    return "master";
+  }
+}
+function getCurrentPath() {
+  const folder = vscode2.workspace.workspaceFolders?.[0];
+  if (!folder) {
+    return "/";
+  }
+  try {
+    return parseFoxwarmUri(folder.uri).realPath;
+  } catch {
+    return "/";
+  }
+}
+async function openFoxwarmFolder() {
+  const value = await vscode2.window.showInputBox({
+    title: "Open Foxwarm Folder",
+    prompt: "Absolute path on the current Foxwarm node.",
+    value: getCurrentPath(),
+    validateInput: (input) => input.startsWith("/") ? void 0 : "Use an absolute path, for example /app."
+  });
+  if (!value) {
+    return;
+  }
+  await vscode2.commands.executeCommand("vscode.openFolder", vscode2.Uri.parse(buildFoxwarmNodeUriString(getCurrentNodeId(), value)), {
+    forceNewWindow: false
+  });
+}
 function activate(context) {
   const provider = FoxwarmFileSystemProvider.fromExtensionContext(context);
   context.subscriptions.push(
     vscode2.workspace.registerFileSystemProvider("foxwarm", provider, {
       isCaseSensitive: true,
       isReadonly: false
-    })
+    }),
+    vscode2.commands.registerCommand("foxwarm-fs.openFolder", openFoxwarmFolder)
   );
-  console.log("Foxwarm filesystem provider registered for foxwarm://node/<nodeId>/<absolute-path>.");
+  console.log("Foxwarm filesystem provider registered for foxwarm://node+<nodeId>/<absolute-path>.");
 }
 function deactivate() {
 }

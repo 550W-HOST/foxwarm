@@ -49,8 +49,20 @@ function parseFoxwarmUri(uri) {
   if (uri.scheme !== "foxwarm") {
     throw new Error(`Unsupported URI scheme \`${uri.scheme}\`; expected \`foxwarm\`.`);
   }
+  if (uri.authority.startsWith("node+")) {
+    const nodeId2 = decodePathSegment(uri.authority.slice("node+".length));
+    if (!nodeId2) {
+      throw new Error(`Missing node id in foxwarm URI \`${uri.toString(true)}\`.`);
+    }
+    const realPathSegments2 = uri.path.split("/").filter(Boolean).map(decodePathSegment);
+    return {
+      namespace: "node",
+      nodeId: nodeId2,
+      realPath: `/${realPathSegments2.join("/")}`
+    };
+  }
   if (uri.authority !== "node") {
-    throw new Error(`Unsupported foxwarm URI namespace \`${uri.authority}\`; expected \`node\`.`);
+    throw new Error(`Unsupported foxwarm URI authority \`${uri.authority}\`; expected \`node+<nodeId>\`.`);
   }
   const rawSegments = uri.path.split("/").filter(Boolean);
   if (rawSegments.length === 0) {
@@ -81,6 +93,7 @@ var TERMINAL_API_PREFIX = "/api/terminals";
 var TERMINAL_STREAM_PREFIX = "/api/terminals/stream";
 var terminalApiBase = TERMINAL_API_PREFIX;
 var terminalStreamBase = TERMINAL_STREAM_PREFIX;
+var terminalRouteOrigin = "";
 function deriveTerminalRouteBase(extensionUri, apiPath) {
   if (extensionUri.scheme !== "http" && extensionUri.scheme !== "https") {
     return apiPath;
@@ -90,11 +103,18 @@ function deriveTerminalRouteBase(extensionUri, apiPath) {
   const prefix = markerIndex >= 0 ? extensionUri.path.slice(0, markerIndex) : "";
   return `${extensionUri.scheme}://${extensionUri.authority}${prefix}${apiPath}`;
 }
+function deriveOrigin(extensionUri) {
+  if ((extensionUri.scheme === "http" || extensionUri.scheme === "https") && extensionUri.authority) {
+    return `${extensionUri.scheme}://${extensionUri.authority}`;
+  }
+  const locationLike = globalThis.location;
+  return typeof locationLike?.origin === "string" ? locationLike.origin : "http://localhost";
+}
 function getApiBase() {
   return terminalApiBase;
 }
 function getTerminalWebSocketUrl(terminalId) {
-  const url = new URL(terminalStreamBase, window.location.origin);
+  const url = new URL(terminalStreamBase, terminalRouteOrigin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("terminalId", terminalId);
   return url.toString();
@@ -255,6 +275,7 @@ function createTerminalProfile() {
 function activate(context) {
   terminalApiBase = deriveTerminalRouteBase(context.extensionUri, TERMINAL_API_PREFIX);
   terminalStreamBase = deriveTerminalRouteBase(context.extensionUri, TERMINAL_STREAM_PREFIX);
+  terminalRouteOrigin = deriveOrigin(context.extensionUri);
   context.subscriptions.push(
     vscode.window.registerTerminalProfileProvider("foxwarm-terminal", {
       provideTerminalProfile: () => createTerminalProfile()
@@ -264,7 +285,7 @@ function activate(context) {
       terminal.show();
     })
   );
-  console.log("Foxwarm terminal profile registered.");
+  console.log(`Foxwarm terminal profile registered. apiBase=${terminalApiBase} streamBase=${terminalStreamBase}`);
 }
 function deactivate() {
 }

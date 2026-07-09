@@ -23,6 +23,7 @@ const TERMINAL_STREAM_PREFIX = '/api/terminals/stream';
 
 let terminalApiBase = TERMINAL_API_PREFIX;
 let terminalStreamBase = TERMINAL_STREAM_PREFIX;
+let terminalRouteOrigin = '';
 
 function deriveTerminalRouteBase(extensionUri: vscode.Uri, apiPath: string): string {
   if (extensionUri.scheme !== 'http' && extensionUri.scheme !== 'https') {
@@ -35,12 +36,20 @@ function deriveTerminalRouteBase(extensionUri: vscode.Uri, apiPath: string): str
   return `${extensionUri.scheme}://${extensionUri.authority}${prefix}${apiPath}`;
 }
 
+function deriveOrigin(extensionUri: vscode.Uri): string {
+  if ((extensionUri.scheme === 'http' || extensionUri.scheme === 'https') && extensionUri.authority) {
+    return `${extensionUri.scheme}://${extensionUri.authority}`;
+  }
+  const locationLike = (globalThis as any).location;
+  return typeof locationLike?.origin === 'string' ? locationLike.origin : 'http://localhost';
+}
+
 function getApiBase(): string {
   return terminalApiBase;
 }
 
 function getTerminalWebSocketUrl(terminalId: string): string {
-  const url = new URL(terminalStreamBase, window.location.origin);
+  const url = new URL(terminalStreamBase, terminalRouteOrigin);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.searchParams.set('terminalId', terminalId);
   return url.toString();
@@ -215,6 +224,7 @@ function createTerminalProfile(): vscode.TerminalProfile {
 export function activate(context: vscode.ExtensionContext): void {
   terminalApiBase = deriveTerminalRouteBase(context.extensionUri, TERMINAL_API_PREFIX);
   terminalStreamBase = deriveTerminalRouteBase(context.extensionUri, TERMINAL_STREAM_PREFIX);
+  terminalRouteOrigin = deriveOrigin(context.extensionUri);
   context.subscriptions.push(
     vscode.window.registerTerminalProfileProvider('foxwarm-terminal', {
       provideTerminalProfile: () => createTerminalProfile(),
@@ -224,7 +234,7 @@ export function activate(context: vscode.ExtensionContext): void {
       terminal.show();
     }),
   );
-  console.log('Foxwarm terminal profile registered.');
+  console.log(`Foxwarm terminal profile registered. apiBase=${terminalApiBase} streamBase=${terminalStreamBase}`);
 }
 
 export function deactivate(): void {

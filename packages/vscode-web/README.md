@@ -10,7 +10,7 @@ It is intentionally separate from `packages/webui` so the VS Code workbench and 
 - Browser web extension: `foxwarm-fs`, served from `/vscode-web/extensions/foxwarm-fs/`.
 - Browser web extension: `foxwarm-terminal`, served from `/vscode-web/extensions/foxwarm-terminal/`.
 - Optional official VS Code Web static assets served from `/vscode-web/static/` when prepared.
-- URI shape: `foxwarm://node/<nodeId>/<absolute-path>`.
+- URI shape: `foxwarm://node+<nodeId>/<absolute-path>`.
   - `node` is the namespace/type layer.
   - `<nodeId>` is currently only `master` on the backend.
   - The remaining URI path is the real absolute filesystem path.
@@ -18,13 +18,13 @@ It is intentionally separate from `packages/webui` so the VS Code workbench and 
 Example workspace folder URI:
 
 ```text
-foxwarm://node/master/home/ldmbot/git/foxwarm/
+foxwarm://node+master/home/ldmbot/git/foxwarm/
 ```
 
 In the Docker test environment the backend sees the repository at `/app`, so use:
 
 ```text
-foxwarm://node/master/app/
+foxwarm://node+master/app/
 ```
 
 ## Authentication
@@ -45,10 +45,12 @@ The terminal extension also uses same-origin cookie auth for `POST /api/terminal
 Current MVP behavior:
 
 - Backend terminal creation is cwd-based and no longer requires a Foxwarm chat session id.
-- The terminal cwd is derived from the first VS Code workspace folder URI. For example, `foxwarm://node/master/app/` becomes backend cwd `/app`.
+- The terminal cwd is derived from the first VS Code workspace folder URI. For example, `foxwarm://node+master/app/` becomes backend cwd `/app`.
 - Only `nodeId=master` is supported.
 - Closing the VS Code terminal kills the backend PTY.
 - The first terminal MVP does not implement detach/reattach persistence across page reload; backend terminals remain process/in-memory state and are removed on backend/container restart.
+
+`foxwarm-fs` also contributes a `Foxwarm: Open Folder...` command and a remote-indicator menu item for virtual `foxwarm` workspaces. It prompts for an absolute path on the current node and reopens the workbench with that path as the workspace root.
 
 ## Preparing official VS Code Web assets
 
@@ -75,7 +77,6 @@ When the required static files exist (`out/nls.messages.js`, `out/vs/workbench/w
 ## Not in scope yet
 
 - Committing VS Code Web static assets.
-- Terminal integration.
 - File/text search providers.
 - File watching.
 - Remote node filesystem implementation.

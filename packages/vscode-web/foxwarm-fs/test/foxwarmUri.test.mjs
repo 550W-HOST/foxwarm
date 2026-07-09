@@ -25,7 +25,7 @@ function uri(input) {
 }
 
 test('parses foxwarm node URI into node id and absolute real path', () => {
-  assert.deepEqual(parseFoxwarmUri(uri('foxwarm://node/master/home/ldmbot/git/foxwarm/')), {
+  assert.deepEqual(parseFoxwarmUri(uri('foxwarm://node+master/home/ldmbot/git/foxwarm/')), {
     namespace: 'node',
     nodeId: 'master',
     realPath: '/home/ldmbot/git/foxwarm',
@@ -33,7 +33,7 @@ test('parses foxwarm node URI into node id and absolute real path', () => {
 });
 
 test('preserves namespace layer and supports encoded path segments', () => {
-  assert.deepEqual(parseFoxwarmUri(uri('foxwarm://node/master/tmp/hello%20world.txt')), {
+  assert.deepEqual(parseFoxwarmUri(uri('foxwarm://node+master/tmp/hello%20world.txt')), {
     namespace: 'node',
     nodeId: 'master',
     realPath: '/tmp/hello world.txt',
@@ -41,9 +41,17 @@ test('preserves namespace layer and supports encoded path segments', () => {
 });
 
 test('builds foxwarm node URI strings from absolute paths', () => {
-  assert.equal(buildFoxwarmNodeUriString('master', '/tmp/hello world.txt'), 'foxwarm://node/master/tmp/hello%20world.txt');
+  assert.equal(buildFoxwarmNodeUriString('master', '/tmp/hello world.txt'), 'foxwarm://node+master/tmp/hello%20world.txt');
+});
+
+test('parses legacy node path URI shape for existing links', () => {
+  assert.deepEqual(parseFoxwarmUri(uri('foxwarm://node/master/app')), {
+    namespace: 'node',
+    nodeId: 'master',
+    realPath: '/app',
+  });
 });
 
 test('rejects non-node namespaces', () => {
-  assert.throws(() => parseFoxwarmUri(uri('foxwarm://repo/example/path')), /namespace/);
+  assert.throws(() => parseFoxwarmUri(uri('foxwarm://repo/example/path')), /authority/);
 });

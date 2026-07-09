@@ -235,12 +235,12 @@ function getDefaultFolderUri(): string {
     return configured;
   }
   if (fs.existsSync('/app/package.json')) {
-    return 'foxwarm://node/master/app/';
+    return 'foxwarm://node+master/app/';
   }
   if (fs.existsSync('/home/ldmbot/git/foxwarm/package.json')) {
-    return 'foxwarm://node/master/home/ldmbot/git/foxwarm/';
+    return 'foxwarm://node+master/home/ldmbot/git/foxwarm/';
   }
-  return 'foxwarm://node/master/';
+  return 'foxwarm://node+master/';
 }
 
 function getRequestOrigin(req: express.Request): string {
@@ -338,6 +338,11 @@ function buildWorkbenchConfiguration(req: express.Request) {
         webviewContentExternalBaseUrlTemplate: `${baseUrl}/out/vs/workbench/contrib/webview/browser/pre/`,
       },
       additionalBuiltinExtensions: [toUriComponents(fsExtensionUri), toUriComponents(terminalExtensionUri)],
+      configurationDefaults: {
+        'terminal.integrated.defaultProfile.linux': 'Foxwarm Terminal',
+        'terminal.integrated.defaultProfile.osx': 'Foxwarm Terminal',
+        'terminal.integrated.defaultProfile.windows': 'Foxwarm Terminal',
+      },
     },
   };
 }
@@ -527,7 +532,7 @@ function buildVscodeWebPlaceholderHtml(): string {
   <p>The browser filesystem extension is served from <code>${VSCODE_WEB_FS_EXTENSION_ROUTE}/</code>.</p>
   <p>The browser terminal extension is served from <code>${VSCODE_WEB_TERMINAL_EXTENSION_ROUTE}/</code>.</p>
   <p>The filesystem API prefix is <code>${escapedApiPrefix}</code>.</p>
-  <p>Intended workspace URI shape: <code>foxwarm://node/master/home/ldmbot/git/foxwarm/</code>.</p>
+  <p>Intended workspace URI shape: <code>foxwarm://node+master/home/ldmbot/git/foxwarm/</code>.</p>
 </body>
 </html>`;
 }

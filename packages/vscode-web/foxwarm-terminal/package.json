@@ -6,15 +6,33 @@
   "license": "MIT",
   "browser": "./dist/extension.js",
   "activationEvents": [
-    "onTerminalProfile:foxwarm-terminal"
+    "onTerminalProfile:foxwarm-terminal",
+    "onCommand:foxwarm-terminal.newTerminal"
   ],
   "contributes": {
+    "commands": [
+      {
+        "command": "foxwarm-terminal.newTerminal",
+        "title": "Foxwarm: New Terminal",
+        "category": "Foxwarm",
+        "icon": "$(terminal)"
+      }
+    ],
     "terminal": {
       "profiles": [
         {
           "id": "foxwarm-terminal",
           "title": "Foxwarm Terminal",
           "icon": "terminal"
+        }
+      ]
+    },
+    "menus": {
+      "statusBar/remoteIndicator": [
+        {
+          "command": "foxwarm-terminal.newTerminal",
+          "when": "virtualWorkspace == foxwarm",
+          "group": "virtualfs_90_foxwarm_1_open@2"
         }
       ]
     }

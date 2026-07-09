@@ -99,7 +99,7 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
         const staticWithCookie = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`, { headers: cookieHeaders() });
         assert.equal(staticWithCookie.status, 200);
 
-        const folderUri = 'foxwarm://node/master/tmp/hello%20world';
+        const folderUri = 'foxwarm://node+master/tmp/hello%20world';
         const workbench = await fetch(`${baseUrl}/vscode-web?folderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
         assert.equal(workbench.status, 200);
         const html = await workbench.text();
@@ -109,8 +109,9 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-fs/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-terminal/);
         assert.match(html, /&quot;scheme&quot;:&quot;foxwarm&quot;/);
-        assert.match(html, /&quot;authority&quot;:&quot;node&quot;/);
-        assert.match(html, /&quot;path&quot;:&quot;\/master\/tmp\/hello%20world&quot;/);
+        assert.match(html, /&quot;authority&quot;:&quot;node\+master&quot;/);
+        assert.match(html, /&quot;path&quot;:&quot;\/tmp\/hello%20world&quot;/);
+        assert.match(html, /terminal\.integrated\.defaultProfile\.linux/);
       });
     });
   } finally {

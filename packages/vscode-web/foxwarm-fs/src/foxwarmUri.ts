@@ -24,8 +24,21 @@ export function parseFoxwarmUri(uri: UriLike): FoxwarmUriTarget {
     throw new Error(`Unsupported URI scheme \`${uri.scheme}\`; expected \`foxwarm\`.`);
   }
 
+  if (uri.authority.startsWith('node+')) {
+    const nodeId = decodePathSegment(uri.authority.slice('node+'.length));
+    if (!nodeId) {
+      throw new Error(`Missing node id in foxwarm URI \`${uri.toString(true)}\`.`);
+    }
+    const realPathSegments = uri.path.split('/').filter(Boolean).map(decodePathSegment);
+    return {
+      namespace: 'node',
+      nodeId,
+      realPath: `/${realPathSegments.join('/')}`,
+    };
+  }
+
   if (uri.authority !== 'node') {
-    throw new Error(`Unsupported foxwarm URI namespace \`${uri.authority}\`; expected \`node\`.`);
+    throw new Error(`Unsupported foxwarm URI authority \`${uri.authority}\`; expected \`node+<nodeId>\`.`);
   }
 
   const rawSegments = uri.path.split('/').filter(Boolean);
@@ -58,5 +71,5 @@ export function buildFoxwarmNodeUriString(nodeId: string, realPath: string): str
 
   const encodedNodeId = encodeURIComponent(nodeId);
   const encodedPath = realPath.split('/').map((segment, index) => index === 0 ? '' : encodeURIComponent(segment)).join('/');
-  return `foxwarm://node/${encodedNodeId}${encodedPath}`;
+  return `foxwarm://node+${encodedNodeId}${encodedPath}`;
 }

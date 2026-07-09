@@ -39,7 +39,7 @@ function uri(value) {
 }
 
 test('parses foxwarm workspace URI into terminal target', () => {
-  assert.deepEqual(parseFoxwarmUri(uri('foxwarm://node/master/app/packages')), {
+  assert.deepEqual(parseFoxwarmUri(uri('foxwarm://node+master/app/packages')), {
     namespace: 'node',
     nodeId: 'master',
     realPath: '/app/packages',
@@ -47,9 +47,15 @@ test('parses foxwarm workspace URI into terminal target', () => {
 });
 
 test('derives terminal target from first workspace folder', () => {
-  const target = getWorkspaceTerminalTarget([{ uri: uri('foxwarm://node/master/tmp/hello%20world') }]);
+  const target = getWorkspaceTerminalTarget([{ uri: uri('foxwarm://node+master/tmp/hello%20world') }]);
   assert.equal(target.nodeId, 'master');
   assert.equal(target.realPath, '/tmp/hello world');
+});
+
+test('supports legacy workspace URI shape', () => {
+  const target = getWorkspaceTerminalTarget([{ uri: uri('foxwarm://node/master/app') }]);
+  assert.equal(target.nodeId, 'master');
+  assert.equal(target.realPath, '/app');
 });
 
 test('defaults to master root when no workspace folder exists', () => {
