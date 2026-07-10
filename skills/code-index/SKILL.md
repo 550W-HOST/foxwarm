@@ -82,7 +82,8 @@ First-time index creation is less common than reading/updating an existing index
   - agent-guided top-down traversal with compaction-safe checkpoints.
 - `WORKER.md` — prompt for a simple assigned-scope/bottom-up worker.
 - `TOP_DOWN_CHILD.md` — prompt for a child/subagent session doing top-down/context-carrying traversal.
-- `generate_code_index.py` — Foxwarm ToolScript batch generator for a fast first draft.
+- `generate_code_index.py` — existing Foxwarm ToolScript batch generator, kept for `run_script` compatibility.
+- `generate_code_index_standalone.py` — standalone Python batch generator; it calls the production `foxwarm model` CLI, validates all model-selected paths/names, and preserves existing docs unless `--force` is explicit.
 
 When initializing a code index from scratch, explicitly read `INITIALIZATION.md` from this skill directory before assigning workers or running the generator.
 

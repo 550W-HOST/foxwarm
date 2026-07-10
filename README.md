@@ -266,6 +266,18 @@ The runtime resolves model definitions in this order:
 
 The template fallback is mainly a fallback for development and diagnostics; OOBE treats missing `state/models.yaml` as first-time setup.
 
+### One-shot model CLI
+
+After building Foxwarm, the repository includes a one-shot CLI that uses the same configuration loader and provider request stack as the server:
+
+```bash
+npm run build
+node scripts/foxwarm.js model --list
+echo "Summarize this text" | node scripts/foxwarm.js model --model openai/gpt-5.5
+```
+
+The package declares `foxwarm` as its executable, so an installed or `npm link`ed checkout can use `foxwarm model ...` directly. The command does not start the Foxwarm server, but it does require `lib/` build output and the normal runtime dependencies. It honors the normal data-root and model-config resolution, provider routing, retries, request compression, sanitization, and provider-specific response handling. Use `foxwarm model --help` for options.
+
 ## Channels (`state/config.yaml`) and hot reload
 
 Channels are configured under `channels:` in `state/config.yaml`.
