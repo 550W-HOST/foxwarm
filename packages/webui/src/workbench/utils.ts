@@ -276,7 +276,15 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
   }
   collect(root)
 
-  return Object.fromEntries(Object.entries(tabsById).filter(([tabId, tab]) => referencedIds.has(tabId) && isSupportedWorkbenchTab(tab)))
+  return Object.fromEntries(Object.entries(tabsById).flatMap(([tabId, tab]) => {
+    if (!referencedIds.has(tabId) || !isSupportedWorkbenchTab(tab)) return []
+
+    // Older workbench state may contain the removed tab-level `pinned` flag.
+    // Read it tolerantly, but strip it so all future persisted writes use the
+    // current single-row tab model.
+    const { pinned: _legacyPinned, ...sanitizedTab } = tab as WorkbenchTab & { pinned?: unknown }
+    return [[tabId, sanitizedTab as WorkbenchTab]]
+  }))
 }
 
 export function normalizePersistedWorkbenchState(state: WorkbenchPersistedState): WorkbenchPersistedState {

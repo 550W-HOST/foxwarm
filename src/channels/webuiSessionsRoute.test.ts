@@ -136,6 +136,74 @@ test('WebUI history route returns queued preview messages separately from commit
   }
 });
 
+test('WebUI session pin route persists live metadata without writing session history', async () => {
+  const sessionId = makeSessionId('webui_pin');
+  const session = await sessionManager.getSession(sessionId);
+  session.agent = 'main';
+  session.history = [];
+  session.persistentMemorySnapshot = '';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = false;
+  session.queue = [];
+  session.meta = { lastMessageTime: Date.now() } as Session['meta'];
+  await sessionManager.saveSession(sessionId);
+
+  const port = 35000 + Math.floor(Math.random() * 200);
+  const server = new HttpServer(port, 'pin-token');
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token: 'pin-token', enableTrigger: false, enableWebUI: true });
+  await server.start();
+
+  const postPin = (pinned: unknown) => fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/pin`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer pin-token',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ pinned }),
+  });
+
+  try {
+    let res = await postPin('yes');
+    assert.equal(res.status, 400);
+
+    res = await postPin(true);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json() as any).pinned, true);
+
+    let metadata = (await loadSessionsMetadataSnapshot()).data as any;
+    let history = await readSessionHistorySnapshot(sessionId) as any;
+    assert.equal(metadata.sessions[sessionId].pinned, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(history, 'pinned'), false);
+
+    res = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
+      headers: { Authorization: 'Bearer pin-token' },
+    });
+    assert.equal(res.status, 200);
+    let listed = ((await res.json() as any).sessions as any[]).find(item => item.id === sessionId);
+    assert.equal(listed.pinned, true);
+
+    res = await postPin(false);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json() as any).pinned, false);
+
+    metadata = (await loadSessionsMetadataSnapshot()).data as any;
+    history = await readSessionHistorySnapshot(sessionId) as any;
+    assert.equal(Object.prototype.hasOwnProperty.call(metadata.sessions[sessionId], 'pinned'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(history, 'pinned'), false);
+
+    res = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
+      headers: { Authorization: 'Bearer pin-token' },
+    });
+    listed = ((await res.json() as any).sessions as any[]).find(item => item.id === sessionId);
+    assert.equal(listed.pinned, false);
+  } finally {
+    await server.stop();
+    setHttpServer(null);
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
 test('WebUI move route reparents, detaches, reorders, and rejects parent cycles', async () => {
   const rootAId = makeSessionId('webui_move_root_a');
   const rootBId = makeSessionId('webui_move_root_b');

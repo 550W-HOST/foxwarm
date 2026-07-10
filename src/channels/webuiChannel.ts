@@ -901,6 +901,7 @@ export class WebUIChannel implements Channel {
                 runtimeState: sessionManager.buildSessionRuntimeState(session),
                 displayName: session.displayName || null,
                 archived: session.archived || false,
+                pinned: session.pinned || false,
                 sidebarOrder: getWebUiSidebarOrder(session) ?? null,
                 currentNode: session.currentNode || 'master',
                 cwd: session.cwd || null,
@@ -1240,6 +1241,39 @@ export class WebUIChannel implements Channel {
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session display name');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      // Pin/unpin a session in the WebUI list without touching per-session history.
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/pin',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const session = await sessionManager.getExistingSession(sessionId);
+
+            if (!session) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
+
+            if (typeof req.body?.pinned !== 'boolean') {
+              return res.status(400).json({ error: 'pinned must be a boolean' });
+            }
+
+            if (req.body.pinned) {
+              session.pinned = true;
+            } else {
+              delete session.pinned;
+            }
+
+            await sessionManager.saveSessionsMetadata();
+            this.broadcastSessionListUpdate();
+            res.json({ success: true, sessionId: session.id, pinned: !!session.pinned });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to update session pin state');
             res.status(500).json({ error: e.message });
           }
         },
