@@ -4,6 +4,7 @@ import path from 'path';
 import { ChildProcess, spawn } from 'child_process';
 import { promises as fsp } from 'fs';
 import { resolveValidatedExecCwd, type ExecCwdSource } from './execCwd';
+import { truncateOutputForDisplay, type OutputTruncationResult } from './outputTruncation';
 import { estimateTokenCount } from './tokenCount';
 
 export const DEFAULT_EXEC_TIMEOUT_SECONDS = 15;
@@ -480,27 +481,20 @@ export class PersistentExecManager {
     }
   }
 
-  private async readWindow(filePath: string, offset: number, length: number): Promise<Buffer> {
-    const file = await fsp.open(filePath, 'r');
-    try {
-      const buffer = Buffer.alloc(length);
-      const { bytesRead } = await file.read(buffer, 0, length, offset);
-      return buffer.subarray(0, bytesRead);
-    } finally {
-      await file.close();
-    }
-  }
-
-  private async readLogExcerpt(filePath: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  private async readLogExcerpt(filePath: string, maxChars: number): Promise<{ text: string; truncated: boolean; truncation?: OutputTruncationResult }> {
     const stat = await fs.stat(filePath);
     if (stat.size <= 0) return { text: '', truncated: false };
-    if (stat.size <= maxBytes) return { text: await fs.readFile(filePath, 'utf8'), truncated: false };
-    const half = Math.max(1, Math.floor(maxBytes / 2));
-    const [head, tail] = await Promise.all([
-      this.readWindow(filePath, 0, half),
-      this.readWindow(filePath, Math.max(0, stat.size - half), half),
-    ]);
-    return { text: `${head.toString('utf8')}\n\n[...TRUNCATED...]\n\n${tail.toString('utf8')}`, truncated: true };
+    const text = await fs.readFile(filePath, 'utf8');
+    const truncation = truncateOutputForDisplay(text, {
+      maxChars,
+      force: text.length > maxChars,
+      lineOmissionReason: 'this file is too long',
+    });
+    return {
+      text: truncation.text,
+      truncated: truncation.truncated,
+      truncation: truncation.truncated ? truncation : undefined,
+    };
   }
 
   private async readPartialLog(logPath: string): Promise<string> {
@@ -515,20 +509,37 @@ export class PersistentExecManager {
     }
   }
 
-  private async readDisplayOutput(logPath: string): Promise<{ text: string; truncated: boolean }> {
+  private async readDisplayOutput(logPath: string): Promise<{ text: string; truncated: boolean; truncation?: OutputTruncationResult }> {
     try {
       const excerpt = await this.readLogExcerpt(logPath, INLINE_LOG_LIMIT_BYTES);
       if (!excerpt.text.trim()) return { text: '(No output)', truncated: false };
       if (!excerpt.truncated && estimateTokenCount(excerpt.text) <= 10000) return excerpt;
-      if (excerpt.truncated) return { text: excerpt.text, truncated: true };
+      if (excerpt.truncated) return excerpt;
+      const truncation = truncateOutputForDisplay(excerpt.text, {
+        maxChars: INLINE_EXCERPT_HALF_BYTES * 2,
+        force: true,
+        lineOmissionReason: 'this file is too long',
+      });
       return {
-        text: `${excerpt.text.substring(0, INLINE_EXCERPT_HALF_BYTES)}\n\n[...TRUNCATED...]\n\n${excerpt.text.substring(Math.max(0, excerpt.text.length - INLINE_EXCERPT_HALF_BYTES))}`,
+        text: truncation.text,
         truncated: true,
+        truncation,
       };
     } catch (err: any) {
       if (err?.code === 'ENOENT') return { text: '(No output)', truncated: false };
       throw err;
     }
+  }
+
+  private buildForegroundFooter(entry: RunningExecEntry, status: ExecStatus, output: { truncated: boolean; truncation?: OutputTruncationResult }): string {
+    const lines = ['---', `Exit code: ${status.exitCode === null ? 'unknown' : status.exitCode}`];
+    if (status.error) lines.push(`Error: ${status.error}`);
+    if (output.truncated) {
+      lines.push(`Full output saved to: ${entry.logPath}`);
+      lines.push('Output was shortened for inline display.');
+    }
+    if (output.truncation?.footerNotes?.length) lines.push(...output.truncation.footerNotes);
+    return lines.join('\n');
   }
 
   private async readExecStatus(statusPath: string): Promise<ExecStatus | null> {
@@ -579,17 +590,8 @@ export class PersistentExecManager {
 
   async buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus): Promise<string> {
     const output = await this.readDisplayOutput(entry.logPath);
-    const prefix = status.exitCode !== null && status.exitCode !== 0
-      ? `Exit code: ${status.exitCode}${status.error ? `\nError: ${status.error}` : ''}\n`
-      : status.error
-        ? `Error: ${status.error}\n`
-        : '';
-    if (output.truncated) {
-      const openingNotice = '[OUTPUT TOO LONG]';
-      const closingNotice = `${openingNotice} Full output saved to: ${entry.logPath}`;
-      return [prefix.trim(), openingNotice, output.text.trim() || '(No output)', closingNotice].filter(Boolean).join('\n\n');
-    }
-    return `${prefix}${output.text}`.trim() || '(No output)';
+    const body = output.text.trim() || '(No output)';
+    return `${body}\n${this.buildForegroundFooter(entry, status, output)}`;
   }
 
   async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS): Promise<string> {

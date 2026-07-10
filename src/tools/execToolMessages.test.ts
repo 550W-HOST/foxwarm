@@ -101,7 +101,7 @@ test('persistent exec expands cwd ~ using local home directory', async () => {
     const status = await waitForExecCompletion(entry.id, 5000);
     assert.ok(status, 'exec should finish during test timeout');
     const result = await buildForegroundExecResult(entry, status);
-    assert.equal(result.trim(), os.homedir());
+    assert.match(result, new RegExp(`^${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
   } finally {
     if (execId) {
       await finalizeForegroundExec(execId).catch(() => {});
@@ -151,7 +151,7 @@ test('background exec timeout result uses short header, body, then full footer n
   }
 });
 
-test('foreground exec truncated output is wrapped with repeated notices and keeps full-output path at the end', async () => {
+test('foreground exec truncated output keeps line-aware excerpt and footer metadata', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-truncated-'));
   const logPath = path.join(tempDir, 'command.log');
   const head = 'A'.repeat(12000);
@@ -164,17 +164,18 @@ test('foreground exec truncated output is wrapped with repeated notices and keep
       { exitCode: 0, finishedAt: new Date().toISOString() },
     );
 
-    assert.ok(result.startsWith('[OUTPUT TOO LONG]'));
-    assert.match(result, /\[\.\.\.TRUNCATED\.\.\.\]/);
+    assert.match(result, /\[foxwarm: line too long/);
     assert.match(result, /A{100}/);
     assert.match(result, /B{100}/);
-    assert.ok(result.endsWith(`[OUTPUT TOO LONG] Full output saved to: ${logPath}`));
+    assert.match(result, new RegExp(`---\nExit code: 0\nFull output saved to: ${logPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(result, /Foxwarm placeholders above .* are not original output content/);
+    assert.match(result, /Original output: 1 line\(s\), 24000 character\(s\)\./);
   } finally {
     await fs.remove(tempDir);
   }
 });
 
-test('read tool truncated output is wrapped with opening and closing notices', async () => {
+test('read tool returns full content for unified output guard', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-read-truncated-'));
   const filePath = path.join(tempDir, 'large.txt');
 
@@ -182,9 +183,7 @@ test('read tool truncated output is wrapped with opening and closing notices', a
     await fs.writeFile(filePath, 'a'.repeat(40000));
     const result = await read({ filePath }, { session: { agent: 'main' } } as any);
 
-    assert.match(String(result), /^\[TOO LONG \(~\d+ tokens\)\]\n\n/);
-    assert.match(String(result), /a{100}/);
-    assert.match(String(result), /\n\n\[TOO LONG \(~\d+ tokens\)\] TRUNCATED\. Showing first 10000 chars only\.$/);
+    assert.equal(String(result), 'a'.repeat(40000));
   } finally {
     await fs.remove(tempDir);
   }
