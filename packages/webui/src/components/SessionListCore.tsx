@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, GripVertical, CornerDownRight } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, GripVertical, CornerDownRight, ListTree, Clock3, Rows3 } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 
@@ -76,6 +76,12 @@ const SESSION_LIST_VIEW_MODE_LABELS: Record<SessionListViewMode, string> = {
   time: 'Time',
   'flat-time': 'Flat',
 }
+
+const SESSION_LIST_VIEW_MODE_ICONS = {
+  default: ListTree,
+  time: Clock3,
+  'flat-time': Rows3,
+} as const
 
 const SESSION_LIST_VIEW_MODE_TITLES: Record<SessionListViewMode, string> = {
   default: 'Default: use saved sidebar order when present, otherwise sort by recent activity. Dragging can reorder and change parents.',
@@ -1137,9 +1143,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     ] as ContextMenuEntry[]
   })() : []
 
+  const ViewModeIcon = SESSION_LIST_VIEW_MODE_ICONS[viewMode]
+
   return (
     <>
-      <div className="sticky top-0 z-10 mb-1 space-y-1 bg-white/95 dark:bg-gray-800/95">
+      <div className="sticky top-4 z-10 mb-1 bg-white/95 dark:bg-gray-800/95">
         <div className="flex items-center gap-1.5">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
@@ -1166,18 +1174,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           <button
             type="button"
             onClick={cycleViewMode}
-            className="shrink-0 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 transition hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-blue-500/70 dark:hover:text-blue-200"
-            title={`${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-blue-500/70 dark:hover:text-blue-200"
+            title={`${SESSION_LIST_VIEW_MODE_LABELS[viewMode]} mode. ${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
             aria-label={`Session list mode: ${SESSION_LIST_VIEW_MODE_LABELS[viewMode]}`}
           >
-            {SESSION_LIST_VIEW_MODE_LABELS[viewMode]}
+            <ViewModeIcon className="h-4 w-4" />
           </button>
         </div>
-        {(isFiltering || viewMode !== 'default') && (
-          <div className="px-1 text-xs text-gray-500 dark:text-gray-400">
-            {isFiltering ? `${visibleSessions.length} ${visibleSessions.length === 1 ? 'match' : 'matches'} · ` : ''}{SESSION_LIST_VIEW_MODE_TITLES[viewMode]}
-          </div>
-        )}
         <SidebarRootDropZone visible={!!draggingSessionId && allowParentDrop} disabled={isFiltering} allowOrder={allowSidebarOrder} />
       </div>
 
