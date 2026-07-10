@@ -18,10 +18,7 @@ interface WorkbenchPaneProps {
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onKeepTab: (tabId: string) => void
-  onPinTab: (tabId: string) => void
-  onUnpinTab: (tabId: string) => void
   onCloseAllTabs: () => void
-  onCloseAllPinnedTabs: () => void
   onSplitRight: () => void
   onSplitDown: () => void
   onClosePane: () => void
@@ -62,10 +59,7 @@ export default function WorkbenchPane({
   onSelectTab,
   onCloseTab,
   onKeepTab,
-  onPinTab,
-  onUnpinTab,
   onCloseAllTabs,
-  onCloseAllPinnedTabs,
   onSplitRight,
   onSplitDown,
   onClosePane,
@@ -105,10 +99,7 @@ export default function WorkbenchPane({
         onSelectTab={onSelectTab}
         onCloseTab={onCloseTab}
         onKeepTab={onKeepTab}
-        onPinTab={onPinTab}
-        onUnpinTab={onUnpinTab}
         onCloseAllTabs={onCloseAllTabs}
-        onCloseAllPinnedTabs={onCloseAllPinnedTabs}
       />
 
       <div className="min-h-0 flex-1 overflow-hidden bg-gray-100 dark:bg-gray-900">

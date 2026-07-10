@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useDndContext, useDroppable } from '@dnd-kit/core'
+import { useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { Bookmark, Copy, MessageSquareText, Pin, PinOff, SquareTerminal, X } from 'lucide-react'
+import { Bookmark, Copy, MessageSquareText, SquareTerminal, X } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import type { WorkbenchTab } from '../workbench/types'
 
@@ -16,10 +16,7 @@ interface WorkbenchTabsProps {
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onKeepTab: (tabId: string) => void
-  onPinTab: (tabId: string) => void
-  onUnpinTab: (tabId: string) => void
   onCloseAllTabs: () => void
-  onCloseAllPinnedTabs: () => void
 }
 
 interface TabContextMenuState {
@@ -94,7 +91,6 @@ function TabStripRow({
   onCloseTab,
   onKeepTab,
   onOpenContextMenu,
-  isPinnedRow,
 }: {
   paneId: string
   dragEnabled: boolean
@@ -104,24 +100,16 @@ function TabStripRow({
   onCloseTab: (tabId: string) => void
   onKeepTab: (tabId: string) => void
   onOpenContextMenu: (tabId: string, event: React.MouseEvent<HTMLDivElement>) => void
-  isPinnedRow: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
-  const { active } = useDndContext()
-  const activeData = active?.data.current as { type?: string; pinned?: boolean } | undefined
   const { setNodeRef, isOver } = useDroppable({
-    id: `tab-row:${paneId}:${isPinnedRow ? 'pinned' : 'regular'}`,
+    id: `tab-row:${paneId}`,
     data: {
       type: 'tab-row',
       paneId,
-      pinned: isPinnedRow,
     },
   })
-
-  const isDraggingTab = activeData?.type === 'tab'
-  const activePinned = !!activeData?.pinned
-  const shouldShowEmptyDropHint = tabs.length === 0 && isDraggingTab && activePinned !== isPinnedRow
 
   useEffect(() => {
     if (!activeTabId || !tabs.some((tab) => tab.id === activeTabId)) return
@@ -164,7 +152,7 @@ function TabStripRow({
   return (
     <div
       ref={setNodeRef}
-      className={`${isPinnedRow ? 'border-b border-gray-200/80 pb-1 dark:border-gray-700/80' : 'pb-px'} ${isOver ? 'rounded-lg bg-blue-500/5 dark:bg-blue-500/10' : ''}`}
+      className={`pb-px ${isOver ? 'rounded-lg bg-blue-500/5 dark:bg-blue-500/10' : ''}`}
     >
       <SortableContext items={tabs.map((tab) => tab.id)} strategy={horizontalListSortingStrategy}>
         <div
@@ -192,11 +180,6 @@ function TabStripRow({
               onCloseTab={onCloseTab}
             />
           ))}
-          {shouldShowEmptyDropHint && (
-            <div className="flex h-9 min-w-[120px] items-center justify-center rounded-lg border border-dashed border-blue-300 px-3 text-xs font-medium text-blue-700 dark:border-blue-500/60 dark:text-blue-200">
-              {isPinnedRow ? 'Drop to pin' : 'Drop to unpin'}
-            </div>
-          )}
         </div>
       </SortableContext>
     </div>
@@ -231,7 +214,6 @@ function SortableTab({
     data: {
       type: 'tab',
       paneId,
-      pinned: !!tab.pinned,
     },
   })
 
@@ -298,18 +280,9 @@ export default function WorkbenchTabs({
   onSelectTab,
   onCloseTab,
   onKeepTab,
-  onPinTab,
-  onUnpinTab,
   onCloseAllTabs,
-  onCloseAllPinnedTabs,
 }: WorkbenchTabsProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
-  const { active } = useDndContext()
-
-  const pinnedTabs = useMemo(() => tabs.filter((tab) => tab.pinned), [tabs])
-  const regularTabs = useMemo(() => tabs.filter((tab) => !tab.pinned), [tabs])
-  const activeData = active?.data.current as { type?: string } | undefined
-  const isDraggingTab = activeData?.type === 'tab'
   const contextMenuTab = useMemo(
     () => (contextMenu ? tabs.find((tab) => tab.id === contextMenu.tabId) || null : null),
     [contextMenu, tabs],
@@ -327,22 +300,6 @@ export default function WorkbenchTabs({
         label: 'Keep',
         icon: <Bookmark className="h-4 w-4" />,
         onSelect: () => onKeepTab(contextMenuTab.id),
-      })
-    }
-
-    if (contextMenuTab.pinned) {
-      entries.push({
-        key: 'unpin',
-        label: 'Unpin',
-        icon: <PinOff className="h-4 w-4" />,
-        onSelect: () => onUnpinTab(contextMenuTab.id),
-      })
-    } else {
-      entries.push({
-        key: 'pin',
-        label: 'Pin',
-        icon: <Pin className="h-4 w-4" />,
-        onSelect: () => onPinTab(contextMenuTab.id),
       })
     }
 
@@ -375,26 +332,16 @@ export default function WorkbenchTabs({
       onSelect: () => onCloseTab(contextMenuTab.id),
     })
 
-    if (contextMenuTab.pinned) {
-      entries.push({ key: 'separator-bulk-close', type: 'separator' })
-      entries.push({
-        key: 'close-all-pinned',
-        label: 'Close all pinned',
-        icon: <X className="h-4 w-4" />,
-        onSelect: onCloseAllPinnedTabs,
-      })
-    } else {
-      entries.push({ key: 'separator-bulk-close', type: 'separator' })
-      entries.push({
-        key: 'close-all',
-        label: 'Close all',
-        icon: <X className="h-4 w-4" />,
-        onSelect: onCloseAllTabs,
-      })
-    }
+    entries.push({ key: 'separator-bulk-close', type: 'separator' })
+    entries.push({
+      key: 'close-all',
+      label: 'Close all',
+      icon: <X className="h-4 w-4" />,
+      onSelect: onCloseAllTabs,
+    })
 
     return entries
-  }, [contextMenuTab, onCloseAllPinnedTabs, onCloseAllTabs, onCloseTab, onKeepTab, onPinTab, onUnpinTab])
+  }, [contextMenuTab, onCloseAllTabs, onCloseTab, onKeepTab])
 
   const openContextMenu = (tabId: string, event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -410,30 +357,16 @@ export default function WorkbenchTabs({
   return (
     <div className="overflow-hidden border-b border-gray-200 bg-gray-100 px-3 pt-2 dark:border-gray-700 dark:bg-gray-900">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 space-y-1">
-          {(pinnedTabs.length > 0 || isDraggingTab) && (
-            <TabStripRow
-              paneId={paneId}
-              dragEnabled={dragEnabled}
-              tabs={pinnedTabs}
-              activeTabId={activeTabId}
-              onSelectTab={onSelectTab}
-              onCloseTab={onCloseTab}
-              onKeepTab={onKeepTab}
-              onOpenContextMenu={openContextMenu}
-              isPinnedRow
-            />
-          )}
+        <div className="min-w-0 flex-1">
           <TabStripRow
             paneId={paneId}
             dragEnabled={dragEnabled}
-            tabs={regularTabs}
+            tabs={tabs}
             activeTabId={activeTabId}
             onSelectTab={onSelectTab}
             onCloseTab={onCloseTab}
             onKeepTab={onKeepTab}
             onOpenContextMenu={openContextMenu}
-            isPinnedRow={false}
           />
         </div>
         {toolbar && (

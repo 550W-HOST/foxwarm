@@ -1,7 +1,6 @@
 export type WorkbenchTabBase = {
   id: string
   title: string
-  pinned?: boolean
 }
 
 export type WorkbenchTab =
