@@ -6,7 +6,7 @@ import Sidebar from './components/Sidebar'
 import CollapsedSidebar from './components/CollapsedSidebar'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
-import type { Session } from './components/SessionListCore'
+import type { Session, SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
 import { useWorkbenchStore } from './workbench/store'
@@ -38,6 +38,21 @@ type WebUiSettings = {
   tabIcon: string
 }
 
+type ApiErrorPayload = {
+  error?: string
+  message?: string
+  reason?: string
+  code?: string
+}
+
+type ApiErrorDetails = {
+  status: number
+  statusText: string
+  contentType: string
+  payload: ApiErrorPayload | null
+  text: string
+}
+
 const LIGHT_THEME_COLOR = '#f3f4f6'
 const DARK_THEME_COLOR = '#111827'
 const THEME_550A_LIGHT_COLOR = '#f4f3ef'
@@ -53,6 +68,8 @@ const UI_THEME_STYLE_STORAGE_KEY = 'foxwarm_ui_theme_style_v1'
 const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
 const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
 const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
+const FOXWARM_TOKEN_KEY = 'foxwarm_token'
+const LEGACY_TOKEN_KEY = 'alphabot_token'
 const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 const CUSTOM_FAVICON_LINK_ID = 'foxwarm-custom-favicon'
 
@@ -75,6 +92,93 @@ function normalizeWebUiSettingsPayload(settings: unknown): WebUiSettings {
   return {
     instanceName: typeof raw.instanceName === 'string' ? raw.instanceName : '',
     tabIcon: typeof raw.tabIcon === 'string' ? raw.tabIcon : '',
+  }
+}
+
+function getStoredAuthToken() {
+  try {
+    const foxwarmToken = localStorage.getItem(FOXWARM_TOKEN_KEY)
+    if (foxwarmToken) return foxwarmToken
+
+    const legacyToken = localStorage.getItem(LEGACY_TOKEN_KEY)
+    if (legacyToken) {
+      localStorage.setItem(FOXWARM_TOKEN_KEY, legacyToken)
+      localStorage.removeItem(LEGACY_TOKEN_KEY)
+      return legacyToken
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+
+async function readApiErrorDetails(response: Response): Promise<ApiErrorDetails> {
+  const contentType = response.headers.get('content-type') || ''
+  let payload: ApiErrorPayload | null = null
+  let text = ''
+
+  if (contentType.includes('application/json')) {
+    try {
+      const parsed = await response.json()
+      payload = parsed && typeof parsed === 'object' ? parsed as ApiErrorPayload : null
+      text = payload?.error || payload?.message || payload?.reason || ''
+    } catch {
+      text = ''
+    }
+  } else {
+    try {
+      text = (await response.text()).trim()
+    } catch {
+      text = ''
+    }
+  }
+
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    contentType,
+    payload,
+    text,
+  }
+}
+
+function formatSessionMoveError(details: ApiErrorDetails): string {
+  const code = details.payload?.code || ''
+  const backendMessage = details.payload?.error || details.payload?.message || details.payload?.reason || details.text
+  const statusLabel = `${details.status} ${details.statusText}`.trim()
+
+  if (details.status === 401) {
+    return 'Could not reorganize the sidebar.\n\nReason: WebUI is not authorized. Refresh the page or sign in again, then retry.'
+  }
+
+  if (details.status === 404 && !code) {
+    return `Could not reorganize the sidebar.\n\nReason: this Foxwarm backend does not seem to have the sidebar move API loaded yet (${statusLabel}).\n\nTry restarting Foxwarm and refreshing the WebUI.`
+  }
+
+  switch (code) {
+    case 'PARENT_CYCLE_NOT_ALLOWED':
+      return 'Could not move that session there.\n\nReason: it would create a parent/child loop. A parent session cannot be placed under one of its own descendants.'
+    case 'SELF_PARENT_NOT_ALLOWED':
+      return 'Could not move that session there.\n\nReason: a session cannot be assigned as a child of itself.'
+    case 'SESSION_NOT_FOUND':
+    case 'TARGET_PARENT_NOT_FOUND':
+    case 'PARENTSESSIONID_NOT_FOUND':
+    case 'BEFORESESSIONID_NOT_FOUND':
+    case 'AFTERSESSIONID_NOT_FOUND':
+      return 'Could not move that session.\n\nReason: one of the sessions involved no longer exists. Refresh the session list and try again.'
+    case 'MULTIPLE_MOVE_ANCHORS':
+    case 'POSITION_WITH_ANCHOR_NOT_ALLOWED':
+    case 'INVALID_MOVE_POSITION':
+    case 'ANCHOR_PARENT_MISMATCH':
+    case 'BEFORE_ANCHOR_NOT_IN_TARGET_GROUP':
+    case 'AFTER_ANCHOR_NOT_IN_TARGET_GROUP':
+      return 'Could not interpret that drop target.\n\nTry dropping on the top or bottom edge to reorder, the center to make a child, or the root drop zone to detach.'
+    default:
+      if (backendMessage && !/^<!doctype html/i.test(backendMessage)) {
+        return `Could not reorganize the sidebar.\n\nReason: ${backendMessage}\n\nStatus: ${statusLabel || 'request failed'}${code ? `\nCode: ${code}` : ''}`
+      }
+      return `Could not reorganize the sidebar.\n\nStatus: ${statusLabel || 'request failed'}\n\nTry refreshing the page; if this continues, restart Foxwarm so frontend and backend are on the same version.`
   }
 }
 
@@ -1084,6 +1188,28 @@ function App() {
     })
   }
 
+  const handleMoveSession = async (sessionId: string, move: SessionMoveRequest) => {
+    try {
+      const token = getStoredAuthToken()
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/move`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(move),
+      })
+      if (!res.ok) {
+        throw new Error(formatSessionMoveError(await readApiErrorDetails(res)))
+      }
+      await fetchSessions()
+    } catch (error) {
+      console.error('Failed to move session:', error)
+      window.alert(error instanceof Error ? error.message : String(error))
+      await fetchSessions()
+    }
+  }
+
   const handleBackToList = () => {
     window.location.hash = ''
     setShowSessionList(true)
@@ -1276,7 +1402,16 @@ function App() {
     const activeId = String(event.active.id)
     const overId = event.over?.id ? String(event.over.id) : null
     const activeData = event.active.data.current as { type?: string; paneId?: string; pinned?: boolean; sessionId?: string } | undefined
-    const overData = event.over?.data.current as { type?: string; paneId?: string; pinned?: boolean; edge?: 'left' | 'right' | 'top' | 'bottom' } | undefined
+    const overData = event.over?.data.current as {
+      type?: string
+      paneId?: string
+      pinned?: boolean
+      edge?: 'left' | 'right' | 'top' | 'bottom'
+      sessionId?: string
+      parentSessionId?: string | null
+      position?: 'first' | 'last'
+      updateOrder?: boolean
+    } | undefined
 
     setDraggingItem(null)
 
@@ -1306,6 +1441,42 @@ function App() {
 
     if (activeData.type === 'session') {
       const draggedSessionId = activeData.sessionId || activeId
+      if (overData?.type === 'sidebar-root-drop') {
+        void handleMoveSession(draggedSessionId, overData.updateOrder === false
+          ? { parentSessionId: null, updateOrder: false }
+          : { parentSessionId: null, position: overData.position || 'first' })
+        return
+      }
+
+      if (overData?.type === 'sidebar-session-child' && overData.sessionId) {
+        if (overData.sessionId !== draggedSessionId) {
+          void handleMoveSession(draggedSessionId, overData.updateOrder === false
+            ? { parentSessionId: overData.sessionId, updateOrder: false }
+            : { parentSessionId: overData.sessionId, position: overData.position || 'first' })
+        }
+        return
+      }
+
+      if (overData?.type === 'sidebar-session-before' && overData.sessionId) {
+        if (overData.sessionId !== draggedSessionId) {
+          void handleMoveSession(draggedSessionId, {
+            parentSessionId: overData.parentSessionId ?? null,
+            beforeSessionId: overData.sessionId,
+          })
+        }
+        return
+      }
+
+      if (overData?.type === 'sidebar-session-after' && overData.sessionId) {
+        if (overData.sessionId !== draggedSessionId) {
+          void handleMoveSession(draggedSessionId, {
+            parentSessionId: overData.parentSessionId ?? null,
+            afterSessionId: overData.sessionId,
+          })
+        }
+        return
+      }
+
       if (overData?.type === 'tab' && overData.paneId) {
         openPersistentChatTab(draggedSessionId, { paneId: overData.paneId, beforeTabId: overId, pinned: !!overData.pinned })
         return
@@ -1388,6 +1559,10 @@ function App() {
       collisionDetection={(args) => {
         const collisions = pointerWithin(args)
         const priorityByType: Record<string, number> = {
+          'sidebar-session-before': 0,
+          'sidebar-session-after': 0,
+          'sidebar-session-child': 1,
+          'sidebar-root-drop': 1,
           tab: 0,
           'tab-row': 1,
           'pane-edge': 2,
@@ -1431,7 +1606,7 @@ function App() {
     }
 
     if (showSessionList) {
-      return (
+      return renderWorkbenchSurface(
         <SessionList
           sessions={sessions}
           currentSession={currentContextSessionId}
@@ -1461,7 +1636,7 @@ function App() {
           onSelectSetup={openSetupView}
           onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
           onCreateSession={handleCreateSession}
-        />
+        />,
       )
     }
 
