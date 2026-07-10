@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, GripVertical, CornerDownRight, ListTree, Clock3, Rows3 } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3 } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 
@@ -382,7 +382,7 @@ function DraggableSessionRow({
   setRowRef,
 }: {
   session: Session
-  children: (dragHandle: ReactNode) => ReactNode
+  children: ReactNode
   className: string
   onClick: () => void
   onDoubleClick: () => void
@@ -390,6 +390,8 @@ function DraggableSessionRow({
   setRowRef: (node: HTMLDivElement | null) => void
 }) {
   const title = session.displayName || session.id
+  const suppressClickRef = useRef(false)
+  const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `session:${session.id}`,
     data: {
@@ -399,21 +401,28 @@ function DraggableSessionRow({
     },
   })
 
-  const dragHandle = (
-    <button
-      type="button"
-      className="mr-1.5 mt-0.5 inline-flex h-6 w-5 shrink-0 cursor-grab items-center justify-center rounded text-gray-300 opacity-0 transition hover:bg-gray-200 hover:text-gray-600 active:cursor-grabbing group-hover:opacity-100 group-focus-within:opacity-100 dark:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-      title="Drag in the sidebar or open in a pane"
-      aria-label={`Drag ${title}`}
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-      onContextMenu={(event) => event.stopPropagation()}
-      {...attributes}
-      {...listeners}
-    >
-      <GripVertical className="h-4 w-4" />
-    </button>
-  )
+  const handlePointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    suppressClickRef.current = false
+    pointerStartRef.current = { x: event.clientX, y: event.clientY }
+  }
+
+  const handlePointerMoveCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = pointerStartRef.current
+    if (!start) return
+    if (Math.abs(event.clientX - start.x) > 4 || Math.abs(event.clientY - start.y) > 4) {
+      suppressClickRef.current = true
+    }
+  }
+
+  const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (isDragging || suppressClickRef.current) {
+      event.preventDefault()
+      event.stopPropagation()
+      suppressClickRef.current = false
+      return
+    }
+    onClick()
+  }
 
   return (
     <div
@@ -422,11 +431,16 @@ function DraggableSessionRow({
         setRowRef(node)
       }}
       className={`${className} ${isDragging ? 'opacity-50' : ''}`}
-      onClick={onClick}
+      title="Drag in the sidebar or open in a pane"
+      onPointerDownCapture={handlePointerDownCapture}
+      onPointerMoveCapture={handlePointerMoveCapture}
+      onClick={handleClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
+      {...attributes}
+      {...listeners}
     >
-      {children(dragHandle)}
+      {children}
     </div>
   )
 }
@@ -962,7 +976,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       >
         <DraggableSessionRow
           session={session}
-          className={`group relative flex items-center rounded cursor-pointer mt-1 ${
+          className={`group relative flex items-center rounded cursor-pointer active:cursor-grabbing mt-1 ${
             isCurrentSession
               ? 'bg-blue-100 dark:bg-blue-900/30' 
               : 'hover:bg-gray-100 dark:hover:bg-gray-700'
@@ -974,8 +988,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             sessionRefs.current.set(session.id, node)
           }}
         >
-          {(dragHandle) => (
-            <>
+          <>
               <SessionRowDropLayer
                 session={session}
                 parentSessionId={rowParentSessionId}
@@ -984,7 +997,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 allowParentDrop={allowParentDrop}
               />
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
-                {dragHandle}
                 <div className="min-w-0 flex-1">
                   <div className="font-medium truncate text-gray-900 dark:text-white text-sm">
                     {session.displayName || displayId}
@@ -1058,13 +1070,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               {/* Menu button - only visible on mobile */}
               <button
                 onClick={(e) => handleMenuClick(e, session.id)}
+                onPointerDown={(e) => e.stopPropagation()}
                 className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded md:hidden"
                 title="More options"
               >
                 <MoreVertical className="w-4 h-4" />
               </button>
-            </>
-          )}
+          </>
         </DraggableSessionRow>
 
         {hasChildren && isExpanded && (
@@ -1147,7 +1159,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   return (
     <>
-      <div className="sticky top-4 z-10 mb-1 bg-white/95 dark:bg-gray-800/95">
+      <div className="sticky top-2 z-10 mb-1 bg-white/95 dark:bg-gray-800/95">
         <div className="flex items-center gap-1.5">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
@@ -1174,11 +1186,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           <button
             type="button"
             onClick={cycleViewMode}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-blue-500/70 dark:hover:text-blue-200"
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-blue-500/70 dark:hover:text-blue-200"
             title={`${SESSION_LIST_VIEW_MODE_LABELS[viewMode]} mode. ${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
             aria-label={`Session list mode: ${SESSION_LIST_VIEW_MODE_LABELS[viewMode]}`}
           >
-            <ViewModeIcon className="h-4 w-4" />
+            <ViewModeIcon className="h-3.5 w-3.5" />
           </button>
         </div>
         <SidebarRootDropZone visible={!!draggingSessionId && allowParentDrop} disabled={isFiltering} allowOrder={allowSidebarOrder} />
