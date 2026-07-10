@@ -40,6 +40,8 @@ interface SessionListCoreProps {
   currentSession?: string  // Optional, for highlighting in sidebar
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
+  toolbarContainerClassName?: string
+  listContainerClassName?: string
 }
 
 export interface SessionMoveRequest {
@@ -445,7 +447,7 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1' }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
@@ -1159,68 +1161,74 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   return (
     <>
-      <div className="sticky top-2 z-10 mb-1 bg-white/95 dark:bg-gray-800/95">
-        <div className="flex items-center gap-1.5">
-          <div className="relative min-w-0 flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-            <input
-              type="search"
-              value={filterText}
-              onChange={(e) => setFilterText(e.currentTarget.value)}
-              placeholder="Search sessions"
-              aria-label="Search sessions"
-              className="w-full rounded-lg border border-gray-200 bg-white py-1 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
-            />
-            {filterText && (
-              <button
-                type="button"
-                onClick={() => setFilterText('')}
-                className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-                aria-label="Clear session search"
-                title="Clear search"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+      <div className="flex h-full min-h-0 flex-col">
+        <div className={`shrink-0 bg-white/95 dark:bg-gray-800/95 ${toolbarContainerClassName}`}>
+          <div className="flex items-center gap-1.5">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+              <input
+                type="search"
+                value={filterText}
+                onChange={(e) => setFilterText(e.currentTarget.value)}
+                placeholder="Search sessions"
+                aria-label="Search sessions"
+                className="w-full rounded-lg border border-gray-200 bg-white py-1 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
+              />
+              {filterText && (
+                <button
+                  type="button"
+                  onClick={() => setFilterText('')}
+                  className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  aria-label="Clear session search"
+                  title="Clear search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={cycleViewMode}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-blue-500/70 dark:hover:text-blue-200"
+              title={`${SESSION_LIST_VIEW_MODE_LABELS[viewMode]} mode. ${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
+              aria-label={`Session list mode: ${SESSION_LIST_VIEW_MODE_LABELS[viewMode]}`}
+            >
+              <ViewModeIcon className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <SidebarRootDropZone visible={!!draggingSessionId && allowParentDrop} disabled={isFiltering} allowOrder={allowSidebarOrder} />
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto" data-session-list-scroll-container>
+          <div className={listContainerClassName}>
+            {rootSessions.length > 0 ? (
+              <>
+                {visibleRootSessions.map(session => renderSession(session))}
+                {hiddenRootCount > 0 && (
+                  <button
+                    onClick={toggleShowMoreRoots}
+                    className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  >
+                    {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
+                  </button>
+                )}
+                {hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
+                  <button
+                    onClick={toggleShowMoreRoots}
+                    className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  >
+                    ▲ Show less
+                  </button>
+                )}
+              </>
+            ) : (
+              <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
+              </div>
             )}
           </div>
-          <button
-            type="button"
-            onClick={cycleViewMode}
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-blue-500/70 dark:hover:text-blue-200"
-            title={`${SESSION_LIST_VIEW_MODE_LABELS[viewMode]} mode. ${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
-            aria-label={`Session list mode: ${SESSION_LIST_VIEW_MODE_LABELS[viewMode]}`}
-          >
-            <ViewModeIcon className="h-3.5 w-3.5" />
-          </button>
         </div>
-        <SidebarRootDropZone visible={!!draggingSessionId && allowParentDrop} disabled={isFiltering} allowOrder={allowSidebarOrder} />
       </div>
-
-      {rootSessions.length > 0 ? (
-        <>
-          {visibleRootSessions.map(session => renderSession(session))}
-          {hiddenRootCount > 0 && (
-            <button
-              onClick={toggleShowMoreRoots}
-              className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-            >
-              {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
-            </button>
-          )}
-          {hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
-            <button
-              onClick={toggleShowMoreRoots}
-              className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-            >
-              ▲ Show less
-            </button>
-          )}
-        </>
-      ) : (
-        <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-          {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
-        </div>
-      )}
 
       <ContextMenu
         open={!!contextMenu}
