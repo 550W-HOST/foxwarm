@@ -1,6 +1,7 @@
 import { PanelLeftOpen, Plus } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
+import { compareSessionListSessions } from '../sessionListPresentation'
 
 interface CollapsedSidebarProps {
   sessions: Session[]
@@ -18,17 +19,6 @@ function getSessionInitial(session: Session): string {
   return firstCodePoint.toUpperCase()
 }
 
-function compareCollapsedSidebarSessions(a: Session, b: Session): number {
-  const aOrder = typeof a.sidebarOrder === 'number' && Number.isFinite(a.sidebarOrder) ? a.sidebarOrder : undefined
-  const bOrder = typeof b.sidebarOrder === 'number' && Number.isFinite(b.sidebarOrder) ? b.sidebarOrder : undefined
-  if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) return aOrder - bOrder
-  if (aOrder !== undefined && bOrder === undefined) return -1
-  if (aOrder === undefined && bOrder !== undefined) return 1
-  const timeDelta = (b.lastMessageTime || 0) - (a.lastMessageTime || 0)
-  if (timeDelta !== 0) return timeDelta
-  return a.id.localeCompare(b.id)
-}
-
 export default function CollapsedSidebar({
   sessions,
   currentSession,
@@ -36,7 +26,9 @@ export default function CollapsedSidebar({
   onCreateSession,
   onToggleCollapsed,
 }: CollapsedSidebarProps) {
-  const rootSessions = sessions.filter((s) => !s.parentSessionId && !s.archived).sort(compareCollapsedSidebarSessions)
+  const rootSessions = sessions
+    .filter((s) => (s.pinned || !s.parentSessionId) && !s.archived)
+    .sort((a, b) => compareSessionListSessions(a, b, 'default'))
 
   return (
     <div className="h-full w-12 flex flex-col items-center bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">

@@ -4,6 +4,13 @@ import * as sessionManager from '../sessionManager';
 import { resolveModelConfig } from '../config';
 import { parseSessionMoveTarget, parseCompactThresholdInput, resolveCommandModelSelection } from './helpers';
 
+export function formatSessionListChannels(channelKeys: Iterable<string>): string {
+  const visibleChannels = Array.from(channelKeys).filter(channelKey => !channelKey.startsWith('webui:'));
+  return visibleChannels.length > 0
+    ? `    - channels: \`${visibleChannels.join(', ')}\`\n`
+    : '';
+}
+
 export async function handleSessionCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) {
   // Manually get session for subcommands that need it
   if (!sessionId) {
@@ -79,9 +86,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         const node = sess.currentNode || 'master'
         const isolated = sessionManager.isSessionEffectivelyIsolated(sess) ? ' isolated' : ''
         resp += `\`${sid}\`${displayName} - ${msgCount} msgs - node: \`${node}\`${isolated}\n`
-        if (attachedChannels.length) {
-          resp += `    - channels: \`${attachedChannels.join(', ')}\`\n`
-        }
+        resp += formatSessionListChannels(attachedChannels)
       }
 
       if (totalPages > 1) {

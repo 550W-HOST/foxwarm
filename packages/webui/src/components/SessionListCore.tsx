@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3 } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
+import { compareSessionListSessions, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 
 export interface Session {
   id: string
@@ -19,6 +20,7 @@ export interface Session {
   runtimeState?: SessionRuntimeState
   displayName?: string
   archived?: boolean
+  pinned?: boolean
   sidebarOrder?: number | null
   currentNode?: string
   cwd?: string | null
@@ -52,7 +54,7 @@ export interface SessionMoveRequest {
   updateOrder?: boolean
 }
 
-type SessionListViewMode = 'default' | 'time' | 'flat-time'
+type SessionListViewMode = SessionListOrderMode
 
 const SESSION_LIST_VIEW_MODE_KEY = 'foxwarm_session_list_view_mode_v1'
 
@@ -99,12 +101,6 @@ const loadStoredSessionListViewMode = (): SessionListViewMode => {
 const getNextSessionListViewMode = (mode: SessionListViewMode): SessionListViewMode => {
   const index = SESSION_LIST_VIEW_MODES.indexOf(mode)
   return SESSION_LIST_VIEW_MODES[(index + 1) % SESSION_LIST_VIEW_MODES.length] || 'default'
-}
-
-const getSidebarOrder = (session: Session): number | undefined => {
-  return typeof session.sidebarOrder === 'number' && Number.isFinite(session.sidebarOrder)
-    ? session.sidebarOrder
-    : undefined
 }
 
 const getSessionFilterFields = (session: Session): string[] => {
@@ -400,6 +396,7 @@ function DraggableSessionRow({
       type: 'session',
       sessionId: session.id,
       title,
+      sessionPinned: !!session.pinned,
     },
   })
 
@@ -433,7 +430,7 @@ function DraggableSessionRow({
         setRowRef(node)
       }}
       className={`${className} ${isDragging ? 'opacity-50' : ''}`}
-      title="Drag in the sidebar or open in a pane"
+      title={session.pinned ? 'Pinned session: drag to open in a pane; unpin before changing its sidebar parent or order' : 'Drag in the sidebar or open in a pane'}
       onPointerDownCapture={handlePointerDownCapture}
       onPointerMoveCapture={handlePointerMoveCapture}
       onClick={handleClick}
@@ -463,26 +460,15 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const sessionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const [pendingFocusSessionId, setPendingFocusSessionId] = useState<string | null>(null)
 
-  const activeDragData = active?.data.current as { type?: string; sessionId?: string } | undefined
+  const activeDragData = active?.data.current as { type?: string; sessionId?: string; sessionPinned?: boolean } | undefined
   const draggingSessionId = activeDragData?.type === 'session' ? activeDragData.sessionId || null : null
+  const draggingPinnedSession = activeDragData?.type === 'session' && !!activeDragData.sessionPinned
 
   const allowSidebarOrder = viewMode === 'default'
   const allowParentDrop = viewMode !== 'flat-time'
-  const isFlatTimeMode = viewMode === 'flat-time'
 
   const sortSessions = (a: Session, b: Session) => {
-    if (a.archived && !b.archived) return 1
-    if (!a.archived && b.archived) return -1
-    if (allowSidebarOrder) {
-      const aOrder = getSidebarOrder(a)
-      const bOrder = getSidebarOrder(b)
-      if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) return aOrder - bOrder
-      if (aOrder !== undefined && bOrder === undefined) return -1
-      if (aOrder === undefined && bOrder !== undefined) return 1
-    }
-    const timeDelta = (b.lastMessageTime || 0) - (a.lastMessageTime || 0)
-    if (timeDelta !== 0) return timeDelta
-    return a.id.localeCompare(b.id)
+    return compareSessionListSessions(a, b, viewMode)
   }
 
   const normalizedFilterQuery = filterText.trim().toLowerCase()
@@ -546,14 +532,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const visibleParentMap = useMemo(() => {
     const map = new Map<string, string | null>()
 
-    if (isFlatTimeMode) {
-      for (const session of visibleSessions) {
-        map.set(session.id, null)
-      }
-      return map
-    }
-
     for (const session of visibleSessions) {
+      if (shouldElevateSessionToRoot(session, viewMode)) {
+        map.set(session.id, null)
+        continue
+      }
+
       let parentId = normalizedParentMap.get(session.id) || null
 
       while (parentId && visibleSessionIds && !visibleSessionIds.has(parentId)) {
@@ -564,7 +548,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }, [visibleSessions, normalizedParentMap, visibleSessionIds, isFlatTimeMode])
+  }, [visibleSessions, normalizedParentMap, visibleSessionIds, viewMode])
 
   const childrenMap = useMemo(() => {
     const map = new Map<string, Session[]>()
@@ -841,6 +825,29 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     setContextMenu(null)
   }
 
+  const togglePinned = async (sessionId: string, pinned: boolean) => {
+    try {
+      const token = getStoredAuthToken()
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/pin`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ pinned })
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        alert(`Failed to ${pinned ? 'pin' : 'unpin'} session: ${error.error || 'Unknown error'}`)
+      }
+    } catch (err) {
+      console.error('[PIN] Exception:', err)
+      alert(`Failed to ${pinned ? 'pin' : 'unpin'} session`)
+    }
+    setContextMenu(null)
+  }
+
   const forkSession = async (sessionId: string) => {
     try {
       const token = getStoredAuthToken()
@@ -968,6 +975,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const disableSidebarDrop = !draggingSessionId
       || isFiltering
       || !allowParentDrop && !allowSidebarOrder
+      || draggingPinnedSession
+      || !!session.pinned
       || draggingSessionId === session.id
       || isDescendantOf(session.id, draggingSessionId)
       || targetParentWouldCreateCycle
@@ -1001,6 +1010,9 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
                 <div className="min-w-0 flex-1">
                   <div className="font-medium truncate text-gray-900 dark:text-white text-sm">
+                    {session.pinned && (
+                      <Pin className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-blue-500 dark:text-blue-300" aria-label="Pinned session" />
+                    )}
                     {session.displayName || displayId}
                     {session.archived && (
                       <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">[Archived]</span>
@@ -1111,11 +1123,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const contextMenuEntries: ContextMenuEntry[] = contextMenu ? (() => {
     const session = sessionMap.get(contextMenu.sessionId)
     const isArchived = session?.archived || false
+    const isPinned = session?.pinned || false
     const hasParent = !!session?.parentSessionId
     const parentSession = hasParent ? sessionMap.get(session!.parentSessionId!) : undefined
     const grandparentId = parentSession?.parentSessionId || undefined
 
     return [
+      {
+        key: 'pin',
+        icon: isPinned ? <PinOff size={14} /> : <Pin size={14} />,
+        label: isPinned ? 'Unpin from top' : 'Pin to top',
+        onSelect: () => { void togglePinned(contextMenu.sessionId, !isPinned) },
+      },
       {
         key: 'rename',
         icon: <Pencil size={14} />,
@@ -1134,13 +1153,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         label: 'Fork',
         onSelect: () => { void forkSession(contextMenu.sessionId) },
       },
-      ...(hasParent && grandparentId ? [{
+      ...(hasParent && grandparentId && !isPinned ? [{
         key: 'promote-up',
         icon: <ArrowUpFromDot size={14} />,
         label: `Move up one level`,
         onSelect: () => { void promoteSession(contextMenu.sessionId, grandparentId) },
       }] : []),
-      ...(hasParent ? [{
+      ...(hasParent && !isPinned ? [{
         key: 'promote',
         icon: <ArrowUpFromDot size={14} />,
         label: 'Promote to root',
@@ -1196,7 +1215,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               <ViewModeIcon className="h-3.5 w-3.5" />
             </button>
           </div>
-          <SidebarRootDropZone visible={!!draggingSessionId && allowParentDrop} disabled={isFiltering} allowOrder={allowSidebarOrder} />
+          <SidebarRootDropZone visible={!!draggingSessionId && allowParentDrop} disabled={isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto" data-session-list-scroll-container>

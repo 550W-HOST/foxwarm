@@ -361,14 +361,13 @@ function makePreviewChatTabId() {
   return createWorkbenchId('chatpreview')
 }
 
-function makeChatTab(sessionId: string, title: string, options?: { preview?: boolean; pinned?: boolean }): WorkbenchTab {
+function makeChatTab(sessionId: string, title: string, options?: { preview?: boolean }): WorkbenchTab {
   return {
     id: options?.preview ? makePreviewChatTabId() : getPersistentChatTabId(sessionId),
     type: 'chat',
     sessionId,
     title,
     preview: !!options?.preview,
-    pinned: options?.preview ? false : options?.pinned,
   }
 }
 
@@ -852,8 +851,7 @@ function App() {
   }
 
   const findPreferredChatTab = (sessionId: string): WorkbenchTab | null => {
-    return allTabs.find((tab) => isChatTab(tab) && !tab.preview && tab.pinned && tab.sessionId === sessionId)
-      || allTabs.find((tab) => isChatTab(tab) && !tab.preview && tab.sessionId === sessionId)
+    return allTabs.find((tab) => isChatTab(tab) && !tab.preview && tab.sessionId === sessionId)
       || null
   }
 
@@ -872,7 +870,7 @@ function App() {
     const previewTab = allTabs.find(isPreviewChatTab)
     if (previewTab) {
       updateTab(previewTab.id, (current) => isPreviewChatTab(current)
-        ? { ...current, sessionId, title, preview: true, pinned: false }
+        ? { ...current, sessionId, title, preview: true }
         : current)
       navigateToTab(previewTab.id)
       return
@@ -1008,64 +1006,29 @@ function App() {
       return
     }
 
-    const persistentTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId), { pinned: !!targetTab.pinned })
+    const persistentTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId))
     replaceTabId(tabId, persistentTab)
     navigateToTab(persistentTab.id)
   }
 
-  const promotePreviewTab = (tabId: string, options?: { pinned?: boolean }): string | null => {
+  const promotePreviewTab = (tabId: string): string | null => {
     const targetTab = tabsById[tabId]
     if (!targetTab) return null
 
     if (!isPreviewChatTab(targetTab)) {
-      if (typeof options?.pinned === 'boolean' && targetTab.pinned !== options.pinned) {
-        updateTab(tabId, (current) => ({ ...current, pinned: options.pinned }))
-      }
       return tabId
     }
 
     const persistentId = getPersistentChatTabId(targetTab.sessionId)
     const existingTab = tabsById[persistentId]
     if (existingTab) {
-      if (typeof options?.pinned === 'boolean' && existingTab.pinned !== options.pinned) {
-        updateTab(existingTab.id, (current) => ({ ...current, pinned: options.pinned }))
-      }
       removeTab(tabId)
       return existingTab.id
     }
 
-    const persistentTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId), {
-      pinned: typeof options?.pinned === 'boolean' ? options.pinned : !!targetTab.pinned,
-    })
+    const persistentTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId))
     replaceTabId(tabId, persistentTab)
     return persistentTab.id
-  }
-
-  const pinWorkbenchTab = (tabId: string) => {
-    const targetTab = tabsById[tabId]
-    if (!targetTab) {
-      return
-    }
-
-    if (isPreviewChatTab(targetTab)) {
-      const nextId = promotePreviewTab(tabId, { pinned: true })
-      if (nextId) {
-        navigateToTab(nextId)
-      }
-      return
-    }
-
-    if (!targetTab.pinned) {
-      updateTab(tabId, (current) => ({ ...current, pinned: true }))
-    }
-  }
-
-  const unpinWorkbenchTab = (tabId: string) => {
-    const targetTab = tabsById[tabId]
-    if (!targetTab?.pinned) {
-      return
-    }
-    updateTab(tabId, (current) => ({ ...current, pinned: false }))
   }
 
   const closePaneTabsByPredicate = async (paneId: string, predicate: (tab: WorkbenchTab) => boolean) => {
@@ -1132,7 +1095,7 @@ function App() {
     void fetchActiveTerminals()
   }
 
-  const openPersistentChatTab = (sessionId: string, options?: { paneId?: string; beforeTabId?: string | null; edge?: 'left' | 'right' | 'bottom'; pinned?: boolean }) => {
+  const openPersistentChatTab = (sessionId: string, options?: { paneId?: string; beforeTabId?: string | null; edge?: 'left' | 'right' | 'bottom' }) => {
     const title = sessionTitle(sessionId)
     const existingTab = findPreferredChatTab(sessionId)
 
@@ -1142,18 +1105,15 @@ function App() {
       if (existingTab.title !== title) {
         updateTab(existingTab.id, (current) => isChatTab(current) ? { ...current, title } : current)
       }
-      if (typeof options?.pinned === 'boolean' && existingTab.pinned !== options.pinned) {
-        updateTab(existingTab.id, (current) => ({ ...current, pinned: options.pinned }))
-      }
       targetTabId = existingTab.id
     } else {
       const previewTab = allTabs.find((tab) => isPreviewChatTab(tab) && tab.sessionId === sessionId)
       if (previewTab) {
-        targetTabId = promotePreviewTab(previewTab.id, { pinned: !!options?.pinned })
+        targetTabId = promotePreviewTab(previewTab.id)
       }
 
       if (!targetTabId) {
-        const tab = makeChatTab(sessionId, title, { pinned: !!options?.pinned })
+        const tab = makeChatTab(sessionId, title)
         upsertTab(tab, { activate: false })
         targetTabId = tab.id
       }
@@ -1374,10 +1334,7 @@ function App() {
         onSelectTab={navigateToTab}
         onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
         onKeepTab={keepWorkbenchTab}
-        onPinTab={pinWorkbenchTab}
-        onUnpinTab={unpinWorkbenchTab}
         onCloseAllTabs={() => { void closePaneTabsByPredicate(paneId, () => true) }}
-        onCloseAllPinnedTabs={() => { void closePaneTabsByPredicate(paneId, (tab) => !!tab.pinned) }}
         onSplitRight={() => handleSplit('right')}
         onSplitDown={() => handleSplit('bottom')}
         onClosePane={handleClosePane}
@@ -1401,11 +1358,10 @@ function App() {
   const handleDragEnd = (event: DragEndEvent) => {
     const activeId = String(event.active.id)
     const overId = event.over?.id ? String(event.over.id) : null
-    const activeData = event.active.data.current as { type?: string; paneId?: string; pinned?: boolean; sessionId?: string } | undefined
+    const activeData = event.active.data.current as { type?: string; paneId?: string; sessionId?: string; sessionPinned?: boolean } | undefined
     const overData = event.over?.data.current as {
       type?: string
       paneId?: string
-      pinned?: boolean
       edge?: 'left' | 'right' | 'top' | 'bottom'
       sessionId?: string
       parentSessionId?: string | null
@@ -1419,29 +1375,16 @@ function App() {
       return
     }
 
-    const applyTabDrop = (targetPaneId: string, options?: { beforeTabId?: string | null; pinned?: boolean }) => {
-      const activeTabRecord = tabsById[activeId] || null
-      let nextActiveId = activeId
-      const nextPinned = typeof options?.pinned === 'boolean' ? options.pinned : !!activeData.pinned
-
-      if (nextPinned && activeTabRecord && isPreviewChatTab(activeTabRecord)) {
-        const promotedId = promotePreviewTab(activeId, { pinned: true })
-        if (!promotedId) {
-          return null
-        }
-        nextActiveId = promotedId
-      } else if (activeTabRecord && (!!activeTabRecord.pinned !== nextPinned || (!!activeData.pinned !== nextPinned))) {
-        updateTab(nextActiveId, (current) => ({ ...current, pinned: nextPinned }))
-      }
-
-      moveTabToPane(nextActiveId, targetPaneId, { beforeTabId: options?.beforeTabId || null, activate: true })
-      navigateToTab(nextActiveId)
-      return nextActiveId
+    const applyTabDrop = (targetPaneId: string, options?: { beforeTabId?: string | null }) => {
+      moveTabToPane(activeId, targetPaneId, { beforeTabId: options?.beforeTabId || null, activate: true })
+      navigateToTab(activeId)
+      return activeId
     }
 
     if (activeData.type === 'session') {
       const draggedSessionId = activeData.sessionId || activeId
       if (overData?.type === 'sidebar-root-drop') {
+        if (activeData.sessionPinned) return
         void handleMoveSession(draggedSessionId, overData.updateOrder === false
           ? { parentSessionId: null, updateOrder: false }
           : { parentSessionId: null, position: overData.position || 'first' })
@@ -1449,6 +1392,7 @@ function App() {
       }
 
       if (overData?.type === 'sidebar-session-child' && overData.sessionId) {
+        if (activeData.sessionPinned) return
         if (overData.sessionId !== draggedSessionId) {
           void handleMoveSession(draggedSessionId, overData.updateOrder === false
             ? { parentSessionId: overData.sessionId, updateOrder: false }
@@ -1458,6 +1402,7 @@ function App() {
       }
 
       if (overData?.type === 'sidebar-session-before' && overData.sessionId) {
+        if (activeData.sessionPinned) return
         if (overData.sessionId !== draggedSessionId) {
           void handleMoveSession(draggedSessionId, {
             parentSessionId: overData.parentSessionId ?? null,
@@ -1468,6 +1413,7 @@ function App() {
       }
 
       if (overData?.type === 'sidebar-session-after' && overData.sessionId) {
+        if (activeData.sessionPinned) return
         if (overData.sessionId !== draggedSessionId) {
           void handleMoveSession(draggedSessionId, {
             parentSessionId: overData.parentSessionId ?? null,
@@ -1478,12 +1424,12 @@ function App() {
       }
 
       if (overData?.type === 'tab' && overData.paneId) {
-        openPersistentChatTab(draggedSessionId, { paneId: overData.paneId, beforeTabId: overId, pinned: !!overData.pinned })
+        openPersistentChatTab(draggedSessionId, { paneId: overData.paneId, beforeTabId: overId })
         return
       }
 
       if (overData?.type === 'tab-row' && overData.paneId) {
-        openPersistentChatTab(draggedSessionId, { paneId: overData.paneId, pinned: !!overData.pinned })
+        openPersistentChatTab(draggedSessionId, { paneId: overData.paneId })
         return
       }
 
@@ -1503,14 +1449,14 @@ function App() {
     }
 
     if (overData?.type === 'tab' && overData.paneId) {
-      if (activeData.paneId === overData.paneId && activeData.pinned === overData.pinned) {
+      if (activeData.paneId === overData.paneId) {
         if (activeId !== overId) {
           reorderTabs(overData.paneId, activeId, overId)
         }
         return
       }
 
-      applyTabDrop(overData.paneId, { beforeTabId: overId, pinned: !!overData.pinned })
+      applyTabDrop(overData.paneId, { beforeTabId: overId })
       return
     }
 
@@ -1523,20 +1469,10 @@ function App() {
     }
 
     if (overData?.type === 'tab-row' && overData.paneId) {
-      const nextPinned = !!overData.pinned
-      if (activeData.paneId === overData.paneId && !!activeData.pinned === nextPinned) {
+      if (activeData.paneId === overData.paneId) {
         return
       }
-
-      const targetPane = findPaneNode(root, overData.paneId)
-      const beforeTabId = nextPinned && targetPane
-        ? targetPane.tabIds.find((tabId) => {
-            if (tabId === activeId) return false
-            return !(tabsById[tabId]?.pinned)
-          }) || null
-        : null
-
-      applyTabDrop(overData.paneId, { beforeTabId, pinned: nextPinned })
+      applyTabDrop(overData.paneId)
       return
     }
 

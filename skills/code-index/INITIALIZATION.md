@@ -75,18 +75,24 @@ Use `TOP_DOWN_CHILD.md` as the prompt for a child/subagent session assigned to t
 
 ## Method 1 Details: Batch Generator
 
-The batch generator is implemented as a Foxwarm ToolScript:
+There are two supported batch runners. The standalone Python runner is:
 
 ```text
-skills/code-index/generate_code_index.py
+skills/code-index/generate_code_index_standalone.py
 ```
 
-Run it through Foxwarm's `run_script` tool. It is not a standalone Python CLI because it uses ToolScript host APIs such as `call_tool(...)` and `request_model_without_context(...)`.
+It calls models via the production `foxwarm model` CLI (no Foxwarm server process is required). Run it directly with `python3`. The existing `generate_code_index.py` remains the Foxwarm ToolScript-compatible runner for `run_script`; the standalone runner is an additional shell/background-friendly path, not a replacement for existing ToolScript automation or ordinary targeted maintenance through the skill.
+
+### Prerequisites
+
+- Build Foxwarm first with `npm run build`; the CLI reuses `lib/config.js` and `lib/llm.js` rather than maintaining a second provider stack.
+- If an installed `foxwarm` executable is not on `PATH`, the generator automatically uses the repo-local `node scripts/foxwarm.js` entry. `FOXWARM_CLI` or `--foxwarm-cli` can explicitly select another command.
+- The selected model key must be available through Foxwarm's normal model-config resolution.
 
 ### Phases
 
-1. **Scan & Plan** — list source files, get sizes, call a model to plan semantic unit groupings.
-2. **Units** — read source files for each unit group and generate `units/*.md`.
+1. **Scan & Plan** — list eligible source files, get sizes, call a model to plan semantic unit groupings, and strictly validate that the plan uses every scanned file exactly once. Results are cached to `_work/groupings.json` with a source/files/project/model/CLI/timeout fingerprint.
+2. **Units** — read allowlisted source files for each unit group and generate `units/*.md` with atomic writes. Existing non-empty docs are preserved unless `--force` is explicit.
 3. **Modules** — generate `modules/*.md` from unit summaries.
 4. **Threads** — generate `threads/*.md` from module summaries.
 5. **Overview** — generate `overview.md` from modules and threads.
@@ -95,18 +101,51 @@ Design decisions are not extracted by the generator. Add decisions from actual t
 
 ### Running
 
-```python
+```bash
 # Full generation
-run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project"})
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44
 
-# Single phase
-run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project", "phase": "units"})
+# Single phase (resume from cached groupings)
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --phase units
 
 # Test with specific files only
-run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project", "phase": "units", "files": ["src/main.ts", "src/server.ts"]})
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --phase units --files src/main.ts,src/server.ts
+
+# Override output directory
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --output /custom/index/path
+
+# Explicitly regenerate existing documents (may replace manual edits/Design Decisions)
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --force
 ```
 
-The script may need multiple `continue_script` calls for large projects. Use a larger timeout, such as `timeoutSecs: 120`, for batch runs.
+Options:
+- `--project` — project name (used for `~/code-index/{project}/`; defaults to source dir name)
+- `--source` — path to project source root (defaults to current directory)
+- `--phase` — run only this phase: `plan`, `units`, `modules`, `threads`, `overview`, `all` (default: all)
+- `--files` — restrict to specific files (comma-separated, for testing)
+- `--output` — override output directory
+- `--model` — model key to use (default: foxwarm default model)
+- `--timeout` — timeout in seconds per model call (default: 120)
+- `--foxwarm-cli` — explicit Foxwarm CLI command (also configurable with `FOXWARM_CLI`)
+- `--force` — replace existing generated docs; this is explicit confirmation that manual edits and Design Decisions may be overwritten
+
+For large projects the script can take a long time (each unit ~60s). Run it in the background and check the log:
+
+```bash
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/project --model gpu44 > /tmp/code-index.log 2>&1 &
+```
+
+The script is resumable: it reuses `_work/groupings.json` only when its fingerprint matches the current source/file selection/project/model/CLI/timeout. Existing non-empty units are resumed individually; an existing module, thread, or overview phase is retained as a whole unless `--force` is explicit, which avoids mixing a new model plan into curated docs. Empty or failed model responses are never written. Absolute paths, parent traversal, files outside the scanned allowlist, unsafe output-directory symlinks, and unsafe model-generated names are rejected. Use a separate output directory for experiments; use `--force` only after reviewing what it may replace.
+
+### ToolScript-compatible runner
+
+Existing Foxwarm automation can continue using the original ToolScript entry:
+
+```python
+run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project"})
+```
+
+It uses ToolScript host APIs such as `call_tool(...)` and `request_model_without_context(...)`; do not run that compatibility entry with ordinary Python. Prefer the standalone runner when you need strict path/output validation, fingerprinted resume state, or a long-running shell/background job.
 
 ### After Generation
 
