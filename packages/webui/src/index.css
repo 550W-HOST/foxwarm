@@ -1209,14 +1209,14 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons-success {
 }
 
 html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons-error {
-  --foxwarm-tool-action-idle-bg: var(--foxwarm-550a-fail-button-idle);
-  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-550a-fail-button-idle-hover);
-  --foxwarm-tool-action-border: var(--foxwarm-550a-fail-border);
-  --foxwarm-tool-action-color: var(--foxwarm-550a-fail);
-  --foxwarm-tool-action-active-bg: var(--foxwarm-550a-fail-deep);
-  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-550a-fail-deep-hover);
-  --foxwarm-tool-action-active-color: var(--foxwarm-550a-fail-button-active-text);
-  --foxwarm-tool-action-glow: var(--foxwarm-550a-fail-glow);
+  --foxwarm-tool-action-idle-bg: color-mix(in srgb, var(--foxwarm-550a-accent) 12%, var(--foxwarm-550a-panel));
+  --foxwarm-tool-action-idle-hover-bg: color-mix(in srgb, var(--foxwarm-550a-accent) 20%, var(--foxwarm-550a-panel));
+  --foxwarm-tool-action-border: var(--foxwarm-550a-accent-dim);
+  --foxwarm-tool-action-color: var(--foxwarm-550a-accent);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-550a-accent-dim);
+  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-550a-accent);
+  --foxwarm-tool-action-active-color: #ffffff;
+  --foxwarm-tool-action-glow: var(--foxwarm-550a-accent-glow);
 }
 
 html[data-foxwarm-ui-style="550a"] .foxwarm-tool-action-buttons button {
