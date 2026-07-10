@@ -131,15 +131,15 @@ export default function Sidebar({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto" data-session-list-scroll-container>
-        <div className="border-t border-gray-200 dark:border-gray-700 p-2">
-          <SessionListCore
-            sessions={sessions}
-            currentSession={currentSession}
-            onSelectSession={onSelectSession}
-            onKeepSession={onKeepSession}
-          />
-        </div>
+      <div className="flex-1 min-h-0 border-t border-gray-200 dark:border-gray-700">
+        <SessionListCore
+          sessions={sessions}
+          currentSession={currentSession}
+          onSelectSession={onSelectSession}
+          onKeepSession={onKeepSession}
+          toolbarContainerClassName="p-2 pb-1"
+          listContainerClassName="p-2 pt-1"
+        />
       </div>
     </div>
   )

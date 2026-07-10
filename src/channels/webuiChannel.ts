@@ -382,7 +382,99 @@ function buildChildrenMap(allSessions: Map<string, any>): Map<string, string[]> 
       childrenMap.get(session.parentSessionId)!.push(id);
     }
   }
+
+  for (const children of childrenMap.values()) {
+    children.sort((a, b) => compareWebUiSidebarSessions(
+      allSessions.get(a) || { id: a },
+      allSessions.get(b) || { id: b },
+    ));
+  }
   return childrenMap;
+}
+
+function getWebUiSidebarOrder(session: any): number | undefined {
+  const value = session?.sidebarOrder;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function getSessionTreeParentId(session: any): string | null {
+  return typeof session?.parentSessionId === 'string' && session.parentSessionId.trim()
+    ? session.parentSessionId.trim()
+    : null;
+}
+
+function compareWebUiSidebarSessions(a: any, b: any): number {
+  if (!!a?.archived && !b?.archived) return 1;
+  if (!a?.archived && !!b?.archived) return -1;
+
+  const aOrder = getWebUiSidebarOrder(a);
+  const bOrder = getWebUiSidebarOrder(b);
+  if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) {
+    return aOrder - bOrder;
+  }
+  if (aOrder !== undefined && bOrder === undefined) return -1;
+  if (aOrder === undefined && bOrder !== undefined) return 1;
+
+  const aTime = typeof a?.meta?.lastMessageTime === 'number' ? a.meta.lastMessageTime : 0;
+  const bTime = typeof b?.meta?.lastMessageTime === 'number' ? b.meta.lastMessageTime : 0;
+  if (aTime !== bTime) return bTime - aTime;
+
+  return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
+function getWebUiSidebarSiblings(parentSessionId: string | null, excludeSessionId?: string): any[] {
+  return Array.from(sessionManager.getAllSessions().values())
+    .filter((candidate: any) => candidate?.id !== excludeSessionId)
+    .filter((candidate: any) => getSessionTreeParentId(candidate) === parentSessionId)
+    .sort(compareWebUiSidebarSessions);
+}
+
+function writeWebUiSidebarOrder(sessions: any[]): void {
+  sessions.forEach((session, index) => {
+    session.sidebarOrder = (index + 1) * 1000;
+  });
+}
+
+async function resolveOptionalSessionId(sessionId: unknown, label: string): Promise<string | null | undefined> {
+  if (sessionId === undefined) return undefined;
+  if (sessionId === null) return null;
+  if (typeof sessionId !== 'string') {
+    throw new Error(`${label} must be a string, null, or omitted.`);
+  }
+  const trimmed = sessionId.trim();
+  if (!trimmed) return null;
+  const session = await sessionManager.getExistingSession(trimmed);
+  if (!session) {
+    const error = new Error(`${label} session "${trimmed}" was not found.`);
+    (error as any).statusCode = 404;
+    (error as any).code = `${label.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_NOT_FOUND`;
+    throw error;
+  }
+  return session.id;
+}
+
+async function assertNoSidebarParentCycle(childSessionId: string, targetParentSessionId: string | null): Promise<void> {
+  if (!targetParentSessionId) return;
+  if (childSessionId === targetParentSessionId) {
+    const error = new Error('A session cannot be assigned as a child of itself.');
+    (error as any).statusCode = 400;
+    (error as any).code = 'SELF_PARENT_NOT_ALLOWED';
+    throw error;
+  }
+
+  const seen = new Set<string>([childSessionId]);
+  let cursorParentId: string | null = targetParentSessionId;
+  while (cursorParentId) {
+    if (seen.has(cursorParentId)) {
+      const error = new Error(`Session "${childSessionId}" cannot be moved under descendant "${targetParentSessionId}" because that would create a parent cycle.`);
+      (error as any).statusCode = 400;
+      (error as any).code = 'PARENT_CYCLE_NOT_ALLOWED';
+      throw error;
+    }
+    seen.add(cursorParentId);
+    const cursorParent = await sessionManager.getExistingSession(cursorParentId);
+    cursorParentId = cursorParent ? getSessionTreeParentId(cursorParent) : null;
+  }
 }
 
 export class WebUIChannel implements Channel {
@@ -809,6 +901,7 @@ export class WebUIChannel implements Channel {
                 runtimeState: sessionManager.buildSessionRuntimeState(session),
                 displayName: session.displayName || null,
                 archived: session.archived || false,
+                sidebarOrder: getWebUiSidebarOrder(session) ?? null,
                 currentNode: session.currentNode || 'master',
                 cwd: session.cwd || null,
                 ...buildWebUiModelStatus(session),
@@ -842,6 +935,10 @@ export class WebUIChannel implements Channel {
             if (!created) {
               return res.status(409).json({ error: 'Session already exists', sessionId: session.id });
             }
+
+            const rootSiblings = getWebUiSidebarSiblings(null, session.id);
+            writeWebUiSidebarOrder([session, ...rootSiblings]);
+            await sessionManager.saveSessionsMetadata();
 
             this.broadcastSessionListUpdate();
 
@@ -1195,6 +1292,209 @@ export class WebUIChannel implements Channel {
         },
       });
 
+      // Move/reorder a session in the WebUI sidebar tree. This powers drag-and-drop:
+      // - parentSessionId: string => assign as a child of that session
+      // - parentSessionId: null   => detach to root
+      // - beforeSessionId/afterSessionId => reorder among siblings
+      // - position: first/last => insert into a target sibling group without an anchor
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/move',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          const requestedSessionId = req.params.sessionId as string;
+          const body = req.body || {};
+
+          try {
+            const movingSession = await sessionManager.getExistingSession(requestedSessionId);
+            if (!movingSession) {
+              res.status(404).json({
+                error: `Session "${requestedSessionId}" was not found, so it cannot be moved.`,
+                code: 'SESSION_NOT_FOUND',
+                sessionId: requestedSessionId,
+              });
+              return;
+            }
+
+            const beforeSessionId = await resolveOptionalSessionId(body.beforeSessionId, 'beforeSessionId');
+            const afterSessionId = await resolveOptionalSessionId(body.afterSessionId, 'afterSessionId');
+
+            if (beforeSessionId && afterSessionId) {
+              res.status(400).json({
+                error: 'Specify either beforeSessionId or afterSessionId, not both.',
+                code: 'MULTIPLE_MOVE_ANCHORS',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            const updateOrder = body.updateOrder !== false;
+            const requestedPosition = body.position === undefined || body.position === null || body.position === ''
+              ? undefined
+              : body.position;
+            if (requestedPosition !== undefined && requestedPosition !== 'first' && requestedPosition !== 'last') {
+              res.status(400).json({
+                error: 'position must be either "first" or "last" when provided.',
+                code: 'INVALID_MOVE_POSITION',
+                sessionId: movingSession.id,
+                position: requestedPosition,
+              });
+              return;
+            }
+
+            if (requestedPosition !== undefined && (beforeSessionId || afterSessionId)) {
+              res.status(400).json({
+                error: 'position cannot be combined with beforeSessionId or afterSessionId.',
+                code: 'POSITION_WITH_ANCHOR_NOT_ALLOWED',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            if (!updateOrder && (requestedPosition !== undefined || beforeSessionId || afterSessionId)) {
+              res.status(400).json({
+                error: 'updateOrder=false can only be used for parent-only moves.',
+                code: 'ORDER_ANCHOR_WITH_UPDATE_ORDER_DISABLED',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            const anchorSessionId = beforeSessionId || afterSessionId || null;
+            if (anchorSessionId === movingSession.id) {
+              res.status(400).json({
+                error: 'A session cannot be reordered relative to itself.',
+                code: 'SELF_ANCHOR_NOT_ALLOWED',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            const anchorSession = anchorSessionId
+              ? await sessionManager.getExistingSession(anchorSessionId)
+              : null;
+
+            const parentProvided = Object.prototype.hasOwnProperty.call(body, 'parentSessionId');
+            const requestedParentSessionId = parentProvided
+              ? await resolveOptionalSessionId(body.parentSessionId, 'parentSessionId')
+              : undefined;
+            const anchorParentSessionId = anchorSession ? getSessionTreeParentId(anchorSession) : null;
+            const targetParentSessionId = requestedParentSessionId !== undefined
+              ? requestedParentSessionId
+              : anchorSession
+                ? anchorParentSessionId
+                : getSessionTreeParentId(movingSession);
+
+            if (anchorSession && anchorParentSessionId !== targetParentSessionId) {
+              res.status(400).json({
+                error: `Move anchor "${anchorSession.id}" is not in the requested target parent group.`,
+                code: 'ANCHOR_PARENT_MISMATCH',
+                sessionId: movingSession.id,
+                anchorSessionId: anchorSession.id,
+                anchorParentSessionId,
+                targetParentSessionId,
+              });
+              return;
+            }
+
+            await assertNoSidebarParentCycle(movingSession.id, targetParentSessionId);
+
+            const previousParentSessionId = getSessionTreeParentId(movingSession);
+            if (previousParentSessionId !== targetParentSessionId) {
+              await sessionManager.setSessionParent(movingSession.id, targetParentSessionId || undefined);
+            }
+
+            const latestMovingSession = await sessionManager.getExistingSession(movingSession.id);
+            if (!latestMovingSession) {
+              res.status(404).json({
+                error: `Session "${movingSession.id}" disappeared while moving.`,
+                code: 'SESSION_NOT_FOUND_AFTER_PARENT_UPDATE',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            if (!updateOrder) {
+              this.broadcastSessionListUpdate();
+              res.json({
+                success: true,
+                sessionId: latestMovingSession.id,
+                parentSessionId: getSessionTreeParentId(latestMovingSession),
+                previousParentSessionId,
+                beforeSessionId: null,
+                afterSessionId: null,
+                sidebarOrder: getWebUiSidebarOrder(latestMovingSession) || null,
+              });
+              return;
+            }
+
+            if (previousParentSessionId !== targetParentSessionId) {
+              writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, latestMovingSession.id));
+            }
+
+            const targetSiblingsWithoutMoving = getWebUiSidebarSiblings(targetParentSessionId, latestMovingSession.id);
+            let insertIndex = requestedPosition === 'last' ? targetSiblingsWithoutMoving.length : 0;
+
+            if (beforeSessionId) {
+              const beforeIndex = targetSiblingsWithoutMoving.findIndex(session => session.id === beforeSessionId);
+              if (beforeIndex < 0) {
+                res.status(400).json({
+                  error: `beforeSessionId "${beforeSessionId}" is not a sibling in the target group.`,
+                  code: 'BEFORE_ANCHOR_NOT_IN_TARGET_GROUP',
+                  sessionId: latestMovingSession.id,
+                  beforeSessionId,
+                  targetParentSessionId,
+                });
+                return;
+              }
+              insertIndex = beforeIndex;
+            } else if (afterSessionId) {
+              const afterIndex = targetSiblingsWithoutMoving.findIndex(session => session.id === afterSessionId);
+              if (afterIndex < 0) {
+                res.status(400).json({
+                  error: `afterSessionId "${afterSessionId}" is not a sibling in the target group.`,
+                  code: 'AFTER_ANCHOR_NOT_IN_TARGET_GROUP',
+                  sessionId: latestMovingSession.id,
+                  afterSessionId,
+                  targetParentSessionId,
+                });
+                return;
+              }
+              insertIndex = afterIndex + 1;
+            }
+
+            const targetSiblings = [...targetSiblingsWithoutMoving];
+            targetSiblings.splice(Math.max(0, Math.min(insertIndex, targetSiblings.length)), 0, latestMovingSession);
+            writeWebUiSidebarOrder(targetSiblings);
+
+            await sessionManager.saveSessionsMetadata();
+            this.broadcastSessionListUpdate();
+
+            res.json({
+              success: true,
+              sessionId: latestMovingSession.id,
+              parentSessionId: getSessionTreeParentId(latestMovingSession),
+              previousParentSessionId,
+              beforeSessionId: beforeSessionId || null,
+              afterSessionId: afterSessionId || null,
+              sidebarOrder: getWebUiSidebarOrder(latestMovingSession) || null,
+            });
+          } catch (e: any) {
+            const statusCode = typeof e?.statusCode === 'number' ? e.statusCode : 500;
+            const code = typeof e?.code === 'string' ? e.code : 'MOVE_SESSION_FAILED';
+            if (statusCode >= 500) {
+              logger.error({ err: e, sessionId: requestedSessionId }, 'Failed to move session in WebUI sidebar');
+            } else {
+              logger.warn({ sessionId: requestedSessionId, statusCode, code, reason: e?.message }, 'Rejected WebUI sidebar session move');
+            }
+            res.status(statusCode).json({
+              error: e?.message || 'Failed to move session.',
+              code,
+              sessionId: requestedSessionId,
+            });
+          }
+        },
+      });
+
       // Promote session (move up one level or detach from parent, making it a root session)
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/promote',
@@ -1277,6 +1577,27 @@ export class WebUIChannel implements Channel {
             }
 
             const result = await sessionManager.setSessionParent(sessionId, targetParentId);
+            const movedSession = await sessionManager.getExistingSession(result.childSessionId);
+
+            if (movedSession) {
+              const previousParentSessionId = result.previousParentSessionId || null;
+              const nextParentSessionId = result.parentSessionId || null;
+
+              if (previousParentSessionId !== nextParentSessionId) {
+                writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, movedSession.id));
+              }
+
+              const targetSiblingsWithoutMoving = getWebUiSidebarSiblings(nextParentSessionId, movedSession.id);
+              const previousParentIndex = result.previousParentSessionId
+                ? targetSiblingsWithoutMoving.findIndex(session => session.id === result.previousParentSessionId)
+                : -1;
+              const insertIndex = previousParentIndex >= 0 ? previousParentIndex + 1 : 0;
+              const targetSiblings = [...targetSiblingsWithoutMoving];
+              targetSiblings.splice(insertIndex, 0, movedSession);
+              writeWebUiSidebarOrder(targetSiblings);
+            }
+
+            await sessionManager.saveSessionsMetadata();
 
             this.broadcastSessionListUpdate();
 
@@ -1286,7 +1607,8 @@ export class WebUIChannel implements Channel {
               sessionId: result.childSessionId,
               parentSessionId: result.parentSessionId || null,
               previousParentSessionId: result.previousParentSessionId || null,
-              targetParentId: targetParentId || null,
+              targetParentId: result.parentSessionId || null,
+              sidebarOrder: movedSession ? getWebUiSidebarOrder(movedSession) || null : null,
               sessionBusy: !!childSession.busy,
               targetParentBusy,
             });

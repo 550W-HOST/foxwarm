@@ -42,6 +42,7 @@ const SESSION_METADATA_FIELDS = [
   'meta',
   'displayName',
   'archived',
+  'sidebarOrder',
   'currentNode',
   'cwd',
   'model',
