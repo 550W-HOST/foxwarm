@@ -371,9 +371,7 @@ html:not(.dark)[data-foxwarm-ui-style="550a"] {
 html[data-foxwarm-ui-style="550a"],
 html[data-foxwarm-ui-style="550a"] body,
 html[data-foxwarm-ui-style="550a"] #root {
-  background: var(--foxwarm-550a-grid-background);
-  background-size: 72px 72px, 72px 72px, 18px 18px, 18px 18px, auto;
-  background-position: -1px -1px;
+  background: var(--foxwarm-550a-bg);
   color: var(--foxwarm-550a-text);
   font-family: var(--foxwarm-550a-font);
 }
@@ -464,16 +462,15 @@ html[data-foxwarm-ui-style="550a"] button {
 html[data-foxwarm-ui-style="550a"] .foxwarm-safe-area-shell,
 html[data-foxwarm-ui-style="550a"] .foxwarm-viewport-shell,
 html[data-foxwarm-ui-style="550a"] .foxwarm-fixed-viewport-shell {
-  background: var(--foxwarm-550a-grid-background) !important;
-  background-size: 72px 72px, 72px 72px, 18px 18px, 18px 18px, auto !important;
-  background-position: -1px -1px !important;
+  background: var(--foxwarm-550a-bg) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-chat-message-region,
 html[data-foxwarm-ui-style="550a"] .foxwarm-chat-messages {
   background: var(--foxwarm-550a-grid-background) !important;
   background-size: 72px 72px, 72px 72px, 18px 18px, 18px 18px, auto !important;
   background-position: -1px -1px !important;
+  /* Anchor the grid to scrollable timeline content instead of the viewport. */
+  background-attachment: local !important;
 }
 
 html[data-foxwarm-ui-style="550a"] :is(
