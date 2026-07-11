@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bot, ChevronDown, MessageSquarePlus, Plus, X } from 'lucide-react'
+import { Bot, MessageSquarePlus, Plus, X } from 'lucide-react'
 import { RANDOM_SESSION_ID_PLACEHOLDER, validateAgentId, validateSessionId, type AgentSummary } from '../agentCreation'
 
 type CreationMode = 'agent' | 'session'
@@ -115,7 +115,6 @@ export default function AgentCreationMenu({
         aria-expanded={menuOpen}
       >
         <Plus className="h-4 w-4" />
-        {compact && <ChevronDown className="ml-0.5 h-3 w-3" />}
       </button>
 
       {menuOpen && (

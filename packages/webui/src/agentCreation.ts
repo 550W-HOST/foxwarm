@@ -3,7 +3,7 @@ export type AgentSummary = {
   inherit?: string | null
 }
 
-export const RANDOM_SESSION_ID_PLACEHOLDER = 'Leave blank for a random ID (for example, 0712_ab123)'
+export const RANDOM_SESSION_ID_PLACEHOLDER = 'Random ID (for example, 0712_ab123)'
 
 export function validateAgentId(agentId: string): string | null {
   if (!agentId.trim()) return 'Agent ID is required.'
