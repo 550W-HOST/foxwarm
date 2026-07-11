@@ -26,7 +26,7 @@ import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
-import { formatFoxwarmMessage, formatFoxwarmSystem, formatSystemPartForModel } from './utils/promptWrappers';
+import { formatFoxwarmMessage, formatFoxwarmSystem, formatFoxwarmSystemClose, formatFoxwarmSystemOpen, formatSystemPartForModel } from './utils/promptWrappers';
 import { runStartupMigrations } from './migrations';
 import {
   buildSessionRuntimeState,
@@ -730,6 +730,12 @@ async function loadChannels(): Promise<void> {
 export const validateAgentName = sessionAgentOps.validateAgentName;
 export const validateSessionName = sessionAgentOps.validateSessionName;
 
+export function validateChildSessionSuffix(suffix: string): void {
+  if (!suffix || typeof suffix !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(suffix)) {
+    throw new Error('Invalid child session suffix. Use only alphanumeric characters, hyphens, and underscores.');
+  }
+}
+
 function getSessionAgentOpsDeps() {
   return {
     getSession,
@@ -1114,6 +1120,7 @@ export function resolveSpawnedSessionModel(
 }
 
 export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
+  validateChildSessionSuffix(suffix);
   if (fork) {
     // Fork from parent (inherit context)
     return await forkSession(parentSessionId, suffix, true, options);
@@ -1695,7 +1702,7 @@ export function notifySessionEvent(sessionId: string, event: SessionStreamEvent)
   }
 }
 
-export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[]): Promise<void> {
+export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[], options: { suppressGoalReminder?: boolean } = {}): Promise<void> {
   const session = typeof sessionOrId === 'string'
     ? await getSession(sessionOrId)
     : sessionOrId;
@@ -1712,7 +1719,7 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
   appendMessagesToContextFrontier(session, messages);
 
   const messagesToNotify = [...messages];
-  const goalReminderMessage = maybeBuildGoalReminderMessage(session);
+  const goalReminderMessage = options.suppressGoalReminder ? undefined : maybeBuildGoalReminderMessage(session);
 
   await saveSession(session.id);
 
@@ -1727,6 +1734,35 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
 
 export async function appendSessionMessage(sessionOrId: Session | string, message: Message): Promise<void> {
   await appendSessionMessages(sessionOrId, [message]);
+}
+
+export async function notifyManualForkCreated(parentSessionId: string, childSessionId: string, initialMessage?: string): Promise<'appended' | 'queued'> {
+  const parent = await getSession(parentSessionId);
+  const messageText = initialMessage === undefined
+    ? formatFoxwarmSystem({
+      kind: 'session-boundary',
+      event: 'manual-fork-created',
+      childSessionId,
+      initialMessage: '(none)',
+    }, `User manually created fork session \`${childSessionId}\`.\nInitial message: (none)`)
+    : `${formatFoxwarmSystemOpen({
+      kind: 'session-boundary',
+      event: 'manual-fork-created',
+      childSessionId,
+    })}\nUser manually created fork session \`${childSessionId}\`.\nInitial message:\n${initialMessage}\n${formatFoxwarmSystemClose()}`;
+  const notification: Message = {
+    role: 'user',
+    parts: [systemPart(messageText)],
+    __meta: { timestamp: Date.now() },
+  };
+
+  if (parent.busy) {
+    await queueSessionMessageEvent(parent.id, notification, 'background');
+    return 'queued';
+  }
+
+  await appendSessionMessages(parent, [notification], { suppressGoalReminder: true });
+  return 'appended';
 }
 
 

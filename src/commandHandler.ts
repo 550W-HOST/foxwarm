@@ -15,7 +15,7 @@ export class CommandHandler {
     return this.router.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId);
   }
 
-  async handleCommand(ctx: ChannelContext, command: string, args: string[]): Promise<boolean> {
+  async handleCommand(ctx: ChannelContext, command: string, args: string[], rawArgs?: string): Promise<boolean> {
     // Check authorization
     if (!this.isAuthorized(ctx)) {
       ctx.reply(this.router.buildUnauthorizedMessage(ctx));
@@ -37,7 +37,7 @@ export class CommandHandler {
       session = await sessionManager.getSession(sessionId);
     }
 
-    await def.handler(ctx, args, sessionId, session);
+    await def.handler(ctx, args, sessionId, session, rawArgs);
     return true;
   }
 }

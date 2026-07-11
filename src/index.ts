@@ -229,16 +229,16 @@ async function start() {
     const commandHandler = new CommandHandler(router);
     initializeChannelRuntime(
         (ctx, message) => router.handleMessage(ctx, message),
-        (ctx, command, args) => commandHandler.handleCommand(ctx, command, args),
+        (ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs),
     );
     
     // Set command handler in router and give commandHandler access to router
-    router.setCommandHandler((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
+    router.setCommandHandler((ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs));
 
     // Set up TUI channel handlers
     if (tuiChannel) {
         tuiChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-        tuiChannel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
+        tuiChannel.onCommand((ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs));
     }
 
     // Set up session event callbacks (for background processes, child sessions, etc.)
@@ -300,7 +300,7 @@ async function start() {
         ? startWithRetry(`telegram:${defaultTelegramEntry.id}`, async () => {
             const channel = new TelegramChannel(defaultTelegramEntry.config, defaultTelegramEntry.id);
             channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-            channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
+            channel.onCommand((ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs));
             await channel.start();
             registerChannel(defaultTelegramEntry.id, channel);
             logger.info({ channelId: defaultTelegramEntry.id }, 'Telegram channel initialized');
@@ -321,7 +321,7 @@ async function start() {
             void startWithRetry(`telegram:${entry.id}`, async () => {
                 const channel = new TelegramChannel(config, entry.id);
                 channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-                channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
+                channel.onCommand((ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs));
                 await channel.start();
                 registerChannel(entry.id, channel);
                 logger.info({ channelId: entry.id }, 'Telegram channel initialized');

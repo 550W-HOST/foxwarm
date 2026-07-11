@@ -548,7 +548,7 @@ export class TUIChannel implements Channel {
     this.messageHandler = handler;
   }
 
-  onCommand(_handler: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>): void {
+  onCommand(_handler: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>): void {
     // TUI currently handles text input as normal messages; slash-command dispatch is not wired here.
   }
 

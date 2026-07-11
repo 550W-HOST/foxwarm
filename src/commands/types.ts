@@ -7,7 +7,7 @@ export type CommandDef = {
   requiresSession?: boolean
   showInTelegram?: boolean
   autocomplete?: CommandAutocomplete
-  handler: (ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) => Promise<void>
+  handler: (ctx: ChannelContext, args: string[], sessionId?: string, session?: Session, rawArgs?: string) => Promise<void>
 }
 
 export type CommandAutocompleteNode = {
