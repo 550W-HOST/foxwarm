@@ -212,13 +212,13 @@ Example:
         {
             name: 'exec',
             defaultInject: true,
-            description: 'Execute a shell command. The working directory is the explicit cwd when provided (relative cwd resolves from the session cwd when set, otherwise from the current node default), otherwise the session cwd when set, otherwise the current node default (master default is the agent folder). Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output is saved under the agent folder .temp/exec area. Commands running longer than the configured timeout (default 15s, allowed range 1-60s) continue in the background and send a completion system message later.',
+            description: 'Execute a shell command. The working directory is the explicit cwd when provided (relative cwd resolves from the session cwd when set, otherwise from the current node default), otherwise the session cwd when set, otherwise the current node default (master default is the agent folder). Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output is saved under the agent folder .temp/exec area. Commands running longer than the configured timeout (default 15s, maximum 60s; larger values are clamped with a warning) continue in the background and send a completion system message later.',
             parameters: {
                 type: 'object',
                 properties: {
                     command: { type: 'string' },
                     cwd: { type: 'string', description: 'Optional working directory override. Relative paths resolve from session.cwd when set, otherwise from the current node default.' },
-                    timeout: { type: 'number', minimum: MIN_EXEC_TIMEOUT_SECONDS, maximum: MAX_EXEC_TIMEOUT_SECONDS, description: `Optional timeout in seconds before the command is moved to background. Default: ${DEFAULT_EXEC_TIMEOUT_SECONDS}. Allowed range: ${MIN_EXEC_TIMEOUT_SECONDS}-${MAX_EXEC_TIMEOUT_SECONDS}.` }
+                    timeout: { type: 'number', minimum: MIN_EXEC_TIMEOUT_SECONDS, description: `Optional timeout in seconds before the command is moved to background. Default: ${DEFAULT_EXEC_TIMEOUT_SECONDS}. Values above the ${MAX_EXEC_TIMEOUT_SECONDS}s maximum are clamped to ${MAX_EXEC_TIMEOUT_SECONDS}s with a warning.` }
                 },
                 required: ['command']
             }

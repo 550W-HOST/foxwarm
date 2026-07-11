@@ -3,7 +3,7 @@ import {
     ToolContext,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
-import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from '../../packages/shared/dist/persistentExec';
+import { resolveExecTimeoutSeconds } from '../../packages/shared/dist/persistentExec';
 import {
     buildBackgroundTimeoutResult,
     buildForegroundExecResult,
@@ -14,22 +14,6 @@ import {
     startPersistentExec,
     waitForExecCompletion,
 } from '../execManager';
-
-function resolveExecTimeoutSeconds(timeoutValue: unknown): number {
-    if (timeoutValue === undefined || timeoutValue === null) {
-        return DEFAULT_EXEC_TIMEOUT_SECONDS;
-    }
-
-    if (typeof timeoutValue !== 'number' || !Number.isFinite(timeoutValue)) {
-        throw new Error(`timeout must be a number between ${MIN_EXEC_TIMEOUT_SECONDS} and ${MAX_EXEC_TIMEOUT_SECONDS} seconds`);
-    }
-
-    if (timeoutValue < MIN_EXEC_TIMEOUT_SECONDS || timeoutValue > MAX_EXEC_TIMEOUT_SECONDS) {
-        throw new Error(`timeout must be between ${MIN_EXEC_TIMEOUT_SECONDS} and ${MAX_EXEC_TIMEOUT_SECONDS} seconds`);
-    }
-
-    return timeoutValue;
-}
 
 async function maybeSyncSessionCwdFromExec(ctx: ToolContext, entry: { initialCwd?: string }, nextCwd: string | null | undefined): Promise<string | null> {
     if (!ctx.sessionId || typeof nextCwd !== 'string' || nextCwd.trim().length === 0) {
@@ -61,7 +45,8 @@ function appendCwdNotice(result: string, cwdNotice: string | null): string {
 
 export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     const { command, cwd, timeout } = args;
-    const timeoutSeconds = resolveExecTimeoutSeconds(timeout);
+    const resolvedTimeout = resolveExecTimeoutSeconds(timeout);
+    const timeoutSeconds = resolvedTimeout.effectiveSeconds;
 
     // Mark that we're about to exec, then save session
     if (ctx && ctx.sessionId) {
@@ -83,7 +68,7 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     if (status) {
         try {
             const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readFinishedExecWorkingDirectory(execEntry));
-            const result = await buildForegroundExecResult(execEntry, status);
+            const result = await buildForegroundExecResult(execEntry, status, resolvedTimeout.warning);
             return appendCwdNotice(result, cwdNotice);
         } finally {
             await finalizeForegroundExec(execEntry.id);
@@ -92,6 +77,6 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
 
     const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readLiveExecWorkingDirectory(execEntry));
     await markExecForBackgroundNotification(execEntry.id);
-    const result = await buildBackgroundTimeoutResult(execEntry, timeoutSeconds);
+    const result = await buildBackgroundTimeoutResult(execEntry, timeoutSeconds, resolvedTimeout.warning);
     return appendCwdNotice(result, cwdNotice);
 }

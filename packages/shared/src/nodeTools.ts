@@ -4,7 +4,7 @@ import path from 'path';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from './applyPatch';
 import { getNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
 import { readFileToolPath, writeFileToolPath } from './fileToolCore';
-import { PersistentExecManager, DEFAULT_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, type ExecStatus, type RunningExecEntry } from './persistentExec';
+import { PersistentExecManager, resolveExecTimeoutSeconds, type ExecStatus, type RunningExecEntry } from './persistentExec';
 
 export interface NodeToolContext {
   sessionId?: string;
@@ -97,14 +97,6 @@ export async function apply_patch(args: ToolArgs, ctx: NodeToolContext = {}) {
   return applyPatchOperations(args.input, filePath => ({ fullPath: resolveToolPath(filePath, ctx), displayPath: filePath }));
 }
 
-function resolveExecTimeoutSeconds(timeoutValue: unknown): number {
-  if (timeoutValue === undefined || timeoutValue === null) return DEFAULT_EXEC_TIMEOUT_SECONDS;
-  if (typeof timeoutValue !== 'number' || !Number.isFinite(timeoutValue) || timeoutValue < MIN_EXEC_TIMEOUT_SECONDS || timeoutValue > MAX_EXEC_TIMEOUT_SECONDS) {
-    throw new Error(`timeout must be a number between ${MIN_EXEC_TIMEOUT_SECONDS} and ${MAX_EXEC_TIMEOUT_SECONDS} seconds`);
-  }
-  return timeoutValue;
-}
-
 const sessionEventDispatchers = new Map<string, NonNullable<NodeToolContext['queueSystemEvent']>>();
 const execManagers = new Map<string, PersistentExecManager>();
 
@@ -133,7 +125,8 @@ export async function get_default_cwd() {
 export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
   const command = String(args.command || '');
   if (!command.trim()) throw new Error('exec requires command');
-  const timeoutSeconds = resolveExecTimeoutSeconds(args.timeout);
+  const resolvedTimeout = resolveExecTimeoutSeconds(args.timeout);
+  const timeoutSeconds = resolvedTimeout.effectiveSeconds;
   const agentName = ctx.session?.agent || 'main';
   if (ctx.sessionId && ctx.queueSystemEvent) sessionEventDispatchers.set(ctx.sessionId, ctx.queueSystemEvent);
   const manager = getExecManager(agentName);
@@ -149,13 +142,13 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
   const status = await manager.waitForExecCompletion(entry.id, timeoutSeconds * 1000);
   if (status) {
     try {
-      return await manager.buildForegroundExecResult(entry, status);
+      return await manager.buildForegroundExecResult(entry, status, resolvedTimeout.warning);
     } finally {
       await manager.finalizeForegroundExec(entry.id);
     }
   }
   await manager.markExecForBackgroundNotification(entry.id);
-  return await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds);
+  return await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, resolvedTimeout.warning);
 }
 
 class SharedBrowserManager {

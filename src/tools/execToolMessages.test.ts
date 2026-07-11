@@ -26,28 +26,32 @@ function buildExecEntry(logPath: string, overrides: Partial<RunningExecEntry> = 
   };
 }
 
-test('exec schema exposes timeout with documented range and default', () => {
+test('exec schema documents timeout clamping without rejecting values above the maximum', () => {
   const def = definitions.find((entry) => entry.name === 'exec');
   assert.ok(def);
   const timeout = (def?.parameters?.properties as any)?.timeout;
   assert.ok(timeout);
   assert.equal(timeout.type, 'number');
   assert.equal(timeout.minimum, execManager.MIN_EXEC_TIMEOUT_SECONDS);
-  assert.equal(timeout.maximum, execManager.MAX_EXEC_TIMEOUT_SECONDS);
+  assert.equal(Object.prototype.hasOwnProperty.call(timeout, 'maximum'), false);
   assert.match(String(timeout.description), /default: 15/i);
-  assert.match(String(timeout.description), /1-60/i);
+  assert.match(String(timeout.description), /above the 60s maximum are clamped/i);
 });
 
-test('exec tool rejects timeout values outside the allowed range', async () => {
+test('exec tool still rejects timeout values below the allowed range', async () => {
   await assert.rejects(
     () => exec({ command: 'echo hi', timeout: 0 }, { session: { agent: 'main' } } as any),
     /timeout must be between 1 and 60 seconds/i,
   );
+});
 
-  await assert.rejects(
-    () => exec({ command: 'echo hi', timeout: 61 }, { session: { agent: 'main' } } as any),
-    /timeout must be between 1 and 60 seconds/i,
-  );
+test('exec tool rejects non-finite numeric timeout values', async () => {
+  for (const timeout of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    await assert.rejects(
+      () => exec({ command: 'echo hi', timeout }, { session: { agent: 'main' } } as any),
+      /timeout must be a number between 1 and 60 seconds/i,
+    );
+  }
 });
 
 test('exec tool passes timeout through to waitForExecCompletion and background result builder', async () => {
@@ -78,6 +82,45 @@ test('exec tool passes timeout through to waitForExecCompletion and background r
     assert.equal(result, 'background timeout 7');
     assert.equal(seenTimeoutMs, 7000);
     assert.equal(seenBackgroundTimeoutSeconds, 7);
+  } finally {
+    (execManager as any).startPersistentExec = originalStartPersistentExec;
+    (execManager as any).waitForExecCompletion = originalWaitForExecCompletion;
+    (execManager as any).readLiveExecWorkingDirectory = originalReadLiveExecWorkingDirectory;
+    (execManager as any).markExecForBackgroundNotification = originalMarkExecForBackgroundNotification;
+    (execManager as any).buildBackgroundTimeoutResult = originalBuildBackgroundTimeoutResult;
+  }
+});
+
+test('exec tool clamps oversized finite timeouts to 60s and forwards a footer warning', async () => {
+  const originalStartPersistentExec = execManager.startPersistentExec;
+  const originalWaitForExecCompletion = execManager.waitForExecCompletion;
+  const originalReadLiveExecWorkingDirectory = execManager.readLiveExecWorkingDirectory;
+  const originalMarkExecForBackgroundNotification = execManager.markExecForBackgroundNotification;
+  const originalBuildBackgroundTimeoutResult = execManager.buildBackgroundTimeoutResult;
+  const fakeEntry = buildExecEntry('/tmp/exec-timeout-clamp.log', { sessionId: undefined });
+  const seen: Array<{ timeoutMs: number; timeoutSeconds: number; warning?: string }> = [];
+
+  try {
+    (execManager as any).startPersistentExec = async (): Promise<RunningExecEntry> => fakeEntry;
+    (execManager as any).waitForExecCompletion = async (_execId: string, timeoutMs: number): Promise<null> => {
+      seen.push({ timeoutMs, timeoutSeconds: -1 });
+      return null;
+    };
+    (execManager as any).readLiveExecWorkingDirectory = async (): Promise<null> => null;
+    (execManager as any).markExecForBackgroundNotification = async (): Promise<RunningExecEntry> => fakeEntry;
+    (execManager as any).buildBackgroundTimeoutResult = async (_entry: RunningExecEntry, timeoutSeconds: number, warning?: string): Promise<string> => {
+      const current = seen.at(-1)!;
+      current.timeoutSeconds = timeoutSeconds;
+      current.warning = warning;
+      return warning || '';
+    };
+
+    for (const requested of [61, 120, Number.MAX_VALUE]) {
+      const result = String(await exec({ command: 'sleep 1', timeout: requested }, { session: { agent: 'main' } } as any));
+      assert.equal(seen.at(-1)?.timeoutMs, 60_000);
+      assert.equal(seen.at(-1)?.timeoutSeconds, 60);
+      assert.match(result, new RegExp(`^WARNING: Requested timeout ${String(requested).replace('+', '\\+')}s exceeds the 60s maximum; using 60s\\.$`));
+    }
   } finally {
     (execManager as any).startPersistentExec = originalStartPersistentExec;
     (execManager as any).waitForExecCompletion = originalWaitForExecCompletion;
@@ -170,6 +213,42 @@ test('foreground exec truncated output keeps line-aware excerpt and footer metad
     assert.match(result, new RegExp(`---\nExit code: 0\nFull output saved to: ${logPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     assert.match(result, /Foxwarm placeholders above .* are not original output content/);
     assert.match(result, /Original output: 1 line\(s\), 24000 character\(s\)\./);
+  } finally {
+    await fs.remove(tempDir);
+  }
+});
+
+test('foreground exec warning remains in the footer when command output is truncated', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-warning-truncated-'));
+  const logPath = path.join(tempDir, 'command.log');
+  const warning = 'WARNING: Requested timeout 120s exceeds the 60s maximum; using 60s.';
+
+  try {
+    await fs.writeFile(logPath, 'x'.repeat(24000));
+    const result = await buildForegroundExecResult(
+      buildExecEntry(logPath),
+      { exitCode: 1, finishedAt: new Date().toISOString(), error: 'test failure' },
+      warning,
+    );
+
+    assert.match(result, /---\nExit code: 1\nError: test failure\nWARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\./);
+    assert.match(result, /Full output saved to:/);
+  } finally {
+    await fs.remove(tempDir);
+  }
+});
+
+test('background timeout result includes oversized-timeout warning with final metadata', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-warning-background-'));
+  const logPath = path.join(tempDir, 'command.log');
+  const warning = 'WARNING: Requested timeout 120s exceeds the 60s maximum; using 60s.';
+
+  try {
+    await fs.writeFile(logPath, 'partial\n');
+    const result = await buildBackgroundTimeoutResult(buildExecEntry(logPath), 60, warning);
+    assert.match(result, /\[Process running longer than 60s\]/);
+    assert.match(result, /WARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\.\nPID: 4321/);
+    assert.ok(result.endsWith(`Log file: ${logPath}`));
   } finally {
     await fs.remove(tempDir);
   }

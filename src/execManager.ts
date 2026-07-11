@@ -63,12 +63,12 @@ export async function finalizeForegroundExec(execId: string): Promise<void> {
   await manager.finalizeForegroundExec(execId);
 }
 
-export async function buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus): Promise<string> {
-  return await manager.buildForegroundExecResult(entry, status);
+export async function buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string> {
+  return await manager.buildForegroundExecResult(entry, status, warning);
 }
 
-export async function buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS): Promise<string> {
-  return await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds);
+export async function buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string): Promise<string> {
+  return await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, warning);
 }
 
 export async function readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
