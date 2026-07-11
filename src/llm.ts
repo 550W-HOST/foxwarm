@@ -741,8 +741,9 @@ async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
 
     for (const skill of visibleSkills) {
         combined += '  <skill>';
-        combined += `    <name>${escapeXmlText(skill.name)}</name>`;
-        combined += `    <description>${escapeXmlText(skill.description || '')}</description>`;
+        combined += `<name>${escapeXmlText(skill.name)}</name>`;
+        combined += `<description>${escapeXmlText(skill.description || '')}</description>`;
+        combined += `<source>${escapeXmlText(skill.sourceType)}</source>`;
         combined += '</skill>\n';
     }
 
