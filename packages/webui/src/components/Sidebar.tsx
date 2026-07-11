@@ -2,6 +2,7 @@ import { PanelLeftClose, PanelLeftOpen, Plus, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 import CreateTabButton from './CreateTabButton'
+import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 
 interface SidebarProps {
@@ -27,9 +28,12 @@ interface SidebarProps {
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectSetup: () => void
-  onOpenVscodeEmbedded: () => void
-  onOpenVscodeBrowserTab: () => void
-  vscodeEmbeddedActive: boolean
+  codePath: string
+  codeOpenInNewWindow: boolean
+  codeActive: boolean
+  onOpenCode: (path: string) => void
+  onCodePathChange: (path: string) => void
+  onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateSession: () => void
   onToggleCollapsed: () => void
@@ -59,9 +63,12 @@ export default function Sidebar({
   onKeepSession,
   onSelectArchitecture,
   onSelectSetup,
-  onOpenVscodeEmbedded,
-  onOpenVscodeBrowserTab,
-  vscodeEmbeddedActive,
+  codePath,
+  codeOpenInNewWindow,
+  codeActive,
+  onOpenCode,
+  onCodePathChange,
+  onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
   onCreateSession,
   onToggleCollapsed,
@@ -69,7 +76,6 @@ export default function Sidebar({
 }: SidebarProps) {
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
-  const sessionLabel = currentSessionRecord?.displayName || currentSession || 'main'
 
   const agentsBtnClass = currentView === 'agents'
     ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
@@ -106,9 +112,6 @@ export default function Sidebar({
               menuAlign="start"
               onOpenSetup={onSelectSetup}
               setupActive={currentView === 'setup'}
-              onOpenVscodeEmbedded={onOpenVscodeEmbedded}
-              onOpenVscodeBrowserTab={onOpenVscodeBrowserTab}
-              vscodeEmbeddedActive={vscodeEmbeddedActive}
             />
           </div>
         </div>
@@ -131,10 +134,17 @@ export default function Sidebar({
               <Plus className="w-4 h-4" />
             </button>
           </div>
+          <CodeLaunchButton
+            path={codePath}
+            openInNewWindow={codeOpenInNewWindow}
+            active={codeActive}
+            onOpen={onOpenCode}
+            onPathChange={onCodePathChange}
+            onOpenInNewWindowChange={onCodeOpenInNewWindowChange}
+          />
           <CreateTabButton
             defaultNodeId={defaultNodeId}
             defaultPath={defaultPath}
-            sessionLabel={sessionLabel}
             onCreate={(options) => onCreateTerminalTab(options)}
           />
         </div>

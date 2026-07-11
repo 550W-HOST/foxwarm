@@ -2,6 +2,7 @@ import { Plus, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 import CreateTabButton from './CreateTabButton'
+import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 
 interface SessionListProps {
@@ -27,9 +28,12 @@ interface SessionListProps {
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectSetup: () => void
-  onOpenVscodeEmbedded: () => void
-  onOpenVscodeBrowserTab: () => void
-  vscodeEmbeddedActive: boolean
+  codePath: string
+  codeOpenInNewWindow: boolean
+  codeActive: boolean
+  onOpenCode: (path: string) => void
+  onCodePathChange: (path: string) => void
+  onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateSession: () => void
 }
@@ -57,15 +61,17 @@ export default function SessionList({
   onKeepSession,
   onSelectArchitecture,
   onSelectSetup,
-  onOpenVscodeEmbedded,
-  onOpenVscodeBrowserTab,
-  vscodeEmbeddedActive,
+  codePath,
+  codeOpenInNewWindow,
+  codeActive,
+  onOpenCode,
+  onCodePathChange,
+  onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
   onCreateSession,
 }: SessionListProps) {
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
-  const sessionLabel = currentSessionRecord?.displayName || currentSession || 'main'
 
   const agentsBtnClass = currentView === 'agents'
     ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
@@ -92,9 +98,6 @@ export default function SessionList({
             onTabIconChange={onTabIconChange}
             onOpenSetup={onSelectSetup}
             setupActive={currentView === 'setup'}
-            onOpenVscodeEmbedded={onOpenVscodeEmbedded}
-            onOpenVscodeBrowserTab={onOpenVscodeBrowserTab}
-            vscodeEmbeddedActive={vscodeEmbeddedActive}
           />
         </div>
 
@@ -116,10 +119,20 @@ export default function SessionList({
         </div>
 
         <div className="mt-2">
+          <CodeLaunchButton
+            path={codePath}
+            openInNewWindow={codeOpenInNewWindow}
+            active={codeActive}
+            onOpen={onOpenCode}
+            onPathChange={onCodePathChange}
+            onOpenInNewWindowChange={onCodeOpenInNewWindowChange}
+          />
+        </div>
+
+        <div className="mt-2">
           <CreateTabButton
             defaultNodeId={defaultNodeId}
             defaultPath={defaultPath}
-            sessionLabel={sessionLabel}
             onCreate={(options) => onCreateTerminalTab(options)}
           />
         </div>

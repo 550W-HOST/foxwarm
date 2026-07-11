@@ -13,7 +13,7 @@ import { isSessionRuntimeActive } from './sessionRuntimeState'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
-import { makeVscodeWebUrl, VSCODE_WEB_TAB_ID } from './vscodeWeb'
+import { makeVscodeWebUrl, normalizeCodePath, readCodeOpenInNewWindowPreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, shouldOpenCodeInNewWindow, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspacePathPreference, type CodeTarget } from './vscodeWeb'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 type UiThemeStyle = 'default' | '550a'
@@ -308,6 +308,14 @@ function loadStoredLastActiveTabId(): string | null {
   }
 }
 
+function loadStoredCodePath(): string {
+  return readCodeWorkspacePathPreference(localStorage)
+}
+
+function loadStoredCodeOpenInNewWindow(): boolean {
+  return readCodeOpenInNewWindowPreference(localStorage)
+}
+
 function getHashState(): RouteState {
   const hash = decodeURIComponent(window.location.hash.slice(1))
   const fallbackTabId = loadStoredLastActiveTabId()
@@ -405,7 +413,7 @@ function makeVscodeWebTab(): WorkbenchTab {
   return {
     id: VSCODE_WEB_TAB_ID,
     type: 'vscode',
-    title: 'VS Code',
+    title: 'Code',
   }
 }
 
@@ -446,6 +454,9 @@ function App() {
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
+  const [codePath, setCodePath] = useState(loadStoredCodePath)
+  const [codeOpenInNewWindow, setCodeOpenInNewWindow] = useState(loadStoredCodeOpenInNewWindow)
+  const [codeFrameUrl, setCodeFrameUrl] = useState(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: 'master', path: loadStoredCodePath() }).toString())
 
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
@@ -481,7 +492,6 @@ function App() {
   const focusedPane = useMemo(() => (focusedPaneId ? findPaneNode(root, focusedPaneId) : null), [root, focusedPaneId])
   const focusedActiveTabId = focusedPane?.activeTabId || paneNodes[0]?.activeTabId || null
   const focusedActiveTab = focusedActiveTabId ? (tabsById[focusedActiveTabId] || null) : null
-  const vscodeWebUrl = useMemo(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin).toString(), [])
   const handleVscodeFrameSlot = useCallback((element: HTMLElement | null) => setVscodeFrameSlot(element), [])
 
   const sessionTitle = (sessionId: string) => sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))?.displayName || sessionId
@@ -865,15 +875,29 @@ function App() {
     }
   }, [allTabs])
 
-  const openVscodeEmbedded = () => {
-    setVscodeFrameStarted(true)
-    const tab = tabsById[VSCODE_WEB_TAB_ID] || makeVscodeWebTab()
-    upsertTab(tab, { activate: true })
-    navigateToTab(tab.id)
+  const updateCodePath = (path: string) => {
+    const normalized = writeCodeWorkspacePathPreference(localStorage, path)
+    setCodePath(normalized)
   }
 
-  const openVscodeBrowserTab = () => {
-    window.open(vscodeWebUrl, '_blank', 'noopener,noreferrer')
+  const updateCodeOpenInNewWindow = (enabled: boolean) => {
+    setCodeOpenInNewWindow(enabled)
+    writeCodeOpenInNewWindowPreference(localStorage, enabled)
+  }
+
+  const openCode = (target: CodeTarget, forceNewWindow = false) => {
+    const url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target).toString()
+    if (shouldOpenCodeInNewWindow(codeOpenInNewWindow, forceNewWindow)) {
+      window.open(url, '_blank', 'noopener,noreferrer')
+      return
+    }
+
+    setCodeFrameUrl(url)
+    setVscodeFrameStarted(true)
+    const existingTab = tabsById[VSCODE_WEB_TAB_ID]
+    const tab = existingTab ? { ...existingTab, title: 'Code' } as WorkbenchTab : makeVscodeWebTab()
+    upsertTab(tab, { activate: true })
+    navigateToTab(tab.id)
   }
 
   const findPreferredChatTab = (sessionId: string): WorkbenchTab | null => {
@@ -1265,6 +1289,8 @@ function App() {
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
           onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
+          onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
+          onOpenCodeNewWindow={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd), true)}
           sendKeyMode={sendKeyMode}
           groupTools={groupTools}
           showUsageBadge={showUsageBadge}
@@ -1563,7 +1589,7 @@ function App() {
       <VscodeWebFrameHost
         key="foxwarm-vscode-web-frame-host"
         started={vscodeFrameStarted}
-        src={vscodeWebUrl}
+        src={codeFrameUrl}
         slot={vscodeFrameSlot}
       />
     </>
@@ -1609,9 +1635,12 @@ function App() {
             setShowSessionList(false)
           }}
           onSelectSetup={openSetupView}
-          onOpenVscodeEmbedded={openVscodeEmbedded}
-          onOpenVscodeBrowserTab={openVscodeBrowserTab}
-          vscodeEmbeddedActive={focusedActiveTab?.type === 'vscode'}
+          codePath={codePath}
+          codeOpenInNewWindow={codeOpenInNewWindow}
+          codeActive={focusedActiveTab?.type === 'vscode'}
+          onOpenCode={(path) => openCode({ nodeId: 'master', path: normalizeCodePath(path) || '/' })}
+          onCodePathChange={updateCodePath}
+          onCodeOpenInNewWindowChange={updateCodeOpenInNewWindow}
           onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
           onCreateSession={handleCreateSession}
         />,
@@ -1669,9 +1698,12 @@ function App() {
               window.location.hash = ARCHITECTURE_HASH
             }}
             onSelectSetup={openSetupView}
-            onOpenVscodeEmbedded={openVscodeEmbedded}
-            onOpenVscodeBrowserTab={openVscodeBrowserTab}
-            vscodeEmbeddedActive={focusedActiveTab?.type === 'vscode'}
+            codePath={codePath}
+            codeOpenInNewWindow={codeOpenInNewWindow}
+            codeActive={focusedActiveTab?.type === 'vscode'}
+            onOpenCode={(path) => openCode({ nodeId: 'master', path: normalizeCodePath(path) || '/' })}
+            onCodePathChange={updateCodePath}
+            onCodeOpenInNewWindowChange={updateCodeOpenInNewWindow}
             onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
             onCreateSession={handleCreateSession}
             onToggleCollapsed={() => setSidebarCollapsed(true)}

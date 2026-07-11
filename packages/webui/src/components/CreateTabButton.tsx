@@ -4,11 +4,10 @@ import { ChevronDown, SquareTerminal } from 'lucide-react'
 interface CreateTabButtonProps {
   defaultNodeId: string
   defaultPath: string
-  sessionLabel: string
   onCreate: (options: { nodeId: string; path: string }) => void
 }
 
-export default function CreateTabButton({ defaultNodeId, defaultPath, sessionLabel, onCreate }: CreateTabButtonProps) {
+export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate }: CreateTabButtonProps) {
   const [open, setOpen] = useState(false)
   const [nodeId, setNodeId] = useState(defaultNodeId || 'master')
   const [path, setPath] = useState(defaultPath || '')
@@ -70,7 +69,6 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, sessionLab
       {open && (
         <div className="absolute left-0 top-full z-30 mt-2 w-80 rounded-xl border border-gray-200 bg-white p-3 shadow-xl dark:border-gray-700 dark:bg-gray-800">
           <div className="text-sm font-semibold text-gray-900 dark:text-white">Create {label.toLowerCase()} tab</div>
-          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">Default context: {sessionLabel}</div>
           <div className="mt-3 space-y-3">
             <div>
               <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Node</label>

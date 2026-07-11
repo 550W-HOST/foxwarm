@@ -92,12 +92,13 @@ When the required static files exist (`out/nls.messages.js`, `out/vs/workbench/w
 
 ## Main WebUI entry
 
-The authenticated main WebUI offers two launch choices in its global Application menu:
+The authenticated main WebUI presents the feature to users as **Code** (the `/vscode-web/` route and internal extension/package names remain unchanged):
 
-- `VS Code: Open embedded` creates/focuses a `vscode` workbench tab. The actual iframe lives in a persistent top-level portal host and is positioned over the active tab slot, so switching WebUI tabs or views hides rather than unmounts the VS Code browsing context.
-- `VS Code: Open in browser tab` opens the same authenticated `/vscode-web/` route directly in a new browser tab.
+- The sidebar `Code` split button opens a master-node workspace, defaulting to `/`, and its dropdown accepts another absolute POSIX path. The selected path and the global `Open in new browser tab` preference are remembered in localStorage.
+- Embedded mode creates/focuses a singleton `Code` workbench tab. The actual iframe lives in a persistent top-level portal host and is positioned over the active tab slot, so switching WebUI tabs or views hides rather than unmounts the VS Code browsing context.
+- Session headers provide `Open code` using the session's master-node cwd (with a safe `master:/` fallback), plus an adjacent external-link button that always opens a new browser tab.
 
-Both URLs are derived from the dynamic WebUI API base path, preserving reverse-proxy prefixes. Runtime transfer/pop-out of an already running iframe is intentionally not implemented.
+All launch URLs include a `foxwarm://node+master/<absolute-path>` `folderUri` and are derived from the dynamic WebUI API base path, preserving reverse-proxy prefixes. Runtime transfer/pop-out of an already running iframe is intentionally not implemented.
 
 ## Not in scope yet
 

@@ -69,7 +69,7 @@ export default function VscodeWebFrameHost({ started, src, slot }: VscodeWebFram
     <iframe
       ref={iframeRef}
       src={src}
-      title="VS Code"
+      title="Code"
       allow="clipboard-read; clipboard-write"
       className="fixed border-0 bg-gray-950"
       style={{ zIndex: 35, visibility: 'hidden', pointerEvents: 'none' }}
