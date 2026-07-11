@@ -15,6 +15,24 @@ async function loadTypeScriptModule(relativePath) {
   return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 }
 
+test('agent/session creation helpers keep an empty session ID random', async () => {
+  const {
+    RANDOM_SESSION_ID_PLACEHOLDER,
+    buildSessionCreationBody,
+    validateAgentId,
+    validateSessionId,
+  } = await loadTypeScriptModule('../src/agentCreation.ts')
+
+  assert.equal(validateAgentId('new-agent_2'), null)
+  assert.match(validateAgentId('../bad'), /letters, numbers/i)
+  assert.equal(validateSessionId('custom-session'), null)
+  assert.match(validateSessionId('other/session'), /cannot contain/i)
+  assert.deepEqual(buildSessionCreationBody('main', ''), { agentId: 'main' })
+  assert.deepEqual(buildSessionCreationBody('worker', ' custom '), { agentId: 'worker', sessionId: 'custom' })
+  assert.equal(Object.hasOwn(buildSessionCreationBody('main', ''), 'sessionId'), false)
+  assert.notEqual(buildSessionCreationBody('main', '').sessionId, RANDOM_SESSION_ID_PLACEHOLDER)
+})
+
 test('workbench normalization ignores and removes legacy tab pinned state', async () => {
   const { normalizePersistedWorkbenchState } = await loadTypeScriptModule('../src/workbench/utils.ts')
   const normalized = normalizePersistedWorkbenchState({

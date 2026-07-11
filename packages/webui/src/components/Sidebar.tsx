@@ -1,12 +1,15 @@
-import { PanelLeftClose, PanelLeftOpen, Plus, Workflow } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 import CreateTabButton from './CreateTabButton'
 import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
+import AgentCreationMenu from './AgentCreationMenu'
+import type { AgentSummary } from '../agentCreation'
 
 interface SidebarProps {
   sessions: Session[]
+  agents: AgentSummary[]
   currentSession: string
   currentView: 'session' | 'agents' | 'setup'
   currentSessionRecord?: Session
@@ -35,13 +38,15 @@ interface SidebarProps {
   onCodePathChange: (path: string) => void
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
-  onCreateSession: () => void
+  onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
+  onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
   onToggleCollapsed: () => void
   isPeek?: boolean
 }
 
 export default function Sidebar({
   sessions,
+  agents,
   currentSession,
   currentView,
   currentSessionRecord,
@@ -70,6 +75,7 @@ export default function Sidebar({
   onCodePathChange,
   onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
+  onCreateAgent,
   onCreateSession,
   onToggleCollapsed,
   isPeek = false,
@@ -126,13 +132,13 @@ export default function Sidebar({
               <Workflow className="w-4 h-4" />
               <span>Agents</span>
             </button>
-            <button
-              onClick={onCreateSession}
-              className="inline-flex items-center justify-center rounded-lg px-2 transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700"
-              title="Create new session"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
+            <AgentCreationMenu
+              agents={agents}
+              currentAgent={currentSessionRecord?.agent}
+              compact
+              onCreateAgent={onCreateAgent}
+              onCreateSession={onCreateSession}
+            />
           </div>
           <CodeLaunchButton
             path={codePath}

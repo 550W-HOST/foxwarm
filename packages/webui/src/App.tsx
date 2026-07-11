@@ -14,6 +14,7 @@ import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 import { makeVscodeWebUrl, normalizeCodePath, readCodeOpenInNewWindowPreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, shouldOpenCodeInNewWindow, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspacePathPreference, type CodeTarget } from './vscodeWeb'
+import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 type UiThemeStyle = 'default' | '550a'
@@ -421,6 +422,7 @@ function App() {
   const initialRoute = getHashState()
 
   const [sessions, setSessions] = useState<Session[]>([])
+  const [agents, setAgents] = useState<AgentSummary[]>([])
   const [route, setRoute] = useState<RouteState>(initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[]>([])
@@ -629,6 +631,18 @@ function App() {
     }
   }
 
+  const fetchAgents = async () => {
+    try {
+      const res = await fetch(`${API_BASE_PATH}/agents`)
+      if (res.ok) {
+        const data = await res.json()
+        setAgents(Array.isArray(data.agents) ? data.agents : [])
+      }
+    } catch (error) {
+      console.error('Failed to fetch agents:', error)
+    }
+  }
+
   const fetchSetupStatus = async () => {
     try {
       const res = await fetch(`${API_BASE_PATH}/setup/status`)
@@ -678,6 +692,7 @@ function App() {
         const data = JSON.parse(event.data)
         if (data.type === 'sessions-updated') {
           void fetchSessions()
+          void fetchAgents()
           void fetchActiveTerminals()
         }
       } catch (error) {
@@ -700,6 +715,7 @@ function App() {
 
   useEffect(() => {
     void fetchSessions()
+    void fetchAgents()
     void fetchSetupStatus()
     void fetchWebUiSettings()
     void fetchActiveTerminals()
@@ -1180,18 +1196,34 @@ function App() {
     return targetTabId
   }
 
-  const handleCreateSession = () => {
-    fetch(`${API_BASE_PATH}/sessions`, {
+  const handleCreateAgent = async (agentId: string, inheritAgent?: string) => {
+    const res = await fetch(`${API_BASE_PATH}/agents`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    }).then(async (res) => {
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || 'Failed to create session')
-      if (!data.sessionId) throw new Error('Missing sessionId in create response')
-      await fetchSessions()
-      openChatTab(data.sessionId)
-    }).catch((error) => {
+      body: JSON.stringify({ agentId, inheritAgent }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Failed to create agent')
+    if (!data.sessionId) throw new Error('Missing sessionId in create response')
+    await Promise.all([fetchSessions(), fetchAgents()])
+    openChatTab(data.sessionId)
+  }
+
+  const handleCreateSession = async (agentId: string, sessionId?: string) => {
+    const res = await fetch(`${API_BASE_PATH}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildSessionCreationBody(agentId, sessionId || '')),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Failed to create session')
+    if (!data.sessionId) throw new Error('Missing sessionId in create response')
+    await fetchSessions()
+    openChatTab(data.sessionId)
+  }
+
+  const handleQuickCreateSession = () => {
+    void handleCreateSession('main').catch((error) => {
       console.error('Failed to create session:', error)
       window.alert(`Failed to create session: ${error instanceof Error ? error.message : String(error)}`)
     })
@@ -1610,6 +1642,7 @@ function App() {
       return renderWithVscodeFrame(renderWorkbenchSurface(
         <SessionList
           sessions={sessions}
+          agents={agents}
           currentSession={currentContextSessionId}
           currentView={currentView}
           currentSessionRecord={currentContextSessionRecord}
@@ -1642,6 +1675,7 @@ function App() {
           onCodePathChange={updateCodePath}
           onCodeOpenInNewWindowChange={updateCodeOpenInNewWindow}
           onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
+          onCreateAgent={handleCreateAgent}
           onCreateSession={handleCreateSession}
         />,
       ))
@@ -1674,6 +1708,7 @@ function App() {
         <div className="relative h-full shrink-0" style={{ width: sidebarWidth }}>
           <Sidebar
             sessions={sessions}
+            agents={agents}
             currentSession={currentContextSessionId}
             currentView={currentView}
             currentSessionRecord={currentContextSessionRecord}
@@ -1705,6 +1740,7 @@ function App() {
             onCodePathChange={updateCodePath}
             onCodeOpenInNewWindowChange={updateCodeOpenInNewWindow}
             onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
+            onCreateAgent={handleCreateAgent}
             onCreateSession={handleCreateSession}
             onToggleCollapsed={() => setSidebarCollapsed(true)}
             isPeek={false}
@@ -1719,7 +1755,7 @@ function App() {
           sessions={sessions}
           currentSession={currentContextSessionId}
           onSelectSession={openChatTab}
-          onCreateSession={handleCreateSession}
+          onCreateSession={handleQuickCreateSession}
           onToggleCollapsed={() => setSidebarCollapsed(false)}
         />
       )}

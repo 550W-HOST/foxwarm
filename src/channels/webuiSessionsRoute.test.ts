@@ -6,10 +6,80 @@ import { WebUIChannel } from './webuiChannel';
 import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from '../session/metadataStore';
 import type { Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
+import fs from 'fs-extra';
+import { getAgentDir } from '../config';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
+
+test('WebUI creation routes create agents and random or custom sessions', async () => {
+  const agentId = makeSessionId('webui_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const port = 35500 + Math.floor(Math.random() * 200);
+  const token = 'creation-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  await server.start();
+
+  const request = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...init.headers,
+    },
+  });
+  const createdSessionIds: string[] = [];
+
+  try {
+    let res = await fetch(`http://127.0.0.1:${port}/api/agents`);
+    assert.equal(res.status, 401);
+
+    res = await request('/api/agents', { method: 'POST', body: JSON.stringify({ agentId: '../bad' }) });
+    assert.equal(res.status, 400);
+
+    res = await request('/api/agents', { method: 'POST', body: JSON.stringify({ agentId, inheritAgent: 'main' }) });
+    assert.equal(res.status, 201);
+    const agentPayload = await res.json() as any;
+    assert.equal(agentPayload.agentId, agentId);
+    assert.equal(agentPayload.sessionId, `${agentId}/main`);
+    createdSessionIds.push(agentPayload.sessionId);
+    assert.equal(sessionManager.getAgentMetadata(agentId).inherit, 'main');
+
+    res = await request('/api/agents', { method: 'POST', body: JSON.stringify({ agentId }) });
+    assert.equal(res.status, 409);
+
+    res = await request('/api/agents');
+    assert.equal(res.status, 200);
+    assert.ok(((await res.json() as any).agents as any[]).some(agent => agent.id === agentId));
+
+    res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId }) });
+    assert.equal(res.status, 200);
+    const randomPayload = await res.json() as any;
+    assert.match(randomPayload.sessionId, new RegExp(`^${agentId}/\\d{4}_[a-z0-9]{5}$`));
+    createdSessionIds.push(randomPayload.sessionId);
+
+    res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'custom' }) });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json() as any).sessionId, `${agentId}/custom`);
+    createdSessionIds.push(`${agentId}/custom`);
+
+    res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'custom' }) });
+    assert.equal(res.status, 409);
+
+    res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'other/agent' }) });
+    assert.equal(res.status, 400);
+  } finally {
+    await server.stop();
+    setHttpServer(null);
+    for (const sessionId of createdSessionIds.reverse()) {
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+    await sessionManager.setAgentInherit(agentId, undefined).catch(() => {});
+    await fs.remove(getAgentDir(agentId));
+  }
+});
 
 test('WebUI sessions route treats bare wait as idle while preserving busy fields', async () => {
   const sessionId = makeSessionId('webui_runtime_state');

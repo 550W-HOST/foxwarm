@@ -1,12 +1,15 @@
-import { Plus, Workflow } from 'lucide-react'
+import { Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 import CreateTabButton from './CreateTabButton'
 import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
+import AgentCreationMenu from './AgentCreationMenu'
+import type { AgentSummary } from '../agentCreation'
 
 interface SessionListProps {
   sessions: Session[]
+  agents: AgentSummary[]
   currentSession?: string
   currentView: 'session' | 'agents' | 'setup'
   currentSessionRecord?: Session
@@ -35,11 +38,13 @@ interface SessionListProps {
   onCodePathChange: (path: string) => void
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
-  onCreateSession: () => void
+  onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
+  onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
 }
 
 export default function SessionList({
   sessions,
+  agents,
   currentSession,
   currentView,
   currentSessionRecord,
@@ -68,6 +73,7 @@ export default function SessionList({
   onCodePathChange,
   onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
+  onCreateAgent,
   onCreateSession,
 }: SessionListProps) {
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
@@ -109,13 +115,13 @@ export default function SessionList({
             <Workflow className="w-4 h-4" />
             <span>Agents</span>
           </button>
-          <button
-            onClick={onCreateSession}
-            className="inline-flex items-center justify-center rounded-lg px-2 text-sm font-medium transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700"
-            title="Create new session"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          <AgentCreationMenu
+            agents={agents}
+            currentAgent={currentSessionRecord?.agent}
+            compact
+            onCreateAgent={onCreateAgent}
+            onCreateSession={onCreateSession}
+          />
         </div>
 
         <div className="mt-2">

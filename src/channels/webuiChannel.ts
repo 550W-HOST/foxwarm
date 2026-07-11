@@ -15,7 +15,7 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
-import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
@@ -876,6 +876,71 @@ export class WebUIChannel implements Channel {
         },
       });
 
+      httpServerInstance.addRoute({
+        path: '/api/agents',
+        method: 'GET',
+        handler: async (_req: express.Request, res: express.Response) => {
+          try {
+            const entries = await fs.pathExists(AGENTS_DIR)
+              ? await fs.readdir(AGENTS_DIR, { withFileTypes: true })
+              : [];
+            const agents = entries
+              .filter(entry => entry.isDirectory())
+              .map(entry => ({
+                id: entry.name,
+                inherit: sessionManager.getAgentMetadata(entry.name).inherit || null,
+              }))
+              .sort((a, b) => a.id.localeCompare(b.id));
+            res.json({ agents });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get agents');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/agents',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const agentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim() : '';
+            const inheritAgent = typeof req.body?.inheritAgent === 'string' && req.body.inheritAgent.trim()
+              ? req.body.inheritAgent.trim()
+              : undefined;
+            if (!agentId) {
+              return res.status(400).json({ error: 'Agent ID is required.' });
+            }
+            sessionManager.validateAgentName(agentId);
+            if (inheritAgent === agentId) {
+              return res.status(400).json({ error: 'Agent cannot inherit from itself.' });
+            }
+            if (inheritAgent && sessionManager.getAgentMetadata(inheritAgent).isolated) {
+              return res.status(400).json({ error: `Agent "${inheritAgent}" is isolated and cannot be used as an inherit source.` });
+            }
+
+            const result = await sessionManager.createAgentWithMainSession({
+              agentName: agentId,
+              inherit: inheritAgent,
+              createMainSession: true,
+            });
+            const session = await sessionManager.getExistingSession(result.mainSessionId);
+            if (session) {
+              const rootSiblings = getWebUiSidebarSiblings(null, session.id);
+              writeWebUiSidebarOrder([session, ...rootSiblings]);
+              await sessionManager.saveSessionsMetadata();
+            }
+            this.broadcastSessionListUpdate();
+            res.status(201).json({ success: true, agentId, sessionId: result.mainSessionId });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to create agent');
+            const message = e instanceof Error ? e.message : String(e);
+            const status = /already exists/i.test(message) ? 409 : 400;
+            res.status(status).json({ error: message });
+          }
+        },
+      });
+
       // Get all sessions
       httpServerInstance.addRoute({
         path: '/api/sessions',
@@ -930,16 +995,28 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            if (typeof req.body?.sessionId === 'string' && req.body.sessionId.trim()) {
-              return res.status(400).json({ error: 'Custom sessionId is not allowed.' });
+            const agentId = typeof req.body?.agentId === 'string' && req.body.agentId.trim()
+              ? req.body.agentId.trim()
+              : 'main';
+            const requestedSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+            sessionManager.validateAgentName(agentId);
+
+            let sessionId: string;
+            if (agentId === 'main' && !requestedSessionId) {
+              const result = await sessionManager.createEmptySession();
+              if (!result.created) {
+                return res.status(409).json({ error: 'Session already exists', sessionId: result.session.id });
+              }
+              sessionId = result.session.id;
+            } else {
+              const sessionName = requestedSessionId || sessionManager.generateSessionId();
+              sessionManager.validateSessionName(sessionName);
+              const result = await sessionManager.createSessionInAgent({ agentName: agentId, sessionName });
+              sessionId = result.sessionId;
             }
 
-            const { session, created } = await sessionManager.createEmptySession();
-
-            if (!created) {
-              return res.status(409).json({ error: 'Session already exists', sessionId: session.id });
-            }
-
+            const session = await sessionManager.getExistingSession(sessionId);
+            if (!session) throw new Error(`Created session "${sessionId}" could not be loaded.`);
             const rootSiblings = getWebUiSidebarSiblings(null, session.id);
             writeWebUiSidebarOrder([session, ...rootSiblings]);
             await sessionManager.saveSessionsMetadata();
@@ -948,11 +1025,13 @@ export class WebUIChannel implements Channel {
 
             res.json({
               success: true,
-              sessionId: session.id,
+              sessionId,
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to create session');
-            res.status(500).json({ error: e.message });
+            const message = e instanceof Error ? e.message : String(e);
+            const status = /already exists/i.test(message) ? 409 : /does not exist|invalid/i.test(message) ? 400 : 500;
+            res.status(status).json({ error: message });
           }
         },
       });
