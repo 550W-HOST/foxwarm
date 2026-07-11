@@ -125,7 +125,7 @@ function getPlainTextOnlyContent(parts: MessagePart[]): string | undefined {
 export class MessageRouter {
   private authorizedUsers: Map<string, boolean> = new Map();
   private processingSessions: Set<string> = new Set();
-  private commandHandler?: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>;
+  private commandHandler?: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>;
 
   constructor(authorizedUsers?: Array<{ platform: string; userId: string }>) {
     if (authorizedUsers) {
@@ -847,10 +847,11 @@ export class MessageRouter {
     if (!commandMatch) return false;
 
     const command = commandMatch[1];
-    const args = commandMatch[2] ? commandMatch[2].trim().split(/\s+/) : [];
+    const rawArgs = commandMatch[2];
+    const args = rawArgs ? rawArgs.trim().split(/\s+/) : [];
 
     try {
-      const handled = await this.commandHandler(ctx, command, args);
+      const handled = await this.commandHandler(ctx, command, args, rawArgs);
       if (!handled) {
         await ctx.reply(`Unknown command: ${command}`, { turnFinal: true });
       }
@@ -1202,7 +1203,7 @@ export class MessageRouter {
     }
   }
 
-  setCommandHandler(handler: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>): void {
+  setCommandHandler(handler: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>): void {
     this.commandHandler = handler;
   }
 

@@ -104,6 +104,35 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: SESSION_AUTOCOMPLETE },
     handler: handleSessionCommand,
   },
+  '/fork': {
+    description: 'Fork current session. `args: [suffix] [message]`',
+    requiresSession: true,
+    handler: async (ctx, _args, sessionId, session, rawArgs) => {
+      if (!sessionId || !session) return;
+
+      const parsed = (rawArgs ?? _args.join(' ')).match(/^(\S+)(?:\s+([\s\S]*))?$/);
+      const suffix = parsed?.[1] || sessionManager.generateSessionId();
+      const initialMessage = parsed?.[2] === '' || parsed?.[2] === undefined ? undefined : parsed[2];
+
+      try {
+        sessionManager.validateChildSessionSuffix(suffix);
+        const requestedSessionId = sessionManager.buildChildSessionId(sessionId, suffix);
+        if (await sessionManager.getExistingSession(requestedSessionId)) {
+          ctx.reply(`❌ Session \`${requestedSessionId}\` already exists.`);
+          return;
+        }
+
+        const childSessionId = await sessionManager.createChildSession(sessionId, suffix, true);
+        if (initialMessage !== undefined) {
+          await sessionManager.sendToSession(childSessionId, initialMessage, sessionId);
+        }
+        await sessionManager.notifyManualForkCreated(sessionId, childSessionId, initialMessage);
+        ctx.reply(`✅ Forked session \`${sessionId}\` → \`${childSessionId}\`${initialMessage === undefined ? '' : '\nInitial message sent.'}`);
+      } catch (e: any) {
+        ctx.reply(`❌ Fork failed: ${e.message}`);
+      }
+    },
+  },
   '/attach': {
     description: 'Attach to session. `args: <sessionId>`',
     requiresSession: false,

@@ -625,6 +625,34 @@ test('MessageRouter strips configured channel selfName mention before command pa
   assert.deepEqual(calls, [{ command: '/session', args: ['list'] }]);
 });
 
+test('MessageRouter preserves raw multiline command arguments alongside tokenized args', async () => {
+  const router = new MessageRouter() as any;
+  const calls: Array<{ command: string; args: string[]; rawArgs?: string }> = [];
+  router.setCommandHandler(async (_ctx: any, command: string, args: string[], rawArgs?: string) => {
+    calls.push({ command, args, rawArgs });
+    return true;
+  });
+
+  const handled = await router.handleCommandIfNeeded({
+    channelUserId: 'chat-a',
+    conversationId: 'chat-a',
+    channelId: 'webui-a',
+    channelType: 'webui',
+    platform: 'webui',
+    senderId: 'user-a',
+    username: 'user-a',
+    reply: async () => {},
+    sendTyping: async () => {},
+  }, '/fork custom first line  \nsecond line\n');
+
+  assert.equal(handled, true);
+  assert.deepEqual(calls, [{
+    command: '/fork',
+    args: ['custom', 'first', 'line', 'second', 'line'],
+    rawArgs: 'custom first line  \nsecond line\n',
+  }]);
+});
+
 test('MessageRouter selfName mention stripping requires whitespace after mention', async () => {
   const router = new MessageRouter() as any;
   let called = false;
