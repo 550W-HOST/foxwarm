@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
-import { useDraggable } from '@dnd-kit/core'
+import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
+import { compareSessionListSessions, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 
 export interface Session {
   id: string
@@ -19,6 +20,8 @@ export interface Session {
   runtimeState?: SessionRuntimeState
   displayName?: string
   archived?: boolean
+  pinned?: boolean
+  sidebarOrder?: number | null
   currentNode?: string
   cwd?: string | null
   model?: string | null
@@ -39,7 +42,21 @@ interface SessionListCoreProps {
   currentSession?: string  // Optional, for highlighting in sidebar
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
+  toolbarContainerClassName?: string
+  listContainerClassName?: string
 }
+
+export interface SessionMoveRequest {
+  parentSessionId?: string | null
+  beforeSessionId?: string | null
+  afterSessionId?: string | null
+  position?: 'first' | 'last'
+  updateOrder?: boolean
+}
+
+type SessionListViewMode = SessionListOrderMode
+
+const SESSION_LIST_VIEW_MODE_KEY = 'foxwarm_session_list_view_mode_v1'
 
 interface ContextMenuState {
   sessionId: string
@@ -53,6 +70,38 @@ const FOXWARM_TOKEN_KEY = 'foxwarm_token'
 const LEGACY_TOKEN_KEY = 'alphabot_token'
 const DEFAULT_VISIBLE_CHILDREN = 5
 const MORE_VISIBLE_CHILDREN_STEP = 10
+const DEFAULT_VISIBLE_ROOTS = 50
+const MORE_VISIBLE_ROOTS_STEP = 50
+
+const SESSION_LIST_VIEW_MODES: SessionListViewMode[] = ['default', 'time', 'flat-time']
+
+const SESSION_LIST_VIEW_MODE_LABELS: Record<SessionListViewMode, string> = {
+  default: 'Default',
+  time: 'Time',
+  'flat-time': 'Flat',
+}
+
+const SESSION_LIST_VIEW_MODE_ICONS = {
+  default: ListTree,
+  time: Clock3,
+  'flat-time': Rows3,
+} as const
+
+const SESSION_LIST_VIEW_MODE_TITLES: Record<SessionListViewMode, string> = {
+  default: 'Default: use saved sidebar order when present, otherwise sort by recent activity. Dragging can reorder and change parents.',
+  time: 'Time: ignore saved sidebar order and sort by recent activity. Dragging can change parents but not reorder siblings.',
+  'flat-time': 'Flat time: ignore saved sidebar order and parent tree; show all sessions at the top level by recent activity.',
+}
+
+const loadStoredSessionListViewMode = (): SessionListViewMode => {
+  const stored = localStorage.getItem(SESSION_LIST_VIEW_MODE_KEY)
+  return SESSION_LIST_VIEW_MODES.includes(stored as SessionListViewMode) ? stored as SessionListViewMode : 'default'
+}
+
+const getNextSessionListViewMode = (mode: SessionListViewMode): SessionListViewMode => {
+  const index = SESSION_LIST_VIEW_MODES.indexOf(mode)
+  return SESSION_LIST_VIEW_MODES[(index + 1) % SESSION_LIST_VIEW_MODES.length] || 'default'
+}
 
 const getSessionFilterFields = (session: Session): string[] => {
   return [
@@ -199,6 +248,128 @@ const isFullyVisibleInContainer = (element: HTMLElement, container: HTMLElement)
   return elementRect.top >= containerRect.top && elementRect.bottom <= containerRect.bottom
 }
 
+function SidebarDropZone({
+  id,
+  data,
+  disabled,
+  className,
+  children,
+}: {
+  id: string
+  data: Record<string, unknown>
+  disabled?: boolean
+  className: string
+  children?: (isOver: boolean) => ReactNode
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id, data, disabled })
+  return (
+    <div ref={setNodeRef} className={className}>
+      {children?.(isOver && !disabled)}
+    </div>
+  )
+}
+
+function SidebarRootDropZone({ visible, disabled, allowOrder }: { visible: boolean; disabled?: boolean; allowOrder: boolean }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: 'sidebar-root-drop',
+    disabled: disabled || !visible,
+    data: {
+      type: 'sidebar-root-drop',
+      parentSessionId: null,
+      ...(allowOrder ? { position: 'first' } : { updateOrder: false }),
+    },
+  })
+
+  if (!visible) return null
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`mb-2 rounded-lg border border-dashed px-3 py-2 text-xs transition-colors ${
+        isOver && !disabled
+          ? 'border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-500/70 dark:bg-blue-950/40 dark:text-blue-200'
+          : disabled
+            ? 'border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-500'
+            : 'border-gray-200 bg-gray-50 text-gray-500 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-400'
+      }`}
+    >
+      <div className="flex items-center gap-2 font-medium">
+        <CornerDownRight className="h-3.5 w-3.5 rotate-180" />
+        <span>Drop here to detach to root</span>
+      </div>
+      <div className="mt-0.5 text-[11px] opacity-80">Keeps this thread in the sidebar, but removes its parent.</div>
+    </div>
+  )
+}
+
+function SessionRowDropLayer({
+  session,
+  parentSessionId,
+  disabled,
+  allowReorder,
+  allowParentDrop,
+}: {
+  session: Session
+  parentSessionId: string | null
+  disabled?: boolean
+  allowReorder: boolean
+  allowParentDrop: boolean
+}) {
+  if (!allowReorder && !allowParentDrop) return null
+
+  return (
+    <div className={`pointer-events-none absolute inset-0 z-10 rounded ${disabled ? 'hidden' : ''}`}>
+      {allowReorder && (
+        <SidebarDropZone
+          id={`sidebar-session-before:${session.id}`}
+          disabled={disabled}
+          data={{
+            type: 'sidebar-session-before',
+            sessionId: session.id,
+            parentSessionId,
+          }}
+          className="pointer-events-none absolute inset-x-0 top-0 h-[28%]"
+        >
+          {(isOver) => isOver ? <div className="absolute inset-x-2 top-0 h-0.5 rounded-full bg-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.18)]" /> : null}
+        </SidebarDropZone>
+      )}
+      {allowParentDrop && (
+        <SidebarDropZone
+          id={`sidebar-session-child:${session.id}`}
+          disabled={disabled}
+          data={{
+            type: 'sidebar-session-child',
+            sessionId: session.id,
+            parentSessionId: session.id,
+            ...(allowReorder ? { position: 'first' } : { updateOrder: false }),
+          }}
+          className="pointer-events-none absolute inset-x-0 top-[28%] bottom-[28%]"
+        >
+          {(isOver) => isOver ? (
+            <div className="absolute inset-x-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-md border border-blue-300 bg-blue-50/95 px-2 py-1 text-[11px] font-medium text-blue-700 shadow-sm dark:border-blue-500/60 dark:bg-blue-950/95 dark:text-blue-200">
+              Assign as child
+            </div>
+          ) : null}
+        </SidebarDropZone>
+      )}
+      {allowReorder && (
+        <SidebarDropZone
+          id={`sidebar-session-after:${session.id}`}
+          disabled={disabled}
+          data={{
+            type: 'sidebar-session-after',
+            sessionId: session.id,
+            parentSessionId,
+          }}
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-[28%]"
+        >
+          {(isOver) => isOver ? <div className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.18)]" /> : null}
+        </SidebarDropZone>
+      )}
+    </div>
+  )
+}
+
 function DraggableSessionRow({
   session,
   children,
@@ -217,14 +388,40 @@ function DraggableSessionRow({
   setRowRef: (node: HTMLDivElement | null) => void
 }) {
   const title = session.displayName || session.id
+  const suppressClickRef = useRef(false)
+  const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `session:${session.id}`,
     data: {
       type: 'session',
       sessionId: session.id,
       title,
+      sessionPinned: !!session.pinned,
     },
   })
+
+  const handlePointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    suppressClickRef.current = false
+    pointerStartRef.current = { x: event.clientX, y: event.clientY }
+  }
+
+  const handlePointerMoveCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = pointerStartRef.current
+    if (!start) return
+    if (Math.abs(event.clientX - start.x) > 4 || Math.abs(event.clientY - start.y) > 4) {
+      suppressClickRef.current = true
+    }
+  }
+
+  const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (isDragging || suppressClickRef.current) {
+      event.preventDefault()
+      event.stopPropagation()
+      suppressClickRef.current = false
+      return
+    }
+    onClick()
+  }
 
   return (
     <div
@@ -233,7 +430,10 @@ function DraggableSessionRow({
         setRowRef(node)
       }}
       className={`${className} ${isDragging ? 'opacity-50' : ''}`}
-      onClick={onClick}
+      title={session.pinned ? 'Pinned session: drag to open in a pane; unpin before changing its sidebar parent or order' : 'Drag in the sidebar or open in a pane'}
+      onPointerDownCapture={handlePointerDownCapture}
+      onPointerMoveCapture={handlePointerMoveCapture}
+      onClick={handleClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
       {...attributes}
@@ -244,10 +444,13 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1' }: SessionListCoreProps) {
+  const { active } = useDndContext()
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
   const [filterText, setFilterText] = useState('')
+  const [viewMode, setViewMode] = useState<SessionListViewMode>(loadStoredSessionListViewMode)
+  const [visibleRootCount, setVisibleRootCount] = useState(DEFAULT_VISIBLE_ROOTS)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
@@ -257,10 +460,15 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const sessionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const [pendingFocusSessionId, setPendingFocusSessionId] = useState<string | null>(null)
 
+  const activeDragData = active?.data.current as { type?: string; sessionId?: string; sessionPinned?: boolean } | undefined
+  const draggingSessionId = activeDragData?.type === 'session' ? activeDragData.sessionId || null : null
+  const draggingPinnedSession = activeDragData?.type === 'session' && !!activeDragData.sessionPinned
+
+  const allowSidebarOrder = viewMode === 'default'
+  const allowParentDrop = viewMode !== 'flat-time'
+
   const sortSessions = (a: Session, b: Session) => {
-    if (a.archived && !b.archived) return 1
-    if (!a.archived && b.archived) return -1
-    return (b.lastMessageTime || 0) - (a.lastMessageTime || 0)
+    return compareSessionListSessions(a, b, viewMode)
   }
 
   const normalizedFilterQuery = filterText.trim().toLowerCase()
@@ -325,6 +533,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const map = new Map<string, string | null>()
 
     for (const session of visibleSessions) {
+      if (shouldElevateSessionToRoot(session, viewMode)) {
+        map.set(session.id, null)
+        continue
+      }
+
       let parentId = normalizedParentMap.get(session.id) || null
 
       while (parentId && visibleSessionIds && !visibleSessionIds.has(parentId)) {
@@ -335,7 +548,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }, [visibleSessions, normalizedParentMap, visibleSessionIds])
+  }, [visibleSessions, normalizedParentMap, visibleSessionIds, viewMode])
 
   const childrenMap = useMemo(() => {
     const map = new Map<string, Session[]>()
@@ -355,7 +568,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }, [visibleSessions, visibleParentMap])
+  }, [visibleSessions, visibleParentMap, viewMode])
 
   const descendantBusyCountMap = useMemo(() => {
     const map = new Map<string, number>()
@@ -384,10 +597,31 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   const rootSessions = useMemo(
     () => visibleSessions.filter(session => !visibleParentMap.get(session.id)).sort(sortSessions),
-    [visibleSessions, visibleParentMap]
+    [visibleSessions, visibleParentMap, viewMode]
   )
 
+  const visibleRootSessions = rootSessions.slice(0, visibleRootCount)
+  const hiddenRootCount = rootSessions.length - visibleRootSessions.length
+
   const resolvedCurrentSessionId = currentSession ? resolveSessionId(currentSession) || currentSession : undefined
+
+  const isDescendantOf = (candidateSessionId: string | null | undefined, ancestorSessionId: string | null | undefined): boolean => {
+    if (!candidateSessionId || !ancestorSessionId || candidateSessionId === ancestorSessionId) return false
+
+    let cursor = visibleParentMap.get(candidateSessionId) || normalizedParentMap.get(candidateSessionId) || null
+    const seen = new Set<string>()
+    while (cursor && !seen.has(cursor)) {
+      if (cursor === ancestorSessionId) return true
+      seen.add(cursor)
+      cursor = visibleParentMap.get(cursor) || normalizedParentMap.get(cursor) || null
+    }
+    return false
+  }
+
+  useEffect(() => {
+    localStorage.setItem(SESSION_LIST_VIEW_MODE_KEY, viewMode)
+    setVisibleRootCount(DEFAULT_VISIBLE_ROOTS)
+  }, [viewMode, normalizedFilterQuery])
 
   useEffect(() => {
     if (!resolvedCurrentSessionId) return
@@ -455,6 +689,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       newExpanded.add(sessionId)
     }
     setExpandedSessions(newExpanded)
+  }
+
+  const cycleViewMode = () => {
+    setViewMode(current => getNextSessionListViewMode(current))
+  }
+
+  const toggleShowMoreRoots = () => {
+    setVisibleRootCount(current => current >= rootSessions.length ? DEFAULT_VISIBLE_ROOTS : current + MORE_VISIBLE_ROOTS_STEP)
   }
 
   const toggleShowMore = (sessionId: string) => {
@@ -583,6 +825,29 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     setContextMenu(null)
   }
 
+  const togglePinned = async (sessionId: string, pinned: boolean) => {
+    try {
+      const token = getStoredAuthToken()
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/pin`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ pinned })
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        alert(`Failed to ${pinned ? 'pin' : 'unpin'} session: ${error.error || 'Unknown error'}`)
+      }
+    } catch (err) {
+      console.error('[PIN] Exception:', err)
+      alert(`Failed to ${pinned ? 'pin' : 'unpin'} session`)
+    }
+    setContextMenu(null)
+  }
+
   const forkSession = async (sessionId: string) => {
     try {
       const token = getStoredAuthToken()
@@ -703,6 +968,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const isCurrentSession = resolvedCurrentSessionId === session.id
     const runtimeStateName = getSessionRuntimeStateName(session)
     const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' : !!session.busy
+    const rowParentSessionId = visibleParentMap.get(session.id) || null
+    const targetParentWouldCreateCycle = rowParentSessionId
+      ? rowParentSessionId === draggingSessionId || isDescendantOf(rowParentSessionId, draggingSessionId)
+      : false
+    const disableSidebarDrop = !draggingSessionId
+      || isFiltering
+      || !allowParentDrop && !allowSidebarOrder
+      || draggingPinnedSession
+      || !!session.pinned
+      || draggingSessionId === session.id
+      || isDescendantOf(session.id, draggingSessionId)
+      || targetParentWouldCreateCycle
 
     return (
       <div
@@ -710,7 +987,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       >
         <DraggableSessionRow
           session={session}
-          className={`flex items-center rounded cursor-pointer mt-1 ${
+          className={`group relative flex items-center rounded cursor-pointer active:cursor-grabbing mt-1 ${
             isCurrentSession
               ? 'bg-blue-100 dark:bg-blue-900/30' 
               : 'hover:bg-gray-100 dark:hover:bg-gray-700'
@@ -722,83 +999,98 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             sessionRefs.current.set(session.id, node)
           }}
         >
-          <div className="flex-1 min-w-0 py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
-            <div className="font-medium truncate text-gray-900 dark:text-white text-sm">
-              {session.displayName || displayId}
-              {session.archived && (
-                <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">[Archived]</span>
-              )}
-            </div>
-            {session.displayName && (
-              <div className="text-xs text-gray-400 dark:text-gray-500 font-mono truncate">
-                {displayId}
-              </div>
-            )}
-            <div className="text-xs text-gray-500 dark:text-gray-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              {showRuntimeBadge && (
-                <>
-                  <span className={`inline-flex items-center gap-1 ${getRuntimeBadgeTone(session)}`} title={session.runtimeState?.note || undefined}>
-                    <RuntimeActivityDots state={runtimeStateName} />
-                    <span>{getSessionRuntimeSummary(session)}</span>
-                  </span>
-                  <span>•</span>
-                </>
-              )}
-              {!!session.queueLength && (
-                <>
-                  <span>{session.queueLength} queued</span>
-                  <span>•</span>
-                </>
-              )}
-              <span>{session.messageCount || 0} msgs</span>
-            </div>
-            {session.cwd && (
-              <div className="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500" title={session.cwd}>
-                cwd: {session.cwd}
-              </div>
-            )}
-            {hasChildren && (
-              <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    toggleExpand(session.id)
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                  onDoubleClick={(e) => e.stopPropagation()}
-                  className="-ml-1 -my-1 inline-flex items-center gap-x-1.5 gap-y-0.5 rounded px-1 py-1 text-left text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 dark:text-gray-400 dark:hover:text-gray-200"
-                  title={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
-                  aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
-                  aria-expanded={isExpanded}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    {isExpanded ? (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    ) : (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          <>
+              <SessionRowDropLayer
+                session={session}
+                parentSessionId={rowParentSessionId}
+                disabled={disableSidebarDrop}
+                allowReorder={allowSidebarOrder}
+                allowParentDrop={allowParentDrop}
+              />
+              <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate text-gray-900 dark:text-white text-sm">
+                    {session.pinned && (
+                      <Pin className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-blue-500 dark:text-blue-300" aria-label="Pinned session" />
                     )}
-                  </svg>
-                  <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
-                  {descendantBusyCount > 0 && (
-                    <>
-                      <span>•</span>
-                      <span className="text-blue-600 dark:text-blue-300">{descendantBusyCount} active</span>
-                    </>
+                    {session.displayName || displayId}
+                    {session.archived && (
+                      <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">[Archived]</span>
+                    )}
+                  </div>
+                  {session.displayName && (
+                    <div className="text-xs text-gray-400 dark:text-gray-500 font-mono truncate">
+                      {displayId}
+                    </div>
                   )}
-                </button>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                    {showRuntimeBadge && (
+                      <>
+                        <span className={`inline-flex items-center gap-1 ${getRuntimeBadgeTone(session)}`} title={session.runtimeState?.note || undefined}>
+                          <RuntimeActivityDots state={runtimeStateName} />
+                          <span>{getSessionRuntimeSummary(session)}</span>
+                        </span>
+                        <span>•</span>
+                      </>
+                    )}
+                    {!!session.queueLength && (
+                      <>
+                        <span>{session.queueLength} queued</span>
+                        <span>•</span>
+                      </>
+                    )}
+                    <span>{session.messageCount || 0} msgs</span>
+                  </div>
+                  {session.cwd && (
+                    <div className="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500" title={session.cwd}>
+                      cwd: {session.cwd}
+                    </div>
+                  )}
+                  {hasChildren && (
+                    <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleExpand(session.id)
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        className="-ml-1 -my-1 inline-flex items-center gap-x-1.5 gap-y-0.5 rounded px-1 py-1 text-left text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 dark:text-gray-400 dark:hover:text-gray-200"
+                        title={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+                        aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+                        aria-expanded={isExpanded}
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          {isExpanded ? (
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          ) : (
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          )}
+                        </svg>
+                        <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
+                        {descendantBusyCount > 0 && (
+                          <>
+                            <span>•</span>
+                            <span className="text-blue-600 dark:text-blue-300">{descendantBusyCount} active</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
-          {/* Menu button - only visible on mobile */}
-          <button
-            onClick={(e) => handleMenuClick(e, session.id)}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded md:hidden"
-            title="More options"
-          >
-            <MoreVertical className="w-4 h-4" />
-          </button>
+              {/* Menu button - only visible on mobile */}
+              <button
+                onClick={(e) => handleMenuClick(e, session.id)}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded md:hidden"
+                title="More options"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+          </>
         </DraggableSessionRow>
 
         {hasChildren && isExpanded && (
@@ -831,11 +1123,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const contextMenuEntries: ContextMenuEntry[] = contextMenu ? (() => {
     const session = sessionMap.get(contextMenu.sessionId)
     const isArchived = session?.archived || false
+    const isPinned = session?.pinned || false
     const hasParent = !!session?.parentSessionId
     const parentSession = hasParent ? sessionMap.get(session!.parentSessionId!) : undefined
     const grandparentId = parentSession?.parentSessionId || undefined
 
     return [
+      {
+        key: 'pin',
+        icon: isPinned ? <PinOff size={14} /> : <Pin size={14} />,
+        label: isPinned ? 'Unpin from top' : 'Pin to top',
+        onSelect: () => { void togglePinned(contextMenu.sessionId, !isPinned) },
+      },
       {
         key: 'rename',
         icon: <Pencil size={14} />,
@@ -854,13 +1153,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         label: 'Fork',
         onSelect: () => { void forkSession(contextMenu.sessionId) },
       },
-      ...(hasParent && grandparentId ? [{
+      ...(hasParent && grandparentId && !isPinned ? [{
         key: 'promote-up',
         icon: <ArrowUpFromDot size={14} />,
         label: `Move up one level`,
         onSelect: () => { void promoteSession(contextMenu.sessionId, grandparentId) },
       }] : []),
-      ...(hasParent ? [{
+      ...(hasParent && !isPinned ? [{
         key: 'promote',
         icon: <ArrowUpFromDot size={14} />,
         label: 'Promote to root',
@@ -877,45 +1176,78 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     ] as ContextMenuEntry[]
   })() : []
 
+  const ViewModeIcon = SESSION_LIST_VIEW_MODE_ICONS[viewMode]
+
   return (
     <>
-      <div className="sticky top-0 z-10 mb-1 space-y-1 bg-white/95 dark:bg-gray-800/95">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-          <input
-            type="search"
-            value={filterText}
-            onChange={(e) => setFilterText(e.currentTarget.value)}
-            placeholder="Search sessions"
-            aria-label="Search sessions"
-            className="w-full rounded-lg border border-gray-200 bg-white py-1 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
-          />
-          {filterText && (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className={`shrink-0 bg-white/95 dark:bg-gray-800/95 ${toolbarContainerClassName}`}>
+          <div className="flex items-center gap-1.5">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+              <input
+                type="search"
+                value={filterText}
+                onChange={(e) => setFilterText(e.currentTarget.value)}
+                placeholder="Search sessions"
+                aria-label="Search sessions"
+                className="w-full rounded-lg border border-gray-200 bg-white py-1 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
+              />
+              {filterText && (
+                <button
+                  type="button"
+                  onClick={() => setFilterText('')}
+                  className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  aria-label="Clear session search"
+                  title="Clear search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
             <button
               type="button"
-              onClick={() => setFilterText('')}
-              className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-              aria-label="Clear session search"
-              title="Clear search"
+              onClick={cycleViewMode}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-blue-500/70 dark:hover:text-blue-200"
+              title={`${SESSION_LIST_VIEW_MODE_LABELS[viewMode]} mode. ${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
+              aria-label={`Session list mode: ${SESSION_LIST_VIEW_MODE_LABELS[viewMode]}`}
             >
-              <X className="h-3.5 w-3.5" />
+              <ViewModeIcon className="h-3.5 w-3.5" />
             </button>
-          )}
-        </div>
-        {isFiltering && (
-          <div className="px-1 text-xs text-gray-500 dark:text-gray-400">
-            {visibleSessions.length} {visibleSessions.length === 1 ? 'match' : 'matches'}
           </div>
-        )}
-      </div>
-
-      {rootSessions.length > 0 ? (
-        rootSessions.map(session => renderSession(session))
-      ) : (
-        <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-          {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
+          <SidebarRootDropZone visible={!!draggingSessionId && allowParentDrop} disabled={isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
         </div>
-      )}
+
+        <div className="min-h-0 flex-1 overflow-y-auto" data-session-list-scroll-container>
+          <div className={listContainerClassName}>
+            {rootSessions.length > 0 ? (
+              <>
+                {visibleRootSessions.map(session => renderSession(session))}
+                {hiddenRootCount > 0 && (
+                  <button
+                    onClick={toggleShowMoreRoots}
+                    className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  >
+                    {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
+                  </button>
+                )}
+                {hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
+                  <button
+                    onClick={toggleShowMoreRoots}
+                    className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  >
+                    ▲ Show less
+                  </button>
+                )}
+              </>
+            ) : (
+              <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       <ContextMenu
         open={!!contextMenu}
@@ -988,25 +1320,25 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
       {/* Delete Confirmation Dialog */}
       {deleteConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md mx-4">
-            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
+        <div className="foxwarm-session-delete-modal-backdrop fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="foxwarm-session-delete-modal bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md mx-4">
+            <h3 className="foxwarm-session-delete-modal-title text-lg font-semibold mb-4 text-gray-900 dark:text-white">
               Delete Session
             </h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
-              Are you sure you want to delete session <span className="font-mono text-sm">{deleteConfirm}</span>?
+            <p className="foxwarm-session-delete-modal-body text-gray-600 dark:text-gray-400 mb-6">
+              Are you sure you want to delete session <span className="foxwarm-session-delete-session-id font-mono text-sm">{deleteConfirm}</span>?
               This action cannot be undone.
             </p>
-            <div className="flex justify-end gap-3">
+            <div className="foxwarm-session-delete-modal-actions flex justify-end gap-3">
               <button
                 onClick={() => setDeleteConfirm(null)}
-                className="px-4 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                className="foxwarm-session-delete-cancel-button px-4 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
               >
                 Cancel
               </button>
               <button
                 onClick={() => deleteSession(deleteConfirm)}
-                className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700"
+                className="foxwarm-session-delete-confirm-button px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700"
               >
                 Delete
               </button>

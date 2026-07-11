@@ -116,15 +116,15 @@ export default function SessionList({
         </div>
       </div>
       
-      <div className="flex-1 overflow-y-auto" data-session-list-scroll-container>
-        <div className="border-t border-gray-200 dark:border-gray-700 max-w-4xl mx-auto p-4">
-          <SessionListCore 
-            sessions={sessions} 
-            currentSession={currentSession}
-            onSelectSession={onSelectSession}
-            onKeepSession={onKeepSession}
-          />
-        </div>
+      <div className="flex-1 min-h-0 border-t border-gray-200 dark:border-gray-700">
+        <SessionListCore
+          sessions={sessions}
+          currentSession={currentSession}
+          onSelectSession={onSelectSession}
+          onKeepSession={onKeepSession}
+          toolbarContainerClassName="mx-auto w-full max-w-4xl p-2 sm:p-4 sm:pb-2"
+          listContainerClassName="mx-auto w-full max-w-4xl p-2 sm:p-4 sm:pt-1"
+        />
       </div>
     </div>
   )

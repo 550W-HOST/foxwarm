@@ -541,6 +541,10 @@ const ChatComposer = memo(function ChatComposer({
   }, [attachments, input, loading, onSend, sessionId, sessionMissing])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+      return
+    }
+
     if (showSlashCommandMenu) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()

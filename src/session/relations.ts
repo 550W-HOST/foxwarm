@@ -36,6 +36,31 @@ export function getChildSessionIds(sessions: Map<string, Session>, parentSession
     .map(([sessionId]) => sessionId);
 }
 
+async function assertNoParentCycle(
+  deps: Pick<SessionRelationsDeps, 'getExistingSession'>,
+  childSessionId: string,
+  parentSessionId?: string,
+): Promise<void> {
+  if (!parentSessionId) return;
+
+  if (childSessionId === parentSessionId) {
+    throw new Error('A session cannot be its own parent.');
+  }
+
+  const seen = new Set<string>([childSessionId]);
+  let cursorParentId: string | undefined = parentSessionId;
+
+  while (cursorParentId) {
+    if (seen.has(cursorParentId)) {
+      throw new Error(`Session "${childSessionId}" cannot be moved under descendant "${parentSessionId}" because that would create a parent cycle.`);
+    }
+
+    seen.add(cursorParentId);
+    const cursorParent = await deps.getExistingSession(cursorParentId);
+    cursorParentId = cursorParent?.parentSessionId || undefined;
+  }
+}
+
 export async function setSessionParent(
   deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'saveSession' | 'saveSessionsMetadata' | 'notifySessionListUpdated'>,
   childSessionId: string,
@@ -64,6 +89,8 @@ export async function setSessionParent(
     if (realParentId === realChildId) {
       throw new Error('A session cannot be its own parent.');
     }
+
+    await assertNoParentCycle(deps, realChildId, realParentId);
   }
 
   if (previousParentSessionId === realParentId) {

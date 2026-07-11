@@ -3,6 +3,7 @@ import pino from 'pino';
 import { BOT_NAME, ENABLE_TUI, LOGS_DIR } from './config';
 
 const LOG_DIR = LOGS_DIR;
+const useSynchronousFileLogger = process.env.FOXWARM_SYNC_FILE_LOG === '1';
 
 // Configure logger based on TUI mode
 const targets: any[] = [];
@@ -33,9 +34,14 @@ targets.push({
     }
 });
 
-export const logger = pino({
-    level: 'info',
-    transport: {
-        targets,
-    },
-});
+export const logger = useSynchronousFileLogger
+    ? pino(
+        { level: 'info' },
+        pino.destination({ dest: path.join(LOG_DIR, logFileName), mkdir: true, sync: true }),
+    )
+    : pino({
+        level: 'info',
+        transport: {
+            targets,
+        },
+    });
