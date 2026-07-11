@@ -1033,7 +1033,7 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/terminals',
         method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
+        handler: async (_req: express.Request, res: express.Response) => {
           try {
             const terminals = await listTerminalRecords();
             res.json({ terminals });

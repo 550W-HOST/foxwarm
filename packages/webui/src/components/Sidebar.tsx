@@ -27,6 +27,9 @@ interface SidebarProps {
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectSetup: () => void
+  onOpenVscodeEmbedded: () => void
+  onOpenVscodeBrowserTab: () => void
+  vscodeEmbeddedActive: boolean
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateSession: () => void
   onToggleCollapsed: () => void
@@ -56,6 +59,9 @@ export default function Sidebar({
   onKeepSession,
   onSelectArchitecture,
   onSelectSetup,
+  onOpenVscodeEmbedded,
+  onOpenVscodeBrowserTab,
+  vscodeEmbeddedActive,
   onCreateTerminalTab,
   onCreateSession,
   onToggleCollapsed,
@@ -100,6 +106,9 @@ export default function Sidebar({
               menuAlign="start"
               onOpenSetup={onSelectSetup}
               setupActive={currentView === 'setup'}
+              onOpenVscodeEmbedded={onOpenVscodeEmbedded}
+              onOpenVscodeBrowserTab={onOpenVscodeBrowserTab}
+              vscodeEmbeddedActive={vscodeEmbeddedActive}
             />
           </div>
         </div>

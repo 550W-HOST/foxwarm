@@ -48,8 +48,9 @@ Current MVP behavior:
 - Backend terminal creation is cwd-based and no longer requires a Foxwarm chat session id.
 - The terminal cwd is derived from the first VS Code workspace folder URI. For example, `foxwarm://node+master/app/` becomes backend cwd `/app`.
 - Only `nodeId=master` is supported.
-- Closing the VS Code terminal kills the backend PTY.
-- The first terminal MVP does not implement detach/reattach persistence across page reload; backend terminals remain process/in-memory state and are removed on backend/container restart.
+- Closing or reloading the whole VS Code browser page only detaches its WebSocket clients. Extension activation lists existing backend terminals on the same node whose cwd is inside the current workspace and recreates attach-mode VS Code terminal views without POSTing new PTYs.
+- Explicit user terminal close (`TerminalExitReason.User`) deletes/kills the backend PTY. Window shutdown/reload, process exit, and extension shutdown do not issue an extra DELETE.
+- Backend terminals remain process/in-memory state and are still removed on backend/container restart.
 
 `foxwarm-fs` also contributes a `Foxwarm: Open Folder...` command and a remote-indicator menu item for virtual `foxwarm` workspaces. It prompts for an absolute path on the current node and reopens the workbench with that path as the workspace root.
 
@@ -88,6 +89,15 @@ FOXWARM_VSCODE_WEB_ASSET_DIR=/path/to/vscode-web-assets npm run start:notmux
 ```
 
 When the required static files exist (`out/nls.messages.js`, `out/vs/workbench/workbench.web.main.internal.css`, `out/vs/workbench/workbench.web.main.internal.js`), `/vscode-web` emits a VS Code Web workbench bootstrap that includes `foxwarm-fs` as an additional browser builtin extension and opens the requested `folderUri` query parameter. The default folder URI can be overridden with `FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI`; otherwise the route prefers `/app` when running in the Docker test environment and falls back to the host checkout path when present.
+
+## Main WebUI entry
+
+The authenticated main WebUI offers two launch choices in its global Application menu:
+
+- `VS Code: Open embedded` creates/focuses a `vscode` workbench tab. The actual iframe lives in a persistent top-level portal host and is positioned over the active tab slot, so switching WebUI tabs or views hides rather than unmounts the VS Code browsing context.
+- `VS Code: Open in browser tab` opens the same authenticated `/vscode-web/` route directly in a new browser tab.
+
+Both URLs are derived from the dynamic WebUI API base path, preserving reverse-proxy prefixes. Runtime transfer/pop-out of an already running iframe is intentionally not implemented.
 
 ## Not in scope yet
 

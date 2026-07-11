@@ -26,7 +26,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
 };
 
 const require = createRequire(import.meta.url);
-const { getWorkspaceTerminalTarget, parseFoxwarmUri } = require('../dist/extension.js');
+const { getWorkspaceTerminalTarget, isTerminalInsideWorkspace, parseFoxwarmUri, shouldKillBackendTerminal } = require('../dist/extension.js');
 
 function uri(value) {
   const parsed = new URL(value);
@@ -64,4 +64,20 @@ test('defaults to master root when no workspace folder exists', () => {
     nodeId: 'master',
     realPath: '/',
   });
+});
+
+test('restores only terminals on the workspace node and inside its path boundary', () => {
+  const workspace = { nodeId: 'master', realPath: '/app' };
+  assert.equal(isTerminalInsideWorkspace({ id: 'one', nodeId: 'master', cwd: '/app' }, workspace), true);
+  assert.equal(isTerminalInsideWorkspace({ id: 'two', nodeId: 'master', cwd: '/app/src' }, workspace), true);
+  assert.equal(isTerminalInsideWorkspace({ id: 'three', nodeId: 'master', cwd: '/application' }, workspace), false);
+  assert.equal(isTerminalInsideWorkspace({ id: 'four', nodeId: 'worker', cwd: '/app' }, workspace), false);
+});
+
+test('kills backend terminals only for explicit user close reasons', () => {
+  assert.equal(shouldKillBackendTerminal(3), true);
+  assert.equal(shouldKillBackendTerminal(1), false);
+  assert.equal(shouldKillBackendTerminal(2), false);
+  assert.equal(shouldKillBackendTerminal(4), false);
+  assert.equal(shouldKillBackendTerminal(undefined), false);
 });
