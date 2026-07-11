@@ -3,14 +3,11 @@ import path from 'path';
 import crypto from 'crypto';
 import { WebSocket } from 'ws';
 import * as pty from 'node-pty';
-import { getAgentDir } from './config';
+import { STATE_DIR } from './config';
 import { logger } from './common';
-import * as sessionManager from './sessionManager';
 
 export type TerminalRecord = {
   id: string;
-  sessionId: string;
-  agentName: string;
   nodeId: string;
   shell: string;
   cwd: string;
@@ -30,6 +27,7 @@ type ManagedTerminal = TerminalRecord & {
 };
 
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 200_000;
+const TERMINAL_TEMP_DIR = path.join(STATE_DIR, '.temp', 'terminals');
 
 const terminals = new Map<string, ManagedTerminal>();
 
@@ -61,8 +59,6 @@ function getShellPath(): string {
 function sanitizeTerminalRecord(record: ManagedTerminal): TerminalRecord {
   return {
     id: record.id,
-    sessionId: record.sessionId,
-    agentName: record.agentName,
     nodeId: record.nodeId,
     shell: record.shell,
     cwd: record.cwd,
@@ -73,10 +69,9 @@ function sanitizeTerminalRecord(record: ManagedTerminal): TerminalRecord {
   };
 }
 
-async function buildRcFile(agentName: string, terminalId: string): Promise<string> {
-  const tempDir = path.join(getAgentDir(agentName), '.temp', 'terminals');
-  await fs.ensureDir(tempDir);
-  const rcFilePath = path.join(tempDir, `${terminalId}.bashrc`);
+async function buildRcFile(terminalId: string): Promise<string> {
+  await fs.ensureDir(TERMINAL_TEMP_DIR);
+  const rcFilePath = path.join(TERMINAL_TEMP_DIR, `${terminalId}.bashrc`);
   const script = [
     'if [ -f /etc/bash.bashrc ]; then source /etc/bash.bashrc; fi',
     'if [ -f "$HOME/.bashrc" ]; then source "$HOME/.bashrc"; fi',
@@ -134,22 +129,22 @@ async function cleanupTerminal(record: ManagedTerminal): Promise<void> {
 }
 
 export async function createTerminal(options: {
-  sessionId: string;
-  cwd?: string;
+  cwd: string;
   nodeId?: string;
   cols?: number;
   rows?: number;
 }): Promise<TerminalRecord> {
-  const session = await sessionManager.getSession(options.sessionId);
-  const nodeId = options.nodeId || session.currentNode || 'master';
+  const nodeId = options.nodeId || 'master';
   if (nodeId !== 'master') {
     throw new Error('Terminal MVP currently supports only master.');
   }
 
-  const agentName = session.agent || 'main';
   const requestedCwd = typeof options.cwd === 'string' && options.cwd.trim().length > 0
     ? options.cwd.trim()
-    : (typeof session.cwd === 'string' && session.cwd.trim().length > 0 ? session.cwd.trim() : getAgentDir(agentName));
+    : '';
+  if (!requestedCwd) {
+    throw new Error('cwd is required');
+  }
 
   const resolvedCwd = path.resolve(requestedCwd);
   let stat: fs.Stats | null = null;
@@ -169,10 +164,9 @@ export async function createTerminal(options: {
   const shell = getShellPath();
   const cols = Math.max(20, Math.floor(options.cols || 100));
   const rows = Math.max(5, Math.floor(options.rows || 30));
-  const tempDir = path.join(getAgentDir(agentName), '.temp', 'terminals');
-  await fs.ensureDir(tempDir);
-  const cwdPath = path.join(tempDir, `${terminalId}.cwd.txt`);
-  const rcFilePath = shell.includes('bash') ? await buildRcFile(agentName, terminalId) : undefined;
+  await fs.ensureDir(TERMINAL_TEMP_DIR);
+  const cwdPath = path.join(TERMINAL_TEMP_DIR, `${terminalId}.cwd.txt`);
+  const rcFilePath = shell.includes('bash') ? await buildRcFile(terminalId) : undefined;
 
   const args = rcFilePath && shell.includes('bash')
     ? ['--rcfile', rcFilePath, '-i']
@@ -195,8 +189,6 @@ export async function createTerminal(options: {
 
   const record: ManagedTerminal = {
     id: terminalId,
-    sessionId: session.id,
-    agentName,
     nodeId,
     shell,
     cwd: resolvedCwd,
@@ -245,7 +237,7 @@ export async function createTerminal(options: {
     })();
   });
 
-  logger.info({ terminalId: record.id, sessionId: record.sessionId, cwd: record.cwd, pid: record.pid }, 'Terminal created');
+  logger.info({ terminalId: record.id, cwd: record.cwd, pid: record.pid }, 'Terminal created');
   return sanitizeTerminalRecord(record);
 }
 
@@ -263,9 +255,8 @@ export async function getTerminalRecord(terminalId: string): Promise<TerminalRec
   return sanitizeTerminalRecord(record);
 }
 
-export async function listTerminalRecords(options: { sessionId?: string } = {}): Promise<TerminalRecord[]> {
-  const filtered = Array.from(terminals.values())
-    .filter((record) => !options.sessionId || record.sessionId === options.sessionId);
+export async function listTerminalRecords(): Promise<TerminalRecord[]> {
+  const filtered = Array.from(terminals.values());
 
   await Promise.all(filtered.map((record) => refreshTerminalCwd(record)));
 

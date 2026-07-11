@@ -1,0 +1,65 @@
+{
+  "name": "@foxwarm/vscode-web-foxwarm-fs",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "foxwarm",
+  "license": "MIT",
+  "browser": "./dist/extension.js",
+  "activationEvents": [
+    "onFileSystem:foxwarm",
+    "onCommand:foxwarm-fs.openFolder"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "foxwarm-fs.openFolder",
+        "title": "Foxwarm: Open Folder...",
+        "category": "Foxwarm",
+        "icon": "$(folder-opened)"
+      }
+    ],
+    "menus": {
+      "statusBar/remoteIndicator": [
+        {
+          "command": "foxwarm-fs.openFolder",
+          "when": "virtualWorkspace == foxwarm",
+          "group": "virtualfs_90_foxwarm_1_open@1"
+        }
+      ]
+    },
+    "resourceLabelFormatters": [
+      {
+        "scheme": "foxwarm",
+        "authority": "node+*",
+        "formatting": {
+          "label": "${path}",
+          "separator": "/",
+          "stripPathStartingSeparator": false,
+          "tildify": false,
+          "workspaceSuffix": "Foxwarm"
+        }
+      },
+      {
+        "scheme": "foxwarm",
+        "authority": "node",
+        "formatting": {
+          "label": "${path}",
+          "separator": "/",
+          "stripPathStartingSeparator": false,
+          "tildify": false,
+          "workspaceSuffix": "Foxwarm"
+        }
+      }
+    ]
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0"
+  }
+}

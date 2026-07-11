@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { RefreshCw, Settings } from 'lucide-react'
+import { Code2, ExternalLink, RefreshCw, Settings } from 'lucide-react'
 import ReloadAppButton from './ReloadAppButton'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
@@ -24,6 +24,9 @@ interface GlobalUiSettingsMenuProps {
   menuAlign?: 'start' | 'end'
   onOpenSetup?: () => void
   setupActive?: boolean
+  onOpenVscodeEmbedded?: () => void
+  onOpenVscodeBrowserTab?: () => void
+  vscodeEmbeddedActive?: boolean
 }
 
 export default function GlobalUiSettingsMenu({
@@ -44,6 +47,9 @@ export default function GlobalUiSettingsMenu({
   menuAlign = 'end',
   onOpenSetup,
   setupActive = false,
+  onOpenVscodeEmbedded,
+  onOpenVscodeBrowserTab,
+  vscodeEmbeddedActive = false,
 }: GlobalUiSettingsMenuProps) {
   const [open, setOpen] = useState(false)
   const [renamingInstance, setRenamingInstance] = useState(false)
@@ -373,6 +379,31 @@ export default function GlobalUiSettingsMenu({
                 >
                   <span>WebUI: Open setup</span>
                   {setupActive && <span className="text-[10px] uppercase tracking-wide">active</span>}
+                </button>
+              )}
+              {onOpenVscodeEmbedded && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenVscodeEmbedded()
+                    setOpen(false)
+                  }}
+                  className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs ${vscodeEmbeddedActive ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'}`}
+                >
+                  <span className="inline-flex items-center gap-2"><Code2 className="h-3.5 w-3.5" />VS Code: Open embedded</span>
+                  {vscodeEmbeddedActive && <span className="text-[10px] uppercase tracking-wide">active</span>}
+                </button>
+              )}
+              {onOpenVscodeBrowserTab && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenVscodeBrowserTab()
+                    setOpen(false)
+                  }}
+                  className={menuButtonClass}
+                >
+                  <span className="inline-flex items-center gap-2"><ExternalLink className="h-3.5 w-3.5" />VS Code: Open in browser tab</span>
                 </button>
               )}
               <ReloadAppButton className={menuButtonClass}>

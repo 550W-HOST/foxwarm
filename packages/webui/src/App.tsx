@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
@@ -6,12 +6,14 @@ import Sidebar from './components/Sidebar'
 import CollapsedSidebar from './components/CollapsedSidebar'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
+import VscodeWebFrameHost from './components/VscodeWebFrameHost'
 import type { Session, SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
+import { makeVscodeWebUrl, VSCODE_WEB_TAB_ID } from './vscodeWeb'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 type UiThemeStyle = 'default' | '550a'
@@ -25,7 +27,6 @@ type RouteState =
 
 type TerminalRegistryRecord = {
   id: string
-  sessionId: string
   cwd: string
   nodeId: string
   shell: string
@@ -378,13 +379,12 @@ function formatTerminalTabTitle(cwd: string, nodeId?: string): string {
   return nodeId && nodeId !== 'master' ? `${lastSegment} · ${nodeId}` : lastSegment
 }
 
-function makeTerminalDraftTab(sessionId: string, nodeId: string, cwd: string): WorkbenchTab {
+function makeTerminalDraftTab(nodeId: string, cwd: string): WorkbenchTab {
   return {
     id: `terminal-draft:${Date.now()}:${Math.random().toString(16).slice(2)}`,
     type: 'terminal',
     nodeId,
     cwd,
-    contextSessionId: sessionId,
     createMode: 'new',
     title: formatTerminalTabTitle(cwd, nodeId),
   }
@@ -397,8 +397,15 @@ function makeTerminalTabFromRecord(record: TerminalRegistryRecord): WorkbenchTab
     terminalId: record.id,
     nodeId: record.nodeId,
     cwd: record.cwd,
-    contextSessionId: record.sessionId,
     title: formatTerminalTabTitle(record.cwd, record.nodeId),
+  }
+}
+
+function makeVscodeWebTab(): WorkbenchTab {
+  return {
+    id: VSCODE_WEB_TAB_ID,
+    type: 'vscode',
+    title: 'VS Code',
   }
 }
 
@@ -437,6 +444,8 @@ function App() {
   const [groupTools, setGroupTools] = useState<boolean>(() => localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true')
   const [showUsageBadge, setShowUsageBadge] = useState<boolean>(() => localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false')
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
+  const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
+  const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
 
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
@@ -472,12 +481,14 @@ function App() {
   const focusedPane = useMemo(() => (focusedPaneId ? findPaneNode(root, focusedPaneId) : null), [root, focusedPaneId])
   const focusedActiveTabId = focusedPane?.activeTabId || paneNodes[0]?.activeTabId || null
   const focusedActiveTab = focusedActiveTabId ? (tabsById[focusedActiveTabId] || null) : null
+  const vscodeWebUrl = useMemo(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin).toString(), [])
+  const handleVscodeFrameSlot = useCallback((element: HTMLElement | null) => setVscodeFrameSlot(element), [])
 
   const sessionTitle = (sessionId: string) => sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))?.displayName || sessionId
 
   const currentContextSessionId = focusedActiveTab?.type === 'chat'
     ? focusedActiveTab.sessionId
-    : focusedActiveTab?.contextSessionId || loadStoredLastVisitedSession()
+    : loadStoredLastVisitedSession()
   const currentContextSessionRecord = sessions.find((session) => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
   const currentView: AppView = route.view === 'agents' ? 'agents' : route.view === 'setup' ? 'setup' : 'session'
   const busyCount = useMemo(() => sessions.filter((session) => isSessionRuntimeActive(session)).length, [sessions])
@@ -733,7 +744,7 @@ function App() {
       }
 
       const nextTitle = formatTerminalTabTitle(terminal.cwd, terminal.nodeId)
-      if (tab.title !== nextTitle || tab.cwd !== terminal.cwd || tab.nodeId !== terminal.nodeId || tab.contextSessionId !== terminal.sessionId || tab.createMode) {
+      if (tab.title !== nextTitle || tab.cwd !== terminal.cwd || tab.nodeId !== terminal.nodeId || tab.createMode) {
         updateTab(tab.id, (current) => current.type === 'terminal'
           ? {
               ...current,
@@ -741,7 +752,6 @@ function App() {
               cwd: terminal.cwd,
               nodeId: terminal.nodeId,
               terminalId: terminal.id,
-              contextSessionId: terminal.sessionId,
               createMode: undefined,
             }
           : current)
@@ -755,8 +765,7 @@ function App() {
       }
 
       const matchingDraft = terminalDraftTabs.find((tab) => (
-        tab.contextSessionId === terminal.sessionId
-        && (tab.nodeId || 'master') === terminal.nodeId
+        (tab.nodeId || 'master') === terminal.nodeId
         && (tab.cwd || '/') === terminal.cwd
       ))
 
@@ -800,7 +809,7 @@ function App() {
   }, [focusedActiveTabId])
 
   useEffect(() => {
-    const sessionId = focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : focusedActiveTab?.contextSessionId
+    const sessionId = focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : undefined
     if (sessionId) {
       localStorage.setItem(LAST_VISITED_SESSION_STORAGE_KEY, sessionId)
     }
@@ -848,6 +857,23 @@ function App() {
     if (isMobile) {
       setShowSessionList(false)
     }
+  }
+
+  useEffect(() => {
+    if (allTabs.some((tab) => tab.type === 'vscode')) {
+      setVscodeFrameStarted(true)
+    }
+  }, [allTabs])
+
+  const openVscodeEmbedded = () => {
+    setVscodeFrameStarted(true)
+    const tab = tabsById[VSCODE_WEB_TAB_ID] || makeVscodeWebTab()
+    upsertTab(tab, { activate: true })
+    navigateToTab(tab.id)
+  }
+
+  const openVscodeBrowserTab = () => {
+    window.open(vscodeWebUrl, '_blank', 'noopener,noreferrer')
   }
 
   const findPreferredChatTab = (sessionId: string): WorkbenchTab | null => {
@@ -934,7 +960,7 @@ function App() {
     return paneTabs[0]
   }
 
-  const openTerminalTab = (sessionId: string, options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string }) => {
+  const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string }) => {
     if (options?.terminalId) {
       const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
       const terminal = activeTerminals.find((item) => item.id === options.terminalId)
@@ -946,9 +972,8 @@ function App() {
       return
     }
 
-    const sessionRecord = sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))
-    const nodeId = options?.nodeId || sessionRecord?.currentNode || 'master'
-    const path = options?.path || sessionRecord?.cwd || '/'
+    const nodeId = options?.nodeId || 'master'
+    const path = options?.path || '/'
 
     const sourcePaneId = options?.sourcePaneId || focusedPaneId || null
 
@@ -963,7 +988,7 @@ function App() {
       }
 
       if (getPaneHeight(sourcePaneId) > 700) {
-        const draftTab = makeTerminalDraftTab(sessionId, nodeId, path)
+        const draftTab = makeTerminalDraftTab(nodeId, path)
         const createdPaneId = splitPaneWithNewTab(sourcePaneId, draftTab, 'bottom')
         if (createdPaneId) {
           navigateToTab(draftTab.id)
@@ -972,7 +997,7 @@ function App() {
       }
     }
 
-    const tab = makeTerminalDraftTab(sessionId, nodeId, path)
+    const tab = makeTerminalDraftTab(nodeId, path)
     upsertTab(tab, { paneId: sourcePaneId || undefined, activate: true })
     navigateToTab(tab.id)
   }
@@ -1052,7 +1077,7 @@ function App() {
     }
   }
 
-  const handleTerminalReady = (draftTabId: string, terminal: { id: string; sessionId: string; cwd: string; nodeId?: string }) => {
+  const handleTerminalReady = (draftTabId: string, terminal: { id: string; cwd: string; nodeId?: string }) => {
     // Keep createMode='new' until activeTerminals reconciliation sees this terminal id,
     // so the missing-terminal cleanup path does not immediately remove the just-opened tab.
     updateTab(draftTabId, (current) => current.type === 'terminal'
@@ -1061,11 +1086,11 @@ function App() {
           terminalId: terminal.id,
           nodeId: terminal.nodeId || 'master',
           cwd: terminal.cwd,
-          contextSessionId: terminal.sessionId,
           title: formatTerminalTabTitle(terminal.cwd, terminal.nodeId || 'master'),
         }
       : current)
     navigateToTab(draftTabId)
+    void fetchActiveTerminals()
   }
 
   const startSidebarResize = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -1211,7 +1236,7 @@ function App() {
     const helper = {
       sendMessage: (message: string) => {
         const activeTab = focusedActiveTab
-        const sessionId = activeTab?.type === 'chat' ? activeTab.sessionId : activeTab?.contextSessionId
+        const sessionId = activeTab?.type === 'chat' ? activeTab.sessionId : loadStoredLastVisitedSession()
         if (!sessionId) return
         void fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
           method: 'POST',
@@ -1239,7 +1264,7 @@ function App() {
           sessionId={tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
-          onOpenTerminal={() => openTerminalTab(tab.sessionId, { sourcePaneId })}
+          onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
           sendKeyMode={sendKeyMode}
           groupTools={groupTools}
           showUsageBadge={showUsageBadge}
@@ -1248,17 +1273,19 @@ function App() {
       )
     }
 
-    const sessionId = tab.contextSessionId || currentContextSessionId
+    if (tab.type === 'vscode') {
+      return <div ref={handleVscodeFrameSlot} className="h-full min-h-0 w-full bg-gray-950" data-foxwarm-vscode-web-slot="true" />
+    }
+
     return (
       <Suspense fallback={<LazyViewFallback label="Loading terminal…" />}>
         <TerminalView
           key={tab.id}
-          sessionId={sessionId}
           initialCwd={tab.cwd}
           initialTerminalId={tab.terminalId}
           createMode={tab.createMode || 'reuse'}
           onBack={onBack}
-          onSessionsChanged={() => { void fetchSessions() }}
+          onSessionsChanged={() => { void fetchActiveTerminals() }}
           onTerminalReady={(terminal) => handleTerminalReady(tab.id, terminal)}
           onTerminalClosed={handleTerminalClosed}
         />
@@ -1530,19 +1557,31 @@ function App() {
     </DndContext>
   )
 
+  const renderWithVscodeFrame = (content: ReactNode) => (
+    <>
+      {content}
+      <VscodeWebFrameHost
+        key="foxwarm-vscode-web-frame-host"
+        started={vscodeFrameStarted}
+        src={vscodeWebUrl}
+        slot={vscodeFrameSlot}
+      />
+    </>
+  )
+
   if (isMobile) {
     if (route.view === 'setup') {
-      return (
+      return renderWithVscodeFrame(
         <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
           <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
             <SetupView forced={setupOobe} onClose={setupOobe ? undefined : handleBackToList} onSetupChanged={() => { void fetchSetupStatus() }} />
           </Suspense>
-        </div>
+        </div>,
       )
     }
 
     if (showSessionList) {
-      return renderWorkbenchSurface(
+      return renderWithVscodeFrame(renderWorkbenchSurface(
         <SessionList
           sessions={sessions}
           currentSession={currentContextSessionId}
@@ -1570,34 +1609,37 @@ function App() {
             setShowSessionList(false)
           }}
           onSelectSetup={openSetupView}
-          onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
+          onOpenVscodeEmbedded={openVscodeEmbedded}
+          onOpenVscodeBrowserTab={openVscodeBrowserTab}
+          vscodeEmbeddedActive={focusedActiveTab?.type === 'vscode'}
+          onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
           onCreateSession={handleCreateSession}
         />,
-      )
+      ))
     }
 
     if (route.view === 'agents') {
-      return (
+      return renderWithVscodeFrame(
         <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
           <Suspense fallback={<LazyViewFallback label="Loading architecture…" />}>
             <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} onBack={handleBackToList} />
           </Suspense>
-        </div>
+        </div>,
       )
     }
 
     const mobilePaneId = focusedPaneId || paneIds[0]
 
-    return (
+    return renderWithVscodeFrame(
       <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 bg-gray-100 dark:bg-gray-900 overflow-hidden">
         <div className="h-full min-h-0 overflow-hidden p-0">
           {renderWorkbenchSurface(mobilePaneId ? renderPane(mobilePaneId, handleBackToList) : null)}
         </div>
-      </div>
+      </div>,
     )
   }
 
-  return renderWorkbenchSurface(
+  return renderWithVscodeFrame(renderWorkbenchSurface(
     <div className="foxwarm-safe-area-shell foxwarm-viewport-shell relative flex overflow-hidden bg-gray-100 dark:bg-gray-900">
       {!sidebarCollapsed ? (
         <div className="relative h-full shrink-0" style={{ width: sidebarWidth }}>
@@ -1627,7 +1669,10 @@ function App() {
               window.location.hash = ARCHITECTURE_HASH
             }}
             onSelectSetup={openSetupView}
-            onCreateTerminalTab={(options) => openTerminalTab(currentContextSessionId, options)}
+            onOpenVscodeEmbedded={openVscodeEmbedded}
+            onOpenVscodeBrowserTab={openVscodeBrowserTab}
+            vscodeEmbeddedActive={focusedActiveTab?.type === 'vscode'}
+            onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
             onCreateSession={handleCreateSession}
             onToggleCollapsed={() => setSidebarCollapsed(true)}
             isPeek={false}
@@ -1666,7 +1711,7 @@ function App() {
         )}
       </div>
     </div>,
-  )
+  ))
 }
 
 export default App

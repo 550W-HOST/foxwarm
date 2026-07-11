@@ -27,6 +27,9 @@ interface SessionListProps {
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectSetup: () => void
+  onOpenVscodeEmbedded: () => void
+  onOpenVscodeBrowserTab: () => void
+  vscodeEmbeddedActive: boolean
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateSession: () => void
 }
@@ -54,6 +57,9 @@ export default function SessionList({
   onKeepSession,
   onSelectArchitecture,
   onSelectSetup,
+  onOpenVscodeEmbedded,
+  onOpenVscodeBrowserTab,
+  vscodeEmbeddedActive,
   onCreateTerminalTab,
   onCreateSession,
 }: SessionListProps) {
@@ -86,6 +92,9 @@ export default function SessionList({
             onTabIconChange={onTabIconChange}
             onOpenSetup={onSelectSetup}
             setupActive={currentView === 'setup'}
+            onOpenVscodeEmbedded={onOpenVscodeEmbedded}
+            onOpenVscodeBrowserTab={onOpenVscodeBrowserTab}
+            vscodeEmbeddedActive={vscodeEmbeddedActive}
           />
         </div>
 

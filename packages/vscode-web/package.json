@@ -1,0 +1,12 @@
+{
+  "name": "@foxwarm/vscode-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Foxwarm VS Code for the Web integration spike assets. This package is independent from packages/webui and is served on a dedicated route.",
+  "scripts": {
+    "build": "npm --prefix foxwarm-fs run build && npm --prefix foxwarm-terminal run build && npm --prefix foxwarm-scm run build",
+    "test": "npm --prefix foxwarm-fs run test && npm --prefix foxwarm-terminal run test && npm --prefix foxwarm-scm run test",
+    "prepare:assets": "node scripts/prepare-assets.mjs"
+  }
+}

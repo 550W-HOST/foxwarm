@@ -13,6 +13,7 @@ __pycache__/
 # WebUI
 /packages/webui/node_modules
 /packages/webui/dist
+/packages/vscode-web/assets
 
 # Shared package build output
 /packages/shared/dist

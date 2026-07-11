@@ -28,6 +28,7 @@ import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, w
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
 import type { Message, MessagePart, QueueItem } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
+import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
@@ -571,6 +572,8 @@ export class WebUIChannel implements Channel {
 
     // WebUI API endpoints
     if (this.enableWebUI) {
+      registerVscodeWebRoutes(httpServerInstance);
+
       // Auth endpoint
       httpServerInstance.addRoute({
         path: '/api/auth',
@@ -1030,10 +1033,9 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/terminals',
         method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
+        handler: async (_req: express.Request, res: express.Response) => {
           try {
-            const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId.trim() ? req.query.sessionId.trim() : undefined;
-            const terminals = await listTerminalRecords({ sessionId });
+            const terminals = await listTerminalRecords();
             res.json({ terminals });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to list terminals');
@@ -1047,17 +1049,12 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
             const nodeId = typeof req.body?.nodeId === 'string' && req.body.nodeId.trim() ? req.body.nodeId.trim() : undefined;
-            const cwd = typeof req.body?.cwd === 'string' && req.body.cwd.trim() ? req.body.cwd.trim() : undefined;
+            const cwd = typeof req.body?.cwd === 'string' && req.body.cwd.trim() ? req.body.cwd.trim() : '';
             const cols = typeof req.body?.cols === 'number' ? req.body.cols : undefined;
             const rows = typeof req.body?.rows === 'number' ? req.body.rows : undefined;
 
-            if (!sessionId) {
-              throw new Error('sessionId is required');
-            }
-
-            const terminal = await createTerminal({ sessionId, nodeId, cwd, cols, rows });
+            const terminal = await createTerminal({ nodeId, cwd, cols, rows });
             res.json({
               success: true,
               terminal,
