@@ -57,8 +57,12 @@ test('/fork supports no args without triggering an idle parent', async () => {
     assert.ok(childId);
     assert.equal(parent.queue.length, 0);
     assert.deepEqual(triggered, []);
-    assert.match(systemText(parent.history.at(-1)?.parts), /event="manual-fork-created"/);
-    assert.match(systemText(parent.history.at(-1)?.parts), /Initial message: \(none\)/);
+    const notification = systemText(parent.history.at(-1)?.parts);
+    assert.match(notification, /kind="session-event" event="manual-fork-created"/);
+    assert.match(notification, new RegExp(`currentSessionId="${parentId}"`));
+    assert.match(notification, new RegExp(`childSessionId="${childId}"`));
+    assert.ok(notification.includes(`from the current session \`${parentId}\``));
+    assert.match(notification, /Initial message: \(none\)/);
     assert.match(replies.at(-1) || '', new RegExp(childId));
   } finally {
     for (const childId of sessionManager.getChildSessionIds(parentId)) {
@@ -86,7 +90,11 @@ test('/fork preserves the complete message after a custom suffix', async () => {
     assert.equal(child.queue.length, 1);
     assert.match(systemText(child.queue[0].parts), new RegExp(initialMessage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.ok(systemText(child.queue[0].parts).includes(initialMessage));
-    assert.ok(systemText(parent.history.at(-1)?.parts).includes(initialMessage));
+    const notification = systemText(parent.history.at(-1)?.parts);
+    assert.match(notification, /kind="session-event" event="manual-fork-created"/);
+    assert.match(notification, new RegExp(`currentSessionId="${parentId}"`));
+    assert.match(notification, new RegExp(`childSessionId="${childId}"`));
+    assert.ok(notification.includes(initialMessage));
     assert.match(replies.at(-1) || '', /Initial message sent/);
   } finally {
     await sessionManager.deleteSession(childId).catch(() => {});
@@ -148,7 +156,10 @@ test('manual fork notification uses the existing queue when parent is busy', asy
     assert.equal(result, 'queued');
     assert.equal(parent.history.length, 1);
     assert.equal(parent.queue.length, 1);
-    assert.match(systemText(parent.queue[0].message?.parts), /manual-fork-created/);
+    const notification = systemText(parent.queue[0].message?.parts);
+    assert.match(notification, /kind="session-event" event="manual-fork-created"/);
+    assert.match(notification, new RegExp(`currentSessionId="${parentId}"`));
+    assert.match(notification, new RegExp(`childSessionId="${parentId}_child"`));
   } finally {
     await sessionManager.deleteSession(parentId).catch(() => {});
   }

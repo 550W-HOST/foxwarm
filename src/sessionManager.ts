@@ -1740,16 +1740,18 @@ export async function notifyManualForkCreated(parentSessionId: string, childSess
   const parent = await getSession(parentSessionId);
   const messageText = initialMessage === undefined
     ? formatFoxwarmSystem({
-      kind: 'session-boundary',
+      kind: 'session-event',
       event: 'manual-fork-created',
+      currentSessionId: parent.id,
       childSessionId,
       initialMessage: '(none)',
-    }, `User manually created fork session \`${childSessionId}\`.\nInitial message: (none)`)
+    }, `User manually created fork child session \`${childSessionId}\` from the current session \`${parent.id}\`.\nInitial message: (none)`)
     : `${formatFoxwarmSystemOpen({
-      kind: 'session-boundary',
+      kind: 'session-event',
       event: 'manual-fork-created',
+      currentSessionId: parent.id,
       childSessionId,
-    })}\nUser manually created fork session \`${childSessionId}\`.\nInitial message:\n${initialMessage}\n${formatFoxwarmSystemClose()}`;
+    })}\nUser manually created fork child session \`${childSessionId}\` from the current session \`${parent.id}\`.\nInitial message:\n${initialMessage}\n${formatFoxwarmSystemClose()}`;
   const notification: Message = {
     role: 'user',
     parts: [systemPart(messageText)],
