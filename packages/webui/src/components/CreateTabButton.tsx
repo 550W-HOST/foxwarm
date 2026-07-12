@@ -67,7 +67,7 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate }
       </div>
 
       {open && (
-        <div className="absolute left-0 top-full z-30 mt-2 w-80 rounded-xl border border-gray-200 bg-white p-3 shadow-xl dark:border-gray-700 dark:bg-gray-800">
+        <div className="absolute left-0 top-full z-50 mt-2 w-80 rounded-xl border border-gray-200 bg-white p-3 shadow-xl dark:border-gray-700 dark:bg-gray-800">
           <div className="text-sm font-semibold text-gray-900 dark:text-white">Create {label.toLowerCase()} tab</div>
           <div className="mt-3 space-y-3">
             <div>
