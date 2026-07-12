@@ -68,19 +68,47 @@ Current MVP behavior:
 - Opens `HEAD ↔ Working Tree` diffs for modified, added, deleted, renamed, and untracked files where possible.
 - Does not implement staging, committing, pushing, branch management, credentials, blame, history graph, or file watchers.
 
-## Preparing official VS Code Web assets
+## Preparing the optional Code workbench
 
-Large official VS Code Web assets are intentionally not committed. To download them into the ignored default asset directory:
+The full browser workbench is intentionally excluded from both Git and the normal `npm run build`. Microsoft does not publish the complete Code - OSS workbench as a supported npm/jsDelivr package, and Microsoft-operated VS Code CDNs are not a public embedding API.
 
-```sh
-npm --prefix packages/vscode-web run prepare:assets -- --quality=stable
-```
-
-The default output is:
+Foxwarm provides two explicit preparation commands. Both write to the ignored default asset directory:
 
 ```text
 packages/vscode-web/assets/vscode-web/
 ```
+
+### Build Code - OSS from source
+
+The preferred redistributable path builds the pinned MIT-licensed Code - OSS source configuration:
+
+```sh
+npm run build:code
+```
+
+The script shallow-fetches the commit recorded in `code-oss-version.json`, verifies that its product configuration is `Code - OSS` / `MIT`, installs the upstream dependencies, downloads its declared builtin extensions, and runs the upstream `vscode-web-min` packaging task. The source and dependency cache lives under ignored `packages/vscode-web/.cache/code-oss/` by default.
+
+This is a large optional build. Expect several GB of temporary/cache usage, native build prerequisites, and the Node major version declared by the pinned source `.nvmrc`. The script prints an actionable `nvm install ...` command when the current Node major does not match. Useful overrides:
+
+```sh
+npm run build:code -- --commit=<full-sha> --cache=/path/to/cache --out=/path/to/assets
+```
+
+### Download Microsoft's prebuilt workbench
+
+For development or licensed internal use, download the pinned Microsoft `web-standalone` product build:
+
+```sh
+npm run download:code
+```
+
+This follows the same update endpoint used by `@vscode/test-web`, but the resulting Microsoft product build is governed by the [Visual Studio Code product license](https://code.visualstudio.com/license), not merely the Code - OSS MIT source license. Review that license before redistribution or public hosting. To deliberately follow the latest Stable/Insiders build instead of the pinned commit:
+
+```sh
+npm run download:code -- --latest --quality=stable
+```
+
+`npm --prefix packages/vscode-web run prepare:assets` remains an alias of the pinned download command for the existing spike workflow.
 
 At runtime the route can also read assets from another directory:
 
@@ -89,6 +117,8 @@ FOXWARM_VSCODE_WEB_ASSET_DIR=/path/to/vscode-web-assets npm run start:notmux
 ```
 
 When the required static files exist (`out/nls.messages.js`, `out/vs/workbench/workbench.web.main.internal.css`, `out/vs/workbench/workbench.web.main.internal.js`), `/vscode-web` emits a VS Code Web workbench bootstrap that includes `foxwarm-fs` as an additional browser builtin extension and opens the requested `folderUri` query parameter. The default folder URI can be overridden with `FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI`; otherwise the route prefers `/app` when running in the Docker test environment and falls back to the host checkout path when present.
+
+When the assets are absent, authenticated requests to `/vscode-web` return a styled `503 Code is not built` page rather than a blank workbench. It shows both preparation commands and the configured asset location. Individual missing static assets continue to return `404`.
 
 ## Main WebUI entry
 
@@ -102,7 +132,7 @@ All launch URLs include a `foxwarm://node+master/<absolute-path>` `folderUri` an
 
 ## Not in scope yet
 
-- Committing VS Code Web static assets.
+- Committing Code workbench static assets or source/dependency caches.
 - File/text search providers.
 - File watching.
 - Remote node filesystem implementation.

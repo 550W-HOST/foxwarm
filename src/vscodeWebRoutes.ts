@@ -364,7 +364,7 @@ function registerAuthenticatedDynamicStatic(httpServer: HttpServer, mountPath: s
     }
     const directory = resolveDirectory();
     if (!directory) {
-      res.status(404).json({ error: 'VS Code Web assets are not prepared' });
+      res.status(404).json({ error: 'Code assets are not prepared' });
       return;
     }
     express.static(directory)(req, res, next);
@@ -530,7 +530,7 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
   <link rel="icon" href="${escapedAssetBasePath}/favicon.ico" type="image/x-icon" />
   <link rel="manifest" href="${escapedAssetBasePath}/manifest.json" crossorigin="use-credentials" />
   <link data-name="vs/workbench/workbench.web.main" rel="stylesheet" href="${escapedAssetBasePath}/out/vs/workbench/workbench.web.main.internal.css" />
-  <title>Foxwarm VS Code Web</title>
+  <title>Foxwarm Code</title>
 </head>
 <body aria-label=""></body>
 <script>
@@ -666,7 +666,7 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
       urlCallbackProvider: new LocalStorageURLCallbackProvider(config.callbackRoute || ${jsCallbackRoute}),
     });
   } catch (error) {
-    console.error('Failed to bootstrap Foxwarm VS Code Web', error);
+    console.error('Failed to bootstrap Foxwarm Code', error);
     const pre = document.createElement('pre');
     pre.textContent = String(error?.stack || error);
     document.body.appendChild(pre);
@@ -675,28 +675,51 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
 </html>`;
 }
 
-function buildVscodeWebPlaceholderHtml(): string {
-  const escapedApiPrefix = VSCODE_WEB_API_PREFIX.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+function buildCodeUnavailableHtml(): string {
   const escapedAssetDir = escapeHtmlText(resolveVscodeWebAssetDir());
   return `<!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Foxwarm VS Code Web spike</title>
+  <title>Code is not built · Foxwarm</title>
   <style>
-    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; line-height: 1.45; }
-    code { background: #f2f2f2; padding: 0.1rem 0.25rem; border-radius: 4px; }
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #f3f4f6; color: #111827; padding: 24px; }
+    main { width: min(720px, 100%); border: 1px solid #d1d5db; border-radius: 16px; background: white; padding: clamp(24px, 5vw, 44px); box-shadow: 0 16px 50px rgba(15, 23, 42, .09); }
+    .eyebrow { margin: 0 0 10px; color: #2563eb; font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(28px, 5vw, 42px); letter-spacing: -.03em; }
+    p { color: #4b5563; line-height: 1.6; }
+    .option { margin-top: 18px; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; }
+    .option strong { display: block; margin-bottom: 8px; }
+    code { display: block; overflow-x: auto; border-radius: 8px; background: #111827; color: #f9fafb; padding: 12px 14px; white-space: nowrap; }
+    .hint { margin-top: 20px; font-size: 13px; color: #6b7280; }
+    .path { overflow-wrap: anywhere; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #030712; color: #f9fafb; }
+      main { border-color: #374151; background: #111827; box-shadow: none; }
+      p, .hint { color: #9ca3af; }
+      .option { border-color: #374151; }
+      code { background: #030712; }
+    }
   </style>
 </head>
 <body>
-  <h1>Foxwarm VS Code Web spike route</h1>
-  <p>This route is reserved for a self-hosted official VS Code for the Web build. Prepare static VS Code Web assets at <code>${escapedAssetDir}</code> or set <code>${VSCODE_WEB_ASSET_DIR_ENV}</code> to enable the workbench bootstrap.</p>
-  <p>The browser filesystem extension is served from <code>${VSCODE_WEB_FS_EXTENSION_ROUTE}/</code>.</p>
-  <p>The browser terminal extension is served from <code>${VSCODE_WEB_TERMINAL_EXTENSION_ROUTE}/</code>.</p>
-  <p>The browser source-control extension is served from <code>${VSCODE_WEB_SCM_EXTENSION_ROUTE}/</code>.</p>
-  <p>The filesystem API prefix is <code>${escapedApiPrefix}</code>.</p>
-  <p>Intended workspace URI shape: <code>foxwarm://node+master/home/ldmbot/git/foxwarm/</code>.</p>
+  <main>
+    <p class="eyebrow">Optional component</p>
+    <h1>Code is not built</h1>
+    <p>This Foxwarm installation does not currently include the optional browser workbench assets. Choose one preparation method, then reload this page.</p>
+    <section class="option">
+      <strong>Build the MIT-licensed Code - OSS workbench from source</strong>
+      <code>npm run build:code</code>
+    </section>
+    <section class="option">
+      <strong>Download Microsoft's prebuilt workbench for development or licensed internal use</strong>
+      <code>npm run download:code</code>
+    </section>
+    <p class="hint">Both commands are intentionally excluded from the normal <code style="display:inline;padding:2px 5px">npm run build</code> because preparing Code is large and slow. Assets are expected at <span class="path">${escapedAssetDir}</span>; alternatively configure <code style="display:inline;padding:2px 5px">${VSCODE_WEB_ASSET_DIR_ENV}</code>.</p>
+  </main>
 </body>
 </html>`;
 }
@@ -724,7 +747,8 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
         if (getPreparedVscodeWebAssetDir()) {
           res.send(buildVscodeWorkbenchHtml(req));
         } else {
-          res.send(buildVscodeWebPlaceholderHtml());
+          res.setHeader('Cache-Control', 'no-store');
+          res.status(503).send(buildCodeUnavailableHtml());
         }
       } catch (error) {
         sendFsError(res, error);
@@ -737,7 +761,7 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     method: 'GET',
     handler: async (_req, res) => {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send('<!doctype html><meta charset="utf-8"><title>Foxwarm VS Code Web callback</title><script>window.close();</script>');
+      res.send('<!doctype html><meta charset="utf-8"><title>Foxwarm Code callback</title><script>window.close();</script>');
     },
   });
 

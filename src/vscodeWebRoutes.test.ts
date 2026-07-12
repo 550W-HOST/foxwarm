@@ -46,8 +46,8 @@ test('VS Code Web route, extension assets, and filesystem API require the WebUI 
     assert.equal(routeNoAuth.status, 401);
 
     const routeWithBearer = await fetch(`${baseUrl}/vscode-web`, { headers: bearerHeaders() });
-    assert.equal(routeWithBearer.status, 200);
-    assert.match(await routeWithBearer.text(), /Foxwarm VS Code Web spike route|vscode-workbench-web-configuration/);
+    assert.ok(routeWithBearer.status === 200 || routeWithBearer.status === 503);
+    assert.match(await routeWithBearer.text(), /Code is not built|vscode-workbench-web-configuration/);
 
     const extensionNoAuth = await fetch(`${baseUrl}/vscode-web/extensions/foxwarm-fs/package.json`);
     assert.equal(extensionNoAuth.status, 401);
@@ -75,6 +75,31 @@ test('VS Code Web route, extension assets, and filesystem API require the WebUI 
     const statPayload = await fsWithBearer.json() as { type?: number };
     assert.equal(statPayload.type, 1);
   });
+});
+
+test('Code route returns a friendly actionable page when optional assets are missing', async () => {
+  const previousAssetDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
+  try {
+    await withTempDir(async (dirPath) => {
+      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
+      await withServer(async (_server, baseUrl) => {
+        const response = await fetch(`${baseUrl}/vscode-web`, { headers: bearerHeaders() });
+        assert.equal(response.status, 503);
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        const html = await response.text();
+        assert.match(html, /Code is not built/);
+        assert.match(html, /npm run build:code/);
+        assert.match(html, /npm run download:code/);
+        assert.doesNotMatch(html, /<title>[^<]*VS Code/i);
+
+        const staticResponse = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`, { headers: bearerHeaders() });
+        assert.equal(staticResponse.status, 404);
+      });
+    });
+  } finally {
+    if (previousAssetDir === undefined) delete process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
+    else process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = previousAssetDir;
+  }
 });
 
 test('VS Code Web filesystem API is master-only and rejects non-absolute paths', async () => {
