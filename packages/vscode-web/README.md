@@ -86,12 +86,18 @@ The preferred redistributable path builds the pinned MIT-licensed Code - OSS sou
 npm run build:code
 ```
 
-The script shallow-fetches the commit recorded in `code-oss-version.json`, verifies that its product configuration is `Code - OSS` / `MIT`, installs the upstream dependencies, downloads its declared builtin extensions, and runs the upstream `vscode-web-min` packaging task. The source and dependency cache lives under ignored `packages/vscode-web/.cache/code-oss/` by default.
+The command builds and runs `Dockerfile.code-oss`, a pinned Node 24 builder containing the upstream Linux native-build prerequisites. Inside that container, the source builder shallow-fetches the commit recorded in `code-oss-version.json`, verifies that its product configuration is `Code - OSS` / `MIT`, installs the upstream dependencies, downloads its declared builtin extensions, and runs upstream's standalone `vscode-web-min-ci` packager. That current packager bundles the web entry points directly from TypeScript source with esbuild, avoiding the all-in-one desktop/server declaration build and symbol mangler. The source and dependency cache lives under ignored `packages/vscode-web/.cache/code-oss/` by default and is written with the invoking user's uid/gid.
 
-This is a large optional build. Expect several GB of temporary/cache usage, native build prerequisites, and the Node major version declared by the pinned source `.nvmrc`. The script prints an actionable `nvm install ...` command when the current Node major does not match. Useful overrides:
+This is a large optional build. Expect several GB of temporary/cache usage and a running Docker daemon. Useful overrides are forwarded into the container:
 
 ```sh
 npm run build:code -- --commit=<full-sha> --cache=/path/to/cache --out=/path/to/assets
+```
+
+For environments that already provide the exact Node version and native prerequisites, bypass Docker explicitly:
+
+```sh
+npm --prefix packages/vscode-web run build:code:local
 ```
 
 ### Download Microsoft's prebuilt workbench

@@ -1,12 +1,13 @@
-FROM node:22-bookworm AS build
+FROM node:24.17.0-bookworm AS build
 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
 COPY packages/webui/package.json packages/webui/package-lock.json ./packages/webui/
+COPY packages/cli-node/package.json packages/cli-node/package-lock.json ./packages/cli-node/
 
-RUN npm ci && npm --prefix packages/webui ci
+RUN npm ci && npm --prefix packages/webui ci && npm --prefix packages/cli-node ci
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -14,10 +15,15 @@ COPY templates ./templates
 COPY skills ./skills
 COPY packages/shared ./packages/shared
 COPY packages/webui ./packages/webui
+COPY packages/cli-node ./packages/cli-node
 
 RUN npm run build && npm --prefix packages/webui run build
 
-FROM node:22-bookworm-slim AS runtime
+# Code workbench assets are optional; extension bundles are always present.
+COPY packages/vscode-web ./packages/vscode-web
+RUN mkdir -p /app/packages/vscode-web/assets/vscode-web
+
+FROM node:24.17.0-bookworm-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -62,6 +68,10 @@ COPY --from=build /app/skills ./skills
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build /app/packages/webui/dist ./packages/webui/dist
 COPY --from=build /app/packages/webui/public ./packages/webui/public
+COPY --from=build /app/packages/vscode-web/foxwarm-fs ./packages/vscode-web/foxwarm-fs
+COPY --from=build /app/packages/vscode-web/foxwarm-terminal ./packages/vscode-web/foxwarm-terminal
+COPY --from=build /app/packages/vscode-web/foxwarm-scm ./packages/vscode-web/foxwarm-scm
+COPY --from=build /app/packages/vscode-web/assets ./packages/vscode-web/assets
 
 RUN mkdir -p /data
 

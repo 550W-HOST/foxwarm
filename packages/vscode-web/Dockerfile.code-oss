@@ -1,0 +1,18 @@
+FROM node:24.17.0-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        git \
+        libkrb5-dev \
+        libnotify-bin \
+        libsecret-1-dev \
+        libx11-dev \
+        libx11-xcb-dev \
+        libxkbfile-dev \
+        pkg-config \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace

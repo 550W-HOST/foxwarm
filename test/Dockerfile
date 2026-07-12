@@ -1,4 +1,4 @@
-FROM node:22-bookworm
+FROM node:24.17.0-bookworm
 
 # Install chromium for browser automation
 RUN apt-get update && \

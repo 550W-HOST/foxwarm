@@ -193,7 +193,10 @@ async function main() {
   const nodeVersion = await assertNodeVersion(sourceDir)
   await installDependencies(sourceDir, options.commit, nodeVersion, options.forceInstall)
   await run('npm', ['run', 'download-builtin-extensions'], { cwd: sourceDir })
-  await run('npm', ['run', 'gulp', 'vscode-web-min'], { cwd: sourceDir })
+  // The current standalone CI packager bundles directly from TypeScript source
+  // with esbuild. Avoid the all-in-one task's unrelated desktop/server
+  // declaration build and symbol mangler, which consume substantially more RAM.
+  await run('npm', ['run', 'gulp', 'vscode-web-min-ci'], { cwd: sourceDir })
 
   const packageJson = JSON.parse(await fs.readFile(path.join(sourceDir, 'package.json'), 'utf8'))
   await publishAssets(sourceDir, options.outDir, {
@@ -204,6 +207,13 @@ async function main() {
     nodeVersion,
     builtAt: new Date().toISOString(),
   })
+  // Preserve the expensive source/dependency cache, but discard reproducible
+  // intermediate trees after validated assets have been published.
+  await Promise.all([
+    fs.rm(path.resolve(sourceDir, '..', 'vscode-web'), { recursive: true, force: true }),
+    fs.rm(path.join(sourceDir, 'out-build'), { recursive: true, force: true }),
+    fs.rm(path.join(sourceDir, 'out-vscode-web-min'), { recursive: true, force: true }),
+  ])
   console.log(`\nCode - OSS web assets are ready at ${options.outDir}`)
 }
 
