@@ -58,7 +58,7 @@ Current MVP behavior:
 
 ## Source control MVP
 
-`foxwarm-scm` contributes a read-only Source Control provider for `foxwarm` workspaces. It calls authenticated Git API routes under `/api/vscode-web/git/*` to list working tree changes and opens diff editors comparing `HEAD` with working tree content through read-only `foxwarm-git:` virtual documents.
+`foxwarm-scm` contributes a read-only Source Control provider for `foxwarm` workspaces. It inspects every workspace root, deduplicates roots that resolve to the same Git top-level, and creates one Source Control section per distinct repository. It calls authenticated Git API routes under `/api/vscode-web/git/*` to list working tree changes and opens individual diff editors comparing `HEAD` with working tree content through read-only `foxwarm-git:` virtual documents. Each repository also has an `Open Changes` action backed by Code OSS's multi-diff editor. Changed submodules show the old/new gitlink commit IDs; the backend obtains an unstaged submodule's current HEAD by reading its Git metadata directly and never adds a fallback Git process for this detail.
 
 Current MVP behavior:
 

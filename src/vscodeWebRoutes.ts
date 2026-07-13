@@ -240,11 +240,11 @@ function getGitFileRequest(req: express.Request): { nodeId: string; workspace: s
   return { nodeId, workspace, relativePath, fullPath };
 }
 
-function runGit(workspace: string, args: string[], options: { maxStdoutBytes?: number; timeoutMs?: number } = {}): Promise<Buffer> {
+function runGit(workspace: string, args: string[], options: { maxStdoutBytes?: number; timeoutMs?: number; safeDirectory?: string } = {}): Promise<Buffer> {
   const maxStdoutBytes = options.maxStdoutBytes ?? MAX_GIT_OUTPUT_BYTES;
   const timeoutMs = options.timeoutMs ?? 10_000;
   return new Promise((resolve, reject) => {
-    const child = spawn('git', ['-c', `safe.directory=${workspace}`, '-C', workspace, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('git', ['-c', `safe.directory=${options.safeDirectory ?? workspace}`, '-C', workspace, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -311,9 +311,26 @@ function classifyGitStatus(indexStatus: string, workingTreeStatus: string, oldPa
   return 'unknown';
 }
 
-function parseGitStatusPorcelainV2(raw: Buffer): Array<{ path: string; oldPath?: string; indexStatus: string; workingTreeStatus: string; kind: string }> {
+type GitSubmoduleChange = {
+  headOid: string;
+  indexOid: string;
+  worktreeOid?: string;
+  dirty: boolean;
+};
+
+type GitStatusChange = {
+  path: string;
+  oldPath?: string;
+  indexStatus: string;
+  workingTreeStatus: string;
+  kind: string;
+  submoduleState?: string;
+  submodule?: GitSubmoduleChange;
+};
+
+function parseGitStatusPorcelainV2(raw: Buffer): GitStatusChange[] {
   const records = raw.toString('utf8').split('\0').filter(Boolean);
-  const changes: Array<{ path: string; oldPath?: string; indexStatus: string; workingTreeStatus: string; kind: string }> = [];
+  const changes: GitStatusChange[] = [];
   for (let i = 0; i < records.length; i += 1) {
     const record = records[i];
     if (record.startsWith('? ')) {
@@ -326,26 +343,126 @@ function parseGitStatusPorcelainV2(raw: Buffer): Array<{ path: string; oldPath?:
     if (record.startsWith('1 ')) {
       const parts = record.split(' ');
       const xy = parts[1] || '..';
+      const submoduleState = parts[2] || 'N...';
       const relativePath = parts.slice(8).join(' ');
       if (relativePath) {
-        changes.push({ path: relativePath, indexStatus: xy[0] || '.', workingTreeStatus: xy[1] || '.', kind: classifyGitStatus(xy[0] || '.', xy[1] || '.') });
+        changes.push({
+          path: relativePath,
+          indexStatus: xy[0] || '.',
+          workingTreeStatus: xy[1] || '.',
+          kind: classifyGitStatus(xy[0] || '.', xy[1] || '.'),
+          ...(submoduleState.startsWith('S') ? {
+            submoduleState,
+            submodule: {
+              headOid: parts[6] || '',
+              indexOid: parts[7] || '',
+              dirty: submoduleState.slice(2).includes('M') || submoduleState.slice(2).includes('U'),
+            },
+          } : {}),
+        });
       }
       continue;
     }
     if (record.startsWith('2 ')) {
       const parts = record.split(' ');
       const xy = parts[1] || '..';
+      const submoduleState = parts[2] || 'N...';
       const relativePath = parts.slice(9).join(' ');
       const oldPath = records[i + 1];
       if (oldPath !== undefined) {
         i += 1;
       }
       if (relativePath) {
-        changes.push({ path: relativePath, oldPath, indexStatus: xy[0] || '.', workingTreeStatus: xy[1] || '.', kind: classifyGitStatus(xy[0] || '.', xy[1] || '.', oldPath) });
+        changes.push({
+          path: relativePath,
+          oldPath,
+          indexStatus: xy[0] || '.',
+          workingTreeStatus: xy[1] || '.',
+          kind: classifyGitStatus(xy[0] || '.', xy[1] || '.', oldPath),
+          ...(submoduleState.startsWith('S') ? {
+            submoduleState,
+            submodule: {
+              headOid: parts[6] || '',
+              indexOid: parts[7] || '',
+              dirty: submoduleState.slice(2).includes('M') || submoduleState.slice(2).includes('U'),
+            },
+          } : {}),
+        });
       }
     }
   }
   return changes;
+}
+
+function isPathInside(parentPath: string, childPath: string): boolean {
+  const relative = path.relative(parentPath, childPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+async function readSmallTextFile(filePath: string): Promise<string | undefined> {
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile() || stat.size > 4 * 1024 * 1024) return undefined;
+    return (await fs.readFile(filePath, 'utf8')).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveGitDirectory(worktreePath: string): Promise<string | undefined> {
+  const dotGitPath = path.join(worktreePath, '.git');
+  try {
+    const stat = await fs.stat(dotGitPath);
+    if (stat.isDirectory()) return dotGitPath;
+    if (!stat.isFile()) return undefined;
+  } catch {
+    return undefined;
+  }
+  const pointer = await readSmallTextFile(dotGitPath);
+  const match = pointer?.match(/^gitdir:\s*(.+)$/i);
+  if (!match) return undefined;
+  return path.resolve(worktreePath, match[1]);
+}
+
+async function readGitHeadOid(worktreePath: string): Promise<string | undefined> {
+  const gitDirectory = await resolveGitDirectory(worktreePath);
+  if (!gitDirectory) return undefined;
+  const head = await readSmallTextFile(path.join(gitDirectory, 'HEAD'));
+  if (!head) return undefined;
+  if (/^[0-9a-f]{40,64}$/i.test(head)) return head.toLowerCase();
+  const refMatch = head.match(/^ref:\s*(refs\/.+)$/);
+  if (!refMatch) return undefined;
+  const refName = path.posix.normalize(refMatch[1].replace(/\\/g, '/'));
+  if (!refName.startsWith('refs/') || refName.includes('../')) return undefined;
+  const looseRefPath = path.resolve(gitDirectory, ...refName.split('/'));
+  if (!isPathInside(gitDirectory, looseRefPath)) return undefined;
+  const looseRef = await readSmallTextFile(looseRefPath);
+  if (looseRef && /^[0-9a-f]{40,64}$/i.test(looseRef)) return looseRef.toLowerCase();
+  const packedRefs = await readSmallTextFile(path.join(gitDirectory, 'packed-refs'));
+  if (!packedRefs) return undefined;
+  for (const line of packedRefs.split(/\r?\n/)) {
+    if (!line || line.startsWith('#') || line.startsWith('^')) continue;
+    const separator = line.indexOf(' ');
+    if (separator < 1 || line.slice(separator + 1) !== refName) continue;
+    const oid = line.slice(0, separator);
+    return /^[0-9a-f]{40,64}$/i.test(oid) ? oid.toLowerCase() : undefined;
+  }
+  return undefined;
+}
+
+async function enrichSubmoduleChanges(topLevel: string, changes: GitStatusChange[]): Promise<GitStatusChange[]> {
+  return Promise.all(changes.map(async (change) => {
+    if (!change.submodule) return change;
+    const submodulePath = resolveWorkspaceChild(topLevel, normalizeGitRelativePath(change.path));
+    const worktreeOid = await readGitHeadOid(submodulePath);
+    return {
+      ...change,
+      submodule: {
+        ...change.submodule,
+        ...(worktreeOid ? { worktreeOid } : {}),
+      },
+    };
+  }));
 }
 
 function registerAuthenticatedStatic(httpServer: HttpServer, mountPath: string, directory: string): void {
@@ -1019,13 +1136,14 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     handler: async (req, res) => {
       try {
         const { nodeId, workspace } = getGitRequestBase(req);
-        const topLevel = (await runGit(workspace, ['rev-parse', '--show-toplevel'], { maxStdoutBytes: 1024 * 1024 })).toString('utf8').trim();
-        const rawStatus = await runGit(workspace, ['status', '--porcelain=v2', '-z', '-uall'], { maxStdoutBytes: MAX_GIT_OUTPUT_BYTES });
+        const topLevel = (await runGit(workspace, ['rev-parse', '--show-toplevel'], { maxStdoutBytes: 1024 * 1024, safeDirectory: '*' })).toString('utf8').trim();
+        const rawStatus = await runGit(topLevel, ['status', '--porcelain=v2', '-z', '-uall'], { maxStdoutBytes: MAX_GIT_OUTPUT_BYTES });
+        const changes = await enrichSubmoduleChanges(topLevel, parseGitStatusPorcelainV2(rawStatus));
         res.json({
           nodeId,
-          workspace,
+          workspace: topLevel,
           topLevel,
-          changes: parseGitStatusPorcelainV2(rawStatus),
+          changes,
         });
       } catch (error) {
         sendFsError(res, error);

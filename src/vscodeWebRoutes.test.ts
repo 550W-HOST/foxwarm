@@ -277,6 +277,52 @@ test('VS Code Web git API reports status and returns base/working content', asyn
   });
 });
 
+test('VS Code Web git status reports submodule commit changes without a separate git diff', async () => {
+  await withTempDir(async (dirPath) => {
+    const sourcePath = path.join(dirPath, 'submodule-source');
+    const repoPath = path.join(dirPath, 'parent');
+    await fs.ensureDir(sourcePath);
+    await fs.ensureDir(repoPath);
+    for (const target of [sourcePath, repoPath]) {
+      await execFileAsync('git', ['init'], { cwd: target });
+      await execFileAsync('git', ['config', 'user.email', 'foxwarm-test@example.invalid'], { cwd: target });
+      await execFileAsync('git', ['config', 'user.name', 'Foxwarm Test'], { cwd: target });
+    }
+    await fs.writeFile(path.join(sourcePath, 'tracked.txt'), 'before\n');
+    await execFileAsync('git', ['add', 'tracked.txt'], { cwd: sourcePath });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: sourcePath });
+    await execFileAsync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', sourcePath, 'modules/sub'], { cwd: repoPath });
+    await execFileAsync('git', ['commit', '-m', 'add submodule'], { cwd: repoPath });
+
+    const checkoutPath = path.join(repoPath, 'modules/sub');
+    await execFileAsync('git', ['config', 'user.email', 'foxwarm-test@example.invalid'], { cwd: checkoutPath });
+    await execFileAsync('git', ['config', 'user.name', 'Foxwarm Test'], { cwd: checkoutPath });
+    const oldOid = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: checkoutPath })).stdout.trim();
+    await fs.writeFile(path.join(checkoutPath, 'tracked.txt'), 'after\n');
+    await execFileAsync('git', ['add', 'tracked.txt'], { cwd: checkoutPath });
+    await execFileAsync('git', ['commit', '-m', 'advance submodule'], { cwd: checkoutPath });
+    const newOid = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: checkoutPath })).stdout.trim();
+
+    await withServer(async (_server, baseUrl) => {
+      const workspace = path.join(repoPath, 'modules');
+      const status = await fetch(`${baseUrl}/api/vscode-web/git/status?nodeId=master&workspace=${encodeURIComponent(workspace)}`, { headers: bearerHeaders() });
+      assert.equal(status.status, 200);
+      const payload = await status.json() as {
+        workspace: string;
+        changes: Array<{ path: string; submodule?: { headOid: string; indexOid: string; worktreeOid?: string; dirty: boolean } }>;
+      };
+      assert.equal(payload.workspace, repoPath);
+      const change = payload.changes.find((candidate) => candidate.path === 'modules/sub');
+      assert.deepEqual(change?.submodule, {
+        headOid: oldOid,
+        indexOid: oldOid,
+        worktreeOid: newOid,
+        dirty: false,
+      });
+    });
+  });
+});
+
 test('VS Code Web git API rejects unsupported nodes and path traversal', async () => {
   await withTempDir(async (repoPath) => {
     await execFileAsync('git', ['init'], { cwd: repoPath });

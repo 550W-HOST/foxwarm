@@ -2,12 +2,21 @@ import * as vscode from 'vscode';
 import { buildFoxwarmNodeUriString, normalizeGitRelativePath, parseFoxwarmUri } from './foxwarmUri';
 export { buildFoxwarmNodeUriString, normalizeGitRelativePath, parseFoxwarmUri } from './foxwarmUri';
 
+type GitSubmoduleChange = {
+  headOid: string;
+  indexOid: string;
+  worktreeOid?: string;
+  dirty: boolean;
+};
+
 type GitChange = {
   path: string;
   oldPath?: string;
   indexStatus: string;
   workingTreeStatus: string;
   kind: string;
+  submoduleState?: string;
+  submodule?: GitSubmoduleChange;
 };
 
 type GitStatusResponse = {
@@ -17,11 +26,24 @@ type GitStatusResponse = {
   changes: GitChange[];
 };
 
+type WorkspaceTarget = {
+  nodeId: string;
+  realPath: string;
+  uri: vscode.Uri;
+};
+
+type RepositoryState = {
+  key: string;
+  workspace: WorkspaceTarget;
+  sourceControl: vscode.SourceControl;
+  changesGroup: vscode.SourceControlResourceGroup;
+  changes: GitChange[];
+};
+
 const GIT_API_PREFIX = '/api/vscode-web/git';
 let gitApiBase = GIT_API_PREFIX;
-let sourceControl: vscode.SourceControl | undefined;
-let changesGroup: vscode.SourceControlResourceGroup | undefined;
-let currentWorkspace: { nodeId: string; realPath: string; uri: vscode.Uri } | undefined;
+let sourceControlSequence = 0;
+const repositories = new Map<string, RepositoryState>();
 
 function deriveGitApiBase(extensionUri: vscode.Uri): string {
   if (extensionUri.scheme !== 'http' && extensionUri.scheme !== 'https') {
@@ -43,13 +65,20 @@ function queryString(params: Record<string, string | undefined>): string {
   return search.toString();
 }
 
-function getFoxwarmWorkspace(): { nodeId: string; realPath: string; uri: vscode.Uri } | undefined {
-  const folder = vscode.workspace.workspaceFolders?.find((candidate) => candidate.uri.scheme === 'foxwarm');
-  if (!folder) {
-    return undefined;
-  }
-  const target = parseFoxwarmUri(folder.uri);
-  return { nodeId: target.nodeId, realPath: target.realPath, uri: folder.uri };
+function getFoxwarmWorkspaces(): WorkspaceTarget[] {
+  return (vscode.workspace.workspaceFolders || [])
+    .filter((folder) => folder.uri.scheme === 'foxwarm')
+    .map((folder) => {
+      const target = parseFoxwarmUri(folder.uri);
+      return { nodeId: target.nodeId, realPath: target.realPath, uri: folder.uri };
+    })
+    .sort((left, right) => right.realPath.length - left.realPath.length);
+}
+
+function isPathWithin(parentPath: string, childPath: string): boolean {
+  const parent = parentPath.replace(/\/+$/, '') || '/';
+  const child = childPath.replace(/\/+$/, '') || '/';
+  return child === parent || parent === '/' || child.startsWith(`${parent}/`);
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -66,50 +95,65 @@ function getChangeLabel(change: GitChange): string {
   return change.oldPath ? `${change.oldPath} → ${change.path}` : change.path;
 }
 
+function shortOid(oid: string | undefined): string | undefined {
+  return oid ? oid.slice(0, 12) : undefined;
+}
+
 function getChangeDescription(change: GitChange): string {
   const xy = `${change.indexStatus}${change.workingTreeStatus}`;
+  if (change.submodule) {
+    const oldOid = shortOid(change.submodule.headOid);
+    const newOid = shortOid(change.submodule.worktreeOid || change.submodule.indexOid);
+    const transition = oldOid && newOid ? ` ${oldOid} → ${newOid}${change.submodule.dirty ? '-dirty' : ''}` : '';
+    return `submodule (${xy})${transition}`;
+  }
   return `${change.kind} (${xy})`;
 }
 
-function getWorkingUri(change: GitChange): vscode.Uri {
-  if (!currentWorkspace) {
-    throw new Error('No Foxwarm workspace is active.');
-  }
-  return vscode.Uri.parse(buildFoxwarmNodeUriString(currentWorkspace.nodeId, `${currentWorkspace.realPath.replace(/\/+$/, '')}/${normalizeGitRelativePath(change.path)}`));
+function getWorkingUri(repository: RepositoryState, change: GitChange): vscode.Uri {
+  const root = repository.workspace.realPath.replace(/\/+$/, '');
+  return vscode.Uri.parse(buildFoxwarmNodeUriString(repository.workspace.nodeId, `${root}/${normalizeGitRelativePath(change.path)}`));
 }
 
-function getGitContentUri(change: GitChange, side: 'base' | 'working'): vscode.Uri {
-  if (!currentWorkspace) {
-    throw new Error('No Foxwarm workspace is active.');
-  }
+function getSubmoduleOid(change: GitChange, side: 'base' | 'working'): string | undefined {
+  if (!change.submodule) return undefined;
+  return side === 'base'
+    ? change.submodule.headOid
+    : (change.submodule.worktreeOid || change.submodule.indexOid);
+}
+
+function getGitContentUri(repository: RepositoryState, change: GitChange, side: 'base' | 'working'): vscode.Uri {
+  const relativePath = side === 'base' && change.oldPath ? change.oldPath : change.path;
   const query = queryString({
-    nodeId: currentWorkspace.nodeId,
-    workspace: currentWorkspace.realPath,
-    path: change.path,
+    nodeId: repository.workspace.nodeId,
+    workspace: repository.workspace.realPath,
+    path: relativePath,
     side,
     ref: 'HEAD',
+    submoduleOid: getSubmoduleOid(change, side),
+    submoduleDirty: side === 'working' && change.submodule?.dirty ? 'true' : undefined,
   });
   return vscode.Uri.from({
     scheme: 'foxwarm-git',
-    authority: `node+${encodeURIComponent(currentWorkspace.nodeId)}`,
-    path: `/${side}/${normalizeGitRelativePath(change.path)}`,
+    authority: `node+${encodeURIComponent(repository.workspace.nodeId)}`,
+    path: `/${side}/${normalizeGitRelativePath(relativePath)}`,
     query,
   });
 }
 
-async function openChange(change: GitChange): Promise<void> {
-  const left = getGitContentUri(change, 'base');
-  const right = getGitContentUri(change, 'working');
+async function openChange(repository: RepositoryState, change: GitChange): Promise<void> {
+  const left = getGitContentUri(repository, change, 'base');
+  const right = getGitContentUri(repository, change, 'working');
   await vscode.commands.executeCommand('vscode.diff', left, right, `${getChangeLabel(change)} (HEAD ↔ Working Tree)`);
 }
 
-function toResourceState(change: GitChange): vscode.SourceControlResourceState {
+function toResourceState(repository: RepositoryState, change: GitChange): vscode.SourceControlResourceState {
   return {
-    resourceUri: getWorkingUri(change),
+    resourceUri: getWorkingUri(repository, change),
     command: {
       command: 'foxwarm-scm.openChange',
       title: 'Open Change',
-      arguments: [change],
+      arguments: [repository.key, change],
     },
     decorations: {
       tooltip: getChangeDescription(change),
@@ -119,32 +163,125 @@ function toResourceState(change: GitChange): vscode.SourceControlResourceState {
   };
 }
 
-async function refresh(): Promise<void> {
-  const workspace = getFoxwarmWorkspace();
-  currentWorkspace = workspace;
-  if (!workspace) {
-    if (sourceControl) {
-      sourceControl.dispose();
-      sourceControl = undefined;
-      changesGroup = undefined;
+function toMultiDiffResource(repository: RepositoryState, change: GitChange): { originalUri?: vscode.Uri; modifiedUri?: vscode.Uri } {
+  if (change.kind === 'added' || change.kind === 'untracked') {
+    return { modifiedUri: getGitContentUri(repository, change, 'working') };
+  }
+  if (change.kind === 'deleted') {
+    return { originalUri: getGitContentUri(repository, change, 'base') };
+  }
+  return {
+    originalUri: getGitContentUri(repository, change, 'base'),
+    modifiedUri: getGitContentUri(repository, change, 'working'),
+  };
+}
+
+async function pickRepository(): Promise<RepositoryState | undefined> {
+  const available = [...repositories.values()];
+  if (available.length <= 1) return available[0];
+  const picked = await vscode.window.showQuickPick(
+    available.map((repository) => ({
+      label: repository.workspace.realPath.split('/').filter(Boolean).pop() || '/',
+      description: repository.workspace.realPath,
+      repository,
+    })),
+    { placeHolder: 'Select a Foxwarm Git repository' },
+  );
+  return picked?.repository;
+}
+
+function findRepository(argument: unknown): RepositoryState | undefined {
+  if (typeof argument === 'string') return repositories.get(argument);
+  if (argument && typeof argument === 'object') {
+    const rootUri = (argument as { rootUri?: vscode.Uri }).rootUri;
+    if (rootUri) {
+      return [...repositories.values()].find((repository) => repository.sourceControl.rootUri?.toString() === rootUri.toString());
     }
+  }
+  return undefined;
+}
+
+async function openAllChanges(argument?: unknown): Promise<void> {
+  const repository = findRepository(argument) || await pickRepository();
+  if (!repository) return;
+  if (repository.changes.length === 0) {
+    void vscode.window.showInformationMessage('There are no changes in this repository.');
     return;
   }
-  if (!sourceControl) {
-    sourceControl = vscode.scm.createSourceControl('foxwarm-scm', 'Foxwarm Git', workspace.uri);
-    sourceControl.acceptInputCommand = { command: 'foxwarm-scm.refresh', title: 'Refresh Git Status' };
-    changesGroup = sourceControl.createResourceGroup('changes', 'Changes');
+  const name = repository.workspace.realPath.split('/').filter(Boolean).pop() || '/';
+  await vscode.commands.executeCommand('_workbench.openMultiDiffEditor', {
+    multiDiffSourceUri: vscode.Uri.from({
+      scheme: 'foxwarm-scm',
+      authority: `node+${encodeURIComponent(repository.workspace.nodeId)}`,
+      path: repository.workspace.realPath,
+    }),
+    title: `Changes in ${name}`,
+    resources: repository.changes.map((change) => toMultiDiffResource(repository, change)),
+  });
+}
+
+async function discoverRepositories(): Promise<Array<{ workspace: WorkspaceTarget; status: GitStatusResponse }>> {
+  const discovered: Array<{ workspace: WorkspaceTarget; status: GitStatusResponse }> = [];
+  for (const workspace of getFoxwarmWorkspaces()) {
+    if (discovered.some((entry) => entry.workspace.nodeId === workspace.nodeId && isPathWithin(entry.workspace.realPath, workspace.realPath))) {
+      continue;
+    }
+    try {
+      const url = `${gitApiBase}/status?${queryString({ nodeId: workspace.nodeId, workspace: workspace.realPath })}`;
+      const status = await fetchJson<GitStatusResponse>(url);
+      const topLevel = status.topLevel || status.workspace;
+      const repositoryWorkspace = {
+        nodeId: status.nodeId,
+        realPath: topLevel,
+        uri: vscode.Uri.parse(buildFoxwarmNodeUriString(status.nodeId, topLevel)),
+      };
+      if (!discovered.some((entry) => entry.workspace.nodeId === repositoryWorkspace.nodeId && entry.workspace.realPath === repositoryWorkspace.realPath)) {
+        discovered.push({ workspace: repositoryWorkspace, status });
+      }
+    } catch (error) {
+      console.debug(`Foxwarm SCM skipped non-Git workspace ${workspace.realPath}`, error);
+    }
   }
-  sourceControl.rootUri = workspace.uri;
-  sourceControl.inputBox.placeholder = 'Foxwarm Git status is read-only in this MVP';
-  const url = `${gitApiBase}/status?${queryString({ nodeId: workspace.nodeId, workspace: workspace.realPath })}`;
-  const status = await fetchJson<GitStatusResponse>(url);
-  changesGroup!.resourceStates = status.changes.map(toResourceState);
-  sourceControl.count = status.changes.length;
+  return discovered;
+}
+
+async function refresh(): Promise<void> {
+  const discovered = await discoverRepositories();
+  const seen = new Set<string>();
+  for (const entry of discovered) {
+    const key = `${entry.workspace.nodeId}:${entry.workspace.realPath}`;
+    seen.add(key);
+    let repository = repositories.get(key);
+    if (!repository) {
+      const id = `foxwarm-scm-${++sourceControlSequence}`;
+      const name = entry.workspace.realPath.split('/').filter(Boolean).pop() || '/';
+      const sourceControl = vscode.scm.createSourceControl(id, `Foxwarm Git: ${name}`, entry.workspace.uri);
+      const changesGroup = sourceControl.createResourceGroup('changes', 'Changes');
+      repository = { key, workspace: entry.workspace, sourceControl, changesGroup, changes: [] };
+      repositories.set(key, repository);
+    }
+    repository.workspace = entry.workspace;
+    repository.changes = entry.status.changes;
+    repository.sourceControl.rootUri = entry.workspace.uri;
+    repository.sourceControl.inputBox.placeholder = 'Foxwarm Git status is read-only';
+    repository.changesGroup.resourceStates = repository.changes.map((change) => toResourceState(repository!, change));
+    repository.sourceControl.count = repository.changes.length;
+  }
+  for (const [key, repository] of repositories) {
+    if (seen.has(key)) continue;
+    repository.sourceControl.dispose();
+    repositories.delete(key);
+  }
 }
 
 class FoxwarmGitContentProvider implements vscode.TextDocumentContentProvider {
   async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+    const params = new URLSearchParams(uri.query);
+    const submoduleOid = params.get('submoduleOid');
+    if (submoduleOid) {
+      const dirty = params.get('submoduleDirty') === 'true' ? '-dirty' : '';
+      return `Subproject commit ${submoduleOid}${dirty}\n`;
+    }
     const response = await fetch(`${gitApiBase}/content?${uri.query}`, { credentials: 'include' });
     if (response.status === 404) {
       return '';
@@ -162,7 +299,11 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider('foxwarm-git', new FoxwarmGitContentProvider()),
     vscode.commands.registerCommand('foxwarm-scm.refresh', () => refresh()),
-    vscode.commands.registerCommand('foxwarm-scm.openChange', (change: GitChange) => openChange(change)),
+    vscode.commands.registerCommand('foxwarm-scm.openChange', (repositoryKey: string, change: GitChange) => {
+      const repository = repositories.get(repositoryKey);
+      return repository ? openChange(repository, change) : undefined;
+    }),
+    vscode.commands.registerCommand('foxwarm-scm.openAllChanges', (sourceControl?: unknown) => openAllChanges(sourceControl)),
     vscode.workspace.onDidChangeWorkspaceFolders(() => refresh()),
   );
   void refresh().catch((error) => {
@@ -172,5 +313,6 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-  sourceControl?.dispose();
+  for (const repository of repositories.values()) repository.sourceControl.dispose();
+  repositories.clear();
 }

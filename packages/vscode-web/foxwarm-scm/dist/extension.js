@@ -91,9 +91,8 @@ function normalizeGitRelativePath(value) {
 // src/extension.ts
 var GIT_API_PREFIX = "/api/vscode-web/git";
 var gitApiBase = GIT_API_PREFIX;
-var sourceControl;
-var changesGroup;
-var currentWorkspace;
+var sourceControlSequence = 0;
+var repositories = /* @__PURE__ */ new Map();
 function deriveGitApiBase(extensionUri) {
   if (extensionUri.scheme !== "http" && extensionUri.scheme !== "https") {
     return GIT_API_PREFIX;
@@ -112,13 +111,16 @@ function queryString(params) {
   }
   return search.toString();
 }
-function getFoxwarmWorkspace() {
-  const folder = vscode.workspace.workspaceFolders?.find((candidate) => candidate.uri.scheme === "foxwarm");
-  if (!folder) {
-    return void 0;
-  }
-  const target = parseFoxwarmUri(folder.uri);
-  return { nodeId: target.nodeId, realPath: target.realPath, uri: folder.uri };
+function getFoxwarmWorkspaces() {
+  return (vscode.workspace.workspaceFolders || []).filter((folder) => folder.uri.scheme === "foxwarm").map((folder) => {
+    const target = parseFoxwarmUri(folder.uri);
+    return { nodeId: target.nodeId, realPath: target.realPath, uri: folder.uri };
+  }).sort((left, right) => right.realPath.length - left.realPath.length);
+}
+function isPathWithin(parentPath, childPath) {
+  const parent = parentPath.replace(/\/+$/, "") || "/";
+  const child = childPath.replace(/\/+$/, "") || "/";
+  return child === parent || parent === "/" || child.startsWith(`${parent}/`);
 }
 async function fetchJson(url) {
   const response = await fetch(url, { credentials: "include" });
@@ -132,46 +134,57 @@ async function fetchJson(url) {
 function getChangeLabel(change) {
   return change.oldPath ? `${change.oldPath} \u2192 ${change.path}` : change.path;
 }
+function shortOid(oid) {
+  return oid ? oid.slice(0, 12) : void 0;
+}
 function getChangeDescription(change) {
   const xy = `${change.indexStatus}${change.workingTreeStatus}`;
+  if (change.submodule) {
+    const oldOid = shortOid(change.submodule.headOid);
+    const newOid = shortOid(change.submodule.worktreeOid || change.submodule.indexOid);
+    const transition = oldOid && newOid ? ` ${oldOid} \u2192 ${newOid}${change.submodule.dirty ? "-dirty" : ""}` : "";
+    return `submodule (${xy})${transition}`;
+  }
   return `${change.kind} (${xy})`;
 }
-function getWorkingUri(change) {
-  if (!currentWorkspace) {
-    throw new Error("No Foxwarm workspace is active.");
-  }
-  return vscode.Uri.parse(buildFoxwarmNodeUriString(currentWorkspace.nodeId, `${currentWorkspace.realPath.replace(/\/+$/, "")}/${normalizeGitRelativePath(change.path)}`));
+function getWorkingUri(repository, change) {
+  const root = repository.workspace.realPath.replace(/\/+$/, "");
+  return vscode.Uri.parse(buildFoxwarmNodeUriString(repository.workspace.nodeId, `${root}/${normalizeGitRelativePath(change.path)}`));
 }
-function getGitContentUri(change, side) {
-  if (!currentWorkspace) {
-    throw new Error("No Foxwarm workspace is active.");
-  }
+function getSubmoduleOid(change, side) {
+  if (!change.submodule) return void 0;
+  return side === "base" ? change.submodule.headOid : change.submodule.worktreeOid || change.submodule.indexOid;
+}
+function getGitContentUri(repository, change, side) {
+  const relativePath = side === "base" && change.oldPath ? change.oldPath : change.path;
   const query = queryString({
-    nodeId: currentWorkspace.nodeId,
-    workspace: currentWorkspace.realPath,
-    path: change.path,
+    nodeId: repository.workspace.nodeId,
+    workspace: repository.workspace.realPath,
+    path: relativePath,
     side,
-    ref: "HEAD"
+    ref: "HEAD",
+    submoduleOid: getSubmoduleOid(change, side),
+    submoduleDirty: side === "working" && change.submodule?.dirty ? "true" : void 0
   });
   return vscode.Uri.from({
     scheme: "foxwarm-git",
-    authority: `node+${encodeURIComponent(currentWorkspace.nodeId)}`,
-    path: `/${side}/${normalizeGitRelativePath(change.path)}`,
+    authority: `node+${encodeURIComponent(repository.workspace.nodeId)}`,
+    path: `/${side}/${normalizeGitRelativePath(relativePath)}`,
     query
   });
 }
-async function openChange(change) {
-  const left = getGitContentUri(change, "base");
-  const right = getGitContentUri(change, "working");
+async function openChange(repository, change) {
+  const left = getGitContentUri(repository, change, "base");
+  const right = getGitContentUri(repository, change, "working");
   await vscode.commands.executeCommand("vscode.diff", left, right, `${getChangeLabel(change)} (HEAD \u2194 Working Tree)`);
 }
-function toResourceState(change) {
+function toResourceState(repository, change) {
   return {
-    resourceUri: getWorkingUri(change),
+    resourceUri: getWorkingUri(repository, change),
     command: {
       command: "foxwarm-scm.openChange",
       title: "Open Change",
-      arguments: [change]
+      arguments: [repository.key, change]
     },
     decorations: {
       tooltip: getChangeDescription(change),
@@ -180,31 +193,120 @@ function toResourceState(change) {
     }
   };
 }
-async function refresh() {
-  const workspace2 = getFoxwarmWorkspace();
-  currentWorkspace = workspace2;
-  if (!workspace2) {
-    if (sourceControl) {
-      sourceControl.dispose();
-      sourceControl = void 0;
-      changesGroup = void 0;
+function toMultiDiffResource(repository, change) {
+  if (change.kind === "added" || change.kind === "untracked") {
+    return { modifiedUri: getGitContentUri(repository, change, "working") };
+  }
+  if (change.kind === "deleted") {
+    return { originalUri: getGitContentUri(repository, change, "base") };
+  }
+  return {
+    originalUri: getGitContentUri(repository, change, "base"),
+    modifiedUri: getGitContentUri(repository, change, "working")
+  };
+}
+async function pickRepository() {
+  const available = [...repositories.values()];
+  if (available.length <= 1) return available[0];
+  const picked = await vscode.window.showQuickPick(
+    available.map((repository) => ({
+      label: repository.workspace.realPath.split("/").filter(Boolean).pop() || "/",
+      description: repository.workspace.realPath,
+      repository
+    })),
+    { placeHolder: "Select a Foxwarm Git repository" }
+  );
+  return picked?.repository;
+}
+function findRepository(argument) {
+  if (typeof argument === "string") return repositories.get(argument);
+  if (argument && typeof argument === "object") {
+    const rootUri = argument.rootUri;
+    if (rootUri) {
+      return [...repositories.values()].find((repository) => repository.sourceControl.rootUri?.toString() === rootUri.toString());
     }
+  }
+  return void 0;
+}
+async function openAllChanges(argument) {
+  const repository = findRepository(argument) || await pickRepository();
+  if (!repository) return;
+  if (repository.changes.length === 0) {
+    void vscode.window.showInformationMessage("There are no changes in this repository.");
     return;
   }
-  if (!sourceControl) {
-    sourceControl = vscode.scm.createSourceControl("foxwarm-scm", "Foxwarm Git", workspace2.uri);
-    sourceControl.acceptInputCommand = { command: "foxwarm-scm.refresh", title: "Refresh Git Status" };
-    changesGroup = sourceControl.createResourceGroup("changes", "Changes");
+  const name = repository.workspace.realPath.split("/").filter(Boolean).pop() || "/";
+  await vscode.commands.executeCommand("_workbench.openMultiDiffEditor", {
+    multiDiffSourceUri: vscode.Uri.from({
+      scheme: "foxwarm-scm",
+      authority: `node+${encodeURIComponent(repository.workspace.nodeId)}`,
+      path: repository.workspace.realPath
+    }),
+    title: `Changes in ${name}`,
+    resources: repository.changes.map((change) => toMultiDiffResource(repository, change))
+  });
+}
+async function discoverRepositories() {
+  const discovered = [];
+  for (const workspace2 of getFoxwarmWorkspaces()) {
+    if (discovered.some((entry) => entry.workspace.nodeId === workspace2.nodeId && isPathWithin(entry.workspace.realPath, workspace2.realPath))) {
+      continue;
+    }
+    try {
+      const url = `${gitApiBase}/status?${queryString({ nodeId: workspace2.nodeId, workspace: workspace2.realPath })}`;
+      const status = await fetchJson(url);
+      const topLevel = status.topLevel || status.workspace;
+      const repositoryWorkspace = {
+        nodeId: status.nodeId,
+        realPath: topLevel,
+        uri: vscode.Uri.parse(buildFoxwarmNodeUriString(status.nodeId, topLevel))
+      };
+      if (!discovered.some((entry) => entry.workspace.nodeId === repositoryWorkspace.nodeId && entry.workspace.realPath === repositoryWorkspace.realPath)) {
+        discovered.push({ workspace: repositoryWorkspace, status });
+      }
+    } catch (error) {
+      console.debug(`Foxwarm SCM skipped non-Git workspace ${workspace2.realPath}`, error);
+    }
   }
-  sourceControl.rootUri = workspace2.uri;
-  sourceControl.inputBox.placeholder = "Foxwarm Git status is read-only in this MVP";
-  const url = `${gitApiBase}/status?${queryString({ nodeId: workspace2.nodeId, workspace: workspace2.realPath })}`;
-  const status = await fetchJson(url);
-  changesGroup.resourceStates = status.changes.map(toResourceState);
-  sourceControl.count = status.changes.length;
+  return discovered;
+}
+async function refresh() {
+  const discovered = await discoverRepositories();
+  const seen = /* @__PURE__ */ new Set();
+  for (const entry of discovered) {
+    const key = `${entry.workspace.nodeId}:${entry.workspace.realPath}`;
+    seen.add(key);
+    let repository = repositories.get(key);
+    if (!repository) {
+      const id = `foxwarm-scm-${++sourceControlSequence}`;
+      const name = entry.workspace.realPath.split("/").filter(Boolean).pop() || "/";
+      const sourceControl = vscode.scm.createSourceControl(id, `Foxwarm Git: ${name}`, entry.workspace.uri);
+      const changesGroup = sourceControl.createResourceGroup("changes", "Changes");
+      repository = { key, workspace: entry.workspace, sourceControl, changesGroup, changes: [] };
+      repositories.set(key, repository);
+    }
+    repository.workspace = entry.workspace;
+    repository.changes = entry.status.changes;
+    repository.sourceControl.rootUri = entry.workspace.uri;
+    repository.sourceControl.inputBox.placeholder = "Foxwarm Git status is read-only";
+    repository.changesGroup.resourceStates = repository.changes.map((change) => toResourceState(repository, change));
+    repository.sourceControl.count = repository.changes.length;
+  }
+  for (const [key, repository] of repositories) {
+    if (seen.has(key)) continue;
+    repository.sourceControl.dispose();
+    repositories.delete(key);
+  }
 }
 var FoxwarmGitContentProvider = class {
   async provideTextDocumentContent(uri) {
+    const params = new URLSearchParams(uri.query);
+    const submoduleOid = params.get("submoduleOid");
+    if (submoduleOid) {
+      const dirty = params.get("submoduleDirty") === "true" ? "-dirty" : "";
+      return `Subproject commit ${submoduleOid}${dirty}
+`;
+    }
     const response = await fetch(`${gitApiBase}/content?${uri.query}`, { credentials: "include" });
     if (response.status === 404) {
       return "";
@@ -221,7 +323,11 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider("foxwarm-git", new FoxwarmGitContentProvider()),
     vscode.commands.registerCommand("foxwarm-scm.refresh", () => refresh()),
-    vscode.commands.registerCommand("foxwarm-scm.openChange", (change) => openChange(change)),
+    vscode.commands.registerCommand("foxwarm-scm.openChange", (repositoryKey, change) => {
+      const repository = repositories.get(repositoryKey);
+      return repository ? openChange(repository, change) : void 0;
+    }),
+    vscode.commands.registerCommand("foxwarm-scm.openAllChanges", (sourceControl) => openAllChanges(sourceControl)),
     vscode.workspace.onDidChangeWorkspaceFolders(() => refresh())
   );
   void refresh().catch((error) => {
@@ -230,6 +336,7 @@ function activate(context) {
   console.log(`Foxwarm SCM registered. apiBase=${gitApiBase}`);
 }
 function deactivate() {
-  sourceControl?.dispose();
+  for (const repository of repositories.values()) repository.sourceControl.dispose();
+  repositories.clear();
 }
 //# sourceMappingURL=extension.js.map

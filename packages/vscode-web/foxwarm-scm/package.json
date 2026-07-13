@@ -20,13 +20,25 @@
         "command": "foxwarm-scm.openChange",
         "title": "Open Change",
         "category": "Foxwarm SCM"
+      },
+      {
+        "command": "foxwarm-scm.openAllChanges",
+        "title": "Open Changes",
+        "category": "Foxwarm SCM",
+        "icon": "$(diff-multiple)"
       }
     ],
     "menus": {
       "scm/title": [
         {
           "command": "foxwarm-scm.refresh",
+          "when": "scmProvider =~ /^foxwarm-scm-/",
           "group": "navigation@10"
+        },
+        {
+          "command": "foxwarm-scm.openAllChanges",
+          "when": "scmProvider =~ /^foxwarm-scm-/",
+          "group": "navigation@20"
         }
       ]
     }
