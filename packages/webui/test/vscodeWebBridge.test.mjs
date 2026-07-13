@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -73,4 +73,13 @@ test('new-tab file targets are encoded as startup URL parameters', () => {
   assert.equal(url.searchParams.get('folderUri'), 'foxwarm://node+master/app')
   assert.equal(url.searchParams.get('openFilePath'), '/app/src/index.ts')
   assert.equal(url.searchParams.get('startLine'), '7')
+})
+
+test('tool Code paths keep native text styling and only add link affordance', async () => {
+  const source = await readFile(path.join(webuiRoot, 'src/components/ToolTimelineItems.tsx'), 'utf8')
+  const start = source.indexOf('const ToolCodePath')
+  const end = source.indexOf('const isLegacyDiffToolName', start)
+  const component = start >= 0 && end > start ? source.slice(start, end) : ''
+  assert.match(component, /hover:underline cursor-pointer/)
+  assert.doesNotMatch(component, /Code2|text-blue|dark:text-blue|h-3|w-3/)
 })

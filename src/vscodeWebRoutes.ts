@@ -15,9 +15,9 @@ const VSCODE_WEB_TERMINAL_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxw
 const VSCODE_WEB_SCM_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-scm`;
 const VSCODE_WEB_ASSET_DIR_ENV = 'FOXWARM_VSCODE_WEB_ASSET_DIR';
 const VSCODE_WEB_DEFAULT_FOLDER_URI_ENV = 'FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI';
-const VSCODE_WEB_EMBEDDED_WORKSPACE_PATH_ENV = 'FOXWARM_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH';
+const VSCODE_WEB_WORKSPACE_PATH_ENV = 'FOXWARM_VSCODE_WEB_WORKSPACE_PATH';
 const DEFAULT_VSCODE_WEB_ASSET_DIR = path.join(BASE_DIR, 'packages', 'vscode-web', 'assets', 'vscode-web');
-const DEFAULT_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH = path.join(STATE_DIR, 'vscode-web', 'embedded.code-workspace');
+const DEFAULT_VSCODE_WEB_WORKSPACE_PATH = path.join(STATE_DIR, 'vscode-web', 'foxwarm.code-workspace');
 const MAX_WRITE_BYTES = 50 * 1024 * 1024;
 const MAX_READ_BYTES = 50 * 1024 * 1024;
 const MAX_GIT_OUTPUT_BYTES = 10 * 1024 * 1024;
@@ -466,11 +466,11 @@ function buildMasterFoxwarmUri(fullPath: string): string {
   return `foxwarm://node+master${encodedPath}`;
 }
 
-function ensureEmbeddedWorkspace(initialFolderUri: string): string {
+function ensureFoxwarmWorkspace(initialFolderUri: string): string {
   toFoxwarmFolderUriComponents(initialFolderUri);
-  const workspacePath = process.env[VSCODE_WEB_EMBEDDED_WORKSPACE_PATH_ENV]?.trim()
-    ? path.resolve(process.env[VSCODE_WEB_EMBEDDED_WORKSPACE_PATH_ENV]!.trim())
-    : DEFAULT_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH;
+  const workspacePath = process.env[VSCODE_WEB_WORKSPACE_PATH_ENV]?.trim()
+    ? path.resolve(process.env[VSCODE_WEB_WORKSPACE_PATH_ENV]!.trim())
+    : DEFAULT_VSCODE_WEB_WORKSPACE_PATH;
   if (!fs.existsSync(workspacePath)) {
     fs.outputJsonSync(workspacePath, {
       folders: [{ uri: initialFolderUri }],
@@ -514,7 +514,7 @@ function buildWorkbenchConfiguration(req: express.Request) {
     callbackRoute,
     configuration: {
       ...(embeddedWorkspace
-        ? { workspaceUri: toUriComponents(ensureEmbeddedWorkspace(requestedFolderUri)) }
+        ? { workspaceUri: toUriComponents(ensureFoxwarmWorkspace(requestedFolderUri)) }
         : { folderUri: toFoxwarmFolderUriComponents(requestedFolderUri) }),
       callbackRoute,
       productConfiguration: {

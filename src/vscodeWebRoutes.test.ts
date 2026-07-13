@@ -118,11 +118,11 @@ test('VS Code Web filesystem API is master-only and rejects non-absolute paths',
 
 test('VS Code Web workbench bootstrap is emitted when official static assets are prepared and assets remain authenticated', async () => {
   const previousAssetDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
-  const previousWorkspacePath = process.env.FOXWARM_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH;
+  const previousWorkspacePath = process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH;
   try {
     await withTempDir(async (dirPath) => {
       process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
-      process.env.FOXWARM_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH = path.join(dirPath, 'embedded.code-workspace');
+      process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH = path.join(dirPath, 'foxwarm.code-workspace');
       await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
@@ -155,14 +155,14 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
         assert.equal(embeddedWorkbench.status, 200);
         const embeddedHtml = await embeddedWorkbench.text();
         assert.match(embeddedHtml, /&quot;workspaceUri&quot;/);
-        assert.match(embeddedHtml, /embedded\.code-workspace/);
+        assert.match(embeddedHtml, /foxwarm\.code-workspace/);
       });
     });
   } finally {
     if (previousWorkspacePath === undefined) {
-      delete process.env.FOXWARM_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH;
+      delete process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH;
     } else {
-      process.env.FOXWARM_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH = previousWorkspacePath;
+      process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH = previousWorkspacePath;
     }
     if (previousAssetDir === undefined) {
       delete process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;

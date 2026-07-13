@@ -1,6 +1,6 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
-import { Code2, Eye, FileJson, Download } from 'lucide-react'
+import { Eye, FileJson, Download } from 'lucide-react'
 import {
   IconToggleButton,
   MiniToggleButton,
@@ -153,15 +153,14 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
   return (
     <button
       type="button"
-      className="inline-flex min-w-0 items-center gap-1 text-left text-blue-700 hover:underline dark:text-blue-300"
+      className="min-w-0 truncate text-left hover:underline cursor-pointer"
       title={`Open ${filePath} in Code`}
       onClick={(event) => {
         event.stopPropagation()
         onOpenCodeFile(filePath, lines)
       }}
     >
-      <Code2 className="h-3 w-3 shrink-0" aria-hidden="true" />
-      <span className="truncate">{prefix}{filePath}</span>
+      {prefix}{filePath}
     </button>
   )
 })
