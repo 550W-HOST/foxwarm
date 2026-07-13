@@ -148,3 +148,14 @@ test('session list comparator keeps pinned sessions first in every mode', async 
   assert.equal(shouldElevateSessionToRoot({ pinned: false }, 'default'), false)
   assert.equal(shouldElevateSessionToRoot({ pinned: false }, 'flat-time'), true)
 })
+
+test('session list labels omit parent and agent-main prefixes for child rows', async () => {
+  const { getSessionListDisplayId } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
+
+  assert.equal(getSessionListDisplayId('agent/main/task', 'agent/main'), '/task')
+  assert.equal(getSessionListDisplayId('agent/task', 'agent/main'), '/task')
+  assert.equal(getSessionListDisplayId('agent/task', 'agent/main', false), 'agent/task')
+  assert.equal(getSessionListDisplayId('other/task', 'agent/main'), 'other/task')
+  assert.equal(getSessionListDisplayId('agent/task', 'agent/parent'), 'agent/task')
+  assert.equal(getSessionListDisplayId('standalone', null), 'standalone')
+})

@@ -4,7 +4,7 @@ import { API_BASE_PATH } from '../config'
 import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
-import { compareSessionListSessions, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import { compareSessionListSessions, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 
 export interface Session {
   id: string
@@ -715,15 +715,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     })
   }
 
-  // Get display ID for a session, removing parent prefix if applicable
-  const getDisplayId = (session: Session, parentSession: Session | null) => {
-    if (!parentSession) return session.id
-    if (session.id.startsWith(parentSession.id)) {
-      return session.id.slice(parentSession.id.length)
-    }
-    return session.id
-  }
-
   // Handle right click
   const handleContextMenu = (e: React.MouseEvent, sessionId: string) => {
     e.preventDefault()
@@ -963,7 +954,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
-    const displayId = getDisplayId(session, parentSession)
+    const isDirectChild = !!parentSession && resolveSessionId(session.parentSessionId) === parentSession.id
+    const displayId = getSessionListDisplayId(session.id, parentSession?.id, isDirectChild)
 
     const isCurrentSession = resolvedCurrentSessionId === session.id
     const runtimeStateName = getSessionRuntimeStateName(session)
