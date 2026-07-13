@@ -16,6 +16,8 @@ This distinction matters here too.
 Examples in this area include:
 
 - `node_bootstrap_info`
+- `node_pair_list`
+- `node_pair_approve`
 - `list_nodes`
 - general inspection tools such as `search_tools`, `load_skill`, file tools, etc.
 
@@ -53,6 +55,9 @@ There is also a structured builtin tool for agent workflows:
 - `node_bootstrap_info`
 
 Use that tool when you want LLM-friendly bootstrap info instead of re-parsing prose help text.
+The pairing and agent-management helpers are not all injected into the default
+tool schema. Discover them with `search_tools`, then invoke them with
+`call_tool`.
 
 When this skill shows `/node ...` examples below, read them as **commands for the user to run on the master side** unless the surrounding text explicitly says otherwise.
 
@@ -90,6 +95,15 @@ So the relationship is:
 - **normal node** = general remote worker
 - **sandbox node** = a node deployed in a sandbox/test environment
 - **isolated agent** = an agent bound to a non-master node so its sessions inherit restricted execution
+
+Do not confuse these three controls:
+
+- `create_child_session({ node: "..." })` changes a session's `currentNode` for
+  ordinary remote execution; it does **not** isolate that session
+- `isolatedNode` is agent-level metadata; every session in that agent inherits
+  the same isolation boundary and bound node
+- a separate VM/container is an operator-provided environment boundary; Foxwarm
+  does not create that compute resource merely by binding an agent
 
 ## What isolated agents are mainly for
 
@@ -149,7 +163,22 @@ BASE_URL=http://YOUR_MASTER:3001
 
 On first run, the node connects with a **pairing token** and creates a pending pairing request.
 
-Then tell the user to approve it from the master command surface:
+### Agent-facing approval
+
+A non-isolated coordinator can discover and use the pairing tools:
+
+1. `search_tools({ query: "pair node", sources: ["builtin"] })`
+2. `call_tool({ toolId: "builtin:node_pair_list", args: {} })`
+3. after checking the pending id, `call_tool({ toolId: "builtin:node_pair_approve", args: { pendingId, nodeId } })`
+
+Approval establishes trust in a new execution host. Even though the tool path
+can automate it, keep a human confirmation step when the operator's policy
+requires one. Do not approve an unexplained pending request merely because it
+appears in the list.
+
+### User-facing approval
+
+If approval should remain on the user command surface, tell the user to run:
 
 ```text
 /node
@@ -167,6 +196,9 @@ After approval:
 - the node stores credentials locally
 - future restarts use stored node credentials
 - the pairing token is mainly for first-time pairing / re-pairing
+
+`list_nodes` is the agent-facing online-node check. A node that is approved but
+offline will not be usable for worker execution and may not appear there.
 
 ## Fastest startup: Linux bare-metal bootstrap
 
@@ -338,6 +370,7 @@ Example:
 Important behavior:
 
 - isolated agents must bind to a **non-master** node
+- isolation is agent-level, not session-level
 - isolated sessions inherit isolation automatically from the agent
 - isolated agents may still use `master` for limited in-agent host-side operations
 - on `master`, the practical writable/readable boundary is their own agent area:
@@ -358,6 +391,14 @@ For an isolated agent, the boundary is:
 
 An isolated agent cannot switch itself to another node.
 If a workflow really needs another node, the user should change the agent's isolation binding deliberately instead of the isolated agent using other nodes directly.
+
+Binding does not reserve a node. Multiple sessions or agents can target the same
+node unless the operator provides distinct nodes and maintains that assignment.
+
+For the repeatable “one temporary isolated agent/session on an existing node”
+workflow, load **`isolated-worker`**. Its bundled ToolScript composes
+`create_agent`, `create_session`, and `send_to_session`; it does not provision
+or tear down the node/container.
 
 ## Sandbox/test-environment note
 
@@ -383,8 +424,8 @@ So when sandbox behavior looks wrong, check the data root before debugging pairi
 
 After startup and approval:
 
-1. tell the user to run `/node`, and confirm the node appears in the approved list
-2. tell the user to run `/node`, and confirm it shows online when connected
+1. use `list_nodes` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
+2. if approval is pending, use the reviewed `node_pair_list` / `node_pair_approve` tool path or the user-facing `/node approve` path
 3. if using isolated agents, confirm the agent is actually bound to that node
 4. confirm tool execution is happening on the expected node, not accidentally on `master`
 5. confirm restricted cross-agent/cross-node behavior when isolation is expected
@@ -426,3 +467,6 @@ Use **`agent-management`** when the task is mainly about:
 - why agent rename/delete behave the way they do
 - safe agent migration / cleanup
 - snapshot refresh after editing another agent's memory
+
+Use **`isolated-worker`** when a coordinator should create a temporary isolated
+agent/session on a user-provided, already connected node.
