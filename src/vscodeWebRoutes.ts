@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import { spawn } from 'child_process';
 import type { HttpServer } from './httpServer';
-import { BASE_DIR } from './config';
+import { BASE_DIR, STATE_DIR } from './config';
 import { logger } from './common';
 
 const VSCODE_WEB_ROUTE = '/vscode-web';
@@ -15,7 +15,9 @@ const VSCODE_WEB_TERMINAL_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxw
 const VSCODE_WEB_SCM_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-scm`;
 const VSCODE_WEB_ASSET_DIR_ENV = 'FOXWARM_VSCODE_WEB_ASSET_DIR';
 const VSCODE_WEB_DEFAULT_FOLDER_URI_ENV = 'FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI';
+const VSCODE_WEB_EMBEDDED_WORKSPACE_PATH_ENV = 'FOXWARM_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH';
 const DEFAULT_VSCODE_WEB_ASSET_DIR = path.join(BASE_DIR, 'packages', 'vscode-web', 'assets', 'vscode-web');
+const DEFAULT_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH = path.join(STATE_DIR, 'vscode-web', 'embedded.code-workspace');
 const MAX_WRITE_BYTES = 50 * 1024 * 1024;
 const MAX_READ_BYTES = 50 * 1024 * 1024;
 const MAX_GIT_OUTPUT_BYTES = 10 * 1024 * 1024;
@@ -457,6 +459,27 @@ function toFoxwarmFolderUriComponents(folderUriString: string) {
   return toUriComponents(folderUriString);
 }
 
+function buildMasterFoxwarmUri(fullPath: string): string {
+  const normalized = fullPath.split(path.sep).join('/');
+  const withLeadingSlash = normalized.startsWith('/') ? normalized : `/${normalized}`;
+  const encodedPath = withLeadingSlash.split('/').map((segment, index) => index === 0 ? '' : encodeURIComponent(segment)).join('/');
+  return `foxwarm://node+master${encodedPath}`;
+}
+
+function ensureEmbeddedWorkspace(initialFolderUri: string): string {
+  toFoxwarmFolderUriComponents(initialFolderUri);
+  const workspacePath = process.env[VSCODE_WEB_EMBEDDED_WORKSPACE_PATH_ENV]?.trim()
+    ? path.resolve(process.env[VSCODE_WEB_EMBEDDED_WORKSPACE_PATH_ENV]!.trim())
+    : DEFAULT_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH;
+  if (!fs.existsSync(workspacePath)) {
+    fs.outputJsonSync(workspacePath, {
+      folders: [{ uri: initialFolderUri }],
+      settings: {},
+    }, { spaces: 2 });
+  }
+  return buildMasterFoxwarmUri(workspacePath);
+}
+
 function escapeHtmlAttribute(value: unknown): string {
   return JSON.stringify(value)
     .replace(/&/g, '&amp;')
@@ -474,7 +497,8 @@ function escapeHtmlText(value: string): string {
 
 function buildWorkbenchConfiguration(req: express.Request) {
   const origin = getRequestOrigin(req);
-  const requestedFolderUri = getSingleQueryValue(req.query.folderUri) ?? getDefaultFolderUri();
+  const embeddedWorkspace = getSingleQueryValue(req.query.embedded) === 'true';
+  const requestedFolderUri = getSingleQueryValue(embeddedWorkspace ? req.query.initialFolderUri : req.query.folderUri) ?? getDefaultFolderUri();
   const staticBasePath = getExternalPath(req, VSCODE_WEB_STATIC_ROUTE);
   const fsExtensionPath = getExternalPath(req, VSCODE_WEB_FS_EXTENSION_ROUTE);
   const terminalExtensionPath = getExternalPath(req, VSCODE_WEB_TERMINAL_EXTENSION_ROUTE);
@@ -489,7 +513,9 @@ function buildWorkbenchConfiguration(req: express.Request) {
     staticBasePath,
     callbackRoute,
     configuration: {
-      folderUri: toFoxwarmFolderUriComponents(requestedFolderUri),
+      ...(embeddedWorkspace
+        ? { workspaceUri: toUriComponents(ensureEmbeddedWorkspace(requestedFolderUri)) }
+        : { folderUri: toFoxwarmFolderUriComponents(requestedFolderUri) }),
       callbackRoute,
       productConfiguration: {
         enableTelemetry: false,
@@ -552,11 +578,57 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
 <script>performance.mark('code/willLoadWorkbenchMain');</script>
 <script type="module" src="${escapedAssetBasePath}/out/nls.messages.js"></script>
 <script type="module">
-  import { create, Emitter, URI } from '${escapedAssetBasePath}/out/vs/workbench/workbench.web.main.internal.js';
+  import { create, commands, Emitter, URI } from '${escapedAssetBasePath}/out/vs/workbench/workbench.web.main.internal.js';
 
   const { baseUrl, routeBaseUrl: routeBaseUrlString } = globalThis.__foxwarmVscodeWeb;
   const routeBaseUrl = new URL(routeBaseUrlString);
   const trimTrailingSlash = (value) => value.endsWith('/') ? value.slice(0, -1) : value;
+  const bridgeChannel = 'foxwarm-code-bridge';
+  const bridgeVersion = 1;
+  let bridgeQueue = Promise.resolve();
+
+  window.addEventListener('message', (event) => {
+    if (event.source !== window.parent || event.origin !== window.location.origin) return;
+    const message = event.data;
+    if (!message || typeof message !== 'object'
+      || message.channel !== bridgeChannel
+      || message.version !== bridgeVersion
+      || message.type !== 'request'
+      || typeof message.requestId !== 'string') return;
+
+    bridgeQueue = bridgeQueue.then(async () => {
+      try {
+        const result = await commands.executeCommand('foxwarm-fs.handleOpenRequest', message.request);
+        window.parent.postMessage({
+          channel: bridgeChannel,
+          version: bridgeVersion,
+          type: 'response',
+          requestId: message.requestId,
+          ok: true,
+          result,
+        }, window.location.origin);
+      } catch (error) {
+        window.parent.postMessage({
+          channel: bridgeChannel,
+          version: bridgeVersion,
+          type: 'response',
+          requestId: message.requestId,
+          ok: false,
+          error: String(error?.message || error),
+        }, window.location.origin);
+      }
+    });
+  });
+
+  const announceBridgeReady = () => {
+    if (window.parent === window) return;
+    window.parent.postMessage({
+      channel: bridgeChannel,
+      version: bridgeVersion,
+      type: 'ready',
+    }, window.location.origin);
+  };
+  window.addEventListener('load', () => window.setTimeout(announceBridgeReady, 0), { once: true });
 
   class WorkspaceProvider {
     constructor(workspace, payload) {
@@ -665,6 +737,21 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
       workspaceProvider: WorkspaceProvider.create(config),
       urlCallbackProvider: new LocalStorageURLCallbackProvider(config.callbackRoute || ${jsCallbackRoute}),
     });
+    const startupQuery = new URL(window.location.href).searchParams;
+    const openFilePath = startupQuery.get('openFilePath');
+    if (openFilePath) {
+      const parseLine = (name) => {
+        const value = Number(startupQuery.get(name));
+        return Number.isInteger(value) && value > 0 ? value : undefined;
+      };
+      void commands.executeCommand('foxwarm-fs.handleOpenRequest', {
+        kind: 'openFile',
+        nodeId: 'master',
+        path: openFilePath,
+        startLine: parseLine('startLine'),
+        endLine: parseLine('endLine'),
+      }).catch((error) => console.error('Failed to open initial Foxwarm file', error));
+    }
   } catch (error) {
     console.error('Failed to bootstrap Foxwarm Code', error);
     const pre = document.createElement('pre');

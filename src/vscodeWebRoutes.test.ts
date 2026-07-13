@@ -118,9 +118,11 @@ test('VS Code Web filesystem API is master-only and rejects non-absolute paths',
 
 test('VS Code Web workbench bootstrap is emitted when official static assets are prepared and assets remain authenticated', async () => {
   const previousAssetDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
+  const previousWorkspacePath = process.env.FOXWARM_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH;
   try {
     await withTempDir(async (dirPath) => {
       process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
+      process.env.FOXWARM_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH = path.join(dirPath, 'embedded.code-workspace');
       await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
@@ -137,6 +139,8 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
         assert.equal(workbench.status, 200);
         const html = await workbench.text();
         assert.match(html, /vscode-workbench-web-configuration/);
+        assert.match(html, /foxwarm-code-bridge/);
+        assert.match(html, /foxwarm-fs\.handleOpenRequest/);
         assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
         assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.css/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-fs/);
@@ -146,9 +150,20 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
         assert.match(html, /&quot;authority&quot;:&quot;node\+master&quot;/);
         assert.match(html, /&quot;path&quot;:&quot;\/tmp\/hello%20world&quot;/);
         assert.match(html, /terminal\.integrated\.defaultProfile\.linux/);
+
+        const embeddedWorkbench = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
+        assert.equal(embeddedWorkbench.status, 200);
+        const embeddedHtml = await embeddedWorkbench.text();
+        assert.match(embeddedHtml, /&quot;workspaceUri&quot;/);
+        assert.match(embeddedHtml, /embedded\.code-workspace/);
       });
     });
   } finally {
+    if (previousWorkspacePath === undefined) {
+      delete process.env.FOXWARM_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH;
+    } else {
+      process.env.FOXWARM_VSCODE_WEB_EMBEDDED_WORKSPACE_PATH = previousWorkspacePath;
+    }
     if (previousAssetDir === undefined) {
       delete process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
     } else {
@@ -212,7 +227,7 @@ test('VS Code Web workbench bootstrap can use relative assets from a trailing-sl
         const html = await workbench.text();
         assert.match(html, /href="\.\/static\/favicon\.ico"/);
         assert.match(html, /src="\.\/static\/out\/nls\.messages\.js"/);
-        assert.match(html, /import \{ create, Emitter, URI \} from '\.\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js'/);
+        assert.match(html, /import \{ create, commands, Emitter, URI \} from '\.\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js'/);
         assert.match(html, /new URL\('static', routeBaseUrl\)/);
         assert.match(html, /extensionUrl\('extensions\/foxwarm-terminal'\)/);
       });

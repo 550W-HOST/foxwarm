@@ -28,6 +28,7 @@ const closedHandlers = [];
 const terminals = [];
 const commands = new Map();
 const disposables = () => ({ dispose() {} });
+const workspaceFoldersChanged = new MockEventEmitter();
 
 const workspaceUri = {
   scheme: 'foxwarm',
@@ -63,6 +64,7 @@ const vscodeMock = {
   workspace: {
     workspaceFolders: [{ uri: workspaceUri }],
     fs: { stat: async () => ({ type: 2 }) },
+    onDidChangeWorkspaceFolders: workspaceFoldersChanged.event,
   },
   commands: {
     registerCommand: (id, handler) => { commands.set(id, handler); return disposables(); },
@@ -131,6 +133,10 @@ test('activation restores workspace terminals by attachment without creating dup
   assert.equal(terminals.length, 2);
   assert.equal(fetchCalls.filter((call) => call.method === 'POST').length, 0);
   assert.equal(fetchCalls.filter((call) => call.method === 'GET').length, 1);
+
+  workspaceFoldersChanged.fire({ added: [], removed: [] });
+  await flushAsync();
+  assert.equal(terminals.length, 2);
 
   for (const terminal of terminals) {
     terminal.creationOptions.pty.open(undefined);

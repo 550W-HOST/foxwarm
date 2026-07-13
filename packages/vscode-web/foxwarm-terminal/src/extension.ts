@@ -312,6 +312,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('foxwarm-terminal.toggleTerminal', toggleTerminal),
     vscode.commands.registerCommand('foxwarm-terminal.openInEditorArea', () => openNewTerminal(getCurrentTarget(), vscode.TerminalLocation.Editor)),
     vscode.commands.registerCommand('foxwarm-terminal.openHere', async (uri?: vscode.Uri) => openNewTerminal(await getTargetForResource(uri))),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      void restoreBackendTerminals().catch((error) => console.error('Failed to restore Foxwarm terminals after workspace change', error));
+    }),
   );
   void restoreBackendTerminals().catch((error) => console.error('Failed to restore Foxwarm terminals', error));
   console.log(`Foxwarm terminal profile registered. apiBase=${terminalApiBase} streamBase=${terminalStreamBase}`);

@@ -25,6 +25,7 @@ import {
   ToolGroupSummaryCard,
   ToolResponsesBlock,
   getToolResponseStatus,
+  type OpenCodeFileHandler,
 } from './ToolTimelineItems'
 
 const getMessageStableKey = (msg: Message, idx: number): string => {
@@ -44,6 +45,7 @@ interface ChatTimelineProps {
   groupTools: boolean
   showUsageBadge: boolean
   onRetryFinalFailure?: () => void
+  onOpenCodeFile?: OpenCodeFileHandler
   nestedDepth?: number
 }
 
@@ -362,6 +364,7 @@ interface MessageRowProps {
   sessionId: string
   nestedDepth: number
   onRetryFinalFailure?: () => void
+  onOpenCodeFile?: OpenCodeFileHandler
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
 }
 
@@ -384,6 +387,7 @@ const MessageRow = memo(function MessageRow({
   sessionId,
   nestedDepth,
   onRetryFinalFailure,
+  onOpenCodeFile,
   renderNestedMessages,
 }: MessageRowProps) {
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
@@ -461,7 +465,7 @@ const MessageRow = memo(function MessageRow({
             {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
               <ToolGroupSummaryCard items={summaryTagItems} onExpand={() => onExpandGroup(groupKey)} />
             )}
-            {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} /> : <ToolCallsBlock msg={msg} />)}
+            {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
             {displayUsage && <ModelUsageAnchor usage={displayUsage} isMobile={isMobile} callCount={displayUsageCallCount} />}
           </div>
@@ -487,10 +491,11 @@ const MessageRow = memo(function MessageRow({
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
   prev.onRetryFinalFailure === next.onRetryFinalFailure &&
+  prev.onOpenCodeFile === next.onOpenCodeFile &&
   prev.renderNestedMessages === next.renderNestedMessages
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onRetryFinalFailure, nestedDepth = 0 }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onRetryFinalFailure, onOpenCodeFile, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
@@ -502,9 +507,10 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       groupTools={groupTools}
       showUsageBadge={nextNestedDepth > 0 ? false : showUsageBadge}
       onRetryFinalFailure={onRetryFinalFailure}
+      onOpenCodeFile={onOpenCodeFile}
       nestedDepth={nextNestedDepth}
     />
-  ), [groupTools, isMobile, onRetryFinalFailure, sessionId, showUsageBadge])
+  ), [groupTools, isMobile, onOpenCodeFile, onRetryFinalFailure, sessionId, showUsageBadge])
 
   const toolGroupMeta = useMemo(() => {
     const messageKeys = messages.map((msg, idx) => getMessageStableKey(msg, idx))
@@ -701,6 +707,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             sessionId={sessionId}
             nestedDepth={nestedDepth}
             onRetryFinalFailure={onRetryFinalFailure}
+            onOpenCodeFile={onOpenCodeFile}
             renderNestedMessages={renderNestedMessages}
           />
         )

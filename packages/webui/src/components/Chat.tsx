@@ -77,6 +77,7 @@ interface ChatProps {
   onOpenTerminal?: () => void
   onOpenCode?: () => void
   onOpenCodeNewWindow?: () => void
+  onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
   sendKeyMode?: 'modEnter' | 'enter'
   groupTools?: boolean
   showUsageBadge?: boolean
@@ -185,7 +186,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -1247,7 +1248,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
             </div>
           )}
           <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-            <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onRetryFinalFailure={handleRetryFinalFailure} />
+            <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} />
           </ToolScriptProgressContext.Provider>
           <ProcessingStatus
             sessionBusy={sessionBusy}
@@ -1259,7 +1260,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
           />
           {queuedMessages.length > 0 && (
             <div className="foxwarm-queued-preview" data-queued-preview="true" aria-label="Queued messages">
-              <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onRetryFinalFailure={handleRetryFinalFailure} />
+              <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} />
             </div>
           )}
           <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
@@ -1378,6 +1379,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
   prev.onOpenTerminal === next.onOpenTerminal
   && prev.onOpenCode === next.onOpenCode
   && prev.onOpenCodeNewWindow === next.onOpenCodeNewWindow
+  && prev.onOpenCodeFile === next.onOpenCodeFile
 ))
 
 export default Chat

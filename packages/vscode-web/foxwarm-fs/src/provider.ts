@@ -123,6 +123,10 @@ export class FoxwarmFileSystemProvider implements vscode.FileSystemProvider {
     );
   }
 
+  notifyExternalChange(uri: vscode.Uri): void {
+    this.fireSoon({ type: vscode.FileChangeType.Changed, uri });
+  }
+
   private async fetchJson<T>(uri: vscode.Uri, operation: string): Promise<T> {
     const response = await this.fetch(uri, operation);
     return response.json() as Promise<T>;

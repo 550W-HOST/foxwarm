@@ -52,9 +52,9 @@ Current MVP behavior:
 - Explicit user terminal close (`TerminalExitReason.User`) deletes/kills the backend PTY. Window shutdown/reload, process exit, and extension shutdown do not issue an extra DELETE.
 - Backend terminals remain process/in-memory state and are still removed on backend/container restart.
 
-`foxwarm-fs` also contributes a `Foxwarm: Open Folder...` command and a remote-indicator menu item for virtual `foxwarm` workspaces. It prompts for an absolute path on the current node and reopens the workbench with that path as the workspace root.
+`foxwarm-fs` also contributes a `Foxwarm: Add Folder...` command and a remote-indicator menu item for virtual `foxwarm` workspaces. It prompts for an absolute path on the current node and appends that path to the current multi-root workspace.
 
-`foxwarm-terminal` contributes `Foxwarm: New Terminal`, `Foxwarm: Toggle Terminal`, and `Foxwarm: Open Terminal in Editor Area`. The toggle command is bound to <kbd>Ctrl</kbd>+<kbd>`</kbd> inside `foxwarm` virtual workspaces so opening the terminal via the terminal shortcut creates a Foxwarm backend PTY when none exists. When a terminal already exists, the command delegates to VS Code's native `workbench.action.terminal.toggleTerminal`. The bottom-left remote/virtual-workspace menu intentionally only exposes workspace/target actions such as `Foxwarm: Open Folder...`, not terminal creation. Explorer resource context menus include `Open in Foxwarm Terminal`, which opens a backend PTY in the selected directory (or the containing directory for a file).
+`foxwarm-terminal` contributes `Foxwarm: New Terminal`, `Foxwarm: Toggle Terminal`, and `Foxwarm: Open Terminal in Editor Area`. The toggle command is bound to <kbd>Ctrl</kbd>+<kbd>`</kbd> inside `foxwarm` virtual workspaces so opening the terminal via the terminal shortcut creates a Foxwarm backend PTY when none exists. When a terminal already exists, the command delegates to VS Code's native `workbench.action.terminal.toggleTerminal`. The bottom-left remote/virtual-workspace menu intentionally only exposes workspace/target actions such as `Foxwarm: Add Folder...`, not terminal creation. Explorer resource context menus include `Open in Foxwarm Terminal`, which opens a backend PTY in the selected directory (or the containing directory for a file).
 
 ## Source control MVP
 
@@ -122,7 +122,7 @@ At runtime the route can also read assets from another directory:
 FOXWARM_VSCODE_WEB_ASSET_DIR=/path/to/vscode-web-assets npm run start:notmux
 ```
 
-When the required static files exist (`out/nls.messages.js`, `out/vs/workbench/workbench.web.main.internal.css`, `out/vs/workbench/workbench.web.main.internal.js`), `/vscode-web` emits a VS Code Web workbench bootstrap that includes `foxwarm-fs` as an additional browser builtin extension and opens the requested `folderUri` query parameter. The default folder URI can be overridden with `FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI`; otherwise the route prefers `/app` when running in the Docker test environment and falls back to the host checkout path when present.
+When the required static files exist (`out/nls.messages.js`, `out/vs/workbench/workbench.web.main.internal.css`, `out/vs/workbench/workbench.web.main.internal.js`), `/vscode-web` emits a VS Code Web workbench bootstrap that includes `foxwarm-fs` as an additional browser builtin extension. Direct launches open the requested `folderUri`; embedded launches open the persistent workspace configuration created under the Foxwarm state directory. The default folder URI can be overridden with `FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI`; otherwise the route prefers `/app` when running in the Docker test environment and falls back to the host checkout path when present.
 
 When the assets are absent, authenticated requests to `/vscode-web` return a styled `503 Code is not built` page rather than a blank workbench. It shows both preparation commands and the configured asset location. Individual missing static assets continue to return `404`.
 
@@ -131,10 +131,11 @@ When the assets are absent, authenticated requests to `/vscode-web` return a sty
 The authenticated main WebUI presents the feature to users as **Code** (the `/vscode-web/` route and internal extension/package names remain unchanged):
 
 - The sidebar `Code` split button opens a master-node workspace, defaulting to `/`, and its dropdown accepts another absolute POSIX path. The selected path and the global `Open in new browser tab` preference are remembered in localStorage.
-- Embedded mode creates/focuses a singleton `Code` workbench tab. The actual iframe lives in a persistent top-level portal host and is positioned over the active tab slot, so switching WebUI tabs or views hides rather than unmounts the VS Code browsing context.
+- Embedded mode creates/focuses a singleton `Code` workbench tab. The actual iframe lives in a persistent top-level portal host and is positioned over the active tab slot, so switching WebUI tabs or views hides rather than unmounts the VS Code browsing context. Its first launch creates a persistent workspace configuration under the Foxwarm state directory. Later folder requests are sent over a same-origin request/ack bridge and appended with the VS Code workspace API without changing the iframe URL or losing open editors and terminals.
+- Paths rendered by direct `read`, `write`, `edit`, and `apply_patch` tool cards are Code links for master-node sessions. They open the file in the existing embedded workbench; `read` line ranges become editor selections. New-browser-tab mode carries the initial folder/file in the launch URL instead of trying to control an already-open tab.
 - Session headers provide `Open code` using the session's master-node cwd (with a safe `master:/` fallback), plus an adjacent external-link button that always opens a new browser tab.
 
-All launch URLs include a `foxwarm://node+master/<absolute-path>` `folderUri` and are derived from the dynamic WebUI API base path, preserving reverse-proxy prefixes. Runtime transfer/pop-out of an already running iframe is intentionally not implemented.
+Launch URLs are derived from the dynamic WebUI API base path and preserve reverse-proxy prefixes. Direct new-browser-tab launches include a `foxwarm://node+master/<absolute-path>` `folderUri`; embedded launches use the persistent workspace configuration plus an initial folder hint. Runtime transfer/pop-out of an already running iframe is intentionally not implemented.
 
 ## Not in scope yet
 

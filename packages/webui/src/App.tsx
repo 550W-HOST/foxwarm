@@ -6,14 +6,14 @@ import Sidebar from './components/Sidebar'
 import CollapsedSidebar from './components/CollapsedSidebar'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
-import VscodeWebFrameHost from './components/VscodeWebFrameHost'
+import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/VscodeWebFrameHost'
 import type { Session, SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
-import { makeVscodeWebUrl, normalizeCodePath, readCodeOpenInNewWindowPreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, shouldOpenCodeInNewWindow, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspacePathPreference, type CodeTarget } from './vscodeWeb'
+import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspacePathPreference, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
@@ -456,9 +456,10 @@ function App() {
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
+  const vscodeFrameRef = useRef<VscodeWebFrameHostHandle | null>(null)
   const [codePath, setCodePath] = useState(loadStoredCodePath)
   const [codeOpenInNewWindow, setCodeOpenInNewWindow] = useState(loadStoredCodeOpenInNewWindow)
-  const [codeFrameUrl, setCodeFrameUrl] = useState(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: 'master', path: loadStoredCodePath() }).toString())
+  const [codeFrameUrl, setCodeFrameUrl] = useState(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: 'master', path: loadStoredCodePath() }, { embedded: true }).toString())
 
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
@@ -901,19 +902,49 @@ function App() {
     writeCodeOpenInNewWindowPreference(localStorage, enabled)
   }
 
-  const openCode = (target: CodeTarget, forceNewWindow = false) => {
-    const url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target).toString()
-    if (shouldOpenCodeInNewWindow(codeOpenInNewWindow, forceNewWindow)) {
-      window.open(url, '_blank', 'noopener,noreferrer')
-      return
-    }
-
-    setCodeFrameUrl(url)
-    setVscodeFrameStarted(true)
+  const activateEmbeddedCodeTab = () => {
     const existingTab = tabsById[VSCODE_WEB_TAB_ID]
     const tab = existingTab ? { ...existingTab, title: 'Code' } as WorkbenchTab : makeVscodeWebTab()
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
+  }
+
+  const openCode = (target: CodeTarget, forceNewWindow = false) => {
+    const plan = planCodeOpen(vscodeFrameStarted, codeOpenInNewWindow, forceNewWindow)
+    if (plan === 'new-window') {
+      const url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target).toString()
+      window.open(url, '_blank', 'noopener,noreferrer')
+      return
+    }
+
+    if (plan === 'start-embedded') {
+      const url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { embedded: true }).toString()
+      setCodeFrameUrl(url)
+      setVscodeFrameStarted(true)
+    }
+    void vscodeFrameRef.current?.request({ kind: 'addFolder', nodeId: target.nodeId, path: target.path }).catch((error) => {
+      window.alert(`Could not add the folder to Code.\n\n${error instanceof Error ? error.message : String(error)}`)
+    })
+    activateEmbeddedCodeTab()
+  }
+
+  const openCodeFile = (
+    request: CodeFileTarget,
+    workspaceTarget: CodeTarget,
+  ) => {
+    const plan = planCodeOpen(vscodeFrameStarted, codeOpenInNewWindow)
+    if (plan === 'new-window') {
+      window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, workspaceTarget, { openFile: request }).toString(), '_blank', 'noopener,noreferrer')
+      return
+    }
+    if (plan === 'start-embedded') {
+      setCodeFrameUrl(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, workspaceTarget, { embedded: true }).toString())
+      setVscodeFrameStarted(true)
+    }
+    void vscodeFrameRef.current?.request(request).catch((error) => {
+      window.alert(`Could not open the file in Code.\n\n${error instanceof Error ? error.message : String(error)}`)
+    })
+    activateEmbeddedCodeTab()
   }
 
   const findPreferredChatTab = (sessionId: string): WorkbenchTab | null => {
@@ -1323,6 +1354,15 @@ function App() {
           onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
           onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
           onOpenCodeNewWindow={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd), true)}
+          onOpenCodeFile={sessionRecord?.currentNode && sessionRecord.currentNode !== 'master' ? undefined : (filePath, lines) => {
+            const request = resolveToolCodeFileTarget(filePath, sessionRecord?.currentNode, sessionRecord?.cwd, lines)
+            if (!request) {
+              window.alert('This path cannot be opened in Code yet. Tool file links currently require node `master` and either an absolute path or a session cwd.')
+              return
+            }
+            const workspaceTarget = resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd)
+            openCodeFile(request, workspaceTarget)
+          }}
           sendKeyMode={sendKeyMode}
           groupTools={groupTools}
           showUsageBadge={showUsageBadge}
@@ -1620,6 +1660,7 @@ function App() {
       {content}
       <VscodeWebFrameHost
         key="foxwarm-vscode-web-frame-host"
+        ref={vscodeFrameRef}
         started={vscodeFrameStarted}
         src={codeFrameUrl}
         slot={vscodeFrameSlot}

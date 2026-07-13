@@ -32,6 +32,7 @@ __export(extension_exports, {
   activate: () => activate,
   buildFoxwarmNodeUriString: () => buildFoxwarmNodeUriString,
   deactivate: () => deactivate,
+  normalizeFoxwarmOpenRequest: () => normalizeFoxwarmOpenRequest,
   parseFoxwarmUri: () => parseFoxwarmUri
 });
 module.exports = __toCommonJS(extension_exports);
@@ -201,6 +202,9 @@ var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
       { type: vscode.FileChangeType.Created, uri: newUri }
     );
   }
+  notifyExternalChange(uri) {
+    this.fireSoon({ type: vscode.FileChangeType.Changed, uri });
+  }
   async fetchJson(uri, operation) {
     const response = await this.fetch(uri, operation);
     return response.json();
@@ -238,7 +242,72 @@ var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
   }
 };
 
+// src/openRequest.ts
+function normalizeFoxwarmAbsolutePath(value) {
+  if (typeof value !== "string") {
+    throw new Error("Foxwarm path must be a string.");
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/") || trimmed.includes("\0")) {
+    throw new Error("Foxwarm path must be an absolute POSIX path.");
+  }
+  const segments = [];
+  for (const segment of trimmed.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
+}
+function normalizeLine(value, label) {
+  if (value === void 0 || value === null) return void 0;
+  if (!Number.isInteger(value) || Number(value) < 1) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return Number(value);
+}
+function normalizeFoxwarmOpenRequest(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Foxwarm open request.");
+  }
+  const request = value;
+  if (request.nodeId !== "master") {
+    throw new Error("Foxwarm Code currently supports only node `master`.");
+  }
+  const path = normalizeFoxwarmAbsolutePath(request.path);
+  if (request.kind === "addFolder") {
+    return { kind: "addFolder", nodeId: "master", path };
+  }
+  if (request.kind === "openFile") {
+    const startLine = normalizeLine(request.startLine, "startLine");
+    const endLine = normalizeLine(request.endLine, "endLine");
+    if (startLine !== void 0 && endLine !== void 0 && endLine < startLine) {
+      throw new Error("endLine must not be before startLine.");
+    }
+    return {
+      kind: "openFile",
+      nodeId: "master",
+      path,
+      ...startLine !== void 0 ? { startLine } : {},
+      ...endLine !== void 0 ? { endLine } : {}
+    };
+  }
+  throw new Error("Unsupported Foxwarm open request kind.");
+}
+
 // src/extension.ts
+async function waitForInitialWorkspaceFolders() {
+  const deadline = Date.now() + 15e3;
+  while (Date.now() < deadline) {
+    const folders = vscode2.workspace.workspaceFolders;
+    if (folders && folders.length > 0) return folders;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("Code workspace folders did not finish loading.");
+}
 function getCurrentNodeId() {
   const folder = vscode2.workspace.workspaceFolders?.[0];
   if (!folder) {
@@ -261,6 +330,52 @@ function getCurrentPath() {
     return "/";
   }
 }
+async function addFoxwarmFolder(request) {
+  const normalized = normalizeFoxwarmOpenRequest(request);
+  if (normalized.kind !== "addFolder") {
+    throw new Error("Expected an addFolder request.");
+  }
+  const uri = vscode2.Uri.parse(buildFoxwarmNodeUriString(normalized.nodeId, normalized.path));
+  const uriString = uri.toString(true);
+  const workspaceFolders = await waitForInitialWorkspaceFolders();
+  const existing = workspaceFolders.some((folder) => {
+    try {
+      const target = parseFoxwarmUri(folder.uri);
+      return target.nodeId === normalized.nodeId && target.realPath === normalized.path;
+    } catch {
+      return false;
+    }
+  }) ?? false;
+  if (existing) {
+    return { status: "existing", uri: uriString };
+  }
+  let folderChangeListener;
+  let folderChangeTimeout;
+  const folderAdded = new Promise((resolve, reject) => {
+    folderChangeTimeout = setTimeout(() => {
+      folderChangeListener?.dispose();
+      reject(new Error(`Timed out while adding ${normalized.path} to the current workspace.`));
+    }, 15e3);
+    folderChangeListener = vscode2.workspace.onDidChangeWorkspaceFolders((event) => {
+      if (!event.added.some((folder) => folder.uri.toString(true) === uriString)) return;
+      if (folderChangeTimeout) clearTimeout(folderChangeTimeout);
+      folderChangeListener?.dispose();
+      resolve();
+    });
+  });
+  const accepted = vscode2.workspace.updateWorkspaceFolders(
+    workspaceFolders.length,
+    0,
+    { uri }
+  );
+  if (!accepted) {
+    if (folderChangeTimeout) clearTimeout(folderChangeTimeout);
+    folderChangeListener?.dispose();
+    throw new Error(`Could not add ${normalized.path} to the current workspace.`);
+  }
+  await folderAdded;
+  return { status: "added", uri: uriString };
+}
 async function openFoxwarmFolder() {
   const value = await vscode2.window.showInputBox({
     title: "Open Foxwarm Folder",
@@ -271,9 +386,42 @@ async function openFoxwarmFolder() {
   if (!value) {
     return;
   }
-  await vscode2.commands.executeCommand("vscode.openFolder", vscode2.Uri.parse(buildFoxwarmNodeUriString(getCurrentNodeId(), value)), {
-    forceNewWindow: false
-  });
+  await addFoxwarmFolder({ kind: "addFolder", nodeId: getCurrentNodeId(), path: value });
+}
+async function openFoxwarmFile(request, provider) {
+  const normalized = normalizeFoxwarmOpenRequest(request);
+  if (normalized.kind !== "openFile") throw new Error("Expected an openFile request.");
+  const uri = vscode2.Uri.parse(buildFoxwarmNodeUriString(normalized.nodeId, normalized.path));
+  const stat = await vscode2.workspace.fs.stat(uri);
+  if ((stat.type & vscode2.FileType.Directory) !== 0) {
+    throw new Error(`${normalized.path} is a directory, not a file.`);
+  }
+  const existing = vscode2.workspace.textDocuments.find((document2) => document2.uri.toString(true) === uri.toString(true));
+  if (!existing?.isDirty) provider.notifyExternalChange(uri);
+  const document = existing ?? await vscode2.workspace.openTextDocument(uri);
+  let selection;
+  if (normalized.startLine !== void 0) {
+    if (normalized.startLine > document.lineCount) {
+      throw new Error(`Line ${normalized.startLine} is beyond the end of ${normalized.path}.`);
+    }
+    const endLine = Math.min(normalized.endLine ?? normalized.startLine, document.lineCount);
+    selection = new vscode2.Range(
+      new vscode2.Position(normalized.startLine - 1, 0),
+      document.lineAt(endLine - 1).range.end
+    );
+  }
+  await vscode2.window.showTextDocument(document, { preview: true, selection });
+  if (existing?.isDirty) {
+    void vscode2.window.showWarningMessage(`${normalized.path} has unsaved Code changes; the external file was not reloaded.`);
+  }
+  return { status: "opened", uri: uri.toString(true) };
+}
+async function handleOpenRequest(request, provider) {
+  const normalized = normalizeFoxwarmOpenRequest(request);
+  if (normalized.kind === "addFolder") {
+    return addFoxwarmFolder(normalized);
+  }
+  return openFoxwarmFile(normalized, provider);
 }
 function activate(context) {
   const provider = FoxwarmFileSystemProvider.fromExtensionContext(context);
@@ -282,7 +430,8 @@ function activate(context) {
       isCaseSensitive: true,
       isReadonly: false
     }),
-    vscode2.commands.registerCommand("foxwarm-fs.openFolder", openFoxwarmFolder)
+    vscode2.commands.registerCommand("foxwarm-fs.openFolder", openFoxwarmFolder),
+    vscode2.commands.registerCommand("foxwarm-fs.handleOpenRequest", (request) => handleOpenRequest(request, provider))
   );
   console.log("Foxwarm filesystem provider registered for foxwarm://node+<nodeId>/<absolute-path>.");
 }

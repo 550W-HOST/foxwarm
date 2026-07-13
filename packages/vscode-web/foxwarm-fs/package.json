@@ -7,15 +7,21 @@
   "browser": "./dist/extension.js",
   "activationEvents": [
     "onFileSystem:foxwarm",
-    "onCommand:foxwarm-fs.openFolder"
+    "onCommand:foxwarm-fs.openFolder",
+    "onCommand:foxwarm-fs.handleOpenRequest"
   ],
   "contributes": {
     "commands": [
       {
         "command": "foxwarm-fs.openFolder",
-        "title": "Foxwarm: Open Folder...",
+        "title": "Foxwarm: Add Folder...",
         "category": "Foxwarm",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "foxwarm-fs.handleOpenRequest",
+        "title": "Foxwarm: Handle Open Request",
+        "category": "Foxwarm"
       }
     ],
     "menus": {
@@ -24,6 +30,12 @@
           "command": "foxwarm-fs.openFolder",
           "when": "virtualWorkspace == foxwarm",
           "group": "virtualfs_90_foxwarm_1_open@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "foxwarm-fs.handleOpenRequest",
+          "when": "false"
         }
       ]
     },
