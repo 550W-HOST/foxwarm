@@ -21,10 +21,7 @@ type UiThemeStyle = 'default' | '550a'
 type AppView = 'session' | 'agents' | 'setup'
 type SendKeyMode = 'modEnter' | 'enter'
 
-type RouteState =
-  | { view: 'agents' }
-  | { view: 'setup' }
-  | { view: 'tab'; tabId: string | null }
+type RouteState = { view: 'tab'; tabId: string | null }
 
 type TerminalRegistryRecord = {
   id: string
@@ -62,6 +59,8 @@ const THEME_550A_DARK_COLOR = '#0c0c0c'
 const ARCHITECTURE_HASH = 'agents'
 const SETUP_HASH = 'setup'
 const TAB_HASH_PREFIX = 'tab/'
+const AGENTS_TAB_ID = 'system:agents'
+const SETUP_TAB_ID = 'system:setup'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
@@ -326,11 +325,11 @@ function getHashState(): RouteState {
   }
 
   if (hash === ARCHITECTURE_HASH || hash === '__architecture__' || hash === 'architecture') {
-    return { view: 'agents' }
+    return { view: 'tab', tabId: AGENTS_TAB_ID }
   }
 
   if (hash === SETUP_HASH || hash === 'oobe') {
-    return { view: 'setup' }
+    return { view: 'tab', tabId: SETUP_TAB_ID }
   }
 
   if (hash.startsWith(TAB_HASH_PREFIX)) {
@@ -418,6 +417,26 @@ function makeVscodeWebTab(): WorkbenchTab {
   }
 }
 
+function makeAgentsTab(): WorkbenchTab {
+  return {
+    id: AGENTS_TAB_ID,
+    type: 'agents',
+    title: 'Agents',
+  }
+}
+
+function makeSetupTab(): WorkbenchTab {
+  return {
+    id: SETUP_TAB_ID,
+    type: 'setup',
+    title: 'Setup',
+  }
+}
+
+function isRestorableRouteTabId(tabId: string): boolean {
+  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID
+}
+
 function App() {
   const initialRoute = getHashState()
 
@@ -503,7 +522,11 @@ function App() {
     ? focusedActiveTab.sessionId
     : loadStoredLastVisitedSession()
   const currentContextSessionRecord = sessions.find((session) => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
-  const currentView: AppView = route.view === 'agents' ? 'agents' : route.view === 'setup' ? 'setup' : 'session'
+  const currentView: AppView = focusedActiveTab?.type === 'agents'
+    ? 'agents'
+    : focusedActiveTab?.type === 'setup'
+      ? 'setup'
+      : 'session'
   const busyCount = useMemo(() => sessions.filter((session) => isSessionRuntimeActive(session)).length, [sessions])
 
   const fetchWebUiSettings = async () => {
@@ -603,7 +626,7 @@ function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const nextRoute = getHashState()
-      setRoute(setupOobe && nextRoute.view !== 'setup' ? { view: 'setup' } : nextRoute)
+      setRoute(setupOobe && nextRoute.tabId !== SETUP_TAB_ID ? { view: 'tab', tabId: SETUP_TAB_ID } : nextRoute)
       if (isMobile) {
         setShowSessionList(!window.location.hash)
       }
@@ -614,11 +637,11 @@ function App() {
   }, [isMobile, setupOobe])
 
   useEffect(() => {
-    if (setupOobe && route.view !== 'setup') {
-      setRoute({ view: 'setup' })
+    if (setupOobe && route.tabId !== SETUP_TAB_ID) {
+      setRoute({ view: 'tab', tabId: SETUP_TAB_ID })
       window.location.hash = SETUP_HASH
     }
-  }, [setupOobe, route.view])
+  }, [setupOobe, route.tabId])
 
   const fetchSessions = async () => {
     try {
@@ -651,8 +674,8 @@ function App() {
       const data = await res.json()
       const isOobe = !!data?.oobe
       setSetupOobe(isOobe)
-      if (isOobe && route.view !== 'setup') {
-        setRoute({ view: 'setup' })
+      if (isOobe && route.tabId !== SETUP_TAB_ID) {
+        setRoute({ view: 'tab', tabId: SETUP_TAB_ID })
         window.location.hash = SETUP_HASH
       }
     } catch (error) {
@@ -748,7 +771,7 @@ function App() {
     const nextId = makePreviewChatTabId()
     replaceTabId(legacyPreview.id, { ...legacyPreview, id: nextId })
 
-    if (route.view === 'tab' && route.tabId === legacyPreview.id) {
+    if (route.tabId === legacyPreview.id) {
       setRoute({ view: 'tab', tabId: nextId })
       setTabHash(nextId)
     }
@@ -817,14 +840,13 @@ function App() {
   }, [webUiSettings.tabIcon])
 
   useEffect(() => {
-    if (route.view !== 'tab') return
     if (route.tabId && tabsById[route.tabId] && route.tabId !== focusedActiveTabId) {
       activateTab(route.tabId)
     }
   }, [route, tabsById, focusedActiveTabId, activateTab])
 
   useEffect(() => {
-    if (route.view === 'tab' && route.tabId && tabsById[route.tabId] && pendingRouteTabIdRef.current === route.tabId) {
+    if (route.tabId && tabsById[route.tabId] && pendingRouteTabIdRef.current === route.tabId) {
       pendingRouteTabIdRef.current = null
     }
   }, [route, tabsById])
@@ -843,10 +865,6 @@ function App() {
   }, [focusedActiveTab])
 
   useEffect(() => {
-    if (route.view !== 'tab') {
-      return
-    }
-
     if (route.tabId && tabsById[route.tabId]) {
       return
     }
@@ -855,7 +873,7 @@ function App() {
       return
     }
 
-    if (route.tabId?.startsWith('chat:')) {
+    if (route.tabId && isRestorableRouteTabId(route.tabId)) {
       return
     }
 
@@ -866,15 +884,15 @@ function App() {
   }, [route, tabsById, focusedActiveTabId])
 
   useEffect(() => {
-    if (route.view !== 'tab') return
     if (flattenedTabIds.length > 0) return
+    if (route.tabId && isRestorableRouteTabId(route.tabId)) return
 
     const fallbackSessionId = loadStoredLastVisitedSession()
     const tab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId), { preview: true })
     upsertTab(tab, { paneId: focusedPaneId || paneIds[0], activate: true })
     setRoute({ view: 'tab', tabId: tab.id })
     setTabHash(tab.id)
-  }, [route.view, flattenedTabIds.length, focusedPaneId, paneIds.join('|')])
+  }, [route.tabId, flattenedTabIds.length, focusedPaneId, paneIds.join('|')])
 
   const navigateToTab = (tabId: string) => {
     pendingRouteTabIdRef.current = tabId
@@ -1075,6 +1093,9 @@ function App() {
 
   const closeWorkbenchTab = async (tabId: string) => {
     const targetTab = tabsById[tabId] || null
+    if (targetTab?.type === 'setup' && setupOobe) {
+      return
+    }
     if (targetTab?.type === 'terminal' && targetTab.terminalId) {
       try {
         await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(targetTab.terminalId)}`, { method: 'DELETE' })
@@ -1288,22 +1309,30 @@ function App() {
     setRoute(getHashState())
   }
 
-  const openSetupView = () => {
-    setRoute({ view: 'setup' })
-    window.location.hash = SETUP_HASH
-    if (isMobile) {
-      setShowSessionList(false)
-    }
+  const openAgentsView = () => {
+    const tab = tabsById[AGENTS_TAB_ID] || makeAgentsTab()
+    upsertTab(tab, { activate: true })
+    navigateToTab(tab.id)
   }
 
-  const closeSetupView = () => {
-    const fallbackTabId = focusedActiveTabId || loadStoredLastActiveTabId()
-    setRoute({ view: 'tab', tabId: fallbackTabId })
-    setTabHash(fallbackTabId)
+  const openSetupView = () => {
+    const tab = tabsById[SETUP_TAB_ID] || makeSetupTab()
+    upsertTab(tab, { activate: true })
+    navigateToTab(tab.id)
   }
 
   useEffect(() => {
-    if (route.view !== 'tab' || !route.tabId || tabsById[route.tabId]) {
+    if (!route.tabId || tabsById[route.tabId]) {
+      return
+    }
+
+    if (route.tabId === AGENTS_TAB_ID) {
+      upsertTab(makeAgentsTab(), { activate: true })
+      return
+    }
+
+    if (route.tabId === SETUP_TAB_ID) {
+      upsertTab(makeSetupTab(), { activate: true })
       return
     }
 
@@ -1369,6 +1398,31 @@ function App() {
           showUsageBadge={showUsageBadge}
           onDraftEdited={() => handleChatDraftEdited(tab.id)}
         />
+      )
+    }
+
+    if (tab.type === 'agents') {
+      return (
+        <Suspense fallback={<LazyViewFallback label="Loading agents…" />}>
+          <ArchitectureView
+            sessions={sessions}
+            currentSession={currentContextSessionId}
+            onSelectSession={openChatTab}
+            onBack={onBack}
+          />
+        </Suspense>
+      )
+    }
+
+    if (tab.type === 'setup') {
+      return (
+        <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
+          <SetupView
+            forced={setupOobe}
+            onClose={setupOobe ? undefined : () => { void closeWorkbenchTab(tab.id) }}
+            onSetupChanged={() => { void fetchSetupStatus() }}
+          />
+        </Suspense>
       )
     }
 
@@ -1670,16 +1724,6 @@ function App() {
   )
 
   if (isMobile) {
-    if (route.view === 'setup') {
-      return renderWithVscodeFrame(
-        <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
-          <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
-            <SetupView forced={setupOobe} onClose={setupOobe ? undefined : handleBackToList} onSetupChanged={() => { void fetchSetupStatus() }} />
-          </Suspense>
-        </div>,
-      )
-    }
-
     if (showSessionList) {
       return renderWithVscodeFrame(renderWorkbenchSurface(
         <SessionList
@@ -1704,11 +1748,7 @@ function App() {
           onTabIconChange={saveWebUiTabIcon}
           onSelectSession={openChatTab}
           onKeepSession={openKeptChatTab}
-          onSelectArchitecture={() => {
-            setRoute({ view: 'agents' })
-            window.location.hash = ARCHITECTURE_HASH
-            setShowSessionList(false)
-          }}
+          onSelectArchitecture={openAgentsView}
           onSelectSetup={openSetupView}
           codePath={codePath}
           codeOpenInNewWindow={codeOpenInNewWindow}
@@ -1721,16 +1761,6 @@ function App() {
           onCreateSession={handleCreateSession}
         />,
       ))
-    }
-
-    if (route.view === 'agents') {
-      return renderWithVscodeFrame(
-        <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
-          <Suspense fallback={<LazyViewFallback label="Loading architecture…" />}>
-            <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} onBack={handleBackToList} />
-          </Suspense>
-        </div>,
-      )
     }
 
     const mobilePaneId = focusedPaneId || paneIds[0]
@@ -1770,10 +1800,7 @@ function App() {
             onTabIconChange={saveWebUiTabIcon}
             onSelectSession={openChatTab}
             onKeepSession={openKeptChatTab}
-            onSelectArchitecture={() => {
-              setRoute({ view: 'agents' })
-              window.location.hash = ARCHITECTURE_HASH
-            }}
+            onSelectArchitecture={openAgentsView}
             onSelectSetup={openSetupView}
             codePath={codePath}
             codeOpenInNewWindow={codeOpenInNewWindow}
@@ -1802,23 +1829,13 @@ function App() {
         />
       )}
       <div className="flex-1 h-full min-h-0 overflow-hidden">
-        {route.view === 'setup' ? (
-          <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
-            <SetupView forced={setupOobe} onClose={setupOobe ? undefined : closeSetupView} onSetupChanged={() => { void fetchSetupStatus() }} />
-          </Suspense>
-        ) : route.view === 'agents' ? (
-          <Suspense fallback={<LazyViewFallback label="Loading architecture…" />}>
-            <ArchitectureView sessions={sessions} currentSession={currentContextSessionId} onSelectSession={openChatTab} />
-          </Suspense>
-        ) : (
-          <div className="h-full min-h-0 overflow-hidden">
-            <WorkbenchLayout
-              node={root}
-              renderPane={(paneId) => renderPane(paneId)}
-              onLayoutResize={updateSplitSizes}
-            />
-          </div>
-        )}
+        <div className="h-full min-h-0 overflow-hidden">
+          <WorkbenchLayout
+            node={root}
+            renderPane={(paneId) => renderPane(paneId)}
+            onLayoutResize={updateSplitSizes}
+          />
+        </div>
       </div>
     </div>,
   ))
