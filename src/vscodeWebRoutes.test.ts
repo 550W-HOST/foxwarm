@@ -70,6 +70,11 @@ test('VS Code Web route, extension assets, and filesystem API require the WebUI 
     const scmExtensionManifest = await scmExtensionWithCookie.json() as { name?: string };
     assert.equal(scmExtensionManifest.name, '@foxwarm/vscode-web-foxwarm-scm');
 
+    const webUiExtensionWithCookie = await fetch(`${baseUrl}/vscode-web/extensions/foxwarm-webui/package.json`, { headers: cookieHeaders() });
+    assert.equal(webUiExtensionWithCookie.status, 200);
+    const webUiExtensionManifest = await webUiExtensionWithCookie.json() as { name?: string };
+    assert.equal(webUiExtensionManifest.name, '@foxwarm/vscode-web-foxwarm-webui');
+
     const fsNoAuth = await fetch(`${baseUrl}/api/vscode-web/fs/stat?nodeId=master&path=${encodeURIComponent(__filename)}`);
     assert.equal(fsNoAuth.status, 401);
 
@@ -168,6 +173,7 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-fs/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-terminal/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-scm/);
+        assert.match(html, /\/vscode-web\/extensions\/foxwarm-webui/);
         assert.match(html, /&quot;scheme&quot;:&quot;foxwarm&quot;/);
         assert.match(html, /&quot;authority&quot;:&quot;node\+master&quot;/);
         assert.match(html, /&quot;path&quot;:&quot;\/tmp\/hello%20world&quot;/);
@@ -182,6 +188,7 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
         const webviewBootstrapHtml = await webviewBootstrap.text();
         assert.match(webviewBootstrapHtml, /new URL\(parentOrigin\)\.origin === new URL\(location\.href\)\.origin/);
         assert.match(webviewBootstrapHtml, /!window\.isSecureContext/);
+        assert.match(webviewBootstrapHtml, /parentOrigin.*window\.location\.origin/);
         assert.match(webviewBootstrapHtml, /return start\(parentOrigin\)/);
         assert.doesNotMatch(webviewBootstrapHtml, /sha256-old/);
         const patchedWorkbench = await fetch(`${baseUrl}/vscode-web/static/out/vs/workbench/workbench.web.main.internal.js`, { headers: cookieHeaders() });
@@ -239,6 +246,7 @@ test('VS Code Web workbench bootstrap honors forwarded base path prefixes', asyn
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-terminal/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-scm/);
+        assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-webui/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\//);
         assert.match(html, /https:\/\/example\.test\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\//);
         assert.match(html, /&quot;webEndpointUrlTemplate&quot;:&quot;https:\/\/example\.test\/proxy-prefix\/vscode-web\/static&quot;/);

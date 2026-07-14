@@ -1,0 +1,59 @@
+{
+  "name": "@foxwarm/vscode-web-foxwarm-webui",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "foxwarm",
+  "license": "MIT",
+  "browser": "./dist/extension.js",
+  "activationEvents": ["*"],
+  "contributes": {
+    "commands": [
+      {
+        "command": "foxwarm-webui.openSession",
+        "title": "Open Session",
+        "category": "Foxwarm"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "foxwarm-webui",
+          "title": "Foxwarm",
+          "icon": "media/foxwarm.svg"
+        }
+      ]
+    },
+    "views": {
+      "foxwarm-webui": [
+        {
+          "type": "webview",
+          "id": "foxwarm-webui.sidebar",
+          "name": "Foxwarm"
+        }
+      ]
+    },
+    "customEditors": [
+      {
+        "viewType": "foxwarm-webui.chatEditor",
+        "displayName": "Foxwarm Chat",
+        "selector": [{ "filenamePattern": "*.foxwarm-chat" }],
+        "priority": "default"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "foxwarm-webui.openSession",
+          "when": "false"
+        }
+      ]
+    }
+  },
+  "engines": { "vscode": "^1.100.0" },
+  "extensionKind": ["web"],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": { "@types/vscode": "^1.100.0" }
+}

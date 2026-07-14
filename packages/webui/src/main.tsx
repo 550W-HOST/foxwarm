@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import 'katex/dist/katex.min.css'
 import './index.css'
 import App from './App'
+import { EmbeddedChatApp, EmbeddedSidebarApp } from './EmbeddedWebUiApp'
+import { parseFoxwarmEmbeddedTarget } from './embeddedWebUi'
 
 function syncViewportHeight() {
   const vv = window.visualViewport
@@ -21,9 +23,16 @@ window.addEventListener('resize', syncViewportHeight)
 window.addEventListener('orientationchange', syncViewportHeight)
 window.addEventListener('pageshow', syncViewportHeight)
 
+const embeddedTarget = parseFoxwarmEmbeddedTarget(window.location.search)
+const content = embeddedTarget?.kind === 'sidebar'
+  ? <EmbeddedSidebarApp target={embeddedTarget} />
+  : embeddedTarget?.kind === 'chat'
+    ? <EmbeddedChatApp target={embeddedTarget} />
+    : <App />
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    {content}
   </StrictMode>,
 )
 

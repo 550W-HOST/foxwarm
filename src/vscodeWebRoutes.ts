@@ -16,6 +16,7 @@ const VSCODE_WEB_STATIC_ROUTE = `${VSCODE_WEB_ROUTE}/static`;
 const VSCODE_WEB_FS_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-fs`;
 const VSCODE_WEB_TERMINAL_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-terminal`;
 const VSCODE_WEB_SCM_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-scm`;
+const VSCODE_WEB_WEBUI_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-webui`;
 const VSCODE_WEB_WEBVIEW_RELATIVE_ROUTE = `webview/${crypto.randomBytes(24).toString('hex')}`;
 const VSCODE_WEB_WEBVIEW_ROUTE = `${VSCODE_WEB_ROUTE}/${VSCODE_WEB_WEBVIEW_RELATIVE_ROUTE}`;
 const VSCODE_WEB_ASSET_DIR_ENV = 'FOXWARM_VSCODE_WEB_ASSET_DIR';
@@ -543,7 +544,7 @@ function registerCapabilityDynamicStatic(httpServer: HttpServer, mountPath: stri
         const validation = 'if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + \'.\')) {';
         const sameOriginValidation = "if (new URL(parentOrigin).origin === new URL(location.href).origin || hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')) {";
         const serviceWorkerFlag = "const disableServiceWorker = searchParams.has('disableServiceWorker');";
-        const insecureServiceWorkerFlag = "const disableServiceWorker = searchParams.has('disableServiceWorker') || !window.isSecureContext;";
+        const insecureServiceWorkerFlag = "const disableServiceWorker = searchParams.has('disableServiceWorker') || !window.isSecureContext || (() => { try { return new URL(searchParams.get('parentOrigin')).origin === window.location.origin; } catch { return false; } })();";
         const sameOriginCheck = "if (new URL(parentOrigin).origin === new URL(location.href).origin) {\n\t\t\t\t\treturn start(parentOrigin);\n\t\t\t\t}";
         let html = source
           .replace(serviceWorkerFlag, insecureServiceWorkerFlag)
@@ -699,12 +700,14 @@ function buildWorkbenchConfiguration(req: express.Request) {
   const fsExtensionPath = getExternalPath(req, VSCODE_WEB_FS_EXTENSION_ROUTE);
   const terminalExtensionPath = getExternalPath(req, VSCODE_WEB_TERMINAL_EXTENSION_ROUTE);
   const scmExtensionPath = getExternalPath(req, VSCODE_WEB_SCM_EXTENSION_ROUTE);
+  const webUiExtensionPath = getExternalPath(req, VSCODE_WEB_WEBUI_EXTENSION_ROUTE);
   const webviewPath = getExternalPath(req, VSCODE_WEB_WEBVIEW_ROUTE);
   const callbackRoute = `${getExternalRouteBasePath(req)}/callback`;
   const baseUrl = `${origin}${staticBasePath}`;
   const fsExtensionUri = `${origin}${fsExtensionPath}`;
   const terminalExtensionUri = `${origin}${terminalExtensionPath}`;
   const scmExtensionUri = `${origin}${scmExtensionPath}`;
+  const webUiExtensionUri = `${origin}${webUiExtensionPath}`;
   const externalUrl = new URL(origin);
   const configuredWebviewOrigin = process.env[VSCODE_WEB_WEBVIEW_ORIGIN_ENV]?.trim().replace(/\/+$/, '');
   if (configuredWebviewOrigin && !/^https?:\/\/\{\{uuid\}\}\.[A-Za-z0-9.-]+(?::\d+)?$/.test(configuredWebviewOrigin)) {
@@ -734,7 +737,7 @@ function buildWorkbenchConfiguration(req: express.Request) {
         webEndpointUrlTemplate: baseUrl,
         webviewContentExternalBaseUrlTemplate: `${webviewBaseUrl}/`,
       },
-      additionalBuiltinExtensions: [toUriComponents(fsExtensionUri), toUriComponents(terminalExtensionUri), toUriComponents(scmExtensionUri)],
+      additionalBuiltinExtensions: [toUriComponents(fsExtensionUri), toUriComponents(terminalExtensionUri), toUriComponents(scmExtensionUri), toUriComponents(webUiExtensionUri)],
       configurationDefaults: {
         'window.menuBarVisibility': 'visible',
         'terminal.integrated.defaultProfile.linux': 'Foxwarm Terminal',
@@ -1016,6 +1019,7 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
       toUriComponents(extensionUrl('extensions/foxwarm-fs')),
       toUriComponents(extensionUrl('extensions/foxwarm-terminal')),
       toUriComponents(extensionUrl('extensions/foxwarm-scm')),
+      toUriComponents(extensionUrl('extensions/foxwarm-webui')),
     ];
     create(document.body, {
       ...config,
@@ -1122,6 +1126,7 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     { route: VSCODE_WEB_FS_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-fs') },
     { route: VSCODE_WEB_TERMINAL_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-terminal') },
     { route: VSCODE_WEB_SCM_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-scm') },
+    { route: VSCODE_WEB_WEBUI_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-webui') },
   ];
   for (const extension of extensionRoutes) {
     if (fs.existsSync(extension.dir)) {

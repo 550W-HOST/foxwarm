@@ -77,6 +77,7 @@ COPY --from=build /app/packages/webui/public ./packages/webui/public
 COPY --from=build /app/packages/vscode-web/foxwarm-fs ./packages/vscode-web/foxwarm-fs
 COPY --from=build /app/packages/vscode-web/foxwarm-terminal ./packages/vscode-web/foxwarm-terminal
 COPY --from=build /app/packages/vscode-web/foxwarm-scm ./packages/vscode-web/foxwarm-scm
+COPY --from=build /app/packages/vscode-web/foxwarm-webui ./packages/vscode-web/foxwarm-webui
 COPY --from=build /app/packages/vscode-web/assets ./packages/vscode-web/assets
 
 RUN mkdir -p /data

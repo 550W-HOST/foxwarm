@@ -1339,38 +1339,46 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     <div ref={chatRootRef} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
-        title={sessionDisplayName || sessionId}
+        title={sessionDisplayName || sessionRecord?.displayName || sessionId}
         subtitle={<span className="font-mono text-[12px]">session {sessionId}</span>}
         onBack={isMobile ? onBack : undefined}
         sticky
         actions={(
           <>
-            <div className="flex items-stretch">
+            {(onOpenCode || onOpenCodeNewWindow) && (
+              <div className="flex items-stretch">
+                {onOpenCode && (
+                  <button
+                    onClick={onOpenCode}
+                    className={`inline-flex items-center gap-1 border border-gray-200 px-2 py-2 text-sm text-gray-700 hover:bg-gray-50 sm:px-3 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700 ${onOpenCodeNewWindow ? 'rounded-l-lg' : 'rounded-lg'}`}
+                    title="Open code"
+                  >
+                    <Code2 className="h-4 w-4" />
+                    <span className="hidden sm:inline">Open code</span>
+                  </button>
+                )}
+                {onOpenCodeNewWindow && (
+                  <button
+                    onClick={onOpenCodeNewWindow}
+                    className={`inline-flex items-center justify-center rounded-r-lg border border-gray-200 px-2 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 ${onOpenCode ? 'border-l-0' : ''}`}
+                    title="Open code in a new browser tab"
+                    aria-label="Open code in a new browser tab"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            )}
+            {onOpenTerminal && (
               <button
-                onClick={onOpenCode}
-                className="inline-flex items-center gap-1 rounded-l-lg border border-gray-200 px-2 py-2 text-sm text-gray-700 hover:bg-gray-50 sm:px-3 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-                title="Open code"
+                onClick={onOpenTerminal}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                title="Open terminal"
               >
-                <Code2 className="h-4 w-4" />
-                <span className="hidden sm:inline">Open code</span>
+                <SquareTerminal className="h-4 w-4" />
+                <span className="hidden md:inline">Open terminal</span>
               </button>
-              <button
-                onClick={onOpenCodeNewWindow}
-                className="inline-flex items-center justify-center rounded-r-lg border border-l-0 border-gray-200 px-2 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
-                title="Open code in a new browser tab"
-                aria-label="Open code in a new browser tab"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </button>
-            </div>
-            <button
-              onClick={onOpenTerminal}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-              title="Open terminal"
-            >
-              <SquareTerminal className="h-4 w-4" />
-              <span className="hidden md:inline">Open terminal</span>
-            </button>
+            )}
             <div className="relative">
               <button
                 onClick={() => setShowMenu(!showMenu)}

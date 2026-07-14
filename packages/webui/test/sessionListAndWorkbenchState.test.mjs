@@ -136,10 +136,10 @@ test('global Code launch preference defaults safely and controls sidebar launche
   assert.equal(shouldOpenCodeInNewWindow(true), true)
 })
 
-test('session header Code target falls back safely and forced-new-tab overrides preference', async () => {
+test('session header Code target preserves valid remote nodes, falls back safely, and honors forced-new-tab', async () => {
   const { resolveSessionCodeTarget, shouldOpenCodeInNewWindow } = await loadTypeScriptModule('../src/vscodeWeb.ts')
   assert.deepEqual(resolveSessionCodeTarget('master', '/app/project'), { nodeId: 'master', path: '/app/project' })
-  assert.deepEqual(resolveSessionCodeTarget('worker', '/app/project'), { nodeId: 'master', path: '/' })
+  assert.deepEqual(resolveSessionCodeTarget('worker', '/app/project'), { nodeId: 'worker', path: '/app/project' })
   assert.deepEqual(resolveSessionCodeTarget('master', 'relative'), { nodeId: 'master', path: '/' })
   assert.equal(shouldOpenCodeInNewWindow(false, true), true)
 })

@@ -10,6 +10,7 @@ It is intentionally separate from `packages/webui` so the VS Code workbench and 
 - Browser web extension: `foxwarm-fs`, served from `/vscode-web/extensions/foxwarm-fs/`.
 - Browser web extension: `foxwarm-terminal`, served from `/vscode-web/extensions/foxwarm-terminal/`.
 - Browser web extension: `foxwarm-scm`, served from `/vscode-web/extensions/foxwarm-scm/`.
+- Browser web extension: `foxwarm-webui`, served from `/vscode-web/extensions/foxwarm-webui/`.
 - Optional official VS Code Web static assets served from `/vscode-web/static/` when prepared.
 - URI shape: `foxwarm://node+<nodeId>/<absolute-path>`.
   - `node` is the namespace/type layer.
@@ -39,11 +40,19 @@ The browser extension uses same-origin `fetch(..., { credentials: 'include' })`,
 
 Code's nested webview bootstrap cannot reliably send the normal login cookie from its sandboxed origin. Foxwarm therefore gives each server process an unguessable `/vscode-web/webview/<capability>/` route scoped only to Code's official `pre/` bootstrap assets. The authenticated workbench receives that capability URL; it does not expose repository data or general static files. Localhost launches use Code's hashed `{{uuid}}.localhost` origin so panel content is origin-isolated from WebUI. Production deployments can provide an equivalent wildcard origin such as `FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN=https://{{uuid}}.code.example.com`; without one, Foxwarm uses its same-origin capability fallback and patches the bootstrap hostname check (recomputing its CSP hash).
 
-Plain-HTTP access by a non-loopback IP is not a browser secure context, so native `crypto.subtle` and service workers are unavailable. Foxwarm keeps Code webviews functional there with a narrowly scoped SHA-256 fallback used only for Code's parent-origin correlation and disables the unavailable webview service worker; commit details and the built-in Markdown preview are covered by browser E2E. This does **not** make HTTP secure or provide origin isolation—use HTTPS plus a wildcard webview origin for exposed deployments.
+Plain-HTTP access by a non-loopback IP is not a browser secure context, so native `crypto.subtle` and service workers are unavailable. Foxwarm keeps Code webviews functional there with a narrowly scoped SHA-256 fallback used only for Code's parent-origin correlation. The same-origin compatibility path disables the webview service worker on HTTP and HTTPS; this also lets more than one same-origin Foxwarm webview coexist without the service worker's single-origin content routing colliding. Commit details and the built-in Markdown preview are covered by browser E2E. This does **not** make HTTP secure or provide origin isolation—use HTTPS plus a wildcard webview origin for exposed deployments.
 
 Firefox prompts with a browser-native one-item **Paste** menu when a secure page probes `navigator.clipboard.read()` without an explicit paste action. Code's Explorer normally performs that probe before showing its own context menu. Foxwarm's served pinned workbench avoids the probe only for Firefox's menu-visibility check and relies on the extension's in-memory copied-resource state instead; choosing Paste can still request clipboard access normally. This prevents the first-right-click prompt without weakening the actual paste action.
 
 The terminal extension also uses same-origin cookie auth for `POST /api/terminals` and `WebSocket /api/terminals/stream`. Browser WebSockets cannot set an `Authorization` header, so do not put tokens in terminal WebSocket query strings.
+
+## Foxwarm sidebar and chat editors
+
+`foxwarm-webui` contributes a dedicated **Foxwarm** Activity Bar container. Its WebviewView contains a thin outer bridge and an iframe loading the normal WebUI in the strict `foxwarmEmbed=sidebar` mode. That mode renders the session list, search/view controls, settings, and the existing New agent/New session dialogs, but not the WebUI workbench shell. Session selection sends only a versioned `open-session` message checked against the exact iframe source plus a random per-view nonce.
+
+Each selected session opens through a read-only custom editor at a deterministic synthetic `foxwarm-chat:` URI. The editor iframe uses `foxwarmEmbed=chat`, renders exactly one normal `Chat`, and therefore fetches only `GET /api/sessions/:id/history` and listens only to `/api/sessions/:id/stream` for session state. The one sidebar iframe owns the separate global session-list fetch/stream. Hidden chat editors retain context; opening the same URI reveals the existing editor, extension global state restores open chat editors after a Code page reload, and an explicit editor close removes that session from restoration state. Session links inside an embedded chat ask the host extension to open another chat editor, while commit markers retain the fixed `foxwarm-scm.openCommitDetails` bridge.
+
+The embed URLs never contain the WebUI token. They use the normal WebUI cookie and are intended for the current same-public-origin deployment, including reverse-proxy base paths. Chrome and Firefox E2E cover HTTPS with a stripping `/alphabot/` proxy. A separately configured wildcard webview origin—and localhost's default hashed webview origin—can make the inner WebUI a third-party-cookie context; a scoped cross-origin embed credential exchange is intentionally not part of this first phase, so those isolated-origin deployments may show the login view until that flow is designed.
 
 ## Terminal profile
 
