@@ -33,6 +33,15 @@
         "category": "Foxwarm SCM"
       }
     ],
+    "views": {
+      "scm": [
+        {
+          "type": "webview",
+          "id": "foxwarm-scm.commitDetailsView",
+          "name": "Commit Details"
+        }
+      ]
+    },
     "menus": {
       "scm/title": [
         {

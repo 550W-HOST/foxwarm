@@ -57,7 +57,7 @@ await esbuild.build({
   external: ['vscode'],
   logLevel: 'silent',
 });
-const { normalizeCommitOpenRequest, openCommitDetails } = createRequire(import.meta.url)(output);
+const { CommitDetailsViewProvider, normalizeCommitOpenRequest, openCommitDetails } = createRequire(import.meta.url)(output);
 
 const details = {
   nodeId: 'worker-1',
@@ -140,4 +140,43 @@ test('opens canonical workspace, renders data by postMessage, and maps file inde
   await openCommitDetails('http://example.test/api/vscode-web/git', { kind: 'openCommit', nodeId: 'worker-1', path: '/requested/path', commitId: 'abcdef1' });
   assert.equal(panelCreateCount, 1);
   assert.equal(panelRevealCount, 1);
+});
+
+test('routes commit opens to the sidebar and keeps the editor panel available from its fixed button', async () => {
+  executedCommands.length = 0;
+  const shown = [];
+  const panelCountBefore = panelCreateCount;
+  await openCommitDetails(
+    'http://example.test/api/vscode-web/git',
+    { kind: 'openCommit', nodeId: 'worker-1', path: '/requested/path', commitId: 'abcdef1' },
+    { showInSidebar: async (value) => { shown.push(value); } },
+  );
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0].workspace, '/canonical/repo');
+  assert.equal(panelCreateCount, panelCountBefore);
+
+  let sidebarMessageHandler;
+  const sidebarMessages = [];
+  const sidebarWebview = {
+    cspSource: 'vscode-webview:',
+    html: '',
+    options: {},
+    onDidReceiveMessage(handler) { sidebarMessageHandler = handler; return { dispose() {} }; },
+    async postMessage(message) { sidebarMessages.push(message); return true; },
+  };
+  const view = {
+    webview: sidebarWebview,
+    onDidDispose() { return { dispose() {} }; },
+  };
+  const provider = new CommitDetailsViewProvider();
+  provider.resolveWebviewView(view);
+  await provider.show(shown[0]);
+  assert.match(sidebarWebview.html, /Open in editor/);
+  assert.match(sidebarWebview.html, /class="sidebar"/);
+  assert.ok(executedCommands.some((entry) => entry.id === 'workbench.view.scm'));
+  assert.ok(executedCommands.some((entry) => entry.id === 'foxwarm-scm.commitDetailsView.focus'));
+  assert.deepEqual(sidebarMessages.at(-1), { type: 'details', details: shown[0] });
+  const revealBefore = panelRevealCount;
+  await sidebarMessageHandler({ type: 'openEditor' });
+  assert.equal(panelRevealCount, revealBefore + 1);
 });

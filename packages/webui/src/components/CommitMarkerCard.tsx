@@ -10,8 +10,6 @@ const CommitMarkerCard = memo(function CommitMarkerCard({ target, onOpen }: {
 }) {
   const [opening, setOpening] = useState(false)
   const [error, setError] = useState('')
-  const repositoryName = target.path.split('/').filter(Boolean).pop() || '/'
-
   const open = async () => {
     if (!onOpen || opening) return
     setOpening(true)
@@ -26,18 +24,15 @@ const CommitMarkerCard = memo(function CommitMarkerCard({ target, onOpen }: {
   }
 
   return (
-    <div className="my-2 rounded-lg border border-violet-200 bg-violet-50/80 px-3 py-2.5 text-violet-950 dark:border-violet-800 dark:bg-violet-950/30 dark:text-violet-100">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
-            <GitCommit size={14} aria-hidden="true" />
-            <span>Commit</span>
-            <code className="normal-case tracking-normal" title={target.commitId}>{target.commitId.slice(0, 12)}</code>
-          </div>
-          <div className="mt-1 truncate text-sm font-medium" title={target.path}>{repositoryName}</div>
-          <div className="mt-0.5 truncate font-mono text-[11px] text-violet-700/80 dark:text-violet-300/80" title={`${target.nodeId}:${target.path}`}>
+    <div className="my-2 rounded-lg border border-violet-200 bg-violet-50/80 px-3 py-2 text-violet-950 dark:border-violet-800 dark:bg-violet-950/30 dark:text-violet-100">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2 text-xs text-violet-700 dark:text-violet-300">
+          <GitCommit size={14} className="shrink-0" aria-hidden="true" />
+          <span className="shrink-0 font-semibold uppercase tracking-wide">Commit</span>
+          <code className="shrink-0" title={target.commitId}>{target.commitId.slice(0, 12)}</code>
+          <span className="min-w-0 truncate font-mono text-[11px] text-violet-700/80 dark:text-violet-300/80" title={`${target.nodeId}:${target.path}`}>
             {target.nodeId}:{target.path}
-          </div>
+          </span>
         </div>
         <button
           type="button"

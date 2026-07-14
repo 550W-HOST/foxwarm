@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { buildFoxwarmNodeUriString, normalizeGitRelativePath, parseFoxwarmUri } from './foxwarmUri';
-import { openCommitDetails } from './commitDetails';
+import { COMMIT_DETAILS_VIEW_ID, CommitDetailsViewProvider, openCommitDetails } from './commitDetails';
 export { buildFoxwarmNodeUriString, normalizeGitRelativePath, parseFoxwarmUri } from './foxwarmUri';
 
 type GitSubmoduleChange = {
@@ -299,13 +299,16 @@ class FoxwarmGitContentProvider implements vscode.TextDocumentContentProvider {
 export function activate(context: vscode.ExtensionContext): void {
   gitApiBase = deriveGitApiBase(context.extensionUri);
   const pendingCommitKey = 'foxwarm.pendingCommitOpen.v1';
+  const commitDetailsView = new CommitDetailsViewProvider();
   const openCommit = async (request: unknown) => {
     await context.globalState.update(pendingCommitKey, undefined);
     return openCommitDetails(gitApiBase, request, {
       deferForWorkspaceReload: (canonicalRequest) => context.globalState.update(pendingCommitKey, canonicalRequest),
+      showInSidebar: (details) => commitDetailsView.show(details),
     });
   };
   context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(COMMIT_DETAILS_VIEW_ID, commitDetailsView),
     vscode.workspace.registerTextDocumentContentProvider('foxwarm-git', new FoxwarmGitContentProvider()),
     vscode.commands.registerCommand('foxwarm-scm.refresh', () => refresh()),
     vscode.commands.registerCommand('foxwarm-scm.openChange', (repositoryKey: string, change: GitChange) => {

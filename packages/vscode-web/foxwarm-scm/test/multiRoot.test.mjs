@@ -61,6 +61,7 @@ const vscodeMock = {
     executeCommand: async (id, ...args) => { executedCommands.push({ id, args }); },
   },
   window: {
+    registerWebviewViewProvider: () => disposable(),
     showQuickPick: async () => undefined,
     showInformationMessage: async () => undefined,
   },
