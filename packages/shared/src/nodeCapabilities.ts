@@ -1,4 +1,8 @@
 export const CLI_NODE_CAPABILITIES = {
+  services: {
+    'vscode-fs': 1,
+    'vscode-git': 1,
+  },
   tools: [
     {
       name: 'read',

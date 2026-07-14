@@ -3,8 +3,8 @@ export type FoxwarmOpenRequest =
   | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; endLine?: number }
 
 export type NormalizedFoxwarmOpenRequest =
-  | { kind: 'addFolder'; nodeId: 'master'; path: string }
-  | { kind: 'openFile'; nodeId: 'master'; path: string; startLine?: number; endLine?: number }
+  | { kind: 'addFolder'; nodeId: string; path: string }
+  | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; endLine?: number }
 
 export function normalizeFoxwarmAbsolutePath(value: unknown): string {
   if (typeof value !== 'string') {
@@ -40,13 +40,14 @@ export function normalizeFoxwarmOpenRequest(value: unknown): NormalizedFoxwarmOp
     throw new Error('Invalid Foxwarm open request.')
   }
   const request = value as Record<string, unknown>
-  if (request.nodeId !== 'master') {
-    throw new Error('Foxwarm Code currently supports only node `master`.')
+  if (typeof request.nodeId !== 'string' || !/^[A-Za-z0-9._-]+$/.test(request.nodeId)) {
+    throw new Error('Foxwarm node id is invalid.')
   }
+  const nodeId = request.nodeId
   const path = normalizeFoxwarmAbsolutePath(request.path)
 
   if (request.kind === 'addFolder') {
-    return { kind: 'addFolder', nodeId: 'master', path }
+    return { kind: 'addFolder', nodeId, path }
   }
   if (request.kind === 'openFile') {
     const startLine = normalizeLine(request.startLine, 'startLine')
@@ -56,7 +57,7 @@ export function normalizeFoxwarmOpenRequest(value: unknown): NormalizedFoxwarmOp
     }
     return {
       kind: 'openFile',
-      nodeId: 'master',
+      nodeId,
       path,
       ...(startLine !== undefined ? { startLine } : {}),
       ...(endLine !== undefined ? { endLine } : {}),

@@ -19,6 +19,7 @@ interface ToolDefinition {
 
 interface NodeCapabilities {
   tools: ToolDefinition[];
+  services?: Record<string, number>;
 }
 
 interface Node {
@@ -49,10 +50,28 @@ interface PendingFileTransfer<T = any> {
   reject: (error: string) => void;
 }
 
+interface PendingServiceRequest {
+  id: string;
+  nodeId: string;
+  service: string;
+  operation: string;
+  resolve: (result: any) => void;
+  reject: (error: Error) => void;
+  timeout: NodeJS.Timeout;
+}
+
+export class NodeServiceRequestError extends Error {
+  constructor(public readonly code: string, message: string, public readonly statusCode = 400) {
+    super(message);
+    this.name = 'NodeServiceRequestError';
+  }
+}
+
 export class NodesManager {
   private nodes: Map<string, Node> = new Map();
   private toolCalls: Map<string, ToolCall> = new Map();
   private fileTransfers: Map<string, PendingFileTransfer> = new Map();
+  private serviceRequests: Map<string, PendingServiceRequest> = new Map();
   private tools: Set<string> = new Set(); // Available tools
   
   constructor() {
@@ -259,6 +278,13 @@ export class NodesManager {
       this.fileTransfers.delete(transferId);
       transfer.reject(reason);
     }
+
+    for (const [requestId, request] of this.serviceRequests.entries()) {
+      if (request.nodeId !== nodeId) continue;
+      this.serviceRequests.delete(requestId);
+      clearTimeout(request.timeout);
+      request.reject(new NodeServiceRequestError('NodeUnavailable', reason, 503));
+    }
   }
 
   /**
@@ -309,6 +335,56 @@ export class NodesManager {
         type: node.type,
         tools: node.capabilities?.tools || []
       }));
+  }
+
+  async requestNodeService(nodeId: string, service: string, operation: string, args: Record<string, unknown>, timeoutMs = 30_000): Promise<any> {
+    const node = this.nodes.get(nodeId);
+    if (!node || nodeId === 'master' || !node.ws) {
+      throw new NodeServiceRequestError('NodeUnavailable', `Remote node \`${nodeId}\` is not connected.`, 503);
+    }
+    const version = node.capabilities?.services?.[service];
+    if (!Number.isInteger(version) || Number(version) < 1) {
+      throw new NodeServiceRequestError('UnsupportedService', `Node \`${nodeId}\` does not advertise service \`${service}\`.`, 501);
+    }
+    const requestId = `service_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (!this.serviceRequests.has(requestId)) return;
+        this.serviceRequests.delete(requestId);
+        reject(new NodeServiceRequestError('NodeTimeout', `Node service request \`${requestId}\` timed out.`, 504));
+      }, timeoutMs);
+      this.serviceRequests.set(requestId, { id: requestId, nodeId, service, operation, resolve, reject, timeout });
+      try {
+        node.ws!.send(JSON.stringify({ type: 'node_service_request', requestId, service, operation, args }));
+      } catch (error) {
+        this.serviceRequests.delete(requestId);
+        clearTimeout(timeout);
+        reject(new NodeServiceRequestError('NodeUnavailable', error instanceof Error ? error.message : String(error), 503));
+      }
+    });
+  }
+
+  handleNodeServiceResponse(nodeId: string, requestId: string, result: any): void {
+    const request = this.serviceRequests.get(requestId);
+    if (!request || request.nodeId !== nodeId) {
+      logger.warn({ nodeId, requestId }, 'Node service response for unknown request');
+      return;
+    }
+    this.serviceRequests.delete(requestId);
+    clearTimeout(request.timeout);
+    request.resolve(result);
+  }
+
+  handleNodeServiceError(nodeId: string, requestId: string, error: { code?: string; message?: string; statusCode?: number } | string): void {
+    const request = this.serviceRequests.get(requestId);
+    if (!request || request.nodeId !== nodeId) {
+      logger.warn({ nodeId, requestId }, 'Node service error for unknown request');
+      return;
+    }
+    this.serviceRequests.delete(requestId);
+    clearTimeout(request.timeout);
+    const payload = typeof error === 'string' ? { message: error } : error;
+    request.reject(new NodeServiceRequestError(payload.code || 'NodeServiceError', payload.message || 'Node service failed.', payload.statusCode || 500));
   }
 
   /**

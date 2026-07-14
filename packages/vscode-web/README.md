@@ -13,7 +13,7 @@ It is intentionally separate from `packages/webui` so the VS Code workbench and 
 - Optional official VS Code Web static assets served from `/vscode-web/static/` when prepared.
 - URI shape: `foxwarm://node+<nodeId>/<absolute-path>`.
   - `node` is the namespace/type layer.
-  - `<nodeId>` is currently only `master` on the backend.
+  - `<nodeId>` can be `master` or a connected CLI node advertising the versioned `vscode-fs` service.
   - The remaining URI path is the real absolute filesystem path.
 
 Example workspace folder URI:
@@ -62,11 +62,17 @@ Current MVP behavior:
 
 Current MVP behavior:
 
-- Supports only `nodeId=master`.
+- Supports `master` plus connected CLI nodes advertising the versioned `vscode-git` service.
 - Shows a single `Changes` resource group for working tree status.
 - Provides `Foxwarm SCM: Refresh Git Status`.
 - Opens `HEAD ↔ Working Tree` diffs for modified, added, deleted, renamed, and untracked files where possible.
 - Does not implement staging, committing, pushing, branch management, credentials, blame, history graph, or file watchers.
+
+## Remote node transport
+
+Remote filesystem and Git requests do not invoke model-facing `read`/`write`/`exec` tools. The authenticated node connection advertises versioned `vscode-fs` and `vscode-git` service capabilities; the master sends fixed-operation `node_service_request` messages and correlates responses/errors by request id. The CLI node executes those operations in its own environment with the same 50 MiB file and 10 MiB Git-output limits used by the HTTP layer. Offline nodes return an unavailable response, and older clients that do not advertise a service are rejected instead of silently falling back to master paths.
+
+The current URI/path implementation is POSIX-oriented. Cross-platform remote terminal and Windows path/PTY delivery remain separate follow-up work.
 
 ## Preparing the optional Code workbench
 
@@ -132,17 +138,17 @@ The authenticated main WebUI presents the feature to users as **Code** (the `/vs
 
 - The sidebar `Code` split button opens a master-node workspace, defaulting to `/`, and its dropdown accepts another absolute POSIX path. The selected path and the global `Open in new browser tab` preference are remembered in localStorage.
 - Embedded mode creates/focuses a singleton `Code` workbench tab. The actual iframe lives in a persistent top-level portal host and is positioned over the active tab slot, so switching WebUI tabs or views hides rather than unmounts the VS Code browsing context. Its first launch creates `state/vscode-web/foxwarm.code-workspace` (override with `FOXWARM_VSCODE_WEB_WORKSPACE_PATH`). Later folder requests are sent over a same-origin request/ack bridge and appended with the VS Code workspace API without changing the iframe URL or losing open editors and terminals.
-- Paths rendered by direct `read`, `write`, `edit`, and `apply_patch` tool cards are Code links for master-node sessions. They open the file in the existing embedded workbench; `read` line ranges become editor selections. New-browser-tab mode carries the initial folder/file in the launch URL instead of trying to control an already-open tab.
-- Session headers provide `Open code` using the session's master-node cwd (with a safe `master:/` fallback), plus an adjacent external-link button that always opens a new browser tab.
+- Paths rendered by direct `read`, `write`, `edit`, and `apply_patch` tool cards use the session's current master or remote node. They open the file in the existing embedded workbench; `read` line ranges become editor selections. New-browser-tab mode carries the node/folder/file in the launch URL instead of trying to control an already-open tab.
+- Session headers provide `Open code` using the session's current node and cwd (with a safe `master:/` fallback), plus an adjacent external-link button that always opens a new browser tab.
 
-Launch URLs are derived from the dynamic WebUI API base path and preserve reverse-proxy prefixes. Direct new-browser-tab launches include a `foxwarm://node+master/<absolute-path>` `folderUri`; embedded launches use the persistent workspace configuration plus an initial folder hint. Runtime transfer/pop-out of an already running iframe is intentionally not implemented.
+Launch URLs are derived from the dynamic WebUI API base path and preserve reverse-proxy prefixes. Direct new-browser-tab launches include a `foxwarm://node+<nodeId>/<absolute-path>` `folderUri`; embedded launches use the persistent workspace configuration plus an initial folder hint. Runtime transfer/pop-out of an already running iframe is intentionally not implemented.
 
 ## Not in scope yet
 
 - Committing Code workbench static assets or source/dependency caches.
 - File/text search providers.
 - File watching.
-- Remote node filesystem implementation.
+- Remote integrated terminals (filesystem and read-only SCM are supported; the current terminal backend remains master-only).
 
 ## Validation commands
 

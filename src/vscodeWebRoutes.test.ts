@@ -7,6 +7,9 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { HttpServer } from './httpServer';
 import { registerVscodeWebRoutes } from './vscodeWebRoutes';
+import { nodesManager } from './nodes/manager';
+import { executeVscodeNodeService, serializeVscodeNodeServiceError } from '../packages/shared/dist/vscodeNodeService';
+import type { WebSocket } from 'ws';
 
 const TEST_TOKEN = 'secret-token';
 const execFileAsync = promisify(execFile);
@@ -102,12 +105,12 @@ test('Code route returns a friendly actionable page when optional assets are mis
   }
 });
 
-test('VS Code Web filesystem API is master-only and rejects non-absolute paths', async () => {
+test('VS Code Web filesystem API rejects unavailable nodes and non-absolute paths', async () => {
   await withServer(async (_server, baseUrl) => {
-    const unsupportedNode = await fetch(`${baseUrl}/api/vscode-web/fs/stat?nodeId=worker-a&path=${encodeURIComponent(__filename)}`, { headers: bearerHeaders() });
-    assert.equal(unsupportedNode.status, 400);
-    const unsupportedNodePayload = await unsupportedNode.json() as { code?: string };
-    assert.equal(unsupportedNodePayload.code, 'UnsupportedNode');
+    const unavailableNode = await fetch(`${baseUrl}/api/vscode-web/fs/stat?nodeId=worker-a&path=${encodeURIComponent(__filename)}`, { headers: bearerHeaders() });
+    assert.equal(unavailableNode.status, 503);
+    const unavailableNodePayload = await unavailableNode.json() as { code?: string };
+    assert.equal(unavailableNodePayload.code, 'NodeUnavailable');
 
     const relativePath = await fetch(`${baseUrl}/api/vscode-web/fs/stat?nodeId=master&path=relative/path`, { headers: bearerHeaders() });
     assert.equal(relativePath.status, 400);
@@ -277,6 +280,59 @@ test('VS Code Web git API reports status and returns base/working content', asyn
   });
 });
 
+test('VS Code Web filesystem and Git APIs dispatch to an advertised remote node service', async () => {
+  await withTempDir(async (remotePath) => {
+    const nodeId = `vscode-remote-${Date.now()}`;
+    const fakeSocket = {
+      send(raw: string) {
+        const message = JSON.parse(raw);
+        if (message.type !== 'node_service_request') return;
+        void executeVscodeNodeService(message.service, message.operation, message.args)
+          .then((result) => nodesManager.handleNodeServiceResponse(nodeId, message.requestId, result))
+          .catch((error) => nodesManager.handleNodeServiceError(nodeId, message.requestId, serializeVscodeNodeServiceError(error)));
+      },
+      close() {},
+    } as unknown as WebSocket;
+    nodesManager.registerNodeWithTools(fakeSocket, {} as any, 'cli-node', {
+      tools: [],
+      services: { 'vscode-fs': 1, 'vscode-git': 1 },
+    }, nodeId);
+    try {
+      await fs.writeFile(path.join(remotePath, 'remote.txt'), 'remote before\n');
+      await execFileAsync('git', ['init'], { cwd: remotePath });
+      await execFileAsync('git', ['config', 'user.email', 'foxwarm-test@example.invalid'], { cwd: remotePath });
+      await execFileAsync('git', ['config', 'user.name', 'Foxwarm Test'], { cwd: remotePath });
+      await execFileAsync('git', ['add', 'remote.txt'], { cwd: remotePath });
+      await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: remotePath });
+      await fs.writeFile(path.join(remotePath, 'remote.txt'), 'remote after\n');
+
+      await withServer(async (_server, baseUrl) => {
+        const stat = await fetch(`${baseUrl}/api/vscode-web/fs/stat?nodeId=${nodeId}&path=${encodeURIComponent(path.join(remotePath, 'remote.txt'))}`, { headers: bearerHeaders() });
+        assert.equal(stat.status, 200);
+        assert.equal((await stat.json() as { type: number }).type, 1);
+
+        const read = await fetch(`${baseUrl}/api/vscode-web/fs/read-file?nodeId=${nodeId}&path=${encodeURIComponent(path.join(remotePath, 'remote.txt'))}`, { headers: bearerHeaders() });
+        assert.equal(await read.text(), 'remote after\n');
+
+        const writePath = path.join(remotePath, 'created.txt');
+        const write = await fetch(`${baseUrl}/api/vscode-web/fs/write-file?nodeId=${nodeId}&path=${encodeURIComponent(writePath)}&create=1&overwrite=0`, {
+          method: 'PUT', headers: bearerHeaders({ 'Content-Type': 'application/octet-stream' }), body: 'created remotely\n',
+        });
+        assert.equal(write.status, 200);
+        assert.equal(await fs.readFile(writePath, 'utf8'), 'created remotely\n');
+
+        const status = await fetch(`${baseUrl}/api/vscode-web/git/status?nodeId=${nodeId}&workspace=${encodeURIComponent(remotePath)}`, { headers: bearerHeaders() });
+        assert.equal(status.status, 200);
+        const payload = await status.json() as { nodeId: string; changes: Array<{ path: string }> };
+        assert.equal(payload.nodeId, nodeId);
+        assert.deepEqual(payload.changes.map((change) => change.path).sort(), ['created.txt', 'remote.txt']);
+      });
+    } finally {
+      nodesManager.unregisterNode(nodeId, fakeSocket);
+    }
+  });
+});
+
 test('VS Code Web git status reports submodule commit changes without a separate git diff', async () => {
   await withTempDir(async (dirPath) => {
     const sourcePath = path.join(dirPath, 'submodule-source');
@@ -323,13 +379,17 @@ test('VS Code Web git status reports submodule commit changes without a separate
   });
 });
 
-test('VS Code Web git API rejects unsupported nodes and path traversal', async () => {
+test('VS Code Web git API rejects unavailable/invalid nodes and path traversal', async () => {
   await withTempDir(async (repoPath) => {
     await execFileAsync('git', ['init'], { cwd: repoPath });
     await withServer(async (_server, baseUrl) => {
-      const unsupportedNode = await fetch(`${baseUrl}/api/vscode-web/git/status?nodeId=worker&workspace=${encodeURIComponent(repoPath)}`, { headers: bearerHeaders() });
-      assert.equal(unsupportedNode.status, 400);
-      assert.equal((await unsupportedNode.json() as { code?: string }).code, 'UnsupportedNode');
+      const unavailableNode = await fetch(`${baseUrl}/api/vscode-web/git/status?nodeId=worker&workspace=${encodeURIComponent(repoPath)}`, { headers: bearerHeaders() });
+      assert.equal(unavailableNode.status, 503);
+      assert.equal((await unavailableNode.json() as { code?: string }).code, 'NodeUnavailable');
+
+      const invalidNode = await fetch(`${baseUrl}/api/vscode-web/git/status?nodeId=bad%20node&workspace=${encodeURIComponent(repoPath)}`, { headers: bearerHeaders() });
+      assert.equal(invalidNode.status, 400);
+      assert.equal((await invalidNode.json() as { code?: string }).code, 'InvalidNode');
 
       const traversal = await fetch(`${baseUrl}/api/vscode-web/git/content?nodeId=master&workspace=${encodeURIComponent(repoPath)}&path=..%2Fsecret&side=working`, { headers: bearerHeaders() });
       assert.equal(traversal.status, 400);

@@ -12,6 +12,7 @@ export type NodeToolDefinition = {
 
 export type NodeCapabilitiesSnapshot = {
   tools: NodeToolDefinition[]
+  services?: Record<string, number>
 }
 
 export type ApprovedNodeRecord = {

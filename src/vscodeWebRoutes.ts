@@ -5,6 +5,7 @@ import { spawn } from 'child_process';
 import type { HttpServer } from './httpServer';
 import { BASE_DIR, STATE_DIR } from './config';
 import { logger } from './common';
+import { nodesManager, NodeServiceRequestError } from './nodes/manager';
 
 const VSCODE_WEB_ROUTE = '/vscode-web';
 const VSCODE_WEB_API_PREFIX = '/api/vscode-web/fs';
@@ -39,6 +40,7 @@ type FsErrorCode =
   | 'Unavailable'
   | 'InvalidPath'
   | 'UnsupportedNode'
+  | 'InvalidNode'
   | 'PayloadTooLarge'
   | 'GitError'
   | 'Unknown';
@@ -64,6 +66,7 @@ function statusForErrorCode(code: FsErrorCode): number {
     case 'FileIsADirectory':
     case 'InvalidPath':
     case 'UnsupportedNode':
+    case 'InvalidNode':
       return 400;
     case 'NoPermissions':
       return 403;
@@ -96,8 +99,8 @@ function parseBool(value: unknown): boolean {
 
 function normalizeNodeId(value: unknown): string {
   const nodeId = typeof value === 'string' && value.trim() ? value.trim() : 'master';
-  if (nodeId !== 'master') {
-    throw new VscodeWebFsError('UnsupportedNode', `VS Code Web filesystem MVP currently supports only node \`master\` (requested \`${nodeId}\`).`);
+  if (!/^[A-Za-z0-9._-]+$/.test(nodeId)) {
+    throw new VscodeWebFsError('InvalidNode', `Invalid node id: ${nodeId}`);
   }
   return nodeId;
 }
@@ -191,9 +194,17 @@ function sendFsError(res: express.Response, error: unknown): void {
     res.status(error.statusCode).json({ error: error.message, code: error.code });
     return;
   }
+  if (error instanceof NodeServiceRequestError) {
+    res.status(error.statusCode).json({ error: error.message, code: error.code });
+    return;
+  }
   const anyError = error as any;
   logger.error({ err: error }, 'VS Code Web filesystem route failed');
   res.status(500).json({ error: anyError?.message || 'Internal Server Error', code: 'Unknown' });
+}
+
+async function requestRemoteVscodeService(nodeId: string, service: 'vscode-fs' | 'vscode-git', operation: string, args: Record<string, unknown>): Promise<any> {
+  return nodesManager.requestNodeService(nodeId, service, operation, args);
 }
 
 function normalizeWorkspacePath(value: unknown): string {
@@ -863,7 +874,7 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
       };
       void commands.executeCommand('foxwarm-fs.handleOpenRequest', {
         kind: 'openFile',
-        nodeId: 'master',
+        nodeId: startupQuery.get('openFileNodeId') || 'master',
         path: openFilePath,
         startLine: parseLine('startLine'),
         endLine: parseLine('endLine'),
@@ -974,7 +985,11 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     method: 'GET',
     handler: async (req, res) => {
       try {
-        const { fullPath } = getRequestTarget(req);
+        const { nodeId, fullPath } = getRequestTarget(req);
+        if (nodeId !== 'master') {
+          res.json(await requestRemoteVscodeService(nodeId, 'vscode-fs', 'stat', { path: fullPath }));
+          return;
+        }
         const { stat, lst } = await getExistingStats(fullPath);
         res.json(toFileStat(stat, lst));
       } catch (error) {
@@ -988,7 +1003,11 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     method: 'GET',
     handler: async (req, res) => {
       try {
-        const { fullPath } = getRequestTarget(req);
+        const { nodeId, fullPath } = getRequestTarget(req);
+        if (nodeId !== 'master') {
+          res.json(await requestRemoteVscodeService(nodeId, 'vscode-fs', 'read-directory', { path: fullPath }));
+          return;
+        }
         const { stat } = await getExistingStats(fullPath);
         if (!stat.isDirectory()) {
           throw new VscodeWebFsError('FileNotADirectory', `Path is not a directory: ${fullPath}`);
@@ -1015,7 +1034,14 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     method: 'GET',
     handler: async (req, res) => {
       try {
-        const { fullPath } = getRequestTarget(req);
+        const { nodeId, fullPath } = getRequestTarget(req);
+        if (nodeId !== 'master') {
+          const result = await requestRemoteVscodeService(nodeId, 'vscode-fs', 'read-file', { path: fullPath });
+          res.setHeader('Content-Type', 'application/octet-stream');
+          res.setHeader('Cache-Control', 'no-store');
+          res.send(Buffer.from(String(result?.contentBase64 || ''), 'base64'));
+          return;
+        }
         const { stat } = await getExistingStats(fullPath);
         if (!stat.isFile()) {
           throw new VscodeWebFsError('FileIsADirectory', `Path is not a file: ${fullPath}`);
@@ -1037,9 +1063,14 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     method: 'PUT',
     handler: async (req, res) => {
       try {
-        const { fullPath } = getRequestTarget(req);
+        const { nodeId, fullPath } = getRequestTarget(req);
         const create = parseBool(getSingleQueryValue(req.query.create));
         const overwrite = parseBool(getSingleQueryValue(req.query.overwrite));
+        if (nodeId !== 'master') {
+          const content = await readRawRequestBody(req);
+          res.json(await requestRemoteVscodeService(nodeId, 'vscode-fs', 'write-file', { path: fullPath, create, overwrite, contentBase64: content.toString('base64') }));
+          return;
+        }
         await assertParentDirectoryExists(fullPath);
         const existing = await fs.pathExists(fullPath);
         if (!existing && !create) {
@@ -1069,7 +1100,11 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     method: 'POST',
     handler: async (req, res) => {
       try {
-        const { fullPath } = getRequestTarget(req);
+        const { nodeId, fullPath } = getRequestTarget(req);
+        if (nodeId !== 'master') {
+          res.json(await requestRemoteVscodeService(nodeId, 'vscode-fs', 'create-directory', { path: fullPath }));
+          return;
+        }
         await assertParentDirectoryExists(fullPath);
         if (await fs.pathExists(fullPath)) {
           throw new VscodeWebFsError('FileExists', `Path already exists: ${fullPath}`);
@@ -1088,8 +1123,12 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     method: 'POST',
     handler: async (req, res) => {
       try {
-        const { fullPath } = getRequestTarget(req);
+        const { nodeId, fullPath } = getRequestTarget(req);
         const recursive = parseBool(req.body?.recursive);
+        if (nodeId !== 'master') {
+          res.json(await requestRemoteVscodeService(nodeId, 'vscode-fs', 'delete', { path: fullPath, recursive }));
+          return;
+        }
         const { stat } = await getExistingStats(fullPath);
         if (stat.isDirectory()) {
           await fs.rm(fullPath, { recursive, force: false });
@@ -1112,7 +1151,10 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
         const oldPath = normalizeRealPath(req.body?.oldPath);
         const newPath = normalizeRealPath(req.body?.newPath);
         const overwrite = parseBool(req.body?.overwrite);
-        void nodeId;
+        if (nodeId !== 'master') {
+          res.json(await requestRemoteVscodeService(nodeId, 'vscode-fs', 'rename', { path: oldPath, newPath, overwrite }));
+          return;
+        }
         await getExistingStats(oldPath);
         await assertParentDirectoryExists(newPath);
         const destinationExists = await fs.pathExists(newPath);
@@ -1136,6 +1178,11 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     handler: async (req, res) => {
       try {
         const { nodeId, workspace } = getGitRequestBase(req);
+        if (nodeId !== 'master') {
+          const result = await requestRemoteVscodeService(nodeId, 'vscode-git', 'status', { workspace });
+          res.json({ nodeId, ...result });
+          return;
+        }
         const topLevel = (await runGit(workspace, ['rev-parse', '--show-toplevel'], { maxStdoutBytes: 1024 * 1024, safeDirectory: '*' })).toString('utf8').trim();
         const rawStatus = await runGit(topLevel, ['status', '--porcelain=v2', '-z', '-uall'], { maxStdoutBytes: MAX_GIT_OUTPUT_BYTES });
         const changes = await enrichSubmoduleChanges(topLevel, parseGitStatusPorcelainV2(rawStatus));
@@ -1156,9 +1203,16 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     method: 'GET',
     handler: async (req, res) => {
       try {
-        const { workspace, relativePath, fullPath } = getGitFileRequest(req);
+        const { nodeId, workspace, relativePath, fullPath } = getGitFileRequest(req);
         const side = getSingleQueryValue(req.query.side) ?? 'base';
         const ref = getSingleQueryValue(req.query.ref) ?? 'HEAD';
+        if (nodeId !== 'master') {
+          const result = await requestRemoteVscodeService(nodeId, 'vscode-git', 'content', { workspace, path: relativePath, side, ref });
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          res.send(Buffer.from(String(result?.contentBase64 || ''), 'base64'));
+          return;
+        }
         let content: Buffer;
         if (side === 'working') {
           try {

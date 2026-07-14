@@ -12,6 +12,7 @@ import WebSocket from 'ws';
 import { nodeTools } from '../../shared/dist/nodeTools';
 import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
 import { readNodeTransferFile, writeNodeTransferFile } from '../../shared/dist/nodeFileTransfer';
+import { executeVscodeNodeService, serializeVscodeNodeServiceError, VSCODE_NODE_SERVICE_VERSIONS, type VscodeNodeServiceName } from '../../shared/dist/vscodeNodeService';
 import { createMasterWebSocketOptions, getMasterProxyInfo } from './masterProxy';
 
 type LogPayload = Record<string, any> | Error | any;
@@ -519,6 +520,9 @@ export class NodeClient {
       case 'file_write_request':
         await this.handleFileWriteRequest(message);
         break;
+      case 'node_service_request':
+        await this.handleNodeServiceRequest(message);
+        break;
       case 'cli_response':
         this.handleCliResponse(message);
         break;
@@ -554,6 +558,21 @@ export class NodeClient {
         transferId,
         error: e.message || String(e),
       });
+    }
+  }
+
+  private async handleNodeServiceRequest(message: any): Promise<void> {
+    const requestId = String(message.requestId || '');
+    const service = String(message.service || '') as VscodeNodeServiceName;
+    const operation = String(message.operation || '');
+    try {
+      if (!(service in VSCODE_NODE_SERVICE_VERSIONS)) {
+        throw new Error(`Unsupported node service: ${service}`);
+      }
+      const result = await executeVscodeNodeService(service, operation, message.args && typeof message.args === 'object' ? message.args : {});
+      this.send({ type: 'node_service_response', requestId, result });
+    } catch (error) {
+      this.send({ type: 'node_service_error', requestId, error: serializeVscodeNodeServiceError(error) });
     }
   }
 

@@ -46,6 +46,11 @@ test('new Code windows retain initial folder URL behavior', () => {
   assert.equal(url.searchParams.get('folderUri'), 'foxwarm://node+master/app/src')
 })
 
+test('Code workspace URLs preserve remote node identity', () => {
+  const url = makeVscodeWebUrl('/api', 'https://example.test', { nodeId: 'worker-a', path: '/srv/project' })
+  assert.equal(url.searchParams.get('folderUri'), 'foxwarm://node+worker-a/srv/project')
+})
+
 test('embedded Code starts from a persistent workspace URL', () => {
   const url = makeVscodeWebUrl('/api', 'https://example.test', { nodeId: 'master', path: '/app' }, { embedded: true })
   assert.equal(url.searchParams.get('embedded'), 'true')
@@ -53,7 +58,7 @@ test('embedded Code starts from a persistent workspace URL', () => {
   assert.equal(url.searchParams.has('folderUri'), false)
 })
 
-test('tool file paths resolve only for master with absolute path or cwd', () => {
+test('tool file paths resolve for valid local or remote nodes with absolute path or cwd', () => {
   assert.deepEqual(resolveToolCodeFileTarget('src/index.ts', 'master', '/app', { startLine: 4, endLine: 8 }), {
     kind: 'openFile',
     nodeId: 'master',
@@ -61,7 +66,9 @@ test('tool file paths resolve only for master with absolute path or cwd', () => 
     startLine: 4,
     endLine: 8,
   })
-  assert.equal(resolveToolCodeFileTarget('src/index.ts', 'worker-a', '/app'), null)
+  assert.deepEqual(resolveToolCodeFileTarget('src/index.ts', 'worker-a', '/app'), {
+    kind: 'openFile', nodeId: 'worker-a', path: '/app/src/index.ts',
+  })
   assert.equal(resolveToolCodeFileTarget('src/index.ts', 'master', undefined), null)
   assert.equal(resolveToolCodeFileTarget('~/secret', 'master', '/app'), null)
 })
@@ -72,6 +79,7 @@ test('new-tab file targets are encoded as startup URL parameters', () => {
   const url = makeVscodeWebUrl('/api', 'https://example.test', { nodeId: 'master', path: '/app' }, { openFile: request })
   assert.equal(url.searchParams.get('folderUri'), 'foxwarm://node+master/app')
   assert.equal(url.searchParams.get('openFilePath'), '/app/src/index.ts')
+  assert.equal(url.searchParams.get('openFileNodeId'), 'master')
   assert.equal(url.searchParams.get('startLine'), '7')
 })
 

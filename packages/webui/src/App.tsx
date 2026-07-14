@@ -1355,10 +1355,10 @@ function App() {
           onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
           onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
           onOpenCodeNewWindow={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd), true)}
-          onOpenCodeFile={sessionRecord?.currentNode && sessionRecord.currentNode !== 'master' ? undefined : (filePath, lines) => {
+          onOpenCodeFile={(filePath, lines) => {
             const request = resolveToolCodeFileTarget(filePath, sessionRecord?.currentNode, sessionRecord?.cwd, lines)
             if (!request) {
-              window.alert('This path cannot be opened in Code yet. Tool file links currently require node `master` and either an absolute path or a session cwd.')
+              window.alert('This path cannot be opened in Code yet. Tool file links require a valid node and either an absolute path or a session cwd.')
               return
             }
             const workspaceTarget = resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd)

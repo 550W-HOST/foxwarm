@@ -40,8 +40,9 @@ test('normalizes file requests with one-based line ranges', () => {
   });
 });
 
-test('rejects remote nodes, relative paths, and invalid ranges', () => {
-  assert.throws(() => normalizeFoxwarmOpenRequest({ kind: 'addFolder', nodeId: 'worker', path: '/app' }), /only node `master`/);
+test('accepts remote nodes and rejects invalid nodes, relative paths, and invalid ranges', () => {
+  assert.deepEqual(normalizeFoxwarmOpenRequest({ kind: 'addFolder', nodeId: 'worker-1', path: '/app' }), { kind: 'addFolder', nodeId: 'worker-1', path: '/app' });
+  assert.throws(() => normalizeFoxwarmOpenRequest({ kind: 'addFolder', nodeId: '../worker', path: '/app' }), /node id is invalid/);
   assert.throws(() => normalizeFoxwarmOpenRequest({ kind: 'addFolder', nodeId: 'master', path: 'app' }), /absolute POSIX/);
   assert.throws(() => normalizeFoxwarmOpenRequest({ kind: 'openFile', nodeId: 'master', path: '/app/a', startLine: 5, endLine: 2 }), /must not be before/);
 });

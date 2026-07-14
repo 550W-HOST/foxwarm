@@ -5,13 +5,13 @@ export const CODE_BRIDGE_CHANNEL = 'foxwarm-code-bridge'
 export const CODE_BRIDGE_VERSION = 1
 
 export interface CodeTarget {
-  nodeId: 'master'
+  nodeId: string
   path: string
 }
 
 export type CodeOpenRequest =
-  | { kind: 'addFolder'; nodeId: 'master'; path: string }
-  | { kind: 'openFile'; nodeId: 'master'; path: string; startLine?: number; endLine?: number }
+  | { kind: 'addFolder'; nodeId: string; path: string }
+  | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; endLine?: number }
 
 export type CodeFileTarget = Extract<CodeOpenRequest, { kind: 'openFile' }>
 
@@ -53,7 +53,8 @@ export function resolveToolCodeFileTarget(
   cwd: unknown,
   lines: { startLine?: unknown; endLine?: unknown } = {},
 ): CodeFileTarget | null {
-  if (nodeId !== undefined && nodeId !== null && nodeId !== '' && nodeId !== 'master') return null
+  const normalizedNodeId = typeof nodeId === 'string' && nodeId.trim() ? nodeId.trim() : 'master'
+  if (!/^[A-Za-z0-9._-]+$/.test(normalizedNodeId)) return null
   if (typeof filePath !== 'string' || !filePath.trim() || filePath.trim().startsWith('~')) return null
   const rawPath = filePath.trim()
   const absolutePath = rawPath.startsWith('/')
@@ -71,7 +72,7 @@ export function resolveToolCodeFileTarget(
   const endLine = normalizeLine(lines.endLine)
   return {
     kind: 'openFile',
-    nodeId: 'master',
+    nodeId: normalizedNodeId,
     path: absolutePath,
     ...(startLine !== undefined ? { startLine } : {}),
     ...(endLine !== undefined && (startLine === undefined || endLine >= startLine) ? { endLine } : {}),
@@ -119,19 +120,17 @@ export function shouldOpenCodeInNewWindow(preferred: boolean, forceNewWindow = f
 }
 
 export function resolveSessionCodeTarget(nodeId: unknown, cwd: unknown): CodeTarget {
-  const path = nodeId === 'master' || nodeId == null || nodeId === ''
-    ? normalizeCodePath(cwd)
-    : null
-  return { nodeId: 'master', path: path || '/' }
+  const normalizedNodeId = typeof nodeId === 'string' && /^[A-Za-z0-9._-]+$/.test(nodeId) ? nodeId : 'master'
+  return { nodeId: normalizedNodeId, path: normalizeCodePath(cwd) || '/' }
 }
 
 export function makeCodeWorkspaceUri(target: CodeTarget): string {
   const path = normalizeCodePath(target.path)
-  if (target.nodeId !== 'master' || !path) {
-    throw new Error('Code workspace target must use master and an absolute POSIX path')
+  if (!/^[A-Za-z0-9._-]+$/.test(target.nodeId) || !path) {
+    throw new Error('Code workspace target must use a valid node and an absolute POSIX path')
   }
   const encodedPath = path.split('/').map((segment) => encodeURIComponent(segment)).join('/')
-  return `foxwarm://node+master${encodedPath || '/'}`
+  return `foxwarm://node+${encodeURIComponent(target.nodeId)}${encodedPath || '/'}`
 }
 
 export function makeVscodeWebUrl(apiBasePath: string, origin: string, target?: CodeTarget, options: { embedded?: boolean; openFile?: CodeFileTarget } = {}): URL {
@@ -140,6 +139,7 @@ export function makeVscodeWebUrl(apiBasePath: string, origin: string, target?: C
   if (target) url.searchParams.set(options.embedded ? 'initialFolderUri' : 'folderUri', makeCodeWorkspaceUri(target))
   if (options.openFile) {
     url.searchParams.set('openFilePath', options.openFile.path)
+    url.searchParams.set('openFileNodeId', options.openFile.nodeId)
     if (options.openFile.startLine !== undefined) url.searchParams.set('startLine', String(options.openFile.startLine))
     if (options.openFile.endLine !== undefined) url.searchParams.set('endLine', String(options.openFile.endLine))
   }
