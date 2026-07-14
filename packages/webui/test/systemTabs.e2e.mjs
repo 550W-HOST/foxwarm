@@ -9,6 +9,7 @@ const tokenFile = process.env.FOXWARM_E2E_TOKEN_FILE || new URL('../../../test/s
 
 let browser
 let page
+let authToken
 
 async function waitForSystemTab(tabId, heading) {
   await page.waitForSelector(`[data-tab-id=${JSON.stringify(tabId)}]`, { timeout: 15_000 })
@@ -20,8 +21,15 @@ async function waitForSystemTab(tabId, heading) {
   }, { timeout: 15_000 }, heading)
 }
 
+async function closeTab(tabId) {
+  await page.click(`[data-tab-id=${JSON.stringify(tabId)}] button[title="Close tab"]`)
+  await page.waitForFunction((id) => !document.querySelector(`[data-tab-id="${CSS.escape(id)}"]`), { timeout: 5_000 }, tabId)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(await page.$(`[data-tab-id=${JSON.stringify(tabId)}]`), null)
+}
+
 before(async () => {
-  const token = (await readFile(tokenFile, 'utf8')).trim()
+  authToken = (await readFile(tokenFile, 'utf8')).trim()
   browser = await puppeteer.launch({
     executablePath: chromiumPath,
     headless: true,
@@ -29,7 +37,7 @@ before(async () => {
   })
   page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 900 })
-  await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
+  await page.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
   await page.waitForFunction(() => !!window.alphabotTest, { timeout: 15_000 })
   await page.evaluate(() => {
     const token = localStorage.getItem('foxwarm_token')
@@ -63,10 +71,72 @@ test('Agents and Setup use persistent workbench tabs without replacing the deskt
   await waitForSystemTab('system:agents', 'Agents')
 })
 
+test('closing active system and chat tabs advances the route instead of hydrating the closed tab', async () => {
+  await page.click('[data-tab-id="system:setup"]')
+  await waitForSystemTab('system:setup', 'Foxwarm Setup')
+  await closeTab('system:setup')
+  assert.equal(decodeURIComponent(await page.evaluate(() => window.location.hash)), '#tab/system:agents')
+
+  await closeTab('system:agents')
+  assert.notEqual(decodeURIComponent(await page.evaluate(() => window.location.hash)), '#agents')
+
+  const sessionId = 'e2e-close-session-tab'
+  const chatTabId = `chat:${sessionId}`
+  await page.evaluate((id) => { window.location.hash = `session/${encodeURIComponent(id)}` }, sessionId)
+  await page.waitForSelector(`[data-tab-id=${JSON.stringify(chatTabId)}]`, { timeout: 15_000 })
+  await closeTab(chatTabId)
+  assert.notEqual(decodeURIComponent(await page.evaluate(() => window.location.hash)), `#tab/${chatTabId}`)
+})
+
 test('system tabs remain workbench tabs on a mobile viewport', async () => {
   await page.setViewport({ width: 390, height: 844, isMobile: true })
   await page.evaluate(() => { window.location.hash = 'setup' })
   await waitForSystemTab('system:setup', 'Foxwarm Setup')
   assert.ok(await page.$('[data-pane-id]'))
   assert.ok(await page.$('[data-tab-id="system:setup"]'))
+})
+
+test('forced OOBE Setup still rejects workbench close requests', async () => {
+  const forcedPage = await browser.newPage()
+  await forcedPage.setViewport({ width: 1440, height: 900 })
+  await forcedPage.setRequestInterception(true)
+  forcedPage.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/api/setup/status')) {
+      void request.respond({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          oobe: true,
+          models: {
+            exists: false,
+            path: 'state/models.yaml',
+            templatePath: '',
+            providerCount: 0,
+            defaultModel: null,
+            hasPlaceholderSecrets: false,
+            placeholderProviders: [],
+          },
+          config: {
+            appConfigPath: 'state/config.yaml',
+            channelsYaml: '',
+            channelCount: 0,
+          },
+          channels: [],
+        }),
+      })
+      return
+    }
+    void request.continue()
+  })
+
+  try {
+    await forcedPage.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
+    await forcedPage.waitForSelector('[data-tab-id="system:setup"]', { timeout: 15_000 })
+    await forcedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
+    await forcedPage.click('[data-tab-id="system:setup"] button[title="Close tab"]')
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    assert.ok(await forcedPage.$('[data-tab-id="system:setup"]'))
+  } finally {
+    await forcedPage.close()
+  }
 })

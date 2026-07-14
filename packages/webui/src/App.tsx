@@ -1096,6 +1096,12 @@ function App() {
     if (targetTab?.type === 'setup' && setupOobe) {
       return
     }
+
+    const stateBeforeClose = useWorkbenchStore.getState()
+    const paneBeforeClose = findPaneContainingTab(stateBeforeClose.root, tabId)
+    const wasFocusedActiveTab = paneBeforeClose?.activeTabId === tabId
+      && stateBeforeClose.focusedPaneId === paneBeforeClose.id
+
     if (targetTab?.type === 'terminal' && targetTab.terminalId) {
       try {
         await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(targetTab.terminalId)}`, { method: 'DELETE' })
@@ -1106,6 +1112,24 @@ function App() {
     }
 
     removeTab(tabId)
+
+    if (route.tabId === tabId || wasFocusedActiveTab) {
+      const stateAfterClose = useWorkbenchStore.getState()
+      const focusedPaneAfterClose = stateAfterClose.focusedPaneId
+        ? findPaneNode(stateAfterClose.root, stateAfterClose.focusedPaneId)
+        : null
+      const nextTabId = focusedPaneAfterClose?.activeTabId
+        || getPaneNodes(stateAfterClose.root)[0]?.activeTabId
+        || null
+
+      if (nextTabId) {
+        navigateToTab(nextTabId)
+      } else {
+        pendingRouteTabIdRef.current = null
+        setRoute({ view: 'tab', tabId: null })
+        setTabHash(null)
+      }
+    }
   }
 
   const keepWorkbenchTab = (tabId: string) => {
