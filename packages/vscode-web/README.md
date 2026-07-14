@@ -30,12 +30,14 @@ foxwarm://node+master/app/
 
 ## Authentication
 
-All VS Code Web routes use the same token mechanism as the main WebUI:
+VS Code workbench, extension, filesystem, Git, and terminal routes use the same token mechanism as the main WebUI:
 
 - `Cookie: foxwarm_token=<token>` / legacy `alphabot_token=<token>`
 - or `Authorization: Bearer <token>`
 
 The browser extension uses same-origin `fetch(..., { credentials: 'include' })`, so the normal WebUI login cookie is sent to `/api/vscode-web/fs/*`. Do not expose the filesystem API without this auth layer.
+
+Code's nested webview bootstrap cannot reliably send the normal login cookie from its sandboxed origin. Foxwarm therefore gives each server process an unguessable `/vscode-web/webview/<capability>/` route scoped only to Code's official `pre/` bootstrap assets. The authenticated workbench receives that capability URL; it does not expose repository data or general static files. Localhost launches use Code's hashed `{{uuid}}.localhost` origin so panel content is origin-isolated from WebUI. Production deployments can provide an equivalent wildcard origin such as `FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN=https://{{uuid}}.code.example.com`; without one, Foxwarm uses its same-origin capability fallback and patches the bootstrap hostname check (recomputing its CSP hash).
 
 The terminal extension also uses same-origin cookie auth for `POST /api/terminals` and `WebSocket /api/terminals/stream`. Browser WebSockets cannot set an `Authorization` header, so do not put tokens in terminal WebSocket query strings.
 
@@ -64,13 +66,28 @@ Explorer folder context menus also expose **Add Folder to Workspace** for `foxwa
 
 `foxwarm-scm` contributes a read-only Source Control provider for `foxwarm` workspaces. It inspects every workspace root, deduplicates roots that resolve to the same Git top-level, and creates one Source Control section per distinct repository. It calls authenticated Git API routes under `/api/vscode-web/git/*` to list working tree changes and opens individual diff editors comparing `HEAD` with working tree content through read-only `foxwarm-git:` virtual documents. Each repository also has an `Open Changes` action backed by Code OSS's multi-diff editor. Changed submodules show the old/new gitlink commit IDs; the backend obtains an unstaged submodule's current HEAD by reading its Git metadata directly and never adds a fallback Git process for this detail.
 
+The same extension opens immutable commit details from a typed `openCommit` request. `GET /api/vscode-web/git/commit` resolves a 7–64 digit hexadecimal commit id, returns metadata plus a first-parent file/stat diff (or empty-tree diff for a root commit), and canonicalizes the repository root. The details panel offers per-file diffs and one multi-diff action. Diff documents use full parent/commit object ids rather than mutable branch names; binary files remain listed but do not pretend to have a text diff. Remote commit inspection requires `vscode-git` service version 2.
+
 Current MVP behavior:
 
 - Supports `master` plus connected CLI nodes advertising the versioned `vscode-git` service.
+- Opens commit metadata and immutable first-parent/root diffs through `vscode-git` v2.
 - Shows a single `Changes` resource group for working tree status.
 - Provides `Foxwarm SCM: Refresh Git Status`.
 - Opens `HEAD ↔ Working Tree` diffs for modified, added, deleted, renamed, and untracked files where possible.
 - Does not implement staging, committing, pushing, branch management, credentials, blame, history graph, or file watchers.
+
+## WebUI commit markers
+
+Model-authored assistant text may contain a strict standalone marker after a real commit has been created:
+
+```text
+<foxwarm-commit node="master" path="/absolute/repository/path" id="0123456789abcdef" />
+```
+
+The main WebUI recognizes this tag only in model text, only outside fenced code blocks, and only as a complete line with exactly the three XML-escaped attributes. Valid markers render an inert commit card; Git lookup starts only when the user clicks **Open in Code**. User-authored text, malformed tags, unsafe paths/node ids, extra attributes, and code examples never become actions.
+
+Clicking sends a fixed typed request to the persistent Code iframe or a one-shot new-tab startup URL. Code resolves the commit first, adds the canonical Git top-level to `foxwarm.code-workspace` with exact-root deduplication, survives the resulting workspace reload through extension global state, and opens the details panel. Agents should load the bundled `webui-markers` skill for the canonical grammar and must not emit a marker for a planned, guessed, or inaccessible commit.
 
 ## Remote node transport
 
@@ -144,6 +161,7 @@ The authenticated main WebUI presents the feature to users as **Code** (the `/vs
 
 - The sidebar `Code` split button opens a master-node workspace, defaulting to `/`, and its dropdown accepts another absolute POSIX path. The selected path and the global `Open in new browser tab` preference are remembered in localStorage.
 - Embedded mode creates/focuses a singleton `Code` workbench tab. The actual iframe lives in a persistent top-level portal host and is positioned over the active tab slot, so switching WebUI tabs or views hides rather than unmounts the VS Code browsing context. Its first launch creates `state/vscode-web/foxwarm.code-workspace` (override with `FOXWARM_VSCODE_WEB_WORKSPACE_PATH`). Later folder requests are sent over a same-origin request/ack bridge and appended with the VS Code workspace API without changing the iframe URL or losing open editors and terminals.
+- Valid model commit cards send only the typed `openCommit` payload. The bridge allowlists that kind to `foxwarm-scm.openCommitDetails`; it does not accept arbitrary Code command names. New-tab commit launches still open the persistent workspace and carry one-shot commit parameters.
 - Paths rendered by direct `read`, `write`, `edit`, and `apply_patch` tool cards use the session's current master or remote node. They open the file in the existing embedded workbench; `read` line ranges become editor selections. New-browser-tab mode carries the node/folder/file in the launch URL instead of trying to control an already-open tab.
 - Session headers provide `Open code` using the session's current node and cwd (with a safe `master:/` fallback), plus an adjacent external-link button that always opens a new browser tab.
 

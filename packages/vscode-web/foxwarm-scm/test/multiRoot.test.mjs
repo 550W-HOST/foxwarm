@@ -116,6 +116,10 @@ test('scans every workspace root, deduplicates Git top levels, and opens one mul
   const context = {
     extensionUri: MockUri.parse('http://example.test/proxy/vscode-web/extensions/foxwarm-scm'),
     subscriptions: [],
+    globalState: {
+      get: () => undefined,
+      update: async () => undefined,
+    },
   };
   extension.activate(context);
   await waitFor(() => sourceControls.length === 2);

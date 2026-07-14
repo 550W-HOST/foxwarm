@@ -4,6 +4,7 @@ import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
 import ChatTimeline from './ChatTimeline'
+import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
@@ -87,6 +88,7 @@ interface ChatProps {
   onOpenCode?: () => void
   onOpenCodeNewWindow?: () => void
   onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
+  onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
   sendKeyMode?: 'modEnter' | 'enter'
   groupTools?: boolean
   showUsageBadge?: boolean
@@ -195,7 +197,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -1403,7 +1405,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             )}
             <div ref={committedTimelineRef} data-chat-timeline="committed">
               <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} />
+                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </ToolScriptProgressContext.Provider>
             </div>
             <ProcessingStatus
@@ -1416,7 +1418,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview" data-queued-preview="true" aria-label="Queued messages">
-                <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} />
+                <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </div>
             )}
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
@@ -1537,6 +1539,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   && prev.onOpenCode === next.onOpenCode
   && prev.onOpenCodeNewWindow === next.onOpenCodeNewWindow
   && prev.onOpenCodeFile === next.onOpenCodeFile
+  && prev.onOpenCodeCommit === next.onOpenCodeCommit
 ))
 
 export default Chat

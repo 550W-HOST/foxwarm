@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { buildFoxwarmNodeUriString, normalizeGitRelativePath, parseFoxwarmUri } from './foxwarmUri';
+import { openCommitDetails } from './commitDetails';
 export { buildFoxwarmNodeUriString, normalizeGitRelativePath, parseFoxwarmUri } from './foxwarmUri';
 
 type GitSubmoduleChange = {
@@ -277,6 +278,7 @@ async function refresh(): Promise<void> {
 class FoxwarmGitContentProvider implements vscode.TextDocumentContentProvider {
   async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
     const params = new URLSearchParams(uri.query);
+    if (params.get('empty') === 'true') return '';
     const submoduleOid = params.get('submoduleOid');
     if (submoduleOid) {
       const dirty = params.get('submoduleDirty') === 'true' ? '-dirty' : '';
@@ -296,6 +298,13 @@ class FoxwarmGitContentProvider implements vscode.TextDocumentContentProvider {
 
 export function activate(context: vscode.ExtensionContext): void {
   gitApiBase = deriveGitApiBase(context.extensionUri);
+  const pendingCommitKey = 'foxwarm.pendingCommitOpen.v1';
+  const openCommit = async (request: unknown) => {
+    await context.globalState.update(pendingCommitKey, undefined);
+    return openCommitDetails(gitApiBase, request, {
+      deferForWorkspaceReload: (canonicalRequest) => context.globalState.update(pendingCommitKey, canonicalRequest),
+    });
+  };
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider('foxwarm-git', new FoxwarmGitContentProvider()),
     vscode.commands.registerCommand('foxwarm-scm.refresh', () => refresh()),
@@ -304,11 +313,19 @@ export function activate(context: vscode.ExtensionContext): void {
       return repository ? openChange(repository, change) : undefined;
     }),
     vscode.commands.registerCommand('foxwarm-scm.openAllChanges', (sourceControl?: unknown) => openAllChanges(sourceControl)),
+    vscode.commands.registerCommand('foxwarm-scm.openCommitDetails', (request: unknown) => openCommit(request)),
     vscode.workspace.onDidChangeWorkspaceFolders(() => refresh()),
   );
   void refresh().catch((error) => {
     console.error('Foxwarm SCM refresh failed', error);
   });
+  setTimeout(() => {
+    const pendingCommit = context.globalState.get<unknown>(pendingCommitKey);
+    if (!pendingCommit) return;
+    void openCommit(pendingCommit).catch((error) => {
+      void vscode.window.showErrorMessage(`Failed to reopen Foxwarm commit: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }, 1000);
   console.log(`Foxwarm SCM registered. apiBase=${gitApiBase}`);
 }
 

@@ -83,6 +83,16 @@ test('new-tab file targets are encoded as startup URL parameters', () => {
   assert.equal(url.searchParams.get('startLine'), '7')
 })
 
+test('new-tab commit targets are encoded as typed startup URL parameters', () => {
+  const target = { nodeId: 'worker-a', path: '/repo', commitId: '85ad4d1b' }
+  const url = makeVscodeWebUrl('/api', 'https://example.test', target, { openCommit: target })
+  assert.equal(url.searchParams.get('embedded'), 'true')
+  assert.equal(url.searchParams.get('initialFolderUri'), null)
+  assert.equal(url.searchParams.get('openCommitPath'), '/repo')
+  assert.equal(url.searchParams.get('openCommitNodeId'), 'worker-a')
+  assert.equal(url.searchParams.get('openCommitId'), '85ad4d1b')
+})
+
 test('tool Code paths keep native text styling and only add link affordance', async () => {
   const source = await readFile(path.join(webuiRoot, 'src/components/ToolTimelineItems.tsx'), 'utf8')
   const start = source.indexOf('const ToolCodePath')

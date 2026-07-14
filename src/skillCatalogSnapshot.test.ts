@@ -46,6 +46,8 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
     assert.match(snapshot, /<available_skills>/);
     assert.match(snapshot, new RegExp(`<name>${skillName}</name>`));
     assert.match(snapshot, /<name>timer-automation<\/name>/);
+    assert.match(snapshot, /<name>webui-markers<\/name>/);
+    assert.match(snapshot, /presenting a real Git commit/);
     assert.match(snapshot, /Analyze visible-skill tasks/);
     assert.doesNotMatch(snapshot, new RegExp(uniqueBody));
 
@@ -66,6 +68,11 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
     assert.match(String(loadedTimerSkill), /day-of-month `L`/);
     assert.match(String(loadedTimerSkill), /`W` .*not supported/);
     assert.doesNotMatch(String(loadedTimerSkill), /memory\//);
+
+    const loadedMarkerSkill = await tool_load_skill({ skillName: 'webui-markers', agentName }, {});
+    assert.match(String(loadedMarkerSkill), /<foxwarm-commit node=/);
+    assert.match(String(loadedMarkerSkill), /actually been created/);
+    assert.match(String(loadedMarkerSkill), /Malformed markers are inert/);
 
     const loadedDocuments = await skillCore.loadSkillDocuments(skillName, { agentName });
     assert.deepEqual(loadedDocuments.info.documentFiles, ['SKILL.md']);

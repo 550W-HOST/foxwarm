@@ -9,9 +9,14 @@ export interface CodeTarget {
   path: string
 }
 
+export interface CodeCommitTarget extends CodeTarget {
+  commitId: string
+}
+
 export type CodeOpenRequest =
   | { kind: 'addFolder'; nodeId: string; path: string }
   | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; endLine?: number }
+  | ({ kind: 'openCommit' } & CodeCommitTarget)
 
 export type CodeFileTarget = Extract<CodeOpenRequest, { kind: 'openFile' }>
 
@@ -133,15 +138,21 @@ export function makeCodeWorkspaceUri(target: CodeTarget): string {
   return `foxwarm://node+${encodeURIComponent(target.nodeId)}${encodedPath || '/'}`
 }
 
-export function makeVscodeWebUrl(apiBasePath: string, origin: string, target?: CodeTarget, options: { embedded?: boolean; openFile?: CodeFileTarget } = {}): URL {
+export function makeVscodeWebUrl(apiBasePath: string, origin: string, target?: CodeTarget, options: { embedded?: boolean; openFile?: CodeFileTarget; openCommit?: CodeCommitTarget } = {}): URL {
   const url = new URL(getVscodeWebPath(apiBasePath), origin)
-  if (options.embedded) url.searchParams.set('embedded', 'true')
-  if (target) url.searchParams.set(options.embedded ? 'initialFolderUri' : 'folderUri', makeCodeWorkspaceUri(target))
+  const usePersistentWorkspace = options.embedded || Boolean(options.openCommit)
+  if (usePersistentWorkspace) url.searchParams.set('embedded', 'true')
+  if (target && !options.openCommit) url.searchParams.set(usePersistentWorkspace ? 'initialFolderUri' : 'folderUri', makeCodeWorkspaceUri(target))
   if (options.openFile) {
     url.searchParams.set('openFilePath', options.openFile.path)
     url.searchParams.set('openFileNodeId', options.openFile.nodeId)
     if (options.openFile.startLine !== undefined) url.searchParams.set('startLine', String(options.openFile.startLine))
     if (options.openFile.endLine !== undefined) url.searchParams.set('endLine', String(options.openFile.endLine))
+  }
+  if (options.openCommit) {
+    url.searchParams.set('openCommitPath', options.openCommit.path)
+    url.searchParams.set('openCommitNodeId', options.openCommit.nodeId)
+    url.searchParams.set('openCommitId', options.openCommit.commitId)
   }
   return url
 }

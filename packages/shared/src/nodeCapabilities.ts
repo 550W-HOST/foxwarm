@@ -1,7 +1,9 @@
+import { VSCODE_GIT_COMMIT_SERVICE_VERSION } from './gitCommitDetails';
+
 export const CLI_NODE_CAPABILITIES = {
   services: {
     'vscode-fs': 1,
-    'vscode-git': 1,
+    'vscode-git': VSCODE_GIT_COMMIT_SERVICE_VERSION,
   },
   tools: [
     {

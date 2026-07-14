@@ -374,14 +374,15 @@ export class NodesManager {
     }
   }
 
-  async requestNodeService(nodeId: string, service: string, operation: string, args: Record<string, unknown>, timeoutMs = 30_000): Promise<any> {
+  async requestNodeService(nodeId: string, service: string, operation: string, args: Record<string, unknown>, timeoutMs = 30_000, minimumVersion = 1): Promise<any> {
     const node = this.nodes.get(nodeId);
     if (!node || nodeId === 'master' || !node.ws) {
       throw new NodeServiceRequestError('NodeUnavailable', `Remote node \`${nodeId}\` is not connected.`, 503);
     }
     const version = node.capabilities?.services?.[service];
-    if (!Number.isInteger(version) || Number(version) < 1) {
-      throw new NodeServiceRequestError('UnsupportedService', `Node \`${nodeId}\` does not advertise service \`${service}\`.`, 501);
+    if (!Number.isInteger(version) || Number(version) < minimumVersion) {
+      const requirement = minimumVersion > 1 ? ` version ${minimumVersion} or newer` : '';
+      throw new NodeServiceRequestError('UnsupportedService', `Node \`${nodeId}\` does not advertise service \`${service}\`${requirement}.`, 501);
     }
     const requestId = `service_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     return new Promise((resolve, reject) => {

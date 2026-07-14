@@ -13,7 +13,7 @@ import { isSessionRuntimeActive } from './sessionRuntimeState'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
-import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspacePathPreference, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
+import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
@@ -965,6 +965,27 @@ function App() {
     activateEmbeddedCodeTab()
   }
 
+  const openCodeCommit = async (target: CodeCommitTarget): Promise<void> => {
+    const plan = planCodeOpen(vscodeFrameStarted, codeOpenInNewWindow)
+    if (plan === 'new-window') {
+      const opened = window.open(
+        makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { openCommit: target }).toString(),
+        '_blank',
+        'noopener,noreferrer',
+      )
+      if (!opened) throw new Error('The browser blocked the Code window.')
+      return
+    }
+    if (plan === 'start-embedded') {
+      setCodeFrameUrl(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, undefined, { embedded: true }).toString())
+      setVscodeFrameStarted(true)
+    }
+    activateEmbeddedCodeTab()
+    const frame = vscodeFrameRef.current
+    if (!frame) throw new Error('The embedded Code frame is unavailable.')
+    await frame.request({ kind: 'openCommit', ...target })
+  }
+
   const findPreferredChatTab = (sessionId: string): WorkbenchTab | null => {
     return allTabs.find((tab) => isChatTab(tab) && !tab.preview && tab.sessionId === sessionId)
       || null
@@ -1417,6 +1438,7 @@ function App() {
             const workspaceTarget = resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd)
             openCodeFile(request, workspaceTarget)
           }}
+          onOpenCodeCommit={openCodeCommit}
           sendKeyMode={sendKeyMode}
           groupTools={groupTools}
           showUsageBadge={showUsageBadge}

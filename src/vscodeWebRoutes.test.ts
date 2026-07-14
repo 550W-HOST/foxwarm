@@ -129,6 +129,12 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
       await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
+      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/contrib/webview/browser/pre/index.html'), `<meta http-equiv="Content-Security-Policy" content="script-src 'sha256-old' 'self'">
+<script async type="module">
+if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')) {
+  start(parentOrigin);
+}
+</script>`);
 
       await withServer(async (_server, baseUrl) => {
         const noAuthStatic = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`);
@@ -144,6 +150,9 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
         assert.match(html, /vscode-workbench-web-configuration/);
         assert.match(html, /foxwarm-code-bridge/);
         assert.match(html, /foxwarm-fs\.handleOpenRequest/);
+        assert.match(html, /foxwarm-scm\.openCommitDetails/);
+        assert.match(html, /Unsupported Foxwarm Code bridge request/);
+        assert.match(html, /openCommitId/);
         assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
         assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.css/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-fs/);
@@ -155,6 +164,16 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
         assert.match(html, /window\.menuBarVisibility/);
         assert.match(html, /&quot;visible&quot;/);
         assert.match(html, /terminal\.integrated\.defaultProfile\.linux/);
+        const webviewCapability = html.match(/\/vscode-web\/webview\/([0-9a-f]{48})\//)?.[1];
+        assert.ok(webviewCapability);
+        assert.match(html, new RegExp(`http:\\/\\/\\{\\{uuid\\}\\}\\.localhost:${new URL(baseUrl).port}\\/vscode-web\\/webview\\/${webviewCapability}\\/`));
+        const webviewBootstrap = await fetch(`${baseUrl}/vscode-web/webview/${webviewCapability}/index.html`);
+        assert.equal(webviewBootstrap.status, 200);
+        const webviewBootstrapHtml = await webviewBootstrap.text();
+        assert.match(webviewBootstrapHtml, /new URL\(parentOrigin\)\.origin === new URL\(location\.href\)\.origin/);
+        assert.doesNotMatch(webviewBootstrapHtml, /sha256-old/);
+        const wrongCapability = await fetch(`${baseUrl}/vscode-web/webview/${'0'.repeat(48)}/index.html`);
+        assert.equal(wrongCapability.status, 404);
 
         const embeddedWorkbench = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
         assert.equal(embeddedWorkbench.status, 200);
@@ -201,6 +220,8 @@ test('VS Code Web workbench bootstrap honors forwarded base path prefixes', asyn
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-terminal/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-scm/);
+        assert.match(html, /\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\//);
+        assert.match(html, /https:\/\/example\.test\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\//);
         assert.match(html, /&quot;webEndpointUrlTemplate&quot;:&quot;https:\/\/example\.test\/proxy-prefix\/vscode-web\/static&quot;/);
         assert.match(html, /&quot;path&quot;:&quot;\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs&quot;/);
         assert.match(html, /&quot;callbackRoute&quot;:&quot;\/proxy-prefix\/vscode-web\/callback&quot;/);
@@ -254,6 +275,7 @@ test('VS Code Web git API reports status and returns base/working content', asyn
     await fs.writeFile(path.join(repoPath, 'tracked.txt'), 'before\n');
     await execFileAsync('git', ['add', 'tracked.txt'], { cwd: repoPath });
     await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: repoPath });
+    const commitOid = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoPath })).stdout.trim();
 
     await fs.writeFile(path.join(repoPath, 'tracked.txt'), 'after\n');
     await fs.writeFile(path.join(repoPath, 'new.txt'), 'new file\n');
@@ -278,6 +300,20 @@ test('VS Code Web git API reports status and returns base/working content', asyn
       const addedBase = await fetch(`${baseUrl}/api/vscode-web/git/content?nodeId=master&workspace=${encodeURIComponent(repoPath)}&path=new.txt&side=base`, { headers: bearerHeaders() });
       assert.equal(addedBase.status, 200);
       assert.equal(await addedBase.text(), '');
+
+      const commitDetails = await fetch(`${baseUrl}/api/vscode-web/git/commit?nodeId=master&workspace=${encodeURIComponent(repoPath)}&id=${commitOid.slice(0, 9)}`, { headers: bearerHeaders() });
+      assert.equal(commitDetails.status, 200);
+      const commitPayload = await commitDetails.json() as { workspace: string; commit: { oid: string; subject: string }; comparison: { mode: string }; files: Array<{ path: string }> };
+      assert.equal(commitPayload.workspace, repoPath);
+      assert.equal(commitPayload.commit.oid, commitOid);
+      assert.equal(commitPayload.commit.subject, 'initial');
+      assert.equal(commitPayload.comparison.mode, 'empty-tree');
+      assert.deepEqual(commitPayload.files.map((file) => file.path), ['tracked.txt']);
+
+      const immutableContent = await fetch(`${baseUrl}/api/vscode-web/git/content?nodeId=master&workspace=${encodeURIComponent(repoPath)}&path=tracked.txt&side=base&ref=${commitOid}`, { headers: bearerHeaders() });
+      assert.equal(await immutableContent.text(), 'before\n');
+      const unsafeRef = await fetch(`${baseUrl}/api/vscode-web/git/content?nodeId=master&workspace=${encodeURIComponent(repoPath)}&path=tracked.txt&side=base&ref=${encodeURIComponent('HEAD~1')}`, { headers: bearerHeaders() });
+      assert.equal(unsafeRef.status, 422);
     });
   });
 });
@@ -297,7 +333,7 @@ test('VS Code Web filesystem and Git APIs dispatch to an advertised remote node 
     } as unknown as WebSocket;
     nodesManager.registerNodeWithTools(fakeSocket, {} as any, 'cli-node', {
       tools: [],
-      services: { 'vscode-fs': 1, 'vscode-git': 1 },
+      services: { 'vscode-fs': 1, 'vscode-git': 2 },
     }, nodeId);
     try {
       await fs.writeFile(path.join(remotePath, 'remote.txt'), 'remote before\n');
@@ -306,6 +342,7 @@ test('VS Code Web filesystem and Git APIs dispatch to an advertised remote node 
       await execFileAsync('git', ['config', 'user.name', 'Foxwarm Test'], { cwd: remotePath });
       await execFileAsync('git', ['add', 'remote.txt'], { cwd: remotePath });
       await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: remotePath });
+      const remoteCommitOid = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: remotePath })).stdout.trim();
       await fs.writeFile(path.join(remotePath, 'remote.txt'), 'remote after\n');
 
       await withServer(async (_server, baseUrl) => {
@@ -328,6 +365,41 @@ test('VS Code Web filesystem and Git APIs dispatch to an advertised remote node 
         const payload = await status.json() as { nodeId: string; changes: Array<{ path: string }> };
         assert.equal(payload.nodeId, nodeId);
         assert.deepEqual(payload.changes.map((change) => change.path).sort(), ['created.txt', 'remote.txt']);
+
+        const commitDetails = await fetch(`${baseUrl}/api/vscode-web/git/commit?nodeId=${nodeId}&workspace=${encodeURIComponent(remotePath)}&id=${remoteCommitOid.slice(0, 8)}`, { headers: bearerHeaders() });
+        assert.equal(commitDetails.status, 200);
+        const commitPayload = await commitDetails.json() as { nodeId: string; commit: { oid: string } };
+        assert.equal(commitPayload.nodeId, nodeId);
+        assert.equal(commitPayload.commit.oid, remoteCommitOid);
+      });
+    } finally {
+      nodesManager.unregisterNode(nodeId, fakeSocket);
+    }
+  });
+});
+
+test('VS Code Web commit API requires vscode-git service version 2 on remote nodes', async () => {
+  await withTempDir(async (repoPath) => {
+    await execFileAsync('git', ['init'], { cwd: repoPath });
+    await execFileAsync('git', ['config', 'user.email', 'foxwarm-test@example.invalid'], { cwd: repoPath });
+    await execFileAsync('git', ['config', 'user.name', 'Foxwarm Test'], { cwd: repoPath });
+    await fs.writeFile(path.join(repoPath, 'file.txt'), 'value\n');
+    await execFileAsync('git', ['add', 'file.txt'], { cwd: repoPath });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: repoPath });
+    const oid = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoPath })).stdout.trim();
+    const nodeId = `vscode-git-v1-${Date.now()}`;
+    const fakeSocket = {
+      send(raw: string) {
+        if (JSON.parse(raw).type === 'node_service_request') throw new Error('v1 node should be rejected before dispatch');
+      },
+      close() {},
+    } as unknown as WebSocket;
+    nodesManager.registerNodeWithTools(fakeSocket, {} as any, 'cli-node', { tools: [], services: { 'vscode-git': 1 } }, nodeId);
+    try {
+      await withServer(async (_server, baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/vscode-web/git/commit?nodeId=${nodeId}&workspace=${encodeURIComponent(repoPath)}&id=${oid}`, { headers: bearerHeaders() });
+        assert.equal(response.status, 501);
+        assert.match((await response.json() as { error: string }).error, /version 2 or newer/);
       });
     } finally {
       nodesManager.unregisterNode(nodeId, fakeSocket);

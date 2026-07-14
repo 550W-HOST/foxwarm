@@ -2,10 +2,12 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs-extra';
 import { spawn } from 'child_process';
+import crypto from 'crypto';
 import type { HttpServer } from './httpServer';
 import { BASE_DIR, STATE_DIR } from './config';
 import { logger } from './common';
 import { nodesManager, NodeServiceRequestError } from './nodes/manager';
+import { normalizeVscodeGitContentRef, readVscodeGitCommitDetails, VscodeGitCommitDetailsError, VSCODE_GIT_COMMIT_SERVICE_VERSION } from '../packages/shared/dist/gitCommitDetails';
 
 const VSCODE_WEB_ROUTE = '/vscode-web';
 const VSCODE_WEB_API_PREFIX = '/api/vscode-web/fs';
@@ -14,9 +16,11 @@ const VSCODE_WEB_STATIC_ROUTE = `${VSCODE_WEB_ROUTE}/static`;
 const VSCODE_WEB_FS_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-fs`;
 const VSCODE_WEB_TERMINAL_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-terminal`;
 const VSCODE_WEB_SCM_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-scm`;
+const VSCODE_WEB_WEBVIEW_ROUTE = `${VSCODE_WEB_ROUTE}/webview/${crypto.randomBytes(24).toString('hex')}`;
 const VSCODE_WEB_ASSET_DIR_ENV = 'FOXWARM_VSCODE_WEB_ASSET_DIR';
 const VSCODE_WEB_DEFAULT_FOLDER_URI_ENV = 'FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI';
 const VSCODE_WEB_WORKSPACE_PATH_ENV = 'FOXWARM_VSCODE_WEB_WORKSPACE_PATH';
+const VSCODE_WEB_WEBVIEW_ORIGIN_ENV = 'FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN';
 const DEFAULT_VSCODE_WEB_ASSET_DIR = path.join(BASE_DIR, 'packages', 'vscode-web', 'assets', 'vscode-web');
 const DEFAULT_VSCODE_WEB_WORKSPACE_PATH = path.join(STATE_DIR, 'vscode-web', 'foxwarm.code-workspace');
 const MAX_WRITE_BYTES = 50 * 1024 * 1024;
@@ -43,6 +47,7 @@ type FsErrorCode =
   | 'InvalidNode'
   | 'PayloadTooLarge'
   | 'GitError'
+  | 'InvalidCommit'
   | 'Unknown';
 
 class VscodeWebFsError extends Error {
@@ -75,6 +80,7 @@ function statusForErrorCode(code: FsErrorCode): number {
     case 'Unavailable':
       return 503;
     case 'GitError':
+    case 'InvalidCommit':
       return 422;
     default:
       return 500;
@@ -203,8 +209,8 @@ function sendFsError(res: express.Response, error: unknown): void {
   res.status(500).json({ error: anyError?.message || 'Internal Server Error', code: 'Unknown' });
 }
 
-async function requestRemoteVscodeService(nodeId: string, service: 'vscode-fs' | 'vscode-git', operation: string, args: Record<string, unknown>): Promise<any> {
-  return nodesManager.requestNodeService(nodeId, service, operation, args);
+async function requestRemoteVscodeService(nodeId: string, service: 'vscode-fs' | 'vscode-git', operation: string, args: Record<string, unknown>, minimumVersion = 1): Promise<any> {
+  return nodesManager.requestNodeService(nodeId, service, operation, args, 30_000, minimumVersion);
 }
 
 function normalizeWorkspacePath(value: unknown): string {
@@ -501,6 +507,35 @@ function registerAuthenticatedDynamicStatic(httpServer: HttpServer, mountPath: s
   });
 }
 
+function registerCapabilityDynamicStatic(httpServer: HttpServer, mountPath: string, resolveDirectory: () => string | undefined): void {
+  httpServer.app.use(mountPath, (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const directory = resolveDirectory();
+    if (!directory) {
+      res.status(404).end();
+      return;
+    }
+    if (req.path === '/' || req.path === '/index.html') {
+      void fs.readFile(path.join(directory, 'index.html'), 'utf8').then((source) => {
+        const validation = 'if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + \'.\')) {';
+        const sameOriginValidation = "if (new URL(parentOrigin).origin === new URL(location.href).origin || hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')) {";
+        let html = source.replace(validation, sameOriginValidation);
+        if (html === source) throw new Error('Code webview bootstrap origin validation shape has changed.');
+        const script = html.match(/<script async type="module">([\s\S]*?)<\/script>/)?.[1];
+        if (!script) throw new Error('Code webview bootstrap script was not found.');
+        const hash = crypto.createHash('sha256').update(script).digest('base64');
+        const updatedCsp = html.replace(/script-src 'sha256-[^']+' 'self'/, `script-src 'sha256-${hash}' 'self'`);
+        if (updatedCsp === html) throw new Error('Code webview bootstrap CSP hash shape has changed.');
+        html = updatedCsp;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(html);
+      }).catch(next);
+      return;
+    }
+    express.static(directory)(req, res, next);
+  });
+}
+
 function resolveVscodeWebAssetDir(): string {
   const configured = process.env[VSCODE_WEB_ASSET_DIR_ENV]?.trim();
   if (!configured) {
@@ -631,15 +666,26 @@ function buildWorkbenchConfiguration(req: express.Request) {
   const fsExtensionPath = getExternalPath(req, VSCODE_WEB_FS_EXTENSION_ROUTE);
   const terminalExtensionPath = getExternalPath(req, VSCODE_WEB_TERMINAL_EXTENSION_ROUTE);
   const scmExtensionPath = getExternalPath(req, VSCODE_WEB_SCM_EXTENSION_ROUTE);
+  const webviewPath = getExternalPath(req, VSCODE_WEB_WEBVIEW_ROUTE);
   const callbackRoute = `${getExternalRouteBasePath(req)}/callback`;
   const baseUrl = `${origin}${staticBasePath}`;
   const fsExtensionUri = `${origin}${fsExtensionPath}`;
   const terminalExtensionUri = `${origin}${terminalExtensionPath}`;
   const scmExtensionUri = `${origin}${scmExtensionPath}`;
+  const externalUrl = new URL(origin);
+  const configuredWebviewOrigin = process.env[VSCODE_WEB_WEBVIEW_ORIGIN_ENV]?.trim().replace(/\/+$/, '');
+  if (configuredWebviewOrigin && !/^https?:\/\/\{\{uuid\}\}\.[A-Za-z0-9.-]+(?::\d+)?$/.test(configuredWebviewOrigin)) {
+    throw new VscodeWebFsError('InvalidPath', `${VSCODE_WEB_WEBVIEW_ORIGIN_ENV} must be an http(s) origin beginning with {{uuid}}.`);
+  }
+  const localWebviewOrigin = (externalUrl.hostname === '127.0.0.1' || externalUrl.hostname === 'localhost')
+    ? `${externalUrl.protocol}//{{uuid}}.localhost${externalUrl.port ? `:${externalUrl.port}` : ''}`
+    : undefined;
+  const webviewBaseUrl = `${configuredWebviewOrigin || localWebviewOrigin || origin}${webviewPath}`;
   return {
     baseUrl,
     staticBasePath,
     callbackRoute,
+    webviewBaseUrl,
     configuration: {
       ...(embeddedWorkspace
         ? { workspaceUri: toUriComponents(ensureFoxwarmWorkspace(requestedFolderUri)) }
@@ -648,10 +694,10 @@ function buildWorkbenchConfiguration(req: express.Request) {
       productConfiguration: {
         enableTelemetry: false,
         // The official static workbench needs these product URLs for web
-        // extension host / webview resources. Keeping them under the same
-        // authenticated origin avoids a code-server style backend extension host.
+        // extension-host and webview resources. The webview bootstrap uses a
+        // narrowly scoped capability route instead of a backend extension host.
         webEndpointUrlTemplate: baseUrl,
-        webviewContentExternalBaseUrlTemplate: `${baseUrl}/out/vs/workbench/contrib/webview/browser/pre/`,
+        webviewContentExternalBaseUrlTemplate: `${webviewBaseUrl}/`,
       },
       additionalBuiltinExtensions: [toUriComponents(fsExtensionUri), toUriComponents(terminalExtensionUri), toUriComponents(scmExtensionUri)],
       configurationDefaults: {
@@ -665,11 +711,12 @@ function buildWorkbenchConfiguration(req: express.Request) {
 }
 
 function buildVscodeWorkbenchHtml(req: express.Request): string {
-  const { baseUrl, staticBasePath, callbackRoute, configuration } = buildWorkbenchConfiguration(req);
+  const { baseUrl, webviewBaseUrl, staticBasePath, callbackRoute, configuration } = buildWorkbenchConfiguration(req);
   const escapedConfiguration = escapeHtmlAttribute(configuration);
   const assetBasePath = shouldUseRelativeAssetPaths(req) ? './static' : staticBasePath;
   const escapedAssetBasePath = escapeHtmlText(assetBasePath);
   const jsBaseUrl = JSON.stringify(baseUrl).replace(/</g, '\u003c');
+  const jsWebviewBaseUrl = JSON.stringify(webviewBaseUrl).replace(/</g, '\u003c');
   const jsCallbackRoute = JSON.stringify(callbackRoute);
   return `<!doctype html>
 <html>
@@ -727,7 +774,14 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
 
     bridgeQueue = bridgeQueue.then(async () => {
       try {
-        const result = await commands.executeCommand('foxwarm-fs.handleOpenRequest', message.request);
+        const requestKind = message.request && typeof message.request === 'object' ? message.request.kind : '';
+        const command = requestKind === 'openCommit'
+          ? 'foxwarm-scm.openCommitDetails'
+          : (requestKind === 'addFolder' || requestKind === 'openFile')
+            ? 'foxwarm-fs.handleOpenRequest'
+            : '';
+        if (!command) throw new Error('Unsupported Foxwarm Code bridge request.');
+        const result = await commands.executeCommand(command, message.request);
         window.parent.postMessage({
           channel: bridgeChannel,
           version: bridgeVersion,
@@ -854,7 +908,7 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
     config.productConfiguration = {
       ...config.productConfiguration,
       webEndpointUrlTemplate: baseUrl,
-      webviewContentExternalBaseUrlTemplate: baseUrl + '/out/vs/workbench/contrib/webview/browser/pre/',
+      webviewContentExternalBaseUrlTemplate: ${jsWebviewBaseUrl} + '/',
     };
     config.additionalBuiltinExtensions = [
       toUriComponents(extensionUrl('extensions/foxwarm-fs')),
@@ -866,6 +920,17 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
       workspaceProvider: WorkspaceProvider.create(config),
       urlCallbackProvider: new LocalStorageURLCallbackProvider(config.callbackRoute || ${jsCallbackRoute}),
     });
+    const executeStartupCommand = async (command, request) => {
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        try {
+          return await commands.executeCommand(command, request);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (attempt === 49 || !/not found|not registered|unknown command/i.test(message)) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+    };
     const startupQuery = new URL(window.location.href).searchParams;
     const openFilePath = startupQuery.get('openFilePath');
     if (openFilePath) {
@@ -873,13 +938,23 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
         const value = Number(startupQuery.get(name));
         return Number.isInteger(value) && value > 0 ? value : undefined;
       };
-      void commands.executeCommand('foxwarm-fs.handleOpenRequest', {
+      void executeStartupCommand('foxwarm-fs.handleOpenRequest', {
         kind: 'openFile',
         nodeId: startupQuery.get('openFileNodeId') || 'master',
         path: openFilePath,
         startLine: parseLine('startLine'),
         endLine: parseLine('endLine'),
       }).catch((error) => console.error('Failed to open initial Foxwarm file', error));
+    }
+    const openCommitPath = startupQuery.get('openCommitPath');
+    const openCommitId = startupQuery.get('openCommitId');
+    if (openCommitPath && openCommitId) {
+      void executeStartupCommand('foxwarm-scm.openCommitDetails', {
+        kind: 'openCommit',
+        nodeId: startupQuery.get('openCommitNodeId') || 'master',
+        path: openCommitPath,
+        commitId: openCommitId,
+      }).catch((error) => console.error('Failed to open initial Foxwarm commit', error));
     }
   } catch (error) {
     console.error('Failed to bootstrap Foxwarm Code', error);
@@ -953,6 +1028,10 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
   }
 
   registerAuthenticatedDynamicStatic(httpServer, VSCODE_WEB_STATIC_ROUTE, getPreparedVscodeWebAssetDir);
+  registerCapabilityDynamicStatic(httpServer, VSCODE_WEB_WEBVIEW_ROUTE, () => {
+    const assetDir = getPreparedVscodeWebAssetDir();
+    return assetDir ? path.join(assetDir, 'out', 'vs', 'workbench', 'contrib', 'webview', 'browser', 'pre') : undefined;
+  });
 
   httpServer.addRoute({
     path: VSCODE_WEB_ROUTE,
@@ -1200,13 +1279,52 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
   });
 
   httpServer.addRoute({
+    path: `${VSCODE_WEB_GIT_API_PREFIX}/commit`,
+    method: 'GET',
+    handler: async (req, res) => {
+      try {
+        const { nodeId, workspace } = getGitRequestBase(req);
+        const id = getSingleQueryValue(req.query.id);
+        if (nodeId !== 'master') {
+          const result = await requestRemoteVscodeService(
+            nodeId,
+            'vscode-git',
+            'commit',
+            { workspace, id },
+            VSCODE_GIT_COMMIT_SERVICE_VERSION,
+          );
+          res.setHeader('Cache-Control', 'no-store');
+          res.json({ nodeId, ...result });
+          return;
+        }
+        const details = await readVscodeGitCommitDetails(workspace, id, (cwd, args, maxStdoutBytes) => (
+          runGit(cwd, args, { maxStdoutBytes, safeDirectory: '*' })
+        ));
+        res.setHeader('Cache-Control', 'no-store');
+        res.json({ nodeId, ...details });
+      } catch (error) {
+        if (error instanceof VscodeGitCommitDetailsError) {
+          sendFsError(res, new VscodeWebFsError(
+            error.code === 'PayloadTooLarge' ? 'PayloadTooLarge' : 'InvalidCommit',
+            error.message,
+          ));
+          return;
+        }
+        sendFsError(res, error);
+      }
+    },
+  });
+
+  httpServer.addRoute({
     path: `${VSCODE_WEB_GIT_API_PREFIX}/content`,
     method: 'GET',
     handler: async (req, res) => {
       try {
         const { nodeId, workspace, relativePath, fullPath } = getGitFileRequest(req);
         const side = getSingleQueryValue(req.query.side) ?? 'base';
-        const ref = getSingleQueryValue(req.query.ref) ?? 'HEAD';
+        let ref: string;
+        try { ref = normalizeVscodeGitContentRef(getSingleQueryValue(req.query.ref)); }
+        catch (error) { throw new VscodeWebFsError('InvalidCommit', error instanceof Error ? error.message : String(error)); }
         if (nodeId !== 'master') {
           const result = await requestRemoteVscodeService(nodeId, 'vscode-git', 'content', { workspace, path: relativePath, side, ref });
           res.setHeader('Content-Type', 'text/plain; charset=utf-8');

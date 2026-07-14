@@ -1,10 +1,11 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { spawn } from 'child_process';
+import { normalizeVscodeGitContentRef, readVscodeGitCommitDetails, VscodeGitCommitDetailsError, VSCODE_GIT_COMMIT_SERVICE_VERSION } from './gitCommitDetails';
 
 export const VSCODE_NODE_SERVICE_VERSIONS = {
   'vscode-fs': 1,
-  'vscode-git': 1,
+  'vscode-git': VSCODE_GIT_COMMIT_SERVICE_VERSION,
 } as const;
 
 export type VscodeNodeServiceName = keyof typeof VSCODE_NODE_SERVICE_VERSIONS;
@@ -379,7 +380,9 @@ async function executeGitOperation(operation: string, args: Record<string, unkno
         else throw error;
       }
     } else {
-      const ref = typeof args.ref === 'string' && args.ref ? args.ref : 'HEAD';
+      let ref: string;
+      try { ref = normalizeVscodeGitContentRef(args.ref); }
+      catch (error) { throw new VscodeNodeServiceError('InvalidCommit', error instanceof Error ? error.message : String(error), 422); }
       try {
         content = await runGit(workspace, ['show', `${ref}:${relativePath}`], { maxStdoutBytes: MAX_GIT_CONTENT_BYTES });
       } catch (error) {
@@ -388,6 +391,19 @@ async function executeGitOperation(operation: string, args: Record<string, unkno
       }
     }
     return { contentBase64: content.toString('base64') };
+  }
+  if (operation === 'commit') {
+    try {
+      return await readVscodeGitCommitDetails(workspace, args.id, (cwd, gitArgs, maxStdoutBytes) => (
+        runGit(cwd, gitArgs, { maxStdoutBytes, safeDirectory: '*' })
+      ));
+    } catch (error) {
+      if (error instanceof VscodeNodeServiceError) throw error;
+      if (error instanceof VscodeGitCommitDetailsError) {
+        throw new VscodeNodeServiceError(error.code, error.message, error.code === 'PayloadTooLarge' ? 413 : 422);
+      }
+      throw new VscodeNodeServiceError('InvalidCommit', error instanceof Error ? error.message : String(error), 422);
+    }
   }
   throw new VscodeNodeServiceError('UnsupportedOperation', `Unsupported vscode-git operation: ${operation}`);
 }

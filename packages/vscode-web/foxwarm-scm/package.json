@@ -26,6 +26,11 @@
         "title": "Open Changes",
         "category": "Foxwarm SCM",
         "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "foxwarm-scm.openCommitDetails",
+        "title": "Open Commit Details",
+        "category": "Foxwarm SCM"
       }
     ],
     "menus": {
@@ -39,6 +44,12 @@
           "command": "foxwarm-scm.openAllChanges",
           "when": "scmProvider =~ /^foxwarm-scm-/",
           "group": "navigation@20"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "foxwarm-scm.openCommitDetails",
+          "when": "false"
         }
       ]
     }

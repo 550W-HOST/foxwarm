@@ -19,6 +19,8 @@ import {
 import ImageParts from './ImageParts'
 import ReasoningCard from './ReasoningCard'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
+import CommitMarkerCard, { type OpenCodeCommitHandler } from './CommitMarkerCard'
+import { splitCommitMarkers } from '../commitMarker'
 import {
   InterleavedToolGroup,
   ToolCallsBlock,
@@ -37,6 +39,7 @@ interface ChatTimelineProps {
   showUsageBadge: boolean
   onRetryFinalFailure?: () => void
   onOpenCodeFile?: OpenCodeFileHandler
+  onOpenCodeCommit?: OpenCodeCommitHandler
   nestedDepth?: number
 }
 
@@ -260,11 +263,12 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message, showRetryButton, onRetry }: { text: string; message: Message; showRetryButton?: boolean; onRetry?: () => void }) {
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, showRetryButton, onRetry, onOpenCodeCommit }: { text: string; message: Message; showRetryButton?: boolean; onRetry?: () => void; onOpenCodeCommit?: OpenCodeCommitHandler }) {
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
   const jsonText = useMemo(() => viewMode === 'json' ? JSON.stringify(message, null, 2) : '', [message, viewMode])
+  const renderedSegments = useMemo(() => splitCommitMarkers(text), [text])
 
   useEffect(() => {
     return () => {
@@ -312,10 +316,21 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, showR
       </div>
 
       {viewMode === 'rendered' ? (
-        <MarkdownContent
-          text={text}
-          className="foxwarm-markdown foxwarm-assistant-message-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100 prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
-        />
+        <div className="foxwarm-assistant-message-markdown">
+          {renderedSegments.map((segment, index) => segment.kind === 'markdown' ? (
+            <MarkdownContent
+              key={`markdown-${index}`}
+              text={segment.text}
+              className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100 prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
+            />
+          ) : segment.kind === 'commit' ? (
+            <CommitMarkerCard key={`commit-${index}-${segment.target.commitId}`} target={segment.target} onOpen={onOpenCodeCommit} />
+          ) : (
+            <pre key={`invalid-commit-${index}`} className="my-2 whitespace-pre-wrap rounded border border-amber-200 bg-amber-50 px-2 py-1.5 font-mono text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200" title="Invalid Foxwarm commit marker">
+              {segment.raw}
+            </pre>
+          ))}
+        </div>
       ) : viewMode === 'raw' ? (
         <pre className="foxwarm-assistant-message-raw whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100">{text}</pre>
       ) : (
@@ -356,6 +371,7 @@ interface MessageRowProps {
   nestedDepth: number
   onRetryFinalFailure?: () => void
   onOpenCodeFile?: OpenCodeFileHandler
+  onOpenCodeCommit?: OpenCodeCommitHandler
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
 }
 
@@ -379,6 +395,7 @@ const MessageRow = memo(function MessageRow({
   nestedDepth,
   onRetryFinalFailure,
   onOpenCodeFile,
+  onOpenCodeCommit,
   renderNestedMessages,
 }: MessageRowProps) {
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
@@ -453,7 +470,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIdx === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
               }
-              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} showRetryButton={isFinalLlmRetryNotice(msg)} onRetry={onRetryFinalFailure} />
+              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} showRetryButton={isFinalLlmRetryNotice(msg)} onRetry={onRetryFinalFailure} onOpenCodeCommit={onOpenCodeCommit} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
@@ -486,10 +503,11 @@ const MessageRow = memo(function MessageRow({
   prev.nestedDepth === next.nestedDepth &&
   prev.onRetryFinalFailure === next.onRetryFinalFailure &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
+  prev.onOpenCodeCommit === next.onOpenCodeCommit &&
   prev.renderNestedMessages === next.renderNestedMessages
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onRetryFinalFailure, onOpenCodeFile, nestedDepth = 0 }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onRetryFinalFailure, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
@@ -502,9 +520,10 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       showUsageBadge={nextNestedDepth > 0 ? false : showUsageBadge}
       onRetryFinalFailure={onRetryFinalFailure}
       onOpenCodeFile={onOpenCodeFile}
+      onOpenCodeCommit={onOpenCodeCommit}
       nestedDepth={nextNestedDepth}
     />
-  ), [groupTools, isMobile, onOpenCodeFile, onRetryFinalFailure, sessionId, showUsageBadge])
+  ), [groupTools, isMobile, onOpenCodeCommit, onOpenCodeFile, onRetryFinalFailure, sessionId, showUsageBadge])
 
   const toolGroupMeta = useMemo(() => {
     const messageKeys = messages.map((msg, idx) => getMessageStableKey(msg, idx))
@@ -702,6 +721,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             nestedDepth={nestedDepth}
             onRetryFinalFailure={onRetryFinalFailure}
             onOpenCodeFile={onOpenCodeFile}
+      onOpenCodeCommit={onOpenCodeCommit}
             renderNestedMessages={renderNestedMessages}
           />
         )
