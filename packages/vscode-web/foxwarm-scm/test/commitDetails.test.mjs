@@ -171,12 +171,13 @@ test('routes commit opens to the sidebar and keeps the editor panel available fr
   const provider = new CommitDetailsViewProvider();
   provider.resolveWebviewView(view);
   await provider.show(shown[0]);
-  assert.match(sidebarWebview.html, /Open in editor/);
+  assert.doesNotMatch(sidebarWebview.html, /Open in editor/);
   assert.match(sidebarWebview.html, /class="sidebar"/);
-  assert.ok(executedCommands.some((entry) => entry.id === 'workbench.view.scm'));
+  assert.ok(executedCommands.some((entry) => entry.id === 'setContext' && entry.args[0] === 'foxwarmCommitDetailsAvailable'));
+  assert.ok(executedCommands.some((entry) => entry.id === 'workbench.view.extension.foxwarm-commit-details'));
   assert.ok(executedCommands.some((entry) => entry.id === 'foxwarm-scm.commitDetailsView.focus'));
   assert.deepEqual(sidebarMessages.at(-1), { type: 'details', details: shown[0] });
   const revealBefore = panelRevealCount;
-  await sidebarMessageHandler({ type: 'openEditor' });
+  await provider.openInEditor();
   assert.equal(panelRevealCount, revealBefore + 1);
 });

@@ -516,7 +516,11 @@ function registerAuthenticatedDynamicStatic(httpServer: HttpServer, mountPath: s
         if (patchedFunction === originalFunction || !patchedFunction.includes('__foxwarmSha256Digest')) {
           throw new Error('Code webview origin hash function shape has changed.');
         }
-        const patchedSource = source.slice(0, functionStart) + patchedFunction + source.slice(functionEnd + 1);
+        const withWebviewHashFallback = source.slice(0, functionStart) + patchedFunction + source.slice(functionEnd + 1);
+        const clipboardProbe = 'async hasResources(){try{let e=await ao().navigator.clipboard.read();';
+        const firefoxSafeClipboardProbe = 'async hasResources(){if(/Firefox\\//.test(navigator.userAgent))return this.resources.length>0;try{let e=await ao().navigator.clipboard.read();';
+        const patchedSource = withWebviewHashFallback.replace(clipboardProbe, firefoxSafeClipboardProbe);
+        if (patchedSource === withWebviewHashFallback) throw new Error('Code Explorer clipboard probe shape has changed.');
         res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store');
         res.send(patchedSource);

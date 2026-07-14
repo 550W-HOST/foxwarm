@@ -31,10 +31,25 @@
         "command": "foxwarm-scm.openCommitDetails",
         "title": "Open Commit Details",
         "category": "Foxwarm SCM"
+      },
+      {
+        "command": "foxwarm-scm.openCommitInEditor",
+        "title": "Open in Editor",
+        "category": "Foxwarm SCM",
+        "icon": "$(open-preview)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "foxwarm-commit-details",
+          "title": "Commit Details",
+          "icon": "media/commit.svg"
+        }
+      ]
+    },
     "views": {
-      "scm": [
+      "foxwarm-commit-details": [
         {
           "type": "webview",
           "id": "foxwarm-scm.commitDetailsView",
@@ -59,6 +74,17 @@
         {
           "command": "foxwarm-scm.openCommitDetails",
           "when": "false"
+        },
+        {
+          "command": "foxwarm-scm.openCommitInEditor",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "foxwarm-scm.openCommitInEditor",
+          "when": "view == foxwarm-scm.commitDetailsView && foxwarmCommitDetailsAvailable",
+          "group": "navigation@10"
         }
       ]
     }

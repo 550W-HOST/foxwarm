@@ -128,7 +128,7 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
       process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH = path.join(dirPath, 'foxwarm.code-workspace');
       await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), `async function hvt(a,o){if(!crypto.subtle)throw new Error("'crypto.subtle' is not available so webviews will not work.");let e=JSON.stringify({parentOrigin:a,salt:o}),i=new TextEncoder().encode(e),n=await crypto.subtle.digest("sha-256",i);return r2o(n)}function r2o(a){return a} export const URI = {}; export class Emitter {}; export function create() {}`);
+      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), `async function hvt(a,o){if(!crypto.subtle)throw new Error("'crypto.subtle' is not available so webviews will not work.");let e=JSON.stringify({parentOrigin:a,salt:o}),i=new TextEncoder().encode(e),n=await crypto.subtle.digest("sha-256",i);return r2o(n)}function r2o(a){return a} class ClipboardService { async hasResources(){try{let e=await ao().navigator.clipboard.read();return e.length>0}catch{}return this.resources.length>0} } export const URI = {}; export class Emitter {}; export function create() {}`);
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/contrib/webview/browser/pre/index.html'), `<meta http-equiv="Content-Security-Policy" content="script-src 'sha256-old' 'self'">
 <script async type="module">
 const searchParams = new URLSearchParams(location.search);
@@ -189,6 +189,8 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
         const patchedWorkbenchSource = await patchedWorkbench.text();
         assert.match(patchedWorkbenchSource, /globalThis\.__foxwarmSha256Digest/);
         assert.doesNotMatch(patchedWorkbenchSource, /if\(!crypto\.subtle\)throw/);
+        assert.match(patchedWorkbenchSource, /Firefox\\\/.*this\.resources\.length/);
+        assert.doesNotMatch(patchedWorkbenchSource, /async hasResources\(\)\{try\{let e=await ao\(\)\.navigator\.clipboard\.read/);
         const wrongCapability = await fetch(`${baseUrl}/vscode-web/webview/${'0'.repeat(48)}/index.html`);
         assert.equal(wrongCapability.status, 404);
 

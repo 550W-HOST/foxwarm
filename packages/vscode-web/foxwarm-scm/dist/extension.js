@@ -95,6 +95,7 @@ var SHORT_OID_RE = /^[0-9a-f]{7,64}$/i;
 var FULL_OID_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 var activeCommitPanels = /* @__PURE__ */ new Map();
 var COMMIT_DETAILS_VIEW_ID = "foxwarm-scm.commitDetailsView";
+var COMMIT_DETAILS_CONTAINER_ID = "foxwarm-commit-details";
 function normalizeAbsolutePath(value) {
   if (typeof value !== "string" || !value.startsWith("/") || value.includes("\0")) throw new Error("Commit path must be an absolute POSIX path.");
   const segments = [];
@@ -214,12 +215,12 @@ function commitHtml(webview, mode) {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${scriptNonce}'; script-src 'nonce-${scriptNonce}';">
 <style nonce="${scriptNonce}">
 body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);padding:20px;max-width:1100px;margin:auto}body.sidebar{padding:10px 12px;max-width:none}h1{font-size:20px;margin:0 0 6px}.sidebar h1{font-size:15px}.muted{color:var(--vscode-descriptionForeground)}code,pre{font-family:var(--vscode-editor-font-family)}.heading{display:flex;gap:8px;align-items:flex-start;justify-content:space-between}.heading-main{min-width:0}.heading h1,.heading .oid{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.meta{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:5px 14px;margin:16px 0}.sidebar .meta{font-size:12px;gap:4px 8px;margin:12px 0}.meta>div{overflow-wrap:anywhere}.stats{display:flex;gap:14px;margin:12px 0;flex-wrap:wrap}.sidebar .stats{font-size:12px;gap:8px}.add{color:var(--vscode-gitDecoration-addedResourceForeground,#3c3)}.del{color:var(--vscode-gitDecoration-deletedResourceForeground,#d55)}pre{white-space:pre-wrap;border:1px solid var(--vscode-panel-border);padding:10px;border-radius:4px}.sidebar pre{font-size:12px;max-height:180px;overflow:auto}.toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:18px 0 8px}.sidebar .toolbar{margin-top:14px}.files{border-top:1px solid var(--vscode-panel-border)}.file{width:100%;display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:8px;align-items:center;text-align:left;color:inherit;background:none;border:0;border-bottom:1px solid var(--vscode-panel-border);padding:8px 4px}.sidebar .file{grid-template-columns:24px minmax(0,1fr);gap:5px;padding:7px 2px}.sidebar .file-stats{grid-column:2}.file:not(:disabled){cursor:pointer}.file:not(:disabled):hover{background:var(--vscode-list-hoverBackground)}.file:disabled{opacity:.65}.path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.badge{font-family:var(--vscode-editor-font-family);font-weight:700}.file-stats{font-family:var(--vscode-editor-font-family);font-size:12px;white-space:nowrap}button.action{color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:0;padding:6px 10px;cursor:pointer;white-space:nowrap}button.action:hover{background:var(--vscode-button-hoverBackground)}</style>
-</head><body class="${mode}"><div id="root"><span class="muted">Loading commit\u2026</span></div>
+</head><body class="${mode}"><div id="root"><span class="muted">${mode === "sidebar" ? "Open a Foxwarm commit from WebUI." : "Loading commit\u2026"}</span></div>
 <script nonce="${scriptNonce}">
 const vscode=acquireVsCodeApi(),root=document.getElementById('root'),mode=${JSON.stringify(mode)};
 const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);if(cls)n.className=cls;return n};
 function row(parent,label,value){parent.append(el('div',label,'muted'),el('div',value))}
-function render(d){root.replaceChildren();const heading=el('div',undefined,'heading'),headingMain=el('div',undefined,'heading-main');headingMain.append(el('h1',d.commit.subject||'(no subject)'),el('div',d.commit.oid,'muted oid'));heading.append(headingMain);if(mode==='sidebar'){const editor=el('button','Open in editor','action');editor.onclick=()=>vscode.postMessage({type:'openEditor'});heading.append(editor)}root.append(heading);const meta=el('div',undefined,'meta');row(meta,'Repository',d.nodeId+':'+d.workspace);row(meta,'Author',d.commit.author.name+' <'+d.commit.author.email+'>');row(meta,'Authored',new Date(d.commit.authoredAt).toLocaleString());row(meta,'Committed',new Date(d.commit.committedAt).toLocaleString());row(meta,'Parents',d.commit.parents.length?d.commit.parents.join('\\n'):'(root commit)');row(meta,'Comparison',d.comparison.mode==='first-parent'?'Changes vs first parent':'Changes vs empty tree');root.append(meta);const stats=el('div',undefined,'stats');stats.append(el('span',d.stats.files+' files'),el('span','+'+d.stats.additions,'add'),el('span','-'+d.stats.deletions,'del'));if(d.stats.binaryFiles)stats.append(el('span',d.stats.binaryFiles+' binary','muted'));root.append(stats);if(d.commit.message)root.append(el('pre',d.commit.message));const toolbar=el('div',undefined,'toolbar');toolbar.append(el('strong','Changed files'));const all=el('button','Open all changes','action');all.onclick=()=>vscode.postMessage({type:'openAll'});toolbar.append(all);root.append(toolbar);const files=el('div',undefined,'files');d.files.forEach((f,index)=>{const b=el('button',undefined,'file');b.type='button';b.disabled=!!f.binary;b.title=f.binary?'Binary text diff is unavailable':'Open diff';b.onclick=()=>vscode.postMessage({type:'openDiff',index});b.append(el('span',f.status,'badge'),el('span',f.oldPath?f.oldPath+' \u2192 '+f.path:f.path,'path'));const s=el('span',undefined,'file-stats');if(f.binary)s.textContent='binary';else{s.append(el('span','+'+(f.additions||0),'add'),document.createTextNode(' '),el('span','-'+(f.deletions||0),'del'));if(f.submodule)s.append(document.createTextNode(' submodule'))}b.append(s);files.append(b)});root.append(files)}
+function render(d){root.replaceChildren();const heading=el('div',undefined,'heading'),headingMain=el('div',undefined,'heading-main');headingMain.append(el('h1',d.commit.subject||'(no subject)'),el('div',d.commit.oid,'muted oid'));heading.append(headingMain);root.append(heading);const meta=el('div',undefined,'meta');row(meta,'Node',d.nodeId);row(meta,'Repository',d.workspace);row(meta,'Author',d.commit.author.name+' <'+d.commit.author.email+'>');row(meta,'Authored',new Date(d.commit.authoredAt).toLocaleString());row(meta,'Committed',new Date(d.commit.committedAt).toLocaleString());row(meta,'Parents',d.commit.parents.length?d.commit.parents.join('\\n'):'(root commit)');row(meta,'Comparison',d.comparison.mode==='first-parent'?'Changes vs first parent':'Changes vs empty tree');root.append(meta);const stats=el('div',undefined,'stats');stats.append(el('span',d.stats.files+' files'),el('span','+'+d.stats.additions,'add'),el('span','-'+d.stats.deletions,'del'));if(d.stats.binaryFiles)stats.append(el('span',d.stats.binaryFiles+' binary','muted'));root.append(stats);if(d.commit.message)root.append(el('pre',d.commit.message));const toolbar=el('div',undefined,'toolbar');toolbar.append(el('strong','Changed files'));const all=el('button','Open all changes','action');all.onclick=()=>vscode.postMessage({type:'openAll'});toolbar.append(all);root.append(toolbar);const files=el('div',undefined,'files');d.files.forEach((f,index)=>{const b=el('button',undefined,'file');b.type='button';b.disabled=!!f.binary;b.title=f.binary?'Binary text diff is unavailable':'Open diff';b.onclick=()=>vscode.postMessage({type:'openDiff',index});b.append(el('span',f.status,'badge'),el('span',f.oldPath?f.oldPath+' \u2192 '+f.path:f.path,'path'));const s=el('span',undefined,'file-stats');if(f.binary)s.textContent='binary';else{s.append(el('span','+'+(f.additions||0),'add'),document.createTextNode(' '),el('span','-'+(f.deletions||0),'del'));if(f.submodule)s.append(document.createTextNode(' submodule'))}b.append(s);files.append(b)});root.append(files)}
 window.addEventListener('message',e=>{if(e.data&&e.data.type==='details')render(e.data.details)});vscode.postMessage({type:'ready'});
 <\/script></body></html>`;
 }
@@ -229,13 +230,9 @@ async function postDetailsWithRetry(webview, details) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }
-function handleCommitMessage(message, details, openEditor) {
+function handleCommitMessage(message, details) {
   if (!message || typeof message !== "object") return;
   const typed = message;
-  if (typed.type === "openEditor" && openEditor) {
-    openEditor();
-    return;
-  }
   if (typed.type === "openAll") {
     void openAllDiffs(details);
     return;
@@ -279,9 +276,7 @@ var CommitDetailsViewProvider = class {
         void postDetailsWithRetry(view.webview, this.details);
         return;
       }
-      handleCommitMessage(message, this.details, () => {
-        void openCommitDetailsEditor(this.details);
-      });
+      handleCommitMessage(message, this.details);
     });
     view.onDidDispose(() => {
       if (this.view === view) this.view = void 0;
@@ -291,9 +286,13 @@ var CommitDetailsViewProvider = class {
   }
   async show(details) {
     this.details = details;
-    await vscode.commands.executeCommand("workbench.view.scm");
+    await vscode.commands.executeCommand("setContext", "foxwarmCommitDetailsAvailable", true);
+    await vscode.commands.executeCommand(`workbench.view.extension.${COMMIT_DETAILS_CONTAINER_ID}`);
     await vscode.commands.executeCommand(`${COMMIT_DETAILS_VIEW_ID}.focus`);
     if (this.view) void postDetailsWithRetry(this.view.webview, details);
+  }
+  async openInEditor() {
+    if (this.details) await openCommitDetailsEditor(this.details);
   }
 };
 async function openCommitDetails(gitApiBase2, value, options = {}) {
@@ -583,6 +582,7 @@ function activate(context) {
     }),
     vscode2.commands.registerCommand("foxwarm-scm.openAllChanges", (sourceControl) => openAllChanges(sourceControl)),
     vscode2.commands.registerCommand("foxwarm-scm.openCommitDetails", (request) => openCommit(request)),
+    vscode2.commands.registerCommand("foxwarm-scm.openCommitInEditor", () => commitDetailsView.openInEditor()),
     vscode2.workspace.onDidChangeWorkspaceFolders(() => refresh())
   );
   void refresh().catch((error) => {

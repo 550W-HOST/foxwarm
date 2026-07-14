@@ -317,6 +317,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('foxwarm-scm.openAllChanges', (sourceControl?: unknown) => openAllChanges(sourceControl)),
     vscode.commands.registerCommand('foxwarm-scm.openCommitDetails', (request: unknown) => openCommit(request)),
+    vscode.commands.registerCommand('foxwarm-scm.openCommitInEditor', () => commitDetailsView.openInEditor()),
     vscode.workspace.onDidChangeWorkspaceFolders(() => refresh()),
   );
   void refresh().catch((error) => {
