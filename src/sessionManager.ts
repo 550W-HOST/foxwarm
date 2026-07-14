@@ -435,8 +435,11 @@ let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = n
 // Callback when transient session events are updated (for SSE broadcasting)
 let onSessionEventUpdated: ((sessionId: string, event: SessionStreamEvent) => void) | null = null;
 
-// Callback when session list is updated (for SSE broadcasting)
+// Independent callbacks for global-list consumers and one-session consumers.
+// The WebUI sidebar/architecture owns the former; each Chat stream owns the
+// latter and never needs to refetch the full list for runtime state.
 let onSessionListUpdated: (() => void) | null = null;
+let onSessionStateUpdated: ((sessionId: string) => void) | null = null;
 
 // Track active in-flight LLM requests so /stop can abort the underlying HTTP call.
 const sessionAbortControllers = new Map<string, AbortController>();
@@ -451,6 +454,10 @@ export function setOnSessionEventUpdated(callback: (sessionId: string, event: Se
 
 export function setOnSessionListUpdated(callback: () => void) {
   onSessionListUpdated = callback;
+}
+
+export function setOnSessionStateUpdated(callback: (sessionId: string) => void) {
+  onSessionStateUpdated = callback;
 }
 
 export function registerSessionAbortController(sessionId: string, controller: AbortController): void {
@@ -703,7 +710,7 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
   }
 
   await saveSessionsMetadata();
-  notifySessionListUpdated();
+  notifySessionUpdated(session.id);
 }
 
 /**
@@ -767,7 +774,12 @@ function notifySessionListUpdated() {
   onSessionListUpdated?.();
 }
 
-setSessionRuntimeStateUpdateCallback(() => notifySessionListUpdated());
+function notifySessionUpdated(sessionId: string) {
+  notifySessionListUpdated();
+  onSessionStateUpdated?.(sessionId);
+}
+
+setSessionRuntimeStateUpdateCallback((sessionId) => notifySessionUpdated(sessionId));
 
 export { buildSessionRuntimeState, clearActiveSessionRuntimeState, formatSessionRuntimeStateSummary, setActiveSessionRuntimeState };
 export type { ActiveSessionRuntimeStateInput, SessionRuntimeState };
@@ -1249,10 +1261,8 @@ export async function saveSession(sessionId: string): Promise<void> {
     vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
       .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
     
-    // Notify session list update
-    if (onSessionListUpdated) {
-      onSessionListUpdated();
-    }
+    // Notify global-list and per-session state consumers.
+    notifySessionUpdated(sessionId);
   } catch (e) {
     logger.error({ err: e, sessionId }, 'Failed to save session');
   }
@@ -1966,10 +1976,8 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
   await saveSessionsMetadata();
   await saveChannels();
   
-  // Notify session list update
-  if (onSessionListUpdated) {
-    onSessionListUpdated();
-  }
+  // Notify global-list and per-session state consumers.
+  notifySessionUpdated(sessionId);
   
   return true;
 }
@@ -1987,10 +1995,8 @@ export async function archiveSession(sessionId: string, archived: boolean = true
   // Archive is metadata-only; avoid touching session history file
   await saveSessionsMetadata();
   
-  // Notify session list update
-  if (onSessionListUpdated) {
-    onSessionListUpdated();
-  }
+  // Notify global-list and per-session state consumers.
+  notifySessionUpdated(sessionId);
   
   return true;
 }

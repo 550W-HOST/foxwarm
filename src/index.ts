@@ -291,6 +291,9 @@ async function start() {
         sessionManager.setOnSessionListUpdated(() => {
             webuiChannel!.broadcastSessionListUpdate();
         });
+        sessionManager.setOnSessionStateUpdated((sessionId) => {
+            webuiChannel!.broadcastSessionStateUpdate(sessionId);
+        });
     } else {
         logger.info('HTTP server disabled (both WebUI and Trigger are disabled)');
     }

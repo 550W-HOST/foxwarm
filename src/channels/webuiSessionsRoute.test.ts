@@ -13,6 +13,32 @@ function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function createSseDataReader(body: ReadableStream<Uint8Array>) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return {
+    async read(): Promise<any> {
+      while (true) {
+        const boundary = buffer.indexOf('\n\n');
+        if (boundary !== -1) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const dataLine = block.split('\n').find(line => line.startsWith('data: '));
+          if (dataLine) return JSON.parse(dataLine.slice('data: '.length));
+          continue;
+        }
+
+        const result = await reader.read();
+        if (result.done) throw new Error('SSE stream ended before the next data event.');
+        buffer += decoder.decode(result.value, { stream: true });
+      }
+    },
+    cancel: () => reader.cancel(),
+  };
+}
+
 test('WebUI creation routes create agents and random or custom sessions', async () => {
   const agentId = makeSessionId('webui_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
   const port = 35500 + Math.floor(Math.random() * 200);
@@ -180,6 +206,10 @@ test('WebUI history route returns queued preview messages separately from commit
     const payload = await res.json() as any;
 
     assert.equal(payload.queueLength, 3);
+    assert.equal(payload.session.id, sessionId);
+    assert.equal(payload.session.busy, true);
+    assert.equal(payload.session.queueLength, 3);
+    assert.equal(payload.session.runtimeState.state, 'requesting-model');
     assert.equal(payload.messages.length, 1);
     assert.equal(payload.messages[0].parts[0].text, 'committed answer');
     assert.equal(payload.queuedMessages.length, 2);
@@ -201,6 +231,111 @@ test('WebUI history route returns queued preview messages separately from commit
   } finally {
     await server.stop();
     setHttpServer(null);
+    session.busy = false;
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('WebUI per-session SSE sends initial and live canonical runtime state without a session-list fetch', async () => {
+  const sessionId = makeSessionId('webui_session_stream');
+  const alias = `${sessionId}_alias`;
+  const session = await sessionManager.getSession(sessionId);
+  session.aliases = [alias];
+  session.agent = 'main';
+  session.history = [];
+  session.persistentMemorySnapshot = '';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = false;
+  session.queue = [];
+  session.meta = {
+    lastMessageTime: Date.now(),
+    wait: {
+      id: 'stream-wait',
+      startedAt: Date.now() - 1000,
+      timeoutSeconds: 30,
+    },
+  } as Session['meta'];
+  await sessionManager.saveSession(sessionId);
+
+  const port = 34900 + Math.floor(Math.random() * 300);
+  const token = 'session-stream-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  const channel = new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  sessionManager.setOnSessionStateUpdated((updatedSessionId) => channel.broadcastSessionStateUpdate(updatedSessionId));
+  await server.start();
+
+  let sse: ReturnType<typeof createSseDataReader> | null = null;
+  try {
+    const missing = await fetch(`http://127.0.0.1:${port}/api/sessions/missing-session/stream`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(missing.status, 404);
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(alias)}/stream`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+    sse = createSseDataReader(response.body!);
+
+    const connected = await sse.read();
+    assert.equal(connected.type, 'connected');
+
+    const initial = await sse.read();
+    assert.equal(initial.type, 'session-state');
+    assert.equal(initial.session.id, sessionId, 'alias subscriptions must use the canonical session id');
+    assert.equal(initial.session.runtimeState.state, 'waiting');
+    assert.equal(initial.session.runtimeState.waiting.waitingFor, 'timer');
+    assert.equal(initial.session.busy, false);
+
+    session.busy = true;
+    session.busyStartedAt = Date.now();
+    session.queue.push({ type: 'retry' });
+    sessionManager.setActiveSessionRuntimeState(sessionId, {
+      state: 'running-tool',
+      tool: {
+        id: 'tool-1',
+        name: 'exec',
+        index: 0,
+        total: 1,
+        startedAt: Date.now(),
+      },
+    });
+
+    const active = await sse.read();
+    assert.equal(active.type, 'session-state');
+    assert.equal(active.session.runtimeState.state, 'running-tool');
+    assert.equal(active.session.runtimeState.tool.name, 'exec');
+    assert.equal(active.session.runtimeState.queueLength, 1);
+    assert.equal(active.session.queueLength, 1);
+    assert.equal(active.session.busy, true);
+
+    session.busy = false;
+    session.busyStartedAt = undefined;
+    session.queue = [];
+    sessionManager.clearActiveSessionRuntimeState(sessionId);
+
+    const waitingAgain = await sse.read();
+    assert.equal(waitingAgain.type, 'session-state');
+    assert.equal(waitingAgain.session.runtimeState.state, 'waiting');
+    assert.equal(waitingAgain.session.queueLength, 0);
+    assert.equal(waitingAgain.session.busy, false);
+
+    delete session.meta.wait;
+    await sessionManager.saveSession(sessionId);
+
+    const idle = await sse.read();
+    assert.equal(idle.type, 'session-state');
+    assert.equal(idle.session.runtimeState.state, 'idle');
+    assert.equal(idle.session.runtimeState.busy, false);
+    assert.equal(idle.session.runtimeState.queueLength, 0);
+  } finally {
+    await sse?.cancel().catch(() => {});
+    await server.stop();
+    setHttpServer(null);
+    sessionManager.setOnSessionStateUpdated(() => {});
+    sessionManager.clearActiveSessionRuntimeState(sessionId);
     session.busy = false;
     await sessionManager.deleteSession(sessionId).catch(() => {});
   }

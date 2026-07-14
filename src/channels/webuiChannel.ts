@@ -318,6 +318,24 @@ function buildWebUiModelStatus(session: { model?: string; childModelDefault?: st
   };
 }
 
+function buildWebUiSessionState(session: any) {
+  return {
+    id: session.id,
+    agent: session.agent || 'main',
+    aliases: session.aliases || [],
+    busy: session.busy || false,
+    busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
+    queueLength: session.queue?.length || 0,
+    runtimeState: sessionManager.buildSessionRuntimeState(session),
+    displayName: session.displayName || null,
+    archived: session.archived || false,
+    currentNode: session.currentNode || 'master',
+    cwd: session.cwd || null,
+    ...buildWebUiModelStatus(session),
+    isolated: sessionManager.isSessionEffectivelyIsolated(session),
+  };
+}
+
 function buildWebUiModelsPayload(currentModel?: string) {
   const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(currentModel);
   const displayModels = modelsConfig.displayModels || Object.keys(modelsConfig.models || {});
@@ -954,27 +972,15 @@ export class WebUIChannel implements Channel {
             
             const sessions = Array.from(allSessions.entries())
               .map(([id, session]) => ({
-                id,
-                agent: session.agent || 'main',
+                ...buildWebUiSessionState(session),
                 messageCount: session.meta?.messageCount ?? session.history.length,
                 lastMessageTime: session.meta?.lastMessageTime ?? (session.history.length > 0 
                   ? session.history[session.history.length - 1].__meta?.timestamp || 0
                   : 0),
                 parentSessionId: session.parentSessionId || null,
                 childSessions: childrenMap.get(id) || [],
-                aliases: session.aliases || [],
-                busy: session.busy || false,
-                busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
-                queueLength: session.queue?.length || 0,
-                runtimeState: sessionManager.buildSessionRuntimeState(session),
-                displayName: session.displayName || null,
-                archived: session.archived || false,
                 pinned: session.pinned || false,
                 sidebarOrder: getWebUiSidebarOrder(session) ?? null,
-                currentNode: session.currentNode || 'master',
-                cwd: session.cwd || null,
-                ...buildWebUiModelStatus(session),
-                isolated: sessionManager.isSessionEffectivelyIsolated(session),
                 tokenUsage: {
                   cachedTokens: session.stats?.totalCachedTokens || 0,
                   inputTokens: session.stats?.totalInputTokens || 0,
@@ -1246,6 +1252,7 @@ export class WebUIChannel implements Channel {
             }
             const queuedMessages = buildQueuedPreviewMessages(session.queue);
             res.json({
+              session: buildWebUiSessionState(session),
               messages: session.history,
               queuedMessages,
               queueLength: session.queue?.length || 0,
@@ -1789,7 +1796,7 @@ export class WebUIChannel implements Channel {
         path: '/api/sessions/:sessionId/stream',
         method: 'GET',
         handler: async (req: express.Request, res: express.Response) => {
-          const sessionId = req.params.sessionId as string;
+          const requestedSessionId = req.params.sessionId as string;
 
           // Check token from cookie or query parameter
           if (!httpServer.checkToken(req)) {
@@ -1797,6 +1804,13 @@ export class WebUIChannel implements Channel {
             res.status(401).json({ error: 'Unauthorized' });
             return;
           }
+
+          const session = await sessionManager.getExistingSession(requestedSessionId);
+          if (!session) {
+            res.status(404).json({ error: 'Session not found' });
+            return;
+          }
+          const sessionId = session.id;
           
           // Set SSE headers
           res.setHeader('Content-Type', 'text/event-stream');
@@ -1813,8 +1827,13 @@ export class WebUIChannel implements Channel {
           
           // logger.info({ sessionId, clientCount: this.sseClients.get(sessionId)!.length }, 'SSE client connected');
           
-          // Send initial ping
+          // Preserve the existing connection acknowledgement, then send a
+          // canonical state snapshot after registration. The snapshot closes
+          // the history/stream race: the history response supplies initial
+          // state, and this event reflects state at subscription time.
           res.write('data: {"type":"connected"}\n\n');
+          const initialState = JSON.stringify({ type: 'session-state', session: buildWebUiSessionState(session) });
+          res.write(`data: ${initialState}\n\n`);
           
           // Keep-alive ping every 30 seconds
           const keepAliveInterval = setInterval(() => {
@@ -2389,6 +2408,33 @@ export class WebUIChannel implements Channel {
           logger.error({ err: e }, 'Failed to send SSE session event');
         }
       });
+    }
+  }
+
+  broadcastSessionStateUpdate(sessionId: string) {
+    const clients = this.sseClients.get(sessionId);
+    if (!clients || clients.length === 0) {
+      return;
+    }
+
+    const session = sessionManager.getAllSessions().get(sessionId);
+    const data = session
+      ? JSON.stringify({ type: 'session-state', session: buildWebUiSessionState(session) })
+      : JSON.stringify({ type: 'session-deleted', sessionId });
+
+    clients.forEach(client => {
+      try {
+        client.write(`data: ${data}\n\n`);
+        if (!session) {
+          client.end();
+        }
+      } catch (e) {
+        logger.error({ err: e, sessionId }, 'Failed to send SSE session state');
+      }
+    });
+
+    if (!session) {
+      this.sseClients.delete(sessionId);
     }
   }
 

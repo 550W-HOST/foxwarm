@@ -10,7 +10,7 @@ import ProcessingStatus from './ProcessingStatus'
 import { copyTextToClipboard } from './chatShared'
 import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
-import { isSessionRuntimeActive } from '../sessionRuntimeState'
+import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import {
   CHAT_MESSAGE_ANCHOR_SELECTOR,
@@ -110,7 +110,9 @@ type SessionListRecord = {
   childSessions?: string[]
   aliases?: string[]
   busy?: boolean
+  busyStartedAt?: number | null
   queueLength?: number
+  runtimeState?: SessionRuntimeState
   displayName?: string | null
   archived?: boolean
   currentNode?: string
@@ -241,6 +243,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const sessionBusyRef = useRef(false)
   const sessionQueueLengthRef = useRef(0)
   const queuedMessagesRef = useRef<Message[]>([])
+  const sessionStateInitializedRef = useRef(false)
   const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
   const composerHeightRef = useRef<number | null>(null)
   const initialViewportState = getStoredChatViewportState(viewportSessionId) || { kind: 'bottom' as const }
@@ -257,6 +260,13 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     setStreamingAssistantDraft(null)
     setToolScriptProgress({})
     setQueuedMessages([])
+    setSessionRecord(null)
+    setSessionBusy(false)
+    setSessionQueueLength(0)
+    sessionBusyRef.current = false
+    sessionQueueLengthRef.current = 0
+    queuedMessagesRef.current = []
+    sessionStateInitializedRef.current = false
   }, [sessionId])
 
   useEffect(() => {
@@ -499,6 +509,18 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     }
   }, [captureCurrentViewportState, markUserViewportInteraction, messages.length, readCurrentViewportState, showFullTimeline])
 
+  const applySessionState = useCallback((session: SessionListRecord | null | undefined) => {
+    if (!session || typeof session.id !== 'string') return
+    const nextBusy = isSessionRuntimeActive(session)
+    const nextQueueLength = typeof session.queueLength === 'number' ? session.queueLength : 0
+    sessionBusyRef.current = nextBusy
+    sessionQueueLengthRef.current = nextQueueLength
+    sessionStateInitializedRef.current = true
+    setSessionRecord(session)
+    setSessionBusy(nextBusy)
+    setSessionQueueLength(nextQueueLength)
+  }, [])
+
   const fetchHistory = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history`)
@@ -509,12 +531,13 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         setSessionQueueLength(0)
         lastKnownTimestampRef.current = 0
         setHistoryLoaded(true)
-        return
+        return false
       }
 
       if (res.ok) {
         const data = await res.json()
         setSessionMissing(false)
+        applySessionState(data.session)
         setMessages(data.messages || [])
         const nextQueuedMessages = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
         setQueuedMessages(nextQueuedMessages)
@@ -527,11 +550,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           lastKnownTimestampRef.current = lastMsg.__meta.timestamp
         }
         setHistoryLoaded(true)
+        return true
       }
+      return true
     } catch (e) {
       console.error('Failed to fetch history:', e)
+      return true
     }
-  }, [sessionId])
+  }, [applySessionState, sessionId])
 
   const connectSSE = useCallback(() => {
     if (eventSourceRef.current) {
@@ -560,6 +586,34 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
+        if (data.type === 'session-state') {
+          const hadSessionState = sessionStateInitializedRef.current
+          const previousQueueLength = sessionQueueLengthRef.current
+          const nextQueueLength = typeof data.session?.queueLength === 'number' ? data.session.queueLength : 0
+          applySessionState(data.session)
+          if (hadSessionState && (
+            nextQueueLength !== previousQueueLength ||
+            (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)
+          )) {
+            void fetchHistory()
+          }
+          return
+        }
+
+        if (data.type === 'session-deleted') {
+          setSessionMissing(true)
+          setSessionBusy(false)
+          setSessionQueueLength(0)
+          setQueuedMessages([])
+          sessionBusyRef.current = false
+          sessionQueueLengthRef.current = 0
+          queuedMessagesRef.current = []
+          es.close()
+          eventSourceRef.current = null
+          setConnectionState('disconnected')
+          return
+        }
+
         if (data.type === 'session-event') {
           const sessionEvent = data.event as SessionStreamEvent
           if (sessionEvent.type === 'model-stream-reset') {
@@ -716,8 +770,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         }, 1000)
 
         reconnectTimeoutRef.current = setTimeout(() => {
-          fetchHistory().then(() => {
-            connectSSE()
+          fetchHistory().then((sessionExists) => {
+            if (sessionExists) {
+              connectSSE()
+            } else {
+              setConnectionState('disconnected')
+            }
           })
           reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000)
         }, delay)
@@ -727,25 +785,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     }
 
     eventSourceRef.current = es
-  }, [fetchHistory, sessionId])
+  }, [applySessionState, fetchHistory, sessionId])
 
   const refreshSessionDebugData = useCallback(async () => {
     setDebugInfoLoading(true)
     setDebugInfoError(null)
 
     try {
-      const [sessionsRes, fileData] = await Promise.all([
-        fetch(`${API_BASE_PATH}/sessions`),
-        fetchSessionFilePayload(sessionId),
-      ])
-
-      if (sessionsRes.ok) {
-        const data = await sessionsRes.json()
-        const currentSession = (data.sessions || []).find((session: SessionListRecord) => session.id === sessionId) || null
-        setSessionRecord(currentSession)
-      } else {
-        setSessionRecord(null)
-      }
+      const fileData = await fetchSessionFilePayload(sessionId)
 
       setResolvedSessionFilePath(fileData.resolvedPath)
       setSessionFilePayload(fileData.payload)
@@ -772,6 +819,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Failed to update model (${res.status})`)
+      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
       await refreshSessionDebugData()
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update model'
@@ -793,6 +841,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Failed to update child default model (${res.status})`)
+      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
       await refreshSessionDebugData()
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update child default model'
@@ -826,44 +875,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   useEffect(() => {
     refreshSessionDebugData()
   }, [refreshSessionDebugData])
-
-  useEffect(() => {
-    setSessionMissing(false)
-
-    const fetchBusyStatus = async () => {
-      try {
-        const res = await fetch(`${API_BASE_PATH}/sessions`)
-        if (res.ok) {
-          const data = await res.json()
-          const currentSession = data.sessions.find((s: any) => s.id === sessionId)
-          if (currentSession) {
-            const nextBusy = isSessionRuntimeActive(currentSession)
-            const nextQueueLength = currentSession.queueLength || 0
-            const previousQueueLength = sessionQueueLengthRef.current
-            setSessionBusy(nextBusy)
-            setSessionQueueLength(nextQueueLength)
-            if (
-              nextQueueLength !== previousQueueLength ||
-              (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)
-            ) {
-              void fetchHistory()
-            }
-          } else {
-            setSessionBusy(false)
-            setSessionQueueLength(0)
-            setQueuedMessages([])
-          }
-        }
-      } catch (e) {
-        console.error('Failed to fetch busy status:', e)
-      }
-    }
-
-    fetchBusyStatus()
-    const interval = setInterval(fetchBusyStatus, 2000)
-
-    return () => clearInterval(interval)
-  }, [fetchHistory, sessionId])
 
   useEffect(() => {
     if (!pendingViewportRestoreRef.current && shouldAutoScrollRef.current) {
