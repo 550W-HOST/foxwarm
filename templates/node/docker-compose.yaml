@@ -11,7 +11,7 @@ services:
         https_proxy: ${https_proxy:-}
         no_proxy: ${no_proxy:-}
       dockerfile_inline: |
-        FROM node:22-bookworm-slim
+        FROM node:24.17.0-bookworm-slim
 
         ARG NODE_SOURCE_URL
 
@@ -56,6 +56,8 @@ services:
               && npm --prefix /app/packages/cli-node ci \
               && npm --prefix /app/packages/cli-node run build; \
             fi
+        RUN npm --prefix /app/packages/cli-node-runtime ci --omit=dev \
+            && npm cache clean --force
         RUN chmod +x /app/scripts/start-sandbox-node.sh
 
         ENV NODE_ENV=production

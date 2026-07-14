@@ -14,6 +14,7 @@ import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
 import { readNodeTransferFile, writeNodeTransferFile } from '../../shared/dist/nodeFileTransfer';
 import { executeVscodeNodeService, serializeVscodeNodeServiceError, VSCODE_NODE_SERVICE_VERSIONS, type VscodeNodeServiceName } from '../../shared/dist/vscodeNodeService';
 import { createMasterWebSocketOptions, getMasterProxyInfo } from './masterProxy';
+import { loadNodePtyService, type NodePtyService, type NodePtyServiceEvent } from './nodePtyService';
 
 type LogPayload = Record<string, any> | Error | any;
 const logger = {
@@ -73,9 +74,6 @@ type StoredNodeCredentials = {
   authToken: string;
   pairedAt: number;
 }
-
-const NODE_CAPABILITIES = CLI_NODE_CAPABILITIES;
-
 
 const DEFAULT_LOCAL_TRIGGER_HOST = '127.0.0.1';
 
@@ -166,6 +164,7 @@ export class NodeClient {
   private toolCallInterceptor?: (tool: string, args: any, sessionId: string, callId: string, timeoutMs?: number) => Promise<boolean | string>;
   private onStatus?: (event: string, detail?: Record<string, any>) => void;
   private pendingRequests: Map<string, PendingRequest> = new Map();
+  private nodePtyService?: NodePtyService;
 
   constructor(options: NodeClientOptions) {
     this.host = options.host;
@@ -180,6 +179,28 @@ export class NodeClient {
       : 0;
     this.toolCallInterceptor = options.toolCallInterceptor;
     this.onStatus = options.onStatus;
+    const ptyLoad = loadNodePtyService({
+      stateDir: resolveNodeStateDir(this.credentialsFile),
+      emitEvent: (event) => this.sendNodePtyEvent(event),
+    });
+    this.nodePtyService = ptyLoad.service;
+    if (ptyLoad.service) logger.info({ runtimeDir: ptyLoad.runtimeDir }, 'Remote PTY service available');
+    else logger.warn({ runtimeDir: ptyLoad.runtimeDir, err: ptyLoad.error }, 'Remote PTY service unavailable; continuing without vscode-pty capability');
+  }
+
+  private getNodeCapabilities(): typeof CLI_NODE_CAPABILITIES | { tools: typeof CLI_NODE_CAPABILITIES.tools; services: Record<string, number> } {
+    return {
+      ...CLI_NODE_CAPABILITIES,
+      services: {
+        ...CLI_NODE_CAPABILITIES.services,
+        ...(this.nodePtyService ? { 'vscode-pty': 1 } : {}),
+      },
+    };
+  }
+
+  private sendNodePtyEvent(event: NodePtyServiceEvent): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'node_service_event', service: 'vscode-pty', event }));
   }
 
   private get isAuthenticatedMode(): boolean {
@@ -415,14 +436,14 @@ export class NodeClient {
         this.send({
           type: 'node_register',
           nodeType: 'cli-node',
-          capabilities: NODE_CAPABILITIES
+          capabilities: this.getNodeCapabilities()
         });
       } else {
         this.send({
           type: 'pair_request',
           requestedName: this.requestedName,
           nodeType: 'cli-node',
-          capabilities: NODE_CAPABILITIES,
+          capabilities: this.getNodeCapabilities(),
         });
       }
     });
@@ -523,6 +544,9 @@ export class NodeClient {
       case 'node_service_request':
         await this.handleNodeServiceRequest(message);
         break;
+      case 'node_service_command':
+        await this.handleNodeServiceCommand(message);
+        break;
       case 'cli_response':
         this.handleCliResponse(message);
         break;
@@ -563,17 +587,43 @@ export class NodeClient {
 
   private async handleNodeServiceRequest(message: any): Promise<void> {
     const requestId = String(message.requestId || '');
-    const service = String(message.service || '') as VscodeNodeServiceName;
+    const service = String(message.service || '');
     const operation = String(message.operation || '');
     try {
-      if (!(service in VSCODE_NODE_SERVICE_VERSIONS)) {
-        throw new Error(`Unsupported node service: ${service}`);
-      }
-      const result = await executeVscodeNodeService(service, operation, message.args && typeof message.args === 'object' ? message.args : {});
+      const result = await this.executeNodeService(service, operation, message.args);
       this.send({ type: 'node_service_response', requestId, result });
     } catch (error) {
       this.send({ type: 'node_service_error', requestId, error: serializeVscodeNodeServiceError(error) });
     }
+  }
+
+  private async handleNodeServiceCommand(message: any): Promise<void> {
+    const service = String(message.service || '');
+    const operation = String(message.operation || '');
+    try {
+      await this.executeNodeService(service, operation, message.args);
+    } catch (error) {
+      this.send({
+        type: 'node_service_event',
+        service,
+        event: {
+          type: 'error',
+          operation,
+          ...(typeof message.args?.terminalId === 'string' ? { terminalId: message.args.terminalId } : {}),
+          error: serializeVscodeNodeServiceError(error),
+        },
+      });
+    }
+  }
+
+  private async executeNodeService(service: string, operation: string, args: any): Promise<any> {
+    const serviceArgs = args && typeof args === 'object' ? args : {};
+    if (service === 'vscode-pty') {
+      if (!this.nodePtyService) throw new Error('vscode-pty service is unavailable on this node.');
+      return this.nodePtyService.execute(operation, serviceArgs);
+    }
+    if (!(service in VSCODE_NODE_SERVICE_VERSIONS)) throw new Error(`Unsupported node service: ${service}`);
+    return executeVscodeNodeService(service as VscodeNodeServiceName, operation, serviceArgs);
   }
 
   private async handleFileWriteRequest(message: any): Promise<void> {

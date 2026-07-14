@@ -47,10 +47,10 @@ Current MVP behavior:
 
 - Backend terminal creation is cwd-based and no longer requires a Foxwarm chat session id.
 - The terminal cwd is derived from the first VS Code workspace folder URI. For example, `foxwarm://node+master/app/` becomes backend cwd `/app`.
-- Only `nodeId=master` is supported.
+- `nodeId=master` uses the master process PTY manager. A connected CLI node advertising versioned `vscode-pty` runs the PTY in the remote node process and exposes the same Code terminal UI.
 - Closing or reloading the whole VS Code browser page only detaches its WebSocket clients. Extension activation lists existing backend terminals on the same node whose cwd is inside the current workspace and recreates attach-mode VS Code terminal views without POSTing new PTYs.
 - Explicit user terminal close (`TerminalExitReason.User`) deletes/kills the backend PTY. Window shutdown/reload, process exit, and extension shutdown do not issue an extra DELETE.
-- Backend terminals remain process/in-memory state and are still removed on backend/container restart.
+- Backend terminals remain process/in-memory state. Master terminals disappear when the master process restarts; remote terminals survive a master reconnect while their CLI node process remains alive, but disappear when that node process restarts.
 
 `foxwarm-fs` also contributes a `Foxwarm: Add Folder...` command and a remote-indicator menu item for virtual `foxwarm` workspaces. It prompts for an absolute path on the current node and appends that path to the current multi-root workspace.
 
@@ -70,9 +70,9 @@ Current MVP behavior:
 
 ## Remote node transport
 
-Remote filesystem and Git requests do not invoke model-facing `read`/`write`/`exec` tools. The authenticated node connection advertises versioned `vscode-fs` and `vscode-git` service capabilities; the master sends fixed-operation `node_service_request` messages and correlates responses/errors by request id. The CLI node executes those operations in its own environment with the same 50 MiB file and 10 MiB Git-output limits used by the HTTP layer. Offline nodes return an unavailable response, and older clients that do not advertise a service are rejected instead of silently falling back to master paths.
+Remote filesystem, Git, and PTY requests do not invoke model-facing `read`/`write`/`exec` tools. The authenticated node connection advertises versioned `vscode-fs`, `vscode-git`, and optional `vscode-pty` service capabilities. Lifecycle operations use correlated `node_service_request` messages; latency-sensitive PTY input/resize uses fixed fire-and-forget `node_service_command` messages; PTY output/exit uses `node_service_event` messages. Offline nodes return an unavailable response, and older clients that do not advertise a service are rejected instead of silently falling back to master paths.
 
-The current URI/path implementation is POSIX-oriented. Cross-platform remote terminal and Windows path/PTY delivery remain separate follow-up work.
+The CLI node loads official `node-pty` from the separate minimal `packages/cli-node-runtime` package. Node bootstrap installs only that package: official macOS/Windows builds use the packaged prebuilds, while Linux compiles through `node-gyp` and therefore requires Python 3, make, and a C/C++ compiler. Docker node builds treat installation failure as fatal; bare-metal bootstrap warns and continues without advertising `vscode-pty`, preserving its filesystem/Git/tool capabilities. The current URI/path implementation is still POSIX-oriented; Windows path mapping remains separate work even though the native PTY package has a Windows prebuild.
 
 ## Preparing the optional Code workbench
 
@@ -148,7 +148,7 @@ Launch URLs are derived from the dynamic WebUI API base path and preserve revers
 - Committing Code workbench static assets or source/dependency caches.
 - File/text search providers.
 - File watching.
-- Remote integrated terminals (filesystem and read-only SCM are supported; the current terminal backend remains master-only).
+- Native Windows-path workspace support.
 
 ## Validation commands
 

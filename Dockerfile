@@ -13,11 +13,14 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY templates ./templates
 COPY skills ./skills
+COPY scripts/start-sandbox-node.sh ./scripts/start-sandbox-node.sh
 COPY packages/shared ./packages/shared
 COPY packages/webui ./packages/webui
 COPY packages/cli-node ./packages/cli-node
+COPY packages/cli-node-runtime ./packages/cli-node-runtime
 
 RUN npm run build && npm --prefix packages/webui run build
+RUN rm -rf /app/packages/shared/node_modules /app/packages/cli-node/node_modules /app/packages/cli-node-runtime/node_modules
 
 # Code workbench assets are optional; extension bundles are always present.
 COPY packages/vscode-web ./packages/vscode-web
@@ -65,7 +68,10 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/lib ./lib
 COPY --from=build /app/templates ./templates
 COPY --from=build /app/skills ./skills
-COPY --from=build /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build /app/scripts/start-sandbox-node.sh ./scripts/start-sandbox-node.sh
+COPY --from=build /app/packages/shared ./packages/shared
+COPY --from=build /app/packages/cli-node ./packages/cli-node
+COPY --from=build /app/packages/cli-node-runtime ./packages/cli-node-runtime
 COPY --from=build /app/packages/webui/dist ./packages/webui/dist
 COPY --from=build /app/packages/webui/public ./packages/webui/public
 COPY --from=build /app/packages/vscode-web/foxwarm-fs ./packages/vscode-web/foxwarm-fs

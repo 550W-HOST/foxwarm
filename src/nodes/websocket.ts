@@ -242,6 +242,9 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
         case 'node_service_error':
           nodesManager.handleNodeServiceError(nodeId || authenticatedNodeId || 'unknown-node', String(data.requestId || ''), data.error || 'Node service failed.');
           break;
+        case 'node_service_event':
+          nodesManager.handleNodeServiceEvent(nodeId || authenticatedNodeId || 'unknown-node', String(data.service || ''), data.event);
+          break;
         case 'session_event':
           if (!data.sessionId || typeof data.message !== 'string') {
             ws.send(JSON.stringify({

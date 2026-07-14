@@ -52,6 +52,12 @@ test('derives terminal target from first workspace folder', () => {
   assert.equal(target.realPath, '/tmp/hello world');
 });
 
+test('derives a remote node terminal target without falling back to master', () => {
+  const target = getWorkspaceTerminalTarget([{ uri: uri('foxwarm://node+worker-1/workspace/src') }]);
+  assert.equal(target.nodeId, 'worker-1');
+  assert.equal(target.realPath, '/workspace/src');
+});
+
 test('supports legacy workspace URI shape', () => {
   const target = getWorkspaceTerminalTarget([{ uri: uri('foxwarm://node/master/app') }]);
   assert.equal(target.nodeId, 'master');
@@ -72,6 +78,7 @@ test('restores only terminals on the workspace node and inside its path boundary
   assert.equal(isTerminalInsideWorkspace({ id: 'two', nodeId: 'master', cwd: '/app/src' }, workspace), true);
   assert.equal(isTerminalInsideWorkspace({ id: 'three', nodeId: 'master', cwd: '/application' }, workspace), false);
   assert.equal(isTerminalInsideWorkspace({ id: 'four', nodeId: 'worker', cwd: '/app' }, workspace), false);
+  assert.equal(isTerminalInsideWorkspace({ id: 'five', nodeId: 'worker', cwd: '/app/src' }, { nodeId: 'worker', realPath: '/app' }), true);
 });
 
 test('kills backend terminals only for explicit user close reasons', () => {

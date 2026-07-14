@@ -62,10 +62,12 @@ By default, the bare-metal script also:
 
 - downloads `/node/source.tar.gz`
 - extracts it into `./foxwarm-node/`
-- runs `npm ci`
 - uses the prebuilt bundle from the archive when available
 - runs `npm run build` only if required artifacts are missing
+- runs `npm ci --omit=dev` only in the separate `packages/cli-node-runtime` package to install official `node-pty` for optional remote Code terminals
 - starts `node packages/cli-node/dist/client.js` in the **foreground**
+
+Official `node-pty` includes macOS/Windows prebuilds but not Linux prebuilds. On Linux, remote terminal support therefore requires npm, Python 3, make, and a C/C++ compiler so node-gyp can build it. If this optional install fails, bare-metal bootstrap prints a warning and starts the node without `vscode-pty`; filesystem, Git, and normal model tools remain available.
 
 If you want background mode instead:
 
@@ -156,6 +158,7 @@ The current compose template is self-contained:
 - it uses an inline Dockerfile in the compose file itself
 - during build, that inline Dockerfile downloads `/node/source.tar.gz`
 - the source bundle includes the shared-package artifacts needed by the current runtime
+- the pinned Node 24 image installs the minimal PTY runtime package with Linux build prerequisites; a failure is fatal to the Docker image build
 - the remote machine does not need a full local Foxwarm checkout first
 
 ## Minimal troubleshooting

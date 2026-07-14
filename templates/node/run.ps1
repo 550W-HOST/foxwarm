@@ -163,6 +163,22 @@ if (-not (Test-Path $entryPoint)) {
     }
 }
 
+# Install only the target-platform PTY runtime. macOS/Windows use official
+# prebuilds; Linux requires node-gyp build prerequisites.
+$runtimeDir = Join-Path $SourceDir "packages\cli-node-runtime"
+$runtimeLock = Join-Path $runtimeDir "package-lock.json"
+if (Test-Path $runtimeLock) {
+    if (Get-Command "npm" -ErrorAction SilentlyContinue) {
+        Write-Host "Installing the target-platform PTY runtime (node-pty only) ..."
+        & npm --prefix $runtimeDir ci --omit=dev
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "node-pty installation failed; the node will continue without remote terminal capability."
+        }
+    } else {
+        Write-Warning "npm is unavailable; the node will continue without remote terminal capability."
+    }
+}
+
 # ─── Build arguments ───
 $nodeArgs = @($entryPoint, "--host", $HostUrl, "--id", $NodeId, "--credentials-file", $CredentialsFile)
 

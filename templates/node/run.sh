@@ -84,6 +84,7 @@ curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$SOURCE_DIR"
 ABS_STATE_DIR="$(cd "$STATE_DIR" && pwd)"
 ABS_SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
 NODE_CLIENT_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/client.bundle.js"
+NODE_RUNTIME_DIR="$ABS_SOURCE_DIR/packages/cli-node-runtime"
 
 cat > "$ENV_FILE" <<EOF
 NODE_HOST=$HOST
@@ -108,6 +109,18 @@ else
   (cd "$ABS_SOURCE_DIR/packages/shared" && npm ci && npm run build)
   (cd "$ABS_SOURCE_DIR/packages/cli-node" && npm ci && npm run build)
   NODE_CLIENT_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/client.bundle.js"
+fi
+
+if [ -f "$NODE_RUNTIME_DIR/package-lock.json" ]; then
+  if command -v npm >/dev/null 2>&1; then
+    echo "Installing the target-platform PTY runtime (node-pty only) ..."
+    if ! npm --prefix "$NODE_RUNTIME_DIR" ci --omit=dev; then
+      echo "Warning: node-pty installation failed; the node will continue without remote terminal capability." >&2
+      echo "Linux requires Python 3, make, and a C/C++ compiler for node-pty." >&2
+    fi
+  else
+    echo "Warning: npm is unavailable; the node will continue without remote terminal capability." >&2
+  fi
 fi
 
 if [ ! -f "$NODE_CLIENT_ENTRYPOINT" ]; then

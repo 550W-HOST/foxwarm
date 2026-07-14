@@ -60,6 +60,8 @@ interface PendingServiceRequest {
   timeout: NodeJS.Timeout;
 }
 
+export type NodeServiceEvent = { nodeId: string; service: string; event: any };
+
 export class NodeServiceRequestError extends Error {
   constructor(public readonly code: string, message: string, public readonly statusCode = 400) {
     super(message);
@@ -72,6 +74,7 @@ export class NodesManager {
   private toolCalls: Map<string, ToolCall> = new Map();
   private fileTransfers: Map<string, PendingFileTransfer> = new Map();
   private serviceRequests: Map<string, PendingServiceRequest> = new Map();
+  private serviceEventListeners = new Set<(event: NodeServiceEvent) => void>();
   private tools: Set<string> = new Set(); // Available tools
   
   constructor() {
@@ -228,6 +231,7 @@ export class NodesManager {
         logger.info({ nodeId }, 'Skipping unregister for stale node connection');
         return;
       }
+      this.emitNodeServicesUnavailable(node, 'Remote node disconnected.');
       this.nodes.delete(nodeId);
       logger.info({ nodeId }, 'Node unregistered');
     }
@@ -249,6 +253,7 @@ export class NodesManager {
     }
 
     this.rejectPendingOperationsForNode(nodeId, reason);
+    this.emitNodeServicesUnavailable(node, reason);
     this.nodes.delete(nodeId);
 
     if (node.ws) {
@@ -284,6 +289,15 @@ export class NodesManager {
       this.serviceRequests.delete(requestId);
       clearTimeout(request.timeout);
       request.reject(new NodeServiceRequestError('NodeUnavailable', reason, 503));
+    }
+  }
+
+  private emitNodeServicesUnavailable(node: Node, reason: string): void {
+    for (const service of Object.keys(node.capabilities?.services || {})) {
+      for (const listener of this.serviceEventListeners) {
+        try { listener({ nodeId: node.id, service, event: { type: 'node-unavailable', reason } }); }
+        catch (error) { logger.warn({ err: error, nodeId: node.id, service }, 'Node service disconnect listener failed'); }
+      }
     }
   }
 
@@ -337,6 +351,29 @@ export class NodesManager {
       }));
   }
 
+  listNodeIdsWithService(service: string): string[] {
+    return [...this.nodes.values()]
+      .filter((node) => node.id !== 'master' && !!node.ws && Number(node.capabilities?.services?.[service] || 0) >= 1)
+      .map((node) => node.id);
+  }
+
+  onNodeServiceEvent(listener: (event: NodeServiceEvent) => void): () => void {
+    this.serviceEventListeners.add(listener);
+    return () => this.serviceEventListeners.delete(listener);
+  }
+
+  handleNodeServiceEvent(nodeId: string, service: string, event: any): void {
+    const node = this.nodes.get(nodeId);
+    if (!node || Number(node.capabilities?.services?.[service] || 0) < 1) {
+      logger.warn({ nodeId, service }, 'Ignoring event for an unadvertised node service');
+      return;
+    }
+    for (const listener of this.serviceEventListeners) {
+      try { listener({ nodeId, service, event }); }
+      catch (error) { logger.warn({ err: error, nodeId, service }, 'Node service event listener failed'); }
+    }
+  }
+
   async requestNodeService(nodeId: string, service: string, operation: string, args: Record<string, unknown>, timeoutMs = 30_000): Promise<any> {
     const node = this.nodes.get(nodeId);
     if (!node || nodeId === 'master' || !node.ws) {
@@ -362,6 +399,17 @@ export class NodesManager {
         reject(new NodeServiceRequestError('NodeUnavailable', error instanceof Error ? error.message : String(error), 503));
       }
     });
+  }
+
+  sendNodeServiceCommand(nodeId: string, service: string, operation: string, args: Record<string, unknown>): void {
+    const node = this.nodes.get(nodeId);
+    if (!node || nodeId === 'master' || !node.ws) {
+      throw new NodeServiceRequestError('NodeUnavailable', `Remote node \`${nodeId}\` is not connected.`, 503);
+    }
+    if (Number(node.capabilities?.services?.[service] || 0) < 1) {
+      throw new NodeServiceRequestError('UnsupportedService', `Node \`${nodeId}\` does not advertise service \`${service}\`.`, 501);
+    }
+    node.ws.send(JSON.stringify({ type: 'node_service_command', service, operation, args }));
   }
 
   handleNodeServiceResponse(nodeId: string, requestId: string, result: any): void {

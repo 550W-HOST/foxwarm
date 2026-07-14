@@ -46,6 +46,7 @@ test('renderNodeTemplateText injects request-derived base url placeholder', () =
 test('node source bundle is limited to node-client packages and runtime launcher', () => {
   assert.equal(NODE_SOURCE_FILES.includes('packages/shared'), true);
   assert.equal(NODE_SOURCE_FILES.includes('packages/cli-node'), true);
+  assert.equal(NODE_SOURCE_FILES.includes('packages/cli-node-runtime'), true);
   assert.equal(NODE_SOURCE_FILES.includes('scripts/start-sandbox-node.sh'), true);
   assert.equal(NODE_SOURCE_FILES.includes('package.json'), false);
   assert.equal(NODE_SOURCE_FILES.includes('src'), false);

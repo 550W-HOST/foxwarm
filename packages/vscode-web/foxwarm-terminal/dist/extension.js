@@ -287,7 +287,6 @@ Foxwarm terminal protocol error: ${error instanceof Error ? error.message : Stri
 };
 function getCurrentTarget() {
   const target = getWorkspaceTerminalTarget(vscode.workspace.workspaceFolders);
-  if (target.nodeId !== "master") throw new Error(`Foxwarm terminal MVP supports only node \`master\` (workspace uses \`${target.nodeId}\`).`);
   return { nodeId: target.nodeId, cwd: target.realPath };
 }
 function getActiveWorkspaceTarget() {
@@ -297,7 +296,7 @@ function getActiveWorkspaceTarget() {
   return { nodeId: target.nodeId, realPath: target.realPath };
 }
 function ensureSupportedTarget(target) {
-  if (target.nodeId !== "master") throw new Error(`Foxwarm terminal MVP supports only node \`master\` (target uses \`${target.nodeId}\`).`);
+  if (!/^[A-Za-z0-9._-]+$/.test(target.nodeId)) throw new Error(`Invalid Foxwarm terminal node id: ${target.nodeId}`);
   return target;
 }
 function queuePty(pty) {
@@ -350,7 +349,7 @@ async function getTargetForResource(uri) {
 }
 async function restoreBackendTerminals() {
   const workspace2 = getActiveWorkspaceTarget();
-  if (!workspace2 || workspace2.nodeId !== "master") return;
+  if (!workspace2) return;
   const records = await listBackendTerminals();
   for (const record of records) {
     if (!isTerminalInsideWorkspace(record, workspace2) || representedBackendIds.has(record.id)) continue;

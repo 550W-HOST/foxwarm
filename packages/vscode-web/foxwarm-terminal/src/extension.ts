@@ -208,7 +208,6 @@ class FoxwarmPseudoterminal implements vscode.Pseudoterminal {
 
 function getCurrentTarget(): TerminalTarget {
   const target = getWorkspaceTerminalTarget(vscode.workspace.workspaceFolders);
-  if (target.nodeId !== 'master') throw new Error(`Foxwarm terminal MVP supports only node \`master\` (workspace uses \`${target.nodeId}\`).`);
   return { nodeId: target.nodeId, cwd: target.realPath };
 }
 
@@ -220,7 +219,7 @@ function getActiveWorkspaceTarget(): { nodeId: string; realPath: string } | unde
 }
 
 function ensureSupportedTarget(target: TerminalTarget): TerminalTarget {
-  if (target.nodeId !== 'master') throw new Error(`Foxwarm terminal MVP supports only node \`master\` (target uses \`${target.nodeId}\`).`);
+  if (!/^[A-Za-z0-9._-]+$/.test(target.nodeId)) throw new Error(`Invalid Foxwarm terminal node id: ${target.nodeId}`);
   return target;
 }
 
@@ -283,7 +282,7 @@ async function getTargetForResource(uri: vscode.Uri | undefined): Promise<Termin
 
 async function restoreBackendTerminals(): Promise<void> {
   const workspace = getActiveWorkspaceTarget();
-  if (!workspace || workspace.nodeId !== 'master') return;
+  if (!workspace) return;
   const records = await listBackendTerminals();
   for (const record of records) {
     if (!isTerminalInsideWorkspace(record, workspace) || representedBackendIds.has(record.id)) continue;

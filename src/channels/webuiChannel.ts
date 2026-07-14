@@ -22,7 +22,7 @@ import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRun
 import { requestLlmOnce } from '../llm';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from '../weixin/api';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
-import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
+import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalRouter';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
