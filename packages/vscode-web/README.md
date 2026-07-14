@@ -39,6 +39,8 @@ The browser extension uses same-origin `fetch(..., { credentials: 'include' })`,
 
 Code's nested webview bootstrap cannot reliably send the normal login cookie from its sandboxed origin. Foxwarm therefore gives each server process an unguessable `/vscode-web/webview/<capability>/` route scoped only to Code's official `pre/` bootstrap assets. The authenticated workbench receives that capability URL; it does not expose repository data or general static files. Localhost launches use Code's hashed `{{uuid}}.localhost` origin so panel content is origin-isolated from WebUI. Production deployments can provide an equivalent wildcard origin such as `FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN=https://{{uuid}}.code.example.com`; without one, Foxwarm uses its same-origin capability fallback and patches the bootstrap hostname check (recomputing its CSP hash).
 
+Plain-HTTP access by a non-loopback IP is not a browser secure context, so native `crypto.subtle` and service workers are unavailable. Foxwarm keeps Code webviews functional there with a narrowly scoped SHA-256 fallback used only for Code's parent-origin correlation and disables the unavailable webview service worker; commit details and the built-in Markdown preview are covered by browser E2E. This does **not** make HTTP secure or provide origin isolation—use HTTPS plus a wildcard webview origin for exposed deployments.
+
 The terminal extension also uses same-origin cookie auth for `POST /api/terminals` and `WebSocket /api/terminals/stream`. Browser WebSockets cannot set an `Authorization` header, so do not put tokens in terminal WebSocket query strings.
 
 ## Terminal profile
@@ -165,7 +167,7 @@ The authenticated main WebUI presents the feature to users as **Code** (the `/vs
 - Paths rendered by direct `read`, `write`, `edit`, and `apply_patch` tool cards use the session's current master or remote node. They open the file in the existing embedded workbench; `read` line ranges become editor selections. New-browser-tab mode carries the node/folder/file in the launch URL instead of trying to control an already-open tab.
 - Session headers provide `Open code` using the session's current node and cwd (with a safe `master:/` fallback), plus an adjacent external-link button that always opens a new browser tab.
 
-Launch URLs are derived from the dynamic WebUI API base path and preserve reverse-proxy prefixes. Direct new-browser-tab launches include a `foxwarm://node+<nodeId>/<absolute-path>` `folderUri`; embedded launches use the persistent workspace configuration plus an initial folder hint. Runtime transfer/pop-out of an already running iframe is intentionally not implemented.
+Launch URLs are derived from the dynamic WebUI API base path and preserve reverse-proxy prefixes. Runtime bootstrap recomputes the webview capability path from the browser's actual `/.../vscode-web/` pathname, so a stripping proxy does not need `X-Forwarded-Prefix` merely to keep webviews under the public base path. Direct new-browser-tab launches include a `foxwarm://node+<nodeId>/<absolute-path>` `folderUri`; embedded launches use the persistent workspace configuration plus an initial folder hint. Runtime transfer/pop-out of an already running iframe is intentionally not implemented.
 
 ## Not in scope yet
 

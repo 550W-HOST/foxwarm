@@ -128,9 +128,17 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
       process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH = path.join(dirPath, 'foxwarm.code-workspace');
       await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
+      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), `async function hvt(a,o){if(!crypto.subtle)throw new Error("'crypto.subtle' is not available so webviews will not work.");let e=JSON.stringify({parentOrigin:a,salt:o}),i=new TextEncoder().encode(e),n=await crypto.subtle.digest("sha-256",i);return r2o(n)}function r2o(a){return a} export const URI = {}; export class Emitter {}; export function create() {}`);
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/contrib/webview/browser/pre/index.html'), `<meta http-equiv="Content-Security-Policy" content="script-src 'sha256-old' 'self'">
 <script async type="module">
+const searchParams = new URLSearchParams(location.search);
+const disableServiceWorker = searchParams.has('disableServiceWorker');
+const parentOrigin = searchParams.get('parentOrigin');
+const hostname = location.hostname;
+
+if (!crypto.subtle) {
+  throw new Error('missing subtle');
+}
 if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')) {
   start(parentOrigin);
 }
@@ -153,6 +161,8 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
         assert.match(html, /foxwarm-scm\.openCommitDetails/);
         assert.match(html, /Unsupported Foxwarm Code bridge request/);
         assert.match(html, /openCommitId/);
+        assert.match(html, /__foxwarmSha256Digest/);
+        assert.match(html, /trimTrailingSlash\(webviewOrigin\) \+ routePath/);
         assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
         assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.css/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-fs/);
@@ -171,7 +181,14 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
         assert.equal(webviewBootstrap.status, 200);
         const webviewBootstrapHtml = await webviewBootstrap.text();
         assert.match(webviewBootstrapHtml, /new URL\(parentOrigin\)\.origin === new URL\(location\.href\)\.origin/);
+        assert.match(webviewBootstrapHtml, /!window\.isSecureContext/);
+        assert.match(webviewBootstrapHtml, /return start\(parentOrigin\)/);
         assert.doesNotMatch(webviewBootstrapHtml, /sha256-old/);
+        const patchedWorkbench = await fetch(`${baseUrl}/vscode-web/static/out/vs/workbench/workbench.web.main.internal.js`, { headers: cookieHeaders() });
+        assert.equal(patchedWorkbench.status, 200);
+        const patchedWorkbenchSource = await patchedWorkbench.text();
+        assert.match(patchedWorkbenchSource, /globalThis\.__foxwarmSha256Digest/);
+        assert.doesNotMatch(patchedWorkbenchSource, /if\(!crypto\.subtle\)throw/);
         const wrongCapability = await fetch(`${baseUrl}/vscode-web/webview/${'0'.repeat(48)}/index.html`);
         assert.equal(wrongCapability.status, 404);
 
