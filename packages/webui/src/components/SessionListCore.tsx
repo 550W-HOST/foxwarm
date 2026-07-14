@@ -429,6 +429,7 @@ function DraggableSessionRow({
         setNodeRef(node)
         setRowRef(node)
       }}
+      data-session-id={session.id}
       className={`${className} ${isDragging ? 'opacity-50' : ''}`}
       title={session.pinned ? 'Pinned session: drag to open in a pane; unpin before changing its sidebar parent or order' : 'Drag in the sidebar or open in a pane'}
       onPointerDownCapture={handlePointerDownCapture}
@@ -459,6 +460,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const renameInputRef = useRef<HTMLInputElement>(null)
   const sessionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const [pendingFocusSessionId, setPendingFocusSessionId] = useState<string | null>(null)
+  const previousCurrentSessionIdRef = useRef<string | undefined>(undefined)
 
   const activeDragData = active?.data.current as { type?: string; sessionId?: string; sessionPinned?: boolean } | undefined
   const draggingSessionId = activeDragData?.type === 'session' ? activeDragData.sessionId || null : null
@@ -648,8 +650,19 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       return changed ? next : prev
     })
 
-    setPendingFocusSessionId(resolvedCurrentSessionId)
   }, [resolvedCurrentSessionId, normalizedParentMap])
+
+  useEffect(() => {
+    if (!resolvedCurrentSessionId) {
+      previousCurrentSessionIdRef.current = undefined
+      return
+    }
+
+    if (previousCurrentSessionIdRef.current === resolvedCurrentSessionId) return
+
+    previousCurrentSessionIdRef.current = resolvedCurrentSessionId
+    setPendingFocusSessionId(resolvedCurrentSessionId)
+  }, [resolvedCurrentSessionId])
 
   useEffect(() => {
     if (!pendingFocusSessionId) return

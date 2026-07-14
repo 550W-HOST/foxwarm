@@ -229,6 +229,7 @@ function SortableTab({
         setNodeRef(node)
         setTabRef(node)
       }}
+      data-tab-id={tab.id}
       style={style}
       onClick={() => onSelectTab(tab.id)}
       onDoubleClick={() => onKeepTab(tab.id)}

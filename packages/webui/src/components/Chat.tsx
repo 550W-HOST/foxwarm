@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Check, Code2, Copy, ExternalLink, Menu, MessageSquareText, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
@@ -11,6 +11,14 @@ import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, Too
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive } from '../sessionRuntimeState'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
+import {
+  CHAT_MESSAGE_ANCHOR_SELECTOR,
+  chooseChatViewportState,
+  getChatViewportAnchorAdjustment,
+  getStoredChatViewportState,
+  storeChatViewportState,
+  type ChatViewportState,
+} from '../chatViewportState'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
@@ -72,6 +80,7 @@ function buildAsrContext(messages: Message[], draftText: string): string {
 
 interface ChatProps {
   sessionId: string
+  canonicalSessionId?: string
   sessionDisplayName?: string
   onBack?: () => void
   onOpenTerminal?: () => void
@@ -186,7 +195,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -213,8 +222,12 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
   const [resolvedSessionFilePath, setResolvedSessionFilePath] = useState<string | null>(null)
   const [sessionFilePayload, setSessionFilePayload] = useState<SessionFilePayload | null>(null)
   const [showFullTimeline, setShowFullTimeline] = useState(false)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
 
+  const viewportSessionId = canonicalSessionId || sessionId
   const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const messagesContentRef = useRef<HTMLDivElement>(null)
+  const committedTimelineRef = useRef<HTMLDivElement>(null)
   const chatRootRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const lastKnownTimestampRef = useRef<number>(0)
@@ -228,7 +241,15 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
   const queuedMessagesRef = useRef<Message[]>([])
   const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
   const composerHeightRef = useRef<number | null>(null)
-  const expandHistoryScrollRestoreRef = useRef<{ top: number; height: number } | null>(null)
+  const initialViewportState = getStoredChatViewportState(viewportSessionId) || { kind: 'bottom' as const }
+  const currentViewportStateRef = useRef<ChatViewportState>(initialViewportState)
+  const pendingViewportRestoreRef = useRef<{ state: ChatViewportState; interactionVersion: number } | null>({
+    state: initialViewportState,
+    interactionVersion: 0,
+  })
+  const userInteractionVersionRef = useRef(0)
+  const capturedInteractionVersionRef = useRef(0)
+  const resizeRestoreFrameRef = useRef<number | null>(null)
 
   useEffect(() => {
     setStreamingAssistantDraft(null)
@@ -252,11 +273,6 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
     setShowDebugInfo(false)
     setDebugInfoError(null)
     setDebugInfoCopied(false)
-  }, [sessionId])
-
-  useEffect(() => {
-    setShowFullTimeline(false)
-    expandHistoryScrollRestoreRef.current = null
   }, [sessionId])
 
   useEffect(() => {
@@ -327,8 +343,12 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
     const container = messagesContainerRef.current
     if (container) {
       container.scrollTop = container.scrollHeight
+      const state: ChatViewportState = { kind: 'bottom' }
+      currentViewportStateRef.current = state
+      shouldAutoScrollRef.current = true
+      storeChatViewportState(viewportSessionId, state)
     }
-  }, [])
+  }, [viewportSessionId])
 
   const handleComposerHeightChange = useCallback((height: number) => {
     const nextHeight = Math.max(0, Math.round(height))
@@ -354,6 +374,77 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
     }
   }, [])
 
+  const readCurrentViewportState = useCallback((): ChatViewportState | null => {
+    const container = messagesContainerRef.current
+    const timeline = committedTimelineRef.current
+    if (!container || !timeline) return null
+
+    const containerRect = container.getBoundingClientRect()
+    const anchors = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR)).map((element) => {
+      const rect = element.getBoundingClientRect()
+      return {
+        messageKey: element.getAttribute('data-chat-message-anchor-key') || '',
+        top: rect.top,
+        bottom: rect.bottom,
+      }
+    }).filter((anchor) => anchor.messageKey)
+
+    return chooseChatViewportState({
+      scrollTop: container.scrollTop,
+      scrollHeight: container.scrollHeight,
+      clientHeight: container.clientHeight,
+      viewportTop: containerRect.top,
+      viewportBottom: containerRect.bottom,
+      anchors,
+    })
+  }, [])
+
+  const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
+    const state = readCurrentViewportState()
+    if (!state) return null
+
+    currentViewportStateRef.current = state
+    shouldAutoScrollRef.current = state.kind === 'bottom'
+    capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    storeChatViewportState(viewportSessionId, state)
+    return state
+  }, [readCurrentViewportState, viewportSessionId])
+
+  const applyViewportState = useCallback((state: ChatViewportState): boolean => {
+    const container = messagesContainerRef.current
+    if (!container) return false
+
+    if (state.kind === 'bottom') {
+      container.scrollTop = container.scrollHeight
+      currentViewportStateRef.current = state
+      shouldAutoScrollRef.current = true
+      storeChatViewportState(viewportSessionId, state)
+      return true
+    }
+
+    const timeline = committedTimelineRef.current
+    if (!timeline) return false
+
+    const anchor = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+      .find((element) => element.getAttribute('data-chat-message-anchor-key') === state.messageKey)
+    if (!anchor) return false
+
+    const currentOffset = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
+    const adjustment = getChatViewportAnchorAdjustment(currentOffset, state.offsetPx)
+    if (Math.abs(adjustment) >= 0.5) {
+      container.scrollTop += adjustment
+    }
+    currentViewportStateRef.current = state
+    shouldAutoScrollRef.current = false
+    storeChatViewportState(viewportSessionId, state)
+    return true
+  }, [viewportSessionId])
+
+  const markUserViewportInteraction = useCallback(() => {
+    userInteractionVersionRef.current += 1
+    pendingViewportRestoreRef.current = null
+  }, [])
+
   useEffect(() => {
     const handleScroll = () => {
       const container = messagesContainerRef.current
@@ -366,23 +457,45 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
 
       setShowScrollButton(distanceFromBottom > 200)
       setShowScrollTopButton(scrollTop > 200)
-      shouldAutoScrollRef.current = distanceFromBottom < 200
+      const viewportState = captureCurrentViewportState()
 
       if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < 120) {
-        expandHistoryScrollRestoreRef.current = {
-          top: scrollTop,
-          height: container.scrollHeight,
+        const restoreState = viewportState?.kind === 'anchor' ? viewportState : readCurrentViewportState()
+        if (restoreState?.kind === 'anchor') {
+          pendingViewportRestoreRef.current = {
+            state: restoreState,
+            interactionVersion: userInteractionVersionRef.current,
+          }
+          setShowFullTimeline(true)
         }
-        setShowFullTimeline(true)
       }
     }
 
     const container = messagesContainerRef.current
     if (container) {
+      const handleWindowKeyDown = (event: KeyboardEvent) => {
+        const target = event.target
+        if (target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName))) {
+          return
+        }
+        if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+          markUserViewportInteraction()
+        }
+      }
       container.addEventListener('scroll', handleScroll)
-      return () => container.removeEventListener('scroll', handleScroll)
+      container.addEventListener('wheel', markUserViewportInteraction, { passive: true })
+      container.addEventListener('touchstart', markUserViewportInteraction, { passive: true })
+      container.addEventListener('pointerdown', markUserViewportInteraction, { passive: true })
+      window.addEventListener('keydown', handleWindowKeyDown)
+      return () => {
+        container.removeEventListener('scroll', handleScroll)
+        container.removeEventListener('wheel', markUserViewportInteraction)
+        container.removeEventListener('touchstart', markUserViewportInteraction)
+        container.removeEventListener('pointerdown', markUserViewportInteraction)
+        window.removeEventListener('keydown', handleWindowKeyDown)
+      }
     }
-  }, [messages.length, showFullTimeline])
+  }, [captureCurrentViewportState, markUserViewportInteraction, messages.length, readCurrentViewportState, showFullTimeline])
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -393,6 +506,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
         setQueuedMessages([])
         setSessionQueueLength(0)
         lastKnownTimestampRef.current = 0
+        setHistoryLoaded(true)
         return
       }
 
@@ -410,6 +524,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
         if (lastMsg?.__meta?.timestamp) {
           lastKnownTimestampRef.current = lastMsg.__meta.timestamp
         }
+        setHistoryLoaded(true)
       }
     } catch (e) {
       console.error('Failed to fetch history:', e)
@@ -749,35 +864,10 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
   }, [fetchHistory, sessionId])
 
   useEffect(() => {
-    if (messages.length > 0) {
-      scrollToBottom()
-      setTimeout(() => {
-        scrollToBottom()
-      }, 100)
-    }
-  }, [messages.length > 0, scrollToBottom, sessionId])
-
-  useEffect(() => {
-    if (shouldAutoScrollRef.current) {
+    if (!pendingViewportRestoreRef.current && shouldAutoScrollRef.current) {
       scrollToBottom()
     }
   }, [messages, scrollToBottom, streamingAssistantDraft])
-
-  useEffect(() => {
-    const restore = expandHistoryScrollRestoreRef.current
-    if (!restore || !showFullTimeline) {
-      return
-    }
-
-    const container = messagesContainerRef.current
-    if (!container) {
-      return
-    }
-
-    const nextScrollHeight = container.scrollHeight
-    container.scrollTop = Math.max(0, nextScrollHeight - restore.height + restore.top)
-    expandHistoryScrollRestoreRef.current = null
-  }, [showFullTimeline, messages.length])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
     const snapshotText = typeof sessionFilePayload?.persistentMemorySnapshot === 'string'
@@ -815,6 +905,69 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
     const baseMessages = snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
     return streamingAssistantMessage ? [...baseMessages, streamingAssistantMessage] : baseMessages
   }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages])
+
+  useLayoutEffect(() => {
+    const pending = pendingViewportRestoreRef.current
+    if (!pending) return
+
+    if (pending.interactionVersion !== userInteractionVersionRef.current) {
+      pendingViewportRestoreRef.current = null
+      return
+    }
+
+    if (applyViewportState(pending.state)) {
+      pendingViewportRestoreRef.current = null
+      return
+    }
+
+    if (pending.state.kind === 'anchor' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+      setShowFullTimeline(true)
+      return
+    }
+
+    if (historyLoaded) {
+      const fallbackState: ChatViewportState = { kind: 'bottom' }
+      pendingViewportRestoreRef.current = null
+      applyViewportState(fallbackState)
+    }
+  }, [applyViewportState, historyLoaded, messages.length, showFullTimeline, timelineMessages])
+
+  useEffect(() => {
+    const content = messagesContentRef.current
+    if (!content) return
+
+    const observer = new ResizeObserver(() => {
+      if (resizeRestoreFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeRestoreFrameRef.current)
+      }
+      resizeRestoreFrameRef.current = window.requestAnimationFrame(() => {
+        resizeRestoreFrameRef.current = null
+        if (capturedInteractionVersionRef.current !== userInteractionVersionRef.current) return
+
+        const pending = pendingViewportRestoreRef.current
+        if (pending) {
+          if (pending.interactionVersion === userInteractionVersionRef.current) {
+            applyViewportState(pending.state)
+          }
+          return
+        }
+        applyViewportState(currentViewportStateRef.current)
+      })
+    })
+    observer.observe(content)
+
+    return () => {
+      observer.disconnect()
+      if (resizeRestoreFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeRestoreFrameRef.current)
+        resizeRestoreFrameRef.current = null
+      }
+    }
+  }, [applyViewportState])
+
+  useLayoutEffect(() => () => {
+    captureCurrentViewportState()
+  }, [captureCurrentViewportState])
 
   const debugInfoObject = useMemo(() => ({
     sessionId,
@@ -1242,28 +1395,32 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenT
 
       <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
         <div ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-y-auto p-4">
-          {hiddenMessageCount > 0 && !showFullTimeline && (
-            <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
-              Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
+          <div ref={messagesContentRef}>
+            {hiddenMessageCount > 0 && !showFullTimeline && (
+              <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
+                Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
+              </div>
+            )}
+            <div ref={committedTimelineRef} data-chat-timeline="committed">
+              <ToolScriptProgressContext.Provider value={toolScriptProgress}>
+                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} />
+              </ToolScriptProgressContext.Provider>
             </div>
-          )}
-          <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-            <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} />
-          </ToolScriptProgressContext.Provider>
-          <ProcessingStatus
-            sessionBusy={sessionBusy}
-            sessionQueueLength={sessionQueueLength}
-            loading={loading}
-            isMobile={isMobile}
-            onStop={handleStop}
-            onRunQueued={handleRunQueued}
-          />
-          {queuedMessages.length > 0 && (
-            <div className="foxwarm-queued-preview" data-queued-preview="true" aria-label="Queued messages">
-              <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} />
-            </div>
-          )}
-          <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
+            <ProcessingStatus
+              sessionBusy={sessionBusy}
+              sessionQueueLength={sessionQueueLength}
+              loading={loading}
+              isMobile={isMobile}
+              onStop={handleStop}
+              onRunQueued={handleRunQueued}
+            />
+            {queuedMessages.length > 0 && (
+              <div className="foxwarm-queued-preview" data-queued-preview="true" aria-label="Queued messages">
+                <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} />
+              </div>
+            )}
+            <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
+          </div>
         </div>
 
         {showScrollTopButton && (

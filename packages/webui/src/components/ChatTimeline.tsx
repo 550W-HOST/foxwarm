@@ -27,16 +27,7 @@ import {
   getToolResponseStatus,
   type OpenCodeFileHandler,
 } from './ToolTimelineItems'
-
-const getMessageStableKey = (msg: Message, idx: number): string => {
-  const meta = msg.__meta || {}
-  if (meta.synthetic) return `synthetic-${String(meta.synthetic)}`
-  if (meta.contextBlock?.id) return `ctx-block-${String(meta.contextBlock.sourceSessionId || 'local')}-${String(meta.contextBlock.id)}`
-  if (meta.seq) return `seq-${String(meta.contextArchiveItem?.sourceSessionId || 'local')}-${String(meta.seq)}`
-  if (meta.id) return `id-${String(meta.id)}`
-  if (meta.timestamp !== undefined) return `ts-${String(meta.timestamp)}`
-  return `idx-${idx}`
-}
+import { getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 
 interface ChatTimelineProps {
   sessionId: string
@@ -423,7 +414,10 @@ const MessageRow = memo(function MessageRow({
         : 'w-full max-w-[80%]'
 
   return (
-    <div className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${marginClass}`}>
+    <div
+      className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${marginClass}`}
+      data-chat-message-anchor-key={nestedDepth === 0 ? getMessageViewportAnchorKey(msg) || undefined : undefined}
+    >
       <div
         className={`${widthClass} ${
           !systemLikeMessage && msg.role === 'user'

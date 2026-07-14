@@ -1349,6 +1349,7 @@ function App() {
         <Chat
           key={`chat:${tab.sessionId}`}
           sessionId={tab.sessionId}
+          canonicalSessionId={sessionRecord?.id || tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
           onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}

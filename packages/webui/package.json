@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test:markdown": "node --test test/markdownRenderer.test.mjs",
+    "test:scroll-e2e": "node --test test/scrollState.e2e.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
