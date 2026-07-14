@@ -152,6 +152,8 @@ test('VS Code Web workbench bootstrap is emitted when official static assets are
         assert.match(html, /&quot;scheme&quot;:&quot;foxwarm&quot;/);
         assert.match(html, /&quot;authority&quot;:&quot;node\+master&quot;/);
         assert.match(html, /&quot;path&quot;:&quot;\/tmp\/hello%20world&quot;/);
+        assert.match(html, /window\.menuBarVisibility/);
+        assert.match(html, /&quot;visible&quot;/);
         assert.match(html, /terminal\.integrated\.defaultProfile\.linux/);
 
         const embeddedWorkbench = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });

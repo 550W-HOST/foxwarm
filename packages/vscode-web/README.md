@@ -45,6 +45,7 @@ The terminal extension also uses same-origin cookie auth for `POST /api/terminal
 
 Current MVP behavior:
 
+- The standalone workbench defaults `window.menuBarVisibility` to `visible`; users can still override the default in Code settings.
 - Backend terminal creation is cwd-based and no longer requires a Foxwarm chat session id.
 - The terminal cwd is derived from the first VS Code workspace folder URI. For example, `foxwarm://node+master/app/` becomes backend cwd `/app`.
 - `nodeId=master` uses the master process PTY manager. A connected CLI node advertising versioned `vscode-pty` runs the PTY in the remote node process and exposes the same Code terminal UI.

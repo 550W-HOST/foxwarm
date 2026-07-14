@@ -655,6 +655,7 @@ function buildWorkbenchConfiguration(req: express.Request) {
       },
       additionalBuiltinExtensions: [toUriComponents(fsExtensionUri), toUriComponents(terminalExtensionUri), toUriComponents(scmExtensionUri)],
       configurationDefaults: {
+        'window.menuBarVisibility': 'visible',
         'terminal.integrated.defaultProfile.linux': 'Foxwarm Terminal',
         'terminal.integrated.defaultProfile.osx': 'Foxwarm Terminal',
         'terminal.integrated.defaultProfile.windows': 'Foxwarm Terminal',
