@@ -35,7 +35,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
 COPY packages/cli-node/package.json packages/cli-node/package-lock.json ./packages/cli-node/
-RUN npm ci && npm --prefix packages/cli-node ci
+COPY packages/cli-node-runtime/package.json packages/cli-node-runtime/package-lock.json ./packages/cli-node-runtime/
+RUN npm ci \
+    && npm --prefix packages/cli-node ci \
+    && npm --prefix packages/cli-node-runtime ci --omit=dev \
+    && npm cache clean --force
 
 # Copy source and build the shared, CLI-node, and root runtime outputs.
 COPY tsconfig.json ./
@@ -44,6 +48,7 @@ COPY templates ./templates
 COPY scripts/start-sandbox-node.sh ./scripts/start-sandbox-node.sh
 COPY packages/shared ./packages/shared
 COPY packages/cli-node ./packages/cli-node
+COPY packages/cli-node-runtime ./packages/cli-node-runtime
 
 RUN npm run build
 

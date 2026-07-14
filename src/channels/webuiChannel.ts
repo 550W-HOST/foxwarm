@@ -22,7 +22,7 @@ import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRun
 import { requestLlmOnce } from '../llm';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from '../weixin/api';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
-import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalRouter';
+import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, resolveTerminalControlRequest, writeTerminalInput } from '../terminalRouter';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
@@ -2092,6 +2092,7 @@ export class WebUIChannel implements Channel {
 
         const requestUrl = new URL(req.url || '/api/terminals/stream', 'http://localhost');
         const terminalId = requestUrl.searchParams.get('terminalId') || '';
+        const codeControl = requestUrl.searchParams.get('control') === 'code';
         if (!terminalId) {
           ws.close(1008, 'Missing terminalId');
           return;
@@ -2099,7 +2100,7 @@ export class WebUIChannel implements Channel {
 
         let attachedTerminalId = '';
         try {
-          const { terminal, backlog } = await attachTerminalClient(terminalId, ws);
+          const { terminal, backlog } = await attachTerminalClient(terminalId, ws, { codeControl });
           attachedTerminalId = terminal.id;
           ws.send(JSON.stringify({
             type: 'ready',
@@ -2126,6 +2127,11 @@ export class WebUIChannel implements Channel {
 
             if (payload?.type === 'close') {
               await closeTerminal(attachedTerminalId, 'ws-close-message');
+              return;
+            }
+
+            if (payload?.type === 'control-result') {
+              resolveTerminalControlRequest(attachedTerminalId, ws, payload);
               return;
             }
 

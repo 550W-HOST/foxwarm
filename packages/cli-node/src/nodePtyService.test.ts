@@ -2,8 +2,12 @@ import assert from 'assert';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import test from 'node:test';
 import { NodePtyService, type NodePtyServiceEvent } from './nodePtyService';
+
+const execFileAsync = promisify(execFile);
 
 class FakePtyProcess {
   pid = 4321;
@@ -72,6 +76,7 @@ test('node PTY service manages create, attach, stream, input, resize, and close'
     assert.equal(process.killed, true);
     assert.equal((await service.execute('list', {})).terminals.length, 0);
   } finally {
+    await service.dispose();
     await fs.remove(tempDir);
   }
 });
@@ -90,6 +95,34 @@ test('node PTY service emits exit for a running attached terminal', async () => 
     assert.equal((events[0] as any).exitCode, 7);
     assert.equal((await service.execute('list', {})).terminals.length, 0);
   } finally {
+    await service.dispose();
+    await fs.remove(tempDir);
+  }
+});
+
+test('node PTY service bridges its terminal-scoped code helper through service events', async () => {
+  if (globalThis.process.platform === 'win32') return;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-pty-code-'));
+  await fs.writeFile(path.join(tempDir, 'target.ts'), 'export {};\n');
+  const fakeProcess = new FakePtyProcess();
+  let spawnOptions: any;
+  const events: NodePtyServiceEvent[] = [];
+  const service = new NodePtyService({
+    spawn(_file, _args, options) { spawnOptions = options; return fakeProcess; },
+  }, tempDir, (event) => events.push(event));
+  try {
+    await service.execute('create', { cwd: tempDir });
+    const helperResult = execFileAsync('code', ['--goto', 'target.ts:1:2'], { cwd: tempDir, env: spawnOptions.env });
+    for (let attempt = 0; attempt < 100 && !events.some((event) => event.type === 'code-request'); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const event = events.find((candidate) => candidate.type === 'code-request') as Extract<NodePtyServiceEvent, { type: 'code-request' }>;
+    assert.ok(event);
+    assert.deepEqual(event.request, { kind: 'openFile', path: path.join(tempDir, 'target.ts'), startLine: 1, startColumn: 2 });
+    await service.execute('code-result', { requestId: event.requestId, ok: true, message: 'Opened target.ts' });
+    assert.equal((await helperResult).stdout.trim(), 'Opened target.ts');
+  } finally {
+    await service.dispose();
     await fs.remove(tempDir);
   }
 });

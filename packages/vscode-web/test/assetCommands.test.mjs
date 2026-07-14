@@ -63,6 +63,7 @@ test('source build uses the official standalone web packaging task and verifies 
   assert.equal((runtimeDockerfile.match(/^FROM node:24\.17\.0-bookworm(?:-slim)?/gm) || []).length, 2)
   assert.match(runtimeDockerfile, /packages\/vscode-web\/foxwarm-fs/)
   assert.match(nodeDockerfile, /^FROM node:24\.17\.0-bookworm-slim/m)
+  assert.match(nodeDockerfile, /packages\/cli-node-runtime ci --omit=dev/)
   assert.match(testDockerfile, /^FROM node:24\.17\.0-bookworm/m)
   assert.match(dockerignore, /^packages\/vscode-web\/\.cache\/$/m)
   assert.doesNotMatch(dockerignore, /^skills\/$/m)

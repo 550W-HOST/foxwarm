@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { createRequire } from 'module';
+import { CodeHelperIpcServer, type CodeHelperControlResult, type CodeHelperOpenRequest } from '../../shared/dist/codeHelperIpc';
 
 export type NodePtyTerminalRecord = {
   id: string;
@@ -16,7 +17,8 @@ export type NodePtyTerminalRecord = {
 
 export type NodePtyServiceEvent =
   | { type: 'output'; terminalId: string; data: string }
-  | { type: 'exit'; terminalId: string; exitCode: number; signal?: number; cwd?: string };
+  | { type: 'exit'; terminalId: string; exitCode: number; signal?: number; cwd?: string }
+  | { type: 'code-request'; terminalId: string; requestId: string; request: CodeHelperOpenRequest };
 
 type PtyProcess = {
   pid: number;
@@ -44,6 +46,7 @@ type ManagedNodePty = NodePtyTerminalRecord & {
   closed: boolean;
   rcFilePath?: string;
   cwdPath?: string;
+  codeCapability?: string;
 };
 
 const OUTPUT_BUFFER_LIMIT = 200_000;
@@ -84,6 +87,12 @@ function getShell(): { file: string; args: string[] } {
 export class NodePtyService {
   private readonly terminals = new Map<string, ManagedNodePty>();
   private readonly tempDir: string;
+  private readonly codeHelper: CodeHelperIpcServer;
+  private readonly pendingCodeRequests = new Map<string, {
+    terminalId: string;
+    resolve: (result: CodeHelperControlResult) => void;
+    timeout: NodeJS.Timeout;
+  }>();
 
   constructor(
     private readonly pty: PtyModule,
@@ -91,6 +100,7 @@ export class NodePtyService {
     private readonly emitEvent: (event: NodePtyServiceEvent) => void,
   ) {
     this.tempDir = path.join(stateDir, '.temp', 'vscode-pty');
+    this.codeHelper = new CodeHelperIpcServer(stateDir, (terminalId, requestId, request) => this.requestCodeControl(terminalId, requestId, request));
   }
 
   async execute(operation: string, args: Record<string, unknown>): Promise<any> {
@@ -103,8 +113,14 @@ export class NodePtyService {
       case 'input': return this.input(requiredString(args.terminalId, 'terminalId'), typeof args.data === 'string' ? args.data : '');
       case 'resize': return this.resize(requiredString(args.terminalId, 'terminalId'), args.cols, args.rows);
       case 'close': return this.close(requiredString(args.terminalId, 'terminalId'));
+      case 'code-result': return this.resolveCodeControl(args);
       default: throw new Error(`Unsupported vscode-pty operation: ${operation}`);
     }
+  }
+
+  async dispose(): Promise<void> {
+    for (const record of [...this.terminals.values()]) await this.close(record.id);
+    await this.codeHelper.close();
   }
 
   private async create(args: Record<string, unknown>): Promise<NodePtyTerminalRecord> {
@@ -119,23 +135,35 @@ export class NodePtyService {
     const rows = normalizeSize(args.rows, MIN_ROWS, 30);
     const shell = getShell();
     await fs.ensureDir(this.tempDir);
+    const codeHelper = await this.codeHelper.registerTerminal(terminalId);
     const cwdPath = process.platform === 'win32' ? undefined : path.join(this.tempDir, `${terminalId}.cwd.txt`);
     const rcFilePath = cwdPath && path.basename(shell.file).includes('bash')
       ? await this.buildBashRc(terminalId)
       : undefined;
     const shellArgs = rcFilePath ? ['--rcfile', rcFilePath, '-i'] : shell.args;
-    const ptyProcess = this.pty.spawn(shell.file, shellArgs, {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd,
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor',
-        ...(cwdPath ? { FOXWARM_TERMINAL_CWD_PATH: cwdPath } : {}),
-      },
-    });
+    let ptyProcess: PtyProcess;
+    try {
+      ptyProcess = this.pty.spawn(shell.file, shellArgs, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd,
+        env: {
+          ...process.env,
+          TERM: 'xterm-256color',
+          COLORTERM: 'truecolor',
+          ...codeHelper.env,
+          ...(cwdPath ? { FOXWARM_TERMINAL_CWD_PATH: cwdPath } : {}),
+        },
+      });
+    } catch (error) {
+      this.codeHelper.unregisterTerminal(codeHelper.capability);
+      await Promise.all([
+        rcFilePath ? fs.remove(rcFilePath).catch((): undefined => undefined) : Promise.resolve(),
+        cwdPath ? fs.remove(cwdPath).catch((): undefined => undefined) : Promise.resolve(),
+      ]);
+      throw error;
+    }
 
     const record: ManagedNodePty = {
       id: terminalId,
@@ -152,6 +180,7 @@ export class NodePtyService {
       closed: false,
       rcFilePath,
       cwdPath,
+      codeCapability: codeHelper.capability,
     };
     this.terminals.set(record.id, record);
 
@@ -256,10 +285,41 @@ export class NodePtyService {
 
   private async cleanup(record: ManagedNodePty): Promise<void> {
     this.terminals.delete(record.id);
+    this.codeHelper.unregisterTerminal(record.codeCapability);
+    for (const [requestId, pending] of this.pendingCodeRequests) {
+      if (pending.terminalId !== record.id) continue;
+      clearTimeout(pending.timeout);
+      pending.resolve({ ok: false, error: 'Terminal closed before Code handled the request.' });
+      this.pendingCodeRequests.delete(requestId);
+    }
     await Promise.all([
       record.rcFilePath ? fs.remove(record.rcFilePath).catch((): undefined => undefined) : Promise.resolve(),
       record.cwdPath ? fs.remove(record.cwdPath).catch((): undefined => undefined) : Promise.resolve(),
     ]);
+  }
+
+  private requestCodeControl(terminalId: string, requestId: string, request: CodeHelperOpenRequest): Promise<CodeHelperControlResult> {
+    this.requireTerminal(terminalId);
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingCodeRequests.delete(requestId);
+        resolve({ ok: false, error: 'Timed out waiting for an attached Code terminal.' });
+      }, 20_000);
+      this.pendingCodeRequests.set(requestId, { terminalId, resolve, timeout });
+      this.emitEvent({ type: 'code-request', terminalId, requestId, request });
+    });
+  }
+
+  private resolveCodeControl(args: Record<string, unknown>): { success: true } {
+    const requestId = requiredString(args.requestId, 'requestId');
+    const pending = this.pendingCodeRequests.get(requestId);
+    if (!pending) return { success: true };
+    this.pendingCodeRequests.delete(requestId);
+    clearTimeout(pending.timeout);
+    pending.resolve(args.ok === true
+      ? { ok: true, ...(typeof args.message === 'string' ? { message: args.message } : {}) }
+      : { ok: false, error: typeof args.error === 'string' ? args.error : 'Code rejected the request.' });
+    return { success: true };
   }
 }
 

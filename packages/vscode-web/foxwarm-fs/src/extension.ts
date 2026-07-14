@@ -100,6 +100,13 @@ async function openFoxwarmFolder(): Promise<void> {
   await addFoxwarmFolder({ kind: 'addFolder', nodeId: getCurrentNodeId(), path: value });
 }
 
+async function addExplorerFolderToWorkspace(uri: vscode.Uri): Promise<void> {
+  const target = parseFoxwarmUri(uri);
+  const stat = await vscode.workspace.fs.stat(uri);
+  if ((stat.type & vscode.FileType.Directory) === 0) throw new Error(`${target.realPath} is not a directory.`);
+  await addFoxwarmFolder({ kind: 'addFolder', nodeId: target.nodeId, path: target.realPath });
+}
+
 async function openFoxwarmFile(
   request: FoxwarmOpenRequest,
   provider: FoxwarmFileSystemProvider,
@@ -120,11 +127,17 @@ async function openFoxwarmFile(
     if (normalized.startLine > document.lineCount) {
       throw new Error(`Line ${normalized.startLine} is beyond the end of ${normalized.path}.`);
     }
-    const endLine = Math.min(normalized.endLine ?? normalized.startLine, document.lineCount);
-    selection = new vscode.Range(
-      new vscode.Position(normalized.startLine - 1, 0),
-      document.lineAt(endLine - 1).range.end,
-    );
+    if (normalized.startColumn !== undefined) {
+      const line = document.lineAt(normalized.startLine - 1);
+      const position = new vscode.Position(normalized.startLine - 1, Math.min(normalized.startColumn - 1, line.text.length));
+      selection = new vscode.Range(position, position);
+    } else {
+      const endLine = Math.min(normalized.endLine ?? normalized.startLine, document.lineCount);
+      selection = new vscode.Range(
+        new vscode.Position(normalized.startLine - 1, 0),
+        document.lineAt(endLine - 1).range.end,
+      );
+    }
   }
   await vscode.window.showTextDocument(document, { preview: true, selection });
   if (existing?.isDirty) {
@@ -149,6 +162,7 @@ export function activate(context: vscode.ExtensionContext): void {
       isReadonly: false,
     }),
     vscode.commands.registerCommand('foxwarm-fs.openFolder', openFoxwarmFolder),
+    vscode.commands.registerCommand('foxwarm-fs.addFolderToWorkspace', addExplorerFolderToWorkspace),
     vscode.commands.registerCommand('foxwarm-fs.handleOpenRequest', (request: FoxwarmOpenRequest) => handleOpenRequest(request, provider)),
   );
   console.log('Foxwarm filesystem provider registered for foxwarm://node+<nodeId>/<absolute-path>.');

@@ -8,6 +8,7 @@
   "activationEvents": [
     "onFileSystem:foxwarm",
     "onCommand:foxwarm-fs.openFolder",
+    "onCommand:foxwarm-fs.addFolderToWorkspace",
     "onCommand:foxwarm-fs.handleOpenRequest"
   ],
   "contributes": {
@@ -21,6 +22,11 @@
       {
         "command": "foxwarm-fs.handleOpenRequest",
         "title": "Foxwarm: Handle Open Request",
+        "category": "Foxwarm"
+      },
+      {
+        "command": "foxwarm-fs.addFolderToWorkspace",
+        "title": "Add Folder to Workspace",
         "category": "Foxwarm"
       }
     ],
@@ -36,6 +42,13 @@
         {
           "command": "foxwarm-fs.handleOpenRequest",
           "when": "false"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "foxwarm-fs.addFolderToWorkspace",
+          "when": "resourceScheme == foxwarm && explorerResourceIsFolder",
+          "group": "navigation@20"
         }
       ]
     },

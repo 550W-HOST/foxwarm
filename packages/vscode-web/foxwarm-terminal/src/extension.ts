@@ -48,6 +48,7 @@ function getTerminalWebSocketUrl(terminalId: string): string {
   const url = new URL(terminalStreamBase, terminalRouteOrigin);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.searchParams.set('terminalId', terminalId);
+  url.searchParams.set('control', 'code');
   return url.toString();
 }
 
@@ -97,6 +98,7 @@ class FoxwarmPseudoterminal implements vscode.Pseudoterminal {
   private closed = false;
   private started = false;
   private killRequested = false;
+  private readonly controlResponses = new Map<string, Record<string, unknown>>();
 
   readonly onDidWrite = this.writeEmitter.event;
   readonly onDidClose = this.closeEmitter.event;
@@ -190,6 +192,8 @@ class FoxwarmPseudoterminal implements vscode.Pseudoterminal {
           this.disposeEmitters();
         } else if (payload.type === 'error') {
           this.writeEmitter.fire(`\r\nFoxwarm terminal error: ${payload.message || 'unknown error'}\r\n`);
+        } else if (payload.type === 'control') {
+          void this.handleControlRequest(socket, payload);
         }
       } catch (error) {
         this.writeEmitter.fire(`\r\nFoxwarm terminal protocol error: ${error instanceof Error ? error.message : String(error)}\r\n`);
@@ -197,6 +201,29 @@ class FoxwarmPseudoterminal implements vscode.Pseudoterminal {
     };
     socket.onerror = () => this.writeEmitter.fire('\r\nFoxwarm terminal websocket error\r\n');
     socket.onclose = () => { if (this.socket === socket) this.socket = undefined; };
+  }
+
+  private async handleControlRequest(socket: WebSocket, payload: any): Promise<void> {
+    const requestId = typeof payload?.requestId === 'string' ? payload.requestId : '';
+    if (!requestId || payload?.command !== 'open' || !payload.request || typeof payload.request !== 'object') {
+      return;
+    }
+    const cached = this.controlResponses.get(requestId);
+    if (cached) {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(cached));
+      return;
+    }
+    let response: Record<string, unknown>;
+    try {
+      const result: any = await vscode.commands.executeCommand('foxwarm-fs.handleOpenRequest', payload.request);
+      const action = result?.status === 'added' ? 'Added' : result?.status === 'existing' ? 'Already in workspace' : 'Opened';
+      response = { type: 'control-result', requestId, ok: true, message: `${action}: ${payload.request.path}` };
+    } catch (error) {
+      response = { type: 'control-result', requestId, ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    this.controlResponses.set(requestId, response);
+    if (this.controlResponses.size > 100) this.controlResponses.delete(this.controlResponses.keys().next().value as string);
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(response));
   }
 
   private disposeEmitters(): void {

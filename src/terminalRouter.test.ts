@@ -2,7 +2,7 @@ import assert from 'assert';
 import test from 'node:test';
 import type { WebSocket } from 'ws';
 import { nodesManager } from './nodes/manager';
-import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, resizeTerminal, writeTerminalInput } from './terminalRouter';
+import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, resizeTerminal, resolveTerminalControlRequest, writeTerminalInput } from './terminalRouter';
 
 test('terminal router proxies lifecycle and stream events to a capable remote node', async () => {
   const nodeId = `pty-router-${Date.now()}`;
@@ -43,7 +43,7 @@ test('terminal router proxies lifecycle and stream events to a capable remote no
     assert.equal(created.nodeId, nodeId);
     assert.equal(created.cwd, '/workspace');
 
-    const attached = await attachTerminalClient(created.id, client);
+    const attached = await attachTerminalClient(created.id, client, { codeControl: true });
     assert.equal(attached.backlog, 'remote backlog');
     nodesManager.handleNodeServiceEvent(nodeId, 'vscode-pty', { type: 'output', terminalId, data: 'live output' });
     assert.deepEqual(sent, [{ type: 'output', data: 'live output' }]);
@@ -52,6 +52,27 @@ test('terminal router proxies lifecycle and stream events to a capable remote no
     resizeTerminal(created.id, 132, 44);
     assert.deepEqual(commands.map((command) => command.operation), ['input', 'resize']);
     assert.equal(commands[0].args.data, 'pwd\r');
+
+    nodesManager.handleNodeServiceEvent(nodeId, 'vscode-pty', {
+      type: 'code-request',
+      terminalId,
+      requestId: 'code-request-1',
+      request: { kind: 'openFile', path: '/workspace/index.ts' },
+    });
+    assert.deepEqual(sent.at(-1), {
+      type: 'control',
+      requestId: 'code-request-1',
+      command: 'open',
+      request: { kind: 'openFile', path: '/workspace/index.ts', nodeId },
+    });
+    resolveTerminalControlRequest(created.id, client, {
+      type: 'control-result',
+      requestId: 'code-request-1',
+      ok: true,
+      message: 'Opened index.ts',
+    });
+    assert.equal(commands.at(-1).operation, 'code-result');
+    assert.equal(commands.at(-1).args.message, 'Opened index.ts');
 
     detachTerminalClient(created.id, client);
     assert.equal(commands.at(-1).operation, 'detach');

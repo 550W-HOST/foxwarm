@@ -27,6 +27,7 @@ const openedHandlers = [];
 const closedHandlers = [];
 const terminals = [];
 const commands = new Map();
+const executedCommands = [];
 const disposables = () => ({ dispose() {} });
 const workspaceFoldersChanged = new MockEventEmitter();
 
@@ -68,7 +69,11 @@ const vscodeMock = {
   },
   commands: {
     registerCommand: (id, handler) => { commands.set(id, handler); return disposables(); },
-    executeCommand: async () => undefined,
+    executeCommand: async (id, ...args) => {
+      executedCommands.push({ id, args });
+      if (id === 'foxwarm-fs.handleOpenRequest') return { status: 'opened' };
+      return undefined;
+    },
   },
 };
 
@@ -107,7 +112,8 @@ class MockWebSocket {
     this.url = url;
     sockets.push(this);
   }
-  send() {}
+  sent = [];
+  send(value) { this.sent.push(JSON.parse(value)); }
   close() {
     this.readyState = 3;
     this.onclose?.();
@@ -147,6 +153,26 @@ test('activation restores workspace terminals by attachment without creating dup
   assert.equal(sockets.length, 2);
   assert.ok(sockets.some((socket) => socket.url.includes('terminalId=term-root')));
   assert.ok(sockets.some((socket) => socket.url.includes('terminalId=term-src')));
+  assert.ok(sockets.every((socket) => socket.url.includes('control=code')));
+
+  const controlSocket = sockets.find((socket) => socket.url.includes('terminalId=term-root'));
+  controlSocket.onmessage({ data: JSON.stringify({
+    type: 'control',
+    requestId: 'request-1',
+    command: 'open',
+    request: { kind: 'openFile', nodeId: 'master', path: '/app/index.ts' },
+  }) });
+  await flushAsync();
+  assert.deepEqual(executedCommands.at(-1), {
+    id: 'foxwarm-fs.handleOpenRequest',
+    args: [{ kind: 'openFile', nodeId: 'master', path: '/app/index.ts' }],
+  });
+  assert.deepEqual(controlSocket.sent.at(-1), {
+    type: 'control-result',
+    requestId: 'request-1',
+    ok: true,
+    message: 'Opened: /app/index.ts',
+  });
 
   const [shutdownTerminal, userClosedTerminal] = terminals;
 

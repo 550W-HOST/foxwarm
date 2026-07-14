@@ -136,6 +136,7 @@ function getTerminalWebSocketUrl(terminalId) {
   const url = new URL(terminalStreamBase, terminalRouteOrigin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("terminalId", terminalId);
+  url.searchParams.set("control", "code");
   return url.toString();
 }
 async function readJsonResponse(response) {
@@ -180,6 +181,7 @@ var FoxwarmPseudoterminal = class {
     this.closed = false;
     this.started = false;
     this.killRequested = false;
+    this.controlResponses = /* @__PURE__ */ new Map();
     this.onDidWrite = this.writeEmitter.event;
     this.onDidClose = this.closeEmitter.event;
     this.onDidChangeName = this.changeNameEmitter.event;
@@ -267,6 +269,8 @@ Foxwarm terminal failed: ${message}\r
           this.writeEmitter.fire(`\r
 Foxwarm terminal error: ${payload.message || "unknown error"}\r
 `);
+        } else if (payload.type === "control") {
+          void this.handleControlRequest(socket, payload);
         }
       } catch (error) {
         this.writeEmitter.fire(`\r
@@ -278,6 +282,28 @@ Foxwarm terminal protocol error: ${error instanceof Error ? error.message : Stri
     socket.onclose = () => {
       if (this.socket === socket) this.socket = void 0;
     };
+  }
+  async handleControlRequest(socket, payload) {
+    const requestId = typeof payload?.requestId === "string" ? payload.requestId : "";
+    if (!requestId || payload?.command !== "open" || !payload.request || typeof payload.request !== "object") {
+      return;
+    }
+    const cached = this.controlResponses.get(requestId);
+    if (cached) {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(cached));
+      return;
+    }
+    let response;
+    try {
+      const result = await vscode.commands.executeCommand("foxwarm-fs.handleOpenRequest", payload.request);
+      const action = result?.status === "added" ? "Added" : result?.status === "existing" ? "Already in workspace" : "Opened";
+      response = { type: "control-result", requestId, ok: true, message: `${action}: ${payload.request.path}` };
+    } catch (error) {
+      response = { type: "control-result", requestId, ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    this.controlResponses.set(requestId, response);
+    if (this.controlResponses.size > 100) this.controlResponses.delete(this.controlResponses.keys().next().value);
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(response));
   }
   disposeEmitters() {
     this.writeEmitter.dispose();

@@ -30,12 +30,14 @@ test('normalizes file requests with one-based line ranges', () => {
     nodeId: 'master',
     path: '/app/src/index.ts',
     startLine: 4,
+    startColumn: 3,
     endLine: 8,
   }), {
     kind: 'openFile',
     nodeId: 'master',
     path: '/app/src/index.ts',
     startLine: 4,
+    startColumn: 3,
     endLine: 8,
   });
 });
@@ -45,4 +47,5 @@ test('accepts remote nodes and rejects invalid nodes, relative paths, and invali
   assert.throws(() => normalizeFoxwarmOpenRequest({ kind: 'addFolder', nodeId: '../worker', path: '/app' }), /node id is invalid/);
   assert.throws(() => normalizeFoxwarmOpenRequest({ kind: 'addFolder', nodeId: 'master', path: 'app' }), /absolute POSIX/);
   assert.throws(() => normalizeFoxwarmOpenRequest({ kind: 'openFile', nodeId: 'master', path: '/app/a', startLine: 5, endLine: 2 }), /must not be before/);
+  assert.throws(() => normalizeFoxwarmOpenRequest({ kind: 'openFile', nodeId: 'master', path: '/app/a', startColumn: 2 }), /requires startLine/);
 });

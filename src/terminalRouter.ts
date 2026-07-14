@@ -8,6 +8,7 @@ import {
   getTerminalRecord as getLocalTerminal,
   listTerminalRecords as listLocalTerminals,
   resizeTerminal as resizeLocalTerminal,
+  resolveTerminalControlRequest as resolveLocalTerminalControlRequest,
   writeTerminalInput as writeLocalTerminalInput,
   type TerminalRecord,
 } from './terminalManager';
@@ -19,11 +20,19 @@ const REMOTE_OUTPUT_BUFFER_LIMIT = 200_000;
 type RemoteTerminal = {
   terminal: TerminalRecord;
   clients: Set<WebSocket>;
+  codeControlClients: Set<WebSocket>;
   outputBuffer: string;
   attachedAtNode: boolean;
+  controlOwner?: WebSocket;
 };
 
 const remoteTerminals = new Map<string, RemoteTerminal>();
+const pendingRemoteCodeRequests = new Map<string, {
+  requestId: string;
+  terminalId: string;
+  owner: WebSocket;
+  timeout: NodeJS.Timeout;
+}>();
 
 function normalizeRemoteRecord(nodeId: string, value: any): TerminalRecord {
   if (!value || typeof value.id !== 'string' || !value.id) throw new Error('Remote terminal response is invalid.');
@@ -46,7 +55,7 @@ function registerRemoteTerminal(nodeId: string, value: any): RemoteTerminal {
     existing.terminal = terminal;
     return existing;
   }
-  const record: RemoteTerminal = { terminal, clients: new Set(), outputBuffer: '', attachedAtNode: false };
+  const record: RemoteTerminal = { terminal, clients: new Set(), codeControlClients: new Set(), outputBuffer: '', attachedAtNode: false };
   remoteTerminals.set(terminal.id, record);
   return record;
 }
@@ -68,13 +77,46 @@ nodesManager.onNodeServiceEvent(({ nodeId, service, event }) => {
         try { client.close(1011, 'Remote node disconnected'); } catch {}
       }
       record.clients.clear();
+      record.codeControlClients.clear();
+      record.controlOwner = undefined;
       record.attachedAtNode = false;
+      for (const [key, pending] of pendingRemoteCodeRequests) {
+        if (pending.terminalId !== record.terminal.id) continue;
+        clearTimeout(pending.timeout);
+        pendingRemoteCodeRequests.delete(key);
+      }
     }
     return;
   }
   const terminalId = typeof event.terminalId === 'string' ? event.terminalId : '';
   const record = terminalId ? remoteTerminals.get(terminalId) : undefined;
   if (!record || record.terminal.nodeId !== nodeId) return;
+  if (event.type === 'code-request' && typeof event.requestId === 'string') {
+    const owner = record.controlOwner && record.controlOwner.readyState === WebSocketClass.OPEN
+      ? record.controlOwner
+      : [...record.codeControlClients].reverse().find((client) => client.readyState === WebSocketClass.OPEN);
+    if (!owner) {
+      try {
+        nodesManager.sendNodeServiceCommand(nodeId, 'vscode-pty', 'code-result', {
+          requestId: event.requestId,
+          ok: false,
+          error: 'No Code terminal is attached to handle this request.',
+        });
+      } catch {}
+      return;
+    }
+    record.controlOwner = owner;
+    const key = `${nodeId}\0${event.requestId}`;
+    const timeout = setTimeout(() => pendingRemoteCodeRequests.delete(key), 21_000);
+    pendingRemoteCodeRequests.set(key, { requestId: event.requestId, terminalId, owner, timeout });
+    owner.send(JSON.stringify({
+      type: 'control',
+      requestId: event.requestId,
+      command: 'open',
+      request: { ...event.request, nodeId },
+    }));
+    return;
+  }
   if (event.type === 'output' && typeof event.data === 'string') {
     record.outputBuffer += event.data;
     if (record.outputBuffer.length > REMOTE_OUTPUT_BUFFER_LIMIT) record.outputBuffer = record.outputBuffer.slice(-REMOTE_OUTPUT_BUFFER_LIMIT);
@@ -84,6 +126,11 @@ nodesManager.onNodeServiceEvent(({ nodeId, service, event }) => {
   if (event.type === 'exit') {
     if (typeof event.cwd === 'string' && event.cwd) record.terminal.cwd = event.cwd;
     sendToClients(record, { type: 'exit', exitCode: Number(event.exitCode || 0), signal: event.signal, cwd: event.cwd });
+    for (const [key, pending] of pendingRemoteCodeRequests) {
+      if (pending.terminalId !== terminalId) continue;
+      clearTimeout(pending.timeout);
+      pendingRemoteCodeRequests.delete(key);
+    }
     remoteTerminals.delete(terminalId);
     return;
   }
@@ -143,12 +190,16 @@ export async function getTerminalRecord(terminalId: string): Promise<TerminalRec
   return registerRemoteTerminal(remote.terminal.nodeId, result.terminal).terminal;
 }
 
-export async function attachTerminalClient(terminalId: string, client: WebSocket): Promise<{ terminal: TerminalRecord; backlog: string }> {
+export async function attachTerminalClient(terminalId: string, client: WebSocket, options?: { codeControl?: boolean }): Promise<{ terminal: TerminalRecord; backlog: string }> {
   const local = await getLocalTerminal(terminalId);
-  if (local) return attachLocalClient(terminalId, client);
+  if (local) return attachLocalClient(terminalId, client, options);
   const record = await findRemoteTerminal(terminalId);
   if (!record) throw new Error(`Terminal not found: ${terminalId}`);
   record.clients.add(client);
+  if (options?.codeControl) {
+    record.codeControlClients.add(client);
+    record.controlOwner = client;
+  }
   if (!record.attachedAtNode) {
     try {
       const result = await nodesManager.requestNodeService(record.terminal.nodeId, 'vscode-pty', 'attach', { terminalId });
@@ -157,6 +208,8 @@ export async function attachTerminalClient(terminalId: string, client: WebSocket
       record.attachedAtNode = true;
     } catch (error) {
       record.clients.delete(client);
+      record.codeControlClients.delete(client);
+      if (record.controlOwner === client) record.controlOwner = undefined;
       throw error;
     }
   }
@@ -170,10 +223,47 @@ export function detachTerminalClient(terminalId: string, client: WebSocket): voi
     return;
   }
   record.clients.delete(client);
+  record.codeControlClients.delete(client);
+  for (const [key, pending] of pendingRemoteCodeRequests) {
+    if (pending.terminalId !== terminalId || pending.owner !== client) continue;
+    clearTimeout(pending.timeout);
+    pendingRemoteCodeRequests.delete(key);
+    try {
+      nodesManager.sendNodeServiceCommand(record.terminal.nodeId, 'vscode-pty', 'code-result', {
+        requestId: pending.requestId,
+        ok: false,
+        error: 'The Code terminal detached before handling the request.',
+      });
+    } catch {}
+  }
+  if (record.controlOwner === client) {
+    record.controlOwner = [...record.codeControlClients].reverse().find((candidate) => candidate.readyState === WebSocketClass.OPEN);
+  }
   if (record.clients.size === 0 && record.attachedAtNode) {
     record.attachedAtNode = false;
     try { nodesManager.sendNodeServiceCommand(record.terminal.nodeId, 'vscode-pty', 'detach', { terminalId }); } catch {}
   }
+}
+
+export function resolveTerminalControlRequest(terminalId: string, client: WebSocket, payload: any): void {
+  const requestId = typeof payload?.requestId === 'string' ? payload.requestId : '';
+  const record = remoteTerminals.get(terminalId);
+  if (!record) {
+    resolveLocalTerminalControlRequest(terminalId, client, payload);
+    return;
+  }
+  const key = `${record.terminal.nodeId}\0${requestId}`;
+  const pending = requestId ? pendingRemoteCodeRequests.get(key) : undefined;
+  if (!pending) throw new Error('Unknown or unauthorized remote terminal control response.');
+  if (pending.terminalId !== terminalId || pending.owner !== client) throw new Error('Unknown or unauthorized remote terminal control response.');
+  pendingRemoteCodeRequests.delete(key);
+  clearTimeout(pending.timeout);
+  nodesManager.sendNodeServiceCommand(record.terminal.nodeId, 'vscode-pty', 'code-result', {
+    requestId,
+    ok: payload.ok === true,
+    ...(typeof payload.message === 'string' ? { message: payload.message } : {}),
+    ...(typeof payload.error === 'string' ? { error: payload.error } : {}),
+  });
 }
 
 export function writeTerminalInput(terminalId: string, data: string): void {
@@ -205,9 +295,15 @@ export async function closeTerminal(terminalId: string, reason = 'manual-close')
   const remote = await findRemoteTerminal(terminalId);
   if (!remote) return;
   await nodesManager.requestNodeService(remote.terminal.nodeId, 'vscode-pty', 'close', { terminalId, reason });
+  for (const [key, pending] of pendingRemoteCodeRequests) {
+    if (pending.terminalId !== terminalId) continue;
+    clearTimeout(pending.timeout);
+    pendingRemoteCodeRequests.delete(key);
+  }
   remoteTerminals.delete(terminalId);
   for (const client of remote.clients) {
     try { client.close(); } catch {}
   }
   remote.clients.clear();
+  remote.codeControlClients.clear();
 }

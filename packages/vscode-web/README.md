@@ -48,11 +48,14 @@ Current MVP behavior:
 - Backend terminal creation is cwd-based and no longer requires a Foxwarm chat session id.
 - The terminal cwd is derived from the first VS Code workspace folder URI. For example, `foxwarm://node+master/app/` becomes backend cwd `/app`.
 - `nodeId=master` uses the master process PTY manager. A connected CLI node advertising versioned `vscode-pty` runs the PTY in the remote node process and exposes the same Code terminal UI.
+- Foxwarm terminals prepend a terminal-scoped `code` helper to `PATH`. `code <file>` opens a file, `code <folder>` / `code --add <folder>` adds a workspace root, and `code --goto <file>:<line>[:column]` opens a location. The helper accepts one existing POSIX path at a time.
 - Closing or reloading the whole VS Code browser page only detaches its WebSocket clients. Extension activation lists existing backend terminals on the same node whose cwd is inside the current workspace and recreates attach-mode VS Code terminal views without POSTing new PTYs.
 - Explicit user terminal close (`TerminalExitReason.User`) deletes/kills the backend PTY. Window shutdown/reload, process exit, and extension shutdown do not issue an extra DELETE.
 - Backend terminals remain process/in-memory state. Master terminals disappear when the master process restarts; remote terminals survive a master reconnect while their CLI node process remains alive, but disappear when that node process restarts.
 
 `foxwarm-fs` also contributes a `Foxwarm: Add Folder...` command and a remote-indicator menu item for virtual `foxwarm` workspaces. It prompts for an absolute path on the current node and appends that path to the current multi-root workspace.
+
+Explorer folder context menus also expose **Add Folder to Workspace** for `foxwarm` directory resources. This calls the same exact-path-deduplicating multi-root workspace operation used by the bridge and terminal helper; it does not replace/reload the Code iframe.
 
 `foxwarm-terminal` contributes `Foxwarm: New Terminal`, `Foxwarm: Toggle Terminal`, and `Foxwarm: Open Terminal in Editor Area`. The toggle command is bound to <kbd>Ctrl</kbd>+<kbd>`</kbd> inside `foxwarm` virtual workspaces so opening the terminal via the terminal shortcut creates a Foxwarm backend PTY when none exists. When a terminal already exists, the command delegates to VS Code's native `workbench.action.terminal.toggleTerminal`. The bottom-left remote/virtual-workspace menu intentionally only exposes workspace/target actions such as `Foxwarm: Add Folder...`, not terminal creation. Explorer resource context menus include `Open in Foxwarm Terminal`, which opens a backend PTY in the selected directory (or the containing directory for a file).
 
@@ -73,6 +76,8 @@ Current MVP behavior:
 Remote filesystem, Git, and PTY requests do not invoke model-facing `read`/`write`/`exec` tools. The authenticated node connection advertises versioned `vscode-fs`, `vscode-git`, and optional `vscode-pty` service capabilities. Lifecycle operations use correlated `node_service_request` messages; latency-sensitive PTY input/resize uses fixed fire-and-forget `node_service_command` messages; PTY output/exit uses `node_service_event` messages. Offline nodes return an unavailable response, and older clients that do not advertise a service are rejected instead of silently falling back to master paths.
 
 The CLI node loads official `node-pty` from the separate minimal `packages/cli-node-runtime` package. Node bootstrap installs only that package: official macOS/Windows builds use the packaged prebuilds, while Linux compiles through `node-gyp` and therefore requires Python 3, make, and a C/C++ compiler. Docker node builds treat installation failure as fatal; bare-metal bootstrap warns and continues without advertising `vscode-pty`, preserving its filesystem/Git/tool capabilities. The current URI/path implementation is still POSIX-oriented; Windows path mapping remains separate work even though the native PTY package has a Windows prebuild.
+
+The terminal `code` helper does not receive the WebUI token, node credential, master URL, or browser URL. Each terminal receives a random capability plus a process-local Unix socket path (a named-pipe shape is reserved for Windows). The helper sends cwd/arguments to its local master/node runtime, which resolves and stats the path. Remote requests then travel over the already-authenticated node WebSocket; the master binds the trusted node id and sends only the fixed `foxwarm-fs.handleOpenRequest` operation to the most recently attached Code-capable terminal WebSocket. Ordinary main-WebUI terminal clients do not claim Code control ownership, and helper invocation without an attached Code terminal fails clearly instead of broadcasting to every browser or waiting silently.
 
 ## Preparing the optional Code workbench
 
@@ -149,6 +154,7 @@ Launch URLs are derived from the dynamic WebUI API base path and preserve revers
 - File/text search providers.
 - File watching.
 - Native Windows-path workspace support.
+- Full desktop `code` CLI compatibility such as installing extensions, opening new windows, waiting for editor close, or accepting multiple paths. The Foxwarm helper intentionally supports only open-file/add-folder/goto operations.
 
 ## Validation commands
 

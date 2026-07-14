@@ -284,7 +284,11 @@ function normalizeFoxwarmOpenRequest(value) {
   }
   if (request.kind === "openFile") {
     const startLine = normalizeLine(request.startLine, "startLine");
+    const startColumn = normalizeLine(request.startColumn, "startColumn");
     const endLine = normalizeLine(request.endLine, "endLine");
+    if (startColumn !== void 0 && startLine === void 0) {
+      throw new Error("startColumn requires startLine.");
+    }
     if (startLine !== void 0 && endLine !== void 0 && endLine < startLine) {
       throw new Error("endLine must not be before startLine.");
     }
@@ -293,6 +297,7 @@ function normalizeFoxwarmOpenRequest(value) {
       nodeId,
       path,
       ...startLine !== void 0 ? { startLine } : {},
+      ...startColumn !== void 0 ? { startColumn } : {},
       ...endLine !== void 0 ? { endLine } : {}
     };
   }
@@ -389,6 +394,12 @@ async function openFoxwarmFolder() {
   }
   await addFoxwarmFolder({ kind: "addFolder", nodeId: getCurrentNodeId(), path: value });
 }
+async function addExplorerFolderToWorkspace(uri) {
+  const target = parseFoxwarmUri(uri);
+  const stat = await vscode2.workspace.fs.stat(uri);
+  if ((stat.type & vscode2.FileType.Directory) === 0) throw new Error(`${target.realPath} is not a directory.`);
+  await addFoxwarmFolder({ kind: "addFolder", nodeId: target.nodeId, path: target.realPath });
+}
 async function openFoxwarmFile(request, provider) {
   const normalized = normalizeFoxwarmOpenRequest(request);
   if (normalized.kind !== "openFile") throw new Error("Expected an openFile request.");
@@ -405,11 +416,17 @@ async function openFoxwarmFile(request, provider) {
     if (normalized.startLine > document.lineCount) {
       throw new Error(`Line ${normalized.startLine} is beyond the end of ${normalized.path}.`);
     }
-    const endLine = Math.min(normalized.endLine ?? normalized.startLine, document.lineCount);
-    selection = new vscode2.Range(
-      new vscode2.Position(normalized.startLine - 1, 0),
-      document.lineAt(endLine - 1).range.end
-    );
+    if (normalized.startColumn !== void 0) {
+      const line = document.lineAt(normalized.startLine - 1);
+      const position = new vscode2.Position(normalized.startLine - 1, Math.min(normalized.startColumn - 1, line.text.length));
+      selection = new vscode2.Range(position, position);
+    } else {
+      const endLine = Math.min(normalized.endLine ?? normalized.startLine, document.lineCount);
+      selection = new vscode2.Range(
+        new vscode2.Position(normalized.startLine - 1, 0),
+        document.lineAt(endLine - 1).range.end
+      );
+    }
   }
   await vscode2.window.showTextDocument(document, { preview: true, selection });
   if (existing?.isDirty) {
@@ -432,6 +449,7 @@ function activate(context) {
       isReadonly: false
     }),
     vscode2.commands.registerCommand("foxwarm-fs.openFolder", openFoxwarmFolder),
+    vscode2.commands.registerCommand("foxwarm-fs.addFolderToWorkspace", addExplorerFolderToWorkspace),
     vscode2.commands.registerCommand("foxwarm-fs.handleOpenRequest", (request) => handleOpenRequest(request, provider))
   );
   console.log("Foxwarm filesystem provider registered for foxwarm://node+<nodeId>/<absolute-path>.");

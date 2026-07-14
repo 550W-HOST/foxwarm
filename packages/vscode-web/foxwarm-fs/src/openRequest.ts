@@ -1,10 +1,10 @@
 export type FoxwarmOpenRequest =
   | { kind: 'addFolder'; nodeId: string; path: string }
-  | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; endLine?: number }
+  | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; startColumn?: number; endLine?: number }
 
 export type NormalizedFoxwarmOpenRequest =
   | { kind: 'addFolder'; nodeId: string; path: string }
-  | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; endLine?: number }
+  | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; startColumn?: number; endLine?: number }
 
 export function normalizeFoxwarmAbsolutePath(value: unknown): string {
   if (typeof value !== 'string') {
@@ -51,7 +51,11 @@ export function normalizeFoxwarmOpenRequest(value: unknown): NormalizedFoxwarmOp
   }
   if (request.kind === 'openFile') {
     const startLine = normalizeLine(request.startLine, 'startLine')
+    const startColumn = normalizeLine(request.startColumn, 'startColumn')
     const endLine = normalizeLine(request.endLine, 'endLine')
+    if (startColumn !== undefined && startLine === undefined) {
+      throw new Error('startColumn requires startLine.')
+    }
     if (startLine !== undefined && endLine !== undefined && endLine < startLine) {
       throw new Error('endLine must not be before startLine.')
     }
@@ -60,6 +64,7 @@ export function normalizeFoxwarmOpenRequest(value: unknown): NormalizedFoxwarmOp
       nodeId,
       path,
       ...(startLine !== undefined ? { startLine } : {}),
+      ...(startColumn !== undefined ? { startColumn } : {}),
       ...(endLine !== undefined ? { endLine } : {}),
     }
   }
