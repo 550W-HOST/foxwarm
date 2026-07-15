@@ -10,6 +10,7 @@ import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/
 import type { Session, SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
+import { applyLatestSessionListRequest, createLatestSessionListRequestGate } from './sessionListRefresh'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
@@ -502,6 +503,7 @@ function App() {
   const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session'; id: string; title: string } | null>(null)
 
   const globalSSERef = useRef<EventSource | null>(null)
+  const sessionListRequestGateRef = useRef(createLatestSessionListRequestGate())
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const reconnectDelayRef = useRef<number>(1000)
   const pendingRouteTabIdRef = useRef<string | null>(null)
@@ -645,11 +647,18 @@ function App() {
 
   const fetchSessions = async () => {
     try {
-      const res = await fetch(`${API_BASE_PATH}/sessions`)
-      if (res.ok) {
-        const data = await res.json()
-        setSessions(data.sessions)
-      }
+      await applyLatestSessionListRequest(
+        sessionListRequestGateRef.current,
+        async () => {
+          const res = await fetch(`${API_BASE_PATH}/sessions`)
+          if (!res.ok) return null
+          const data = await res.json()
+          return Array.isArray(data.sessions) ? data.sessions as Session[] : []
+        },
+        nextSessions => {
+          if (nextSessions) setSessions(nextSessions)
+        },
+      )
     } catch (error) {
       console.error('Failed to fetch sessions:', error)
     }

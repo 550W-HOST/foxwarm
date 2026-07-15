@@ -182,3 +182,27 @@ test('session list labels omit parent and agent-main prefixes for child rows', a
   assert.equal(getSessionListDisplayId('agent/task', 'agent/parent'), 'agent/task')
   assert.equal(getSessionListDisplayId('standalone', null), 'standalone')
 })
+
+test('overlapping global session refreshes cannot let an older response hide a new child', async () => {
+  const {
+    applyLatestSessionListRequest,
+    createLatestSessionListRequestGate,
+  } = await loadTypeScriptModule('../src/sessionListRefresh.ts')
+
+  const gate = createLatestSessionListRequestGate()
+  const applied = []
+  let resolveOlder
+  let resolveNewer
+  const olderResponse = new Promise(resolve => { resolveOlder = resolve })
+  const newerResponse = new Promise(resolve => { resolveNewer = resolve })
+
+  const olderRefresh = applyLatestSessionListRequest(gate, () => olderResponse, sessions => applied.push(sessions))
+  const newerRefresh = applyLatestSessionListRequest(gate, () => newerResponse, sessions => applied.push(sessions))
+
+  resolveNewer([{ id: 'parent' }, { id: 'parent_child', parentSessionId: 'parent' }])
+  await newerRefresh
+  resolveOlder([{ id: 'parent' }])
+  await olderRefresh
+
+  assert.deepEqual(applied, [[{ id: 'parent' }, { id: 'parent_child', parentSessionId: 'parent' }]])
+})

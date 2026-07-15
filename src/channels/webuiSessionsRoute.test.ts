@@ -341,6 +341,85 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
   }
 });
 
+test('WebUI global SSE broadcasts every session creation path used by the sidebar', async () => {
+  const parentSessionId = makeSessionId('webui_global_parent');
+  const ordinarySessionName = makeSessionId('webui_global_ordinary');
+  const createdSessionIds: string[] = [];
+  const port = 35200 + Math.floor(Math.random() * 200);
+  const token = 'global-session-stream-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  const channel = new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  sessionManager.setOnSessionListUpdated(() => channel.broadcastSessionListUpdate());
+  await server.start();
+
+  let sse: ReturnType<typeof createSseDataReader> | null = null;
+  const expectListUpdate = async () => {
+    const event = await Promise.race([
+      sse!.read(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for sessions-updated.')), 2000)),
+    ]);
+    assert.equal(event.type, 'sessions-updated');
+  };
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions/stream`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+    sse = createSseDataReader(response.body!);
+    assert.equal((await sse.read()).type, 'connected');
+
+    const parentResult = await sessionManager.createEmptySession(parentSessionId);
+    assert.equal(parentResult.created, true);
+    createdSessionIds.push(parentSessionId);
+    await expectListUpdate();
+
+    const newChildId = await sessionManager.createChildSession(parentSessionId, 'newchild', false);
+    createdSessionIds.push(newChildId);
+    await expectListUpdate();
+
+    const forkChildId = await sessionManager.createChildSession(parentSessionId, 'forkchild', true);
+    createdSessionIds.push(forkChildId);
+    await expectListUpdate();
+
+    const manualForkId = await sessionManager.forkSession(parentSessionId, 'manual', false);
+    createdSessionIds.push(manualForkId);
+    await expectListUpdate();
+
+    const ordinary = await sessionManager.createSessionInAgent({
+      agentName: 'main',
+      sessionName: ordinarySessionName,
+      parentSessionId,
+    });
+    createdSessionIds.push(ordinary.sessionId);
+    await expectListUpdate();
+
+    const listResponse = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(listResponse.status, 200);
+    const listedSessions = (await listResponse.json() as any).sessions as any[];
+    const listedById = new Map(listedSessions.map(session => [session.id, session]));
+    for (const sessionId of createdSessionIds) {
+      assert.ok(listedById.has(sessionId), `expected ${sessionId} in the global list`);
+    }
+    assert.equal(listedById.get(newChildId).parentSessionId, parentSessionId);
+    assert.equal(listedById.get(forkChildId).parentSessionId, parentSessionId);
+    assert.equal(listedById.get(manualForkId).parentSessionId, parentSessionId);
+    assert.equal(listedById.get(ordinary.sessionId).parentSessionId, parentSessionId);
+  } finally {
+    await sse?.cancel().catch(() => {});
+    await server.stop();
+    setHttpServer(null);
+    sessionManager.setOnSessionListUpdated(() => {});
+    for (const sessionId of createdSessionIds.reverse()) {
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+  }
+});
+
 test('WebUI session pin route persists live metadata without writing session history', async () => {
   const sessionId = makeSessionId('webui_pin');
   const session = await sessionManager.getSession(sessionId);

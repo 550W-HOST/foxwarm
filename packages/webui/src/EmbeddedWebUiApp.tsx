@@ -9,6 +9,7 @@ import CreateTabButton from './components/CreateTabButton'
 import { API_BASE_PATH } from './config'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
+import { applyLatestSessionListRequest, createLatestSessionListRequestGate } from './sessionListRefresh'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const SetupView = lazy(() => import('./components/SetupView'))
@@ -101,14 +102,21 @@ function useEmbeddedSessions(onGlobalUpdate?: () => Promise<unknown>) {
   const [sessions, setSessions] = useState<Session[]>([])
   const [loadError, setLoadError] = useState('')
   const reconnectTimer = useRef<number | null>(null)
+  const sessionListRequestGateRef = useRef(createLatestSessionListRequestGate())
   const onGlobalUpdateRef = useRef(onGlobalUpdate)
   onGlobalUpdateRef.current = onGlobalUpdate
 
   const fetchSessions = useCallback(async () => {
-    const response = await fetch(`${API_BASE_PATH}/sessions`)
-    if (!response.ok) throw new Error(`Failed to load sessions (${response.status})`)
-    const data = await response.json()
-    setSessions(Array.isArray(data.sessions) ? data.sessions : [])
+    await applyLatestSessionListRequest(
+      sessionListRequestGateRef.current,
+      async () => {
+        const response = await fetch(`${API_BASE_PATH}/sessions`)
+        if (!response.ok) throw new Error(`Failed to load sessions (${response.status})`)
+        const data = await response.json()
+        return Array.isArray(data.sessions) ? data.sessions as Session[] : []
+      },
+      setSessions,
+    )
   }, [])
 
   useEffect(() => {
