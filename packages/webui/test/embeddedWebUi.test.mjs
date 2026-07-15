@@ -54,8 +54,12 @@ test('posts a versioned fixed-shape message only when embedded', () => {
   assert.deepEqual(messages, [[{
     channel: 'foxwarm-webui-embed', version: 1, nonce, type: 'open-session', sessionId: 'agent/task',
   }, '*']])
+  postFoxwarmEmbedHostMessage(nonce, { type: 'open-terminal' })
+  assert.deepEqual(messages[1], [{
+    channel: 'foxwarm-webui-embed', version: 1, nonce, type: 'open-terminal',
+  }, '*'])
   globalThis.window = { parent: null }
   globalThis.window.parent = globalThis.window
   postFoxwarmEmbedHostMessage(nonce, { type: 'open-session', sessionId: 'ignored' })
-  assert.equal(messages.length, 1)
+  assert.equal(messages.length, 2)
 })

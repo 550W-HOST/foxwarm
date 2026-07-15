@@ -18,6 +18,7 @@ export type FoxwarmEmbedHostPayload =
   | { type: 'open-session'; sessionId: string; title?: string }
   | { type: 'open-agents' }
   | { type: 'open-setup' }
+  | { type: 'open-terminal' }
   | { type: 'open-commit'; nodeId: string; path: string; commitId: string }
 
 const normalizeNonce = (value: string | null): string | null => {

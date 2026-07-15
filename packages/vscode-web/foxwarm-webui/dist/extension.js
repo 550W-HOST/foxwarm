@@ -185,6 +185,8 @@ window.addEventListener('message', event => {
       vscode.postMessage({ type: 'open-agents' });
     } else if (data.type === 'open-setup') {
       vscode.postMessage({ type: 'open-setup' });
+    } else if (data.type === 'open-terminal') {
+      vscode.postMessage({ type: 'open-terminal' });
     } else if (data.type === 'open-commit') {
       vscode.postMessage({ type: 'open-commit', nodeId: data.nodeId, path: data.path, commitId: data.commitId });
     }
@@ -201,6 +203,7 @@ function normalizeHostMessage(value) {
   if (type === "sidebar-ready") return { type };
   if (type === "open-agents") return { type };
   if (type === "open-setup") return { type };
+  if (type === "open-terminal") return { type };
   if (type === "open-session") {
     const request = normalizeOpenSessionRequest(value);
     return request ? { type, ...request } : null;
@@ -297,6 +300,10 @@ var FoxwarmWebUiController = class {
     }
     if (message.type === "open-setup") {
       await this.openTarget({ kind: "setup" });
+      return;
+    }
+    if (message.type === "open-terminal") {
+      await vscode.commands.executeCommand("foxwarm-terminal.newTerminal");
       return;
     }
     await vscode.commands.executeCommand("foxwarm-scm.openCommitDetails", {

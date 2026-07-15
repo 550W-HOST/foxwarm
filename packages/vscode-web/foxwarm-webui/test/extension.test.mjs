@@ -123,6 +123,9 @@ test('fixed bridges open, restore, activate, and explicitly close session/Agents
   await tick();
   assert.equal(sidebarWebview.posted.at(-1).target, null);
 
+  await sidebarWebview.receive({ type: 'open-terminal' });
+  assert.deepEqual(executed.at(-1), { id: 'foxwarm-terminal.newTerminal', args: [] });
+
   await sidebarWebview.receive({ type: 'open-session', sessionId: 'agent/task', title: 'Task title' });
   await tick();
   let open = executed.filter(item => item.id === 'vscode.openWith').at(-1);
