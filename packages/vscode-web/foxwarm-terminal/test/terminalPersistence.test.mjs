@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import Module from 'node:module';
+import packageJson from '../package.json' with { type: 'json' };
 
 class MockEventEmitter {
   listeners = [];
@@ -55,7 +56,8 @@ const vscodeMock = {
         name: creationOptions.name,
         creationOptions,
         exitStatus: undefined,
-        show() {},
+        showCalls: 0,
+        show() { this.showCalls += 1; },
       };
       terminals.push(terminal);
       for (const handler of openedHandlers) handler(terminal);
@@ -124,8 +126,12 @@ globalThis.WebSocket = MockWebSocket;
 const require = createRequire(import.meta.url);
 const extension = require('../dist/extension.js');
 
+test('terminal extension restores persisted backend terminals after Code startup', () => {
+  assert.ok(packageJson.activationEvents.includes('onStartupFinished'));
+});
+
 async function flushAsync() {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, 150));
 }
 
 test('activation restores workspace terminals by attachment without creating duplicates', async () => {
@@ -139,6 +145,7 @@ test('activation restores workspace terminals by attachment without creating dup
   assert.equal(terminals.length, 2);
   assert.equal(fetchCalls.filter((call) => call.method === 'POST').length, 0);
   assert.equal(fetchCalls.filter((call) => call.method === 'GET').length, 1);
+  assert.equal(terminals.filter((terminal) => terminal.showCalls === 1).length, 1);
 
   workspaceFoldersChanged.fire({ added: [], removed: [] });
   await flushAsync();

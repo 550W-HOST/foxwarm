@@ -6,6 +6,7 @@
   "license": "MIT",
   "browser": "./dist/extension.js",
   "activationEvents": [
+    "onStartupFinished",
     "onTerminalProfile:foxwarm-terminal",
     "onCommand:foxwarm-terminal.newTerminal",
     "onCommand:foxwarm-terminal.toggleTerminal",

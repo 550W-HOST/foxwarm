@@ -1,10 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DndContext } from '@dnd-kit/core'
-import { Bot, SquareTerminal, Workflow } from 'lucide-react'
+import { Bot, Workflow } from 'lucide-react'
 import Chat from './components/Chat'
 import SessionListCore, { type Session } from './components/SessionListCore'
 import AgentCreationMenu from './components/AgentCreationMenu'
 import GlobalUiSettingsMenu from './components/GlobalUiSettingsMenu'
+import CreateTabButton from './components/CreateTabButton'
 import { API_BASE_PATH } from './config'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
@@ -275,15 +276,13 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
             </button>
             <AgentCreationMenu agents={agents} currentAgent={currentRecord?.agent} compact onCreateAgent={createAgent} onCreateSession={createSession} />
           </div>
-          <button
-            type="button"
-            onClick={() => postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-terminal' })}
-            className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700"
-            title="Open Foxwarm terminal"
-          >
-            <SquareTerminal className="h-4 w-4" />
-            <span>Terminal</span>
-          </button>
+          <div className="mt-2">
+            <CreateTabButton
+              defaultNodeId={currentRecord?.currentNode || 'master'}
+              defaultPath={currentRecord?.cwd || '/'}
+              onCreate={() => postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-terminal' })}
+            />
+          </div>
         </div>
         <div className="min-h-0 flex-1 border-t border-gray-200 dark:border-gray-700">
           <SessionListCore sessions={sessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} />

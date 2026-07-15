@@ -377,10 +377,13 @@ async function restoreBackendTerminals() {
   const workspace2 = getActiveWorkspaceTarget();
   if (!workspace2) return;
   const records = await listBackendTerminals();
+  let firstRestored;
   for (const record of records) {
     if (!isTerminalInsideWorkspace(record, workspace2) || representedBackendIds.has(record.id)) continue;
-    openNewTerminal({ nodeId: record.nodeId, cwd: record.cwd }, void 0, record, false);
+    const terminal = openNewTerminal({ nodeId: record.nodeId, cwd: record.cwd }, void 0, record, false);
+    firstRestored || (firstRestored = terminal);
   }
+  if (firstRestored) globalThis.setTimeout(() => firstRestored?.show(), 100);
 }
 function activate(context) {
   terminalApiBase = deriveTerminalRouteBase(context.extensionUri, TERMINAL_API_PREFIX);

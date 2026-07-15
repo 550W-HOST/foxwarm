@@ -311,10 +311,13 @@ async function restoreBackendTerminals(): Promise<void> {
   const workspace = getActiveWorkspaceTarget();
   if (!workspace) return;
   const records = await listBackendTerminals();
+  let firstRestored: vscode.Terminal | undefined;
   for (const record of records) {
     if (!isTerminalInsideWorkspace(record, workspace) || representedBackendIds.has(record.id)) continue;
-    openNewTerminal({ nodeId: record.nodeId, cwd: record.cwd }, undefined, record, false);
+    const terminal = openNewTerminal({ nodeId: record.nodeId, cwd: record.cwd }, undefined, record, false);
+    firstRestored ||= terminal;
   }
+  if (firstRestored) globalThis.setTimeout(() => firstRestored?.show(), 100);
 }
 
 export function activate(context: vscode.ExtensionContext): void {
