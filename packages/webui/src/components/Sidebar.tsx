@@ -115,7 +115,7 @@ export default function Sidebar({
               onInstanceNameChange={onInstanceNameChange}
               tabIcon={tabIcon}
               onTabIconChange={onTabIconChange}
-              menuAlign="start"
+              menuAlign="end"
               onOpenSetup={onSelectSetup}
               setupActive={currentView === 'setup'}
             />

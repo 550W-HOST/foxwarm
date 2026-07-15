@@ -2,19 +2,32 @@ import * as vscode from 'vscode';
 
 export const FOXWARM_SIDEBAR_VIEW_ID = 'foxwarm-webui.sidebar';
 export const FOXWARM_CHAT_EDITOR_VIEW_TYPE = 'foxwarm-webui.chatEditor';
+export const FOXWARM_AGENTS_EDITOR_VIEW_TYPE = 'foxwarm-webui.agentsEditor';
+export const FOXWARM_SETUP_EDITOR_VIEW_TYPE = 'foxwarm-webui.setupEditor';
 export const FOXWARM_OPEN_SESSION_COMMAND = 'foxwarm-webui.openSession';
 export const FOXWARM_EMBED_CHANNEL = 'foxwarm-webui-embed';
+export const FOXWARM_EMBED_HOST_CHANNEL = 'foxwarm-webui-host';
 export const FOXWARM_EMBED_VERSION = 1;
 const CHAT_URI_SCHEME = 'foxwarm-chat';
+const AGENTS_URI_SCHEME = 'foxwarm-agents';
+const SETUP_URI_SCHEME = 'foxwarm-setup';
 const CHAT_FILE_SUFFIX = '.foxwarm-chat';
+const AGENTS_FILE_PATH = '/agents.foxwarm-agents';
+const SETUP_FILE_PATH = '/setup.foxwarm-setup';
 const EXTENSION_ROUTE_MARKER = '/vscode-web/extensions/foxwarm-webui';
-const OPEN_SESSIONS_STATE_KEY = 'foxwarm-webui.openSessions.v1';
+const OPEN_TABS_STATE_KEY = 'foxwarm-webui.openTabs.v2';
+const LEGACY_OPEN_SESSIONS_STATE_KEY = 'foxwarm-webui.openSessions.v1';
 
 type OpenSessionRequest = { sessionId: string; title?: string };
-type EmbedTarget = { kind: 'sidebar' } | { kind: 'chat'; sessionId: string; title?: string };
+export type FoxwarmEditorTarget = { kind: 'session'; sessionId: string; title?: string } | { kind: 'agents' } | { kind: 'setup' };
+type ActiveTarget = { kind: 'session'; sessionId: string } | { kind: 'agents' } | { kind: 'setup' };
+type EmbedTarget = { kind: 'sidebar' } | { kind: 'chat'; sessionId: string; title?: string } | { kind: 'agents' } | { kind: 'setup' };
 
 type HostMessage =
+  | { type: 'sidebar-ready' }
   | { type: 'open-session'; sessionId: string; title?: string }
+  | { type: 'open-agents' }
+  | { type: 'open-setup' }
   | { type: 'open-commit'; nodeId: string; path: string; commitId: string };
 
 function normalizeText(value: unknown, maxLength: number): string | undefined {
@@ -57,6 +70,41 @@ export function parseChatEditorUri(uri: vscode.Uri): string {
   const normalized = normalizeOpenSessionRequest(sessionId || '');
   if (!normalized) throw new Error('Foxwarm chat editor URI is missing a valid session.');
   return normalized.sessionId;
+}
+
+export function buildAgentsEditorUri(): vscode.Uri {
+  return vscode.Uri.from({ scheme: AGENTS_URI_SCHEME, path: AGENTS_FILE_PATH });
+}
+
+export function buildSetupEditorUri(): vscode.Uri {
+  return vscode.Uri.from({ scheme: SETUP_URI_SCHEME, path: SETUP_FILE_PATH });
+}
+
+export function parseEditorTarget(uri: vscode.Uri): FoxwarmEditorTarget {
+  if (uri.scheme === CHAT_URI_SCHEME) return { kind: 'session', sessionId: parseChatEditorUri(uri) };
+  if (uri.scheme === AGENTS_URI_SCHEME && uri.path === AGENTS_FILE_PATH) return { kind: 'agents' };
+  if (uri.scheme === SETUP_URI_SCHEME && uri.path === SETUP_FILE_PATH) return { kind: 'setup' };
+  throw new Error('Invalid Foxwarm editor URI.');
+}
+
+function normalizeStoredTarget(value: unknown): FoxwarmEditorTarget | null {
+  if (!value || typeof value !== 'object') return null;
+  const kind = (value as { kind?: unknown }).kind;
+  if (kind === 'agents') return { kind: 'agents' };
+  if (kind === 'setup') return { kind: 'setup' };
+  if (kind !== 'session') return null;
+  const request = normalizeOpenSessionRequest(value);
+  return request ? { kind, ...request } : null;
+}
+
+function targetKey(target: FoxwarmEditorTarget): string {
+  return target.kind === 'session' ? `session:${target.sessionId}` : target.kind;
+}
+
+function targetEditor(target: FoxwarmEditorTarget): { uri: vscode.Uri; viewType: string } {
+  if (target.kind === 'session') return { uri: buildChatEditorUri(target.sessionId), viewType: FOXWARM_CHAT_EDITOR_VIEW_TYPE };
+  if (target.kind === 'agents') return { uri: buildAgentsEditorUri(), viewType: FOXWARM_AGENTS_EDITOR_VIEW_TYPE };
+  return { uri: buildSetupEditorUri(), viewType: FOXWARM_SETUP_EDITOR_VIEW_TYPE };
 }
 
 export function deriveWebUiBaseUrl(extensionUri: vscode.Uri): string {
@@ -104,14 +152,24 @@ const vscode = acquireVsCodeApi();
 const frame = document.getElementById('foxwarm-frame');
 const bridgeNonce = ${safeNonce};
 window.addEventListener('message', event => {
-  if (event.source !== frame.contentWindow) return;
   const data = event.data;
-  if (!data || data.channel !== '${FOXWARM_EMBED_CHANNEL}' || data.version !== ${FOXWARM_EMBED_VERSION} || data.nonce !== bridgeNonce) return;
-  if (data.type === 'open-session') {
-    vscode.postMessage({ type: 'open-session', sessionId: data.sessionId, title: data.title });
-  } else if (data.type === 'open-commit') {
-    vscode.postMessage({ type: 'open-commit', nodeId: data.nodeId, path: data.path, commitId: data.commitId });
+  if (event.source === frame.contentWindow) {
+    if (!data || data.channel !== '${FOXWARM_EMBED_CHANNEL}' || data.version !== ${FOXWARM_EMBED_VERSION} || data.nonce !== bridgeNonce) return;
+    if (data.type === 'sidebar-ready') {
+      vscode.postMessage({ type: 'sidebar-ready' });
+    } else if (data.type === 'open-session') {
+      vscode.postMessage({ type: 'open-session', sessionId: data.sessionId, title: data.title });
+    } else if (data.type === 'open-agents') {
+      vscode.postMessage({ type: 'open-agents' });
+    } else if (data.type === 'open-setup') {
+      vscode.postMessage({ type: 'open-setup' });
+    } else if (data.type === 'open-commit') {
+      vscode.postMessage({ type: 'open-commit', nodeId: data.nodeId, path: data.path, commitId: data.commitId });
+    }
+    return;
   }
+  if (!data || data.channel !== '${FOXWARM_EMBED_HOST_CHANNEL}' || data.version !== ${FOXWARM_EMBED_VERSION} || data.nonce !== bridgeNonce || data.type !== 'active-target') return;
+  frame.contentWindow.postMessage(data, ${JSON.stringify(frameOrigin)});
 });
 </script></body></html>`;
 }
@@ -119,6 +177,9 @@ window.addEventListener('message', event => {
 function normalizeHostMessage(value: unknown): HostMessage | null {
   if (!value || typeof value !== 'object') return null;
   const type = (value as { type?: unknown }).type;
+  if (type === 'sidebar-ready') return { type };
+  if (type === 'open-agents') return { type };
+  if (type === 'open-setup') return { type };
   if (type === 'open-session') {
     const request = normalizeOpenSessionRequest(value);
     return request ? { type, ...request } : null;
@@ -134,65 +195,90 @@ function normalizeHostMessage(value: unknown): HostMessage | null {
   return null;
 }
 
-class FoxwarmChatDocument implements vscode.CustomDocument {
-  constructor(readonly uri: vscode.Uri, readonly sessionId: string) {}
+class FoxwarmDocument implements vscode.CustomDocument {
+  constructor(readonly uri: vscode.Uri, readonly target: FoxwarmEditorTarget) {}
   dispose(): void {}
 }
 
-export class FoxwarmWebUiController implements vscode.WebviewViewProvider, vscode.CustomReadonlyEditorProvider<FoxwarmChatDocument> {
+export class FoxwarmWebUiController implements vscode.WebviewViewProvider, vscode.CustomReadonlyEditorProvider<FoxwarmDocument> {
   private readonly webUiBaseUrl: string;
   private readonly sessionTitles = new Map<string, string>();
+  private sidebarBridge: { webview: vscode.Webview; nonce: string } | null = null;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.webUiBaseUrl = deriveWebUiBaseUrl(context.extensionUri);
   }
 
-  private getStoredSessions(): OpenSessionRequest[] {
-    const value = this.context.globalState.get<unknown>(OPEN_SESSIONS_STATE_KEY, []);
-    if (!Array.isArray(value)) return [];
-    return value.map(normalizeOpenSessionRequest).filter((item): item is OpenSessionRequest => !!item);
+  private getStoredTargets(): FoxwarmEditorTarget[] {
+    const value = this.context.globalState.get<unknown>(OPEN_TABS_STATE_KEY);
+    if (Array.isArray(value)) return value.map(normalizeStoredTarget).filter((item): item is FoxwarmEditorTarget => !!item);
+    const legacy = this.context.globalState.get<unknown>(LEGACY_OPEN_SESSIONS_STATE_KEY, []);
+    if (!Array.isArray(legacy)) return [];
+    return legacy
+      .map(normalizeOpenSessionRequest)
+      .filter((item): item is OpenSessionRequest => !!item)
+      .map(item => ({ kind: 'session' as const, ...item }));
   }
 
-  private async storeSessions(sessions: OpenSessionRequest[]): Promise<void> {
-    await this.context.globalState.update(OPEN_SESSIONS_STATE_KEY, sessions);
+  private async storeTargets(targets: FoxwarmEditorTarget[]): Promise<void> {
+    await this.context.globalState.update(OPEN_TABS_STATE_KEY, targets);
   }
 
-  private async rememberSession(request: OpenSessionRequest): Promise<void> {
-    const stored = this.getStoredSessions().filter(item => item.sessionId !== request.sessionId);
-    stored.push(request);
-    await this.storeSessions(stored);
+  private async rememberTarget(target: FoxwarmEditorTarget): Promise<void> {
+    const key = targetKey(target);
+    const stored = this.getStoredTargets().filter(item => targetKey(item) !== key);
+    stored.push(target);
+    await this.storeTargets(stored);
   }
 
   async forgetClosedTabs(closedTabs: readonly vscode.Tab[]): Promise<void> {
-    const closedSessionIds = new Set<string>();
+    const closedKeys = new Set<string>();
     for (const tab of closedTabs) {
       const input = tab.input as { viewType?: unknown; uri?: vscode.Uri } | undefined;
-      if (input?.viewType !== FOXWARM_CHAT_EDITOR_VIEW_TYPE || !input.uri) continue;
-      try { closedSessionIds.add(parseChatEditorUri(input.uri)); } catch {}
+      if (!input?.uri || ![FOXWARM_CHAT_EDITOR_VIEW_TYPE, FOXWARM_AGENTS_EDITOR_VIEW_TYPE, FOXWARM_SETUP_EDITOR_VIEW_TYPE].includes(String(input.viewType))) continue;
+      try { closedKeys.add(targetKey(parseEditorTarget(input.uri))); } catch {}
     }
-    if (closedSessionIds.size === 0) return;
-    await this.storeSessions(this.getStoredSessions().filter(item => !closedSessionIds.has(item.sessionId)));
+    if (closedKeys.size === 0) return;
+    await this.storeTargets(this.getStoredTargets().filter(item => !closedKeys.has(targetKey(item))));
   }
 
-  async restoreSessions(): Promise<void> {
-    for (const request of this.getStoredSessions()) {
-      try { await this.openSession(request); } catch (error) { console.warn(`Could not restore Foxwarm session ${request.sessionId}`, error); }
+  async restoreTargets(): Promise<void> {
+    for (const target of this.getStoredTargets()) {
+      try { await this.openTarget(target); } catch (error) { console.warn(`Could not restore Foxwarm ${targetKey(target)}`, error); }
     }
+  }
+
+  async openTarget(target: FoxwarmEditorTarget): Promise<void> {
+    if (target.kind === 'session' && target.title) this.sessionTitles.set(target.sessionId, target.title);
+    await this.rememberTarget(target);
+    const editor = targetEditor(target);
+    await vscode.commands.executeCommand('vscode.openWith', editor.uri, editor.viewType, { preview: false });
+    this.publishActiveTarget();
   }
 
   async openSession(value: unknown): Promise<void> {
     const request = normalizeOpenSessionRequest(value);
     if (!request) throw new Error('Expected a valid Foxwarm session id.');
-    if (request.title) this.sessionTitles.set(request.sessionId, request.title);
-    await this.rememberSession(request);
-    await vscode.commands.executeCommand('vscode.openWith', buildChatEditorUri(request.sessionId), FOXWARM_CHAT_EDITOR_VIEW_TYPE, { preview: false });
+    await this.openTarget({ kind: 'session', ...request });
   }
 
   async handleHostMessage(value: unknown): Promise<void> {
     const message = normalizeHostMessage(value);
     if (!message) return;
+    if (message.type === 'sidebar-ready') {
+      this.publishActiveTarget();
+      return;
+    }
     if (message.type === 'open-session') {
       await this.openSession(message);
+      return;
+    }
+    if (message.type === 'open-agents') {
+      await this.openTarget({ kind: 'agents' });
+      return;
+    }
+    if (message.type === 'open-setup') {
+      await this.openTarget({ kind: 'setup' });
       return;
     }
     await vscode.commands.executeCommand('foxwarm-scm.openCommitDetails', {
@@ -202,25 +288,52 @@ export class FoxwarmWebUiController implements vscode.WebviewViewProvider, vscod
     });
   }
 
+  private getActiveTarget(): ActiveTarget | null {
+    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input as { viewType?: unknown; uri?: vscode.Uri } | undefined;
+    if (!input?.uri || ![FOXWARM_CHAT_EDITOR_VIEW_TYPE, FOXWARM_AGENTS_EDITOR_VIEW_TYPE, FOXWARM_SETUP_EDITOR_VIEW_TYPE].includes(String(input.viewType))) return null;
+    try {
+      const target = parseEditorTarget(input.uri);
+      return target.kind === 'session' ? { kind: 'session', sessionId: target.sessionId } : target;
+    } catch {
+      return null;
+    }
+  }
+
+  publishActiveTarget(): void {
+    const bridge = this.sidebarBridge;
+    if (!bridge) return;
+    void bridge.webview.postMessage({
+      channel: FOXWARM_EMBED_HOST_CHANNEL,
+      version: FOXWARM_EMBED_VERSION,
+      nonce: bridge.nonce,
+      type: 'active-target',
+      target: this.getActiveTarget(),
+    });
+  }
+
   resolveWebviewView(view: vscode.WebviewView): void {
+    const nonce = randomNonce();
+    this.sidebarBridge = { webview: view.webview, nonce };
     view.webview.options = { enableScripts: true };
-    view.webview.html = buildEmbeddedWebviewHtml(this.webUiBaseUrl, { kind: 'sidebar' });
+    view.webview.html = buildEmbeddedWebviewHtml(this.webUiBaseUrl, { kind: 'sidebar' }, nonce);
     this.context.subscriptions.push(view.webview.onDidReceiveMessage(message => { void this.handleHostMessage(message); }));
+    this.context.subscriptions.push(view.onDidDispose(() => {
+      if (this.sidebarBridge?.webview === view.webview) this.sidebarBridge = null;
+    }));
   }
 
-  openCustomDocument(uri: vscode.Uri): FoxwarmChatDocument {
-    return new FoxwarmChatDocument(uri, parseChatEditorUri(uri));
+  openCustomDocument(uri: vscode.Uri): FoxwarmDocument {
+    return new FoxwarmDocument(uri, parseEditorTarget(uri));
   }
 
-  resolveCustomEditor(document: FoxwarmChatDocument, panel: vscode.WebviewPanel): void {
-    const title = this.sessionTitles.get(document.sessionId);
+  resolveCustomEditor(document: FoxwarmDocument, panel: vscode.WebviewPanel): void {
+    const target = document.target;
+    const title = target.kind === 'session' ? this.sessionTitles.get(target.sessionId) : target.kind === 'agents' ? 'Agents' : 'Setup';
     if (title) panel.title = title;
     panel.webview.options = { enableScripts: true };
-    panel.webview.html = buildEmbeddedWebviewHtml(this.webUiBaseUrl, {
-      kind: 'chat',
-      sessionId: document.sessionId,
-      ...(title ? { title } : {}),
-    });
+    panel.webview.html = buildEmbeddedWebviewHtml(this.webUiBaseUrl, target.kind === 'session'
+      ? { kind: 'chat', sessionId: target.sessionId, ...(title ? { title } : {}) }
+      : target);
     this.context.subscriptions.push(panel.webview.onDidReceiveMessage(message => { void this.handleHostMessage(message); }));
   }
 }
@@ -233,9 +346,20 @@ export function activate(context: vscode.ExtensionContext): void {
       webviewOptions: { retainContextWhenHidden: true },
       supportsMultipleEditorsPerDocument: false,
     }),
+    vscode.window.registerCustomEditorProvider(FOXWARM_AGENTS_EDITOR_VIEW_TYPE, controller, {
+      webviewOptions: { retainContextWhenHidden: true },
+      supportsMultipleEditorsPerDocument: false,
+    }),
+    vscode.window.registerCustomEditorProvider(FOXWARM_SETUP_EDITOR_VIEW_TYPE, controller, {
+      webviewOptions: { retainContextWhenHidden: true },
+      supportsMultipleEditorsPerDocument: false,
+    }),
     vscode.commands.registerCommand(FOXWARM_OPEN_SESSION_COMMAND, value => controller.openSession(value)),
-    vscode.window.tabGroups.onDidChangeTabs(event => { void controller.forgetClosedTabs(event.closed); }),
+    vscode.window.tabGroups.onDidChangeTabs(event => {
+      void controller.forgetClosedTabs(event.closed).finally(() => controller.publishActiveTarget());
+    }),
+    vscode.window.tabGroups.onDidChangeTabGroups(() => controller.publishActiveTarget()),
   );
-  globalThis.setTimeout(() => { void controller.restoreSessions(); }, 0);
+  globalThis.setTimeout(() => { void controller.restoreTargets(); }, 0);
   console.log(`Foxwarm WebUI integration registered. webUiBase=${deriveWebUiBaseUrl(context.extensionUri)}`);
 }

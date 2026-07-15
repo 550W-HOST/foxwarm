@@ -38,6 +38,18 @@
         "displayName": "Foxwarm Chat",
         "selector": [{ "filenamePattern": "*.foxwarm-chat" }],
         "priority": "default"
+      },
+      {
+        "viewType": "foxwarm-webui.agentsEditor",
+        "displayName": "Foxwarm Agents",
+        "selector": [{ "filenamePattern": "*.foxwarm-agents" }],
+        "priority": "default"
+      },
+      {
+        "viewType": "foxwarm-webui.setupEditor",
+        "displayName": "Foxwarm Setup",
+        "selector": [{ "filenamePattern": "*.foxwarm-setup" }],
+        "priority": "default"
       }
     ],
     "menus": {

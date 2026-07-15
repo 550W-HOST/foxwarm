@@ -539,7 +539,9 @@ function registerCapabilityDynamicStatic(httpServer: HttpServer, mountPath: stri
       res.status(404).end();
       return;
     }
-    if (req.path === '/' || req.path === '/index.html') {
+    const instancePrefix = req.path.match(/^\/[^/]+(?=\/)/)?.[0] || '';
+    const capabilityPath = instancePrefix ? req.path.slice(instancePrefix.length) : req.path;
+    if (capabilityPath === '/' || capabilityPath === '/index.html') {
       void fs.readFile(path.join(directory, 'index.html'), 'utf8').then((source) => {
         const validation = 'if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + \'.\')) {';
         const sameOriginValidation = "if (new URL(parentOrigin).origin === new URL(location.href).origin || hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')) {";
@@ -566,7 +568,17 @@ function registerCapabilityDynamicStatic(httpServer: HttpServer, mountPath: stri
       }).catch(next);
       return;
     }
-    express.static(directory)(req, res, next);
+    if (!instancePrefix) {
+      express.static(directory)(req, res, next);
+      return;
+    }
+    const originalUrl = req.url;
+    req.url = req.url.slice(instancePrefix.length);
+    express.static(directory)(req, res, (error?: unknown) => {
+      req.url = originalUrl;
+      if (error) next(error);
+      else next();
+    });
   });
 }
 
@@ -717,7 +729,9 @@ function buildWorkbenchConfiguration(req: express.Request) {
     ? `${externalUrl.protocol}//{{uuid}}.localhost${externalUrl.port ? `:${externalUrl.port}` : ''}`
     : undefined;
   const webviewOriginTemplate = configuredWebviewOrigin || localWebviewOrigin;
-  const webviewBaseUrl = `${webviewOriginTemplate || origin}${webviewPath}`;
+  const webviewBaseUrl = webviewOriginTemplate
+    ? `${webviewOriginTemplate}${webviewPath}`
+    : `${origin}${webviewPath}/{{uuid}}`;
   return {
     baseUrl,
     staticBasePath,
@@ -1009,7 +1023,7 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
     const extensionUrl = (extensionPath) => trimTrailingSlash(new URL(extensionPath, routeBaseUrl).toString());
     config.callbackRoute = routePath + '/callback';
     const webviewOrigin = ${jsWebviewOriginTemplate} || window.location.origin;
-    const webviewBaseUrl = trimTrailingSlash(webviewOrigin) + routePath + '/' + ${jsWebviewRelativeRoute};
+    const webviewBaseUrl = trimTrailingSlash(webviewOrigin) + routePath + '/' + ${jsWebviewRelativeRoute} + (${jsWebviewOriginTemplate} ? '' : '/{{uuid}}');
     config.productConfiguration = {
       ...config.productConfiguration,
       webEndpointUrlTemplate: baseUrl,

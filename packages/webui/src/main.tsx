@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import 'katex/dist/katex.min.css'
 import './index.css'
 import App from './App'
-import { EmbeddedChatApp, EmbeddedSidebarApp } from './EmbeddedWebUiApp'
+import { EmbeddedAgentsApp, EmbeddedChatApp, EmbeddedSetupApp, EmbeddedSidebarApp } from './EmbeddedWebUiApp'
 import { parseFoxwarmEmbeddedTarget } from './embeddedWebUi'
 
 function syncViewportHeight() {
@@ -28,6 +28,10 @@ const content = embeddedTarget?.kind === 'sidebar'
   ? <EmbeddedSidebarApp target={embeddedTarget} />
   : embeddedTarget?.kind === 'chat'
     ? <EmbeddedChatApp target={embeddedTarget} />
+    : embeddedTarget?.kind === 'agents'
+      ? <EmbeddedAgentsApp target={embeddedTarget} />
+      : embeddedTarget?.kind === 'setup'
+        ? <EmbeddedSetupApp target={embeddedTarget} />
     : <App />
 
 createRoot(document.getElementById('root')!).render(

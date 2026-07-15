@@ -131,9 +131,10 @@ export default function GlobalUiSettingsMenu({
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+        className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border transition ${setupActive ? 'border-blue-200 bg-blue-100 text-blue-700 dark:border-blue-800 dark:bg-blue-900/40 dark:text-blue-200' : 'border-gray-200 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'}`}
         title="UI settings"
         aria-label="Open UI settings"
+        aria-pressed={setupActive}
       >
         <Settings className="h-4 w-4" />
       </button>

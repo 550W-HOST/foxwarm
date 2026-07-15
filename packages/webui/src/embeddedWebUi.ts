@@ -1,12 +1,23 @@
 export const FOXWARM_EMBED_CHANNEL = 'foxwarm-webui-embed'
+export const FOXWARM_EMBED_HOST_CHANNEL = 'foxwarm-webui-host'
 export const FOXWARM_EMBED_VERSION = 1
 
 export type FoxwarmEmbeddedTarget =
   | { kind: 'sidebar'; nonce: string }
   | { kind: 'chat'; nonce: string; sessionId: string; title?: string }
+  | { kind: 'agents'; nonce: string }
+  | { kind: 'setup'; nonce: string }
+
+export type FoxwarmActiveTarget =
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'agents' }
+  | { kind: 'setup' }
 
 export type FoxwarmEmbedHostPayload =
+  | { type: 'sidebar-ready' }
   | { type: 'open-session'; sessionId: string; title?: string }
+  | { type: 'open-agents' }
+  | { type: 'open-setup' }
   | { type: 'open-commit'; nodeId: string; path: string; commitId: string }
 
 const normalizeNonce = (value: string | null): string | null => {
@@ -27,6 +38,8 @@ export function parseFoxwarmEmbeddedTarget(search: string): FoxwarmEmbeddedTarge
   const nonce = normalizeNonce(params.get('foxwarmEmbedNonce'))
   if (!nonce) return null
   if (mode === 'sidebar') return { kind: 'sidebar', nonce }
+  if (mode === 'agents') return { kind: 'agents', nonce }
+  if (mode === 'setup') return { kind: 'setup', nonce }
   if (mode !== 'chat') return null
   const sessionId = normalizeSessionId(params.get('sessionId'))
   if (!sessionId) return null
@@ -37,6 +50,20 @@ export function parseFoxwarmEmbeddedTarget(search: string): FoxwarmEmbeddedTarge
     sessionId,
     ...(title && title.length <= 200 ? { title } : {}),
   }
+}
+
+export function readFoxwarmActiveTargetMessage(value: unknown, nonce: string): FoxwarmActiveTarget | null | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const message = value as { channel?: unknown; version?: unknown; nonce?: unknown; type?: unknown; target?: unknown }
+  if (message.channel !== FOXWARM_EMBED_HOST_CHANNEL || message.version !== FOXWARM_EMBED_VERSION || message.nonce !== nonce || message.type !== 'active-target') return undefined
+  if (message.target === null) return null
+  if (!message.target || typeof message.target !== 'object') return undefined
+  const target = message.target as { kind?: unknown; sessionId?: unknown }
+  if (target.kind === 'agents') return { kind: 'agents' }
+  if (target.kind === 'setup') return { kind: 'setup' }
+  if (target.kind !== 'session') return undefined
+  const sessionId = normalizeSessionId(typeof target.sessionId === 'string' ? target.sessionId : null)
+  return sessionId ? { kind: 'session', sessionId } : undefined
 }
 
 export function postFoxwarmEmbedHostMessage(nonce: string, payload: FoxwarmEmbedHostPayload): void {

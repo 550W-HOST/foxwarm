@@ -21,17 +21,29 @@ await esbuild.build({
   logLevel: 'silent',
 })
 
-const { parseFoxwarmEmbeddedTarget, postFoxwarmEmbedHostMessage } = await import(pathToFileURL(bundledPath).href)
+const { parseFoxwarmEmbeddedTarget, postFoxwarmEmbedHostMessage, readFoxwarmActiveTargetMessage } = await import(pathToFileURL(bundledPath).href)
 const nonce = '0123456789abcdef0123456789abcdef'
 
-test('parses only fixed sidebar and chat embed targets with a bridge nonce', () => {
+test('parses only fixed sidebar, chat, Agents, and Setup embed targets with a bridge nonce', () => {
   assert.deepEqual(parseFoxwarmEmbeddedTarget(`?foxwarmEmbed=sidebar&foxwarmEmbedNonce=${nonce}`), { kind: 'sidebar', nonce })
+  assert.deepEqual(parseFoxwarmEmbeddedTarget(`?foxwarmEmbed=agents&foxwarmEmbedNonce=${nonce}`), { kind: 'agents', nonce })
+  assert.deepEqual(parseFoxwarmEmbeddedTarget(`?foxwarmEmbed=setup&foxwarmEmbedNonce=${nonce}`), { kind: 'setup', nonce })
   assert.deepEqual(parseFoxwarmEmbeddedTarget(`?foxwarmEmbed=chat&foxwarmEmbedNonce=${nonce}&sessionId=${encodeURIComponent('agent/task')}&title=Task`), {
     kind: 'chat', nonce, sessionId: 'agent/task', title: 'Task',
   })
   assert.equal(parseFoxwarmEmbeddedTarget('?foxwarmEmbed=sidebar'), null)
   assert.equal(parseFoxwarmEmbeddedTarget(`?foxwarmEmbed=chat&foxwarmEmbedNonce=${nonce}&sessionId=`), null)
   assert.equal(parseFoxwarmEmbeddedTarget(`?foxwarmEmbed=terminal&foxwarmEmbedNonce=${nonce}`), null)
+})
+
+test('accepts only nonce-bound fixed active-target messages from the Code host', () => {
+  const base = { channel: 'foxwarm-webui-host', version: 1, nonce, type: 'active-target' }
+  assert.deepEqual(readFoxwarmActiveTargetMessage({ ...base, target: { kind: 'session', sessionId: 'agent/task' } }, nonce), { kind: 'session', sessionId: 'agent/task' })
+  assert.deepEqual(readFoxwarmActiveTargetMessage({ ...base, target: { kind: 'agents' } }, nonce), { kind: 'agents' })
+  assert.deepEqual(readFoxwarmActiveTargetMessage({ ...base, target: { kind: 'setup' } }, nonce), { kind: 'setup' })
+  assert.equal(readFoxwarmActiveTargetMessage({ ...base, target: null }, nonce), null)
+  assert.equal(readFoxwarmActiveTargetMessage({ ...base, nonce: 'wrong', target: { kind: 'agents' } }, nonce), undefined)
+  assert.equal(readFoxwarmActiveTargetMessage({ ...base, target: { kind: 'session', sessionId: '' } }, nonce), undefined)
 })
 
 test('posts a versioned fixed-shape message only when embedded', () => {

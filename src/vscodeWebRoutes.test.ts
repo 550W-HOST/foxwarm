@@ -191,6 +191,9 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
         assert.match(webviewBootstrapHtml, /parentOrigin.*window\.location\.origin/);
         assert.match(webviewBootstrapHtml, /return start\(parentOrigin\)/);
         assert.doesNotMatch(webviewBootstrapHtml, /sha256-old/);
+        const instancedWebviewBootstrap = await fetch(`${baseUrl}/vscode-web/webview/${webviewCapability}/unit-instance/index.html`);
+        assert.equal(instancedWebviewBootstrap.status, 200);
+        assert.equal(await instancedWebviewBootstrap.text(), webviewBootstrapHtml);
         const patchedWorkbench = await fetch(`${baseUrl}/vscode-web/static/out/vs/workbench/workbench.web.main.internal.js`, { headers: cookieHeaders() });
         assert.equal(patchedWorkbench.status, 200);
         const patchedWorkbenchSource = await patchedWorkbench.text();
@@ -248,7 +251,7 @@ test('VS Code Web workbench bootstrap honors forwarded base path prefixes', asyn
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-scm/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-webui/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\//);
-        assert.match(html, /https:\/\/example\.test\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\//);
+        assert.match(html, /https:\/\/example\.test\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\/\{\{uuid\}\}\//);
         assert.match(html, /&quot;webEndpointUrlTemplate&quot;:&quot;https:\/\/example\.test\/proxy-prefix\/vscode-web\/static&quot;/);
         assert.match(html, /&quot;path&quot;:&quot;\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs&quot;/);
         assert.match(html, /&quot;callbackRoute&quot;:&quot;\/proxy-prefix\/vscode-web\/callback&quot;/);
