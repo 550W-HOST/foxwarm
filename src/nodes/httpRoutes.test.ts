@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type express from 'express';
+import fs from 'fs-extra';
+import path from 'node:path';
 import {
   inferNodeBootstrapBaseUrl,
   NODE_SOURCE_FILES,
@@ -51,4 +53,12 @@ test('node source bundle is limited to node-client packages and runtime launcher
   assert.equal(NODE_SOURCE_FILES.includes('package.json'), false);
   assert.equal(NODE_SOURCE_FILES.includes('src'), false);
   assert.equal(NODE_SOURCE_FILES.includes('lib'), false);
+});
+
+test('bare-metal bootstrap route template requires explicit dir and exposes background/systemd modes', async () => {
+  const template = await fs.readFile(path.resolve(__dirname, '../../templates/node/run.sh'), 'utf8');
+  assert.match(template, /--dir=DIR\s+Required installation root/);
+  assert.match(template, /-d, --detach\s+Start in background; prefer tmux/);
+  assert.match(template, /--install\s+Install, enable, and start a systemd service/);
+  assert.match(template, /if \[ -z "\$INSTALL_DIR" \]/);
 });

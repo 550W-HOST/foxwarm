@@ -207,6 +207,7 @@ Use this when you want a direct host-side node client.
 ```bash
 BASE_URL=http://YOUR_MASTER:3001
 curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
 ```
@@ -214,9 +215,10 @@ curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
 What it does:
 
 - downloads `/node/source.tar.gz`
-- extracts it into `./foxwarm-node/`
-- writes `./.env`
-- creates local state under `./data/`
+- requires an explicit installation root through `--dir` (it never silently uses the current directory)
+- extracts source into `<dir>/foxwarm-node/`
+- writes `<dir>/.env`
+- creates local state under `<dir>/data/`
 - runs `npm ci`
 - uses the prebuilt bundle from the archive when available
 - builds only if required artifacts are missing
@@ -227,15 +229,39 @@ If you want background mode instead:
 ```bash
 BASE_URL=http://YOUR_MASTER:3001
 curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
   -d
 ```
 
+`-d` prefers a detached tmux session. If tmux is unavailable, it falls back to
+`nohup`, records a PID, and redirects output to `<dir>/data/logs/node.log`. The
+script prints the exact status/log/stop commands for the selected mode.
+
+For systemd-managed startup and restart supervision:
+
+```bash
+curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
+  --pairing=YOUR_PAIRING_TOKEN \
+  --node-id=my-node \
+  --install
+```
+
+`--install` requires a running systemd manager. Root installs a system service
+under `/etc/systemd/system/`; non-root installs a user service under
+`${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/`. The user path also checks
+systemd lingering so the service can start before login. The installed service
+runs the node in the foreground under systemd supervision (no nested tmux/nohup).
+Its generated source unit remains under `<dir>/systemd/`, while source, env,
+data, logs, PID metadata, and launcher remain under the explicit `<dir>`.
+
 Override the host explicitly only when needed:
 
 ```bash
 curl -fsSL "http://127.0.0.1:3001/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --host=http://192.168.1.50:3001 \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
@@ -323,17 +349,20 @@ Override `-HostUrl` only when needed.
 
 ## Where data goes
 
-By default, local node deployment state is written in the **current directory**:
+Bare-metal `run.sh` requires `--dir` and writes deployment state only beneath
+that explicit installation root:
 
-- `./.env`
-- `./data/`
-- `./foxwarm-node/`
+- `<dir>/.env`
+- `<dir>/data/`
+- `<dir>/foxwarm-node/`
+- `<dir>/run-node-client.sh`
+- `<dir>/systemd/` (generated unit source when `--install` is used)
 
-Inside `./data/`, the most important persisted files are:
+Inside `<dir>/data/`, the most important persisted files are:
 
-- `./data/state/node_credentials.json` — paired node credentials
-- `./data/agents/` — node-side agent workspace/data
-- `./data/logs/` — node-side logs/artifacts
+- `<dir>/data/state/node_credentials.json` — paired node credentials
+- `<dir>/data/agents/` — node-side agent workspace/data
+- `<dir>/data/logs/` — node-side logs/artifacts
 
 ## Bind isolated agents to a node
 
@@ -450,7 +479,7 @@ If you are debugging an older deployment or stale extracted directory, re-downlo
 Remove or reset the stored credentials file and pair again:
 
 ```bash
-rm -f ./data/state/node_credentials.json
+rm -f /opt/foxwarm-node/data/state/node_credentials.json
 ```
 
 Then restart and re-approve.

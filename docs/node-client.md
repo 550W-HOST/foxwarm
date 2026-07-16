@@ -37,19 +37,23 @@ BASE_URL=http://YOUR_MASTER:3002
 
 ```bash
 curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --pairing="$(cat test/state/node_token)" \
   --node-id=my-node
 ```
 
-This writes the following into the current directory by default:
+`--dir` is required; `run.sh` never silently installs into the current directory.
+It writes all local deployment artifacts beneath that explicit root:
 
-- `./.env`
-- `./data/` (credentials, agent data, logs)
-- `./foxwarm-node/` (downloaded source + built/prebuilt node client)
+- `<dir>/.env`
+- `<dir>/data/` (credentials, agent data, logs, PID/mode metadata)
+- `<dir>/foxwarm-node/` (downloaded source + built/prebuilt node client)
+- `<dir>/run-node-client.sh` (foreground launcher)
+- `<dir>/systemd/` (generated unit source for `--install`)
 
 Important persisted path:
 
-- `./data/state/node_credentials.json`
+- `<dir>/data/state/node_credentials.json`
 
 Then approve the pending node from the master:
 
@@ -75,15 +79,37 @@ If you want background mode instead:
 
 ```bash
 curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --pairing="$(cat test/state/node_token)" \
   --node-id=my-node \
   -d
 ```
 
+Detached mode prefers tmux and prints the session/attach/stop commands. If tmux
+is unavailable it falls back to `nohup`, records `<dir>/data/node.pid`, and
+writes output to `<dir>/data/logs/node.log`.
+
+For boot startup and systemd restart supervision:
+
+```bash
+curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
+  --pairing="$(cat test/state/node_token)" \
+  --node-id=my-node \
+  --install
+```
+
+Root installs `/etc/systemd/system/foxwarm-node-my-node.service`; non-root
+prefers `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/foxwarm-node-my-node.service`
+and checks user lingering for startup before login. The service directly runs
+the foreground launcher with `Restart=always`; it does not nest tmux or nohup.
+Node output remains in `<dir>/data/logs/node.log`.
+
 If the script was fetched through the wrong address, override the host explicitly:
 
 ```bash
 curl -fsSL "http://127.0.0.1:3002/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --host="http://192.168.1.50:3002" \
   --pairing="$(cat test/state/node_token)" \
   --node-id=my-node
@@ -93,6 +119,7 @@ If you only want preparation without starting, use:
 
 ```bash
 curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --pairing="$(cat test/state/node_token)" \
   --node-id=my-node \
   --prepare-only
