@@ -915,6 +915,8 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-markdown {
   --tw-prose-bold: var(--foxwarm-550a-text-bright);
   --tw-prose-links: var(--foxwarm-550a-accent);
   --tw-prose-code: var(--foxwarm-550a-text-bright);
+  --tw-prose-pre-code: var(--foxwarm-550a-text-bright);
+  --tw-prose-pre-bg: var(--foxwarm-550a-input);
   --tw-prose-quotes: var(--foxwarm-550a-text);
   --tw-prose-hr: var(--foxwarm-550a-border-panel);
   --tw-prose-th-borders: var(--foxwarm-550a-border-panel);

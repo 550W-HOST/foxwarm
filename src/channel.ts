@@ -94,7 +94,7 @@ export interface Channel {
   /**
    * Set command handler (optional)
    */
-  onCommand?(handler: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>): void;
+  onCommand?(handler: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>): void;
 }
 
 // Channel registry for broadcast

@@ -197,8 +197,18 @@ export function buildNodePairHelp(token: string): string {
     '**Bare metal (recommended Linux host bootstrap)**',
     '```bash',
     `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --pairing=${token} \
   --node-id=my-node`,
+    '```',
+    '',
+    '**Bare metal with systemd boot startup**',
+    '```bash',
+    `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
+  --pairing=${token} \
+  --node-id=my-node \
+  --install`,
     '```',
     '',
     '**Docker bootstrap**',
@@ -211,6 +221,7 @@ export function buildNodePairHelp(token: string): string {
     '**Explicit host override example**',
     '```bash',
     `curl -fsSL "http://127.0.0.1:${HTTP_PORT}/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --host=http://192.168.1.50:${HTTP_PORT} \
   --pairing=${token} \
   --node-id=my-node`,
@@ -237,7 +248,7 @@ export function buildNodePairHelp(token: string): string {
     '```',
     '',
     'Notes:',
-    '- `/node/run.sh` = bare-metal bootstrap; runs in foreground by default, use `-d` to detach',
+    '- `/node/run.sh` = bare-metal bootstrap; requires `--dir`; runs in foreground by default, use `-d` for tmux/nohup background mode or `--install` for a systemd service',
     '- `/node/run-docker.sh` = Docker bootstrap; starts containers and follows logs by default, use `-d` to skip log following',
     '- `/node/run-interactive.sh` = cli-node TUI mode (tool approvals plus bound-session chat)',
     '- `/node/docker-compose.yaml` = inspect/customize the self-contained compose template first',

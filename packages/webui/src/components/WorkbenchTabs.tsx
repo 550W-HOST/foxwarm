@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { Bookmark, Copy, MessageSquareText, SquareTerminal, X } from 'lucide-react'
+import { Bookmark, Code2, Copy, MessageSquareText, Settings, SquareTerminal, Users, X } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import type { WorkbenchTab } from '../workbench/types'
 
@@ -29,6 +29,9 @@ interface TabContextMenuState {
 
 function TabIcon({ type }: { type: WorkbenchTab['type'] }) {
   if (type === 'chat') return <MessageSquareText className="h-4 w-4 shrink-0" />
+  if (type === 'vscode') return <Code2 className="h-4 w-4 shrink-0" />
+  if (type === 'agents') return <Users className="h-4 w-4 shrink-0" />
+  if (type === 'setup') return <Settings className="h-4 w-4 shrink-0" />
   return <SquareTerminal className="h-4 w-4 shrink-0" />
 }
 
@@ -228,6 +231,7 @@ function SortableTab({
         setNodeRef(node)
         setTabRef(node)
       }}
+      data-tab-id={tab.id}
       style={style}
       onClick={() => onSelectTab(tab.id)}
       onDoubleClick={() => onKeepTab(tab.id)}

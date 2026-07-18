@@ -9,6 +9,7 @@ test('global ToolScript skills are visible and loadable', async () => {
 
   assert.ok(names.includes('toolscript-automation'));
   assert.ok(names.includes('toolscript-managed-controller'));
+  assert.ok(names.includes('isolated-worker'));
   assert.ok(names.includes('agent-skill-creator'));
   assert.ok(names.includes('web-search'));
   assert.ok(!names.includes('ask-gemini'));
@@ -26,6 +27,13 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.match(managedText, /open_managed_session/);
   assert.match(managedText, /wait_for_managed_event/);
   assert.match(managedText, /session_step/);
+
+  const isolatedWorker = await loadSkillDocuments('isolated-worker', { agentName: 'main' });
+  assert.match(isolatedWorker.documents[0].content, /create_isolated_worker\.py/);
+  assert.match(isolatedWorker.documents[0].content, /createMainSession=false/);
+  assert.match(isolatedWorker.documents[0].content, /not a transaction/);
+  assert.ok(isolatedWorker.info.resourceFiles.includes('create_isolated_worker.py'));
+  assert.ok(isolatedWorker.info.resourceFiles.includes('tests/test_create_isolated_worker.py'));
 
   const creator = await loadSkillDocuments('agent-skill-creator', { agentName: 'main' });
   assert.deepEqual(creator.info.documentFiles, ['SKILL.md']);

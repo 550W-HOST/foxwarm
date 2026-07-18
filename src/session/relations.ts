@@ -163,11 +163,16 @@ async function checkIsolatedPermission(
   const targetAgent = targetSession.agent || 'main';
 
   const sourceAgentMeta = deps.getAgentMetadata(sourceAgent);
+  const targetAgentMeta = deps.getAgentMetadata(targetAgent);
+
+  if ((sourceAgentMeta.isolated || targetAgentMeta.isolated) && isDirectSessionLink(sourceSession, targetSession)) {
+    return targetSession;
+  }
+
   if (sourceAgentMeta.isolated && sourceAgent !== targetAgent) {
     throw new Error(`Agent "${sourceAgent}" is isolated and cannot operate on sessions in other agents.`);
   }
 
-  const targetAgentMeta = deps.getAgentMetadata(targetAgent);
   if (targetAgentMeta.isolated && sourceAgent !== targetAgent) {
     throw new Error(`Agent "${targetAgent}" is isolated and cannot be accessed from other agents.`);
   }

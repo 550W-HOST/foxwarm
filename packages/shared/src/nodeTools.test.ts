@@ -5,6 +5,8 @@ import os from 'os';
 import path from 'path';
 import { exec, read, write } from './nodeTools';
 import { getNodeAgentDir } from './nodeFileTransfer';
+import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
+import { resolveExecTimeoutSeconds } from './persistentExec';
 
 function uniqueAgent(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -13,6 +15,44 @@ function uniqueAgent(prefix: string): string {
 async function cleanupAgent(agentName: string) {
   await fs.remove(getNodeAgentDir(agentName)).catch(() => {});
 }
+
+test('node exec schema allows oversized timeout values and documents clamping', () => {
+  const definition = CLI_NODE_CAPABILITIES.tools.find(entry => entry.name === 'exec');
+  assert.ok(definition);
+  const timeout = (definition.parameters.properties as any).timeout;
+  assert.equal(timeout.type, 'number');
+  assert.equal(timeout.minimum, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(timeout, 'maximum'), false);
+  assert.match(String(timeout.description), /above the 60s maximum are clamped/i);
+});
+
+test('shared exec timeout resolution clamps only oversized finite values', () => {
+  assert.deepEqual(resolveExecTimeoutSeconds(undefined), { requestedSeconds: 15, effectiveSeconds: 15 });
+  assert.deepEqual(resolveExecTimeoutSeconds(60), { requestedSeconds: 60, effectiveSeconds: 60 });
+  assert.deepEqual(resolveExecTimeoutSeconds(1.5), { requestedSeconds: 1.5, effectiveSeconds: 1.5 });
+  assert.deepEqual(resolveExecTimeoutSeconds(61), {
+    requestedSeconds: 61,
+    effectiveSeconds: 60,
+    warning: 'WARNING: Requested timeout 61s exceeds the 60s maximum; using 60s.',
+  });
+  assert.equal(resolveExecTimeoutSeconds(Number.MAX_VALUE).effectiveSeconds, 60);
+  for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '120']) {
+    assert.throws(() => resolveExecTimeoutSeconds(invalid));
+  }
+});
+
+test('node exec clamps oversized timeout and puts the warning in the foreground footer', async () => {
+  const agentName = uniqueAgent('node_exec_timeout_clamp');
+  try {
+    const result = String(await exec(
+      { command: 'printf remote-clamp-ok', timeout: 120 },
+      { sessionId: 'shared-node-test-timeout-clamp', session: { agent: agentName, currentNode: 'test-node' }, runtimeNodeId: 'test-node' },
+    ));
+    assert.match(result, /^remote-clamp-ok\n---\nExit code: 0\nWARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\.$/);
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});
 
 test('node read treats startLine/endLine 0 as omitted', async () => {
   const agentName = uniqueAgent('node_read_zero');

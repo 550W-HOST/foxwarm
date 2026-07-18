@@ -236,6 +236,15 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
         case 'file_transfer_error':
           nodesManager.handleFileTransferError(data.transferId, data.error);
           break;
+        case 'node_service_response':
+          nodesManager.handleNodeServiceResponse(nodeId || authenticatedNodeId || 'unknown-node', String(data.requestId || ''), data.result);
+          break;
+        case 'node_service_error':
+          nodesManager.handleNodeServiceError(nodeId || authenticatedNodeId || 'unknown-node', String(data.requestId || ''), data.error || 'Node service failed.');
+          break;
+        case 'node_service_event':
+          nodesManager.handleNodeServiceEvent(nodeId || authenticatedNodeId || 'unknown-node', String(data.service || ''), data.event);
+          break;
         case 'session_event':
           if (!data.sessionId || typeof data.message !== 'string') {
             ws.send(JSON.stringify({

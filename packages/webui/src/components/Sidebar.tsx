@@ -1,11 +1,15 @@
-import { PanelLeftClose, PanelLeftOpen, Plus, Workflow } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
 import CreateTabButton from './CreateTabButton'
+import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
+import AgentCreationMenu from './AgentCreationMenu'
+import type { AgentSummary } from '../agentCreation'
 
 interface SidebarProps {
   sessions: Session[]
+  agents: AgentSummary[]
   currentSession: string
   currentView: 'session' | 'agents' | 'setup'
   currentSessionRecord?: Session
@@ -27,14 +31,22 @@ interface SidebarProps {
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectSetup: () => void
+  codePath: string
+  codeOpenInNewWindow: boolean
+  codeActive: boolean
+  onOpenCode: (path: string) => void
+  onCodePathChange: (path: string) => void
+  onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
-  onCreateSession: () => void
+  onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
+  onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
   onToggleCollapsed: () => void
   isPeek?: boolean
 }
 
 export default function Sidebar({
   sessions,
+  agents,
   currentSession,
   currentView,
   currentSessionRecord,
@@ -56,14 +68,20 @@ export default function Sidebar({
   onKeepSession,
   onSelectArchitecture,
   onSelectSetup,
+  codePath,
+  codeOpenInNewWindow,
+  codeActive,
+  onOpenCode,
+  onCodePathChange,
+  onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
+  onCreateAgent,
   onCreateSession,
   onToggleCollapsed,
   isPeek = false,
 }: SidebarProps) {
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
-  const sessionLabel = currentSessionRecord?.displayName || currentSession || 'main'
 
   const agentsBtnClass = currentView === 'agents'
     ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
@@ -97,7 +115,7 @@ export default function Sidebar({
               onInstanceNameChange={onInstanceNameChange}
               tabIcon={tabIcon}
               onTabIconChange={onTabIconChange}
-              menuAlign="start"
+              menuAlign="end"
               onOpenSetup={onSelectSetup}
               setupActive={currentView === 'setup'}
             />
@@ -114,18 +132,25 @@ export default function Sidebar({
               <Workflow className="w-4 h-4" />
               <span>Agents</span>
             </button>
-            <button
-              onClick={onCreateSession}
-              className="inline-flex items-center justify-center rounded-lg px-2 transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700"
-              title="Create new session"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
+            <AgentCreationMenu
+              agents={agents}
+              currentAgent={currentSessionRecord?.agent}
+              compact
+              onCreateAgent={onCreateAgent}
+              onCreateSession={onCreateSession}
+            />
           </div>
+          <CodeLaunchButton
+            path={codePath}
+            openInNewWindow={codeOpenInNewWindow}
+            active={codeActive}
+            onOpen={onOpenCode}
+            onPathChange={onCodePathChange}
+            onOpenInNewWindowChange={onCodeOpenInNewWindowChange}
+          />
           <CreateTabButton
             defaultNodeId={defaultNodeId}
             defaultPath={defaultPath}
-            sessionLabel={sessionLabel}
             onCreate={(options) => onCreateTerminalTab(options)}
           />
         </div>

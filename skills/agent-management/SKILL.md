@@ -34,7 +34,7 @@ These are the things an agent can normally use directly when they are in the too
 - `set_agent_isolated`
 - `update_session_snapshot`
 - `list_agents`
-- `list_sessions`
+- `session` (status by default, list with `action: "list"`)
 - `read_memory` / `write_memory` / `edit_memory` / `apply_patch_memory` for the **current** agent
 - ordinary file tools for other paths, if your current permissions allow that access
 
@@ -134,6 +134,16 @@ That means:
 - renaming or moving a **session** is comparatively lightweight
 - changing an **agent** is heavier because agent identity is tied to workspace paths, memory location, metadata, and all sessions under it
 
+Node selection and isolation are also separate:
+
+- a session's `currentNode` selects where ordinary runtime tools execute
+- `create_child_session({ node: "..." })` sets `currentNode` but does not make the child isolated
+- isolation is agent-level; an isolated agent binds all of its sessions to one non-master node and narrows their permissions
+
+If different workers need different real isolation boundaries, use different
+temporary agents, not several sessions under one agent. Load `isolated-worker`
+for the reusable parent-linked workflow.
+
 ## Collaboration and memory bootstrapping
 
 If you are creating or configuring an agent that may use child sessions, do not improvise its collaboration rules from scratch.
@@ -183,6 +193,17 @@ So for an isolated agent, the mental model is:
 - durable local files on `master`: own agent area only
 - other nodes / other agent directories: not allowed
 
+Isolation does not create or reserve a VM/container. The operator supplies that
+environment, and binding does not prevent another agent/session from sharing the
+same node.
+
+Coordinator communication is intentionally narrow: the supported isolated
+worker pattern uses an explicit parent/child session relation. Builds that
+support parent-linked cross-agent isolation allow messaging only across that
+direct link; unrelated cross-agent access remains denied. Older builds with a
+blanket cross-agent isolated deny cannot complete that workflow and will reject
+the initial `send_to_session` call.
+
 ## Common workflow: create a new agent
 
 ### If you are using tools
@@ -201,6 +222,17 @@ Useful fields in current implementation include:
 If you also need a separate extra session afterward, use:
 
 - `create_session`
+
+For an isolated worker controlled by the current session, do not create an
+unrelated isolated agent main session and assume it can report back. The intended
+shape is:
+
+1. `create_agent` with `isolatedNode` and `createMainSession:false`
+2. `create_session` under that agent with `parentSessionId` set to the coordinator
+3. `send_to_session` to deliver the task
+
+The bundled `isolated-worker` skill packages this sequence in a ToolScript with
+read-only validation mode and partial-failure recovery reporting.
 
 ### If you are guiding the user
 
@@ -313,6 +345,7 @@ Important behavior:
 - changing isolation updates affected sessions accordingly
 - an isolated session cannot switch itself to some other arbitrary node for normal work
 - if a different node is really required, the right model is usually to change the agent's isolation binding deliberately, not to let the isolated agent use other nodes directly
+- binding currently does not guarantee that the node is online or exclusively assigned; verify with `list_nodes` before starting work
 
 ## Common workflow: move work between agents/sessions
 
@@ -383,6 +416,11 @@ So as an agent, your normal behavior should be:
 - verify the migration/cleanup preconditions
 - then tell the user the exact delete command to run if deletion is still wanted
 
+This also means a multi-step create-agent/create-session workflow cannot promise
+transactional rollback. Validate first, report exactly which resources survived
+a failure, and use user-confirmed deletion for cleanup rather than manually
+removing directories.
+
 ### What delete does
 
 Current command behavior deletes:
@@ -437,7 +475,16 @@ Covered path:
 - tool path vs user command path
 - handoff to `node-setup` for node-side details
 
-### Scenario E: "Can I delete the old agent now?"
+### Scenario E: "Create one temporary isolated worker on an existing node"
+
+Covered path:
+
+- load `isolated-worker`
+- dry-run its bundled ToolScript
+- create a parent-linked isolated agent/session and send the task
+- report partial resources honestly if a later step fails
+
+### Scenario F: "Can I delete the old agent now?"
 
 Covered path:
 
@@ -463,3 +510,6 @@ Use **`node-setup`** when the task is primarily about:
 - pairing / approval
 - sandbox node setup
 - isolated-agent binding as part of node deployment
+
+Use **`isolated-worker`** when the node already exists and the task is to create
+one parent-linked temporary isolated worker through the reusable ToolScript.

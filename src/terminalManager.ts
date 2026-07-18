@@ -3,14 +3,12 @@ import path from 'path';
 import crypto from 'crypto';
 import { WebSocket } from 'ws';
 import * as pty from 'node-pty';
-import { getAgentDir } from './config';
+import { STATE_DIR } from './config';
 import { logger } from './common';
-import * as sessionManager from './sessionManager';
+import { CodeHelperIpcServer, type CodeHelperControlResult, type CodeHelperOpenRequest } from '../packages/shared/dist/codeHelperIpc';
 
 export type TerminalRecord = {
   id: string;
-  sessionId: string;
-  agentName: string;
   nodeId: string;
   shell: string;
   cwd: string;
@@ -23,15 +21,48 @@ export type TerminalRecord = {
 type ManagedTerminal = TerminalRecord & {
   ptyProcess: pty.IPty;
   clients: Set<WebSocket>;
+  codeControlClients: Set<WebSocket>;
   closed: boolean;
   outputBuffer: string;
   rcFilePath?: string;
   cwdPath?: string;
+  codeCapability?: string;
+  controlOwner?: WebSocket;
+  pendingCodeRequests: Map<string, {
+    owner: WebSocket;
+    resolve: (result: CodeHelperControlResult) => void;
+    timeout: NodeJS.Timeout;
+  }>;
 };
 
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 200_000;
+const TERMINAL_TEMP_DIR = path.join(STATE_DIR, '.temp', 'terminals');
 
 const terminals = new Map<string, ManagedTerminal>();
+const codeHelper = new CodeHelperIpcServer(STATE_DIR, requestTerminalCodeControl);
+
+async function requestTerminalCodeControl(terminalId: string, requestId: string, request: CodeHelperOpenRequest): Promise<CodeHelperControlResult> {
+  const record = terminals.get(terminalId);
+  if (!record) return { ok: false, error: `Terminal not found: ${terminalId}` };
+  const owner = record.controlOwner && record.controlOwner.readyState === WebSocket.OPEN
+    ? record.controlOwner
+    : [...record.codeControlClients].reverse().find((client) => client.readyState === WebSocket.OPEN);
+  if (!owner) return { ok: false, error: 'No Code terminal is attached to handle this request.' };
+  record.controlOwner = owner;
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      record.pendingCodeRequests.delete(requestId);
+      resolve({ ok: false, error: 'Timed out waiting for the attached Code terminal.' });
+    }, 20_000);
+    record.pendingCodeRequests.set(requestId, { owner, resolve, timeout });
+    owner.send(JSON.stringify({
+      type: 'control',
+      requestId,
+      command: 'open',
+      request: { ...request, nodeId: 'master' },
+    }));
+  });
+}
 
 async function ensureNodePtyDarwinSpawnHelperExecutable(): Promise<void> {
   if (process.platform !== 'darwin') {
@@ -61,8 +92,6 @@ function getShellPath(): string {
 function sanitizeTerminalRecord(record: ManagedTerminal): TerminalRecord {
   return {
     id: record.id,
-    sessionId: record.sessionId,
-    agentName: record.agentName,
     nodeId: record.nodeId,
     shell: record.shell,
     cwd: record.cwd,
@@ -73,10 +102,9 @@ function sanitizeTerminalRecord(record: ManagedTerminal): TerminalRecord {
   };
 }
 
-async function buildRcFile(agentName: string, terminalId: string): Promise<string> {
-  const tempDir = path.join(getAgentDir(agentName), '.temp', 'terminals');
-  await fs.ensureDir(tempDir);
-  const rcFilePath = path.join(tempDir, `${terminalId}.bashrc`);
+async function buildRcFile(terminalId: string): Promise<string> {
+  await fs.ensureDir(TERMINAL_TEMP_DIR);
+  const rcFilePath = path.join(TERMINAL_TEMP_DIR, `${terminalId}.bashrc`);
   const script = [
     'if [ -f /etc/bash.bashrc ]; then source /etc/bash.bashrc; fi',
     'if [ -f "$HOME/.bashrc" ]; then source "$HOME/.bashrc"; fi',
@@ -116,6 +144,12 @@ async function refreshTerminalCwd(record: ManagedTerminal): Promise<void> {
 
 async function cleanupTerminal(record: ManagedTerminal): Promise<void> {
   terminals.delete(record.id);
+  codeHelper.unregisterTerminal(record.codeCapability);
+  for (const [requestId, pending] of record.pendingCodeRequests) {
+    clearTimeout(pending.timeout);
+    pending.resolve({ ok: false, error: 'Terminal closed before Code handled the request.' });
+    record.pendingCodeRequests.delete(requestId);
+  }
   await refreshTerminalCwd(record);
 
   for (const client of record.clients) {
@@ -126,6 +160,8 @@ async function cleanupTerminal(record: ManagedTerminal): Promise<void> {
     } catch {}
   }
   record.clients.clear();
+  record.codeControlClients.clear();
+  record.controlOwner = undefined;
 
   await Promise.all([
     record.rcFilePath ? fs.remove(record.rcFilePath).catch(() => {}) : Promise.resolve(),
@@ -134,22 +170,22 @@ async function cleanupTerminal(record: ManagedTerminal): Promise<void> {
 }
 
 export async function createTerminal(options: {
-  sessionId: string;
-  cwd?: string;
+  cwd: string;
   nodeId?: string;
   cols?: number;
   rows?: number;
 }): Promise<TerminalRecord> {
-  const session = await sessionManager.getSession(options.sessionId);
-  const nodeId = options.nodeId || session.currentNode || 'master';
+  const nodeId = options.nodeId || 'master';
   if (nodeId !== 'master') {
     throw new Error('Terminal MVP currently supports only master.');
   }
 
-  const agentName = session.agent || 'main';
   const requestedCwd = typeof options.cwd === 'string' && options.cwd.trim().length > 0
     ? options.cwd.trim()
-    : (typeof session.cwd === 'string' && session.cwd.trim().length > 0 ? session.cwd.trim() : getAgentDir(agentName));
+    : '';
+  if (!requestedCwd) {
+    throw new Error('cwd is required');
+  }
 
   const resolvedCwd = path.resolve(requestedCwd);
   let stat: fs.Stats | null = null;
@@ -169,10 +205,10 @@ export async function createTerminal(options: {
   const shell = getShellPath();
   const cols = Math.max(20, Math.floor(options.cols || 100));
   const rows = Math.max(5, Math.floor(options.rows || 30));
-  const tempDir = path.join(getAgentDir(agentName), '.temp', 'terminals');
-  await fs.ensureDir(tempDir);
-  const cwdPath = path.join(tempDir, `${terminalId}.cwd.txt`);
-  const rcFilePath = shell.includes('bash') ? await buildRcFile(agentName, terminalId) : undefined;
+  await fs.ensureDir(TERMINAL_TEMP_DIR);
+  const cwdPath = path.join(TERMINAL_TEMP_DIR, `${terminalId}.cwd.txt`);
+  const rcFilePath = shell.includes('bash') ? await buildRcFile(terminalId) : undefined;
+  const helper = await codeHelper.registerTerminal(terminalId);
 
   const args = rcFilePath && shell.includes('bash')
     ? ['--rcfile', rcFilePath, '-i']
@@ -180,23 +216,32 @@ export async function createTerminal(options: {
 
   await ensureNodePtyDarwinSpawnHelperExecutable();
 
-  const ptyProcess = pty.spawn(shell, args, {
-    name: 'xterm-256color',
-    cols,
-    rows,
-    cwd: resolvedCwd,
-    env: {
-      ...process.env,
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor',
-      FOXWARM_TERMINAL_CWD_PATH: cwdPath,
-    },
-  });
+  let ptyProcess: pty.IPty;
+  try {
+    ptyProcess = pty.spawn(shell, args, {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd: resolvedCwd,
+      env: {
+        ...process.env,
+        ...helper.env,
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor',
+        FOXWARM_TERMINAL_CWD_PATH: cwdPath,
+      },
+    });
+  } catch (error) {
+    codeHelper.unregisterTerminal(helper.capability);
+    await Promise.all([
+      rcFilePath ? fs.remove(rcFilePath).catch(() => {}) : Promise.resolve(),
+      fs.remove(cwdPath).catch(() => {}),
+    ]);
+    throw error;
+  }
 
   const record: ManagedTerminal = {
     id: terminalId,
-    sessionId: session.id,
-    agentName,
     nodeId,
     shell,
     cwd: resolvedCwd,
@@ -206,10 +251,13 @@ export async function createTerminal(options: {
     pid: ptyProcess.pid,
     ptyProcess,
     clients: new Set(),
+    codeControlClients: new Set(),
     closed: false,
     outputBuffer: '',
     rcFilePath,
     cwdPath,
+    codeCapability: helper.capability,
+    pendingCodeRequests: new Map(),
   };
 
   terminals.set(record.id, record);
@@ -245,7 +293,7 @@ export async function createTerminal(options: {
     })();
   });
 
-  logger.info({ terminalId: record.id, sessionId: record.sessionId, cwd: record.cwd, pid: record.pid }, 'Terminal created');
+  logger.info({ terminalId: record.id, cwd: record.cwd, pid: record.pid }, 'Terminal created');
   return sanitizeTerminalRecord(record);
 }
 
@@ -263,9 +311,8 @@ export async function getTerminalRecord(terminalId: string): Promise<TerminalRec
   return sanitizeTerminalRecord(record);
 }
 
-export async function listTerminalRecords(options: { sessionId?: string } = {}): Promise<TerminalRecord[]> {
-  const filtered = Array.from(terminals.values())
-    .filter((record) => !options.sessionId || record.sessionId === options.sessionId);
+export async function listTerminalRecords(): Promise<TerminalRecord[]> {
+  const filtered = Array.from(terminals.values());
 
   await Promise.all(filtered.map((record) => refreshTerminalCwd(record)));
 
@@ -274,13 +321,17 @@ export async function listTerminalRecords(options: { sessionId?: string } = {}):
     .map((record) => sanitizeTerminalRecord(record));
 }
 
-export async function attachTerminalClient(terminalId: string, client: WebSocket): Promise<{ terminal: TerminalRecord; backlog: string }> {
+export async function attachTerminalClient(terminalId: string, client: WebSocket, options?: { codeControl?: boolean }): Promise<{ terminal: TerminalRecord; backlog: string }> {
   const record = terminals.get(terminalId);
   if (!record) {
     throw new Error(`Terminal not found: ${terminalId}`);
   }
 
   record.clients.add(client);
+  if (options?.codeControl) {
+    record.codeControlClients.add(client);
+    record.controlOwner = client;
+  }
   await refreshTerminalCwd(record);
   return {
     terminal: sanitizeTerminalRecord(record),
@@ -295,6 +346,28 @@ export function detachTerminalClient(terminalId: string, client: WebSocket): voi
   }
 
   record.clients.delete(client);
+  record.codeControlClients.delete(client);
+  for (const [requestId, pending] of record.pendingCodeRequests) {
+    if (pending.owner !== client) continue;
+    clearTimeout(pending.timeout);
+    pending.resolve({ ok: false, error: 'The Code terminal detached before handling the request.' });
+    record.pendingCodeRequests.delete(requestId);
+  }
+  if (record.controlOwner === client) {
+    record.controlOwner = [...record.codeControlClients].reverse().find((candidate) => candidate.readyState === WebSocket.OPEN);
+  }
+}
+
+export function resolveTerminalControlRequest(terminalId: string, client: WebSocket, payload: any): void {
+  const record = terminals.get(terminalId);
+  const requestId = typeof payload?.requestId === 'string' ? payload.requestId : '';
+  const pending = requestId ? record?.pendingCodeRequests.get(requestId) : undefined;
+  if (!record || !pending || pending.owner !== client) throw new Error('Unknown or unauthorized terminal control response.');
+  record.pendingCodeRequests.delete(requestId);
+  clearTimeout(pending.timeout);
+  pending.resolve(payload.ok === true
+    ? { ok: true, ...(typeof payload.message === 'string' ? { message: payload.message } : {}) }
+    : { ok: false, error: typeof payload.error === 'string' ? payload.error : 'Code rejected the request.' });
 }
 
 export function writeTerminalInput(terminalId: string, data: string): void {

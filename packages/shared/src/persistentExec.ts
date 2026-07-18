@@ -11,6 +11,35 @@ export const DEFAULT_EXEC_TIMEOUT_SECONDS = 15;
 export const MIN_EXEC_TIMEOUT_SECONDS = 1;
 export const MAX_EXEC_TIMEOUT_SECONDS = 60;
 
+export interface ResolvedExecTimeout {
+  requestedSeconds: number;
+  effectiveSeconds: number;
+  warning?: string;
+}
+
+export function resolveExecTimeoutSeconds(timeoutValue: unknown): ResolvedExecTimeout {
+  if (timeoutValue === undefined || timeoutValue === null) {
+    return {
+      requestedSeconds: DEFAULT_EXEC_TIMEOUT_SECONDS,
+      effectiveSeconds: DEFAULT_EXEC_TIMEOUT_SECONDS,
+    };
+  }
+  if (typeof timeoutValue !== 'number' || !Number.isFinite(timeoutValue)) {
+    throw new Error(`timeout must be a number between ${MIN_EXEC_TIMEOUT_SECONDS} and ${MAX_EXEC_TIMEOUT_SECONDS} seconds`);
+  }
+  if (timeoutValue < MIN_EXEC_TIMEOUT_SECONDS) {
+    throw new Error(`timeout must be between ${MIN_EXEC_TIMEOUT_SECONDS} and ${MAX_EXEC_TIMEOUT_SECONDS} seconds`);
+  }
+  if (timeoutValue > MAX_EXEC_TIMEOUT_SECONDS) {
+    return {
+      requestedSeconds: timeoutValue,
+      effectiveSeconds: MAX_EXEC_TIMEOUT_SECONDS,
+      warning: `WARNING: Requested timeout ${formatExecTimeoutSeconds(timeoutValue)}s exceeds the ${MAX_EXEC_TIMEOUT_SECONDS}s maximum; using ${MAX_EXEC_TIMEOUT_SECONDS}s.`,
+    };
+  }
+  return { requestedSeconds: timeoutValue, effectiveSeconds: timeoutValue };
+}
+
 const RECONCILE_INTERVAL_MS = 5000;
 const STATUS_POLL_INTERVAL_MS = 250;
 const MISSING_STATUS_GRACE_MS = 3000;
@@ -531,9 +560,10 @@ export class PersistentExecManager {
     }
   }
 
-  private buildForegroundFooter(entry: RunningExecEntry, status: ExecStatus, output: { truncated: boolean; truncation?: OutputTruncationResult }): string {
+  private buildForegroundFooter(entry: RunningExecEntry, status: ExecStatus, output: { truncated: boolean; truncation?: OutputTruncationResult }, warning?: string): string {
     const lines = ['---', `Exit code: ${status.exitCode === null ? 'unknown' : status.exitCode}`];
     if (status.error) lines.push(`Error: ${status.error}`);
+    if (warning) lines.push(warning);
     if (output.truncated) {
       lines.push(`Full output saved to: ${entry.logPath}`);
       lines.push('Output was shortened for inline display.');
@@ -588,18 +618,19 @@ export class PersistentExecManager {
     await this.removeRunningExec(execId);
   }
 
-  async buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus): Promise<string> {
+  async buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string> {
     const output = await this.readDisplayOutput(entry.logPath);
     const body = output.text.trim() || '(No output)';
-    return `${body}\n${this.buildForegroundFooter(entry, status, output)}`;
+    return `${body}\n${this.buildForegroundFooter(entry, status, output, warning)}`;
   }
 
-  async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS): Promise<string> {
+  async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string): Promise<string> {
     const partialOutput = await this.readPartialLog(entry.logPath);
     const shortNotice = buildBackgroundTimeoutShortNotice(timeoutSeconds);
     const fullNotice = buildBackgroundTimeoutFullNotice(timeoutSeconds);
     const nodeLine = entry.nodeId && entry.nodeId !== 'master' ? `Node: \`${entry.nodeId}\`\n` : '';
-    return `${shortNotice}\n\nPartial Output:\n${partialOutput}\n\n${fullNotice}\n${nodeLine}PID: ${entry.pid}\nLog file: ${entry.logPath}`;
+    const warningLine = warning ? `${warning}\n` : '';
+    return `${shortNotice}\n\nPartial Output:\n${partialOutput}\n\n${fullNotice}\n${warningLine}${nodeLine}PID: ${entry.pid}\nLog file: ${entry.logPath}`;
   }
 
   buildCompletionMessage(entry: RunningExecEntry, status: ExecStatus): string {

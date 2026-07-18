@@ -1,0 +1,9 @@
+{
+  "name": "@foxwarm/cli-node-runtime",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Target-platform native runtime dependency for Foxwarm CLI nodes.",
+  "dependencies": {
+    "node-pty": "1.1.0"
+  }
+}

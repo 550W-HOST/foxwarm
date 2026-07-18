@@ -15,19 +15,20 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
-import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
 import { requestLlmOnce } from '../llm';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from '../weixin/api';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
-import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
+import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, resolveTerminalControlRequest, writeTerminalInput } from '../terminalRouter';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
 import type { Message, MessagePart, QueueItem } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
+import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
@@ -317,6 +318,24 @@ function buildWebUiModelStatus(session: { model?: string; childModelDefault?: st
   };
 }
 
+function buildWebUiSessionState(session: any) {
+  return {
+    id: session.id,
+    agent: session.agent || 'main',
+    aliases: session.aliases || [],
+    busy: session.busy || false,
+    busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
+    queueLength: session.queue?.length || 0,
+    runtimeState: sessionManager.buildSessionRuntimeState(session),
+    displayName: session.displayName || null,
+    archived: session.archived || false,
+    currentNode: session.currentNode || 'master',
+    cwd: session.cwd || null,
+    ...buildWebUiModelStatus(session),
+    isolated: sessionManager.isSessionEffectivelyIsolated(session),
+  };
+}
+
 function buildWebUiModelsPayload(currentModel?: string) {
   const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(currentModel);
   const displayModels = modelsConfig.displayModels || Object.keys(modelsConfig.models || {});
@@ -571,6 +590,8 @@ export class WebUIChannel implements Channel {
 
     // WebUI API endpoints
     if (this.enableWebUI) {
+      registerVscodeWebRoutes(httpServerInstance);
+
       // Auth endpoint
       httpServerInstance.addRoute({
         path: '/api/auth',
@@ -873,6 +894,71 @@ export class WebUIChannel implements Channel {
         },
       });
 
+      httpServerInstance.addRoute({
+        path: '/api/agents',
+        method: 'GET',
+        handler: async (_req: express.Request, res: express.Response) => {
+          try {
+            const entries = await fs.pathExists(AGENTS_DIR)
+              ? await fs.readdir(AGENTS_DIR, { withFileTypes: true })
+              : [];
+            const agents = entries
+              .filter(entry => entry.isDirectory())
+              .map(entry => ({
+                id: entry.name,
+                inherit: sessionManager.getAgentMetadata(entry.name).inherit || null,
+              }))
+              .sort((a, b) => a.id.localeCompare(b.id));
+            res.json({ agents });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get agents');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/agents',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const agentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim() : '';
+            const inheritAgent = typeof req.body?.inheritAgent === 'string' && req.body.inheritAgent.trim()
+              ? req.body.inheritAgent.trim()
+              : undefined;
+            if (!agentId) {
+              return res.status(400).json({ error: 'Agent ID is required.' });
+            }
+            sessionManager.validateAgentName(agentId);
+            if (inheritAgent === agentId) {
+              return res.status(400).json({ error: 'Agent cannot inherit from itself.' });
+            }
+            if (inheritAgent && sessionManager.getAgentMetadata(inheritAgent).isolated) {
+              return res.status(400).json({ error: `Agent "${inheritAgent}" is isolated and cannot be used as an inherit source.` });
+            }
+
+            const result = await sessionManager.createAgentWithMainSession({
+              agentName: agentId,
+              inherit: inheritAgent,
+              createMainSession: true,
+            });
+            const session = await sessionManager.getExistingSession(result.mainSessionId);
+            if (session) {
+              const rootSiblings = getWebUiSidebarSiblings(null, session.id);
+              writeWebUiSidebarOrder([session, ...rootSiblings]);
+              await sessionManager.saveSessionsMetadata();
+            }
+            this.broadcastSessionListUpdate();
+            res.status(201).json({ success: true, agentId, sessionId: result.mainSessionId });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to create agent');
+            const message = e instanceof Error ? e.message : String(e);
+            const status = /already exists/i.test(message) ? 409 : 400;
+            res.status(status).json({ error: message });
+          }
+        },
+      });
+
       // Get all sessions
       httpServerInstance.addRoute({
         path: '/api/sessions',
@@ -886,27 +972,15 @@ export class WebUIChannel implements Channel {
             
             const sessions = Array.from(allSessions.entries())
               .map(([id, session]) => ({
-                id,
-                agent: session.agent || 'main',
+                ...buildWebUiSessionState(session),
                 messageCount: session.meta?.messageCount ?? session.history.length,
                 lastMessageTime: session.meta?.lastMessageTime ?? (session.history.length > 0 
                   ? session.history[session.history.length - 1].__meta?.timestamp || 0
                   : 0),
                 parentSessionId: session.parentSessionId || null,
                 childSessions: childrenMap.get(id) || [],
-                aliases: session.aliases || [],
-                busy: session.busy || false,
-                busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
-                queueLength: session.queue?.length || 0,
-                runtimeState: sessionManager.buildSessionRuntimeState(session),
-                displayName: session.displayName || null,
-                archived: session.archived || false,
                 pinned: session.pinned || false,
                 sidebarOrder: getWebUiSidebarOrder(session) ?? null,
-                currentNode: session.currentNode || 'master',
-                cwd: session.cwd || null,
-                ...buildWebUiModelStatus(session),
-                isolated: sessionManager.isSessionEffectivelyIsolated(session),
                 tokenUsage: {
                   cachedTokens: session.stats?.totalCachedTokens || 0,
                   inputTokens: session.stats?.totalInputTokens || 0,
@@ -927,16 +1001,28 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            if (typeof req.body?.sessionId === 'string' && req.body.sessionId.trim()) {
-              return res.status(400).json({ error: 'Custom sessionId is not allowed.' });
+            const agentId = typeof req.body?.agentId === 'string' && req.body.agentId.trim()
+              ? req.body.agentId.trim()
+              : 'main';
+            const requestedSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+            sessionManager.validateAgentName(agentId);
+
+            let sessionId: string;
+            if (agentId === 'main' && !requestedSessionId) {
+              const result = await sessionManager.createEmptySession();
+              if (!result.created) {
+                return res.status(409).json({ error: 'Session already exists', sessionId: result.session.id });
+              }
+              sessionId = result.session.id;
+            } else {
+              const sessionName = requestedSessionId || sessionManager.generateSessionId();
+              sessionManager.validateSessionName(sessionName);
+              const result = await sessionManager.createSessionInAgent({ agentName: agentId, sessionName });
+              sessionId = result.sessionId;
             }
 
-            const { session, created } = await sessionManager.createEmptySession();
-
-            if (!created) {
-              return res.status(409).json({ error: 'Session already exists', sessionId: session.id });
-            }
-
+            const session = await sessionManager.getExistingSession(sessionId);
+            if (!session) throw new Error(`Created session "${sessionId}" could not be loaded.`);
             const rootSiblings = getWebUiSidebarSiblings(null, session.id);
             writeWebUiSidebarOrder([session, ...rootSiblings]);
             await sessionManager.saveSessionsMetadata();
@@ -945,11 +1031,13 @@ export class WebUIChannel implements Channel {
 
             res.json({
               success: true,
-              sessionId: session.id,
+              sessionId,
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to create session');
-            res.status(500).json({ error: e.message });
+            const message = e instanceof Error ? e.message : String(e);
+            const status = /already exists/i.test(message) ? 409 : /does not exist|invalid/i.test(message) ? 400 : 500;
+            res.status(status).json({ error: message });
           }
         },
       });
@@ -1030,10 +1118,9 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/terminals',
         method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
+        handler: async (_req: express.Request, res: express.Response) => {
           try {
-            const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId.trim() ? req.query.sessionId.trim() : undefined;
-            const terminals = await listTerminalRecords({ sessionId });
+            const terminals = await listTerminalRecords();
             res.json({ terminals });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to list terminals');
@@ -1047,17 +1134,12 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
             const nodeId = typeof req.body?.nodeId === 'string' && req.body.nodeId.trim() ? req.body.nodeId.trim() : undefined;
-            const cwd = typeof req.body?.cwd === 'string' && req.body.cwd.trim() ? req.body.cwd.trim() : undefined;
+            const cwd = typeof req.body?.cwd === 'string' && req.body.cwd.trim() ? req.body.cwd.trim() : '';
             const cols = typeof req.body?.cols === 'number' ? req.body.cols : undefined;
             const rows = typeof req.body?.rows === 'number' ? req.body.rows : undefined;
 
-            if (!sessionId) {
-              throw new Error('sessionId is required');
-            }
-
-            const terminal = await createTerminal({ sessionId, nodeId, cwd, cols, rows });
+            const terminal = await createTerminal({ nodeId, cwd, cols, rows });
             res.json({
               success: true,
               terminal,
@@ -1170,6 +1252,7 @@ export class WebUIChannel implements Channel {
             }
             const queuedMessages = buildQueuedPreviewMessages(session.queue);
             res.json({
+              session: buildWebUiSessionState(session),
               messages: session.history,
               queuedMessages,
               queueLength: session.queue?.length || 0,
@@ -1713,7 +1796,7 @@ export class WebUIChannel implements Channel {
         path: '/api/sessions/:sessionId/stream',
         method: 'GET',
         handler: async (req: express.Request, res: express.Response) => {
-          const sessionId = req.params.sessionId as string;
+          const requestedSessionId = req.params.sessionId as string;
 
           // Check token from cookie or query parameter
           if (!httpServer.checkToken(req)) {
@@ -1721,6 +1804,13 @@ export class WebUIChannel implements Channel {
             res.status(401).json({ error: 'Unauthorized' });
             return;
           }
+
+          const session = await sessionManager.getExistingSession(requestedSessionId);
+          if (!session) {
+            res.status(404).json({ error: 'Session not found' });
+            return;
+          }
+          const sessionId = session.id;
           
           // Set SSE headers
           res.setHeader('Content-Type', 'text/event-stream');
@@ -1737,8 +1827,13 @@ export class WebUIChannel implements Channel {
           
           // logger.info({ sessionId, clientCount: this.sseClients.get(sessionId)!.length }, 'SSE client connected');
           
-          // Send initial ping
+          // Preserve the existing connection acknowledgement, then send a
+          // canonical state snapshot after registration. The snapshot closes
+          // the history/stream race: the history response supplies initial
+          // state, and this event reflects state at subscription time.
           res.write('data: {"type":"connected"}\n\n');
+          const initialState = JSON.stringify({ type: 'session-state', session: buildWebUiSessionState(session) });
+          res.write(`data: ${initialState}\n\n`);
           
           // Keep-alive ping every 30 seconds
           const keepAliveInterval = setInterval(() => {
@@ -2016,6 +2111,7 @@ export class WebUIChannel implements Channel {
 
         const requestUrl = new URL(req.url || '/api/terminals/stream', 'http://localhost');
         const terminalId = requestUrl.searchParams.get('terminalId') || '';
+        const codeControl = requestUrl.searchParams.get('control') === 'code';
         if (!terminalId) {
           ws.close(1008, 'Missing terminalId');
           return;
@@ -2023,7 +2119,7 @@ export class WebUIChannel implements Channel {
 
         let attachedTerminalId = '';
         try {
-          const { terminal, backlog } = await attachTerminalClient(terminalId, ws);
+          const { terminal, backlog } = await attachTerminalClient(terminalId, ws, { codeControl });
           attachedTerminalId = terminal.id;
           ws.send(JSON.stringify({
             type: 'ready',
@@ -2050,6 +2146,11 @@ export class WebUIChannel implements Channel {
 
             if (payload?.type === 'close') {
               await closeTerminal(attachedTerminalId, 'ws-close-message');
+              return;
+            }
+
+            if (payload?.type === 'control-result') {
+              resolveTerminalControlRequest(attachedTerminalId, ws, payload);
               return;
             }
 
@@ -2307,6 +2408,33 @@ export class WebUIChannel implements Channel {
           logger.error({ err: e }, 'Failed to send SSE session event');
         }
       });
+    }
+  }
+
+  broadcastSessionStateUpdate(sessionId: string) {
+    const clients = this.sseClients.get(sessionId);
+    if (!clients || clients.length === 0) {
+      return;
+    }
+
+    const session = sessionManager.getAllSessions().get(sessionId);
+    const data = session
+      ? JSON.stringify({ type: 'session-state', session: buildWebUiSessionState(session) })
+      : JSON.stringify({ type: 'session-deleted', sessionId });
+
+    clients.forEach(client => {
+      try {
+        client.write(`data: ${data}\n\n`);
+        if (!session) {
+          client.end();
+        }
+      } catch (e) {
+        logger.error({ err: e, sessionId }, 'Failed to send SSE session state');
+      }
+    });
+
+    if (!session) {
+      this.sseClients.delete(sessionId);
     }
   }
 

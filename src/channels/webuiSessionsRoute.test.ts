@@ -6,10 +6,106 @@ import { WebUIChannel } from './webuiChannel';
 import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from '../session/metadataStore';
 import type { Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
+import fs from 'fs-extra';
+import { getAgentDir } from '../config';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
+
+function createSseDataReader(body: ReadableStream<Uint8Array>) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return {
+    async read(): Promise<any> {
+      while (true) {
+        const boundary = buffer.indexOf('\n\n');
+        if (boundary !== -1) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const dataLine = block.split('\n').find(line => line.startsWith('data: '));
+          if (dataLine) return JSON.parse(dataLine.slice('data: '.length));
+          continue;
+        }
+
+        const result = await reader.read();
+        if (result.done) throw new Error('SSE stream ended before the next data event.');
+        buffer += decoder.decode(result.value, { stream: true });
+      }
+    },
+    cancel: () => reader.cancel(),
+  };
+}
+
+test('WebUI creation routes create agents and random or custom sessions', async () => {
+  const agentId = makeSessionId('webui_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const port = 35500 + Math.floor(Math.random() * 200);
+  const token = 'creation-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  await server.start();
+
+  const request = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...init.headers,
+    },
+  });
+  const createdSessionIds: string[] = [];
+
+  try {
+    let res = await fetch(`http://127.0.0.1:${port}/api/agents`);
+    assert.equal(res.status, 401);
+
+    res = await request('/api/agents', { method: 'POST', body: JSON.stringify({ agentId: '../bad' }) });
+    assert.equal(res.status, 400);
+
+    res = await request('/api/agents', { method: 'POST', body: JSON.stringify({ agentId, inheritAgent: 'main' }) });
+    assert.equal(res.status, 201);
+    const agentPayload = await res.json() as any;
+    assert.equal(agentPayload.agentId, agentId);
+    assert.equal(agentPayload.sessionId, `${agentId}/main`);
+    createdSessionIds.push(agentPayload.sessionId);
+    assert.equal(sessionManager.getAgentMetadata(agentId).inherit, 'main');
+
+    res = await request('/api/agents', { method: 'POST', body: JSON.stringify({ agentId }) });
+    assert.equal(res.status, 409);
+
+    res = await request('/api/agents');
+    assert.equal(res.status, 200);
+    assert.ok(((await res.json() as any).agents as any[]).some(agent => agent.id === agentId));
+
+    res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId }) });
+    assert.equal(res.status, 200);
+    const randomPayload = await res.json() as any;
+    assert.match(randomPayload.sessionId, new RegExp(`^${agentId}/\\d{4}_[a-z0-9]{5}$`));
+    createdSessionIds.push(randomPayload.sessionId);
+
+    res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'custom' }) });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json() as any).sessionId, `${agentId}/custom`);
+    createdSessionIds.push(`${agentId}/custom`);
+
+    res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'custom' }) });
+    assert.equal(res.status, 409);
+
+    res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'other/agent' }) });
+    assert.equal(res.status, 400);
+  } finally {
+    await server.stop();
+    setHttpServer(null);
+    for (const sessionId of createdSessionIds.reverse()) {
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+    await sessionManager.setAgentInherit(agentId, undefined).catch(() => {});
+    await fs.remove(getAgentDir(agentId));
+  }
+});
 
 test('WebUI sessions route treats bare wait as idle while preserving busy fields', async () => {
   const sessionId = makeSessionId('webui_runtime_state');
@@ -110,6 +206,10 @@ test('WebUI history route returns queued preview messages separately from commit
     const payload = await res.json() as any;
 
     assert.equal(payload.queueLength, 3);
+    assert.equal(payload.session.id, sessionId);
+    assert.equal(payload.session.busy, true);
+    assert.equal(payload.session.queueLength, 3);
+    assert.equal(payload.session.runtimeState.state, 'requesting-model');
     assert.equal(payload.messages.length, 1);
     assert.equal(payload.messages[0].parts[0].text, 'committed answer');
     assert.equal(payload.queuedMessages.length, 2);
@@ -133,6 +233,190 @@ test('WebUI history route returns queued preview messages separately from commit
     setHttpServer(null);
     session.busy = false;
     await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('WebUI per-session SSE sends initial and live canonical runtime state without a session-list fetch', async () => {
+  const sessionId = makeSessionId('webui_session_stream');
+  const alias = `${sessionId}_alias`;
+  const session = await sessionManager.getSession(sessionId);
+  session.aliases = [alias];
+  session.agent = 'main';
+  session.history = [];
+  session.persistentMemorySnapshot = '';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = false;
+  session.queue = [];
+  session.meta = {
+    lastMessageTime: Date.now(),
+    wait: {
+      id: 'stream-wait',
+      startedAt: Date.now() - 1000,
+      timeoutSeconds: 30,
+    },
+  } as Session['meta'];
+  await sessionManager.saveSession(sessionId);
+
+  const port = 34900 + Math.floor(Math.random() * 300);
+  const token = 'session-stream-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  const channel = new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  sessionManager.setOnSessionStateUpdated((updatedSessionId) => channel.broadcastSessionStateUpdate(updatedSessionId));
+  await server.start();
+
+  let sse: ReturnType<typeof createSseDataReader> | null = null;
+  try {
+    const missing = await fetch(`http://127.0.0.1:${port}/api/sessions/missing-session/stream`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(missing.status, 404);
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(alias)}/stream`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+    sse = createSseDataReader(response.body!);
+
+    const connected = await sse.read();
+    assert.equal(connected.type, 'connected');
+
+    const initial = await sse.read();
+    assert.equal(initial.type, 'session-state');
+    assert.equal(initial.session.id, sessionId, 'alias subscriptions must use the canonical session id');
+    assert.equal(initial.session.runtimeState.state, 'waiting');
+    assert.equal(initial.session.runtimeState.waiting.waitingFor, 'timer');
+    assert.equal(initial.session.busy, false);
+
+    session.busy = true;
+    session.busyStartedAt = Date.now();
+    session.queue.push({ type: 'retry' });
+    sessionManager.setActiveSessionRuntimeState(sessionId, {
+      state: 'running-tool',
+      tool: {
+        id: 'tool-1',
+        name: 'exec',
+        index: 0,
+        total: 1,
+        startedAt: Date.now(),
+      },
+    });
+
+    const active = await sse.read();
+    assert.equal(active.type, 'session-state');
+    assert.equal(active.session.runtimeState.state, 'running-tool');
+    assert.equal(active.session.runtimeState.tool.name, 'exec');
+    assert.equal(active.session.runtimeState.queueLength, 1);
+    assert.equal(active.session.queueLength, 1);
+    assert.equal(active.session.busy, true);
+
+    session.busy = false;
+    session.busyStartedAt = undefined;
+    session.queue = [];
+    sessionManager.clearActiveSessionRuntimeState(sessionId);
+
+    const waitingAgain = await sse.read();
+    assert.equal(waitingAgain.type, 'session-state');
+    assert.equal(waitingAgain.session.runtimeState.state, 'waiting');
+    assert.equal(waitingAgain.session.queueLength, 0);
+    assert.equal(waitingAgain.session.busy, false);
+
+    delete session.meta.wait;
+    await sessionManager.saveSession(sessionId);
+
+    const idle = await sse.read();
+    assert.equal(idle.type, 'session-state');
+    assert.equal(idle.session.runtimeState.state, 'idle');
+    assert.equal(idle.session.runtimeState.busy, false);
+    assert.equal(idle.session.runtimeState.queueLength, 0);
+  } finally {
+    await sse?.cancel().catch(() => {});
+    await server.stop();
+    setHttpServer(null);
+    sessionManager.setOnSessionStateUpdated(() => {});
+    sessionManager.clearActiveSessionRuntimeState(sessionId);
+    session.busy = false;
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('WebUI global SSE broadcasts every session creation path used by the sidebar', async () => {
+  const parentSessionId = makeSessionId('webui_global_parent');
+  const ordinarySessionName = makeSessionId('webui_global_ordinary');
+  const createdSessionIds: string[] = [];
+  const port = 35200 + Math.floor(Math.random() * 200);
+  const token = 'global-session-stream-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  const channel = new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  sessionManager.setOnSessionListUpdated(() => channel.broadcastSessionListUpdate());
+  await server.start();
+
+  let sse: ReturnType<typeof createSseDataReader> | null = null;
+  const expectListUpdate = async () => {
+    const event = await Promise.race([
+      sse!.read(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for sessions-updated.')), 2000)),
+    ]);
+    assert.equal(event.type, 'sessions-updated');
+  };
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions/stream`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+    sse = createSseDataReader(response.body!);
+    assert.equal((await sse.read()).type, 'connected');
+
+    const parentResult = await sessionManager.createEmptySession(parentSessionId);
+    assert.equal(parentResult.created, true);
+    createdSessionIds.push(parentSessionId);
+    await expectListUpdate();
+
+    const newChildId = await sessionManager.createChildSession(parentSessionId, 'newchild', false);
+    createdSessionIds.push(newChildId);
+    await expectListUpdate();
+
+    const forkChildId = await sessionManager.createChildSession(parentSessionId, 'forkchild', true);
+    createdSessionIds.push(forkChildId);
+    await expectListUpdate();
+
+    const manualForkId = await sessionManager.forkSession(parentSessionId, 'manual', false);
+    createdSessionIds.push(manualForkId);
+    await expectListUpdate();
+
+    const ordinary = await sessionManager.createSessionInAgent({
+      agentName: 'main',
+      sessionName: ordinarySessionName,
+      parentSessionId,
+    });
+    createdSessionIds.push(ordinary.sessionId);
+    await expectListUpdate();
+
+    const listResponse = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(listResponse.status, 200);
+    const listedSessions = (await listResponse.json() as any).sessions as any[];
+    const listedById = new Map(listedSessions.map(session => [session.id, session]));
+    for (const sessionId of createdSessionIds) {
+      assert.ok(listedById.has(sessionId), `expected ${sessionId} in the global list`);
+    }
+    assert.equal(listedById.get(newChildId).parentSessionId, parentSessionId);
+    assert.equal(listedById.get(forkChildId).parentSessionId, parentSessionId);
+    assert.equal(listedById.get(manualForkId).parentSessionId, parentSessionId);
+    assert.equal(listedById.get(ordinary.sessionId).parentSessionId, parentSessionId);
+  } finally {
+    await sse?.cancel().catch(() => {});
+    await server.stop();
+    setHttpServer(null);
+    sessionManager.setOnSessionListUpdated(() => {});
+    for (const sessionId of createdSessionIds.reverse()) {
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
   }
 });
 

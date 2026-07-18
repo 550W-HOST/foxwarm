@@ -1,10 +1,12 @@
 node_modules/
 packages/webui/node_modules/
 packages/webui/dist/
+packages/vscode-web/.cache/
+packages/vscode-web/assets/*.tar.gz
+packages/vscode-web/assets/*.tmp-*/
 lib/
 state/
 agents/
-skills/
 .env
 *.log
 .DS_Store

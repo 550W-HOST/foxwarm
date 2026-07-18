@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/microsoft/vscode.git",
+  "commit": "fc3def6774c76082adf699d366f31a557ce5573f",
+  "version": "1.128.0",
+  "nodeVersion": "24.17.0"
+}

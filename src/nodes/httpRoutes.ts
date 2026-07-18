@@ -17,12 +17,14 @@ export const NODE_TEMPLATE_BASE_URL_PLACEHOLDER = '__FOXWARM_DEFAULT_BASE_URL__'
 export const NODE_SOURCE_FILES = [
   'packages/shared',
   'packages/cli-node',
+  'packages/cli-node-runtime',
   'scripts/start-sandbox-node.sh',
 ];
 
 const NODE_SOURCE_TAR_EXCLUDES = [
   'packages/shared/node_modules',
   'packages/cli-node/node_modules',
+  'packages/cli-node-runtime/node_modules',
 ];
 
 async function ensureNodeTemplateFiles(): Promise<void> {

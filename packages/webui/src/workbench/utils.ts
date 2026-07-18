@@ -234,6 +234,10 @@ function isSupportedWorkbenchTab(tab: unknown): tab is WorkbenchTab {
     return true
   }
 
+  if (raw.type === 'vscode' || raw.type === 'agents' || raw.type === 'setup') {
+    return true
+  }
+
   return false
 }
 
@@ -283,6 +287,9 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
     // Read it tolerantly, but strip it so all future persisted writes use the
     // current single-row tab model.
     const { pinned: _legacyPinned, ...sanitizedTab } = tab as WorkbenchTab & { pinned?: unknown }
+    if (sanitizedTab.type === 'vscode') {
+      return [[tabId, { ...sanitizedTab, title: 'Code' } as WorkbenchTab]]
+    }
     return [[tabId, sanitizedTab as WorkbenchTab]]
   }))
 }

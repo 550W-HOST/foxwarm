@@ -1,0 +1,105 @@
+{
+  "name": "@foxwarm/vscode-web-foxwarm-scm",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "foxwarm",
+  "license": "MIT",
+  "browser": "./dist/extension.js",
+  "activationEvents": [
+    "*"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "foxwarm-scm.refresh",
+        "title": "Refresh Git Status",
+        "category": "Foxwarm SCM",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "foxwarm-scm.openChange",
+        "title": "Open Change",
+        "category": "Foxwarm SCM"
+      },
+      {
+        "command": "foxwarm-scm.openAllChanges",
+        "title": "Open Changes",
+        "category": "Foxwarm SCM",
+        "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "foxwarm-scm.openCommitDetails",
+        "title": "Open Commit Details",
+        "category": "Foxwarm SCM"
+      },
+      {
+        "command": "foxwarm-scm.openCommitInEditor",
+        "title": "Open in Editor",
+        "category": "Foxwarm SCM",
+        "icon": "$(open-preview)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "foxwarm-commit-details",
+          "title": "Commit Details",
+          "icon": "media/commit.svg"
+        }
+      ]
+    },
+    "views": {
+      "foxwarm-commit-details": [
+        {
+          "type": "webview",
+          "id": "foxwarm-scm.commitDetailsView",
+          "name": "Commit Details"
+        }
+      ]
+    },
+    "menus": {
+      "scm/title": [
+        {
+          "command": "foxwarm-scm.refresh",
+          "when": "scmProvider =~ /^foxwarm-scm-/",
+          "group": "navigation@10"
+        },
+        {
+          "command": "foxwarm-scm.openAllChanges",
+          "when": "scmProvider =~ /^foxwarm-scm-/",
+          "group": "navigation@20"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "foxwarm-scm.openCommitDetails",
+          "when": "false"
+        },
+        {
+          "command": "foxwarm-scm.openCommitInEditor",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "foxwarm-scm.openCommitInEditor",
+          "when": "view == foxwarm-scm.commitDetailsView && foxwarmCommitDetailsAvailable",
+          "group": "navigation@10"
+        }
+      ]
+    }
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "extensionKind": [
+    "web"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0"
+  }
+}

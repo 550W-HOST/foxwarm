@@ -190,7 +190,7 @@ function ensureFactories(): void {
 
 export function initializeChannelRuntime(
   handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>,
-  commandHandler?: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>,
+  commandHandler?: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>,
 ): void {
   runtimeMessageHandler = handler;
   runtimeCommandHandler = commandHandler;

@@ -141,6 +141,30 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
   return `${text.slice(0, maxLength)}...`
 }
 
+export type OpenCodeFileHandler = (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
+
+const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFile, prefix }: {
+  filePath: string
+  lines?: { startLine?: number; endLine?: number }
+  onOpenCodeFile?: OpenCodeFileHandler
+  prefix?: string
+}) {
+  if (!onOpenCodeFile) return <span>{prefix}{filePath}</span>
+  return (
+    <button
+      type="button"
+      className="min-w-0 truncate text-left hover:underline cursor-pointer"
+      title={`Open ${filePath} in Code`}
+      onClick={(event) => {
+        event.stopPropagation()
+        onOpenCodeFile(filePath, lines)
+      }}
+    >
+      {prefix}{filePath}
+    </button>
+  )
+})
+
 
 const isLegacyDiffToolName = (name: string): boolean => name === 'edit' || name === 'edit_memory'
 const isPatchToolName = (name: string): boolean => name === 'apply_patch' || name === 'apply_patch_memory'
@@ -151,7 +175,7 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
 )
 
-const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean } = {}): ReactNode => {
+const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}): ReactNode => {
   if (options.partial) {
     return <span className="text-gray-500 dark:text-gray-400">streaming tool call…</span>
   }
@@ -160,11 +184,11 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean 
     const extra = (call.args.startLine || call.args.endLine)
       ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
       : ''
-    return <span title={`${call.args.filePath}${extra}`}>{call.args.filePath}{extra}</span>
+    return <span title={`${call.args.filePath}${extra}`} className="inline-flex min-w-0 items-center gap-1"><ToolCodePath filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} onOpenCodeFile={options.onOpenCodeFile} />{extra}</span>
   }
 
   if (call.name === 'write') {
-    return <span title={call.args.filePath}>{call.args.filePath}</span>
+    return <ToolCodePath filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} />
   }
 
   if (isLegacyDiffToolName(call.name)) {
@@ -178,7 +202,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean 
         ) : (
           <span className="shrink-0 text-xs text-gray-500">legacy payload unavailable</span>
         )}
-        <span className="truncate">{call.args.filePath}</span>
+        {call.name === 'edit' ? <ToolCodePath filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} /> : <span className="truncate">{call.args.filePath}</span>}
       </span>
     )
   }
@@ -191,7 +215,9 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean 
       return (
         <span className="flex items-center gap-2 min-w-0">
           <span className="shrink-0 text-xs text-gray-500">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
-          <span className="truncate">{fileSummary}</span>
+          {call.name === 'apply_patch' && operations.length === 1
+            ? <ToolCodePath filePath={operations[0].filePath} onOpenCodeFile={options.onOpenCodeFile} />
+            : <span className="truncate">{fileSummary}</span>}
         </span>
       )
     } catch {
@@ -244,7 +270,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean 
   return <span className="truncate break-all">{preview}</span>
 }
 
-const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split', options: { partial?: boolean } = {}) => {
+const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split', options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}) => {
   if (options.partial) {
     return <div className="text-gray-500 dark:text-gray-400">Streaming tool call. Full arguments will appear after the model finishes emitting the call.</div>
   }
@@ -253,13 +279,13 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     const extra = (call.args.startLine || call.args.endLine)
       ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
       : ''
-    return <div className="whitespace-pre-wrap break-all"><span>{call.args.filePath}</span>{extra && <span className="ml-2 text-gray-500 dark:text-gray-400">{extra}</span>}</div>
+    return <div className="flex items-center gap-2 whitespace-pre-wrap break-all"><ToolCodePath filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} onOpenCodeFile={options.onOpenCodeFile} />{extra && <span className="text-gray-500 dark:text-gray-400">{extra}</span>}</div>
   }
 
   if (call.name === 'write') {
     return (
       <div className="space-y-2">
-        <div className="whitespace-pre-wrap break-all">{call.args.filePath}</div>
+        <div className="whitespace-pre-wrap break-all"><ToolCodePath filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} /></div>
         {typeof call.args.content === 'string' && (
           <pre className="whitespace-pre-wrap text-xs bg-white dark:bg-gray-900 p-2 rounded border border-gray-300 dark:border-gray-600 cursor-text"><SyntaxHighlightedText text={call.args.content} filePath={call.args.filePath} /></pre>
         )}
@@ -271,7 +297,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     const hasLegacyDiff = hasLegacyDiffPayload(call)
     return hasLegacyDiff ? (
       <div className="space-y-2">
-        <div className="text-xs text-gray-600 dark:text-gray-300">{call.args.filePath}</div>
+        <div className="text-xs text-gray-600 dark:text-gray-300">{call.name === 'edit' ? <ToolCodePath filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} /> : call.args.filePath}</div>
         <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} filePath={call.args.filePath} />
       </div>
     ) : (
@@ -288,7 +314,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
             if (operation.action === 'update') {
               return (
                 <div key={operationIdx} className="">
-                  <div className="text-xs font-semibold text-gray-600 dark:text-gray-300">Update {operation.filePath}</div>
+                  <div className="text-xs font-semibold text-gray-600 dark:text-gray-300"><ToolCodePath prefix="Update " filePath={operation.filePath} onOpenCodeFile={call.name === 'apply_patch' ? options.onOpenCodeFile : undefined} /></div>
                   <div>
                     {operation.hunks.map((hunk, hunkIdx) => {
                       const snippets = buildPatchHunkSnippets(hunk)
@@ -312,7 +338,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
             if (operation.action === 'add') {
               return (
                 <div key={operationIdx} className="space-y-1">
-                  <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">Add {operation.filePath}</div>
+                  <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300"><ToolCodePath prefix="Add " filePath={operation.filePath} onOpenCodeFile={call.name === 'apply_patch' ? options.onOpenCodeFile : undefined} /></div>
                   <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} filePath={operation.filePath} />
                 </div>
               )
@@ -501,11 +527,13 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   responses,
   imageParts,
   modelMessage,
+  onOpenCodeFile,
 }: {
   call?: FunctionCall
   responses: FunctionResponse[]
   imageParts: MessagePart[]
   modelMessage?: Message
+  onOpenCodeFile?: OpenCodeFileHandler
 }) {
   const [expanded, setExpanded] = useState(false)
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
@@ -583,7 +611,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       onClick={onClick}
     >
       <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
-      {includeCallPreview && call && <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call, { partial: partialToolCall })}</div>}
+      {includeCallPreview && call && <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
     </div>
   )
 
@@ -629,7 +657,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                     <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
                   </div>
                 )}
-                {renderToolCallExpandedContent(call, diffViewMode, { partial: partialToolCall })}
+                {renderToolCallExpandedContent(call, diffViewMode, { partial: partialToolCall, onOpenCodeFile })}
               </div>
             )}
 
@@ -742,7 +770,7 @@ const getGroupedToolEntries = (msg: Message, nextMsg: Message, messageKeyPrefix:
   ]
 }
 
-export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix }: { msg: Message; nextMsg: Message; messageKeyPrefix: string }) {
+export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix, onOpenCodeFile }: { msg: Message; nextMsg: Message; messageKeyPrefix: string; onOpenCodeFile?: OpenCodeFileHandler }) {
   const entries = useMemo(() => getGroupedToolEntries(msg, nextMsg, messageKeyPrefix), [messageKeyPrefix, msg, nextMsg])
 
   return (
@@ -754,20 +782,21 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
           responses={entry.responses}
           imageParts={entry.imageParts}
           modelMessage={entry.modelMessage}
+          onOpenCodeFile={onOpenCodeFile}
         />
       ))}
     </div>
   )
 })
 
-export const ToolCallsBlock = memo(function ToolCallsBlock({ msg }: { msg: Message }) {
+export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, onOpenCodeFile }: { msg: Message; onOpenCodeFile?: OpenCodeFileHandler }) {
   const functionCalls = useMemo(() => msg.parts.filter(p => p.functionCall).map(p => p.functionCall!), [msg.parts])
   if (functionCalls.length === 0) return null
 
   return (
     <div>
       {functionCalls.map((call, callIdx) => (
-        <ToolCallResponseItem key={`call-${call.id || callIdx}`} call={call} responses={[]} imageParts={[]} modelMessage={msg} />
+        <ToolCallResponseItem key={`call-${call.id || callIdx}`} call={call} responses={[]} imageParts={[]} modelMessage={msg} onOpenCodeFile={onOpenCodeFile} />
       ))}
     </div>
   )

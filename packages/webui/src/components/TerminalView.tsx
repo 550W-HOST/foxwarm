@@ -9,8 +9,6 @@ type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
 
 type TerminalInfo = {
   id: string
-  sessionId: string
-  agentName: string
   nodeId: string
   shell: string
   cwd: string
@@ -21,7 +19,6 @@ type TerminalInfo = {
 }
 
 interface TerminalViewProps {
-  sessionId: string
   initialCwd?: string
   initialTerminalId?: string
   createMode?: 'new' | 'reuse'
@@ -31,7 +28,7 @@ interface TerminalViewProps {
   onTerminalClosed?: (terminalId: string) => void
 }
 
-export default function TerminalView({ sessionId, initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
+export default function TerminalView({ initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -189,7 +186,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
         }
 
         if (!terminalId && createModeRef.current !== 'new') {
-          const listRes = await fetch(`${API_BASE_PATH}/terminals?sessionId=${encodeURIComponent(sessionId)}`)
+          const listRes = await fetch(`${API_BASE_PATH}/terminals`)
           const listData = await listRes.json().catch(() => ({}))
           if (!listRes.ok) {
             throw new Error(listData.error || 'Failed to list terminals')
@@ -210,9 +207,8 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              sessionId,
               nodeId: 'master',
-              cwd: requestedCwdRef.current,
+              cwd: requestedCwdRef.current || '/',
               cols,
               rows,
             }),
@@ -330,7 +326,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [sessionId])
+  }, [])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">

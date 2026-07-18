@@ -26,7 +26,7 @@ import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
-import { formatFoxwarmMessage, formatFoxwarmSystem, formatSystemPartForModel } from './utils/promptWrappers';
+import { formatFoxwarmMessage, formatFoxwarmSystem, formatFoxwarmSystemClose, formatFoxwarmSystemOpen, formatSystemPartForModel } from './utils/promptWrappers';
 import { runStartupMigrations } from './migrations';
 import {
   buildSessionRuntimeState,
@@ -435,8 +435,11 @@ let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = n
 // Callback when transient session events are updated (for SSE broadcasting)
 let onSessionEventUpdated: ((sessionId: string, event: SessionStreamEvent) => void) | null = null;
 
-// Callback when session list is updated (for SSE broadcasting)
+// Independent callbacks for global-list consumers and one-session consumers.
+// The WebUI sidebar/architecture owns the former; each Chat stream owns the
+// latter and never needs to refetch the full list for runtime state.
 let onSessionListUpdated: (() => void) | null = null;
+let onSessionStateUpdated: ((sessionId: string) => void) | null = null;
 
 // Track active in-flight LLM requests so /stop can abort the underlying HTTP call.
 const sessionAbortControllers = new Map<string, AbortController>();
@@ -451,6 +454,10 @@ export function setOnSessionEventUpdated(callback: (sessionId: string, event: Se
 
 export function setOnSessionListUpdated(callback: () => void) {
   onSessionListUpdated = callback;
+}
+
+export function setOnSessionStateUpdated(callback: (sessionId: string) => void) {
+  onSessionStateUpdated = callback;
 }
 
 export function registerSessionAbortController(sessionId: string, controller: AbortController): void {
@@ -703,7 +710,7 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
   }
 
   await saveSessionsMetadata();
-  notifySessionListUpdated();
+  notifySessionUpdated(session.id);
 }
 
 /**
@@ -729,6 +736,12 @@ async function loadChannels(): Promise<void> {
 
 export const validateAgentName = sessionAgentOps.validateAgentName;
 export const validateSessionName = sessionAgentOps.validateSessionName;
+
+export function validateChildSessionSuffix(suffix: string): void {
+  if (!suffix || typeof suffix !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(suffix)) {
+    throw new Error('Invalid child session suffix. Use only alphanumeric characters, hyphens, and underscores.');
+  }
+}
 
 function getSessionAgentOpsDeps() {
   return {
@@ -761,7 +774,12 @@ function notifySessionListUpdated() {
   onSessionListUpdated?.();
 }
 
-setSessionRuntimeStateUpdateCallback(() => notifySessionListUpdated());
+function notifySessionUpdated(sessionId: string) {
+  notifySessionListUpdated();
+  onSessionStateUpdated?.(sessionId);
+}
+
+setSessionRuntimeStateUpdateCallback((sessionId) => notifySessionUpdated(sessionId));
 
 export { buildSessionRuntimeState, clearActiveSessionRuntimeState, formatSessionRuntimeStateSummary, setActiveSessionRuntimeState };
 export type { ActiveSessionRuntimeStateInput, SessionRuntimeState };
@@ -1114,6 +1132,7 @@ export function resolveSpawnedSessionModel(
 }
 
 export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
+  validateChildSessionSuffix(suffix);
   if (fork) {
     // Fork from parent (inherit context)
     return await forkSession(parentSessionId, suffix, true, options);
@@ -1242,10 +1261,8 @@ export async function saveSession(sessionId: string): Promise<void> {
     vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
       .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
     
-    // Notify session list update
-    if (onSessionListUpdated) {
-      onSessionListUpdated();
-    }
+    // Notify global-list and per-session state consumers.
+    notifySessionUpdated(sessionId);
   } catch (e) {
     logger.error({ err: e, sessionId }, 'Failed to save session');
   }
@@ -1695,7 +1712,7 @@ export function notifySessionEvent(sessionId: string, event: SessionStreamEvent)
   }
 }
 
-export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[]): Promise<void> {
+export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[], options: { suppressGoalReminder?: boolean } = {}): Promise<void> {
   const session = typeof sessionOrId === 'string'
     ? await getSession(sessionOrId)
     : sessionOrId;
@@ -1712,7 +1729,7 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
   appendMessagesToContextFrontier(session, messages);
 
   const messagesToNotify = [...messages];
-  const goalReminderMessage = maybeBuildGoalReminderMessage(session);
+  const goalReminderMessage = options.suppressGoalReminder ? undefined : maybeBuildGoalReminderMessage(session);
 
   await saveSession(session.id);
 
@@ -1727,6 +1744,37 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
 
 export async function appendSessionMessage(sessionOrId: Session | string, message: Message): Promise<void> {
   await appendSessionMessages(sessionOrId, [message]);
+}
+
+export async function notifyManualForkCreated(parentSessionId: string, childSessionId: string, initialMessage?: string): Promise<'appended' | 'queued'> {
+  const parent = await getSession(parentSessionId);
+  const messageText = initialMessage === undefined
+    ? formatFoxwarmSystem({
+      kind: 'session-event',
+      event: 'manual-fork-created',
+      currentSessionId: parent.id,
+      childSessionId,
+      initialMessage: '(none)',
+    }, `User manually created fork child session \`${childSessionId}\` from the current session \`${parent.id}\`.\nInitial message: (none)`)
+    : `${formatFoxwarmSystemOpen({
+      kind: 'session-event',
+      event: 'manual-fork-created',
+      currentSessionId: parent.id,
+      childSessionId,
+    })}\nUser manually created fork child session \`${childSessionId}\` from the current session \`${parent.id}\`.\nInitial message:\n${initialMessage}\n${formatFoxwarmSystemClose()}`;
+  const notification: Message = {
+    role: 'user',
+    parts: [systemPart(messageText)],
+    __meta: { timestamp: Date.now() },
+  };
+
+  if (parent.busy) {
+    await queueSessionMessageEvent(parent.id, notification, 'background');
+    return 'queued';
+  }
+
+  await appendSessionMessages(parent, [notification], { suppressGoalReminder: true });
+  return 'appended';
 }
 
 
@@ -1928,10 +1976,8 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
   await saveSessionsMetadata();
   await saveChannels();
   
-  // Notify session list update
-  if (onSessionListUpdated) {
-    onSessionListUpdated();
-  }
+  // Notify global-list and per-session state consumers.
+  notifySessionUpdated(sessionId);
   
   return true;
 }
@@ -1949,10 +1995,8 @@ export async function archiveSession(sessionId: string, archived: boolean = true
   // Archive is metadata-only; avoid touching session history file
   await saveSessionsMetadata();
   
-  // Notify session list update
-  if (onSessionListUpdated) {
-    onSessionListUpdated();
-  }
+  // Notify global-list and per-session state consumers.
+  notifySessionUpdated(sessionId);
   
   return true;
 }

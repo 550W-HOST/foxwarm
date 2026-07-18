@@ -4,7 +4,7 @@ import { API_BASE_PATH } from '../config'
 import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
-import { compareSessionListSessions, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import { compareSessionListSessions, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 
 export interface Session {
   id: string
@@ -44,6 +44,7 @@ interface SessionListCoreProps {
   onKeepSession?: (sessionId: string) => void
   toolbarContainerClassName?: string
   listContainerClassName?: string
+  dragEnabled?: boolean
 }
 
 export interface SessionMoveRequest {
@@ -378,6 +379,7 @@ function DraggableSessionRow({
   onDoubleClick,
   onContextMenu,
   setRowRef,
+  dragEnabled,
 }: {
   session: Session
   children: ReactNode
@@ -386,12 +388,14 @@ function DraggableSessionRow({
   onDoubleClick: () => void
   onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void
   setRowRef: (node: HTMLDivElement | null) => void
+  dragEnabled: boolean
 }) {
   const title = session.displayName || session.id
   const suppressClickRef = useRef(false)
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `session:${session.id}`,
+    disabled: !dragEnabled,
     data: {
       type: 'session',
       sessionId: session.id,
@@ -402,7 +406,7 @@ function DraggableSessionRow({
 
   const handlePointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
     suppressClickRef.current = false
-    pointerStartRef.current = { x: event.clientX, y: event.clientY }
+    pointerStartRef.current = dragEnabled ? { x: event.clientX, y: event.clientY } : null
   }
 
   const handlePointerMoveCapture = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -429,22 +433,23 @@ function DraggableSessionRow({
         setNodeRef(node)
         setRowRef(node)
       }}
+      data-session-id={session.id}
       className={`${className} ${isDragging ? 'opacity-50' : ''}`}
-      title={session.pinned ? 'Pinned session: drag to open in a pane; unpin before changing its sidebar parent or order' : 'Drag in the sidebar or open in a pane'}
+      title={dragEnabled ? (session.pinned ? 'Pinned session: drag to open in a pane; unpin before changing its sidebar parent or order' : 'Drag in the sidebar or open in a pane') : `Open session ${session.id}`}
       onPointerDownCapture={handlePointerDownCapture}
       onPointerMoveCapture={handlePointerMoveCapture}
       onClick={handleClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
-      {...attributes}
-      {...listeners}
+      {...(dragEnabled ? attributes : {})}
+      {...(dragEnabled ? listeners : {})}
     >
       {children}
     </div>
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1' }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
@@ -459,6 +464,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const renameInputRef = useRef<HTMLInputElement>(null)
   const sessionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const [pendingFocusSessionId, setPendingFocusSessionId] = useState<string | null>(null)
+  const previousCurrentSessionIdRef = useRef<string | undefined>(undefined)
 
   const activeDragData = active?.data.current as { type?: string; sessionId?: string; sessionPinned?: boolean } | undefined
   const draggingSessionId = activeDragData?.type === 'session' ? activeDragData.sessionId || null : null
@@ -648,8 +654,19 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       return changed ? next : prev
     })
 
-    setPendingFocusSessionId(resolvedCurrentSessionId)
   }, [resolvedCurrentSessionId, normalizedParentMap])
+
+  useEffect(() => {
+    if (!resolvedCurrentSessionId) {
+      previousCurrentSessionIdRef.current = undefined
+      return
+    }
+
+    if (previousCurrentSessionIdRef.current === resolvedCurrentSessionId) return
+
+    previousCurrentSessionIdRef.current = resolvedCurrentSessionId
+    setPendingFocusSessionId(resolvedCurrentSessionId)
+  }, [resolvedCurrentSessionId])
 
   useEffect(() => {
     if (!pendingFocusSessionId) return
@@ -713,15 +730,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
       return next
     })
-  }
-
-  // Get display ID for a session, removing parent prefix if applicable
-  const getDisplayId = (session: Session, parentSession: Session | null) => {
-    if (!parentSession) return session.id
-    if (session.id.startsWith(parentSession.id)) {
-      return session.id.slice(parentSession.id.length)
-    }
-    return session.id
   }
 
   // Handle right click
@@ -963,7 +971,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
-    const displayId = getDisplayId(session, parentSession)
+    const isDirectChild = !!parentSession && resolveSessionId(session.parentSessionId) === parentSession.id
+    const displayId = getSessionListDisplayId(session.id, parentSession?.id, isDirectChild)
 
     const isCurrentSession = resolvedCurrentSessionId === session.id
     const runtimeStateName = getSessionRuntimeStateName(session)
@@ -973,6 +982,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       ? rowParentSessionId === draggingSessionId || isDescendantOf(rowParentSessionId, draggingSessionId)
       : false
     const disableSidebarDrop = !draggingSessionId
+      || !dragEnabled
       || isFiltering
       || !allowParentDrop && !allowSidebarOrder
       || draggingPinnedSession
@@ -998,6 +1008,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           setRowRef={(node) => {
             sessionRefs.current.set(session.id, node)
           }}
+          dragEnabled={dragEnabled}
         >
           <>
               <SessionRowDropLayer
@@ -1215,7 +1226,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               <ViewModeIcon className="h-3.5 w-3.5" />
             </button>
           </div>
-          <SidebarRootDropZone visible={!!draggingSessionId && allowParentDrop} disabled={isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
+          <SidebarRootDropZone visible={dragEnabled && !!draggingSessionId && allowParentDrop} disabled={!dragEnabled || isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto" data-session-list-scroll-container>

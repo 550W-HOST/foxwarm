@@ -8,6 +8,7 @@ import * as skillCore from './skills';
 import * as tools from './tools';
 import { tool_load_skill } from './toolsSessionAgent';
 import { getAgentDir } from './config';
+import * as sessionManager from './sessionManager';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -45,6 +46,8 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
     assert.match(snapshot, /<available_skills>/);
     assert.match(snapshot, new RegExp(`<name>${skillName}</name>`));
     assert.match(snapshot, /<name>timer-automation<\/name>/);
+    assert.match(snapshot, /<name>webui-markers<\/name>/);
+    assert.match(snapshot, /presenting a real Git commit/);
     assert.match(snapshot, /Analyze visible-skill tasks/);
     assert.doesNotMatch(snapshot, new RegExp(uniqueBody));
 
@@ -65,6 +68,11 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
     assert.match(String(loadedTimerSkill), /day-of-month `L`/);
     assert.match(String(loadedTimerSkill), /`W` .*not supported/);
     assert.doesNotMatch(String(loadedTimerSkill), /memory\//);
+
+    const loadedMarkerSkill = await tool_load_skill({ skillName: 'webui-markers', agentName }, {});
+    assert.match(String(loadedMarkerSkill), /<foxwarm-commit node=/);
+    assert.match(String(loadedMarkerSkill), /actually been created/);
+    assert.match(String(loadedMarkerSkill), /Malformed markers are inert/);
 
     const loadedDocuments = await skillCore.loadSkillDocuments(skillName, { agentName });
     assert.deepEqual(loadedDocuments.info.documentFiles, ['SKILL.md']);
@@ -105,5 +113,57 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
     assert.match(replies.pop() || '', /no longer supported/i);
   } finally {
     await fs.remove(agentDir).catch(() => {});
+  }
+});
+
+test('snapshot skill catalog uses compact escaped XML and reports the selected source after precedence', async () => {
+  await sessionManager.loadSessions();
+
+  const inheritedAgentName = makeId('skill_catalog_parent');
+  const agentName = makeId('skill_catalog_child');
+  const inheritedAgentDir = getAgentDir(inheritedAgentName);
+  const agentDir = getAgentDir(agentName);
+  const inheritedOnlySkill = 'inherited-only-skill';
+  const localOnlySkill = 'local-only-skill';
+  const shadowedSkill = 'shadowed-skill';
+  const escapedSkill = 'xml&skill';
+
+  async function writeSkill(baseDir: string, name: string, description: string): Promise<void> {
+    const skillDir = path.join(baseDir, 'skills', name);
+    await fs.ensureDir(skillDir);
+    await fs.writeFile(
+      path.join(skillDir, 'SKILL.md'),
+      `---\ndescription: ${JSON.stringify(description)}\n---\n# ${name}\n`,
+      'utf8',
+    );
+  }
+
+  await fs.ensureDir(inheritedAgentDir);
+  await fs.ensureDir(agentDir);
+  await writeSkill(inheritedAgentDir, inheritedOnlySkill, 'Inherited description');
+  await writeSkill(inheritedAgentDir, shadowedSkill, 'Inherited shadowed description');
+  await writeSkill(agentDir, localOnlySkill, 'Local description');
+  await writeSkill(agentDir, shadowedSkill, 'Local wins description');
+  await writeSkill(agentDir, escapedSkill, 'Use <xml> & keep > escaped');
+  await sessionManager.setAgentInherit(agentName, inheritedAgentName);
+
+  try {
+    const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, systemPromptFiles: [] });
+    const catalog = snapshot.match(/<available_skills>\n([\s\S]*?)<\/available_skills>/)?.[1] || '';
+    const skillLines = catalog.trimEnd().split('\n');
+
+    assert.ok(skillLines.length > 0);
+    assert.ok(skillLines.every(line => /^  <skill><name>.*<\/name><description>.*<\/description><source>(?:agent-local|agent-inherited|global)<\/source><\/skill>$/.test(line)));
+    assert.match(catalog, new RegExp(`<skill><name>${localOnlySkill}</name><description>Local description</description><source>agent-local</source></skill>`));
+    assert.match(catalog, new RegExp(`<skill><name>${inheritedOnlySkill}</name><description>Inherited description</description><source>agent-inherited</source></skill>`));
+    assert.match(catalog, /<skill><name>timer-automation<\/name><description>[^\n]*<\/description><source>global<\/source><\/skill>/);
+    assert.match(catalog, new RegExp(`<skill><name>${shadowedSkill}</name><description>Local wins description</description><source>agent-local</source></skill>`));
+    assert.doesNotMatch(catalog, /Inherited shadowed description/);
+    assert.match(catalog, /<skill><name>xml&amp;skill<\/name><description>Use &lt;xml&gt; &amp; keep &gt; escaped<\/description><source>agent-local<\/source><\/skill>/);
+    assert.doesNotMatch(catalog, /<skill>\s+<name>|<\/name>\s+<description>|<\/description>\s+<source>/);
+  } finally {
+    await sessionManager.setAgentInherit(agentName, undefined).catch(() => {});
+    await fs.remove(agentDir).catch(() => {});
+    await fs.remove(inheritedAgentDir).catch(() => {});
   }
 });

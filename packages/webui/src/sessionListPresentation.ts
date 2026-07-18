@@ -38,3 +38,19 @@ export function compareSessionListSessions(
 export function shouldElevateSessionToRoot(session: Pick<SessionListSortable, 'pinned'>, mode: SessionListOrderMode): boolean {
   return mode === 'flat-time' || !!session.pinned
 }
+
+export function getSessionListDisplayId(sessionId: string, parentSessionId?: string | null, isDirectChild: boolean = true): string {
+  if (!parentSessionId) return sessionId
+  if (sessionId.startsWith(parentSessionId)) {
+    return sessionId.slice(parentSessionId.length)
+  }
+
+  if (isDirectChild && parentSessionId.endsWith('/main')) {
+    const agentId = parentSessionId.slice(0, -'/main'.length)
+    if (agentId && sessionId.startsWith(`${agentId}/`)) {
+      return sessionId.slice(agentId.length)
+    }
+  }
+
+  return sessionId
+}

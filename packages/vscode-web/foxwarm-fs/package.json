@@ -1,0 +1,90 @@
+{
+  "name": "@foxwarm/vscode-web-foxwarm-fs",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "foxwarm",
+  "license": "MIT",
+  "browser": "./dist/extension.js",
+  "activationEvents": [
+    "onFileSystem:foxwarm",
+    "onCommand:foxwarm-fs.openFolder",
+    "onCommand:foxwarm-fs.addFolderToWorkspace",
+    "onCommand:foxwarm-fs.handleOpenRequest"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "foxwarm-fs.openFolder",
+        "title": "Foxwarm: Add Folder...",
+        "category": "Foxwarm",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "foxwarm-fs.handleOpenRequest",
+        "title": "Foxwarm: Handle Open Request",
+        "category": "Foxwarm"
+      },
+      {
+        "command": "foxwarm-fs.addFolderToWorkspace",
+        "title": "Add Folder to Workspace",
+        "category": "Foxwarm"
+      }
+    ],
+    "menus": {
+      "statusBar/remoteIndicator": [
+        {
+          "command": "foxwarm-fs.openFolder",
+          "when": "virtualWorkspace == foxwarm",
+          "group": "virtualfs_90_foxwarm_1_open@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "foxwarm-fs.handleOpenRequest",
+          "when": "false"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "foxwarm-fs.addFolderToWorkspace",
+          "when": "resourceScheme == foxwarm && explorerResourceIsFolder",
+          "group": "navigation@20"
+        }
+      ]
+    },
+    "resourceLabelFormatters": [
+      {
+        "scheme": "foxwarm",
+        "authority": "node+*",
+        "formatting": {
+          "label": "${path}",
+          "separator": "/",
+          "stripPathStartingSeparator": false,
+          "tildify": false,
+          "workspaceSuffix": "Foxwarm"
+        }
+      },
+      {
+        "scheme": "foxwarm",
+        "authority": "node",
+        "formatting": {
+          "label": "${path}",
+          "separator": "/",
+          "stripPathStartingSeparator": false,
+          "tildify": false,
+          "workspaceSuffix": "Foxwarm"
+        }
+      }
+    ]
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0"
+  }
+}
