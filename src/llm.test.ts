@@ -121,6 +121,80 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
   }
 });
 
+test('OpenAI chat completions requests omit empty system messages and preserve non-empty prompts', async () => {
+  const originalPost = axios.post;
+  const capturedUrls: string[] = [];
+  const capturedBodies: any[] = [];
+
+  (axios as any).post = async (url: string, data: any) => {
+    capturedUrls.push(url);
+    capturedBodies.push(data);
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: makeChatCompletionStream(),
+    };
+  };
+
+  const modelEntryOverride = {
+    providerKey: 'compatible',
+    providerType: 'openai-completions',
+    baseUrl: 'https://compatible.example/v1',
+    apiKey: 'test-key',
+    model: 'compatible-model',
+    extraFields: {},
+    extraHeaders: {},
+  } as any;
+
+  try {
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'empty system prompt' }] }],
+      systemPrompt: '',
+      modelEntryOverride,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'whitespace-only system prompt' }] }],
+      systemPrompt: '   ',
+      modelEntryOverride,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'non-empty system prompt' }] }],
+      systemPrompt: 'You are a helpful assistant.',
+      modelEntryOverride,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.deepEqual(capturedUrls, [
+      'https://compatible.example/v1/chat/completions',
+      'https://compatible.example/v1/chat/completions',
+      'https://compatible.example/v1/chat/completions',
+    ]);
+    assert.deepEqual(capturedBodies[0].messages, [
+      { role: 'user', content: 'empty system prompt' },
+    ]);
+    assert.deepEqual(capturedBodies[1].messages, [
+      { role: 'user', content: 'whitespace-only system prompt' },
+    ]);
+    assert.deepEqual(capturedBodies[2].messages, [
+      { role: 'system', content: 'You are a helpful assistant.' },
+      { role: 'user', content: 'non-empty system prompt' },
+    ]);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('requestLlmOnce logs raw stream body with parsed streaming response', async () => {
   const originalPost = axios.post;
   const fs = await import('node:fs/promises');
