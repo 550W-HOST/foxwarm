@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import type { AddressInfo } from 'node:net';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { NODE_SOURCE_FILES, NODE_SOURCE_TAR_EXCLUDES } from './httpRoutes';
 
 const execFileAsync = promisify(execFile);
 const RUN_SH = path.resolve(__dirname, '../../templates/node/run.sh');
@@ -64,7 +67,7 @@ exit 0
   }
 
   if (options.isolatedPath) {
-    const commands = ['awk', 'cat', 'chmod', 'cksum', 'cp', 'hostname', 'mkdir', 'nohup', 'rm', 'sed', 'sleep'];
+    const commands = ['awk', 'cat', 'chmod', 'cksum', 'cp', 'gzip', 'hostname', 'mkdir', 'nohup', 'rm', 'sed', 'sleep'];
     for (const command of commands) {
       const real = ['/usr/bin', '/bin'].map(dir => path.join(dir, command)).find(candidate => fs.existsSync(candidate));
       assert.ok(real, `missing test utility ${command}`);
@@ -183,6 +186,75 @@ test('run.sh -d falls back to nohup when tmux is unavailable', async () => {
     if (pid) {
       try { process.kill(pid, 'SIGTERM'); } catch {}
     }
+    await fs.remove(fixture.root);
+  }
+});
+
+test('run.sh starts the real prebuilt node bundle from a clean source archive without host node_modules', async () => {
+  const fixture = await makeFixture({ isolatedPath: true });
+  const installDir = path.join(fixture.root, 'clean distribution');
+  const archivePath = path.join(fixture.root, 'source.tar.gz');
+  const repoRoot = path.resolve(__dirname, '../..');
+  let nodePid: number | undefined;
+  let server: http.Server | undefined;
+  try {
+    await execFileAsync('tar', [
+      '-czf', archivePath,
+      ...NODE_SOURCE_TAR_EXCLUDES.map(relPath => `--exclude=${relPath}`),
+      ...NODE_SOURCE_FILES,
+    ], { cwd: repoRoot });
+    const archiveListing = (await execFileAsync('tar', ['-tzf', archivePath])).stdout;
+    assert.match(archiveListing, /packages\/shared\/dist\/codeHelperIpc\.js/);
+    assert.doesNotMatch(archiveListing, /node_modules/);
+
+    for (const command of ['curl', 'tar', 'node']) {
+      await fs.remove(path.join(fixture.bin, command));
+    }
+    const realCurl = ['/usr/bin/curl', '/bin/curl'].find(candidate => fs.existsSync(candidate));
+    const realTar = ['/usr/bin/tar', '/bin/tar'].find(candidate => fs.existsSync(candidate));
+    assert.ok(realCurl, 'curl is required for the clean distribution test');
+    assert.ok(realTar, 'tar is required for the clean distribution test');
+    await fs.symlink(realCurl, path.join(fixture.bin, 'curl'));
+    await fs.symlink(realTar, path.join(fixture.bin, 'tar'));
+    await fs.symlink(process.execPath, path.join(fixture.bin, 'node'));
+    await writeExecutable(path.join(fixture.bin, 'npm'), '#!/bin/sh\nexit 0\n');
+
+    server = http.createServer((req, res) => {
+      if (req.url === '/node/source.tar.gz') {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/gzip');
+        fs.createReadStream(archivePath).pipe(res);
+        return;
+      }
+      res.statusCode = 404;
+      res.end('not found');
+    });
+    await new Promise<void>((resolve, reject) => {
+      server!.once('error', reject);
+      server!.listen(0, '127.0.0.1', resolve);
+    });
+    const port = (server.address() as AddressInfo).port;
+    const result = await runScript([
+      `--dir=${installDir}`,
+      `--host=http://127.0.0.1:${port}`,
+      '--pairing=TOKEN',
+      '--node-id=clean-bundle-node',
+      '--detach',
+    ], { ...fixture.env, NODE_PATH: '' });
+
+    assert.match(result.stdout, /Using bundled node client from source archive; skipping npm install/);
+    assert.match(result.stdout, /Background supervisor: nohup/);
+    nodePid = Number((await fs.readFile(path.join(installDir, 'data/node.pid'), 'utf8')).trim());
+    assert.ok(Number.isInteger(nodePid) && nodePid > 0);
+    process.kill(nodePid, 0);
+    const log = await fs.readFile(path.join(installDir, 'data/logs/node.log'), 'utf8');
+    assert.doesNotMatch(log, /Cannot find module 'fs-extra'/);
+    assert.match(log, /Connecting to foxwarm master/);
+  } finally {
+    if (nodePid) {
+      try { process.kill(nodePid, 'SIGTERM'); } catch {}
+    }
+    if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
     await fs.remove(fixture.root);
   }
 });
