@@ -21,7 +21,7 @@ export const NODE_SOURCE_FILES = [
   'scripts/start-sandbox-node.sh',
 ];
 
-const NODE_SOURCE_TAR_EXCLUDES = [
+export const NODE_SOURCE_TAR_EXCLUDES = [
   'packages/shared/node_modules',
   'packages/cli-node/node_modules',
   'packages/cli-node-runtime/node_modules',

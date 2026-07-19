@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import fs from 'fs-extra';
+import fs from 'fs';
 import net from 'net';
 import os from 'os';
 import path from 'path';
@@ -78,7 +78,7 @@ async function resolveHelperRequest(cwd: string, args: string[]): Promise<CodeHe
   if (!positional) throw new Error('Usage: code [--add <folder> | --goto <file>:<line>[:<column>] | <path>]');
   const gotoTarget = goto ? parseGotoTarget(positional) : undefined;
   const resolvedPath = path.resolve(cwd, gotoTarget?.filePath || positional);
-  const stat = await fs.stat(resolvedPath).catch((): null => null);
+  const stat = await fs.promises.stat(resolvedPath).catch((): null => null);
   if (!stat) throw new Error(`Path does not exist: ${resolvedPath}`);
   if (forceAdd) {
     if (!stat.isDirectory()) throw new Error(`--add requires a directory: ${resolvedPath}`);
@@ -141,8 +141,8 @@ export class CodeHelperIpcServer {
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
     if (this.exitCleanup) process.removeListener('exit', this.exitCleanup);
     this.exitCleanup = undefined;
-    if (process.platform !== 'win32') await fs.remove(this.socketPath).catch((): undefined => undefined);
-    await fs.remove(this.helperDir).catch((): undefined => undefined);
+    if (process.platform !== 'win32') await fs.promises.rm(this.socketPath, { force: true }).catch((): undefined => undefined);
+    await fs.promises.rm(this.helperDir, { recursive: true, force: true }).catch((): undefined => undefined);
   }
 
   private async start(): Promise<void> {
@@ -153,7 +153,7 @@ export class CodeHelperIpcServer {
 
   private async startInternal(): Promise<void> {
     await this.writeHelperScripts();
-    if (process.platform !== 'win32') await fs.remove(this.socketPath).catch((): undefined => undefined);
+    if (process.platform !== 'win32') await fs.promises.rm(this.socketPath, { force: true }).catch((): undefined => undefined);
     const server = net.createServer((socket) => this.handleConnection(socket));
     this.server = server;
     await new Promise<void>((resolve, reject) => {
@@ -164,24 +164,24 @@ export class CodeHelperIpcServer {
       server.listen(this.socketPath);
     });
     server.unref();
-    if (process.platform !== 'win32') await fs.chmod(this.socketPath, 0o600);
+    if (process.platform !== 'win32') await fs.promises.chmod(this.socketPath, 0o600);
     this.exitCleanup = () => {
-      try { if (process.platform !== 'win32') fs.removeSync(this.socketPath); } catch {}
-      try { fs.removeSync(this.helperDir); } catch {}
+      try { if (process.platform !== 'win32') fs.rmSync(this.socketPath, { force: true }); } catch {}
+      try { fs.rmSync(this.helperDir, { recursive: true, force: true }); } catch {}
     };
     process.once('exit', this.exitCleanup);
   }
 
   private async writeHelperScripts(): Promise<void> {
     const binDir = path.join(this.helperDir, 'bin');
-    await fs.ensureDir(binDir);
+    await fs.promises.mkdir(binDir, { recursive: true });
     if (process.platform === 'win32') {
       const script = `@echo off\r\n"${process.execPath.replace(/"/g, '""')}" "${__filename.replace(/"/g, '""')}" %*\r\n`;
-      await fs.writeFile(path.join(binDir, 'code.cmd'), script);
+      await fs.promises.writeFile(path.join(binDir, 'code.cmd'), script);
       return;
     }
     const script = `#!/bin/sh\nexec ${quotePosix(process.execPath)} ${quotePosix(__filename)} "$@"\n`;
-    await fs.writeFile(path.join(binDir, 'code'), script, { mode: 0o755 });
+    await fs.promises.writeFile(path.join(binDir, 'code'), script, { mode: 0o755 });
   }
 
   private handleConnection(socket: net.Socket): void {
