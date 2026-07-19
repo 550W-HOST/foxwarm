@@ -1477,7 +1477,9 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             stream: true,
             stream_options: { include_usage: true },
             messages: [
-                { role: 'system', content: options.systemPrompt },
+                ...(options.systemPrompt?.trim()
+                    ? [{ role: 'system', content: options.systemPrompt }]
+                    : []),
                 ...messages
             ],
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
