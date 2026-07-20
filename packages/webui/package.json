@@ -10,6 +10,7 @@
     "test:scroll-e2e": "node --test test/scrollState.e2e.mjs",
     "test:session-list-e2e": "node --test test/sessionListLiveRefresh.e2e.mjs",
     "test:session-list-drag-e2e": "node --test test/sessionListDrag.e2e.mjs",
+    "test:session-header-e2e": "node --test test/sessionHeader.e2e.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

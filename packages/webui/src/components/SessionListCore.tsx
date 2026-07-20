@@ -1074,11 +1074,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     )}
                     <span>{session.messageCount || 0} msgs</span>
                   </div>
-                  {session.cwd && (
-                    <div className="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500" title={session.cwd}>
-                      cwd: {session.cwd}
-                    </div>
-                  )}
                   {hasChildren && (
                     <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
                       <button

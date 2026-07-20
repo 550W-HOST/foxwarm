@@ -12,6 +12,7 @@ import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, Too
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
+import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import {
   CHAT_MESSAGE_ANCHOR_SELECTOR,
   chooseChatViewportState,
@@ -116,6 +117,7 @@ type SessionListRecord = {
   displayName?: string | null
   archived?: boolean
   currentNode?: string
+  cwd?: string | null
   model?: string | null
   modelKey?: string
   defaultModelKey?: string
@@ -227,6 +229,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [sessionFilePayload, setSessionFilePayload] = useState<SessionFilePayload | null>(null)
   const [showFullTimeline, setShowFullTimeline] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
+  const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
 
   const viewportSessionId = canonicalSessionId || sessionId
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -1340,7 +1343,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionRecord?.displayName || sessionId}
-        subtitle={<span className="font-mono text-[12px]">session {sessionId}</span>}
+        subtitle={(
+          <span data-session-header-subtitle className="font-mono text-[12px]" title={sessionRecord?.cwd || undefined}>
+            {sessionHeaderSubtitle}
+          </span>
+        )}
         onBack={isMobile ? onBack : undefined}
         sticky
         actions={(
