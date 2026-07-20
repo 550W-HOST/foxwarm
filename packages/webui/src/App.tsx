@@ -1757,7 +1757,7 @@ function App() {
             <span className="truncate">{draggingTab.title}</span>
           </div>
         ) : draggingItem?.type === 'session' ? (
-          <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+          <div data-session-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
             <span className="truncate">{draggingItem.title}</span>
           </div>
         ) : null}

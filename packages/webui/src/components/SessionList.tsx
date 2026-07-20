@@ -150,6 +150,7 @@ export default function SessionList({
           currentSession={currentSession}
           onSelectSession={onSelectSession}
           onKeepSession={onKeepSession}
+          dragEnabled={false}
           toolbarContainerClassName="mx-auto w-full max-w-4xl p-2 sm:p-4 sm:pb-2"
           listContainerClassName="mx-auto w-full max-w-4xl p-2 sm:p-4 sm:pt-1"
         />

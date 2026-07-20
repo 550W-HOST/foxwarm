@@ -9,6 +9,7 @@
     "test:theme-e2e": "node --test test/themeMarkdownStyles.e2e.mjs",
     "test:scroll-e2e": "node --test test/scrollState.e2e.mjs",
     "test:session-list-e2e": "node --test test/sessionListLiveRefresh.e2e.mjs",
+    "test:session-list-drag-e2e": "node --test test/sessionListDrag.e2e.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
