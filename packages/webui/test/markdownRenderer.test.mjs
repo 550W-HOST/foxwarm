@@ -70,3 +70,13 @@ test('malformed TeX does not crash and still outputs safe content', () => {
   assert.match(html, /\\frac\{/)
   assert.doesNotMatch(html, /<script/i)
 })
+
+test('GFM tables retain semantic table markup for the scrollable Markdown style', () => {
+  const html = renderMarkdownWithSanitizer('| left | right |\n| --- | --- |\n| a | b |', identitySanitizer)
+
+  assert.match(html, /<table>/)
+  assert.match(html, /<thead>/)
+  assert.match(html, /<tbody>/)
+  assert.match(html, /<th>left<\/th>/)
+  assert.match(html, /<td>b<\/td>/)
+})

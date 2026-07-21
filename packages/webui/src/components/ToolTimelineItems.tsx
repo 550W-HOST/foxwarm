@@ -1,5 +1,5 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
-import type { MouseEvent, ReactNode } from 'react'
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react'
 import { Eye, FileJson, Download } from 'lucide-react'
 import {
   IconToggleButton,
@@ -149,19 +149,26 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
   onOpenCodeFile?: OpenCodeFileHandler
   prefix?: string
 }) {
-  if (!onOpenCodeFile) return <span>{prefix}{filePath}</span>
+  if (!onOpenCodeFile) return <span className="min-w-0 max-w-full break-words">{prefix}{filePath}</span>
   return (
-    <button
-      type="button"
-      className="min-w-0 truncate text-left hover:underline cursor-pointer"
+    <span
+      role="button"
+      tabIndex={0}
+      className="foxwarm-tool-code-path min-w-0 max-w-full whitespace-normal break-words text-left hover:underline cursor-pointer"
       title={`Open ${filePath} in Code`}
       onClick={(event) => {
         event.stopPropagation()
         onOpenCodeFile(filePath, lines)
       }}
+      onKeyDown={(event: KeyboardEvent<HTMLSpanElement>) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        event.stopPropagation()
+        onOpenCodeFile(filePath, lines)
+      }}
     >
       {prefix}{filePath}
-    </button>
+    </span>
   )
 })
 
@@ -184,7 +191,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     const extra = (call.args.startLine || call.args.endLine)
       ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
       : ''
-    return <span title={`${call.args.filePath}${extra}`} className="inline-flex min-w-0 items-center gap-1"><ToolCodePath filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} onOpenCodeFile={options.onOpenCodeFile} />{extra}</span>
+    return <span title={`${call.args.filePath}${extra}`} className="flex min-w-0 max-w-full flex-wrap items-baseline gap-x-1"><ToolCodePath filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} onOpenCodeFile={options.onOpenCodeFile} />{extra}</span>
   }
 
   if (call.name === 'write') {
@@ -611,13 +618,13 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       onClick={onClick}
     >
       <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
-      {includeCallPreview && call && <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
+      {includeCallPreview && call && <div className="min-w-0 max-w-full flex-1 break-words">{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
     </div>
   )
 
   return (
     <div
-      className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} min-w-0 max-w-full text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? () => setExpanded(true) : undefined}
     >
       <ThreadLineButton
@@ -648,7 +655,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           {header('cursor-pointer hover:text-gray-900 dark:hover:text-gray-100', (e) => { e.stopPropagation(); setExpanded(false) })}
 
-          <div className="mt-1 cursor-default pr-2" onClick={(e) => e.stopPropagation()}>
+          <div className="mt-1 min-w-0 max-w-full cursor-default pr-2" onClick={(e) => e.stopPropagation()}>
             {call && (
               <div className={`text-gray-700 dark:text-gray-300 ${showDiffToggles ? 'relative' : ''}`}>
                 {showDiffToggles && (
