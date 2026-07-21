@@ -66,6 +66,78 @@ export interface CompactPlanValidationDetails {
   createBlockErrors: string[];
 }
 
+export interface MessageCompactionPolicy {
+  thresholdTokens: number;
+  totalCandidateTokens: number;
+  eligibleTokens: number;
+  requestedMinTokens: number;
+  feasibleMaxTokens: number;
+  effectiveMinTokens: number;
+  skippedReason?: string;
+}
+
+export interface BlockCompactionPolicy {
+  sourceLevel: number;
+  totalBlockCount: number;
+  totalTokens: number;
+  forcedKeepNewestCount: number;
+  candidateBlockCount: number;
+  requestedMinBlocks: number;
+  feasibleMaxBlocks: number;
+  effectiveMinBlocks: number;
+  skippedReason?: string;
+}
+
+export interface CompactPlanValidationOptions {
+  removablePreservedMessages?: PreservedMessageCandidateItem[];
+  messagePolicy?: MessageCompactionPolicy;
+  blockPolicies?: BlockCompactionPolicy[];
+}
+
+export interface BlockCompactionWindow {
+  forcedKeepNewestCount: number;
+  candidateBlockCount: number;
+  requestedMinBlocks: number;
+}
+
+export function clampCompactFraction(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  if (value <= 0) return 0;
+  if (value >= 1) return 1;
+  return value;
+}
+
+export function calculateBlockCompactionWindow(options: {
+  totalBlockCount: number;
+  totalTokens: number;
+  minTokens: number;
+  forceTokens: number;
+  candidateFraction: number;
+  forceCompactFraction: number;
+}): BlockCompactionWindow {
+  const totalBlockCount = Math.max(0, Math.floor(options.totalBlockCount));
+  if (totalBlockCount === 0 || options.totalTokens < options.minTokens) {
+    return {
+      forcedKeepNewestCount: totalBlockCount,
+      candidateBlockCount: 0,
+      requestedMinBlocks: 0,
+    };
+  }
+
+  const candidateFraction = clampCompactFraction(options.candidateFraction, 0.4);
+  const forceCompactFraction = clampCompactFraction(options.forceCompactFraction, 0.2);
+  // floor makes the candidate window strict: everything outside the oldest
+  // fraction is force-kept, including conservative rounding for small levels.
+  const candidateBlockCount = Math.floor(totalBlockCount * candidateFraction);
+  return {
+    forcedKeepNewestCount: totalBlockCount - candidateBlockCount,
+    candidateBlockCount,
+    requestedMinBlocks: options.totalTokens >= options.forceTokens
+      ? Math.ceil(totalBlockCount * forceCompactFraction)
+      : 0,
+  };
+}
+
 export class CompactPlanValidationError extends Error {
   details: CompactPlanValidationDetails;
 
@@ -402,14 +474,45 @@ export function buildCompactPromptText(options: {
   forcedKeptEndSeq?: number;
   candidateItems: CompactCandidateItem[];
   preservedMessages?: PreservedMessageCandidateItem[];
+  messagePolicy?: MessageCompactionPolicy;
+  blockPolicies?: BlockCompactionPolicy[];
   guidance?: string;
 }): string {
-  const { forcedKeptCount, forcedKeptStartSeq, forcedKeptEndSeq, candidateItems, preservedMessages = [], guidance } = options;
+  const {
+    forcedKeptCount,
+    forcedKeptStartSeq,
+    forcedKeptEndSeq,
+    candidateItems,
+    preservedMessages = [],
+    messagePolicy,
+    blockPolicies = [],
+    guidance,
+  } = options;
   const lines: string[] = [
     'COMPACTION STARTED: stop any previous task and focus only on layered-context compaction.',
     'Goal: Replace older context with compact, continuation-oriented summaries so the main model can keep working without re-reading the original messages. Summaries must preserve decisions, active tasks, blockers, and concrete next actions.',
     `Recent messages ${forcedKeptCount > 0 ? `(${forcedKeptCount} rendered item(s), ${formatSeqRange(forcedKeptStartSeq, forcedKeptEndSeq)})` : '(none)'} are already force-kept verbatim by the system. No need to summarize/replace them.`,
   ];
+
+  lines.push('Hard compaction limits for this run:');
+  if (messagePolicy) {
+    if (messagePolicy.effectiveMinTokens > 0) {
+      lines.push(`- Raw messages: ~${messagePolicy.eligibleTokens} eligible estimated tokens; message-source createBlocks must actually replace at least ~${messagePolicy.effectiveMinTokens} estimated tokens. Raw messages listed in preserveMessages stay verbatim and do not count toward this minimum.`);
+    } else {
+      lines.push(`- Raw messages: no mandatory message compaction this run (${messagePolicy.skippedReason || 'no eligible raw message candidates'}).`);
+    }
+  }
+  for (const policy of blockPolicies) {
+    const base = `- Source L${policy.sourceLevel} blocks: ${policy.totalBlockCount} block(s), ~${policy.totalTokens} tokens; newest ${policy.forcedKeepNewestCount} are force-kept and are not candidates; oldest ${policy.candidateBlockCount} may be listed.`;
+    if (policy.effectiveMinBlocks > 0) {
+      lines.push(`${base} Valid multi-block operations must compact at least ${policy.effectiveMinBlocks} source L${policy.sourceLevel} block(s) in total.`);
+    } else if (policy.requestedMinBlocks > 0) {
+      lines.push(`${base} Requested minimum ${policy.requestedMinBlocks} was reduced to 0 because no legal multi-block range is feasible${policy.skippedReason ? ` (${policy.skippedReason})` : ''}; stranded single-block lifts do not count as effective compression.`);
+    } else {
+      lines.push(`${base}${policy.skippedReason ? ` ${policy.skippedReason}.` : ''}`);
+    }
+  }
+  lines.push('Hard minima may be satisfied across multiple legal Segments, but every individual createBlocksJson range must remain inside one Segment.', '');
 
   // Group candidates by legal compression boundaries instead of only by target level.
   // In particular, block ranges must not cross a different source level/source kind.
@@ -462,8 +565,8 @@ export function buildCompactPromptText(options: {
     '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim unless listed in removePreservedMessages.',
     '- Use preserveMessages for a small number of raw message seqs that must remain verbatim even though they are covered by a newly created message-source block. The system will extract them after the covering block in working history.',
     '- Use removePreservedMessages only for messages listed in the "Previously preserved raw messages" section. This removes the raw message from working history/frontier only; it does not delete archive records or existing summary blocks.',
-    '- Block compression is optional. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from createBlocksJson.',
-    '- If a block/message still seems useful, you can leave it uncompressed by simply omitting it from createBlocksJson.',
+    '- Block compression is optional after satisfying the hard minima above. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from createBlocksJson.',
+    '- Subject to the hard minima above, if a block/message still seems useful, you can leave it uncompressed by simply omitting it from createBlocksJson.',
     '',
     'Block range rules (must be followed to produce a valid plan):',
     '- Treat each Segment header as a hard boundary: createBlocksJson ranges must stay inside one listed segment and must not cross different block levels or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
@@ -625,10 +728,6 @@ function findBlockRange(candidateItems: CompactCandidateItem[], level: number, s
   return null;
 }
 
-type CompactPlanValidationOptions = {
-  removablePreservedMessages?: PreservedMessageCandidateItem[];
-};
-
 function getMessageCandidateCoveringSeq(candidateItems: CompactCandidateItem[], seq: number): Extract<CompactCandidateItem, { kind: 'message' }> | undefined {
   return candidateItems.find((item): item is Extract<CompactCandidateItem, { kind: 'message' }> => (
     item.kind === 'message' && item.startSeq <= seq && item.endSeq >= seq
@@ -688,6 +787,8 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
   }
 
   const usedIndices = new Set<number>();
+  const coveredMessageIndices = new Set<number>();
+  const coveredBlockIndicesByLevel = new Map<number, Set<number>>();
   createBlocks.forEach((block, index) => {
     const range = block.sourceKind === 'message'
       ? findMessageRange(candidateItems, block.sourceStart, block.sourceEnd)
@@ -715,7 +816,56 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
     for (let candidateIndex = range[0]; candidateIndex <= range[1]; candidateIndex += 1) {
       usedIndices.add(candidateIndex);
     }
+
+    if (block.sourceKind === 'message') {
+      for (let candidateIndex = range[0]; candidateIndex <= range[1]; candidateIndex += 1) {
+        coveredMessageIndices.add(candidateIndex);
+      }
+    } else if (range[1] > range[0]) {
+      // A stranded single-block lift changes level but does not reduce the
+      // number of active frontier items, so it never satisfies a compression quota.
+      const sourceLevel = block.level - 1;
+      const covered = coveredBlockIndicesByLevel.get(sourceLevel) || new Set<number>();
+      for (let candidateIndex = range[0]; candidateIndex <= range[1]; candidateIndex += 1) {
+        covered.add(candidateIndex);
+      }
+      coveredBlockIndicesByLevel.set(sourceLevel, covered);
+    }
   });
+
+  if (details.createBlockErrors.length > 0) {
+    return details;
+  }
+
+  const preservedMessageIndices = new Set<number>();
+  for (const seq of preserveMessages) {
+    const index = candidateItems.findIndex(item => item.kind === 'message' && item.startSeq <= seq && item.endSeq >= seq);
+    if (index >= 0) preservedMessageIndices.add(index);
+  }
+
+  if (options.messagePolicy && options.messagePolicy.effectiveMinTokens > 0) {
+    let coveredTokens = 0;
+    for (const candidateIndex of coveredMessageIndices) {
+      if (preservedMessageIndices.has(candidateIndex)) continue;
+      const item = candidateItems[candidateIndex];
+      if (item?.kind === 'message') {
+        coveredTokens += Math.max(0, item.estimatedTokens || 0);
+      }
+    }
+    if (coveredTokens < options.messagePolicy.effectiveMinTokens) {
+      const deficit = options.messagePolicy.effectiveMinTokens - coveredTokens;
+      details.createBlockErrors.push(`Raw-message hard quota requires message-source createBlocks to actually replace at least ~${options.messagePolicy.effectiveMinTokens} eligible estimated tokens, but this plan replaces only ~${coveredTokens} after excluding preserveMessages (deficit ~${deficit}).`);
+    }
+  }
+
+  for (const policy of options.blockPolicies || []) {
+    if (policy.effectiveMinBlocks <= 0) continue;
+    const covered = coveredBlockIndicesByLevel.get(policy.sourceLevel)?.size || 0;
+    if (covered < policy.effectiveMinBlocks) {
+      const deficit = policy.effectiveMinBlocks - covered;
+      details.createBlockErrors.push(`Source L${policy.sourceLevel} block hard quota requires valid multi-block operations to compact at least ${policy.effectiveMinBlocks} candidate block(s), but this plan compacts only ${covered}; stranded single-block lifts do not count (deficit ${deficit}).`);
+    }
+  }
 
   return details;
 }

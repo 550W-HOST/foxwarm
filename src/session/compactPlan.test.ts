@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildBlockCandidateItem,
+  calculateBlockCompactionWindow,
   buildCompactPlanValidationFeedback,
   buildCompactPromptText,
   buildMessageCandidateItem,
@@ -34,6 +35,44 @@ test('message and block candidates render stable compact keys', () => {
   assert.match(block.preview, /summarized prior discussion/);
 });
 
+test('calculateBlockCompactionWindow strictly keeps newest 60% and applies 3k/5k thresholds', () => {
+  for (const [count, expectedCandidates] of [[1, 0], [2, 0], [3, 1], [4, 1], [5, 2], [6, 2]] as const) {
+    const window = calculateBlockCompactionWindow({
+      totalBlockCount: count,
+      totalTokens: 3000,
+      minTokens: 3000,
+      forceTokens: 5000,
+      candidateFraction: 0.4,
+      forceCompactFraction: 0.2,
+    });
+    assert.equal(window.candidateBlockCount, expectedCandidates);
+    assert.equal(window.forcedKeepNewestCount, count - expectedCandidates);
+    assert.equal(window.requestedMinBlocks, 0);
+  }
+
+  assert.deepStrictEqual(calculateBlockCompactionWindow({
+    totalBlockCount: 5,
+    totalTokens: 2999,
+    minTokens: 3000,
+    forceTokens: 5000,
+    candidateFraction: 0.4,
+    forceCompactFraction: 0.2,
+  }), {
+    forcedKeepNewestCount: 5,
+    candidateBlockCount: 0,
+    requestedMinBlocks: 0,
+  });
+
+  assert.equal(calculateBlockCompactionWindow({
+    totalBlockCount: 6,
+    totalTokens: 5000,
+    minTokens: 3000,
+    forceTokens: 5000,
+    candidateFraction: 0.4,
+    forceCompactFraction: 0.2,
+  }).requestedMinBlocks, 2);
+});
+
 test('buildCompactPromptText instructs the model to use the compact plan tool for layered-context candidates', () => {
   const prompt = buildCompactPromptText({
     forcedKeptCount: 3,
@@ -43,6 +82,24 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
       ...messageCandidates.slice(0, 2),
       buildBlockCandidateItem(9, 1, 3, 9, 'earlier summarized context'),
     ],
+    messagePolicy: {
+      thresholdTokens: 2000,
+      totalCandidateTokens: 5000,
+      eligibleTokens: 5000,
+      requestedMinTokens: 1000,
+      feasibleMaxTokens: 5000,
+      effectiveMinTokens: 1000,
+    },
+    blockPolicies: [{
+      sourceLevel: 1,
+      totalBlockCount: 5,
+      totalTokens: 5000,
+      forcedKeepNewestCount: 3,
+      candidateBlockCount: 2,
+      requestedMinBlocks: 1,
+      feasibleMaxBlocks: 2,
+      effectiveMinBlocks: 1,
+    }],
     guidance: 'Prefer compact summaries for resolved discussion.',
   });
 
@@ -51,6 +108,9 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /M#1/);
   assert.match(prompt, /B#9 L1 raw#3-#9/);
   assert.match(prompt, /resolved discussion/);
+  assert.match(prompt, /Raw messages: ~5000 eligible estimated tokens.*at least ~1000/i);
+  assert.match(prompt, /Source L1 blocks: 5 block\(s\).*newest 3 are force-kept.*oldest 2 may be listed/i);
+  assert.match(prompt, /must compact at least 1 source L1 block/i);
   assert.match(prompt, /Segment 1: raw message candidates -> L1 block\(s\)/);
   assert.match(prompt, /Segment 2: frontier-contiguous L1 block candidates -> L2 block\(s\)/);
   assert.match(prompt, /This segment has only one block, so normally leave it uncompressed/i);
@@ -84,6 +144,132 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /memoryFactsJson/);
   assert.match(prompt, /include them in memoryFactsJson/i);
   assert.match(prompt, /durable facts worth future retrieval/i);
+});
+
+test('validateCompactPlanArgs rejects block-only plans when eligible raw-message token quota is unmet', () => {
+  const candidates = [
+    buildMessageCandidateItem(1, 1, 'large raw message', 1000, 1),
+    buildMessageCandidateItem(2, 2, 'another raw message', 1000, 1),
+    buildBlockCandidateItem(10, 1, 3, 4, 'old block one', 1000, false, 2),
+    buildBlockCandidateItem(11, 1, 5, 6, 'old block two', 1000, false, 2),
+  ];
+  const messagePolicy = {
+    thresholdTokens: 2000,
+    totalCandidateTokens: 2000,
+    eligibleTokens: 2000,
+    requestedMinTokens: 400,
+    feasibleMaxTokens: 2000,
+    effectiveMinTokens: 400,
+  };
+
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 2,
+      sourceKind: 'block',
+      sourceStart: 10,
+      sourceEnd: 11,
+      summary: 'block-only plan',
+    }]),
+  }, candidates, { messagePolicy }), /Raw-message hard quota.*deficit ~400/i);
+
+  const repaired = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 1,
+      sourceEnd: 1,
+      summary: 'raw message summary',
+    }]),
+  }, candidates, { messagePolicy });
+  assert.equal(repaired.createBlocks[0].sourceKind, 'message');
+});
+
+test('raw-message quota uses estimated tokens across segments and excludes preserveMessages coverage', () => {
+  const candidates = [
+    buildMessageCandidateItem(1, 1, 'first', 300, 1),
+    buildMessageCandidateItem(2, 2, 'second', 400, 2),
+  ];
+  const messagePolicy = {
+    thresholdTokens: 2000,
+    totalCandidateTokens: 700,
+    eligibleTokens: 700,
+    requestedMinTokens: 350,
+    feasibleMaxTokens: 700,
+    effectiveMinTokens: 350,
+  };
+
+  const acrossSegments = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([
+      { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 1, summary: 'one' },
+      { level: 1, sourceKind: 'message', sourceStart: 2, sourceEnd: 2, summary: 'two' },
+    ]),
+  }, candidates, { messagePolicy });
+  assert.equal(acrossSegments.createBlocks.length, 2);
+
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 1,
+      sourceKind: 'message',
+      sourceStart: 2,
+      sourceEnd: 2,
+      summary: 'summary but preserve the original verbatim',
+    }]),
+    preserveMessages: [2],
+  }, candidates, { messagePolicy }), /replaces only ~0 after excluding preserveMessages/i);
+});
+
+test('block quotas accumulate legal multi-block segments and ignore stranded single lifts', () => {
+  const candidates = [
+    buildBlockCandidateItem(10, 1, 1, 2, 'a', 100, false, 1),
+    buildBlockCandidateItem(11, 1, 3, 4, 'b', 100, false, 1),
+    buildBlockCandidateItem(20, 1, 5, 6, 'c', 100, false, 2),
+    buildBlockCandidateItem(21, 1, 7, 8, 'd', 100, false, 2),
+    buildBlockCandidateItem(30, 2, 9, 10, 'stranded', 100, true, 3),
+  ];
+  const blockPolicies = [{
+    sourceLevel: 1,
+    totalBlockCount: 10,
+    totalTokens: 6000,
+    forcedKeepNewestCount: 6,
+    candidateBlockCount: 4,
+    requestedMinBlocks: 2,
+    feasibleMaxBlocks: 4,
+    effectiveMinBlocks: 3,
+  }, {
+    sourceLevel: 2,
+    totalBlockCount: 5,
+    totalTokens: 6000,
+    forcedKeepNewestCount: 4,
+    candidateBlockCount: 1,
+    requestedMinBlocks: 1,
+    feasibleMaxBlocks: 0,
+    effectiveMinBlocks: 0,
+    skippedReason: 'no legal contiguous multi-block candidate segment is available',
+  }];
+
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 2,
+      sourceKind: 'block',
+      sourceStart: 10,
+      sourceEnd: 11,
+      summary: 'only two source blocks',
+    }, {
+      level: 3,
+      sourceKind: 'block',
+      sourceStart: 30,
+      sourceEnd: 30,
+      summary: 'single lift does not count',
+    }]),
+  }, candidates, { blockPolicies }), /requires.*3 candidate block\(s\).*compacts only 2/i);
+
+  const valid = validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([
+      { level: 2, sourceKind: 'block', sourceStart: 10, sourceEnd: 11, summary: 'first segment' },
+      { level: 2, sourceKind: 'block', sourceStart: 20, sourceEnd: 21, summary: 'second segment' },
+    ]),
+  }, candidates, { blockPolicies });
+  assert.equal(valid.createBlocks.length, 2);
 });
 
 test('buildCompactPromptText renders block candidates by legal frontier-contiguous segments', () => {
@@ -411,26 +597,22 @@ test('validateCompactPlanArgs accepts frontier-continuous block ranges whose end
   assert.equal(plan.createBlocks[0].sourceEnd, 13);
 });
 
-test('validateCompactPlanArgs accepts sparse raw seq ranges when ignored lifecycle messages were filtered out of candidates', () => {
+test('validateCompactPlanArgs rejects ranges across an ignored lifecycle hard barrier', () => {
   const sparseMessageCandidates = [
-    buildMessageCandidateItem(1, 1, 'first real message'),
-    buildMessageCandidateItem(3, 3, 'second real message after ignored lifecycle seq #2'),
-    buildMessageCandidateItem(4, 4, 'third real message'),
+    buildMessageCandidateItem(1, 1, 'first real message', 10, 1),
+    buildMessageCandidateItem(3, 3, 'second real message after ignored lifecycle seq #2', 10, 2),
+    buildMessageCandidateItem(4, 4, 'third real message', 10, 2),
   ];
 
-  const plan = validateCompactPlanArgs({
+  assert.throws(() => validateCompactPlanArgs({
     createBlocksJson: JSON.stringify([{
       level: 1,
       sourceKind: 'message',
       sourceStart: 1,
       sourceEnd: 4,
-      summary: 'summary across visible messages while skipping ignored lifecycle seqs',
+      summary: 'invalid summary across the protected lifecycle boundary',
     }]),
-  }, sparseMessageCandidates);
-
-  assert.equal(plan.createBlocks.length, 1);
-  assert.equal(plan.createBlocks[0].sourceStart, 1);
-  assert.equal(plan.createBlocks[0].sourceEnd, 4);
+  }, sparseMessageCandidates), /continuous message range/i);
 });
 
 test('validateCompactPlanArgs can span message candidates across a display-only gap', () => {

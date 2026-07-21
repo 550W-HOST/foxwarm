@@ -1,21 +1,33 @@
 import * as llm from '../llm';
 import { logger } from '../common';
-import { COMPACT_PERCENT, resolveModelConfig } from '../config';
+import {
+  COMPACT_BLOCK_CANDIDATE_FRACTION,
+  COMPACT_BLOCK_FORCE_COMPACT_FRACTION,
+  COMPACT_BLOCK_LEVEL_FORCE_TOKENS,
+  COMPACT_BLOCK_LEVEL_MIN_TOKENS,
+  COMPACT_MESSAGE_FORCE_COMPACT_FRACTION,
+  COMPACT_PERCENT,
+  resolveModelConfig,
+} from '../config';
 import { estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
 import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange } from './archive';
 import {
   buildBlockCandidateItem,
+  calculateBlockCompactionWindow,
+  clampCompactFraction,
   buildCompactPlanValidationFeedback,
   buildCompactPromptText,
   buildMessageCandidateItem,
+  BlockCompactionPolicy,
   COMPACT_FLOW_MAX_ROUNDS,
+  COMPACT_LEVEL_TOKEN_THRESHOLD,
   COMPACT_PLAN_TOOL_NAME,
   CompactCandidateItem,
   CompactPlan,
   CompactPlanValidationError,
   ExtractedMemoryFact,
-  getCandidateTargetLevel,
+  MessageCompactionPolicy,
   PreservedMessageCandidateItem,
   selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
@@ -386,6 +398,12 @@ export type LayeredCompactCandidateEntry = {
   frontierEndIndex: number;
 };
 
+type LayeredCompactCandidateBuildResult = {
+  candidateEntries: LayeredCompactCandidateEntry[];
+  messagePolicy: MessageCompactionPolicy;
+  blockPolicies: BlockCompactionPolicy[];
+};
+
 export function isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(
   olderFrontier: ContextFrontierItem[],
   frontierIndex: number,
@@ -457,7 +475,7 @@ export function removePreservedMessageFrontierItems(frontier: ContextFrontierIte
   return frontier.filter(item => !(isPreservedMessageFrontierItem(item) && removeSeqs.has(item.seq)));
 }
 
-async function buildLayeredCompactCandidateEntries(session: Session, olderFrontier: ContextFrontierItem[]): Promise<LayeredCompactCandidateEntry[]> {
+async function buildLayeredCompactCandidateEntries(session: Session, olderFrontier: ContextFrontierItem[]): Promise<LayeredCompactCandidateBuildResult> {
   const messageSeqs = olderFrontier
     .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
     .map(item => item.seq);
@@ -475,6 +493,46 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
   const messageMap = new Map(messageRecords.map(record => [record.seq, record]));
   const blockMap = new Map(blockRecords.map(record => [record.id, record]));
 
+  const blockRecordsByLevel = new Map<number, Array<{ id: number; summary: string }>>();
+  for (const item of olderFrontier) {
+    if (item.kind !== 'block') continue;
+    const record = blockMap.get(item.id);
+    if (!record) continue;
+    const records = blockRecordsByLevel.get(record.level) || [];
+    records.push({ id: record.id, summary: record.summary });
+    blockRecordsByLevel.set(record.level, records);
+  }
+
+  const candidateBlockIdsByLevel = new Map<number, Set<number>>();
+  const preliminaryBlockPolicies: BlockCompactionPolicy[] = [];
+  for (const [sourceLevel, records] of blockRecordsByLevel.entries()) {
+    const totalTokens = records.reduce((sum, record) => sum + estimateTokenCount(record.summary || ''), 0);
+    const window = calculateBlockCompactionWindow({
+      totalBlockCount: records.length,
+      totalTokens,
+      minTokens: COMPACT_BLOCK_LEVEL_MIN_TOKENS,
+      forceTokens: COMPACT_BLOCK_LEVEL_FORCE_TOKENS,
+      candidateFraction: COMPACT_BLOCK_CANDIDATE_FRACTION,
+      forceCompactFraction: COMPACT_BLOCK_FORCE_COMPACT_FRACTION,
+    });
+    candidateBlockIdsByLevel.set(sourceLevel, new Set(records.slice(0, window.candidateBlockCount).map(record => record.id)));
+    preliminaryBlockPolicies.push({
+      sourceLevel,
+      totalBlockCount: records.length,
+      totalTokens,
+      forcedKeepNewestCount: window.forcedKeepNewestCount,
+      candidateBlockCount: window.candidateBlockCount,
+      requestedMinBlocks: window.requestedMinBlocks,
+      feasibleMaxBlocks: 0,
+      effectiveMinBlocks: 0,
+      ...(totalTokens < COMPACT_BLOCK_LEVEL_MIN_TOKENS
+        ? { skippedReason: `below the ${COMPACT_BLOCK_LEVEL_MIN_TOKENS}-token block eligibility threshold` }
+        : window.candidateBlockCount === 0
+        ? { skippedReason: 'the strict oldest-candidate window is empty at this level size' }
+        : {}),
+    });
+  }
+
   const entries: LayeredCompactCandidateEntry[] = [];
   let compactSegmentId = 1;
 
@@ -488,7 +546,11 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
 
     if (item.kind === 'block') {
       const record = blockMap.get(item.id);
-      if (!record) {
+      if (!record || !candidateBlockIdsByLevel.get(record.level)?.has(record.id)) {
+        // Non-candidate blocks are hard boundaries. Otherwise two eligible
+        // same-level blocks could form a range whose frontier replacement
+        // silently consumes a force-kept/different-level block between them.
+        compactSegmentId += 1;
         continue;
       }
 
@@ -510,7 +572,19 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
     }
 
     const record = messageMap.get(item.seq);
-    if (!record || shouldIgnoreMessageInCompactCandidates(record.message)) {
+    if (!record) {
+      compactSegmentId += 1;
+      continue;
+    }
+    if (!isModelVisibleMessage(record.message)) {
+      // Display-only items are intentionally transparent to compact ranges;
+      // they are dropped when an enclosing visible range is rewritten.
+      continue;
+    }
+    if (shouldIgnoreMessageInCompactCandidates(record.message)) {
+      // Model-visible lifecycle/session-boundary messages are protected hard
+      // boundaries even though they are not useful summary candidates.
+      compactSegmentId += 1;
       continue;
     }
 
@@ -536,7 +610,8 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       }
     }
 
-    const preview = groupedRecords
+    const visibleGroupedRecords = groupedRecords.filter(groupRecord => isModelVisibleMessage(groupRecord.message));
+    const preview = visibleGroupedRecords
       .map(groupRecord => formatMessagePreviewText(groupRecord.message, 50, {
         skipEphemeralSystem: true,
         skipRagMemorySnippets: true,
@@ -545,7 +620,7 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       .filter(Boolean)
       .join(' | ') || '[empty message]';
 
-    const estimatedTokens = groupedRecords.reduce((sum, groupRecord) => {
+    const estimatedTokens = visibleGroupedRecords.reduce((sum, groupRecord) => {
       return sum + estimateTokenCount(formatMessagePreviewText(groupRecord.message, Number.MAX_SAFE_INTEGER, {
         skipEphemeralSystem: true,
         skipRagMemorySnippets: true,
@@ -562,12 +637,66 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
     frontierIndex = groupedEndFrontierIndex;
   }
 
-  return entries;
-}
+  const rawEntries = entries.filter(entry => entry.item.kind === 'message');
+  const rawItems = rawEntries.map(entry => entry.item);
+  const totalRawTokens = rawItems.reduce((sum, item) => sum + Math.max(0, item.estimatedTokens || 0), 0);
+  const rawEligible = selectCompactCandidateTargetLevels(rawItems).has(1);
+  const candidateEntries = entries.filter(entry => entry.item.kind === 'block' || rawEligible);
 
-function filterLayeredCompactCandidateEntries(entries: LayeredCompactCandidateEntry[]): LayeredCompactCandidateEntry[] {
-  const allowedLevels = selectCompactCandidateTargetLevels(entries.map(entry => entry.item));
-  return entries.filter(entry => allowedLevels.has(getCandidateTargetLevel(entry.item)));
+  const rawFraction = clampCompactFraction(COMPACT_MESSAGE_FORCE_COMPACT_FRACTION, 0.2);
+  const eligibleRawTokens = rawEligible ? totalRawTokens : 0;
+  const requestedRawTokens = rawEligible ? Math.ceil(eligibleRawTokens * rawFraction) : 0;
+  const messagePolicy: MessageCompactionPolicy = {
+    thresholdTokens: COMPACT_LEVEL_TOKEN_THRESHOLD,
+    totalCandidateTokens: totalRawTokens,
+    eligibleTokens: eligibleRawTokens,
+    requestedMinTokens: requestedRawTokens,
+    feasibleMaxTokens: eligibleRawTokens,
+    effectiveMinTokens: Math.min(requestedRawTokens, eligibleRawTokens),
+    ...(!rawEligible
+      ? { skippedReason: totalRawTokens > 0
+        ? `~${totalRawTokens} raw-message tokens do not exceed the ${COMPACT_LEVEL_TOKEN_THRESHOLD}-token eligibility threshold`
+        : 'no eligible model-visible raw message candidates' }
+      : {}),
+  };
+
+  const blockPolicies = preliminaryBlockPolicies
+    .map(policy => {
+      const levelEntries = candidateEntries.filter(entry => entry.item.kind === 'block' && entry.item.level === policy.sourceLevel);
+      let feasibleMaxBlocks = 0;
+      let runLength = 0;
+      let previousSegmentId: number | undefined;
+      let previousCandidateIndex = -2;
+      const flushRun = () => {
+        if (runLength >= 2) feasibleMaxBlocks += runLength;
+        runLength = 0;
+      };
+
+      for (const entry of levelEntries) {
+        const candidateIndex = candidateEntries.indexOf(entry);
+        const segmentId = entry.item.segmentId ?? 0;
+        if (runLength > 0 && (candidateIndex !== previousCandidateIndex + 1 || segmentId !== previousSegmentId)) {
+          flushRun();
+        }
+        runLength += 1;
+        previousSegmentId = segmentId;
+        previousCandidateIndex = candidateIndex;
+      }
+      flushRun();
+
+      const effectiveMinBlocks = Math.min(policy.requestedMinBlocks, feasibleMaxBlocks);
+      return {
+        ...policy,
+        feasibleMaxBlocks,
+        effectiveMinBlocks,
+        ...(policy.requestedMinBlocks > 0 && feasibleMaxBlocks === 0
+          ? { skippedReason: 'no legal contiguous multi-block candidate segment is available' }
+          : {}),
+      };
+    })
+    .sort((a, b) => a.sourceLevel - b.sourceLevel);
+
+  return { candidateEntries, messagePolicy, blockPolicies };
 }
 
 async function getDisplayOnlyMessageSeqsForFrontier(sessionId: string, frontier: ContextFrontierItem[]): Promise<Set<number>> {
@@ -862,9 +991,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   const olderFrontier = frontierSnapshot.slice(0, splitIndex);
   const forceKeptRecentFrontier = splitIndex < frontierSnapshot.length ? frontierSnapshot.slice(splitIndex) : [];
   const preservedMessageCandidates = await buildPreservedMessageCandidateItems(transientSession, olderFrontier);
-  const candidateEntries = filterLayeredCompactCandidateEntries(
-    await buildLayeredCompactCandidateEntries(transientSession, olderFrontier)
-  );
+  const { candidateEntries, messagePolicy, blockPolicies } = await buildLayeredCompactCandidateEntries(transientSession, olderFrontier);
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   if (candidateItems.length === 0 && preservedMessageCandidates.length === 0) {
@@ -886,7 +1013,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       };
     }
 
-    logger.info({ sessionId, splitIndex }, 'Compaction skipped because no layered candidate items were produced');
+    logger.info({ sessionId, splitIndex, rawMessageReason: messagePolicy.skippedReason, blockPolicies }, 'Compaction skipped because no layered candidate items were produced');
     return {
       status: 'noop',
       reason: 'no-candidates',
@@ -906,6 +1033,8 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       forcedKeptEndSeq,
       candidateItems,
       preservedMessages: preservedMessageCandidates,
+      messagePolicy,
+      blockPolicies,
       guidance: compactGuidance,
     })
   };
@@ -950,6 +1079,8 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     try {
       compactPlan = validateCompactPlanArgs(result.toolCalls[0].args || {}, candidateItems, {
         removablePreservedMessages: preservedMessageCandidates,
+        messagePolicy,
+        blockPolicies,
       });
       break;
     } catch (e) {
