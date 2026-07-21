@@ -8,6 +8,7 @@
     "test:markdown": "node --test test/markdownRenderer.test.mjs",
     "test:theme-e2e": "node --test test/themeMarkdownStyles.e2e.mjs",
     "test:message-overflow-e2e": "node --test test/messageOverflow.e2e.mjs",
+    "test:tool-collapsed-overflow-e2e": "node --test test/toolCollapsedOverflow.e2e.mjs",
     "test:scroll-e2e": "node --test test/scrollState.e2e.mjs",
     "test:stream-follow-e2e": "node --test test/streamFollow.e2e.mjs",
     "test:session-list-e2e": "node --test test/sessionListLiveRefresh.e2e.mjs",

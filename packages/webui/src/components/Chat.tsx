@@ -1507,14 +1507,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       )}
 
       <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
-        <div ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-y-auto p-4">
-          <div ref={messagesContentRef}>
+        <div ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-x-hidden overflow-y-auto p-4">
+          <div ref={messagesContentRef} className="min-w-0 max-w-full overflow-x-hidden">
             {hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
               </div>
             )}
-            <div ref={committedTimelineRef} data-chat-timeline="committed">
+            <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full overflow-x-hidden">
               <ToolScriptProgressContext.Provider value={toolScriptProgress}>
                 <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </ToolScriptProgressContext.Provider>
@@ -1528,7 +1528,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               onRunQueued={handleRunQueued}
             />
             {queuedMessages.length > 0 && (
-              <div className="foxwarm-queued-preview" data-queued-preview="true" aria-label="Queued messages">
+              <div className="foxwarm-queued-preview min-w-0 max-w-full overflow-x-hidden" data-queued-preview="true" aria-label="Queued messages">
                 <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </div>
             )}

@@ -257,6 +257,22 @@ input, textarea, select {
     font: inherit;
     color: inherit;
   }
+
+  .foxwarm-tool-call-summary {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .foxwarm-tool-call-summary .foxwarm-tool-code-path-collapsed {
+    overflow: hidden;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+    text-overflow: ellipsis;
+  }
 }
 
 /* 550A theme style ---------------------------------------------------------

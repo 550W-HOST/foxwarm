@@ -691,7 +691,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
   }, [])
 
   return (
-    <>
+    <div className="foxwarm-chat-timeline min-w-0 max-w-full overflow-x-hidden">
       {messages.map((msg, idx) => {
         if (toolGroupMeta.handledByPreviousGroup[idx]) {
           return null
@@ -726,7 +726,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
           />
         )
       })}
-    </>
+    </div>
   )
 })
 

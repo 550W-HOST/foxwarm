@@ -17,7 +17,10 @@ const tableHead = Array.from({ length: 10 }, (_, index) => `<th>column-${index}-
 const tableBody = Array.from({ length: 10 }, (_, index) => `<td>cell-${index}-wide-value</td>`).join('')
 
 const fixtureMarkup = `
-  <main id="viewport" class="w-full min-w-0 max-w-full p-4">
+  <main id="viewport" class="foxwarm-chat-timeline w-full min-w-0 max-w-full overflow-x-hidden p-4">
+    <section id="timeline-defense" class="foxwarm-chat-timeline min-w-0 max-w-full overflow-x-hidden">
+      <div id="intentional-oversized-child" style="width: 2400px; height: 1px"></div>
+    </section>
     <div class="flex w-full min-w-0 max-w-full">
       <article id="assistant" class="foxwarm-assistant-message-card min-w-0 max-w-full w-full rounded-lg border px-2">
         <div class="foxwarm-assistant-message-markdown min-w-0 max-w-full">
@@ -65,6 +68,7 @@ async function readLayout() {
     const toolPath = document.querySelector('#tool-code-path')
     const reasoning = document.querySelector('#reasoning')
     const contextBlock = document.querySelector('#context-block')
+    const timelineDefense = document.querySelector('#timeline-defense')
     const style = (element) => getComputedStyle(element)
 
     return {
@@ -74,6 +78,12 @@ async function readLayout() {
       assistantOverflow: assistant.scrollWidth - assistant.clientWidth,
       reasoningOverflow: reasoning.scrollWidth - reasoning.clientWidth,
       contextOverflow: contextBlock.scrollWidth - contextBlock.clientWidth,
+      timelineDefense: {
+        overflowX: style(timelineDefense).overflowX,
+        scrollWidth: timelineDefense.scrollWidth,
+        clientWidth: timelineDefense.clientWidth,
+        right: timelineDefense.getBoundingClientRect().right,
+      },
       wordOverflowWrap: style(longWord).overflowWrap,
       code: {
         overflowX: style(code).overflowX,
@@ -110,6 +120,9 @@ function assertContainedLayout(layout) {
   assert.ok(layout.assistantOverflow <= 1, `assistant overflowed by ${layout.assistantOverflow}px`)
   assert.ok(layout.reasoningOverflow <= 1, `reasoning overflowed by ${layout.reasoningOverflow}px`)
   assert.ok(layout.contextOverflow <= 1, `CTX-BLOCK overflowed by ${layout.contextOverflow}px`)
+  assert.equal(layout.timelineDefense.overflowX, 'hidden')
+  assert.ok(layout.timelineDefense.scrollWidth > layout.timelineDefense.clientWidth + 1000, 'fixture must contain a deliberately oversized future child')
+  assert.ok(layout.timelineDefense.right <= layout.viewportWidth + 1, 'timeline boundary itself must stay in the viewport')
   assert.equal(layout.wordOverflowWrap, 'anywhere')
 
   assert.equal(layout.code.whiteSpace, 'pre-wrap')
