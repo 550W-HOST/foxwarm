@@ -145,7 +145,7 @@ test('vector search filters, block boost, and recall vector_query source renderi
       sessionId: 'child',
       scope: 'current-session',
       limit: 5,
-      query: 'useful',
+      contentFilter: 'useful',
       previewLength: 2000,
     }, { sessionId: 'child', session: { id: 'child', agent: 'test-agent' } } as any));
     assert.match(recallVector, /Recall vector search for `alpha`/);

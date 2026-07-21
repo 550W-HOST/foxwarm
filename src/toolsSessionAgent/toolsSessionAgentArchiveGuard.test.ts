@@ -135,6 +135,21 @@ test('get_session_messages treats previewLength as a clamped total preview budge
     }, {});
     assert.match(String(singleResult), /showing 1 of 3 message\(s\)/i);
     assert.match(String(singleResult), /using 20000/i);
+
+    const filteredResult = await toolsSessionAgent.tool_get_session_messages({
+      sessionId,
+      count: 3,
+      contentFilter: 'two',
+      previewLength: 1000,
+    }, {});
+    assert.match(String(filteredResult), /showing 1 of 3 message\(s\)/i);
+    assert.match(String(filteredResult), /contentFilter excluded 2 item\(s\)/i);
+    assert.doesNotMatch(String(filteredResult), /\[hint\]/i);
+
+    await assert.rejects(
+      () => toolsSessionAgent.tool_get_session_messages({ sessionId, query: 'two' }, {}),
+      /get_session_messages no longer accepts `query`[\s\S]*contentFilter/i,
+    );
   } finally {
     try {
       await sessionManager.deleteSession(sessionId);
@@ -505,17 +520,40 @@ test('recall renderer filters messages and centers previews around matches', asy
       __meta: { timestamp: 3000 },
     },
   ]);
+  await deps.layeredContext.appendBlocksToArchive(session, [
+    { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 3, rawStartSeq: 1, rawEndSeq: 3, summary: 'summary remains visible while source messages are post-filtered' },
+  ]);
 
   const literal = String(await deps.toolsSessionAgent.tool_recall({
     sessionId,
     target: 'msg#1-3',
-    query: 'UNIQUE_NEEDLE',
+    contentFilter: 'UNIQUE_NEEDLE',
     previewLength: 1000,
   }));
   assert.match(literal, /UNIQUE_NEEDLE/);
   assert.match(literal, /showing 1 of 3 matched message\(s\)/);
+  assert.match(literal, /contentFilter excluded 2 item\(s\)/);
   assert.doesNotMatch(literal, /boring beta message/);
   assert.ok(literal.length < 1500, 'literal filtered preview should respect total budget');
+
+  const allFilteredBlock = String(await deps.toolsSessionAgent.tool_recall({
+    sessionId,
+    target: 'B#1',
+    contentFilter: 'TOPIC_NOT_PRESENT_IN_SOURCE',
+    previewLength: 500,
+  }));
+  assert.match(allFilteredBlock, /CTX-BLOCK B#1/);
+  assert.match(allFilteredBlock, /contentFilter excluded 3 item\(s\)/);
+  assert.match(allFilteredBlock, /literal result post-filter, not semantic search/i);
+  assert.match(allFilteredBlock, /omit it to inspect the complete recalled CTX-BLOCK\/message target/i);
+  assert.match(allFilteredBlock, /No archived messages matched the requested filters/i);
+
+  const unfilteredBlock = String(await deps.toolsSessionAgent.tool_recall({
+    sessionId,
+    target: 'B#1',
+    previewLength: 1000,
+  }));
+  assert.doesNotMatch(unfilteredBlock, /\[filter\]|\[hint\]/);
 
   const regexFiltered = String(await deps.toolsSessionAgent.tool_recall({
     sessionId,
@@ -526,11 +564,13 @@ test('recall renderer filters messages and centers previews around matches', asy
   }));
   assert.match(regexFiltered, /UNIQUE_NEEDLE/);
   assert.doesNotMatch(regexFiltered, /TOOL_SECRET_MATCH/);
+  assert.match(regexFiltered, /includeRegex excluded 1 additional item\(s\)/);
+  assert.match(regexFiltered, /excludeRegex excluded 1 additional item\(s\)/);
 
   const foldedToolMatch = String(await deps.toolsSessionAgent.tool_recall({
     sessionId,
     target: 'msg#1-3',
-    query: 'TOOL_SECRET_MATCH',
+    contentFilter: 'TOOL_SECRET_MATCH',
     previewLength: 1000,
   }));
   assert.match(foldedToolMatch, /Tool results: read\(call_secret\): ok \(content omitted\)/);
@@ -540,12 +580,17 @@ test('recall renderer filters messages and centers previews around matches', asy
   const snippetToolMatch = String(await deps.toolsSessionAgent.tool_recall({
     sessionId,
     target: 'msg#1-3',
-    query: 'TOOL_SECRET_MATCH',
+    contentFilter: 'TOOL_SECRET_MATCH',
     toolDetail: 'snippets',
     previewLength: 1000,
   }));
   assert.match(snippetToolMatch, /\[tool:read\(call_secret\)\]/);
   assert.match(snippetToolMatch, /TOOL_SECRET_MATCH/);
+
+  await assert.rejects(
+    () => deps.toolsSessionAgent.tool_recall({ sessionId, target: 'B#1', query: 'UNIQUE_NEEDLE' }),
+    /recall no longer accepts `query`[\s\S]*contentFilter[\s\S]*vector_query[\s\S]*target/i,
+  );
 });
 
 test('recall rejects unsupported targets with examples', async () => {
