@@ -367,7 +367,7 @@ Example:
         {
             name: 'get_session_messages',
             defaultInject: true,
-            description: 'Get messages from a session with optional pagination. Defaults to last 10 messages. Output uses a total previewLength budget (auto-clamped to 1000-20000), folds tool calls/results by default, and can filter with query/includeRegex/excludeRegex.',
+            description: 'Get messages from a session with optional pagination. Defaults to last 10 messages. Output uses a total previewLength budget (auto-clamped to 1000-20000), folds tool calls/results by default, and can post-filter the selected result set with contentFilter/includeRegex/excludeRegex.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -375,7 +375,7 @@ Example:
                     start: { type: 'number', description: 'Start index (0-based, optional). Negative values count from end (e.g., -10 for last 10 messages)' },
                     count: { type: 'number', description: 'Number of messages to retrieve (optional)' },
                     previewLength: { type: 'number', description: 'Total output preview budget, not per-message length. Values below 1000 or above 20000 are automatically clamped with a warning. Omit or pass 0 for the default.' },
-                    query: { type: 'string', description: 'Optional literal case-insensitive text filter. Matching messages are previewed around the match when possible.' },
+                    contentFilter: { type: 'string', description: 'Optional literal case-insensitive post-filter applied to the full content of messages already selected by sessionId/start/count. This is not semantic search or a retrieval query. Matching messages are previewed around the match when possible.' },
                     includeRegex: { type: 'string', description: 'Optional case-insensitive regex; messages must match this pattern in their full text/tool content.' },
                     excludeRegex: { type: 'string', description: 'Optional case-insensitive regex; matching messages are excluded.' },
                     toolDetail: { type: 'string', enum: ['names', 'snippets', 'full'], description: 'How much tool call/result content to show. Default names folds tools to name/id/status only; snippets shows short tool snippets; full expands tool args/results within the total preview budget.' }
@@ -412,7 +412,7 @@ Example:
         {
             name: 'recall',
             defaultInject: true,
-            description: 'Recall earlier session context by expanding CTX-BLOCK ids (for example `B#126`), reading message ranges, or doing semantic vector retrieval with vector_query. Use this when the working context contains a `[CTX-BLOCK ...]` reference and you need to drill down. Output uses a total previewLength budget (auto-clamped to 1000-20000), folds tool calls/results by default, and can filter with query/includeRegex/excludeRegex.',
+            description: 'Recall earlier session context by expanding CTX-BLOCK ids (for example `B#126`), reading message ranges, or doing semantic vector retrieval with vector_query. Use target to select or drill down into exact archived context; use vector_query for semantic search. Output uses a total previewLength budget (auto-clamped to 1000-20000), folds tool calls/results by default, and can post-filter the retrieved result set with contentFilter/includeRegex/excludeRegex.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -423,7 +423,7 @@ Example:
                     scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: 'For vector_query: requested scope. Non-isolated sessions are limited to the current agent; isolated sessions are limited to the current session.' },
                     agentName: { type: 'string', description: 'For vector_query: optional agent name, limited to your current agent.' },
                     previewLength: { type: 'number', description: 'Total output preview budget, not per-item length. Values below 1000 or above 20000 are automatically clamped with a warning. Omit or pass 0 for the default.' },
-                    query: { type: 'string', description: 'Optional literal case-insensitive text filter applied to full message/block/tool content; previews center around matches when possible.' },
+                    contentFilter: { type: 'string', description: 'Optional literal case-insensitive post-filter applied to full message/block/tool content after target or vector_query retrieval. This is not semantic search and does not choose which CTX-BLOCK to expand; omit it when you want the complete target contents. Previews center around matches when possible.' },
                     includeRegex: { type: 'string', description: 'Optional case-insensitive regex; returned items must match this pattern in their full text/tool content.' },
                     excludeRegex: { type: 'string', description: 'Optional case-insensitive regex; matching items are excluded.' },
                     preferBlocks: { type: 'boolean', description: 'For vector_query: if true, give block summary hits a modest ranking boost.' },

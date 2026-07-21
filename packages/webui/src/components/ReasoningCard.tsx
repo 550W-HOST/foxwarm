@@ -95,7 +95,7 @@ const ReasoningCard = memo(function ReasoningCard({
 
   return (
     <div
-      className={`foxwarm-reasoning-card foxwarm-reasoning-card-${tone} relative group pl-2 pr-2 text-xs ${reasoningSurfaceClasses[tone]} ${expanded ? 'pb-1' : ''} ${reasoningTextClasses[tone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      className={`foxwarm-reasoning-card foxwarm-reasoning-card-${tone} relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${reasoningSurfaceClasses[tone]} ${expanded ? 'pb-1' : ''} ${reasoningTextClasses[tone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? () => setExpanded(true) : undefined}
     >
       <ThreadLineButton

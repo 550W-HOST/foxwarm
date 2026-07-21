@@ -99,6 +99,11 @@ export type AppConfig = {
     ollamaBaseUrl?: string;
     contextLimit?: number;
     compactPercent?: number;
+    compactBlockLevelMinTokens?: number;
+    compactBlockLevelForceTokens?: number;
+    compactBlockCandidateFraction?: number;
+    compactBlockForceCompactFraction?: number;
+    compactMessageForceCompactFraction?: number;
     maxOutput?: number;
     thinkingBudget?: number;
     openaiBaseUrl?: string;
@@ -329,6 +334,11 @@ export const WEBUI_PORT = HTTP_PORT; // For backward compatibility
 // Context and compaction settings
 export const CONTEXT_LIMIT = APP_CONFIG.llm?.contextLimit || 122880; // 120K tokens
 export const COMPACT_PERCENT = APP_CONFIG.llm?.compactPercent || 0.3;
+export const COMPACT_BLOCK_LEVEL_MIN_TOKENS = APP_CONFIG.llm?.compactBlockLevelMinTokens ?? 3000;
+export const COMPACT_BLOCK_LEVEL_FORCE_TOKENS = APP_CONFIG.llm?.compactBlockLevelForceTokens ?? 5000;
+export const COMPACT_BLOCK_CANDIDATE_FRACTION = APP_CONFIG.llm?.compactBlockCandidateFraction ?? 0.4;
+export const COMPACT_BLOCK_FORCE_COMPACT_FRACTION = APP_CONFIG.llm?.compactBlockForceCompactFraction ?? 0.2;
+export const COMPACT_MESSAGE_FORCE_COMPACT_FRACTION = APP_CONFIG.llm?.compactMessageForceCompactFraction ?? 0.2;
 
 // TODO: move to models config
 export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 16384;

@@ -13,7 +13,6 @@ import {
   type ContextPreviewRenderOptions,
   type ContextPreviewToolDetail,
 } from '../contextPreviewRenderer';
-import { formatPrefixedMultilineText } from '../utils/messageFormat';
 import { truncateUnicodeSafe } from '../utils/unicode';
 import { formatLocalTimestamp } from '../utils/localTime';
 import { requireNotIsolated, checkArchivedReadPermission } from '../isolatedCheck';
@@ -264,36 +263,6 @@ function formatArchivedBlockPreview(
   }).text;
 }
 
-function formatArchivedBlockPreviewLine(
-  record: {
-    id: number;
-    level: number;
-    rawStartSeq: number;
-    rawEndSeq: number;
-    rawStartTimestamp?: number;
-    rawEndTimestamp?: number;
-    summary: string;
-    sourceKind: string;
-    sourceStart: number;
-    sourceEnd: number;
-    sourceBlockIds?: number[];
-    inherited?: boolean;
-    sourceSessionId?: string;
-  },
-  previewLength: number,
-  options: { includeSourceSuffix?: boolean } = {},
-): string {
-  const locality = record.inherited ? `[inherited from ${record.sourceSessionId || 'unknown'}] ` : '[local] ';
-  const blockText = formatArchiveBlockContextText({
-    ...record,
-    summary: truncateUnicodeSafe(record.summary || '', previewLength) || '[empty summary]',
-  });
-  const text = options.includeSourceSuffix === false
-    ? blockText
-    : `${blockText} from ${formatArchiveSourceLabel(record.sourceKind, record.sourceStart, record.sourceEnd, record.sourceBlockIds)}`;
-  return formatPrefixedMultilineText(locality, text);
-}
-
 type RecallTargetSpec =
   | { kind: 'overview' }
   | { kind: 'blocks' }
@@ -442,6 +411,18 @@ function assertNoLegacyRecallArgs(args: ToolArgs): void {
     buildRecallSyntaxHelp(
       `recall no longer accepts legacy get_context_archive parameters: ${legacyKeys.join(', ')}. Use the target selector instead.`,
     ),
+  );
+}
+
+function assertNoRemovedQueryArg(args: ToolArgs, toolName: 'recall' | 'get_session_messages'): void {
+  if (!Object.prototype.hasOwnProperty.call(args || {}, 'query')) {
+    return;
+  }
+  throw new Error(
+    `${toolName} no longer accepts \`query\`. Use \`contentFilter\` for a literal case-insensitive result post-filter, `
+    + (toolName === 'recall'
+      ? 'use `vector_query` for semantic search, and use `target` to select a CTX-BLOCK or message range.'
+      : 'or omit the filter to return all selected messages.'),
   );
 }
 
@@ -679,6 +660,7 @@ async function resolveRecallBlockMessageRange(
 
 
 export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContext) {
+  assertNoRemovedQueryArg(args, 'get_session_messages');
   await requireNotIsolated(ctx, 'get_session_messages');
   const { sessionId, start, count } = args;
 
@@ -725,7 +707,7 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
     toolDetail,
     renderOptions: {
       previewLength: args.previewLength,
-      query: args.query,
+      contentFilter: args.contentFilter,
       includeRegex: args.includeRegex,
       excludeRegex: args.excludeRegex,
       toolDetail: args.toolDetail,
@@ -741,7 +723,7 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
     emptyMessage: `No messages matched the requested filters in session \`${sessionId}\` (total: ${totalMessages} messages).`,
     options: {
       previewLength: args.previewLength,
-      query: args.query,
+      contentFilter: args.contentFilter,
       includeRegex: args.includeRegex,
       excludeRegex: args.excludeRegex,
       toolDetail: args.toolDetail,
@@ -775,7 +757,7 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
     endSeq: result.requestedRange.endSeq,
   }, {
     previewLength: args.previewLength,
-    query: args.query,
+    contentFilter: args.contentFilter,
     includeRegex: args.includeRegex,
     excludeRegex: args.excludeRegex,
     toolDetail: args.toolDetail,
@@ -802,7 +784,7 @@ export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext
     endId: result.requestedRange.endId,
   }, {
     previewLength: args.previewLength,
-    query: args.query,
+    contentFilter: args.contentFilter,
     includeRegex: args.includeRegex,
     excludeRegex: args.excludeRegex,
   });
@@ -948,15 +930,20 @@ async function buildRecallBlockDetail(
     const childRecords = await getRecallChildBlocksForBlock(targetSessionId, blockWithTime);
     const capped = capRecallBlockSummaryRecords(childRecords, previewLength);
     const visibleChildRecords = await hydrateRecallBlockTimeRanges(targetSessionId, capped.records);
-    const childSection = visibleChildRecords.length > 0
-      ? visibleChildRecords
-        .map((child: ArchiveBlockRecord) => formatArchivedBlockPreviewLine(child, previewLength, { includeSourceSuffix: false }))
-        .join('\n')
-      : '[no child blocks found]';
+    const childItems = visibleChildRecords.map(child => createArchivedBlockContextPreviewItem({
+      key: `block:${child.id}`,
+      block: child,
+    }));
+    const childSection = renderContextPreviewItems({
+      items: childItems,
+      title: ({ matchedCount }) => `Immediate child blocks (${formatArchiveChildBlockReference(blockWithTime)}): showing ${matchedCount} of ${visibleChildRecords.length} CTX-BLOCK summary item(s).`,
+      emptyMessage: '[no child CTX-BLOCK summaries matched the requested filters]',
+      options: renderOptions,
+    }).text;
     const capNote = capped.capped
       ? `\n\nChild block list has ${childRecords.length} block(s); showing ${capped.records.length} because ${childRecords.length} × ${previewLength} = ${capped.requestedChars} summary-preview characters exceeds the ${ARCHIVE_PREVIEW_REQUEST_CHAR_LIMIT}-character guard. Pick a specific child \`B#N\` to continue drilling down, or lower previewLength.`
       : '';
-    return `${header.join('\n')}\n\nImmediate child blocks (${formatArchiveChildBlockReference(blockWithTime)}):\n${childSection}`
+    return `${header.join('\n')}\n\n${childSection}`
       + capNote
       + formatRecallNextHintsIfEnabled(includeSuggestions, targetSessionId, includeSessionId, [
         visibleChildRecords[0] ? `B#${visibleChildRecords[0].id}` : undefined,
@@ -1194,6 +1181,7 @@ async function buildRecallVectorQuery(
 }
 
 export async function tool_recall(args: ToolArgs = {}, ctx?: ToolContext) {
+  assertNoRemovedQueryArg(args, 'recall');
   assertNoLegacyRecallArgs(args);
   const targetSessionId = args.sessionId || ctx?.sessionId;
   if (!targetSessionId) {
@@ -1206,10 +1194,11 @@ export async function tool_recall(args: ToolArgs = {}, ctx?: ToolContext) {
   const renderOptions: ContextPreviewRenderOptions = {
     previewLength: args.previewLength,
     defaultPreviewLength: RECALL_DEFAULT_PREVIEW_LENGTH,
-    query: args.query,
+    contentFilter: args.contentFilter,
     includeRegex: args.includeRegex,
     excludeRegex: args.excludeRegex,
     toolDetail: args.toolDetail,
+    contentFilterOmitHint: 'contentFilter is a literal result post-filter, not semantic search. Omit it to inspect the complete recalled CTX-BLOCK/message target; use vector_query to find context by meaning.',
   };
   const includeSessionId = isNonEmptyString(args.sessionId);
 

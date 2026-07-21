@@ -7,8 +7,15 @@
     "build": "tsc && vite build",
     "test:markdown": "node --test test/markdownRenderer.test.mjs",
     "test:theme-e2e": "node --test test/themeMarkdownStyles.e2e.mjs",
+    "test:message-overflow-e2e": "node --test test/messageOverflow.e2e.mjs",
+    "test:message-width-e2e": "node --test test/messageWidth.e2e.mjs",
+    "test:tool-collapsed-overflow-e2e": "node --test test/toolCollapsedOverflow.e2e.mjs",
     "test:scroll-e2e": "node --test test/scrollState.e2e.mjs",
+    "test:stream-follow-e2e": "node --test test/streamFollow.e2e.mjs",
     "test:session-list-e2e": "node --test test/sessionListLiveRefresh.e2e.mjs",
+    "test:session-list-drag-e2e": "node --test test/sessionListDrag.e2e.mjs",
+    "test:session-header-e2e": "node --test test/sessionHeader.e2e.mjs",
+    "test:settings-menu-e2e": "node --test test/settingsMenuPosition.e2e.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -3,6 +3,7 @@ import type { Message } from './components/chatShared'
 export const CHAT_MESSAGE_ANCHOR_ATTRIBUTE = 'data-chat-message-anchor-key'
 export const CHAT_MESSAGE_ANCHOR_SELECTOR = `[${CHAT_MESSAGE_ANCHOR_ATTRIBUTE}]`
 export const CHAT_VIEWPORT_BOTTOM_THRESHOLD_PX = 200
+export const CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX = 4
 
 export type ChatViewportState =
   | { kind: 'bottom' }
@@ -12,6 +13,39 @@ export interface ChatViewportAnchorMeasurement {
   messageKey: string
   top: number
   bottom: number
+}
+
+export interface ChatBottomFollowState {
+  following: boolean
+  pendingUserLeave: boolean
+}
+
+export function updateChatBottomFollow(options: ChatBottomFollowState & {
+  distanceFromBottom: number
+  userIntent?: 'none' | 'leave'
+  rejoinThresholdPx?: number
+}): ChatBottomFollowState {
+  const threshold = options.rejoinThresholdPx ?? CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX
+  const distanceFromBottom = Math.max(0, options.distanceFromBottom)
+
+  if (options.userIntent === 'leave') {
+    return {
+      following: false,
+      pendingUserLeave: distanceFromBottom <= threshold,
+    }
+  }
+
+  if (options.pendingUserLeave) {
+    return distanceFromBottom > threshold
+      ? { following: false, pendingUserLeave: false }
+      : { following: false, pendingUserLeave: true }
+  }
+
+  if (!options.following && distanceFromBottom <= threshold) {
+    return { following: true, pendingUserLeave: false }
+  }
+
+  return { following: options.following, pendingUserLeave: false }
 }
 
 const viewportStateBySession = new Map<string, ChatViewportState>()

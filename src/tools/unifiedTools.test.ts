@@ -580,19 +580,23 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(definitions.some(def => def.name === 'end_turn'), false);
 });
 
-test('recall model-facing schema exposes target selectors and vector retrieval fields', () => {
+test('recall model-facing schema separates target/vector retrieval from literal result post-filtering', () => {
   const recallDef = definitions.find(def => def.name === 'recall');
   assert.ok(recallDef);
   assert.equal(recallDef.defaultInject, true);
   assert.match(String(recallDef.description), /CTX-BLOCK/);
+  assert.match(String(recallDef.description), /vector_query for semantic search/i);
+  assert.match(String((recallDef.parameters?.properties as any)?.contentFilter?.description), /literal case-insensitive post-filter/i);
+  assert.match(String((recallDef.parameters?.properties as any)?.contentFilter?.description), /not semantic search/i);
+  assert.equal(Object.prototype.hasOwnProperty.call(recallDef.parameters?.properties || {}, 'query'), false);
   assert.deepEqual(Object.keys(recallDef.parameters?.properties || {}).sort(), [
     'agentName',
+    'contentFilter',
     'excludeRegex',
     'includeRegex',
     'limit',
     'preferBlocks',
     'previewLength',
-    'query',
     'scope',
     'sessionId',
     'target',
@@ -603,6 +607,11 @@ test('recall model-facing schema exposes target selectors and vector retrieval f
     assert.equal(Object.prototype.hasOwnProperty.call(recallDef.parameters?.properties || {}, legacyName), false);
   }
   assert.equal(definitions.some(def => def.name === 'get_context_archive'), false);
+
+  const sessionMessagesDef = definitions.find(def => def.name === 'get_session_messages');
+  assert.ok(sessionMessagesDef);
+  assert.ok((sessionMessagesDef.parameters?.properties as any)?.contentFilter);
+  assert.equal(Object.prototype.hasOwnProperty.call(sessionMessagesDef.parameters?.properties || {}, 'query'), false);
 });
 
 test('wait is the model-facing pause tool and end_turn is removed', () => {

@@ -1,5 +1,5 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
-import type { MouseEvent, ReactNode } from 'react'
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react'
 import { Eye, FileJson, Download } from 'lucide-react'
 import {
   IconToggleButton,
@@ -143,25 +143,36 @@ const truncatePreviewText = (text: string, maxLength = 400): string => {
 
 export type OpenCodeFileHandler = (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
 
-const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFile, prefix }: {
+const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFile, prefix, collapsed = false }: {
   filePath: string
   lines?: { startLine?: number; endLine?: number }
   onOpenCodeFile?: OpenCodeFileHandler
   prefix?: string
+  collapsed?: boolean
 }) {
-  if (!onOpenCodeFile) return <span>{prefix}{filePath}</span>
+  const layoutClass = collapsed
+    ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full truncate whitespace-nowrap'
+    : 'min-w-0 max-w-full whitespace-normal break-words'
+  if (!onOpenCodeFile) return <span className={layoutClass}>{prefix}{filePath}</span>
   return (
-    <button
-      type="button"
-      className="min-w-0 truncate text-left hover:underline cursor-pointer"
+    <span
+      role="button"
+      tabIndex={0}
+      className={`foxwarm-tool-code-path ${layoutClass} text-left hover:underline cursor-pointer`}
       title={`Open ${filePath} in Code`}
       onClick={(event) => {
         event.stopPropagation()
         onOpenCodeFile(filePath, lines)
       }}
+      onKeyDown={(event: KeyboardEvent<HTMLSpanElement>) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        event.stopPropagation()
+        onOpenCodeFile(filePath, lines)
+      }}
     >
       {prefix}{filePath}
-    </button>
+    </span>
   )
 })
 
@@ -184,11 +195,11 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     const extra = (call.args.startLine || call.args.endLine)
       ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
       : ''
-    return <span title={`${call.args.filePath}${extra}`} className="inline-flex min-w-0 items-center gap-1"><ToolCodePath filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} onOpenCodeFile={options.onOpenCodeFile} />{extra}</span>
+    return <span title={`${call.args.filePath}${extra}`} className="flex min-w-0 max-w-full items-baseline gap-x-1 overflow-hidden whitespace-nowrap"><ToolCodePath collapsed filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} onOpenCodeFile={options.onOpenCodeFile} />{extra && <span className="shrink-0">{extra}</span>}</span>
   }
 
   if (call.name === 'write') {
-    return <ToolCodePath filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} />
+    return <ToolCodePath collapsed filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} />
   }
 
   if (isLegacyDiffToolName(call.name)) {
@@ -202,7 +213,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
         ) : (
           <span className="shrink-0 text-xs text-gray-500">legacy payload unavailable</span>
         )}
-        {call.name === 'edit' ? <ToolCodePath filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} /> : <span className="truncate">{call.args.filePath}</span>}
+        {call.name === 'edit' ? <ToolCodePath collapsed filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} /> : <span className="truncate">{call.args.filePath}</span>}
       </span>
     )
   }
@@ -216,7 +227,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
         <span className="flex items-center gap-2 min-w-0">
           <span className="shrink-0 text-xs text-gray-500">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
           {call.name === 'apply_patch' && operations.length === 1
-            ? <ToolCodePath filePath={operations[0].filePath} onOpenCodeFile={options.onOpenCodeFile} />
+            ? <ToolCodePath collapsed filePath={operations[0].filePath} onOpenCodeFile={options.onOpenCodeFile} />
             : <span className="truncate">{fileSummary}</span>}
         </span>
       )
@@ -611,13 +622,13 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       onClick={onClick}
     >
       <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
-      {includeCallPreview && call && <div className="min-w-0 flex-1 truncate">{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
+      {includeCallPreview && call && <div className="foxwarm-tool-call-summary min-w-0 max-w-full flex-1 truncate whitespace-nowrap">{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
     </div>
   )
 
   return (
     <div
-      className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} min-w-0 max-w-full text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? () => setExpanded(true) : undefined}
     >
       <ThreadLineButton
@@ -648,7 +659,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           {header('cursor-pointer hover:text-gray-900 dark:hover:text-gray-100', (e) => { e.stopPropagation(); setExpanded(false) })}
 
-          <div className="mt-1 cursor-default pr-2" onClick={(e) => e.stopPropagation()}>
+          <div className="foxwarm-tool-expanded-content mt-1 min-w-0 max-w-full cursor-default pr-2" onClick={(e) => e.stopPropagation()}>
             {call && (
               <div className={`text-gray-700 dark:text-gray-300 ${showDiffToggles ? 'relative' : ''}`}>
                 {showDiffToggles && (

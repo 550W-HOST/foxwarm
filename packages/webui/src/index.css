@@ -158,6 +158,10 @@ input, textarea, select {
   .foxwarm-markdown {
     --tw-prose-headings: rgb(17 24 39);
     --tw-prose-body: rgb(17 24 39);
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .dark .foxwarm-markdown {
@@ -202,6 +206,29 @@ input, textarea, select {
   .foxwarm-markdown :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
     margin-top: 0;
     margin-bottom: 0;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: visible;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .foxwarm-markdown :where(pre code):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    white-space: inherit;
+    overflow-wrap: inherit;
+    word-break: inherit;
+  }
+
+  .foxwarm-markdown :where(table):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overflow-wrap: normal;
+    word-break: normal;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
   }
 
   .dark .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
@@ -220,6 +247,31 @@ input, textarea, select {
 
   .foxwarm-markdown :where(.katex-display > .katex):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
     min-width: max-content;
+  }
+
+  .foxwarm-tool-code-path {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    font: inherit;
+    color: inherit;
+  }
+
+  .foxwarm-tool-call-summary {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .foxwarm-tool-call-summary .foxwarm-tool-code-path-collapsed {
+    overflow: hidden;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+    text-overflow: ellipsis;
   }
 }
 

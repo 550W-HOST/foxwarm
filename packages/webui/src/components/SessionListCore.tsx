@@ -5,6 +5,7 @@ import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUp
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { compareSessionListSessions, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 
 export interface Session {
   id: string
@@ -427,6 +428,17 @@ function DraggableSessionRow({
     onClick()
   }
 
+  const dragListeners = dragEnabled
+    ? {
+        ...listeners,
+        onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => {
+          if (shouldActivateSessionListDrag(dragEnabled, event.pointerType)) {
+            listeners?.onPointerDown?.(event)
+          }
+        },
+      }
+    : {}
+
   return (
     <div
       ref={(node) => {
@@ -442,7 +454,7 @@ function DraggableSessionRow({
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
       {...(dragEnabled ? attributes : {})}
-      {...(dragEnabled ? listeners : {})}
+      {...dragListeners}
     >
       {children}
     </div>
@@ -451,6 +463,7 @@ function DraggableSessionRow({
 
 export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true }: SessionListCoreProps) {
   const { active } = useDndContext()
+  const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
   const [filterText, setFilterText] = useState('')
@@ -465,6 +478,15 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const sessionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const [pendingFocusSessionId, setPendingFocusSessionId] = useState<string | null>(null)
   const previousCurrentSessionIdRef = useRef<string | undefined>(undefined)
+  const sessionDragEnabled = shouldEnableSessionListDrag(dragEnabled, primaryPointerCoarse)
+
+  useEffect(() => {
+    if (!window.matchMedia) return
+    const mediaQuery = window.matchMedia('(pointer: coarse)')
+    const handleChange = (event: MediaQueryListEvent) => setPrimaryPointerCoarse(event.matches)
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
+  }, [])
 
   const activeDragData = active?.data.current as { type?: string; sessionId?: string; sessionPinned?: boolean } | undefined
   const draggingSessionId = activeDragData?.type === 'session' ? activeDragData.sessionId || null : null
@@ -982,7 +1004,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       ? rowParentSessionId === draggingSessionId || isDescendantOf(rowParentSessionId, draggingSessionId)
       : false
     const disableSidebarDrop = !draggingSessionId
-      || !dragEnabled
+      || !sessionDragEnabled
       || isFiltering
       || !allowParentDrop && !allowSidebarOrder
       || draggingPinnedSession
@@ -1008,7 +1030,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           setRowRef={(node) => {
             sessionRefs.current.set(session.id, node)
           }}
-          dragEnabled={dragEnabled}
+          dragEnabled={sessionDragEnabled}
         >
           <>
               <SessionRowDropLayer
@@ -1052,11 +1074,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     )}
                     <span>{session.messageCount || 0} msgs</span>
                   </div>
-                  {session.cwd && (
-                    <div className="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500" title={session.cwd}>
-                      cwd: {session.cwd}
-                    </div>
-                  )}
                   {hasChildren && (
                     <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
                       <button
@@ -1226,10 +1243,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               <ViewModeIcon className="h-3.5 w-3.5" />
             </button>
           </div>
-          <SidebarRootDropZone visible={dragEnabled && !!draggingSessionId && allowParentDrop} disabled={!dragEnabled || isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
+          <SidebarRootDropZone visible={sessionDragEnabled && !!draggingSessionId && allowParentDrop} disabled={!sessionDragEnabled || isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto" data-session-list-scroll-container>
+        <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto" data-session-list-scroll-container>
           <div className={listContainerClassName}>
             {rootSessions.length > 0 ? (
               <>

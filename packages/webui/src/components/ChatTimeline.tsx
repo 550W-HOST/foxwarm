@@ -145,7 +145,7 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
 
 const MarkdownContent = memo(function MarkdownContent({ text, className }: { text: string; className: string }) {
   const html = useMemo(() => renderMarkdown(text), [text])
-  return <div className={className} dangerouslySetInnerHTML={{ __html: html }} onClick={handleMarkdownLinkClick} />
+  return <div className={`min-w-0 max-w-full ${className}`} dangerouslySetInnerHTML={{ __html: html }} onClick={handleMarkdownLinkClick} />
 })
 
 const isFinalLlmRetryNotice = (message: Message): boolean => (
@@ -155,7 +155,7 @@ const isFinalLlmRetryNotice = (message: Message): boolean => (
 const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { systemText: string; isUser: boolean }) {
   return (
     <pre
-      className={`whitespace-pre-wrap font-sans ${isUser ? 'text-white' : 'text-gray-500 dark:text-gray-400'}`}
+      className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'text-white' : 'text-gray-500 dark:text-gray-400'}`}
       style={{ lineHeight: '1.3em' }}
     >
       {systemText.split('\n').map((line, lineIdx) => {
@@ -184,7 +184,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: 
   return (
     <div>
       <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
-        <pre className="foxwarm-user-message-text whitespace-pre-wrap font-sans" style={{ lineHeight: '1.5em' }}>
+        <pre className="foxwarm-user-message-text max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: '1.5em' }}>
           {text.split('\n').map((line, lineIdx) => {
             const isPrefix = isSystemLikeText(line)
             return (
@@ -232,7 +232,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
     <div className="w-full overflow-x-hidden">
       <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-3 text-slate-700 dark:text-slate-300">
         <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : undefined}>
-          <pre className="whitespace-pre-wrap font-sans text-sm" style={{ lineHeight: '1.5em' }}>
+          <pre className="max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
             {renderedText.split('\n').map((line, lineIdx) => {
               const isPrefix = isSystemLikeText(line)
               return (
@@ -299,7 +299,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, showR
   const paddingClass = viewMode === 'rendered' ? 'px-2' : 'px-2 py-2'
 
   return (
-    <div className={`foxwarm-assistant-message-card bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${paddingClass} rounded-lg cursor-text relative group`}>
+    <div className={`foxwarm-assistant-message-card min-w-0 max-w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${paddingClass} rounded-lg cursor-text relative group`}>
       <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
         <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
@@ -332,9 +332,9 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, showR
           ))}
         </div>
       ) : viewMode === 'raw' ? (
-        <pre className="foxwarm-assistant-message-raw whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100">{text}</pre>
+        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-900 dark:text-gray-100">{text}</pre>
       ) : (
-        <pre className="foxwarm-assistant-message-raw whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto">{jsonText}</pre>
+        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-900 dark:text-gray-100">{jsonText}</pre>
       )}
       {showRetryButton && (
         <div className="mt-2 flex justify-end">
@@ -432,11 +432,11 @@ const MessageRow = memo(function MessageRow({
 
   return (
     <div
-      className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${marginClass}`}
+      className={`flex w-full min-w-0 max-w-full ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${marginClass}`}
       data-chat-message-anchor-key={nestedDepth === 0 ? getMessageViewportAnchorKey(msg) || undefined : undefined}
     >
       <div
-        className={`${widthClass} ${
+        className={`min-w-0 ${widthClass} ${
           !systemLikeMessage && msg.role === 'user'
             ? 'foxwarm-user-message-bubble bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
             : ''
@@ -445,7 +445,7 @@ const MessageRow = memo(function MessageRow({
         {systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} />
         ) : msg.role === 'user' ? (
-          <div className="flex flex-col">
+          <div className="flex min-w-0 flex-col">
             {textLikeParts.map((part, partIdx) => (
               <div key={`user-part-${partIdx}`}>
                 {part.system
@@ -456,7 +456,7 @@ const MessageRow = memo(function MessageRow({
             <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />
           </div>
         ) : (
-          <div className={`flex flex-col ${displayUsage && !isMobile ? 'relative' : ''}`}>
+          <div className={`flex min-w-0 max-w-full flex-col ${displayUsage && !isMobile ? 'relative' : ''}`}>
             {textLikeParts.map((part, partIdx) => {
               if (part.system) {
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
@@ -691,7 +691,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
   }, [])
 
   return (
-    <>
+    <div className="foxwarm-chat-timeline min-w-0 max-w-full overflow-x-hidden">
       {messages.map((msg, idx) => {
         if (toolGroupMeta.handledByPreviousGroup[idx]) {
           return null
@@ -726,7 +726,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
           />
         )
       })}
-    </>
+    </div>
   )
 })
 

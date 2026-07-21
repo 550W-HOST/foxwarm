@@ -18,10 +18,17 @@ export type ContextPreviewItem = {
 export type ContextPreviewRenderOptions = {
   previewLength?: unknown;
   defaultPreviewLength?: number;
-  query?: unknown;
+  contentFilter?: unknown;
   includeRegex?: unknown;
   excludeRegex?: unknown;
   toolDetail?: unknown;
+  contentFilterOmitHint?: string;
+};
+
+export type ContextPreviewFilterStats = {
+  contentFilterExcludedCount: number;
+  includeRegexExcludedCount: number;
+  excludeRegexExcludedCount: number;
 };
 
 export type ContextPreviewRenderResult = {
@@ -31,6 +38,7 @@ export type ContextPreviewRenderResult = {
   matchedCount: number;
   inputCount: number;
   omittedCount: number;
+  filterStats: ContextPreviewFilterStats;
 };
 
 const DEFAULT_CONTEXT_PREVIEW_BUDGET = 6000;
@@ -142,29 +150,29 @@ export function normalizeContextPreviewBudget(
 }
 
 export type CompiledPreviewFilters = {
-  query?: string;
-  queryRegex?: RegExp;
+  contentFilter?: string;
+  contentFilterRegex?: RegExp;
   includeRegex?: RegExp;
   excludeRegex?: RegExp;
   active: boolean;
 };
 
 function compilePreviewFilters(options: ContextPreviewRenderOptions): CompiledPreviewFilters {
-  const query = normalizeFilterText(options.query);
+  const contentFilter = normalizeFilterText(options.contentFilter);
   const includeRegex = compileOptionalRegex(options.includeRegex, 'includeRegex');
   const excludeRegex = compileOptionalRegex(options.excludeRegex, 'excludeRegex');
   return {
-    query,
-    queryRegex: query ? new RegExp(escapeRegexLiteral(query), 'i') : undefined,
+    contentFilter,
+    contentFilterRegex: contentFilter ? new RegExp(escapeRegexLiteral(contentFilter), 'i') : undefined,
     includeRegex,
     excludeRegex,
-    active: Boolean(query || includeRegex || excludeRegex),
+    active: Boolean(contentFilter || includeRegex || excludeRegex),
   };
 }
 
 function itemMatchesFilters(item: ContextPreviewItem, filters: CompiledPreviewFilters): boolean {
   const haystack = normalizeWhitespaceForSearch(item.searchText || item.body || '');
-  if (filters.query && !haystack.toLowerCase().includes(filters.query.toLowerCase())) {
+  if (filters.contentFilter && !haystack.toLowerCase().includes(filters.contentFilter.toLowerCase())) {
     return false;
   }
   if (filters.includeRegex && !filters.includeRegex.test(haystack)) {
@@ -177,7 +185,75 @@ function itemMatchesFilters(item: ContextPreviewItem, filters: CompiledPreviewFi
 }
 
 function collectMatchRegexes(filters: CompiledPreviewFilters): RegExp[] {
-  return [filters.queryRegex, filters.includeRegex].filter((entry): entry is RegExp => Boolean(entry));
+  return [filters.contentFilterRegex, filters.includeRegex].filter((entry): entry is RegExp => Boolean(entry));
+}
+
+function filterPreviewItems(
+  items: ContextPreviewItem[],
+  filters: CompiledPreviewFilters,
+): { items: ContextPreviewItem[]; stats: ContextPreviewFilterStats } {
+  let remaining = items;
+  let contentFilterExcludedCount = 0;
+  let includeRegexExcludedCount = 0;
+  let excludeRegexExcludedCount = 0;
+
+  if (filters.contentFilter) {
+    const next = remaining.filter(item => {
+      const haystack = normalizeWhitespaceForSearch(item.searchText || item.body || '');
+      return haystack.toLowerCase().includes(filters.contentFilter!.toLowerCase());
+    });
+    contentFilterExcludedCount = remaining.length - next.length;
+    remaining = next;
+  }
+
+  if (filters.includeRegex) {
+    const next = remaining.filter(item => {
+      const haystack = normalizeWhitespaceForSearch(item.searchText || item.body || '');
+      filters.includeRegex!.lastIndex = 0;
+      return filters.includeRegex!.test(haystack);
+    });
+    includeRegexExcludedCount = remaining.length - next.length;
+    remaining = next;
+  }
+
+  if (filters.excludeRegex) {
+    const next = remaining.filter(item => {
+      const haystack = normalizeWhitespaceForSearch(item.searchText || item.body || '');
+      filters.excludeRegex!.lastIndex = 0;
+      return !filters.excludeRegex!.test(haystack);
+    });
+    excludeRegexExcludedCount = remaining.length - next.length;
+    remaining = next;
+  }
+
+  return {
+    items: remaining,
+    stats: {
+      contentFilterExcludedCount,
+      includeRegexExcludedCount,
+      excludeRegexExcludedCount,
+    },
+  };
+}
+
+function formatFilterNotices(
+  stats: ContextPreviewFilterStats,
+  options: ContextPreviewRenderOptions,
+): string[] {
+  const notices: string[] = [];
+  if (stats.contentFilterExcludedCount > 0) {
+    notices.push(`[filter] contentFilter excluded ${stats.contentFilterExcludedCount} item(s) because the literal case-insensitive content filter did not match.`);
+    if (options.contentFilterOmitHint) {
+      notices.push(`[hint] ${options.contentFilterOmitHint}`);
+    }
+  }
+  if (stats.includeRegexExcludedCount > 0) {
+    notices.push(`[filter] includeRegex excluded ${stats.includeRegexExcludedCount} additional item(s) that remained after earlier filter stages.`);
+  }
+  if (stats.excludeRegexExcludedCount > 0) {
+    notices.push(`[filter] excludeRegex excluded ${stats.excludeRegexExcludedCount} additional item(s) that remained after earlier filter stages.`);
+  }
+  return notices;
 }
 
 function firstMatchIndex(text: string, filters: CompiledPreviewFilters): { index: number; length: number } | undefined {
@@ -477,15 +553,24 @@ export function renderContextPreviewItems(args: {
   const options = args.options || {};
   const { budget, warnings } = normalizeContextPreviewBudget(options.previewLength, options.defaultPreviewLength);
   const filters = compilePreviewFilters(options);
-  const filteredItems = args.items.filter(item => itemMatchesFilters(item, filters));
+  const filtered = filterPreviewItems(args.items, filters);
+  const filteredItems = filtered.items;
   const title = typeof args.title === 'function'
     ? args.title({ matchedCount: filteredItems.length, inputCount: args.items.length, budget })
     : args.title;
-  const prefixLines = [...warnings, title].filter(Boolean);
+  const prefixLines = [...warnings, title, ...formatFilterNotices(filtered.stats, options)].filter(Boolean);
 
   if (filteredItems.length === 0) {
     const emptyText = [...prefixLines, '', args.emptyMessage].join('\n').trimEnd();
-    return { text: emptyText, budget, warnings, matchedCount: 0, inputCount: args.items.length, omittedCount: 0 };
+    return {
+      text: emptyText,
+      budget,
+      warnings,
+      matchedCount: 0,
+      inputCount: args.items.length,
+      omittedCount: 0,
+      filterStats: filtered.stats,
+    };
   }
 
   let output = `${prefixLines.join('\n')}\n\n`;
@@ -531,6 +616,7 @@ export function renderContextPreviewItems(args: {
     matchedCount: filteredItems.length,
     inputCount: args.items.length,
     omittedCount,
+    filterStats: filtered.stats,
   };
 }
 

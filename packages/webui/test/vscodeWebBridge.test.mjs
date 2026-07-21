@@ -99,5 +99,10 @@ test('tool Code paths keep native text styling and only add link affordance', as
   const end = source.indexOf('const isLegacyDiffToolName', start)
   const component = start >= 0 && end > start ? source.slice(start, end) : ''
   assert.match(component, /hover:underline cursor-pointer/)
+  assert.match(component, /role="button"/)
+  assert.match(component, /tabIndex=\{0\}/)
+  assert.match(component, /event\.key !== 'Enter' && event\.key !== ' '/)
+  assert.match(component, /onOpenCodeFile\(filePath, lines\)/)
+  assert.doesNotMatch(component, /<button/)
   assert.doesNotMatch(component, /Code2|text-blue|dark:text-blue|h-3|w-3/)
 })

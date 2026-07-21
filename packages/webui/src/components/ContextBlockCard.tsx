@@ -212,7 +212,7 @@ const ContextBlockCard = memo(function ContextBlockCard({
 
   return (
     <div
-      className={`relative group pl-2 pr-2 text-xs ${contextBlockSurfaceClasses} ${expanded ? 'pb-1' : ''} ${contextBlockTextClasses} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
+      className={`relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${contextBlockSurfaceClasses} ${expanded ? 'pb-1' : ''} ${contextBlockTextClasses} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? expand : undefined}
     >
       <ThreadLineButton
