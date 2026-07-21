@@ -436,7 +436,7 @@ const MessageRow = memo(function MessageRow({
       data-chat-message-anchor-key={nestedDepth === 0 ? getMessageViewportAnchorKey(msg) || undefined : undefined}
     >
       <div
-        className={`min-w-0 max-w-full ${widthClass} ${
+        className={`min-w-0 ${widthClass} ${
           !systemLikeMessage && msg.role === 'user'
             ? 'foxwarm-user-message-bubble bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
             : ''
