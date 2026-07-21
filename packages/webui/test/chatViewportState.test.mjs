@@ -79,3 +79,42 @@ test('chat viewport registry is isolated by canonical session id', async () => {
   assert.deepEqual(getStoredChatViewportState('agent/other'), { kind: 'bottom' })
   assert.equal(getStoredChatViewportState('main'), null)
 })
+
+test('streaming bottom follow latches explicit leave intent until a strict bottom rejoin', async () => {
+  const { updateChatBottomFollow } = await loadTypeScriptModule('../src/chatViewportState.ts')
+
+  assert.deepEqual(updateChatBottomFollow({
+    following: true,
+    pendingUserLeave: false,
+    distanceFromBottom: 80,
+  }), { following: true, pendingUserLeave: false }, 'token-driven growth does not look like user intent')
+
+  const leaveAtBottom = updateChatBottomFollow({
+    following: true,
+    pendingUserLeave: false,
+    distanceFromBottom: 0,
+    userIntent: 'leave',
+  })
+  assert.deepEqual(leaveAtBottom, { following: false, pendingUserLeave: true })
+
+  assert.deepEqual(updateChatBottomFollow({
+    ...leaveAtBottom,
+    distanceFromBottom: 0,
+  }), { following: false, pendingUserLeave: true }, 'programmatic bottom scroll cannot erase pending user intent')
+
+  const leftBottom = updateChatBottomFollow({
+    ...leaveAtBottom,
+    distanceFromBottom: 30,
+  })
+  assert.deepEqual(leftBottom, { following: false, pendingUserLeave: false })
+
+  assert.deepEqual(updateChatBottomFollow({
+    ...leftBottom,
+    distanceFromBottom: 80,
+  }), { following: false, pendingUserLeave: false }, 'near-bottom positions do not silently resume follow')
+
+  assert.deepEqual(updateChatBottomFollow({
+    ...leftBottom,
+    distanceFromBottom: 3,
+  }), { following: true, pendingUserLeave: false }, 'the actual bottom resumes follow')
+})

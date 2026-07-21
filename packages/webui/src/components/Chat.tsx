@@ -14,11 +14,13 @@ import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRunt
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import {
+  CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
   chooseChatViewportState,
   getChatViewportAnchorAdjustment,
   getStoredChatViewportState,
   storeChatViewportState,
+  updateChatBottomFollow,
   type ChatViewportState,
 } from '../chatViewportState'
 
@@ -242,6 +244,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const reconnectDelayRef = useRef<number>(1000)
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const shouldAutoScrollRef = useRef<boolean>(true)
+  const pendingUserLeaveBottomRef = useRef(false)
+  const touchScrollStartYRef = useRef<number | null>(null)
+  const pointerScrollInteractionRef = useRef(false)
   const pendingSentMessagesRef = useRef<string[]>([])
   const sessionBusyRef = useRef(false)
   const sessionQueueLengthRef = useRef(0)
@@ -361,6 +366,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       const state: ChatViewportState = { kind: 'bottom' }
       currentViewportStateRef.current = state
       shouldAutoScrollRef.current = true
+      pendingUserLeaveBottomRef.current = false
       storeChatViewportState(viewportSessionId, state)
     }
   }, [viewportSessionId])
@@ -382,14 +388,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     }
   }, [])
 
-  const scrollToTop = useCallback(() => {
-    const container = messagesContainerRef.current
-    if (container) {
-      container.scrollTop = 0
-    }
-  }, [])
-
-  const readCurrentViewportState = useCallback((): ChatViewportState | null => {
+  const readCurrentViewportState = useCallback((bottomThresholdPx?: number): ChatViewportState | null => {
     const container = messagesContainerRef.current
     const timeline = committedTimelineRef.current
     if (!container || !timeline) return null
@@ -411,19 +410,41 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       viewportTop: containerRect.top,
       viewportBottom: containerRect.bottom,
       anchors,
+      ...(bottomThresholdPx === undefined ? {} : { bottomThresholdPx }),
     })
   }, [])
 
+  const updateBottomFollowState = useCallback((userIntent: 'none' | 'leave' = 'none') => {
+    const container = messagesContainerRef.current
+    const distanceFromBottom = container
+      ? container.scrollHeight - container.scrollTop - container.clientHeight
+      : Number.POSITIVE_INFINITY
+    const next = updateChatBottomFollow({
+      following: shouldAutoScrollRef.current,
+      pendingUserLeave: pendingUserLeaveBottomRef.current,
+      distanceFromBottom,
+      userIntent,
+    })
+    shouldAutoScrollRef.current = next.following
+    pendingUserLeaveBottomRef.current = next.pendingUserLeave
+    return next
+  }, [])
+
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
-    const state = readCurrentViewportState()
+    const followState = updateBottomFollowState()
+    const bottomThresholdPx = followState.pendingUserLeave
+      ? -1
+      : followState.following
+        ? undefined
+        : CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX
+    const state = readCurrentViewportState(bottomThresholdPx)
     if (!state) return null
 
     currentViewportStateRef.current = state
-    shouldAutoScrollRef.current = state.kind === 'bottom'
     capturedInteractionVersionRef.current = userInteractionVersionRef.current
     storeChatViewportState(viewportSessionId, state)
     return state
-  }, [readCurrentViewportState, viewportSessionId])
+  }, [readCurrentViewportState, updateBottomFollowState, viewportSessionId])
 
   const applyViewportState = useCallback((state: ChatViewportState): boolean => {
     const container = messagesContainerRef.current
@@ -433,6 +454,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       container.scrollTop = container.scrollHeight
       currentViewportStateRef.current = state
       shouldAutoScrollRef.current = true
+      pendingUserLeaveBottomRef.current = false
       storeChatViewportState(viewportSessionId, state)
       return true
     }
@@ -451,6 +473,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     }
     currentViewportStateRef.current = state
     shouldAutoScrollRef.current = false
+    pendingUserLeaveBottomRef.current = false
     storeChatViewportState(viewportSessionId, state)
     return true
   }, [viewportSessionId])
@@ -459,6 +482,21 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     userInteractionVersionRef.current += 1
     pendingViewportRestoreRef.current = null
   }, [])
+
+  const leaveBottomFollow = useCallback(() => {
+    markUserViewportInteraction()
+    updateBottomFollowState('leave')
+  }, [markUserViewportInteraction, updateBottomFollowState])
+
+  const scrollToTop = useCallback(() => {
+    const container = messagesContainerRef.current
+    if (container) {
+      markUserViewportInteraction()
+      shouldAutoScrollRef.current = false
+      pendingUserLeaveBottomRef.current = false
+      container.scrollTop = 0
+    }
+  }, [markUserViewportInteraction])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -469,6 +507,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       const scrollHeight = container.scrollHeight
       const clientHeight = container.clientHeight
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight
+
+      if (pointerScrollInteractionRef.current && distanceFromBottom > CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX) {
+        leaveBottomFollow()
+      }
 
       setShowScrollButton(distanceFromBottom > 200)
       setShowScrollTopButton(scrollTop > 200)
@@ -488,29 +530,72 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
     const container = messagesContainerRef.current
     if (container) {
+      const handleWheel = (event: WheelEvent) => {
+        if (event.deltaY < 0) {
+          leaveBottomFollow()
+        } else {
+          markUserViewportInteraction()
+        }
+      }
+      const handleTouchStart = (event: TouchEvent) => {
+        markUserViewportInteraction()
+        touchScrollStartYRef.current = event.touches[0]?.clientY ?? null
+      }
+      const handleTouchMove = (event: TouchEvent) => {
+        const currentY = event.touches[0]?.clientY
+        const startY = touchScrollStartYRef.current
+        if (typeof currentY === 'number' && typeof startY === 'number' && currentY > startY + 2) {
+          leaveBottomFollow()
+        }
+        if (typeof currentY === 'number') {
+          touchScrollStartYRef.current = currentY
+        }
+      }
+      const handleTouchEnd = () => {
+        touchScrollStartYRef.current = null
+      }
+      const handlePointerDown = () => {
+        markUserViewportInteraction()
+        pointerScrollInteractionRef.current = true
+      }
+      const handlePointerEnd = () => {
+        pointerScrollInteractionRef.current = false
+      }
       const handleWindowKeyDown = (event: KeyboardEvent) => {
         const target = event.target
         if (target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName))) {
           return
         }
         if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
-          markUserViewportInteraction()
+          const leavesBottom = ['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)
+          if (leavesBottom) leaveBottomFollow()
+          else markUserViewportInteraction()
         }
       }
       container.addEventListener('scroll', handleScroll)
-      container.addEventListener('wheel', markUserViewportInteraction, { passive: true })
-      container.addEventListener('touchstart', markUserViewportInteraction, { passive: true })
-      container.addEventListener('pointerdown', markUserViewportInteraction, { passive: true })
+      container.addEventListener('wheel', handleWheel, { passive: true })
+      container.addEventListener('touchstart', handleTouchStart, { passive: true })
+      container.addEventListener('touchmove', handleTouchMove, { passive: true })
+      container.addEventListener('touchend', handleTouchEnd, { passive: true })
+      container.addEventListener('touchcancel', handleTouchEnd, { passive: true })
+      container.addEventListener('pointerdown', handlePointerDown, { passive: true })
+      window.addEventListener('pointerup', handlePointerEnd)
+      window.addEventListener('pointercancel', handlePointerEnd)
       window.addEventListener('keydown', handleWindowKeyDown)
       return () => {
         container.removeEventListener('scroll', handleScroll)
-        container.removeEventListener('wheel', markUserViewportInteraction)
-        container.removeEventListener('touchstart', markUserViewportInteraction)
-        container.removeEventListener('pointerdown', markUserViewportInteraction)
+        container.removeEventListener('wheel', handleWheel)
+        container.removeEventListener('touchstart', handleTouchStart)
+        container.removeEventListener('touchmove', handleTouchMove)
+        container.removeEventListener('touchend', handleTouchEnd)
+        container.removeEventListener('touchcancel', handleTouchEnd)
+        container.removeEventListener('pointerdown', handlePointerDown)
+        window.removeEventListener('pointerup', handlePointerEnd)
+        window.removeEventListener('pointercancel', handlePointerEnd)
         window.removeEventListener('keydown', handleWindowKeyDown)
       }
     }
-  }, [captureCurrentViewportState, markUserViewportInteraction, messages.length, readCurrentViewportState, showFullTimeline])
+  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages.length, readCurrentViewportState, showFullTimeline])
 
   const applySessionState = useCallback((session: SessionListRecord | null | undefined) => {
     if (!session || typeof session.id !== 'string') return

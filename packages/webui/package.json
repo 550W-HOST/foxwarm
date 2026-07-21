@@ -9,6 +9,7 @@
     "test:theme-e2e": "node --test test/themeMarkdownStyles.e2e.mjs",
     "test:message-overflow-e2e": "node --test test/messageOverflow.e2e.mjs",
     "test:scroll-e2e": "node --test test/scrollState.e2e.mjs",
+    "test:stream-follow-e2e": "node --test test/streamFollow.e2e.mjs",
     "test:session-list-e2e": "node --test test/sessionListLiveRefresh.e2e.mjs",
     "test:session-list-drag-e2e": "node --test test/sessionListDrag.e2e.mjs",
     "test:session-header-e2e": "node --test test/sessionHeader.e2e.mjs",
