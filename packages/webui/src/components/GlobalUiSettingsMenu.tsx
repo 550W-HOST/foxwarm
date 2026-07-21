@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { RefreshCw, Settings } from 'lucide-react'
 import ReloadAppButton from './ReloadAppButton'
+import { MENU_VIEWPORT_GUTTER, clampAnchoredMenuHorizontally, readHorizontalViewportBounds } from './menuPositioning'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 type UiThemeStyle = 'default' | '550a'
@@ -54,13 +55,16 @@ export default function GlobalUiSettingsMenu({
   const [savingTabIcon, setSavingTabIcon] = useState(false)
   const [instanceNameError, setInstanceNameError] = useState('')
   const [tabIconError, setTabIconError] = useState('')
+  const [menuOffset, setMenuOffset] = useState(0)
+  const [menuPositioned, setMenuPositioned] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!open) return
 
     const handlePointerDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      if (!rootRef.current?.contains(event.target as Node) && !menuRef.current?.contains(event.target as Node)) {
         setOpen(false)
       }
     }
@@ -78,6 +82,55 @@ export default function GlobalUiSettingsMenu({
       document.removeEventListener('keydown', handleEscape)
     }
   }, [open])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuOffset(0)
+      setMenuPositioned(false)
+      return
+    }
+
+    let animationFrame = 0
+    let lastGeometry = ''
+
+    const updatePosition = () => {
+      const anchor = rootRef.current
+      const menu = menuRef.current
+      if (!anchor || !menu) return
+
+      const viewport = readHorizontalViewportBounds()
+      const maxWidth = Math.max(0, viewport.right - viewport.left - MENU_VIEWPORT_GUTTER * 2)
+      const maxWidthStyle = `${maxWidth}px`
+      if (menu.style.maxWidth !== maxWidthStyle) {
+        menu.style.maxWidth = maxWidthStyle
+      }
+
+      const anchorRect = anchor.getBoundingClientRect()
+      const menuRect = menu.getBoundingClientRect()
+      const geometry = [anchorRect.left, anchorRect.right, menuRect.width, viewport.left, viewport.right, menuAlign].join(':')
+
+      if (geometry !== lastGeometry) {
+        lastGeometry = geometry
+        const placement = clampAnchoredMenuHorizontally({
+          anchorLeft: anchorRect.left,
+          anchorRight: anchorRect.right,
+          menuWidth: menuRect.width,
+          viewport,
+          align: menuAlign,
+        })
+        setMenuOffset((current) => Math.abs(current - placement.offset) < 0.25 ? current : placement.offset)
+        setMenuPositioned(true)
+      }
+    }
+
+    const watchGeometry = () => {
+      updatePosition()
+      animationFrame = window.requestAnimationFrame(watchGeometry)
+    }
+    watchGeometry()
+
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [menuAlign, open])
 
   const menuButtonClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-wait disabled:opacity-70 dark:text-gray-300 dark:hover:bg-gray-700'
   const modifierLabel = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? 'Cmd' : 'Ctrl'
@@ -140,7 +193,12 @@ export default function GlobalUiSettingsMenu({
       </button>
 
       {open && (
-        <div className={`absolute ${menuAlignClass} top-full z-50 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100`}>
+        <div
+          ref={menuRef}
+          data-global-ui-settings-menu
+          className={`absolute ${menuAlignClass} top-full z-50 mt-2 w-72 rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100`}
+          style={{ transform: `translateX(${menuOffset}px)`, visibility: menuPositioned ? 'visible' : 'hidden' }}
+        >
           <div className="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
             <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Theme style</div>
             <div className="flex gap-1">
