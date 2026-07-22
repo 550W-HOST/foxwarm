@@ -18,7 +18,7 @@ import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, getNextSessionMessageSeq } from './session/archive';
 import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
-import { ensureSessionBranch } from './session/archiveStore';
+import { ensureSessionBranch, hasArchivedSessionId } from './session/archiveStore';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
@@ -284,20 +284,28 @@ export async function queueSessionWaitTimeoutEvent(sessionId: string, waitId: st
   });
 }
 
+async function isSessionIdReserved(sessionId: string): Promise<boolean> {
+  if (await getExistingSession(sessionId)) {
+    return true;
+  }
+
+  return hasArchivedSessionId(sessionId);
+}
+
 async function allocateForkSessionId(sourceSessionId: string, suffix?: string, replaceMainLeaf = false): Promise<string> {
   const requestedSuffix = (suffix || 'fork').trim() || 'fork';
   const baseId = replaceMainLeaf
     ? buildChildSessionId(sourceSessionId, requestedSuffix)
     : `${sourceSessionId}_${requestedSuffix}`;
 
-  if (!await getExistingSession(baseId)) {
+  if (!await isSessionIdReserved(baseId)) {
     return baseId;
   }
 
   let counter = 2;
   while (true) {
     const candidate = `${baseId}_${counter}`;
-    if (!await getExistingSession(candidate)) {
+    if (!await isSessionIdReserved(candidate)) {
       return candidate;
     }
     counter += 1;
@@ -323,14 +331,14 @@ async function allocateChildSessionId(parentSessionId: string, suffix: string): 
   const requestedSuffix = (suffix || 'child').trim() || 'child';
   const baseId = buildChildSessionId(parentSessionId, requestedSuffix);
 
-  if (!await getExistingSession(baseId)) {
+  if (!await isSessionIdReserved(baseId)) {
     return baseId;
   }
 
   let counter = 2;
   while (true) {
     const candidate = `${baseId}_${counter}`;
-    if (!await getExistingSession(candidate)) {
+    if (!await isSessionIdReserved(candidate)) {
       return candidate;
     }
     counter += 1;

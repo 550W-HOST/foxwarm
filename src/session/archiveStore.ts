@@ -754,6 +754,23 @@ export function initArchiveStoreSync(): void {
   openArchiveStore();
 }
 
+/**
+ * Return whether a session id has ever been registered in the durable archive.
+ *
+ * Deleted live sessions intentionally keep their append-only archive records.
+ * Callers that allocate new session ids must therefore treat an archived id as
+ * reserved even when it no longer exists in sessions.json or state/sessions/.
+ */
+export async function hasArchivedSessionId(sessionId: string): Promise<boolean> {
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+  if (!normalizedSessionId) {
+    return false;
+  }
+
+  await initArchiveStore();
+  return getBranchInternal(normalizedSessionId) !== null;
+}
+
 export async function ensureSessionBranch(
   sessionId: string,
   options: {
