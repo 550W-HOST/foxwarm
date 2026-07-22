@@ -19,7 +19,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 
 - `nodeTools`, `CLI_NODE_CAPABILITIES`.
 - shared file read/write core and node transfer/path helpers.
-- patch parsing/content-application functions.
+- patch parsing/content-application functions plus per-operation change-count summaries.
 - `PersistentExecManager` and shared timeout/cwd resolution.
 - `truncateOutputForDisplay`.
 - `formatToolResponsePayload`, `formatStructuredValue`, token estimation, and small WebUI rendering helpers.
@@ -29,6 +29,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 ## Invariants
 
 - Patch matching normalizes LF internally, restores original line endings, and refuses ambiguous exact replacements.
+- Master and node patch results share per-file add/update counts; the exact counting and display contract is canonical in [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 - Write refuses overwrite by default and creates parents only with `createDirs=true`; it attempts the real write before enriching parent errors.
 - Master and node wrappers reuse shared file/cwd/timeout semantics rather than independently approximating them.
 - Exec cwd expands home, must exist, and must be a directory before spawn.

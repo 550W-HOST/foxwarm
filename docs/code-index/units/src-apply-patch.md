@@ -52,4 +52,4 @@ None from other project modules — this unit is self-contained. The selftest im
 
 ## Integration
 
-This is the core patch engine consumed by higher-level tools that receive structured diffs (e.g., from an LLM tool call). Callers provide file content and raw patch text; this unit returns the transformed content or throws on invalid input. The selftest validates the parser and application logic in isolation without filesystem access.
+This is the master-side patch engine consumed by higher-level tools that receive structured diffs (e.g., from an LLM tool call). Callers provide file content and raw patch text; this unit returns the transformed content or throws on invalid input. Master result summaries pass its structurally matching parsed operations to the shared formatter; the line-count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts). The selftest validates the parser and application logic in isolation without filesystem access.

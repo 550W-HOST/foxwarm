@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
-import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from './applyPatch';
+import { applyUpdatePatch, buildAddedFileContent, formatApplyPatchOperationSummary, parseApplyPatchInput } from './applyPatch';
 import { getNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
 import { readFileToolPath, writeFileToolPath } from './fileToolCore';
 import { PersistentExecManager, resolveExecTimeoutSeconds, type ExecStatus, type RunningExecEntry } from './persistentExec';
@@ -69,16 +69,16 @@ async function applyPatchOperations(input: string, resolveOperationPath: (filePa
         if (!await fs.pathExists(fullPath)) throw new Error(`Cannot update missing file: ${displayPath}`);
         const content = await fs.readFile(fullPath, 'utf8');
         await fs.writeFile(fullPath, applyUpdatePatch(content, operation.lines, displayPath));
-        summaries.push(`Updated ${displayPath}`);
+        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
       } else if (operation.action === 'add') {
         if (await fs.pathExists(fullPath)) throw new Error(`Cannot add file that already exists: ${displayPath}`);
         await fs.ensureDir(path.dirname(fullPath));
         await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
-        summaries.push(`Added ${displayPath}`);
+        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
       } else {
         if (!await fs.pathExists(fullPath)) throw new Error(`Cannot delete missing file: ${displayPath}`);
         await fs.remove(fullPath);
-        summaries.push(`Deleted ${displayPath}`);
+        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
       }
     } catch (err) {
       const succeeded = summaries.length > 0

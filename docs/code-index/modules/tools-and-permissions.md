@@ -37,6 +37,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - Image results receive stable IDs before model serialization.
 - Timer builtins remain discoverable but are not injected into the default model schema.
 - Patch application preserves the source line-ending convention.
+- Master and node patch results use the shared per-file add/update count formatter; the exact contract is canonical in [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 
 ## Canonical cross-module flow
 

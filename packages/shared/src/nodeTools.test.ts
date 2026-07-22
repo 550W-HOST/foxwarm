@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { exec, read, write } from './nodeTools';
+import { apply_patch, exec, read, write } from './nodeTools';
 import { getNodeAgentDir } from './nodeFileTransfer';
 import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
 import { resolveExecTimeoutSeconds } from './persistentExec';
@@ -100,6 +100,40 @@ test('node write accepts symlinked parent dirs without createDirs', async () => 
     await fs.symlink(realParent, symlinkParent, 'dir');
     await write({ filePath: 'linked-parent/note.txt', content: 'via symlink' }, { session: { agent: agentName } });
     assert.equal(await fs.readFile(path.join(realParent, 'note.txt'), 'utf8'), 'via symlink');
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});
+
+test('node apply_patch reports added and updated line counts', async () => {
+  const agentName = uniqueAgent('node_apply_patch_counts');
+  const baseDir = getNodeAgentDir(agentName);
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(path.join(baseDir, 'note.txt'), 'old\nkeep');
+    const result = await apply_patch({
+      input: [
+        '*** Begin Patch',
+        '*** Update File: note.txt',
+        '@@',
+        '-old',
+        '+new',
+        '+extra',
+        ' keep',
+        '*** Add File: added.txt',
+        '+first',
+        '+second',
+        '*** End Patch',
+      ].join('\n'),
+    }, { session: { agent: agentName } });
+
+    assert.equal(result, [
+      'Patch applied successfully.',
+      '- Updated note.txt (+2 -1)',
+      '- Added added.txt (+2)',
+    ].join('\n'));
+    assert.equal(await fs.readFile(path.join(baseDir, 'note.txt'), 'utf8'), 'new\nextra\nkeep');
+    assert.equal(await fs.readFile(path.join(baseDir, 'added.txt'), 'utf8'), 'first\nsecond');
   } finally {
     await cleanupAgent(agentName);
   }

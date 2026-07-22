@@ -1,6 +1,6 @@
 # Unit: src-tools
 
-Files: src/tools.ts (facade), src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/utils/pathResolve.ts
+Files: src/tools.ts (facade), src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
 
 ## Purpose
 
@@ -150,6 +150,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - **MCP result pass-through**: MCP result cleanup is owned by `src/mcpClient.callTool`; unified `call_tool` simply passes the normalized value onward, so ToolScript and direct unified calls receive parsed object/array values for single-text JSON responses without MCP-specific branches. Hidden `call_mcp` / `search_mcp_tools` runtime handlers remain for compatibility, while current model guidance uses `search_tools` and `call_tool` (`toolId: "mcp:<server>/<tool>"` or `source:"mcp"`).
 - **Model-facing schema validity**: Default-injected tool definitions are the single schema source passed to providers. Every top-level property in a model-facing tool must have a concrete schema shape (`type`, `enum`, or composition keywords), because OpenAI Responses rejects description-only properties.
 - **Memory operations**: Read/write/edit/delete/patch operations target per-agent memory directories. These file CRUD operations do not automatically update the session-archive vector index.
+- **Patch result summaries**: Master file and memory patch wrappers use the shared per-operation formatter for per-file add/update counts, including operations listed after a partial failure; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).
 
 ## Integration
 

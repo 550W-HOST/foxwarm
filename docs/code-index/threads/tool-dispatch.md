@@ -15,7 +15,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 7. MCP calls run through `mcpClient.callTool`; MCP result normalization occurs at that client boundary.
 8. Node calls are sent through `nodesManager` over the authenticated node connection. A node-side approval interceptor may still reject the call.
 9. Master and node file wrappers use the shared file-tool core after their own path, context, and isolation handling.
-10. Results are normalized, image parts receive stable IDs, and oversized output is guarded before the next model iteration.
+10. Results are normalized, image parts receive stable IDs, and oversized output is guarded before the next model iteration. Successful master/node patch results already carry shared per-file change-count summaries from [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 11. ToolScript nested calls use the same registered tool surfaces and appear as subcalls of the outer run.
 
 ## Modules involved

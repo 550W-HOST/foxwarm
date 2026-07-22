@@ -1,6 +1,6 @@
 # Unit: shared-apply-patch
 
-Files: packages/shared/src/applyPatch.ts
+Files: packages/shared/src/applyPatch.ts, packages/shared/src/applyPatch.test.ts
 
 ## Purpose
 
@@ -13,6 +13,8 @@ Parses and applies text-based patch operations (update, add, delete) to file con
 - `parseApplyPatchInput(input)` — Parses a full patch into a list of `ApplyPatchOperation` objects
 - `applyUpdatePatch(content, lines, filePath)` — Applies an update diff to existing file content
 - `buildAddedFileContent(lines)` — Joins add-section lines into final file content
+- `countApplyPatchOperationLines(operation)` — Counts inserted and deleted patch content lines
+- `formatApplyPatchOperationSummary(operation, displayPath?)` — Formats the per-file success summary used by master and node tools
 
 ## Function Index
 
@@ -35,6 +37,8 @@ Parses and applies text-based patch operations (update, add, delete) to file con
 | `applyChunks(input, chunks, filePath)` | (truncated) | Splices insert/delete chunks into original lines |
 | `applyUpdatePatch(content, lines, filePath)` | (truncated) | Top-level update: normalize, parse, apply, restore endings |
 | `buildAddedFileContent(lines)` | (truncated) | Joins lines for newly added files |
+| `countApplyPatchOperationLines(operation)` | ~424 | Counts changed content lines while excluding headers, anchors, and context |
+| `formatApplyPatchOperationSummary(operation, displayPath?)` | ~442 | Formats Added/Updated/Deleted per-file result lines |
 
 ## Dependencies
 
@@ -46,8 +50,15 @@ None — this module is self-contained with no imports from other project module
 - Patch envelope extraction supports both explicit `*** Begin Patch / *** End Patch` wrappers and bare patches starting with a file header.
 - Update diffs use `@@` anchors to locate positions in the original file, with a fuzz mechanism that falls back to trimmed matching when exact matches fail.
 - Chunks track original line indices for deletions and insertions; `applyChunks` validates no overlapping or out-of-bounds chunks.
+- Per-file success summaries report `Added path (+N)` and `Updated path (+N -M)`; delete summaries retain `Deleted path`.
 - Throws descriptive errors on malformed input, missing context matches, or structural violations.
 
 ## Integration
 
 This is a shared utility consumed by other packages that need to apply text patches to file contents (e.g., tool implementations that handle `apply_patch` operations from an LLM). It provides the parsing and application logic while leaving file I/O to callers.
+
+## Design Decisions
+
+### D-apply-patch-change-counts
+
+Successful add and update operations include compact Git-style line counts in each file summary. Counts come from parsed patch content: add-file content lines count as additions, and only `+`/`-` update lines count as additions/deletions, excluding file headers, hunk anchors, and context. Multiple hunks aggregate per operation. Updated files always show both sides, including zero, while added files show additions only and deleted-file output remains unchanged. The same formatter is shared by master and node execution so normal success and already-applied partial-failure summaries stay aligned.

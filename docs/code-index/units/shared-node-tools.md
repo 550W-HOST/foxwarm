@@ -20,6 +20,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `resolveExecCwd`, `validateResolvedExecCwd`, `resolveValidatedExecCwd` — exec working directory resolution and validation
 - `estimateTokenCount` — lightweight token count estimator
 - `formatStructuredValue`, `formatToolResponsePayload`, `formatCompactObjectPreview` — YAML-based response formatting for model-facing and WebUI display paths
+- Shared patch parsing, line-count, and per-operation summary helpers are re-exported from the package index.
 - `truncateOutputForDisplay` — line-aware excerpt helper used by tool-output guard and persistent exec output formatting
 - `parseSessionLinkText`, `shouldUseStreamingToolPlaceholder` — small pure helpers used by WebUI tool/text renderers and covered by shared Node tests
 
@@ -89,6 +90,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - File transfer functions enforce path traversal restrictions by default
 - Exec cwd validation produces detailed error messages distinguishing cwd issues from missing shell errors
 - Output exceeding `INLINE_OUTPUT_LIMIT` (10K chars) is truncated with a pointer to the log file
+- Node `apply_patch` success and partial-failure summaries use the shared per-operation formatter, including per-file add/update counts; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).
 
 ## Integration
 

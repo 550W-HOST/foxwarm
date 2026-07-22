@@ -9,3 +9,4 @@ export * from './nodeTools';
 export * from './webuiToolRendering';
 export * from './outputTruncation';
 export * from './gitCommitDetails';
+export * from './applyPatch';
