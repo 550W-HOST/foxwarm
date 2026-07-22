@@ -10,6 +10,7 @@
     "build": "npm --prefix packages/shared run build && npm --prefix packages/cli-node run build && rm -f lib/nodeClient.js lib/nodeClient.js.map lib/nodes/client.js lib/nodes/client.js.map lib/nodes/interactive-client.js lib/nodes/interactive-client.js.map && tsc",
     "build:code": "npm --prefix packages/vscode-web run build:code --",
     "download:code": "npm --prefix packages/vscode-web run download:code --",
+    "quality:code-index": "python3 docs/code-index/scripts/audit_index.py --source-root . --fail-on-cjk",
     "quality:unused": "node scripts/quality/unused-check.mjs",
     "test:model-cli": "node --test scripts/model.test.js",
     "test:code-index-generator": "python3 skills/code-index/tests/test_generate_code_index.py",

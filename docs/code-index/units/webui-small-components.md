@@ -1,0 +1,85 @@
+# Unit: webui-small-components
+
+Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts
+Secondary files: packages/webui/src/components/CollapsedSidebar.tsx
+
+## Purpose
+
+A collection of small, reusable React UI components and utility functions for the Foxwarm web interface, providing layout primitives (headers, sidebars, context menus), display widgets (syntax highlighting, image previews, processing indicators), and language detection utilities.
+
+## Key Exports
+
+- `ContentHeader` — Page/section header with icon, title, optional back button and actions
+- `ContextMenu` — Portal-based positioned context menu with keyboard/click-outside dismissal
+- `CollapsedSidebar` — Fixed-width collapsed sidebar rail with expand/new-session controls and root-session avatar buttons
+- `AgentCreationMenu` — Shared Agents `+` dropdown and simple new-agent/new-session modals, including inline validation/loading/error states
+- `agentCreation` helpers — Client validation and request-body helpers that omit an empty session ID so the backend generates the existing random name
+- `CreateTabButton` — Split button for creating terminal tabs with custom node/path options
+- `CodeLaunchButton` — Sidebar split button for opening Code at a remembered master path and controlling the global new-browser-tab default
+- `ImageParts` — Renders inline base64 image attachments from message parts
+- `ProcessingStatus` — Animated status indicators for busy/queued/loading states
+- `ReasoningCard` — Collapsible card displaying AI reasoning/thinking content with markdown rendering
+- `ReloadAppButton` — Button that clears service workers and caches before hard-reloading
+- `Sidebar` — Main application sidebar with session list, navigation, and settings
+- `SyntaxHighlightedText` — Lightweight regex-based syntax highlighter for code snippets
+- `ThreadLineButton` — Vertical thread-line toggle button for expand/collapse interactions
+- `inferSimpleLanguage` — Maps file paths to a simplified language enum
+- `getMonacoLanguage` — Maps file paths to Monaco editor language identifiers
+- `SimpleLanguage` (type) — Union type of supported language identifiers
+
+## Function Index
+
+| Function | Lines (approx) | Description |
+|----------|----------------|-------------|
+| `ContentHeader({ ... })` | ~15–55 | Renders a page header with icon, title, back button, and action slots |
+| `ContextMenu({ ... })` | ~40–130 | Positioned dropdown menu with portal rendering and viewport clamping |
+| `getSessionInitial(session)` | (CollapsedSidebar.tsx) | Derives a single visible initial/avatar from display name or session id |
+| `CollapsedSidebar({ ... })` | (CollapsedSidebar.tsx) | Renders the compact rail with expand/new-session buttons and top root sessions |
+| `AgentCreationMenu({ ... })` | (AgentCreationMenu.tsx) | Renders the creation dropdown plus agent/session modal flows shared by desktop and mobile expanded sidebars |
+| `buildSessionCreationBody(agentId, sessionId)` | (agentCreation.ts) | Omits blank session IDs so random backend naming remains authoritative |
+| `CreateTabButton({ ... })` | ~50–110 | Split button with dropdown form for custom terminal tab creation |
+| `ImageParts({ ... })` | ~5–20 | Renders a grid of clickable base64 image thumbnails |
+| `ProcessingStatus({ ... })` | ~10–50 | Shows animated bounce dots and status text for session processing states |
+| `extractOpenAIReasoningSummaryTitles(text)` | ~55–68 | Extracts bold-formatted summary titles from reasoning text |
+| `getReasoningPreview(text)` | ~70–75 | Returns collapsed preview text for reasoning card header |
+| `ReasoningCard({ ... })` | ~78–120 | Expandable card rendering markdown reasoning with debounce support |
+| `hardReloadApp()` | ~5–15 | Unregisters service workers, clears caches, then reloads the page |
+| `ReloadAppButton({ ... })` | ~18–35 | Button component wrapping hardReloadApp with loading state |
+| `Sidebar({ ... })` | ~65–145 | Full sidebar layout with branding, nav buttons, tab creators, and session list |
+| `buildCodeRegex(language)` | ~50–75 | Constructs a tokenizing regex for a given language |
+| `classifyToken(language, value)` | ~77–90 | Determines token kind (keyword, string, comment, etc.) from matched text |
+| `SyntaxHighlightedText({ text, filePath })` | ~92–115 | Tokenizes and wraps code text in colored spans |
+| `ThreadLineButton({ ... })` | ~10–30 | Accessible toggle button rendering a vertical thread line |
+| `inferSimpleLanguage(filePath)` | ~30–95 | Maps file extension/name to a SimpleLanguage value |
+| `getMonacoLanguage(filePath)` | ~97–110 | Converts SimpleLanguage to Monaco editor language string |
+| `basename(filePath)` | ~25 | Extracts lowercase filename from a path |
+| `extension(filePath)` | ~26–29 | Extracts file extension including the dot |
+| `keywordPattern(words)` | ~30 | Builds a word-boundary alternation regex string from keyword list |
+
+## Dependencies
+
+- `./chatShared` — `MessagePart` type, `getCollapsedReasoningPreview`, `handleMarkdownLinkClick`, `renderMarkdown`, `ToolTag`
+- `./SessionListCore` — `SessionListCore` component and `Session` type
+- `./GlobalUiSettingsMenu` — Settings menu component used in Sidebar
+- `./AgentCreationMenu` / `../agentCreation` — Shared creation menu/modals and request validation helpers
+- `../utils/languages` — `inferSimpleLanguage`, `SimpleLanguage` type
+
+## Behavior
+
+- `ContextMenu` uses `createPortal` to render outside the component tree, calculates position with `useLayoutEffect`, and auto-dismisses on outside click, Escape, scroll, or resize.
+- `CollapsedSidebar` filters to unarchived root sessions, shows at most 20 avatars, highlights the active session, and displays a busy dot for busy sessions.
+- `ReasoningCard` debounces content updates, detects OpenAI-style bold summary titles for collapsed preview, and renders full markdown when expanded.
+- `ReasoningCard` exposes semantic CSS hooks (`foxwarm-reasoning-card`, `foxwarm-reasoning-card-*`, `foxwarm-reasoning-thread-line`, `foxwarm-reasoning-header`, `foxwarm-reasoning-tag`, `foxwarm-reasoning-preview`, `foxwarm-reasoning-body`) so optional UI style layers can retheme reasoning surfaces without duplicating reasoning rendering logic.
+- `hardReloadApp` performs a destructive cache/service-worker purge before triggering `window.location.reload()`.
+- `SyntaxHighlightedText` performs client-side regex tokenization without external highlighting libraries; classification is heuristic-based per language.
+- `CreateTabButton` manages local dropdown state with click-outside detection and syncs terminal defaults from props via effects; it no longer displays a session/default-context hint because terminal creation is cwd/node-based.
+- Its fixed 20rem dropdown also has a viewport-relative maximum width so the same split button remains usable inside the narrow Code-embedded sidebar.
+- `CodeLaunchButton` validates absolute POSIX paths before opening, shows inline errors for invalid input, fixes node selection to `master`, and exposes controlled path/open-mode callbacks so `App` owns global persistence.
+
+## Integration
+
+- `Sidebar` composes `SessionListCore`, `AgentCreationMenu`, `CreateTabButton`, and `GlobalUiSettingsMenu` to form the app's primary navigation surface; `CollapsedSidebar` is the desktop collapsed-state counterpart wired by `App.tsx` to the same session open/new-session callbacks.
+- `ReasoningCard` and `ThreadLineButton` are used within chat message rendering to display collapsible AI thinking blocks.
+- `ProcessingStatus` and `ImageParts` plug into the chat view to show session activity and inline images.
+- `ContentHeader` is a generic layout primitive used across detail/settings pages.
+- `inferSimpleLanguage` / `getMonacoLanguage` are shared by both `SyntaxHighlightedText` and the Monaco-based code editor elsewhere in the app.
