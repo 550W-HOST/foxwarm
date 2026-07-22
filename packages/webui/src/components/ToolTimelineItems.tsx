@@ -616,13 +616,32 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   const actionButtonsToneClass = `foxwarm-tool-action-buttons-${tagTone}`
 
-  const header = (extraClass = '', onClick?: (e: MouseEvent<HTMLDivElement>) => void, includeCallPreview = false) => (
+  const expandedCallContent = call ? (
+    <div className={`text-gray-700 dark:text-gray-300 ${showDiffToggles ? 'relative' : ''}`}>
+      {showDiffToggles && (
+        <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute top-1 right-0 flex gap-1`} onClick={(e) => e.stopPropagation()}>
+          <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
+          <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
+        </div>
+      )}
+      {renderToolCallExpandedContent(call, diffViewMode, { partial: partialToolCall, onOpenCodeFile })}
+    </div>
+  ) : null
+
+  const header = (extraClass = '', onClick?: (e: MouseEvent<HTMLDivElement>) => void, includeCallPreview = false, includeExpandedCall = false) => (
     <div
-      className={`foxwarm-tool-header flex items-center gap-2 min-w-0 ${toolHeaderToneClasses[tagTone]} ${extraClass}`.trim()}
+      className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]} ${extraClass}`.trim()}
       onClick={onClick}
     >
-      <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
-      {includeCallPreview && call && <div className="foxwarm-tool-call-summary min-w-0 max-w-full flex-1 truncate whitespace-nowrap">{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
+      <div className="flex min-w-0 items-center gap-2">
+        <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
+        {includeCallPreview && call && <div className="foxwarm-tool-call-summary min-w-0 max-w-full flex-1 truncate whitespace-nowrap">{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
+      </div>
+      {includeExpandedCall && expandedCallContent && (
+        <div className="foxwarm-tool-call-args min-w-0 max-w-full pt-1 pr-2" onClick={(e) => e.stopPropagation()}>
+          {expandedCallContent}
+        </div>
+      )}
     </div>
   )
 
@@ -651,62 +670,48 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           <div className="space-y-1">
             {header('', undefined, true)}
-            {responsePreview && !hasToolScriptProgress && <div className="pr-2 text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>}
+            {responsePreview && !hasToolScriptProgress && <div className="foxwarm-tool-result-preview pr-2 text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>}
             {hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} />}
           </div>
         </div>
       ) : (
         <div className={baseTextClass}>
-          {header('cursor-pointer hover:text-gray-900 dark:hover:text-gray-100', (e) => { e.stopPropagation(); setExpanded(false) })}
+          {header('cursor-pointer hover:text-gray-900 dark:hover:text-gray-100', (e) => { e.stopPropagation(); setExpanded(false) }, false, true)}
 
-          <div className="foxwarm-tool-expanded-content mt-1 min-w-0 max-w-full cursor-default pr-2" onClick={(e) => e.stopPropagation()}>
-            {call && (
-              <div className={`text-gray-700 dark:text-gray-300 ${showDiffToggles ? 'relative' : ''}`}>
-                {showDiffToggles && (
-                  <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute top-1 right-0 flex gap-1`} onClick={(e) => e.stopPropagation()}>
-                    <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
-                    <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
-                  </div>
-                )}
-                {renderToolCallExpandedContent(call, diffViewMode, { partial: partialToolCall, onOpenCodeFile })}
-              </div>
-            )}
-
-            {call && hasResponseContent && (
-              <div className={`my-2 border-t ${isError ? 'border-red-200 dark:border-red-800' : 'border-green-200 dark:border-green-800'} opacity-70`} />
-            )}
-
-            {hasResponseContent && !hasToolScriptProgress && (
-              <div className="text-gray-700 dark:text-gray-300">
-                {responses.length > 0 && responses.map((resp, idx) => (
-                  <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
-                    {renderToolResponseContent(resp, true, call)}
-                  </div>
-                ))}
-
-                {imageParts.length > 0 && (
-                  <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
-                    <ImageParts imageParts={imageParts} keyPrefix={`tool-pair-${call?.id || primaryName}`} />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
-
-            {hasToolScriptProgress && hasResponseContent && (
-              <div className="text-gray-700 dark:text-gray-300">
-                {responses.length > 0 && responses.map((resp, idx) => {
-                  const content = renderToolScriptResultContent(resp, true)
-                  return content ? (
-                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
-                      {content}
+          {(hasResponseContent || hasToolScriptProgress) && (
+            <div className="foxwarm-tool-expanded-content foxwarm-tool-result-content mt-1 min-w-0 max-w-full cursor-default pr-2" onClick={(e) => e.stopPropagation()}>
+              {hasResponseContent && !hasToolScriptProgress && (
+                <div className="text-gray-700 dark:text-gray-300">
+                  {responses.length > 0 && responses.map((resp, idx) => (
+                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
+                      {renderToolResponseContent(resp, true, call)}
                     </div>
-                  ) : null
-                })}
-              </div>
-            )}
-          </div>
+                  ))}
+
+                  {imageParts.length > 0 && (
+                    <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
+                      <ImageParts imageParts={imageParts} keyPrefix={`tool-pair-${call?.id || primaryName}`} />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
+
+              {hasToolScriptProgress && hasResponseContent && (
+                <div className="text-gray-700 dark:text-gray-300">
+                  {responses.length > 0 && responses.map((resp, idx) => {
+                    const content = renderToolScriptResultContent(resp, true)
+                    return content ? (
+                      <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-red-100 dark:border-red-900/40' : 'border-green-100 dark:border-green-900/40'}` : ''}>
+                        {content}
+                      </div>
+                    ) : null
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
 # Unit: webui-tool-timeline
 
-Files: packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ToolExecText.tsx, packages/webui/src/components/ToolScriptProgressContext.tsx, packages/webui/test/toolCollapsedOverflow.e2e.mjs
+Files: packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ToolExecText.tsx, packages/webui/src/components/ToolScriptProgressContext.tsx, packages/webui/test/toolCollapsedOverflow.e2e.mjs, packages/webui/test/toolArgsHeader.e2e.mjs
 
 ## Purpose
 
@@ -78,6 +78,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - Tool script sub-calls are rendered via `ToolScriptProgressContext`, showing nested progress for composite tool operations
 - Status-based theming (success/error/neutral) applies to thread lines, headers, and surface backgrounds
 - Tool cards and diff previews expose semantic CSS hooks (`foxwarm-tool-card`, `foxwarm-tool-tone-*`, `foxwarm-tool-header`, `foxwarm-tool-tag`, `foxwarm-tool-thread-line`, `foxwarm-tool-action-buttons-*`, `foxwarm-diff-*`) so opt-in UI style layers can map success/error/neutral and diff added/removed states to alternate palettes without changing tool grouping or response rendering logic.
+- Default-view call arguments remain inside the tone-specific `foxwarm-tool-header` region in both collapsed and expanded states. Collapsed arguments use the compact one-line summary; expanded arguments wrap below the tag row inside the same header background. Result previews and expanded results remain on the lighter card surface, without a call/result divider. Separators between multiple result items remain result-local.
 - Finalized direct `read`, `write`, and `edit` cards render `filePath` as a Code action when the parent supplies a current-node handler. Expanded actions are text-sized (not control-sized), may wrap long paths, and support click plus Enter/Space. Collapsed tool-call headers are a separate compact mode: the entire args preview is exactly one no-wrap line clipped inside its shrinkable flex slot with an ellipsis; an inline Code path participates in that truncation without losing its bridge action. Direct `apply_patch` uses the existing parsed operation list: single-file collapsed previews and expanded Update/Add headings are actionable, while multi-file summaries and deleted-file headings stay non-actionable. `read` forwards its one-based start/end lines. Memory tools and nested unified tool calls keep their existing plain rendering.
 
 ## Integration
@@ -89,6 +90,10 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - Download functionality connects to the authenticated `/download?path=...` route used by WebUI `send_file` results
 
 ## Design Decisions
+
+### D-webui-tool-call-region
+
+The tool tag, action controls, and call arguments form one continuous tone-specific header region in the default view, regardless of collapse state. Expanding changes the arguments from the one-line ellipsized preview to the existing rich wrapping renderer inside that header; it does not move arguments into the result surface. Tool results retain the lighter card surface and are separated by background contrast rather than a divider between call and result. Preserve the existing collapse events, view modes, status tones, result-local separators, Code actions, and ToolScript progress behavior.
 
 - [2026-07-06] 550A diff rendering should use an orange/green pair for removed/added content instead of letting generic blue utility classes map to the red accent. Keep default diff colors unchanged and use semantic `foxwarm-diff-*` hooks plus scoped `html[data-foxwarm-ui-style="550a"]` CSS overrides for the 550A palette; both line-level backgrounds and stronger inline token backgrounds should use the orange/green pair. Because the broad 550A utility remap uses high-specificity `:is(...)` selectors, diff overrides should include a diff/tool parent selector (for example `.foxwarm-diff-preview` / `.foxwarm-tool-card`) so they actually win the cascade.
 - [2026-06-17] WebUI streaming tool cards should not parse incomplete/heavy arguments. Avoid misleading validation errors such as `invalid patch` for streaming `apply_patch`; defer rich patch/diff rendering until finalized call args are present. If partial-arg display is added later, throttle it rather than parsing on every stream update.

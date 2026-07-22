@@ -10,6 +10,7 @@
     "test:message-overflow-e2e": "node --test test/messageOverflow.e2e.mjs",
     "test:message-width-e2e": "node --test test/messageWidth.e2e.mjs",
     "test:tool-collapsed-overflow-e2e": "node --test test/toolCollapsedOverflow.e2e.mjs",
+    "test:tool-args-header-e2e": "node --test test/toolArgsHeader.e2e.mjs",
     "test:scroll-e2e": "node --test test/scrollState.e2e.mjs",
     "test:stream-follow-e2e": "node --test test/streamFollow.e2e.mjs",
     "test:session-list-e2e": "node --test test/sessionListLiveRefresh.e2e.mjs",
