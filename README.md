@@ -474,6 +474,7 @@ foxwarm/
 
 ## Documentation
 
+- [Code Index](docs/code-index/README.md)
 - [Architecture](docs/architecture.md)
 - [Session Management](docs/session-management.md)
 - [Multi-Agent Guide](docs/multi-agent.md)
@@ -483,6 +484,21 @@ foxwarm/
 - [ToolScript examples](examples/toolscript/README.md)
 
 ## Development
+
+### Code index workflow for contributors and coding agents
+
+Foxwarm keeps a repository-local code index for both human contributors and coding agents. Before inspecting or modifying code:
+
+1. Read the [code-index governance guide](docs/code-index/README.md) and [architecture overview](docs/code-index/overview.md).
+2. Read the relevant module, thread, and unit documents as whole files.
+3. Verify important claims against current source and tests; the index is a map, while source and tests remain authoritative.
+
+After changing source:
+
+1. Update the affected `docs/code-index/` documents in the same branch and pull request. Refresh unit behavior, file ownership, and stable-symbol indexes as relevant; update parent navigation only when boundaries change.
+2. Record each Design Decision at exactly one canonical owner: unit, module, thread, or overview. Other documents use a short summary and link. Repetition across modules is a signal to create or use a thread.
+3. Keep the index public-safe English. Do not add credentials, private paths, deployment runbooks, or private operational context.
+4. Run `npm run quality:code-index` before submitting.
 
 ```bash
 npm run build        # backend/shared/cli-node build
