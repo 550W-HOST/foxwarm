@@ -97,7 +97,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /retry, /node, /s
 - Timer commands enforce permission checks for isolated agents before creating timers.
 - `/config` can modify persistent app config (model settings, WeChat credentials) and triggers channel restarts when relevant config changes.
 - `/session create` supports `--model` and `--system-prompt-file` flags for customizing new sessions.
-- `/session new` allocates a reserved-safe session lifetime through `sessionManager` before attaching the current channel; channel attachment itself no longer invents an ID. Canonical semantics: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
+- `/session new`, `/session create`, `/session fork`, `/fork`, and `/attach` await durable channel attachment after creating/resolving the target; they do not report success after an attachment write failure. Canonical semantics: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - `/channel` subcommands can start/stop/restart managed channel processes and toggle security settings like `dangerouslyAllowAllUsers`.
 - `/status` delegates to `src/sessionStatus`, sharing status fields/formatting with `session({ action: "status" })`: session/agent identity, agent dir, parent id, model, message count, token/image estimate, last usage, last message time, auto-compact threshold, current node, current cwd/default cwd, busy/queue state, and recent child sessions.
 - `/search` delegates to `recall({ vector_query })` rather than the removed `search_vector` tool, so command output uses the same archive back-resolution and preview renderer as agent recall.

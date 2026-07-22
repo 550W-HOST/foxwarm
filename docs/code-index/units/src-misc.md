@@ -81,7 +81,7 @@ This unit provides miscellaneous infrastructure utilities: logging setup, startu
 - **ASR client** communicates with an external speech recognition service via HTTP (transcription, health) and WebSocket (streaming), using bearer token auth.
 - **Log rotation** archives date-named directories into tar.gz files, prunes old archives, and cleans up legacy directory structures. Runs on a 10-hour interval.
 - **Node file transfer** enforces path traversal protection (restricts to agent directory by default), computes SHA-256 checksums, and handles base64 encoding/decoding.
-- **Tests** verify guest agent session creation (single and inherited modes, isolated and non-isolated initial-node variants), channel authorization semantics, and systemPromptFiles behavior including isolation enforcement.
+- **Tests** verify guest agent session creation (single and inherited modes, isolated and non-isolated initial-node variants), concurrent first-message provisioning without orphan sessions, inherited guest retry after an archived generated main ID, channel authorization semantics, and systemPromptFiles behavior including isolation enforcement.
 
 ## Integration
 

@@ -36,6 +36,8 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 - Models path: `MODELS_CONFIG_PATH`, otherwise `<data-root>/state/models.yaml`; when the default file is absent, the packaged template is a read fallback.
 - MCP path: `MCP_CONFIG_PATH`, then `paths.mcpConfigPath`, then `<state>/mcp.json`.
 - Agent, skill, model, and MCP paths may also be selected through their documented app-config fields.
+- The archive moved-ID reservation ledger is explicit durable state at `<data-root>/state/session-id-reservations.jsonl`.
+- The temporary crash-recovery journal for one in-progress identity move is `<data-root>/state/session-id-move-pending.json`.
 
 These are selected runtime overrides, not an environment-to-YAML migration.
 

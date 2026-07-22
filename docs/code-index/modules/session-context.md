@@ -42,7 +42,7 @@ Session context owns model-context budgeting, layered compaction, the active con
 - Optional memory facts and startup vector backfill are best-effort and never block a compact commit or service readiness.
 - Display-only messages are excluded from model context, candidate quota denominators, and embeddings.
 - Read-only recall/expansion may update archive import caches but never live history/frontier/queue.
-- Retained branch/log discovery supplies the archive side of internal session-ID reservation; lifecycle semantics are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
+- Retained branch/log discovery plus the committed moved-ID alias ledger supplies the archive side of exact internal session-ID reservation and canonical historical reads; lifecycle semantics are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 
 ## Compatibility
 

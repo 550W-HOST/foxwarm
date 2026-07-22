@@ -13,6 +13,9 @@ Implements the SQLite/WAL archive index for raw messages, summary blocks, branch
 - `initArchiveStore()` — open schema and await one startup bootstrap pass.
 - `initArchiveStoreSync()` — open schema without awaiting bootstrap.
 - `hasArchivedSessionId` — reports whether bootstrap/current branch metadata reserves an internal session ID.
+- `commitSessionIdRename` — commits an old-to-current alias after the live move has durably succeeded.
+- `resolveArchivedSessionId` — resolves a historical alias chain to its current archive identity.
+- `rollbackUncommittedSessionArchive` — removes branch/record/import artifacts for a known failed new lifetime.
 - `ensureSessionBranch`, `getSessionBranch` — branch and fork-point records.
 - `writeArchiveMessages`, `writeArchiveBlocks` — batched SQLite upserts for current archive appends/import.
 - `readLocalArchiveMessages`, `readLocalArchiveBlocks` — current-branch rows only.
@@ -20,13 +23,15 @@ Implements the SQLite/WAL archive index for raw messages, summary blocks, branch
 - `refreshSessionArchiveImportState` — persist the current JSONL size/mtime after an append/import.
 - `getVectorCheckpoint`, `getVectorCheckpointSync`, `setVectorCheckpointSync` — vector progress.
 - `getVectorSearchLineage`, `listSessionsNeedingVectorBackfill` — vector scope/backfill inputs.
-- `renameSessionArchiveStore` — transactional ID/parent/checkpoint/import-state rename.
+- `renameSessionArchiveStore` — bootstrapped transactional ID/parent/checkpoint/import-state rename.
+- `renameSessionArchiveStoreForRecovery` — startup-journal rollback variant that updates existing SQLite rows before normal bootstrap can infer a duplicate branch.
 
 ## Internal sections
 
 | Stable symbol/section | Responsibility |
 |---|---|
 | `streamJsonlLines` | Streaming line reader with explicit event-loop yields |
+| reservation-ledger load/persist/canonical-resolution helpers | Rebuild exact moved-ID reservations and map historical JSONL payload IDs |
 | message/block import functions | Batched parse/upsert and per-source import-state updates |
 | `bootstrapArchiveStoreFromLegacy` / `ensureBootstrapped` | Import metadata-known legacy JSONL sources once per process and reset the shared promise after failure |
 | `ensureImported` | Per-session lazy import fallback when bootstrap missed or source changed |
@@ -36,6 +41,7 @@ Implements the SQLite/WAL archive index for raw messages, summary blocks, branch
 ## Schema
 
 - `archive_branches` — session, optional parent, message/block fork points.
+- `archive_session_id_reservations` — exact committed historical ID to current canonical-ID mappings mirrored by the durable ledger.
 - `archive_messages` — session-local sequence records and serialized message JSON.
 - `archive_blocks` — block level/source/range/summary records.
 - `archive_checkpoints` — raw tail and block vector-index progress.
@@ -49,7 +55,8 @@ Implements the SQLite/WAL archive index for raw messages, summary blocks, branch
 - Effective reads walk current session then ancestors, cap each ancestor at cumulative fork points, annotate `sourceSessionId`/`inherited`, and sort by source sequence or block ID.
 - Child branch creation seeds vector checkpoints at its fork boundaries.
 - Backfill candidates are sessions whose latest local message/block exceeds the checkpoint.
-- Reservation lookup waits for bootstrap, so retained JSONL paths can reconstruct branch rows after SQLite loss before a new lifetime is allocated.
+- Reservation lookup waits for bootstrap. The atomically rewritten `state/session-id-reservations.jsonl` ledger is explicit durable state: missing/malformed files self-heal from every SQLite mapping row, while SQLite loss rebuilds from the ledger. Live metadata aliases and conservative path/payload evidence backfill pre-ledger moves.
+- JSONL message/block imports and archive reads resolve multi-hop aliases to the current canonical ID. Known failed creation rollback removes partial JSONL/SQLite branch artifacts; successful moves commit alias mappings only after all strict move persistence succeeds.
 
 ## Compatibility
 

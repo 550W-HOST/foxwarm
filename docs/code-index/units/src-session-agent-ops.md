@@ -14,6 +14,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - `createSessionInAgent(options, deps)` — creates a new session scoped to an agent
 - `createAgentWithSession(options, deps)` — creates a new agent directory and its initial session
 - `moveSessionToTarget(options, deps)` — renames or moves a session across agents
+- `recoverPendingSessionIdentityMove(moveSessionArchiveIndex)` — finishes or reverses the one crash-interrupted identity move before normal session loading
 - `AgentMetadata` (interface) — shape of per-agent config (isolated, isolatedNode, inherit)
 - `createAgentMetadataStore(filePath)` — factory for the disk-backed metadata store
 - `loadAgentMetadata()` — loads metadata from disk into memory
@@ -37,6 +38,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | `buildSessionId(agentName, sessionName)` | ~35 | Constructs composite session ID from agent and name |
 | `initializeAgentDirectory(options)` | ~42 | Creates agent dir, optionally copies memory from source |
 | `renameSessionIdentity(options, deps)` | ~80 | Renames session ID, moves all associated files, updates aliases and children |
+| pending-move journal helpers / `recoverPendingSessionIdentityMove` | ~top | Atomically records one in-progress move and recovers it from persisted target metadata |
 | `createSessionInAgent(options, deps)` | ~130 | Creates a session within an existing agent with a fresh promptCacheKey and metadata |
 | `createAgentWithSession(options, deps)` | ~(truncated) | Creates agent directory then creates its initial session |
 | `moveSessionToTarget(options, deps)` | ~(truncated) | Orchestrates session move/rename with optional agent creation |
@@ -71,7 +73,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 
 - Agent operations use a dependency-injection pattern (`SessionAgentOpsDeps` / `AgentMetadataDeps`) for session access, enabling testability.
 - `renameSessionIdentity` performs a multi-step atomic-ish rename: updates in-memory maps, moves history/archive/image files plus any leftover legacy frontier file on disk, updates child sessions' parent references, and persists everything.
-- New named sessions and agent-main sessions use the session-manager reservation guard. Moves that change the internal session ID reject live, alias, or retained-archive targets before moving files; display metadata changes do not enter this path.
+- New named sessions and agent-main sessions run under the session-manager identity commit lock and remove a newly initialized agent directory when critical creation fails. Moves reject live, alias, or retained-archive targets, reverse known failed memory/file/archive/index/relation/attachment mutations, and commit the historical alias only after strict persistence succeeds. A single pending-move journal recovers process crashes by finishing when target metadata committed or rolling back otherwise; display metadata changes do not enter this path.
 - Recreating an agent directory without a main session is allowed because it allocates no session lifetime. Recreating the archived main internal ID is rejected before the new directory is initialized.
 - Agent metadata is held in an in-memory `Map` backed by a single JSON file (no backup rotation). Normalization strips `skills` and cleans `isolatedNode`.
 - Isolation enforcement prevents cross-agent session moves when either source or target agent is isolated.
