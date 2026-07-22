@@ -41,6 +41,7 @@ Implements the full remote Node.js client: pairing/authenticated WebSocket conne
 - Authentication failure clears local credentials and returns to pairing behavior.
 - Client heartbeat sends WebSocket ping frames every 30 seconds, expects pong within 10 seconds, and reconnects after a 5-second delay.
 - Model tool calls resolve against shared `nodeTools` and may be rejected/timed out by `toolCallInterceptor`.
+- Current shared tool image results use structured inline data; old node result reading exists only at the master ingress under [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - File transfer uses shared node file-transfer helpers.
 - `node_service_request`, `node_service_command`, and `node_service_event` are separate from model-tool interception.
 - Optional `node-pty` is loaded from `FOXWARM_NODE_RUNTIME_DIR` or the sibling runtime package; service version is advertised only after success.

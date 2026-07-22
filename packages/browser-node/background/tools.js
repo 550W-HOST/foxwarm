@@ -3,6 +3,7 @@
  */
 
 import { resolvePermission, isTabVisible, requestConfirmation } from './permissions.js';
+import { buildBrowserScreenshotResult } from './toolResults.js';
 
 /**
  * Check permission and optionally request confirmation.
@@ -300,14 +301,11 @@ export async function browser_screenshot(args) {
 
   // Return as base64 (strip data:image/png;base64, prefix)
   const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
-  return {
-    image: base64,
-    format: 'png',
-    encoding: 'base64',
+  return buildBrowserScreenshotResult(base64, {
     tabId,
     url: tab.url,
     title: tab.title,
-  };
+  });
 }
 
 // ─── Tool: browser_click ───

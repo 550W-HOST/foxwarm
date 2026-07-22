@@ -10,6 +10,7 @@ import { NodeTransferFilePayload, NodeTransferWriteResult, readNodeTransferFile,
 import * as sessionManager from '../sessionManager';
 import { WebSocket } from 'ws';
 import { isReservedNodeId } from './registry';
+import { adaptLegacyRemoteNodeToolResult } from './legacyToolResultCompatibility';
 
 interface ToolDefinition {
   name: string;
@@ -514,7 +515,7 @@ export class NodesManager {
     const call = this.toolCalls.get(callId);
     if (call) {
       this.toolCalls.delete(callId);
-      call.resolve(result);
+      call.resolve(adaptLegacyRemoteNodeToolResult(result));
       logger.info({ callId, tool: call.name }, 'Tool response received');
     } else {
       logger.warn({ callId }, 'Tool response for unknown call');

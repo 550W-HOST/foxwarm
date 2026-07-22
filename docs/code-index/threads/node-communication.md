@@ -19,7 +19,7 @@ This thread owns the connection/dispatch contract among the master [nodes module
 2. Master dispatch sends `tool_call` with call/session IDs.
 3. CLI node resolves shared `nodeTools` and optionally asks its TUI interceptor.
 4. Browser node resolves only its advertised `browser_*` handlers and applies extension tab policy.
-5. `tool_call_response` or `tool_call_error` resolves the master request.
+5. `tool_call_response` or `tool_call_error` resolves the master request. Current nodes write canonical structured image fields. The master applies the isolated old-node result reader described in [D-node-thread-tool-result-compatibility](#d-node-thread-tool-result-compatibility) only at this remote response ingress.
 
 The browser extension's `browser_*` tools and shared Puppeteer `browse_*` tools are distinct current surfaces.
 
@@ -46,6 +46,13 @@ CLI node's local loopback trigger and other authenticated node senders use `sess
 
 - Remove deletes the approved hash, invalidates an unclaimed handoff, and closes the online runtime.
 - Move preserves approved metadata/hash under a new ID and closes the old runtime. The client must update/restart or re-pair because no protocol rewrites local credentials.
+
+## Tool-result compatibility
+
+- Current CLI and browser-extension screenshot writers emit `inlineData` with `mimeType`; they never write text markers or source-specific base64 fields.
+- `src/nodes/legacyToolResultCompatibility.ts` is the one read-old boundary for remote node results. It recognizes prior `{image, encoding, format}`, `{screenshot, mimeType}`, `__IMAGE__`, and `__SCREENSHOT__` wire shapes and converts them to the current structured form before generic tool-result processing.
+- The generic image pipeline does not recognize those old node shapes. Identical text from master tools or MCP remains ordinary tool output.
+- The compatibility file, its test, and its single `NodesManager.handleToolResponse` call form one deletable unit. They can be removed together after supported nodes and extensions have all upgraded to structured writers.
 
 ## Bootstrap and setup
 
@@ -80,6 +87,10 @@ Approved-node rename is registry move plus disconnect, not live protocol migrati
 ### D-node-thread-helper-ipc
 
 The terminal helper has only local capability IPC. Path resolution and remote routing stay inside trusted node/master processes and one Code control owner.
+
+### D-node-thread-tool-result-compatibility
+
+Official node and browser-extension tool writers use the current structured `inlineData` / `inlineDataItems` result fields with camel-case `mimeType`. Old source-specific image payloads are read only by one pure compatibility adapter at the master remote-node response ingress. Generic tool processing accepts only the current structured fields. Keep the adapter isolated so deleting its file, tests, and one ingress call is the complete migration from read-old/write-new compatibility to a strict current-node requirement.
 
 ## Open questions
 

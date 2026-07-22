@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { apply_patch, exec, read, write } from './nodeTools';
+import { apply_patch, buildBrowserScreenshotResult, exec, read, write } from './nodeTools';
 import { getNodeAgentDir } from './nodeFileTransfer';
 import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
 import { resolveExecTimeoutSeconds } from './persistentExec';
@@ -15,6 +15,31 @@ function uniqueAgent(prefix: string): string {
 async function cleanupAgent(agentName: string) {
   await fs.remove(getNodeAgentDir(agentName)).catch(() => {});
 }
+
+test('shared CLI browser screenshots use the canonical structured image result', () => {
+  const buffer = Buffer.from('png-image-bytes');
+  const result = buildBrowserScreenshotResult({
+    id: 'tab_fixture',
+    url: 'https://example.test/',
+    title: 'Example',
+  }, buffer);
+
+  assert.deepEqual(result, {
+    id: 'tab_fixture',
+    url: 'https://example.test/',
+    title: 'Example',
+    output: '[Screenshot of tab_fixture]',
+    mimeType: 'image/png',
+    sizeBytes: buffer.length,
+    inlineData: {
+      data: buffer.toString('base64'),
+      mimeType: 'image/png',
+    },
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'screenshot'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'image'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'encoding'), false);
+});
 
 test('node exec schema allows oversized timeout values and documents clamping', () => {
   const definition = CLI_NODE_CAPABILITIES.tools.find(entry => entry.name === 'exec');

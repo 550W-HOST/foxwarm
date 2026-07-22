@@ -1,6 +1,6 @@
 # Unit: browser node extension
 
-Files: packages/browser-node/manifest.json, packages/browser-node/README.md, packages/browser-node/background/main.js, packages/browser-node/background/websocket.js, packages/browser-node/background/tools.js, packages/browser-node/background/permissions.js, packages/browser-node/background/storage.js, packages/browser-node/popup/popup.html, packages/browser-node/popup/popup.js, packages/browser-node/popup/popup.css
+Files: packages/browser-node/manifest.json, packages/browser-node/README.md, packages/browser-node/background/main.js, packages/browser-node/background/websocket.js, packages/browser-node/background/tools.js, packages/browser-node/background/toolResults.js, packages/browser-node/background/permissions.js, packages/browser-node/background/storage.js, packages/browser-node/popup/popup.html, packages/browser-node/popup/popup.js, packages/browser-node/popup/popup.css, packages/browser-node/test/toolResults.test.mjs
 
 ## Purpose
 
@@ -22,7 +22,7 @@ Plain-ES-module Manifest V3 extension that pairs/authenticates to Foxwarm as a n
 |---|---|
 | `browser_list_tabs` | Returns tabs whose resolved policy is not `off`; does not prompt for `ask` tabs |
 | `browser_get_tab_content` | Accessibility-style interactive/landmark list, capped HTML, or capped body text |
-| `browser_screenshot` | Activates target if needed and returns visible-tab base64 PNG; prior tab is not restored |
+| `browser_screenshot` | Activates target if needed and returns a visible-tab PNG in the current structured `inlineData` result; prior tab is not restored |
 | `browser_click` | CSS-selector or viewport-coordinate click after scrolling selector target into view |
 | `browser_execute_js` | Evaluates code in `world:'MAIN'` and returns JSON-cloned/stringified result |
 | `browser_open_tab` | Creates a tab; currently skips permission resolution because no target tab exists |
@@ -55,3 +55,4 @@ Plain-ES-module Manifest V3 extension that pairs/authenticates to Foxwarm as a n
 - Extension tab/domain/default permission boundary: [D-browser-node-tab-policy](../modules/browser-node.md#d-browser-node-tab-policy).
 - Distinct extension `browser_*` tool names: [D-browser-node-distinct-tools](../modules/browser-node.md#d-browser-node-distinct-tools).
 - Main-world JavaScript risk boundary: [D-browser-node-main-world-js](../modules/browser-node.md#d-browser-node-main-world-js).
+- Structured current screenshot writing and the separately deletable old-node reader: [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).

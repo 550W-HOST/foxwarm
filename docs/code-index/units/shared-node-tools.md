@@ -13,6 +13,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions
 - `readFileToolPath`, `writeFileToolPath`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write core used by both master-side and node-side wrappers
 - `browse_open`, `browse_list`, `browse_get`, `browse_close`, `browse_interact` — browser automation tools
+- `buildBrowserScreenshotResult` — builds the current structured `inlineData` screenshot result without source-specific base64 fields
 - `CLI_NODE_CAPABILITIES` — tool schema definitions for all node tools (used for LLM tool registration)
 - `resolveNodePath`, `getNodeAgentDir`, `resolveNodeTransferPath` — path resolution utilities
 - `readNodeTransferFile`, `writeNodeTransferFile` — base64 file transfer helpers
@@ -46,6 +47,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `exec(args, ctx)` | ~160 | Tool: executes shell commands with timeout and background support |
 | `get_default_cwd(args, ctx)` | ~230 | Tool: returns the default working directory |
 | `SharedBrowserManager` (class) | ~235 | Manages Puppeteer browser tabs with open/get/close/interact |
+| `buildBrowserScreenshotResult(tab, buffer)` | after `SharedBrowserManager` | Builds the canonical screenshot tool result used on the node wire |
 | `browse_open(args)` | ~305 | Tool: opens a browser tab |
 | `browse_list()` | ~306 | Tool: lists open browser tabs |
 | `browse_get(args)` | ~307 | Tool: gets tab content or screenshot |
@@ -85,6 +87,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `edit` enforces single-occurrence matching to prevent ambiguous replacements
 - `write` refuses to overwrite unless explicitly told, and requires parent directories to already exist unless `createDirs=true` is passed. For the default path it first attempts `fs.writeFile` directly, so symlinked parent directories work naturally; friendly parent errors are generated only after write failure.
 - `SharedBrowserManager` lazily launches a headless Puppeteer instance and manages tabs by UUID
+- Shared browser screenshots write current structured inline data. Old remote-node screenshot shapes are read only under [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - Directory reads are paginated (50 items default) with navigation hints
 - File and directory read `startLine`/`endLine` values of `0` are treated as omitted, matching master-side read compatibility for optional numeric placeholders
 - File transfer functions enforce path traversal restrictions by default

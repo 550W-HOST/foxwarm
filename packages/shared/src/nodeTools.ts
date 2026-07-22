@@ -182,7 +182,7 @@ class SharedBrowserManager {
     tab.title = await tab.page.title();
     if (screenshot) {
       const buffer = await tab.page.screenshot({ fullPage: screenshot === 'full' });
-      return { id, url: tab.url, title: tab.title, screenshot: buffer.toString('base64'), mimeType: 'image/png' };
+      return buildBrowserScreenshotResult({ id, url: tab.url, title: tab.title }, buffer);
     }
     return { id, url: tab.url, title: tab.title, content: await tab.page.content() };
   }
@@ -213,6 +213,20 @@ class SharedBrowserManager {
       default: throw new Error(`Unknown action: ${action}`);
     }
   }
+}
+
+export function buildBrowserScreenshotResult(
+  tab: { id: string; url: string; title: string },
+  buffer: Buffer,
+) {
+  const mimeType = 'image/png';
+  return {
+    ...tab,
+    output: `[Screenshot of ${tab.id}]`,
+    mimeType,
+    sizeBytes: buffer.length,
+    inlineData: { data: buffer.toString('base64'), mimeType },
+  };
 }
 
 const browser = new SharedBrowserManager();

@@ -13,7 +13,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 5. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
 6. `call_tool` parses a `toolId` or explicit source descriptor and resolves one concrete builtin, MCP, or node target.
 7. MCP calls run through `mcpClient.callTool`; safe text cleanup and MCP image-content promotion occur at that client boundary while non-image content remains structured.
-8. Node calls are sent through `nodesManager` over the authenticated node connection. A node-side approval interceptor may still reject the call.
+8. Node calls are sent through `nodesManager` over the authenticated node connection. A node-side approval interceptor may still reject the call. Old node image-result shapes are adapted only at this remote ingress under [D-node-thread-tool-result-compatibility](./node-communication.md#d-node-thread-tool-result-compatibility).
 9. Master and node file wrappers use the shared file-tool core after their own path, context, and isolation handling.
 10. Recognized image payloads are promoted to image parts and receive stable IDs before the remaining text/structured response passes through the oversized-output guard. Successful master/node patch results already carry shared per-file change-count summaries from [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 11. ToolScript nested calls use the same registered tool surfaces and appear as subcalls of the outer run.
@@ -50,6 +50,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 ## Compatibility
 
 - Free-form object arguments may use documented JSON-string fallbacks.
+- Generic dispatch recognizes only current structured image result fields. The separately deletable old-node result reader is canonical in [D-node-thread-tool-result-compatibility](./node-communication.md#d-node-thread-tool-result-compatibility).
 - Removed internal wrappers are not retained merely as model-facing aliases; persisted or external readers are documented only when they still exist in source.
 
 ## Design decisions

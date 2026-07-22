@@ -1,6 +1,6 @@
 # Unit: src-nodes-manager
 
-Files: src/nodes/manager.ts
+Files: src/nodes/manager.ts, src/nodes/legacyToolResultCompatibility.ts, src/nodes/legacyToolResultCompatibility.test.ts
 
 ## Purpose
 
@@ -11,6 +11,7 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 - `NodesManager` — class that owns node registration, runtime node state, pending tool/file operations, and session-access checks.
 - `nodesManager` — singleton used by the LLM/tool layer, WebSocket handlers, slash commands, and node tools.
 - `NodeServiceRequestError` — structured unavailable/unsupported/timeout/service failure propagated to authenticated Code HTTP routes.
+- `adaptLegacyRemoteNodeToolResult` — pure, separately deletable read-old adapter used only at remote model-tool response ingress.
 
 ## Function Index
 
@@ -26,6 +27,7 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 | `getNode(nodeId)` / `listNodes()` / `listNodesWithTools()` | Query runtime node state and dynamic capabilities. |
 | `executeNodeTool(...)` / `executeTool(...)` | Dispatches a tool call locally for `master` or over WebSocket for a remote node. |
 | `handleToolResponse(...)` / `handleToolError(...)` | Resolves/rejects a pending remote tool call by call id. |
+| `adaptLegacyRemoteNodeToolResult(result)` | Converts the explicitly supported old remote-node image result shapes to current structured inline data without mutating canonical or malformed values. |
 | `readFileFromNode(...)` / `writeFileToNode(...)` | Reads/writes local or remote files through the node file-transfer protocol. |
 | `handleFileReadResponse(...)` / `handleFileWriteResponse(...)` / `handleFileTransferError(...)` | Resolves/rejects pending remote file transfers. |
 | `requestNodeService(...)` | Dispatches a fixed-operation backend service only when the connected node advertises a supported service version. |
@@ -56,6 +58,7 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 - `disconnectNode` is used by administrative `/node remove` and `/node move` flows so deleting or renaming approved credentials also removes online runtime state and rejects pending work for the old node id.
 - Node-originated session access is allowed only when the target session's `currentNode` matches the node id or the session's agent is isolated and bound to that node.
 - Local/master execution passes `__runtimeNodeId` through tool context when needed, then strips it from user-visible tool args.
+- Remote model-tool responses pass through one isolated compatibility adapter before their pending call resolves. Master-local and MCP results never enter this adapter. The adapter's complete deletion contract is canonical in [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 
 ## Integration
 

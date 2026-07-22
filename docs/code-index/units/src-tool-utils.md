@@ -12,7 +12,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - `parseFunctionCallArgs` — parses raw argument text into a structured result with error tracking
 - `guardToolOutputForModel` — two-stage guard that truncates oversized tool results and saves full output to disk
 - `TOOL_OUTPUT_GUARD_CHAR_LIMIT` — character limit constant for tool output truncation
-- `normalizeToolResultImages` — extracts and normalizes image data from various tool result formats
+- `normalizeToolResultImages` — extracts current structured inline image fields from tool results
 - `buildToolImageId` — constructs a deterministic image identifier from tool use ID and index
 - `getImageMetaFromPart` — extracts image metadata from a message part
 - `buildImageGuidanceText` / `appendImageGuidanceText` — generates model-facing image usage hints
@@ -42,10 +42,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 | `guardToolOutputForModel(rawResult, options)` | ~228–270 | Main entry: two-stage guard with fallback error handling |
 | `isObject(value)` (toolImages) | ~1 | Type guard for objects in image module |
 | `isImageMimeType(mimeType)` | ~5 | Checks if MIME type is an image type |
-| `normalizeMimeTypeFromFormat(format)` | ~10 | Converts short format names to full MIME types |
-| `normalizeInlineData(item)` | ~20 | Extracts InlineData from various item shapes |
-| `normalizeLegacyImagePayload(result)` | ~30 | Handles legacy browser-style image payloads |
-| `parseLegacyOutputImage(output)` | ~48 | Parses __IMAGE__ and __SCREENSHOT__ prefixed strings |
+| `normalizeInlineData(item)` | ~20 | Validates one current `{data, mimeType}` inline image item |
 | `buildToolImageId(toolUseId, imageIndex)` | ~65 | Creates deterministic image ID string |
 | `probeImageMetadata(inlineData)` | ~70 | Uses sharp to extract width/height/size/hash from image buffer |
 | `buildNormalizedToolResultImage(toolUseId, imageIndex, inlineData)` | ~82 | Combines metadata probe with ID generation |
@@ -83,7 +80,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - `parseFunctionCallArgs` gracefully handles malformed JSON by preserving the raw text and a structured error message, preventing 400 errors on provider APIs.
 - `guardToolOutputForModel` applies a two-stage truncation to the non-image response that remains after image promotion: Stage A targets the `output` field specifically; Stage B catches any remaining oversized payload. Both stages save the complete text to disk and return a line-aware excerpt with location metadata, Foxwarm placeholder notes, and original line/character counts. A fallback path handles save failures. Canonical ordering is [D-dispatch-output-boundary](../threads/tool-dispatch.md#d-dispatch-output-boundary).
 - The guard preserves a curated set of shallow metadata keys (paths, IDs, status, error) in truncated summaries so the model retains actionable context.
-- `normalizeToolResultImages` unifies multiple legacy image formats (base64 payloads, `__IMAGE__:` prefixes, `__SCREENSHOT__:` prefixes, inline data items) into a consistent `MessagePart[]` with probed metadata; additional source metadata already attached to an inline item remains internal to that image part.
+- `normalizeToolResultImages` accepts only current structured `inlineData` / `inlineDataItems` fields with `mimeType` and turns them into consistent `MessagePart[]` values with probed metadata. Source-specific old node shapes are outside this generic unit and are owned by [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - `cropImageById` resolves images by walking session history backwards (including archives), then uses sharp to extract a sub-region.
 - The `wait` tool's stop-current-turn behavior is suppressed when any other tool in the batch returns an error.
 

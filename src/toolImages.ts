@@ -23,20 +23,9 @@ function isImageMimeType(mimeType: unknown): mimeType is string {
   return typeof mimeType === 'string' && mimeType.startsWith('image/');
 }
 
-function normalizeMimeTypeFromFormat(format: unknown): string | undefined {
-  if (typeof format !== 'string') return undefined;
-  const normalized = format.trim().toLowerCase();
-  if (!normalized) return undefined;
-  if (normalized.includes('/')) {
-    return normalized;
-  }
-  if (normalized === 'jpg') return 'image/jpeg';
-  return `image/${normalized}`;
-}
-
 function normalizeInlineData(item: any): InlineData | null {
   if (!item || typeof item !== 'object') return null;
-  const mimeType = item.mimeType || item.mime_type;
+  const mimeType = item.mimeType;
   if (typeof item.data === 'string' && isImageMimeType(mimeType)) {
     return {
       ...item,
@@ -44,43 +33,6 @@ function normalizeInlineData(item: any): InlineData | null {
       mimeType,
     };
   }
-  return null;
-}
-
-function normalizeLegacyImagePayload(result: Record<string, any>): { inlineData: InlineData; consumedKeys: string[] } | null {
-  if (typeof result.image === 'string' && typeof result.encoding === 'string' && result.encoding.toLowerCase() === 'base64') {
-    const mimeType = typeof result.mimeType === 'string'
-      ? result.mimeType
-      : normalizeMimeTypeFromFormat(result.format) || 'image/png';
-    return {
-      inlineData: {
-        data: result.image,
-        mimeType,
-      },
-      consumedKeys: ['image', 'encoding', 'format'],
-    };
-  }
-
-  return null;
-}
-
-function parseLegacyOutputImage(output: string): InlineData | null {
-  if (output.startsWith('__IMAGE__:')) {
-    const [, mimeType, base64] = output.split(':', 3);
-    if (!mimeType || !base64) return null;
-    return {
-      data: base64,
-      mimeType,
-    };
-  }
-
-  if (output.startsWith('__SCREENSHOT__:')) {
-    return {
-      data: output.substring('__SCREENSHOT__:'.length),
-      mimeType: 'image/png',
-    };
-  }
-
   return null;
 }
 
@@ -94,7 +46,7 @@ async function probeImageMetadata(inlineData: InlineData): Promise<Omit<ImageMet
   const metadata = await sharp(buffer, { limitInputPixels: 64 * 1024 * 1024 }).metadata();
 
   return {
-    mimeType: inlineData.mimeType || inlineData.mime_type,
+    mimeType: inlineData.mimeType,
     width: typeof metadata.width === 'number' ? metadata.width : undefined,
     height: typeof metadata.height === 'number' ? metadata.height : undefined,
     sizeBytes: buffer.length,
@@ -133,18 +85,6 @@ export async function normalizeToolResultImages(result: any, toolUseId: string, 
     }
   }
 
-  const legacyPayload = normalizeLegacyImagePayload(result);
-  if (legacyPayload) {
-    normalizedInlineItems.push(legacyPayload.inlineData);
-  }
-
-  if (typeof result.output === 'string') {
-    const legacyOutputImage = parseLegacyOutputImage(result.output);
-    if (legacyOutputImage) {
-      normalizedInlineItems.push(legacyOutputImage);
-    }
-  }
-
   if (normalizedInlineItems.length === 0) {
     return { result, imageParts: [] };
   }
@@ -164,16 +104,6 @@ export async function normalizeToolResultImages(result: any, toolUseId: string, 
     inlineDataItems,
     ...rest
   } = result;
-
-  if (legacyPayload) {
-    for (const key of legacyPayload.consumedKeys) {
-      delete rest[key];
-    }
-  }
-
-  if (typeof rest.output === 'string' && parseLegacyOutputImage(rest.output)) {
-    delete rest.output;
-  }
 
   if (rest.output === undefined) {
     rest.output = fallbackLabel;
