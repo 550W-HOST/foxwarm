@@ -23,10 +23,13 @@ interface SessionAgentOpsDeps {
 
 type PendingSessionIdentityMove = {
   v: 1;
+  phase: 'rolling-back' | 'finishing';
   oldSessionId: string;
   newSessionId: string;
   oldAgent?: string;
   oldAliases: string[];
+  ownsTargetAgentDirectory: boolean;
+  targetAgentName?: string;
   createdAt: number;
 };
 
@@ -85,16 +88,26 @@ export async function recoverPendingSessionIdentityMove(
   if (record.v !== 1 || typeof record.oldSessionId !== 'string' || typeof record.newSessionId !== 'string') {
     throw new Error('Invalid pending session identity move journal.');
   }
+  if ((record.phase !== 'rolling-back' && record.phase !== 'finishing')
+    || typeof record.ownsTargetAgentDirectory !== 'boolean'
+    || !Array.isArray(record.oldAliases)
+    || record.oldAliases.some(alias => typeof alias !== 'string')
+    || (record.ownsTargetAgentDirectory && (typeof record.targetAgentName !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(record.targetAgentName)))) {
+    throw new Error('Pending session identity move journal is missing valid recovery intent or ownership metadata.');
+  }
   const oldSessionId = record.oldSessionId;
   const newSessionId = record.newSessionId;
   assertSafeJournalSessionId(oldSessionId, 'oldSessionId');
   assertSafeJournalSessionId(newSessionId, 'newSessionId');
+  for (const alias of record.oldAliases) assertSafeJournalSessionId(alias, 'oldAliases');
+  if (record.oldAgent && !/^[a-zA-Z0-9_-]+$/.test(record.oldAgent)) {
+    throw new Error('Invalid oldAgent in pending session identity move journal.');
+  }
   if (oldSessionId === newSessionId) {
     throw new Error('Pending session identity move journal cannot use the same source and target ID.');
   }
   const metadata = await fs.pathExists(SESSIONS_FILE) ? await fs.readJson(SESSIONS_FILE) : { sessions: {} };
   const sessionsData = metadata.sessions && typeof metadata.sessions === 'object' ? metadata.sessions : metadata;
-  const targetWasDurablyCommitted = Object.prototype.hasOwnProperty.call(sessionsData, newSessionId);
 
   const rewriteChannels = async (from: string, to: string): Promise<void> => {
     if (!await fs.pathExists(CHANNELS_FILE)) return;
@@ -105,9 +118,16 @@ export async function recoverPendingSessionIdentityMove(
     await writeJsonAtomically(CHANNELS_FILE, channelsData);
   };
 
-  if (targetWasDurablyCommitted) {
+  if (record.phase === 'finishing') {
+    if (!Object.prototype.hasOwnProperty.call(sessionsData, newSessionId)
+      || !await fs.pathExists(path.join(SESSIONS_DIR, `${newSessionId}.json`))) {
+      throw new Error(`Pending finishing move is missing durable target session "${newSessionId}".`);
+    }
+    if (record.ownsTargetAgentDirectory && record.targetAgentName && !await fs.pathExists(getAgentDir(record.targetAgentName))) {
+      throw new Error(`Pending finishing move requires missing owned target agent directory "${record.targetAgentName}".`);
+    }
     await renameSessionArchiveStore(oldSessionId, newSessionId);
-    await moveSessionArchiveIndex(oldSessionId, newSessionId).catch(() => {});
+    await moveSessionArchiveIndex(oldSessionId, newSessionId);
     await rewriteChannels(oldSessionId, newSessionId);
     await commitSessionIdRename(oldSessionId, newSessionId);
     await clearPendingSessionIdentityMove();
@@ -125,6 +145,16 @@ export async function recoverPendingSessionIdentityMove(
   await reversePath(getSessionBlockArchiveLogPath(oldSessionId), getSessionBlockArchiveLogPath(newSessionId));
   await reversePath(getLegacySessionFrontierPath(oldSessionId), getLegacySessionFrontierPath(newSessionId));
 
+  if (Object.prototype.hasOwnProperty.call(sessionsData, newSessionId)) {
+    const sourceMetadata = sessionsData[newSessionId];
+    delete sessionsData[newSessionId];
+    sourceMetadata.id = oldSessionId;
+    if (record.oldAgent) sourceMetadata.agent = record.oldAgent;
+    else delete sourceMetadata.agent;
+    sourceMetadata.aliases = [...(record.oldAliases || [])];
+    sessionsData[oldSessionId] = sourceMetadata;
+  }
+
   for (const [sessionId, sessionMeta] of Object.entries(sessionsData) as Array<[string, any]>) {
     if (sessionMeta?.parentSessionId === newSessionId) sessionMeta.parentSessionId = oldSessionId;
     const historyPath = path.join(SESSIONS_DIR, `${sessionId}.json`);
@@ -136,10 +166,22 @@ export async function recoverPendingSessionIdentityMove(
       }
     }
   }
+  const restoredHistoryPath = path.join(SESSIONS_DIR, `${oldSessionId}.json`);
+  if (await fs.pathExists(restoredHistoryPath)) {
+    const restoredHistory = await fs.readJson(restoredHistoryPath);
+    restoredHistory.id = oldSessionId;
+    if (record.oldAgent) restoredHistory.agent = record.oldAgent;
+    else delete restoredHistory.agent;
+    restoredHistory.aliases = [...(record.oldAliases || [])];
+    await writeJsonAtomically(restoredHistoryPath, restoredHistory);
+  }
   await writeJsonAtomically(SESSIONS_FILE, metadata);
   await rewriteChannels(newSessionId, oldSessionId);
   renameSessionArchiveStoreForRecovery(newSessionId, oldSessionId);
-  await moveSessionArchiveIndex(newSessionId, oldSessionId).catch(() => {});
+  await moveSessionArchiveIndex(newSessionId, oldSessionId);
+  if (record.ownsTargetAgentDirectory && record.targetAgentName) {
+    await fs.remove(getAgentDir(record.targetAgentName));
+  }
   await clearPendingSessionIdentityMove();
   return 'rolled-back';
 }
@@ -200,23 +242,33 @@ async function renameSessionIdentity(options: {
   sourceInputId: string;
   targetSessionId: string;
   targetAgent: string;
+  ownsTargetAgentDirectory?: boolean;
 }, deps: SessionAgentOpsDeps): Promise<{ aliases: string[]; updatedChildren: string[] }> {
-  const { sourceSession, sourceInputId, targetSessionId, targetAgent } = options;
+  const { sourceSession, sourceInputId, targetSessionId, targetAgent, ownsTargetAgentDirectory = false } = options;
   const oldRealId = sourceSession.id;
+  assertSafeJournalSessionId(oldRealId, 'oldSessionId');
   const oldAgent = sourceSession.agent;
 
   await deps.assertSessionIdAvailableForNewLifetime(targetSessionId);
 
   const oldAliases = sourceSession.aliases || [];
   const newAliases = [...new Set([...oldAliases, oldRealId, sourceInputId])];
-  await writePendingSessionIdentityMove({
+  assertSafeJournalSessionId(oldRealId, 'oldSessionId');
+  assertSafeJournalSessionId(sourceInputId, 'sourceInputId');
+  assertSafeJournalSessionId(targetSessionId, 'newSessionId');
+  for (const alias of oldAliases) assertSafeJournalSessionId(alias, 'oldAliases');
+  const pendingMove: PendingSessionIdentityMove = {
     v: 1,
+    phase: 'rolling-back',
     oldSessionId: oldRealId,
     newSessionId: targetSessionId,
     oldAgent,
     oldAliases: [...oldAliases],
+    ownsTargetAgentDirectory,
+    targetAgentName: ownsTargetAgentDirectory ? targetAgent : undefined,
     createdAt: Date.now(),
-  });
+  };
+  await writePendingSessionIdentityMove(pendingMove);
   const sessions = deps.getSessionsMap();
   const attachments = deps.getAttachmentsMap();
   const originalAttachments = new Map(
@@ -262,6 +314,8 @@ async function renameSessionIdentity(options: {
     await deps.saveSession(targetSessionId);
     await deps.saveSessionsMetadata();
     await deps.saveChannels();
+    pendingMove.phase = 'finishing';
+    await writePendingSessionIdentityMove(pendingMove);
     identityMoveFaultInjector?.('after-target-persistence', oldRealId, targetSessionId);
     await commitSessionIdRename(oldRealId, targetSessionId);
     deps.updateAliasCache(newAliases, targetSessionId);
@@ -278,6 +332,16 @@ async function renameSessionIdentity(options: {
         rollbackErrors.push(wrapped);
       }
     };
+
+    if (pendingMove.phase !== 'rolling-back') {
+      await attemptRollback('pending journal rollback intent', async () => {
+        pendingMove.phase = 'rolling-back';
+        await writePendingSessionIdentityMove(pendingMove);
+      });
+      if (rollbackErrors.length > 0) {
+        throw new SessionMoveRollbackError(`Session move failed and rollback remains pending for "${oldRealId}".`, [error, ...rollbackErrors]);
+      }
+    }
 
     if (vectorIndexMoved) await attemptRollback('vector index restore', () => deps.moveSessionArchiveIndex(targetSessionId, oldRealId));
     if (archiveStoreRenamed) await attemptRollback('archive store restore', () => renameSessionArchiveStore(targetSessionId, oldRealId));
@@ -302,6 +366,9 @@ async function renameSessionIdentity(options: {
     await attemptRollback('source session persistence', () => deps.saveSession(oldRealId));
     await attemptRollback('session metadata persistence', () => deps.saveSessionsMetadata());
     await attemptRollback('channel persistence', () => deps.saveChannels());
+    if (ownsTargetAgentDirectory && rollbackErrors.length === 0) {
+      await attemptRollback(`target agent directory removal ${targetAgent}`, () => fs.remove(getAgentDir(targetAgent)));
+    }
     if (rollbackErrors.length === 0) {
       await attemptRollback('pending journal removal', clearPendingSessionIdentityMove);
     }
@@ -458,6 +525,7 @@ export async function createAgentWithMainSession(options: {
         sourceInputId: convertSessionId,
         targetSessionId: mainSessionId,
         targetAgent: agentName,
+        ownsTargetAgentDirectory: true,
       }, deps);
       return {
         agentDir,
@@ -469,7 +537,7 @@ export async function createAgentWithMainSession(options: {
       };
     } catch (error) {
       if (sourceToConvert) sourceToConvert.displayName = previousDisplayName;
-      await fs.remove(agentDir).catch(() => {});
+      if (!(error instanceof SessionMoveRollbackError)) await fs.remove(agentDir).catch(() => {});
       throw error;
     }
   }
@@ -568,6 +636,7 @@ export async function moveSessionToTarget(options: {
 
     targetAgent = newAgentName;
     targetSessionId = `${newAgentName}/${newSessionId || 'main'}`;
+    assertSafeJournalSessionId(targetSessionId, 'newSessionId');
     await deps.assertSessionIdAvailableForNewLifetime(targetSessionId);
     await initializeAgentDirectory({
       agentName: newAgentName,
@@ -594,6 +663,8 @@ export async function moveSessionToTarget(options: {
       : `${targetAgent}/${newSessionId}`;
   }
 
+  assertSafeJournalSessionId(targetSessionId, 'newSessionId');
+
   try {
     const sourceAgentName = sourceSession.agent || 'main';
     const sourceAgentMeta = deps.getAgentMetadata(sourceAgentName);
@@ -612,6 +683,7 @@ export async function moveSessionToTarget(options: {
       sourceInputId: sourceSessionId,
       targetSessionId,
       targetAgent,
+      ownsTargetAgentDirectory: createdAgent,
     }, deps);
 
     return {
@@ -623,7 +695,7 @@ export async function moveSessionToTarget(options: {
       updatedChildren,
     };
   } catch (error) {
-    if (createdAgent) {
+    if (createdAgent && !(error instanceof SessionMoveRollbackError)) {
       try {
         await fs.remove(getAgentDir(targetAgent));
       } catch (cleanupError) {

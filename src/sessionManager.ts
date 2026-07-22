@@ -1595,11 +1595,13 @@ async function saveSessionsMetadataCritical(): Promise<void> {
 }
 
 export async function loadSessions(): Promise<void> {
+  // A pending identity move is authoritative data-integrity state. Recovery
+  // must finish before ordinary loading and its failure is intentionally fatal.
+  const identityMoveRecovery = await sessionAgentOps.recoverPendingSessionIdentityMove(vector.renameSessionArchiveIndex);
+  if (identityMoveRecovery !== 'none') {
+    logger.warn({ identityMoveRecovery }, 'Recovered pending session identity move');
+  }
   try {
-    const identityMoveRecovery = await sessionAgentOps.recoverPendingSessionIdentityMove(vector.renameSessionArchiveIndex);
-    if (identityMoveRecovery !== 'none') {
-      logger.warn({ identityMoveRecovery }, 'Recovered pending session identity move');
-    }
     // Load agent metadata first
     await sessionAgentMetadata.loadAgentMetadata();
     await loadChannels();

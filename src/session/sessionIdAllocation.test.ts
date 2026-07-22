@@ -221,6 +221,22 @@ test('session identity moves reject archived target ids without mutating the sou
   }
 });
 
+test('session identity moves reject journal-unsafe target ids before mutation', async () => {
+  await sessionManager.loadSessions();
+  const sourceId = makeId('unsafe_move_source');
+  await createParent(sourceId);
+  try {
+    await assert.rejects(
+      sessionManager.moveSessionToTarget({ sourceSessionId: sourceId, newSessionId: '..' }),
+      /Invalid newSessionId in pending session identity move journal/,
+    );
+    assert.ok(await sessionManager.getExistingSession(sourceId));
+    assert.equal(await fs.pathExists(path.join(process.env.FOXWARM_DATA_DIR || '', 'state', 'session-id-move-pending.json')), false);
+  } finally {
+    if (sessionManager.getAllSessions().has(sourceId)) await sessionManager.deleteSession(sourceId).catch(() => {});
+  }
+});
+
 test('restart hydration remains valid and archive bootstrap rebuild still reserves deleted ids', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-session-id-reservation-'));
   const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
@@ -860,9 +876,11 @@ test('pending move recovery rejects traversal IDs before touching filesystem sta
     fs.outputFileSync(markerPath, 'keep');
     fs.outputJsonSync(path.join(tempRoot, 'state', 'session-id-move-pending.json'), {
       v: 1,
+      phase: 'rolling-back',
       oldSessionId: '../../outside-marker',
       newSessionId: 'safe_target',
       oldAliases: [],
+      ownsTargetAgentDirectory: false,
       createdAt: Date.now(),
     });
     execFileSync(process.execPath, ['-e', `
@@ -878,6 +896,40 @@ test('pending move recovery rejects traversal IDs before touching filesystem sta
       })().catch(error => { console.error(error); process.exit(1); });
     `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert.equal(fs.readFileSync(markerPath, 'utf8'), 'keep');
+    assert.equal(fs.pathExistsSync(path.join(tempRoot, 'state', 'session-id-move-pending.json')), true);
+  } finally {
+    fs.removeSync(tempRoot);
+  }
+});
+
+test('loadSessions propagates authoritative pending-move recovery failure', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-pending-move-fatal-load-'));
+  const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
+  const vectorPath = path.resolve(__dirname, '../vector.js');
+  try {
+    fs.outputJsonSync(path.join(tempRoot, 'state', 'session-id-move-pending.json'), {
+      v: 1,
+      phase: 'rolling-back',
+      oldSessionId: 'fatal_old',
+      newSessionId: 'fatal_new',
+      oldAliases: [],
+      ownsTargetAgentDirectory: false,
+      createdAt: Date.now(),
+    });
+    execFileSync(process.execPath, ['-e', `
+      const vector = require(${JSON.stringify(vectorPath)});
+      vector.renameSessionArchiveIndex = async () => { throw new Error('injected recovery failure'); };
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      (async () => {
+        try {
+          await sm.loadSessions();
+          throw new Error('loadSessions swallowed pending recovery failure');
+        } catch (error) {
+          if (!String(error).includes('injected recovery failure')) throw error;
+        }
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert.equal(fs.pathExistsSync(path.join(tempRoot, 'state', 'session-id-move-pending.json')), true);
   } finally {
     fs.removeSync(tempRoot);
@@ -923,6 +975,111 @@ test('failed reverse persistence keeps move journal until startup completes roll
         if (await fs.pathExists(path.join(${JSON.stringify(tempRoot)}, 'state', 'session-id-move-pending.json'))) throw new Error('journal remained after startup recovery');
         const retry = await sm.moveSessionToTarget({ sourceSessionId: 'rollback_source', newSessionId: 'rollback_target' });
         if (retry.targetSessionId !== 'rollback_target') throw new Error('exact target retry failed');
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } finally {
+    fs.removeSync(tempRoot);
+  }
+});
+
+test('create-agent move keeps owned directory for recorded rollback and startup removes it', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-owned-agent-rollback-'));
+  const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
+  const agentOpsPath = path.resolve(__dirname, 'agentOps.js');
+  const configPath = path.resolve(__dirname, '../config.js');
+  try {
+    execFileSync(process.execPath, ['-e', `
+      const fs = require('fs-extra');
+      const config = require(${JSON.stringify(configPath)});
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      const agentOps = require(${JSON.stringify(agentOpsPath)});
+      (async () => {
+        await sm.loadSessions();
+        const source = await sm.createEmptySession('owned_rollback_source');
+        await sm.appendSessionMessage(source.session, { role: 'user', parts: [{ text: 'owned rollback history' }], __meta: { timestamp: Date.now() } });
+        await sm.createChildSession('owned_rollback_source', 'worker', false);
+        let rollbackStarted = false;
+        let sourceSaveFailed = false;
+        agentOps.setIdentityMoveFaultInjectorForTests((phase) => {
+          if (phase === 'after-target-persistence') {
+            rollbackStarted = true;
+            throw new Error('injected post-target failure');
+          }
+        });
+        sm.setSessionPersistenceFaultInjectorForTests((phase, sessionId) => {
+          if (!rollbackStarted) return;
+          if (phase === 'history' && sessionId === 'owned_rollback_source') {
+            sourceSaveFailed = true;
+            throw new Error('injected rollback source save failure');
+          }
+          if (phase === 'metadata' && sourceSaveFailed) throw new Error('injected rollback metadata failure');
+        });
+        try {
+          await sm.moveSessionToTarget({ sourceSessionId: 'owned_rollback_source', createAgent: true, newAgentName: 'owned_rollback_agent' });
+          throw new Error('move unexpectedly succeeded');
+        } catch (error) {
+          if (error?.name !== 'SessionMoveRollbackError') throw error;
+        }
+        const journal = await fs.readJson(config.SESSION_ID_MOVE_JOURNAL_PATH);
+        if (journal.phase !== 'rolling-back' || journal.ownsTargetAgentDirectory !== true || journal.targetAgentName !== 'owned_rollback_agent') throw new Error('journal intent/ownership missing');
+        if (!await fs.pathExists(config.getAgentDir('owned_rollback_agent'))) throw new Error('owned directory deleted before recovery');
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+
+    execFileSync(process.execPath, ['-e', `
+      const fs = require('fs-extra');
+      const config = require(${JSON.stringify(configPath)});
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      (async () => {
+        await sm.loadSessions();
+        const source = await sm.getExistingSession('owned_rollback_source');
+        if (!source || source.history[0]?.parts?.[0]?.text !== 'owned rollback history') throw new Error('source history not restored');
+        const child = await sm.getExistingSession('owned_rollback_source_worker');
+        if (child?.parentSessionId !== 'owned_rollback_source') throw new Error('child relation not restored');
+        if (await fs.pathExists(config.getAgentDir('owned_rollback_agent'))) throw new Error('owned directory survived completed rollback');
+        if (await fs.pathExists(config.SESSION_ID_MOVE_JOURNAL_PATH)) throw new Error('journal not cleared');
+        const retry = await sm.moveSessionToTarget({ sourceSessionId: 'owned_rollback_source', createAgent: true, newAgentName: 'owned_rollback_agent' });
+        if (retry.targetSessionId !== 'owned_rollback_agent/main') throw new Error('exact retry failed');
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } finally {
+    fs.removeSync(tempRoot);
+  }
+});
+
+test('create-agent finishing recovery keeps its owned target directory', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-owned-agent-finish-'));
+  const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
+  const agentOpsPath = path.resolve(__dirname, 'agentOps.js');
+  const configPath = path.resolve(__dirname, '../config.js');
+  try {
+    const crashed = spawnSync(process.execPath, ['-e', `
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      const agentOps = require(${JSON.stringify(agentOpsPath)});
+      (async () => {
+        await sm.loadSessions();
+        const source = await sm.createEmptySession('owned_finish_source');
+        await sm.appendSessionMessage(source.session, { role: 'user', parts: [{ text: 'owned finish history' }], __meta: { timestamp: Date.now() } });
+        agentOps.setIdentityMoveFaultInjectorForTests((phase) => {
+          if (phase === 'after-target-persistence') process.exit(44);
+        });
+        await sm.moveSessionToTarget({ sourceSessionId: 'owned_finish_source', createAgent: true, newAgentName: 'owned_finish_agent' });
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8' });
+    assert.equal(crashed.status, 44, crashed.stderr);
+    execFileSync(process.execPath, ['-e', `
+      const fs = require('fs-extra');
+      const config = require(${JSON.stringify(configPath)});
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      (async () => {
+        await sm.loadSessions();
+        const target = await sm.getExistingSession('owned_finish_agent/main');
+        if (!target || target.history[0]?.parts?.[0]?.text !== 'owned finish history') throw new Error('forward recovery did not finish');
+        if (!await fs.pathExists(config.getAgentDir('owned_finish_agent'))) throw new Error('owned target directory was removed');
+        if (await fs.pathExists(config.SESSION_ID_MOVE_JOURNAL_PATH)) throw new Error('journal not cleared');
         process.exit(0);
       })().catch(error => { console.error(error); process.exit(1); });
     `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
