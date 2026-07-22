@@ -804,7 +804,7 @@ export class MessageRouter {
 
       const result = await sessionManager.createSessionInAgent({
         agentName: guestAgent.agentId,
-        sessionName: sessionManager.generateSessionId(),
+        sessionName: await sessionManager.generateAvailableSessionName(guestAgent.agentId),
       });
       sessionManager.attachChannel(channelId, conversationId, result.sessionId, { dangerouslyAllowAllUsers: true });
       return result.sessionId;
@@ -884,7 +884,9 @@ export class MessageRouter {
   private async resolveSessionForIncomingMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session }> {
     let sessionId = sessionManager.getSessionByChannel(getChannelId(ctx), getConversationId(ctx));
     if (!sessionId) {
-      sessionId = sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx));
+      const created = await sessionManager.createEmptySession();
+      sessionId = created.session.id;
+      sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), sessionId);
     }
 
     const session = await sessionManager.getSession(sessionId);

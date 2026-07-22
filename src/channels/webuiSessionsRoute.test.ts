@@ -94,6 +94,19 @@ test('WebUI creation routes create agents and random or custom sessions', async 
     res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'custom' }) });
     assert.equal(res.status, 409);
 
+    await sessionManager.appendSessionMessage(`${agentId}/custom`, {
+      role: 'user',
+      parts: [{ text: 'archived custom session' }],
+      __meta: { timestamp: Date.now() },
+    });
+    assert.equal(await sessionManager.deleteSession(`${agentId}/custom`), true);
+    createdSessionIds.splice(createdSessionIds.indexOf(`${agentId}/custom`), 1);
+    res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'custom' }) });
+    assert.equal(res.status, 409);
+    const archivedPayload = await res.json() as any;
+    assert.equal(archivedPayload.code, sessionManager.ARCHIVED_SESSION_ID_ERROR_CODE);
+    assert.match(archivedPayload.error, /internal session ID is reserved by retained archive history/);
+
     res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'other/agent' }) });
     assert.equal(res.status, 400);
   } finally {

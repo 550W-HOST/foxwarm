@@ -953,8 +953,9 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to create agent');
             const message = e instanceof Error ? e.message : String(e);
-            const status = /already exists/i.test(message) ? 409 : 400;
-            res.status(status).json({ error: message });
+            const code = typeof e?.code === 'string' ? e.code : undefined;
+            const status = code === sessionManager.ARCHIVED_SESSION_ID_ERROR_CODE || /already exists/i.test(message) ? 409 : 400;
+            res.status(status).json({ error: message, ...(code ? { code } : {}) });
           }
         },
       });
@@ -1015,7 +1016,7 @@ export class WebUIChannel implements Channel {
               }
               sessionId = result.session.id;
             } else {
-              const sessionName = requestedSessionId || sessionManager.generateSessionId();
+              const sessionName = requestedSessionId || await sessionManager.generateAvailableSessionName(agentId);
               sessionManager.validateSessionName(sessionName);
               const result = await sessionManager.createSessionInAgent({ agentName: agentId, sessionName });
               sessionId = result.sessionId;
@@ -1036,8 +1037,11 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to create session');
             const message = e instanceof Error ? e.message : String(e);
-            const status = /already exists/i.test(message) ? 409 : /does not exist|invalid/i.test(message) ? 400 : 500;
-            res.status(status).json({ error: message });
+            const code = typeof e?.code === 'string' ? e.code : undefined;
+            const status = code === sessionManager.ARCHIVED_SESSION_ID_ERROR_CODE || /already exists/i.test(message)
+              ? 409
+              : /does not exist|invalid/i.test(message) ? 400 : 500;
+            res.status(status).json({ error: message, ...(code ? { code } : {}) });
           }
         },
       });

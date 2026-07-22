@@ -284,12 +284,82 @@ export async function queueSessionWaitTimeoutEvent(sessionId: string, waitId: st
   });
 }
 
-async function isSessionIdReserved(sessionId: string): Promise<boolean> {
-  if (await getExistingSession(sessionId)) {
+export const ARCHIVED_SESSION_ID_ERROR_CODE = 'SESSION_ID_ARCHIVED';
+
+export class ArchivedSessionIdError extends Error {
+  readonly code = ARCHIVED_SESSION_ID_ERROR_CODE;
+
+  constructor(sessionId: string) {
+    super(`Session "${sessionId}" cannot be created because that internal session ID is reserved by retained archive history.`);
+    this.name = 'ArchivedSessionIdError';
+  }
+}
+
+type SessionIdReservation = 'live' | 'archived' | null;
+
+async function hasPersistedLiveSessionId(sessionId: string): Promise<boolean> {
+  if (sessions.has(sessionId) || await fs.pathExists(getSessionHistoryFilePath(sessionId))) {
     return true;
   }
 
-  return hasArchivedSessionId(sessionId);
+  if (!await fs.pathExists(SESSIONS_FILE)) {
+    return false;
+  }
+
+  try {
+    const data = await fs.readJson(SESSIONS_FILE);
+    const sessionsData = data?.sessions || data;
+    return !!sessionsData && typeof sessionsData === 'object'
+      && Object.prototype.hasOwnProperty.call(sessionsData, sessionId);
+  } catch {
+    return false;
+  }
+}
+
+async function getSessionIdReservation(sessionId: string): Promise<SessionIdReservation> {
+  const resolvedSessionId = await resolveSessionId(sessionId);
+  if (resolvedSessionId !== sessionId) {
+    return 'live';
+  }
+
+  if (await hasPersistedLiveSessionId(sessionId)) {
+    return 'live';
+  }
+
+  return await hasArchivedSessionId(sessionId) ? 'archived' : null;
+}
+
+export async function assertSessionIdAvailableForNewLifetime(sessionId: string): Promise<void> {
+  const reservation = await getSessionIdReservation(sessionId);
+  if (reservation === 'live') {
+    throw new Error(`Session "${sessionId}" already exists.`);
+  }
+  if (reservation === 'archived') {
+    throw new ArchivedSessionIdError(sessionId);
+  }
+}
+
+async function isSessionIdReserved(sessionId: string): Promise<boolean> {
+  return await getSessionIdReservation(sessionId) !== null;
+}
+
+async function allocateGeneratedSessionId(): Promise<string> {
+  while (true) {
+    const candidate = generateSessionId();
+    if (!await isSessionIdReserved(candidate)) {
+      return candidate;
+    }
+  }
+}
+
+export async function generateAvailableSessionName(agentName: string = 'main'): Promise<string> {
+  while (true) {
+    const sessionName = generateSessionId();
+    const sessionId = agentName === 'main' ? sessionName : `${agentName}/${sessionName}`;
+    if (!await isSessionIdReserved(sessionId)) {
+      return sessionName;
+    }
+  }
 }
 
 async function allocateForkSessionId(sourceSessionId: string, suffix?: string, replaceMainLeaf = false): Promise<string> {
@@ -596,8 +666,14 @@ export async function getSession(sessionId: string): Promise<Session> {
   let session = sessions.get(realId);
   let isNew = false;
   if (!session) {
-    // Create new session with minimal required fields
-    isNew = true;
+    const reservation = await getSessionIdReservation(realId);
+    if (reservation === 'archived') {
+      throw new ArchivedSessionIdError(realId);
+    }
+
+    // A persisted live record may be hydrated here even though it already has
+    // archive rows. Only the absence of live persistence starts a new lifetime.
+    isNew = reservation === null;
     session = {
       id: realId,
       history: [],
@@ -686,11 +762,13 @@ export async function getSession(sessionId: string): Promise<Session> {
 }
 
 export async function createEmptySession(sessionId?: string): Promise<{ session: Session; created: boolean }> {
-  const targetSessionId = sessionId || generateSessionId();
+  const targetSessionId = sessionId || await allocateGeneratedSessionId();
   const existingSession = await getExistingSession(targetSessionId);
   if (existingSession) {
     return { session: existingSession, created: false };
   }
+
+  await assertSessionIdAvailableForNewLifetime(targetSessionId);
 
   const session = await getSession(targetSessionId);
   await saveSession(session.id);
@@ -725,6 +803,7 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
  * Create a new session with given data
  */
 export async function createSession(sessionId: string, sessionData: any): Promise<void> {
+  await assertSessionIdAvailableForNewLifetime(sessionId);
   if (sessionData && typeof sessionData === 'object') {
     delete sessionData.isolated;
     llm.ensurePromptCacheKey(sessionData as Session);
@@ -755,6 +834,7 @@ function getSessionAgentOpsDeps() {
   return {
     getSession,
     getExistingSession,
+    assertSessionIdAvailableForNewLifetime,
     createSession,
     saveSession,
     saveSessionsMetadata,
@@ -912,14 +992,10 @@ export async function moveSessionToTarget(options: {
  * Attach a channel to a session
  * @param channelId Configured channel instance id (for legacy configs this is usually the same as the channel type)
  * @param conversationId Channel-side conversation/chat/room target id
- * @param sessionId Optional session ID. If not provided, creates a new session
+ * @param sessionId Existing session ID to attach
  * @returns The session ID
  */
-export function attachChannel(channelId: string, conversationId: string, sessionId?: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): string {
-  if (!sessionId) {
-    sessionId = generateSessionId();
-  }
-
+export function attachChannel(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): string {
   return sessionChannels.attachChannel(channelId, conversationId, sessionId, configUpdates);
 }
 

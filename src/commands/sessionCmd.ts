@@ -98,8 +98,9 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
     }
 
     case 'new': {
+      const { session: newSession } = await sessionManager.createEmptySession()
       sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
-      const newSessionId = sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx))
+      const newSessionId = sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), newSession.id)
       ctx.reply(`✅ Created and attached to new session \`${newSessionId}\``)
       break
     }

@@ -8,6 +8,7 @@ import { renameSessionArchiveStore } from './archiveStore';
 interface SessionAgentOpsDeps {
   getSession: (sessionId: string) => Promise<Session>;
   getExistingSession: (sessionId: string) => Promise<Session | null>;
+  assertSessionIdAvailableForNewLifetime: (sessionId: string) => Promise<void>;
   createSession: (sessionId: string, sessionData: any) => Promise<void>;
   saveSession: (sessionId: string) => Promise<void>;
   saveSessionsMetadata: () => Promise<void>;
@@ -80,9 +81,7 @@ async function renameSessionIdentity(options: {
   const { sourceSession, sourceInputId, targetSessionId, targetAgent } = options;
   const oldRealId = sourceSession.id;
 
-  if (await deps.getExistingSession(targetSessionId)) {
-    throw new Error(`Session "${targetSessionId}" already exists.`);
-  }
+  await deps.assertSessionIdAvailableForNewLifetime(targetSessionId);
 
   const oldAliases = sourceSession.aliases || [];
   const newAliases = [...new Set([...oldAliases, oldRealId, sourceInputId])];
@@ -177,9 +176,7 @@ export async function createSessionInAgent(options: {
   }
 
   const sessionId = buildSessionId(agentName, sessionName);
-  if (await deps.getExistingSession(sessionId)) {
-    throw new Error(`Session "${sessionId}" already exists.`);
-  }
+  await deps.assertSessionIdAvailableForNewLifetime(sessionId);
 
   if (parentSessionId) {
     const parentSession = await deps.getExistingSession(parentSessionId);
@@ -254,6 +251,19 @@ export async function createAgentWithMainSession(options: {
     createMainSession = true,
   } = options;
 
+  validateAgentName(agentName);
+
+  if (convertSessionId && !createMainSession) {
+    throw new Error('convertSessionId requires createMainSession=true.');
+  }
+
+  const mainSessionId = buildSessionId(agentName, 'main');
+  if (createMainSession) {
+    // Reject archived main-session reuse before creating the agent directory.
+    // A no-main agent creates no session lifetime and remains allowed.
+    await deps.assertSessionIdAvailableForNewLifetime(mainSessionId);
+  }
+
   const sourceSession = sourceSessionId ? await deps.getSession(sourceSessionId) : undefined;
   const sourceAgentName = sourceSession?.agent || 'main';
   const { agentDir } = await initializeAgentDirectory({
@@ -263,11 +273,6 @@ export async function createAgentWithMainSession(options: {
     initialMemoryFiles,
   });
 
-  if (convertSessionId && !createMainSession) {
-    throw new Error('convertSessionId requires createMainSession=true.');
-  }
-
-  const mainSessionId = buildSessionId(agentName, 'main');
   const targetAgentMeta = deps.getAgentMetadata(agentName);
   const isolatedNode = targetAgentMeta.isolated && typeof targetAgentMeta.isolatedNode === 'string' && targetAgentMeta.isolatedNode.trim()
     ? targetAgentMeta.isolatedNode.trim()
@@ -388,14 +393,14 @@ export async function moveSessionToTarget(options: {
       throw new Error('newAgentName is required when createAgent=true.');
     }
 
+    targetAgent = newAgentName;
+    targetSessionId = `${newAgentName}/${newSessionId || 'main'}`;
+    await deps.assertSessionIdAvailableForNewLifetime(targetSessionId);
     await initializeAgentDirectory({
       agentName: newAgentName,
       inheritMemory: createAgentInheritMemory,
       sourceAgentName: sourceSession.agent || 'main',
     });
-
-    targetAgent = newAgentName;
-    targetSessionId = `${newAgentName}/${newSessionId || 'main'}`;
     createdAgent = true;
   } else if (newAgentName) {
     if (!await fs.pathExists(getAgentDir(newAgentName))) {
