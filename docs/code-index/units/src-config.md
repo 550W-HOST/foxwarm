@@ -1,6 +1,7 @@
 # Unit: src-config
 
 Files: src/config.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts
+Secondary files: templates/models.example.yaml, README.md
 
 ## Purpose
 
@@ -17,7 +18,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 ### Model configuration
 
-- `ProviderConfigEntry`, `ProviderModelListItem`, `ModelConfigEntry`, `ModelsConfig`.
+- `ProviderConfigEntry`, `ProviderModelListItem`, `ModelConfigEntry`, `ModelsConfig`, and virtual routing config types/guards.
 - `expandModelsConfig`, `loadModelsConfig`, `loadModelsConfigFromObject`, `resolveModelConfig`.
 
 ### Setup configuration
@@ -65,11 +66,13 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly.
 - `openai`, `openai-responses`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings.
 - Invalid model lists or object entries fail with explicit validation errors.
+- `session-hash` and `failover` entries resolve strict concrete targets, safe context/async-compact values, and a route fingerprint. Their schema and semantics are canonical in [model routing](../threads/model-routing.md).
 
 ## Persistence behavior
 
 - App YAML missing at read time yields an empty config.
 - Setup writes validate by parsing through the same current config readers before replacing files.
+- Structured setup accepts virtual target/failover fields; raw virtual YAML remains byte-preserving after validation.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.
 - Template models config is a read fallback only and logs once; it is not silently copied into mutable state.
 

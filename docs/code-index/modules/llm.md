@@ -7,6 +7,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 ## Units
 
 - [src-llm](../units/src-llm.md) — routing, Anthropic path, prompt snapshots, retries, logs, tool batches, and one-shot/session requests.
+- [src-model-routing](../units/src-model-routing.md) — virtual target selection and process-local failover health.
 - [src-llm-openai](../units/src-llm-openai.md) — OpenAI Responses/Chat Completions conversion and stream collectors.
 - [src-mcp-client](../units/src-mcp-client.md) — MCP config, connection lifecycle, discovery, invocation, and result normalization.
 - [src-config](../units/src-config.md) — canonical provider/model expansion and path/default resolution.
@@ -23,6 +24,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 - `openai` and `openai-responses` use the Responses API.
 - `openai-completions` uses Chat Completions.
 - `anthropic` uses Anthropic Messages.
+- `session-hash` and `failover` resolve strict concrete leaves before provider serialization. Canonical contract: [model routing](../threads/model-routing.md).
 - Provider configuration/default/override rules are canonical in [src-config](../units/src-config.md#model-resolution).
 
 ## Invariants
@@ -35,6 +37,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 - Prompt-cache keys follow model-facing prefix lineage.
 - MCP summaries do not expose secret values.
 - One-shot CLI/ToolScript model requests reuse production provider code.
+- Empty, whitespace-only, and reasoning-only responses without tool calls are retryable failures; successful virtual results attribute the concrete leaf. Canonical contract: [model routing](../threads/model-routing.md).
 
 ## Prompt-cache lineage
 

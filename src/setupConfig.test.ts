@@ -29,6 +29,28 @@ providers:
   await fs.remove(dir);
 });
 
+test('raw models setup preserves virtual provider YAML byte-for-byte after validation', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-virtual-models-'));
+  const filePath = path.join(dir, 'models.yaml');
+  const rawYaml = `# virtual route comment
+default: sticky
+providers:
+  leaf:
+    providerType: anthropic
+    baseUrl: https://example.test
+    models: [model-a]
+  sticky:
+    providerType: session-hash
+    targets:
+      - leaf/model-a
+`;
+
+  writeRawModelsConfig(rawYaml, filePath);
+
+  assert.equal(await fs.readFile(filePath, 'utf8'), rawYaml);
+  await fs.remove(dir);
+});
+
 test('raw app config setup save writes the provided YAML text exactly', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-config-'));
   const filePath = path.join(dir, 'config.yaml');
@@ -101,6 +123,90 @@ test('models setup form preserves unknown provider and model fields', () => {
 
   const loaded = loadModelsConfigFromObject(next);
   assert.equal(loaded.default, 'openai/gpt-5.2-codex');
+});
+
+test('structured models setup accepts virtual providers and preserves their routing fields', () => {
+  const existing = {
+    default: 'concrete',
+    providers: {
+      concrete: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'secret',
+        models: ['model-a', 'model-b'],
+      },
+    },
+  };
+
+  const next = buildModelsConfigFromSetupForm({
+    default: 'fallback',
+    providers: [
+      {
+        id: 'concrete',
+        providerType: 'openai-completions',
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'secret',
+        models: 'model-a\nmodel-b',
+      },
+      {
+        id: 'sticky',
+        providerType: 'session-hash',
+        targets: ['concrete/model-a'],
+      },
+      {
+        id: 'fallback',
+        providerType: 'failover',
+        targets: 'concrete/model-a\nconcrete/model-b',
+        failureThreshold: '7',
+        cooldownMs: '12345',
+      },
+    ],
+  }, existing);
+
+  assert.deepEqual(next.providers?.sticky, {
+    providerType: 'session-hash',
+    targets: ['concrete/model-a'],
+  });
+  assert.deepEqual(next.providers?.fallback, {
+    providerType: 'failover',
+    targets: ['concrete/model-a', 'concrete/model-b'],
+    failureThreshold: 7,
+    cooldownMs: 12345,
+  });
+});
+
+test('structured setup conversion between concrete and virtual removes incompatible fields', () => {
+  const next = buildModelsConfigFromSetupForm({
+    default: 'route',
+    providers: [
+      {
+        id: 'leaf',
+        providerType: 'openai-completions',
+        baseUrl: 'https://example.test/v1',
+        models: 'model-a',
+      },
+      {
+        id: 'route',
+        providerType: 'session-hash',
+        targets: ['leaf/model-a'],
+      },
+    ],
+  }, {
+    providers: {
+      route: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://old.test/v1',
+        apiKey: 'old-secret',
+        models: ['old-model'],
+        extraFields: { old: true },
+      },
+    },
+  });
+
+  assert.deepEqual(next.providers?.route, {
+    providerType: 'session-hash',
+    targets: ['leaf/model-a'],
+  });
 });
 
 test('structured channel setup updates channels without rewriting unrelated config text', async () => {

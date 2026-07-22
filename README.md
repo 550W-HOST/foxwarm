@@ -260,6 +260,41 @@ Provider notes:
 - `anthropic` uses Anthropic-compatible requests
 - OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
 
+Virtual models reference concrete model keys from the same file. `session-hash`
+uses prompt-cache prefix lineage for stable rendezvous routing; `failover` tries
+targets in order and keeps short-lived process-local health state:
+
+```yaml
+default: sticky
+providers:
+  # Define concrete providers first (the order in the file is not significant).
+  openai:
+    providerType: openai-completions
+    baseUrl: https://api.openai.com/v1
+    apiKey: your-openai-key
+    models: [gpt-5.4]
+  backup:
+    providerType: anthropic
+    baseUrl: https://api.anthropic.com
+    apiKey: your-anthropic-key
+    models: [claude-sonnet-4-6]
+
+  sticky:
+    providerType: session-hash
+    targets: [openai/gpt-5.4, backup/claude-sonnet-4-6]
+
+  resilient:
+    providerType: failover
+    targets: [openai/gpt-5.4, backup/claude-sonnet-4-6]
+    failureThreshold: 5  # optional default
+    cooldownMs: 600000   # optional default: 10 minutes
+```
+
+Virtual targets must be concrete leaves; nested virtual models and duplicate
+aliases of the same concrete leaf are rejected. Virtual entries do not carry
+provider credentials, endpoint fields, model lists, request compression, or
+extra request fields/headers.
+
 The runtime resolves model definitions in this order:
 
 1. `MODELS_CONFIG_PATH` if set

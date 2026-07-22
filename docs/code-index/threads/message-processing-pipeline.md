@@ -10,7 +10,7 @@ The interactive turn flow from channel input through authorization, queueing, pr
 2. Router performs channel authorization, normalizes source metadata/mentions, handles slash commands where applicable, and resolves the attached session.
 3. Ordinary input enters the session queue through the session-manager façade.
 4. The registered trigger invokes `MessageRouter.processSessionQueue`. `tryClaimSession` provides per-session exclusion and `continueWithQueuedWork` selects/merges a legal turn source.
-5. `llm.chat(parts, session, iteration, options)` builds the current model-visible history/prompt/tool schema, routes to the selected provider, streams progress, records canonical provider-qualified model ID, and appends the model result.
+5. `llm.chat(parts, session, iteration, options)` builds the current model-visible history/prompt/tool schema, resolves concrete or virtual routing, streams progress, records the actual concrete provider-qualified model ID, and appends the model result. Virtual attempt semantics are canonical in [model routing](./model-routing.md).
 6. Retry callbacks create/update display-only notices and broadcast concise progress; terminal request exhaustion throws `LlmRequestError`.
 7. Model stream deltas become `model-stream-update` events for WebUI/channel progress.
 8. When function calls exist, router publishes structured progress and calls `llm.executeTools`; normal dispatch resolves builtin, MCP, or node tools through permission-aware tool infrastructure.

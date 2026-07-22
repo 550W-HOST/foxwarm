@@ -1,6 +1,6 @@
 # Unit: src-llm
 
-Files: src/llm.ts, src/llm.test.ts, src/llmRouting.test.ts
+Files: src/llm.ts, src/llm.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts
 
 ## Purpose
 
@@ -16,6 +16,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 - `sanitizeProviderRequestPayload`, `isAbortError`.
 - `LlmRequestError`, `isLlmRequestError`, retry event types/defaults/delay helper.
 - `getOpenAIRequestApi(providerType)` — exact OpenAI surface routing.
+- `DEFAULT_LLM_MAX_ATTEMPTS` plus compatibility `DEFAULT_LLM_MAX_RETRIES`; `classifyHttpFailure`.
 - `fixToolCalls(contents)` — provider-safe tool-call/response history normalization.
 
 ## Provider routing
@@ -25,6 +26,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 | `openai`, `openai-responses` | OpenAI Responses API at `<baseUrl>/responses` |
 | `openai-completions` | OpenAI Chat Completions at `<baseUrl>/chat/completions` |
 | `anthropic` | Anthropic Messages at `<baseUrl>/v1/messages` |
+| `session-hash`, `failover` | Resolve a concrete leaf per outer attempt, then use that leaf's protocol |
 
 `getOpenAIRequestApi()` returns null for other values; the current request branch then uses Anthropic-format handling. Custom provider types therefore need Anthropic-compatible behavior unless source routing is extended.
 
@@ -46,6 +48,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - OpenAI and Anthropic payloads receive current tool schemas and current Foxwarm system/source wrappers.
 - Streaming progress emits throttled reasoning/text/tool-call snapshots.
 - Retry waits are abortable. Terminal failures move bounded diagnostics to error logs, emit a final retry event, and throw `LlmRequestError`; they do not create fake assistant `Error:` messages. Canonical boundary: [D-llm-request-errors](../modules/llm.md#d-llm-request-errors).
+- The historical `maxRetries` option/event field means total attempts; the default is six. Virtual attempts rebuild the complete selected concrete request, and unusable empty/reasoning-only responses retry. Canonical semantics: [model routing](../threads/model-routing.md).
 - Successful results normalize into `ChatResult`, record provider-qualified model ID and usage, and may contain function calls for the router loop.
 - Display-only messages and internal `__meta` are excluded from provider input.
 

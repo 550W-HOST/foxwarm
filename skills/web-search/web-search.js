@@ -334,6 +334,12 @@ function findGptModelCandidates(explicitModelsConfigPath = '') {
 
   for (const [providerKey, providerEntry] of Object.entries(providers)) {
     const providerType = providerTypeOf(providerEntry);
+    // Virtual providers contain references to concrete configured models, not
+    // credentials or request endpoints of their own. Candidate discovery must
+    // inspect only the concrete provider entries below.
+    if (providerType === 'session-hash' || providerType === 'failover') {
+      continue;
+    }
     const models = normalizeModelsField(providerEntry);
     const baseUrl = String(providerEntry?.baseUrl || DEFAULT_OPENAI_BASE_URL).trim();
     const apiKey = String(providerEntry?.apiKey || '').trim();
@@ -1007,4 +1013,11 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  findGptModelCandidates,
+  chooseGptCandidate,
+};

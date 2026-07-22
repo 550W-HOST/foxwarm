@@ -2,6 +2,7 @@
  * Centralized configuration constants
  */
 import path from 'path';
+import crypto from 'crypto';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
 
@@ -371,6 +372,19 @@ export type ProviderConfigEntry = {
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  targets?: string[];
+  failureThreshold?: number;
+  cooldownMs?: number;
+};
+
+export type VirtualProviderType = 'session-hash' | 'failover';
+
+export type VirtualModelRoutingConfig = {
+  strategy: VirtualProviderType;
+  targets: string[];
+  failureThreshold: number;
+  cooldownMs: number;
+  fingerprint: string;
 };
 
 export type ModelConfigEntry = {
@@ -384,6 +398,7 @@ export type ModelConfigEntry = {
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  virtualRouting?: VirtualModelRoutingConfig;
 };
 
 export type ModelsConfig = {
@@ -429,6 +444,14 @@ function deepMergeObjects<T extends Record<string, any> | undefined>(base: T, ov
 
 function getProviderType(providerEntry: ProviderConfigEntry): string {
   return providerEntry.providerType || providerEntry.provider || 'openai';
+}
+
+export function isVirtualProviderType(providerType: unknown): providerType is VirtualProviderType {
+  return providerType === 'session-hash' || providerType === 'failover';
+}
+
+export function isVirtualModelConfigEntry(entry: ModelConfigEntry | undefined): entry is ModelConfigEntry & { virtualRouting: VirtualModelRoutingConfig } {
+  return !!entry?.virtualRouting && isVirtualProviderType(entry.providerType);
 }
 
 function normalizeProviderModelsField(providerKey: string, providerEntry: ProviderConfigEntry): ProviderModelListItem[] | undefined {
@@ -523,7 +546,15 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
   const models: Record<string, ModelConfigEntry> = {};
   const displayModels: string[] = [];
 
+  const virtualEntries: Array<[string, ProviderConfigEntry, VirtualProviderType]> = [];
+
   for (const [providerKey, providerEntry] of Object.entries(rawProviderEntries || {})) {
+    const providerType = getProviderType(providerEntry);
+    if (isVirtualProviderType(providerType)) {
+      virtualEntries.push([providerKey, providerEntry, providerType]);
+      continue;
+    }
+
     const normalizedModels = normalizeProviderModelsField(providerKey, providerEntry);
 
     // Allow empty/undefined (some providers has default model)
@@ -552,7 +583,107 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     }
   }
 
-  return { models, displayModels };
+  const rawVirtualKeys = new Set(virtualEntries.map(([providerKey]) => providerKey));
+  const forbiddenVirtualFields: Array<keyof ProviderConfigEntry> = [
+    'models',
+    'model',
+    'baseUrl',
+    'apiKey',
+    'requestCompression',
+    'extraFields',
+    'extraHeaders',
+  ];
+
+  const canonicalConcreteKey = (entry: ModelConfigEntry): string => {
+    const modelName = typeof entry.model === 'string' ? entry.model.trim() : '';
+    return modelName
+      ? (modelName.startsWith(`${entry.providerKey}/`) ? modelName : `${entry.providerKey}/${modelName}`)
+      : entry.providerKey;
+  };
+
+  for (const [virtualKey, providerEntry, providerType] of virtualEntries) {
+    for (const field of forbiddenVirtualFields) {
+      if (Object.prototype.hasOwnProperty.call(providerEntry, field)) {
+        throw new Error(`Virtual provider \`${virtualKey}\` (${providerType}) forbids field \`${field}\`.`);
+      }
+    }
+
+    if (!Array.isArray(providerEntry.targets)) {
+      throw new Error(`Virtual provider \`${virtualKey}\` requires a \`targets\` array of concrete model ids.`);
+    }
+
+    const minimumTargets = providerType === 'failover' ? 2 : 1;
+    if (providerEntry.targets.length < minimumTargets) {
+      throw new Error(`Virtual provider \`${virtualKey}\` (${providerType}) requires at least ${minimumTargets} target${minimumTargets === 1 ? '' : 's'}.`);
+    }
+
+    const targets: string[] = [];
+    const seenCanonicalTargets = new Set<string>();
+    const leafEntries: ModelConfigEntry[] = [];
+    for (const [index, rawTarget] of providerEntry.targets.entries()) {
+      const target = typeof rawTarget === 'string' ? rawTarget.trim() : '';
+      if (!target) {
+        throw new Error(`Virtual provider \`${virtualKey}\` has an invalid empty targets[${index}] value.`);
+      }
+      if (target === virtualKey) {
+        throw new Error(`Virtual provider \`${virtualKey}\` cannot target itself.`);
+      }
+      if (rawVirtualKeys.has(target)) {
+        throw new Error(`Virtual provider \`${virtualKey}\` target \`${target}\` is virtual; nested virtual routing is not supported.`);
+      }
+
+      const targetEntry = models[target];
+      if (!targetEntry) {
+        throw new Error(`Virtual provider \`${virtualKey}\` has unknown concrete target \`${target}\`.`);
+      }
+      const canonicalTarget = canonicalConcreteKey(targetEntry);
+      if (seenCanonicalTargets.has(canonicalTarget)) {
+        throw new Error(`Virtual provider \`${virtualKey}\` has duplicate canonical target \`${canonicalTarget}\`.`);
+      }
+      seenCanonicalTargets.add(canonicalTarget);
+      targets.push(canonicalTarget);
+      leafEntries.push(targetEntry);
+    }
+
+    const failureThreshold = providerEntry.failureThreshold ?? 5;
+    if (!Number.isInteger(failureThreshold) || failureThreshold < 1) {
+      throw new Error(`Virtual provider \`${virtualKey}\` failureThreshold must be a positive integer.`);
+    }
+    const cooldownMs = providerEntry.cooldownMs ?? 600_000;
+    if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) {
+      throw new Error(`Virtual provider \`${virtualKey}\` cooldownMs must be a positive number.`);
+    }
+
+    const contextLimit = Math.min(...leafEntries.map(entry => entry.contextLimit || CONTEXT_LIMIT));
+    const asyncCompact = leafEntries.every(entry => entry.asyncCompact !== false);
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({
+      strategy: providerType,
+      targets,
+      failureThreshold,
+      cooldownMs,
+    })).digest('hex');
+
+    models[virtualKey] = {
+      providerKey: virtualKey,
+      providerType,
+      model: '',
+      contextLimit,
+      asyncCompact,
+      virtualRouting: {
+        strategy: providerType,
+        targets,
+        failureThreshold,
+        cooldownMs,
+        fingerprint,
+      },
+    };
+    displayModels.push(virtualKey);
+  }
+
+  const orderedDisplayModels = Object.keys(rawProviderEntries || {}).flatMap(providerKey =>
+    displayModels.filter(modelKey => models[modelKey]?.providerKey === providerKey)
+  );
+  return { models, displayModels: orderedDisplayModels };
 }
 
 function getResolvedModelsConfigPath(): string {

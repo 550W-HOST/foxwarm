@@ -1,6 +1,6 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts
+Files: src/channels/webuiChannel.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts
 Secondary files: src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
@@ -15,6 +15,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - `buildWebUiSessionState(session)` — canonical single-session runtime/model/node/cwd payload shared by list, history, and streams.
 - `buildQueuedPreviewMessages(queue)` — bounded render-only queue previews.
 - `broadcastMessage`, `broadcastSessionStateUpdate`, and `broadcastSessionListUpdate` — per-session and global SSE delivery.
+- `getModelsSetupDiagnostics(modelsPath?)` — structured concrete/virtual setup diagnostics.
 
 ## Route groups
 
@@ -50,6 +51,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - CTX-BLOCK expansion delegates to the read-only archive helper and never queues, saves, or broadcasts session mutations.
 - The model-test endpoint treats request exceptions as failed HTTP results rather than scanning successful model text for an `Error:` prefix.
 - Setup routes are normal authenticated WebUI routes: `GET /api/setup/status`; `POST /api/setup/models`, `/api/setup/models/test`, `/api/setup/config`, `/api/setup/channels`, `/api/setup/weixin/login/start`, and `/api/setup/weixin/login/wait`. OOBE is reported when the models file is absent; there is no separate guest/admin role API at these routes.
+- Model setup diagnostics expose virtual strategy/targets/failover values, while session model selection remains the virtual key. Canonical backend contract: [model routing](../threads/model-routing.md).
 - The former custom workspace filesystem routes remain removed; authenticated file download remains available for tool/file affordances.
 - `sendFile` is a channel no-op because the browser consumes file information through tool result metadata and authenticated download routes.
 

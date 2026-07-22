@@ -1,6 +1,7 @@
 # Unit: src-skills
 
 Files: src/skills.ts, src/skillCatalogSnapshot.test.ts, src/toolscriptSkills.test.ts
+Secondary files: skills/web-search/web-search.js, skills/web-search/web-search.test.js
 
 ## Purpose
 
@@ -71,7 +72,7 @@ Test file additionally imports:
 - The bundled global `agent-management` skill links explicit reference docs under `skills/agent-management/references/` for Organizer/Executor collaboration patterns, progressive disclosure guidance, and copyable agent `MEMORY.md` templates.
 - The bundled global `isolated-worker` skill distinguishes session `currentNode` routing from agent-level isolation and packages `skills/isolated-worker/create_isolated_worker.py`, a ToolScript that validates an existing connected non-master node and unique agent name before composing `create_agent(createMainSession=false, isolatedNode)`, `create_session(parentSessionId=coordinator)`, and `send_to_session`. Its dry-run mode is read-only; apply mode is fail-fast but deliberately non-transactional because there is no agent-facing delete/rollback tool. Companion Python tests mock all nested tool calls and cover dry-run, success ordering, offline-node rejection, and partial failures.
 - The bundled global `agent-skill-creator` skill adapts `FrancyJGLisboa/agent-skill-creator` (MIT, upstream commit `f8ebbf6fe9262b716b02790fcd75f9922c3c048b`) as a Foxwarm SKILL.md-first skill with explicit `references/`, `scripts/`, `assets/`, and license/attribution files.
-- The bundled global `web-search` skill replaces the old `ask-gemini` entry (no alias/shim). Its resource script `skills/web-search/web-search.js` prefers OpenAI Responses API web search (`web_search`, GPT-5.5 by default), supports custom base URLs, preserves Gemini `google_search` fallback config, and can list/copy GPT entries from Foxwarm `models.yaml` into `~/.secrets/web_search_openai_*` without printing API keys.
+- The bundled global `web-search` skill replaces the old `ask-gemini` entry (no alias/shim). Its resource script `skills/web-search/web-search.js` prefers OpenAI Responses API web search (`web_search`, GPT-5.5 by default), supports custom base URLs, preserves Gemini `google_search` fallback config, and can list/copy concrete GPT entries from Foxwarm `models.yaml` into `~/.secrets/web_search_openai_*` without printing API keys. Raw candidate discovery skips virtual routing entries because they own no credentials; canonical routing contract: [model routing](../threads/model-routing.md).
 - The bundled global `timer-automation` skill documents hidden timer tools (`create_timer`, `list_timers`, `update_timer`, `delete_timer`), examples for `call_tool`, and the actual cron syntax supported by the installed `node-schedule`/`cron-parser` runtime, including `L` support and `W` rejection.
 
 ## Integration

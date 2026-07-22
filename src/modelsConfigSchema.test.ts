@@ -182,3 +182,120 @@ test('map form for provider entry models is rejected with a clear error', () => 
     /map\/object form is not supported/i,
   );
 });
+
+test('virtual providers resolve strict concrete leaves with safe context and async compact values', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'sticky',
+    providers: {
+      sticky: {
+        providerType: 'session-hash',
+        targets: ['openai/a', 'anthropic/b'],
+      },
+      openai: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://openai.test/v1',
+        contextLimit: 200000,
+        models: ['a'],
+      },
+      anthropic: {
+        providerType: 'anthropic',
+        baseUrl: 'https://anthropic.test',
+        contextLimit: 100000,
+        asyncCompact: false,
+        models: ['b'],
+      },
+      fallback: {
+        providerType: 'failover',
+        targets: ['openai/a', 'anthropic/b'],
+        failureThreshold: 3,
+        cooldownMs: 1234,
+      },
+    },
+  });
+
+  assert.deepEqual(parsed.displayModels, ['sticky', 'openai', 'anthropic', 'fallback']);
+  assert.equal(parsed.models.sticky.contextLimit, 100000);
+  assert.equal(parsed.models.sticky.asyncCompact, false);
+  assert.deepEqual(parsed.models.sticky.virtualRouting?.targets, ['openai/a', 'anthropic/b']);
+  assert.equal(parsed.models.sticky.virtualRouting?.failureThreshold, 5);
+  assert.equal(parsed.models.sticky.virtualRouting?.cooldownMs, 600000);
+  assert.equal(parsed.models.fallback.virtualRouting?.failureThreshold, 3);
+  assert.equal(parsed.models.fallback.virtualRouting?.cooldownMs, 1234);
+  assert.match(parsed.models.fallback.virtualRouting?.fingerprint || '', /^[0-9a-f]{64}$/);
+});
+
+test('session-hash accepts one concrete target as an alias and canonicalizes single-model aliases', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'alias',
+    providers: {
+      concrete: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://example.test/v1',
+        models: ['model-a'],
+      },
+      alias: {
+        providerType: 'session-hash',
+        targets: ['concrete'],
+      },
+    },
+  });
+  assert.deepEqual(parsed.models.alias.virtualRouting?.targets, ['concrete/model-a']);
+  assert.equal(parsed.models.alias.asyncCompact, true);
+});
+
+test('virtual schema rejects forbidden fields, invalid target counts, unknown/nested/self targets, and canonical duplicates', () => {
+  const concrete = {
+    providerType: 'openai-completions',
+    baseUrl: 'https://example.test/v1',
+    models: ['model-a'],
+  };
+  const parseVirtual = (entry: any, extraProviders: any = {}) => loadModelsConfigFromObject({
+    default: 'virtual',
+    providers: { concrete, ...extraProviders, virtual: entry },
+  });
+
+  assert.throws(() => parseVirtual({ providerType: 'session-hash', targets: ['concrete'], apiKey: 'forbidden' }), /forbids field `apiKey`/);
+  assert.throws(() => parseVirtual({ providerType: 'failover', targets: ['concrete'] }), /at least 2 targets/);
+  assert.throws(() => parseVirtual({ providerType: 'session-hash', targets: ['missing/model'] }), /unknown concrete target/);
+  assert.throws(() => parseVirtual({ providerType: 'session-hash', targets: ['virtual'] }), /cannot target itself/);
+  assert.throws(() => parseVirtual(
+    { providerType: 'session-hash', targets: ['other'] },
+    { other: { providerType: 'session-hash', targets: ['virtual'] } },
+  ), /is virtual; nested virtual routing is not supported/);
+  assert.throws(() => parseVirtual({ providerType: 'failover', targets: ['concrete', 'concrete/model-a'] }), /duplicate canonical target/);
+});
+
+test('providerType continues to take precedence over the legacy provider reader', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'concrete',
+    providers: {
+      concrete: {
+        providerType: 'openai-completions',
+        provider: 'failover',
+        baseUrl: 'https://example.test/v1',
+        models: ['model-a'],
+      },
+    },
+  });
+  assert.equal(parsed.models.concrete.providerType, 'openai-completions');
+  assert.equal(parsed.models.concrete.virtualRouting, undefined);
+});
+
+test('legacy provider remains a fallback reader for virtual providerType values', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'legacy-route',
+    providers: {
+      concrete: {
+        providerType: 'anthropic',
+        baseUrl: 'https://example.test',
+        models: ['model-a'],
+      },
+      'legacy-route': {
+        provider: 'session-hash',
+        targets: ['concrete/model-a'],
+      },
+    },
+  });
+  assert.equal(parsed.models['legacy-route'].providerType, 'session-hash');
+  assert.deepEqual(parsed.models['legacy-route'].virtualRouting?.targets, ['concrete/model-a']);
+});

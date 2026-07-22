@@ -200,7 +200,7 @@ test('requestLlmOnce logs raw stream body with parsed streaming response', async
   const fs = await import('node:fs/promises');
   const path = await import('node:path');
   const beforeFiles = new Set<string>();
-  const createdFiles: string[] = [];
+  let ownFiles: string[] = [];
   const recentDir = path.join(LOGS_DIR, 'recent');
   await fs.mkdir(recentDir, { recursive: true });
   for (const file of await fs.readdir(recentDir).catch((): string[] => [])) beforeFiles.add(file);
@@ -223,16 +223,24 @@ test('requestLlmOnce logs raw stream body with parsed streaming response', async
     });
 
     const files = await fs.readdir(recentDir);
-    createdFiles.push(...files.filter(file => !beforeFiles.has(file)));
-    const responseFile = createdFiles.find(file => file.endsWith('_res.json'));
+    const createdFiles = files.filter(file => !beforeFiles.has(file));
+    let responseFile: string | undefined;
+    for (const file of createdFiles.filter(file => file.endsWith('_res.json'))) {
+      const candidate = JSON.parse(await fs.readFile(path.join(recentDir, file), 'utf8'));
+      if (candidate.body?.choices?.[0]?.message?.content === 'raw-ok') {
+        responseFile = file;
+        break;
+      }
+    }
     assert.ok(responseFile, 'expected response log file');
+    ownFiles = [responseFile!, responseFile!.replace(/_res\.json$/, '_req.json')];
     const logged = JSON.parse(await fs.readFile(path.join(recentDir, responseFile!), 'utf8'));
     assert.equal(logged.body.choices[0].message.content, 'raw-ok');
     assert.match(logged.rawStream.body, /data: .*raw-ok/);
     assert.ok(logged.rawStream.sseBlocks.some((block: string) => block.includes('raw-ok')));
   } finally {
     (axios as any).post = originalPost;
-    await Promise.all(createdFiles.map(file => fs.rm(path.join(recentDir, file), { force: true }).catch(() => {})));
+    await Promise.all(ownFiles.map(file => fs.rm(path.join(recentDir, file), { force: true }).catch(() => {})));
   }
 });
 
@@ -242,14 +250,11 @@ test('requestLlmOnce keeps failed raw stream attempts in moved error logs', asyn
   const path = await import('node:path');
   const recentDir = path.join(LOGS_DIR, 'recent');
   const errorDir = path.join(LOGS_DIR, `${formatDate()}-error`);
-  const beforeRecent = new Set<string>();
   const beforeError = new Set<string>();
-  let newRecentFiles: string[] = [];
-  let newErrorFiles: string[] = [];
+  let ownErrorFiles: string[] = [];
   const retryEvents: any[] = [];
   await fs.mkdir(recentDir, { recursive: true });
   await fs.mkdir(errorDir, { recursive: true });
-  for (const file of await fs.readdir(recentDir).catch((): string[] => [])) beforeRecent.add(file);
   for (const file of await fs.readdir(errorDir).catch((): string[] => [])) beforeError.add(file);
 
   (axios as any).post = async () => {
@@ -281,23 +286,32 @@ test('requestLlmOnce keeps failed raw stream attempts in moved error logs', asyn
     assert.equal(retryEvents[0].final, true);
     assert.equal(retryEvents[0].attempt, 1);
     assert.equal(retryEvents[0].kind, 'request-error');
-    newRecentFiles = (await fs.readdir(recentDir).catch((): string[] => [])).filter(file => !beforeRecent.has(file));
-    assert.equal(newRecentFiles.some(file => file.endsWith('_res.json')), false, 'failed response log should move out of recent');
-    newErrorFiles = (await fs.readdir(errorDir)).filter(file => !beforeError.has(file));
-    const responseFile = newErrorFiles.find(file => file.endsWith('_res.json'));
+    const newErrorFiles = (await fs.readdir(errorDir)).filter(file => !beforeError.has(file));
+    let responseFile: string | undefined;
+    for (const file of newErrorFiles.filter(file => file.endsWith('_res.json'))) {
+      const candidate = JSON.parse(await fs.readFile(path.join(errorDir, file), 'utf8'));
+      if (candidate.attempts?.some((attempt: any) => /stream exploded after partial/.test(attempt.error || ''))) {
+        responseFile = file;
+        break;
+      }
+    }
     assert.ok(responseFile, 'expected moved error response log');
+    assert.equal(await fs.stat(path.join(recentDir, responseFile!)).then(() => true, () => false), false, 'this failed response log should move out of recent');
+    ownErrorFiles = [
+      responseFile!,
+      responseFile!.replace(/_res\.json$/, '_req.json'),
+    ];
     const logged = JSON.parse(await fs.readFile(path.join(errorDir, responseFile!), 'utf8'));
     assert.match(logged.attempts[0].error, /stream exploded after partial/);
     assert.match(logged.attempts[0].rawStream.body, /partial-before-fail/);
     assert.ok(logged.attempts[0].rawStream.sseBlocks.some((block: string) => block.includes('partial-before-fail')));
   } finally {
     (axios as any).post = originalPost;
-    await Promise.all(newRecentFiles.map(file => fs.rm(path.join(recentDir, file), { force: true }).catch(() => {})));
-    await Promise.all(newErrorFiles.map(file => fs.rm(path.join(errorDir, file), { force: true }).catch(() => {})));
+    await Promise.all(ownErrorFiles.map(file => fs.rm(path.join(errorDir, file), { force: true }).catch(() => {})));
   }
 });
 
-test('requestLlmOnce retries 5 times by default with increasing retry delays', async () => {
+test('requestLlmOnce uses 6 total attempts by default with increasing retry delays', async () => {
   const originalPost = axios.post;
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
@@ -338,12 +352,13 @@ test('requestLlmOnce retries 5 times by default with increasing retry delays', a
 
     assert.equal(result.text, 'retry-ok');
     assert.equal(callCount, DEFAULT_LLM_MAX_RETRIES);
-    assert.deepEqual(retryEvents.map(event => event.nextAttempt), [2, 3, 4, 5]);
+    assert.deepEqual(retryEvents.map(event => event.nextAttempt), [2, 3, 4, 5, 6]);
     assert.deepEqual(retryEvents.map(event => event.delayMs), [
       getLlmRetryDelayMs(1),
       getLlmRetryDelayMs(2),
       getLlmRetryDelayMs(3),
       getLlmRetryDelayMs(4),
+      getLlmRetryDelayMs(5),
     ]);
     assert.deepEqual(sleepDelays, retryEvents.map(event => event.delayMs));
   } finally {

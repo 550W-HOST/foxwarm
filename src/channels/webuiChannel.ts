@@ -196,9 +196,9 @@ function buildQueuedPreviewMessages(queue: QueueItem[] | undefined): Message[] {
 }
 
 
-function getModelsSetupDiagnostics() {
-  const exists = fs.existsSync(DEFAULT_MODELS_CONFIG_PATH);
-  const rawYaml = exists ? readRawTextFileIfExists(DEFAULT_MODELS_CONFIG_PATH) : '';
+export function getModelsSetupDiagnostics(modelsPath: string = DEFAULT_MODELS_CONFIG_PATH) {
+  const exists = fs.existsSync(modelsPath);
+  const rawYaml = exists ? readRawTextFileIfExists(modelsPath) : '';
   const raw = rawYaml ? (yaml.load(rawYaml) as any) || {} : undefined;
   const providers = raw?.providers || raw?.models || {};
   const providerEntries = providers && typeof providers === 'object' && !Array.isArray(providers) ? Object.entries(providers as Record<string, ProviderConfigEntry>) : [];
@@ -209,13 +209,15 @@ function getModelsSetupDiagnostics() {
     .map(([key]) => key);
 
   return {
-    path: DEFAULT_MODELS_CONFIG_PATH,
+    path: modelsPath,
     templatePath: MODELS_CONFIG_TEMPLATE_PATH,
     exists,
     providerCount,
     defaultModel,
     rawYaml,
     providers: providerEntries.map(([key, entry]) => {
+      const providerType = entry.providerType || entry.provider || 'openai-completions';
+      const isVirtual = providerType === 'session-hash' || providerType === 'failover';
       const rawModels = Array.isArray(entry.models) ? entry.models : Array.isArray(entry.model) ? entry.model : (entry.model ? [entry.model] : []);
       const models = rawModels
         .map((item: any) => typeof item === 'string' ? item : item?.id)
@@ -224,10 +226,14 @@ function getModelsSetupDiagnostics() {
       const defaultPrefix = `${key}/`;
       return {
         id: key,
-        providerType: entry.providerType || entry.provider || 'openai-completions',
+        providerType,
+        isVirtual,
         baseUrl: entry.baseUrl || '',
         apiKey: entry.apiKey || '',
         models,
+        targets: Array.isArray(entry.targets) ? entry.targets : [],
+        failureThreshold: entry.failureThreshold ?? (providerType === 'failover' ? 5 : null),
+        cooldownMs: entry.cooldownMs ?? (providerType === 'failover' ? 600_000 : null),
         defaultModel: defaultModel?.startsWith(defaultPrefix) ? defaultModel.slice(defaultPrefix.length) : '',
       };
     }),
@@ -349,6 +355,9 @@ function buildWebUiModelsPayload(currentModel?: string) {
         label: key,
         isDefault: key === defaultKey,
         contextLimit: entry?.contextLimit || null,
+        providerType: entry?.providerType || null,
+        isVirtual: !!entry?.virtualRouting,
+        targets: entry?.virtualRouting?.targets || [],
       };
     }),
   };
