@@ -10,6 +10,7 @@ import { handleAgentCommand } from '../commands/agentCmd';
 import { hasArchivedSessionId } from './archiveStore';
 import { setArchiveWriteFaultInjectorForTests } from './archive';
 import * as sessionChannels from './channels';
+import { setAgentDirectoryFaultInjectorForTests } from './agentOps';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -455,6 +456,40 @@ test('known persistence failures roll back creation and allow the same requested
     }
     await fs.remove(getAgentDir(failedAgent));
     await fs.remove(getAgentDir(moveTargetAgent));
+  }
+});
+
+test('create-agent initialization failure cleans journal and partial directory before retry', async () => {
+  await sessionManager.loadSessions();
+  const sourceId = makeId('init_failure_source');
+  const targetAgent = makeId('init_failure_target').replace(/[^a-zA-Z0-9_-]/g, '_');
+  await createParent(sourceId);
+  try {
+    setAgentDirectoryFaultInjectorForTests((phase, agentName) => {
+      if (phase === 'after-memory-directory' && agentName === targetAgent) {
+        throw new Error('injected target-agent initialization failure');
+      }
+    });
+    await assert.rejects(sessionManager.moveSessionToTarget({
+      sourceSessionId: sourceId,
+      createAgent: true,
+      newAgentName: targetAgent,
+    }), /injected target-agent initialization failure/);
+    assert.equal(await fs.pathExists(getAgentDir(targetAgent)), false);
+    assert.equal(await fs.pathExists(path.join(process.env.FOXWARM_DATA_DIR || '', 'state', 'session-id-move-pending.json')), false);
+    assert.ok(await sessionManager.getExistingSession(sourceId));
+    setAgentDirectoryFaultInjectorForTests(null);
+    assert.equal((await sessionManager.moveSessionToTarget({
+      sourceSessionId: sourceId,
+      createAgent: true,
+      newAgentName: targetAgent,
+    })).targetSessionId, `${targetAgent}/main`);
+  } finally {
+    setAgentDirectoryFaultInjectorForTests(null);
+    for (const id of [sourceId, `${targetAgent}/main`]) {
+      if (sessionManager.getAllSessions().has(id)) await sessionManager.deleteSession(id).catch(() => {});
+    }
+    await fs.remove(getAgentDir(targetAgent));
   }
 });
 
@@ -936,6 +971,43 @@ test('loadSessions propagates authoritative pending-move recovery failure', () =
   }
 });
 
+test('pending move ownership cannot target an unrelated agent directory', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-pending-move-ownership-binding-'));
+  const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
+  const unrelatedDir = path.join(tempRoot, 'agents', 'unrelated');
+  const markerPath = path.join(unrelatedDir, 'KEEP');
+  try {
+    fs.outputFileSync(markerPath, 'keep');
+    fs.outputJsonSync(path.join(tempRoot, 'state', 'session-id-move-pending.json'), {
+      v: 1,
+      phase: 'rolling-back',
+      oldSessionId: 'binding_old',
+      newSessionId: 'target_agent/main',
+      oldAgent: 'main',
+      oldAliases: [],
+      ownsTargetAgentDirectory: true,
+      targetAgentName: 'unrelated',
+      createdAt: Date.now(),
+    });
+    execFileSync(process.execPath, ['-e', `
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      (async () => {
+        try {
+          await sm.loadSessions();
+          throw new Error('inconsistent ownership unexpectedly loaded');
+        } catch (error) {
+          if (!String(error).includes('inconsistent target-agent directory ownership')) throw error;
+        }
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.equal(fs.readFileSync(markerPath, 'utf8'), 'keep');
+    assert.equal(fs.pathExistsSync(path.join(tempRoot, 'state', 'session-id-move-pending.json')), true);
+  } finally {
+    fs.removeSync(tempRoot);
+  }
+});
+
 test('failed reverse persistence keeps move journal until startup completes rollback', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-pending-move-reverse-failure-'));
   const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
@@ -1042,6 +1114,66 @@ test('create-agent move keeps owned directory for recorded rollback and startup 
         if (await fs.pathExists(config.SESSION_ID_MOVE_JOURNAL_PATH)) throw new Error('journal not cleared');
         const retry = await sm.moveSessionToTarget({ sourceSessionId: 'owned_rollback_source', createAgent: true, newAgentName: 'owned_rollback_agent' });
         if (retry.targetSessionId !== 'owned_rollback_agent/main') throw new Error('exact retry failed');
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } finally {
+    fs.removeSync(tempRoot);
+  }
+});
+
+test('create-agent copy crash is journaled before target directory mutation', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-owned-agent-copy-crash-'));
+  const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
+  const agentOpsPath = path.resolve(__dirname, 'agentOps.js');
+  const configPath = path.resolve(__dirname, '../config.js');
+  try {
+    const crashed = spawnSync(process.execPath, ['-e', `
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      const agentOps = require(${JSON.stringify(agentOpsPath)});
+      (async () => {
+        await sm.loadSessions();
+        const source = await sm.createAgentWithMainSession({
+          agentName: 'copy_crash_source',
+          initialMemoryFiles: { 'MEMORY.md': 'copy crash marker' },
+        });
+        const session = await sm.getSession(source.mainSessionId);
+        await sm.appendSessionMessage(session, { role: 'user', parts: [{ text: 'copy crash history' }], __meta: { timestamp: Date.now() } });
+        agentOps.setAgentDirectoryFaultInjectorForTests((phase, agentName) => {
+          if (phase === 'after-memory-copy' && agentName === 'copy_crash_target') process.exit(45);
+        });
+        await sm.moveSessionToTarget({
+          sourceSessionId: source.mainSessionId,
+          createAgent: true,
+          newAgentName: 'copy_crash_target',
+          createAgentInheritMemory: true,
+        });
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8' });
+    assert.equal(crashed.status, 45, crashed.stderr);
+    const journalPath = path.join(tempRoot, 'state', 'session-id-move-pending.json');
+    const journal = fs.readJsonSync(journalPath);
+    assert.equal(journal.phase, 'rolling-back');
+    assert.equal(journal.targetAgentName, 'copy_crash_target');
+    assert.equal(fs.readFileSync(path.join(tempRoot, 'agents', 'copy_crash_target', 'memory', 'MEMORY.md'), 'utf8'), 'copy crash marker');
+
+    execFileSync(process.execPath, ['-e', `
+      const fs = require('fs-extra');
+      const config = require(${JSON.stringify(configPath)});
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      (async () => {
+        await sm.loadSessions();
+        const source = await sm.getExistingSession('copy_crash_source/main');
+        if (!source || source.history[0]?.parts?.[0]?.text !== 'copy crash history') throw new Error('source was not preserved');
+        if (await fs.pathExists(config.getAgentDir('copy_crash_target'))) throw new Error('partial target directory survived recovery');
+        if (await fs.pathExists(config.SESSION_ID_MOVE_JOURNAL_PATH)) throw new Error('journal not cleared');
+        const retry = await sm.moveSessionToTarget({
+          sourceSessionId: 'copy_crash_source/main',
+          createAgent: true,
+          newAgentName: 'copy_crash_target',
+          createAgentInheritMemory: true,
+        });
+        if (retry.targetSessionId !== 'copy_crash_target/main') throw new Error('exact retry failed');
         process.exit(0);
       })().catch(error => { console.error(error); process.exit(1); });
     `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
