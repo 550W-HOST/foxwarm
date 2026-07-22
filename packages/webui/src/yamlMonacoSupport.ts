@@ -58,14 +58,21 @@ export function loadYamlMonacoSupport(): Promise<YamlMonacoSupport> {
 
     return {
       monaco,
-      updateModelSuggestions(modelUri, value, immediate = false) {
+      updateModelSuggestions(modelUri: string, value: string, immediate = false) {
         if (modelUri === MODELS_YAML_MODEL_URI) completionSupport?.update(modelUri, value, immediate)
       },
-      removeModelSuggestions(modelUri) {
+      removeModelSuggestions(modelUri: string) {
         completionSupport?.remove(modelUri)
       },
     }
-  })()
+  })().catch((error) => {
+    supportPromise = null
+    completionSupport?.dispose()
+    completionSupport = null
+    editorWorkerConstructor = null
+    yamlWorkerConstructor = null
+    throw error
+  })
 
   return supportPromise
 }

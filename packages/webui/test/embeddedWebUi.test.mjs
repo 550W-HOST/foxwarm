@@ -21,7 +21,7 @@ await esbuild.build({
   logLevel: 'silent',
 })
 
-const { parseFoxwarmEmbeddedTarget, postFoxwarmEmbedHostMessage, readFoxwarmActiveTargetMessage } = await import(pathToFileURL(bundledPath).href)
+const { parseFoxwarmEmbeddedTarget, postFoxwarmEmbedHostMessage, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage } = await import(pathToFileURL(bundledPath).href)
 const nonce = '0123456789abcdef0123456789abcdef'
 
 test('parses only fixed sidebar, chat, Agents, and Setup embed targets with a bridge nonce', () => {
@@ -46,6 +46,13 @@ test('accepts only nonce-bound fixed active-target messages from the Code host',
   assert.equal(readFoxwarmActiveTargetMessage({ ...base, target: { kind: 'session', sessionId: '' } }, nonce), undefined)
 })
 
+test('accepts only the nonce-bound fixed Models focus signal from the Code host', () => {
+  const message = { channel: 'foxwarm-webui-host', version: 1, nonce, type: 'focus-models' }
+  assert.equal(readFoxwarmFocusModelsMessage(message, nonce), true)
+  assert.equal(readFoxwarmFocusModelsMessage({ ...message, nonce: 'wrong' }, nonce), false)
+  assert.equal(readFoxwarmFocusModelsMessage({ ...message, type: 'focus-config' }, nonce), false)
+})
+
 test('posts a versioned fixed-shape message only when embedded', () => {
   const messages = []
   const parent = { postMessage: (...args) => messages.push(args) }
@@ -58,8 +65,12 @@ test('posts a versioned fixed-shape message only when embedded', () => {
   assert.deepEqual(messages[1], [{
     channel: 'foxwarm-webui-embed', version: 1, nonce, type: 'open-terminal',
   }, '*'])
+  postFoxwarmEmbedHostMessage(nonce, { type: 'open-setup', focus: 'models' })
+  assert.deepEqual(messages[2], [{
+    channel: 'foxwarm-webui-embed', version: 1, nonce, type: 'open-setup', focus: 'models',
+  }, '*'])
   globalThis.window = { parent: null }
   globalThis.window.parent = globalThis.window
   postFoxwarmEmbedHostMessage(nonce, { type: 'open-session', sessionId: 'ignored' })
-  assert.equal(messages.length, 2)
+  assert.equal(messages.length, 3)
 })

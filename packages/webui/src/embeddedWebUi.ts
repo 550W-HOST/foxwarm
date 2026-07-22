@@ -17,7 +17,8 @@ export type FoxwarmEmbedHostPayload =
   | { type: 'sidebar-ready' }
   | { type: 'open-session'; sessionId: string; title?: string }
   | { type: 'open-agents' }
-  | { type: 'open-setup' }
+  | { type: 'open-setup'; focus?: 'models' }
+  | { type: 'setup-ready' }
   | { type: 'open-terminal' }
   | { type: 'open-commit'; nodeId: string; path: string; commitId: string }
 
@@ -65,6 +66,15 @@ export function readFoxwarmActiveTargetMessage(value: unknown, nonce: string): F
   if (target.kind !== 'session') return undefined
   const sessionId = normalizeSessionId(typeof target.sessionId === 'string' ? target.sessionId : null)
   return sessionId ? { kind: 'session', sessionId } : undefined
+}
+
+export function readFoxwarmFocusModelsMessage(value: unknown, nonce: string): boolean {
+  if (!value || typeof value !== 'object') return false
+  const message = value as { channel?: unknown; version?: unknown; nonce?: unknown; type?: unknown }
+  return message.channel === FOXWARM_EMBED_HOST_CHANNEL
+    && message.version === FOXWARM_EMBED_VERSION
+    && message.nonce === nonce
+    && message.type === 'focus-models'
 }
 
 export function postFoxwarmEmbedHostMessage(nonce: string, payload: FoxwarmEmbedHostPayload): void {

@@ -18,6 +18,23 @@ const knownProviderType = {
   description: 'Provider protocol or virtual routing strategy. Known Foxwarm values are suggested; custom provider types remain valid.',
 }
 
+const effectiveProviderTypeIs = (providerType: string) => ({
+  anyOf: [
+    {
+      required: ['providerType'],
+      properties: { providerType: { const: providerType } },
+    },
+    {
+      required: ['provider'],
+      properties: { provider: { const: providerType } },
+      anyOf: [
+        { not: { required: ['providerType'] } },
+        { properties: { providerType: { enum: ['', null, false] } } },
+      ],
+    },
+  ],
+})
+
 const positiveInteger = {
   type: 'integer',
   minimum: 1,
@@ -26,7 +43,7 @@ const positiveInteger = {
 const modelOverrideProperties = {
   contextLimit: { type: 'integer', minimum: 1, description: 'Context window size in tokens.' },
   extraFields: { type: 'object', additionalProperties: true, description: 'Provider-specific request fields.' },
-  extraHeaders: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] }, description: 'Provider-specific HTTP headers.' },
+  extraHeaders: { type: 'object', additionalProperties: true, description: 'Provider-specific HTTP headers. Values are passed through to the canonical backend loader.' },
 }
 
 const modelItem = {
@@ -72,7 +89,7 @@ const providerEntry = {
   },
   allOf: [
     {
-      if: { properties: { providerType: { const: 'session-hash' } }, required: ['providerType'] },
+      if: effectiveProviderTypeIs('session-hash'),
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
@@ -80,7 +97,7 @@ const providerEntry = {
       },
     },
     {
-      if: { properties: { providerType: { const: 'failover' } }, required: ['providerType'] },
+      if: effectiveProviderTypeIs('failover'),
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
@@ -88,7 +105,7 @@ const providerEntry = {
       },
     },
     {
-      if: { not: { properties: { providerType: { enum: ['session-hash', 'failover'] } }, required: ['providerType'] } },
+      if: { not: { anyOf: [effectiveProviderTypeIs('session-hash'), effectiveProviderTypeIs('failover')] } },
       then: {
         not: { anyOf: ['targets', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
@@ -101,7 +118,6 @@ export const MODELS_CONFIG_SCHEMA = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   title: 'Foxwarm models configuration',
   type: 'object',
-  required: ['default'],
   additionalProperties: true,
   properties: {
     default: { type: 'string', minLength: 1, description: 'Default concrete or virtual model key.' },

@@ -99,6 +99,11 @@ test('model popup refreshes models and opens the singleton Setup models editor',
   const modelButton = await page.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
   const previousRequests = modelListRequestCount
   await modelButton.click()
+  await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
+  await page.keyboard.press('Escape')
+  await page.waitForFunction(() => document.activeElement?.matches('button[aria-haspopup="dialog"]'))
+  await modelButton.click()
+  await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
   const requestDeadline = Date.now() + 5_000
   while (modelListRequestCount <= previousRequests && Date.now() < requestDeadline) {
     await new Promise((resolve) => setTimeout(resolve, 50))

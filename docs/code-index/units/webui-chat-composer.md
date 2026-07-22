@@ -51,6 +51,7 @@ A rich chat composer component for the web UI that handles text input with slash
 - Notifies parent of height changes via `onHeightChange` using ResizeObserver.
 - Calls `onDraftEdited` whenever the draft text changes.
 - Model selector renders as a portal-based fixed popup with outside-click and Escape dismissal.
+- The model selector uses dialog focus semantics: opening moves focus into the popup, and Escape/outside dismissal restores the trigger before normal navigation proceeds.
 - Opening the model popup requests a fresh `/api/models` list through Chat, so long-lived/multi-pane composers do not keep stale choices. Its `Configure models…` footer delegates to App rather than changing location itself.
 - Adds semantic CSS hooks (`foxwarm-chat-composer-form`, `foxwarm-chat-composer-textarea`, `foxwarm-attachment-chip`) used by optional UI style layers such as 550A; these hooks should not change composer behavior or draft/attachment data flow.
 

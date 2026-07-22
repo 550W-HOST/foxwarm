@@ -13,6 +13,7 @@ import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
+import { createLatestRequestGate, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import {
   CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
@@ -226,6 +227,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [asrAvailable, setAsrAvailable] = useState(false)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelBusy, setModelBusy] = useState(false)
+  const [modelsRefreshing, setModelsRefreshing] = useState(false)
   const [modelError, setModelError] = useState<string | null>(null)
   const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
   const [resolvedSessionFilePath, setResolvedSessionFilePath] = useState<string | null>(null)
@@ -264,6 +266,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const userInteractionVersionRef = useRef(0)
   const capturedInteractionVersionRef = useRef(0)
   const resizeRestoreFrameRef = useRef<number | null>(null)
+  const modelRequestGateRef = useRef(createLatestRequestGate())
 
   useEffect(() => {
     setStreamingAssistantDraft(null)
@@ -321,21 +324,24 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [])
 
   const fetchModels = useCallback(async () => {
-    try {
+    await runLatestModelOptionsRequest(modelRequestGateRef.current, async () => {
       const res = await fetch(`${API_BASE_PATH}/models`)
       if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
       const data = await res.json()
-      setModelOptions(Array.isArray(data.models) ? data.models : [])
-      setModelError(null)
-    } catch (error) {
-      console.error('Failed to fetch models:', error)
-      setModelError(error instanceof Error ? error.message : 'Failed to load models')
-      setModelOptions([])
-    }
+      return (Array.isArray(data.models) ? data.models : []) as ModelOption[]
+    }, (state) => {
+      if (state.options) setModelOptions(state.options)
+      if (state.error !== undefined) {
+        setModelError(state.error)
+        if (state.error) console.error('Failed to fetch models:', state.error)
+      }
+      if (state.loading !== undefined) setModelsRefreshing(state.loading)
+    })
   }, [])
 
   useEffect(() => {
     void fetchModels()
+    return () => modelRequestGateRef.current.invalidate()
   }, [fetchModels])
 
   useEffect(() => {
@@ -1571,6 +1577,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         onChangeModel={updateSessionModel}
         onChangeChildModel={updateChildModel}
         onRefreshModels={fetchModels}
+        modelsRefreshing={modelsRefreshing}
         onOpenModelSettings={onOpenModelSettings || (() => {})}
         sendKeyMode={sendKeyMode}
         onHeightChange={handleComposerHeightChange}

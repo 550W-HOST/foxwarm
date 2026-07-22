@@ -1,6 +1,6 @@
 # Unit: WebUI Chat
 
-Files: packages/webui/src/components/Chat.tsx, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionHeader.ts, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs
+Files: packages/webui/src/components/Chat.tsx, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs
 
 ## Purpose
 
@@ -48,7 +48,7 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 - Debug view fetches the session debug file payload and builds/copies current internal JSON.
 - Timeline defaults to a recent subset with explicit full expansion.
 - Horizontal containment remains on the chat/timeline boundaries while tables/output own intentional inner scrolling.
-- Chat fetches model options on mount and again whenever the composer popup opens. The popup's settings action is passed upward to App; Chat does not own Setup routing.
+- Chat fetches model options on mount and again whenever the composer popup opens. A latest-request gate owns options, errors, and loading state, so stale successes/failures/finalizers cannot overwrite a newer refresh. The popup's settings action is passed upward; normal Chat delegates to App and embedded Chat emits the fixed Code-host message.
 
 ## Dependencies
 

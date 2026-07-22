@@ -29,6 +29,7 @@ interface ChatComposerProps {
   childModelDefault?: string | null
   effectiveChildModelKey?: string
   modelBusy?: boolean
+  modelsRefreshing?: boolean
   modelError?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
@@ -79,6 +80,7 @@ function ModelSelector({
   childModelDefault,
   effectiveChildModelKey,
   busy,
+  refreshing,
   error,
   onChangeModel,
   onChangeChildModel,
@@ -92,6 +94,7 @@ function ModelSelector({
   childModelDefault?: string | null
   effectiveChildModelKey?: string
   busy: boolean
+  refreshing: boolean
   error?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
@@ -99,10 +102,11 @@ function ModelSelector({
   onOpenModelSettings: () => void
 }) {
   const [open, setOpen] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({})
   const rootRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const popupRef = useRef<HTMLDivElement | null>(null)
+  const wasOpenRef = useRef(false)
   const currentIsDefault = !sessionModel
   const childFollows = !childModelDefault
 
@@ -110,8 +114,7 @@ function ModelSelector({
     setOpen((current) => {
       const next = !current
       if (next) {
-        setRefreshing(true)
-        void onRefreshModels().finally(() => setRefreshing(false))
+        void onRefreshModels()
       }
       return next
     })
@@ -162,7 +165,10 @@ function ModelSelector({
       setOpen(false)
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setOpen(false)
+      }
     }
     const handleReposition = () => updatePopupPosition()
 
@@ -177,6 +183,21 @@ function ModelSelector({
       window.removeEventListener('scroll', handleReposition, true)
     }
   }, [open, updatePopupPosition])
+
+  useEffect(() => {
+    let focusFrame = 0
+    if (open) {
+      focusFrame = requestAnimationFrame(() => {
+        popupRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+      })
+    } else if (wasOpenRef.current) {
+      buttonRef.current?.focus()
+    }
+    wasOpenRef.current = open
+    return () => {
+      if (focusFrame) cancelAnimationFrame(focusFrame)
+    }
+  }, [open])
 
   const applyCurrentModel = useCallback((model: string | null) => {
     if (busy) return
@@ -256,9 +277,11 @@ function ModelSelector({
 
       {open && createPortal(
         <div
+          ref={popupRef}
           className="z-[1000] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
           style={popupStyle}
           role="dialog"
+          aria-modal="false"
           aria-label="Model selection"
           data-model-selector-popup="true"
         >
@@ -317,6 +340,7 @@ const ChatComposer = memo(function ChatComposer({
   childModelDefault,
   effectiveChildModelKey,
   modelBusy = false,
+  modelsRefreshing = false,
   modelError,
   onChangeModel,
   onChangeChildModel,
@@ -1245,6 +1269,7 @@ const ChatComposer = memo(function ChatComposer({
               childModelDefault={childModelDefault}
               effectiveChildModelKey={effectiveChildModelKey}
               busy={modelBusy}
+              refreshing={modelsRefreshing}
               error={modelError}
               onChangeModel={onChangeModel}
               onChangeChildModel={onChangeChildModel}

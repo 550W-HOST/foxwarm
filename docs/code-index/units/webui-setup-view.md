@@ -35,13 +35,14 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - Weixin start renders image/base64/pairing payloads; wait persists connected token/user/channel fields server-side.
 - Forced mode is closable only after the active models file exists. WebUI itself makes the channel-availability check non-blocking.
 - A positive `focusModelsRequest` scrolls to the Models section and focuses its Monaco editor.
+- If editor assistance cannot load, the Models and app-config surfaces remain controlled plain-text editors, so OOBE can still be completed and canonical backend validation still owns Save.
 
 ## Integration
 
 - Normal App owns singleton `system:setup`; a missing active models file forces this tab and rejects close.
 - The active file is the data-directory models path; diagnostics and writes do not follow the removed generic override. Canonical path contract: [D-config-models-data-path](./src-config.md#d-config-models-data-path).
 - Chat's model popup opens/activates this singleton and requests Models focus through App.
-- Code's Setup custom editor mounts the same non-forced leaf view and lets the extension own close/restore identity.
+- Code's Setup custom editor mounts the same non-forced leaf view, accepts only the nonce-bound fixed Models-focus signal, and lets the extension own close/restore identity.
 - `onSetupChanged` lets App refresh setup/OOBE status after successful model/config/login changes.
 
 ## Function index

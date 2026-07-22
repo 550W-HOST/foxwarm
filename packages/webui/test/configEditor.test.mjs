@@ -1,10 +1,11 @@
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
+import Ajv from 'ajv'
 
 const webuiRoot = path.resolve(new URL('..', import.meta.url).pathname)
 const tempDir = await mkdtemp(path.join(os.tmpdir(), 'foxwarm-config-editor-test-'))
@@ -23,6 +24,7 @@ async function loadModule(entry, outfile) {
 
 const schemas = await loadModule('src/yamlConfigSchemas.ts', 'schemas.cjs')
 const completions = await loadModule('src/modelsYamlCompletions.ts', 'completions.cjs')
+const validateModelsSchema = new Ajv({ allErrors: true, strict: false }).compile(schemas.MODELS_CONFIG_SCHEMA)
 
 after(async () => {
   await rm(tempDir, { recursive: true, force: true })
@@ -36,6 +38,64 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties.additionalProperties, true)
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties.additionalProperties, true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.paths.properties, 'modelsConfigPath'), false)
+  assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
+})
+
+test('models schema deliberately accepts current, legacy, custom, and backend-tolerant fixtures', () => {
+  const fixtures = [
+    {
+      providers: {
+        current: {
+          providerType: 'openai-completions',
+          models: ['model-a'],
+          extraHeaders: { nested: { supportedByLoader: true }, numeric: 42 },
+          customExtension: { enabled: true },
+        },
+      },
+    },
+    {
+      default: 'sticky',
+      models: {
+        legacy: { provider: 'anthropic', model: 'model-a' },
+        sticky: { provider: 'session-hash', targets: ['legacy'] },
+      },
+    },
+    {
+      default: 'custom/model-a',
+      providers: {
+        custom: { providerType: 'company-protocol', baseUrl: 'https://example.invalid', models: ['model-a'] },
+      },
+    },
+    {
+      providers: {
+        precedence: { providerType: 'openai-completions', provider: 'failover', models: ['model-a'] },
+      },
+    },
+  ]
+  for (const fixture of fixtures) {
+    assert.equal(validateModelsSchema(fixture), true, JSON.stringify(validateModelsSchema.errors))
+  }
+})
+
+test('legacy virtual providers receive the same target and forbidden-field diagnostics', () => {
+  const invalidFixtures = [
+    { default: 'missing-providers' },
+    { providers: { sticky: { provider: 'session-hash' } } },
+    { providers: { route: { provider: 'failover', targets: ['one'] } } },
+    { providers: { route: { provider: 'failover', targets: ['one', 'two'], baseUrl: 'https://forbidden.invalid' } } },
+  ]
+  for (const fixture of invalidFixtures) {
+    assert.equal(validateModelsSchema(fixture), false)
+  }
+})
+
+test('Monaco stays on the worker-compatible pinned release used by the real-worker E2E', async () => {
+  // Compatibility probe: install monaco-editor@0.55.1, then run
+  // `npm run test:setup-models-e2e`. The real marker test times out because
+  // monaco-yaml@5.5.1 / monaco-worker-manager@2.0.1 falls back to the generic
+  // editor worker, which reports a missing `doValidation` foreign method.
+  const packageJson = JSON.parse(await readFile(path.join(webuiRoot, 'node_modules/monaco-editor/package.json'), 'utf8'))
+  assert.equal(packageJson.version, '0.54.0')
 })
 
 test('models schema suggests known provider types while accepting custom strings and documents legacy readers', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { loadYamlMonacoSupport } from '../yamlMonacoSupport'
 
 interface SimpleCodeEditorProps {
@@ -35,6 +35,8 @@ export default function SimpleCodeEditor({
   const valueRef = useRef(value)
   const placeholderRef = useRef(placeholder)
   const focusRequestRef = useRef(focusRequest)
+  const fallbackRef = useRef<HTMLTextAreaElement | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   onChangeRef.current = onChange
   valueRef.current = value
@@ -49,7 +51,15 @@ export default function SimpleCodeEditor({
     let activeModelUri = ''
 
     const start = async () => {
-      const support = await loadYamlMonacoSupport()
+      let support
+      try {
+        support = await loadYamlMonacoSupport()
+      } catch (error) {
+        if (!disposed) {
+          setLoadError(error instanceof Error ? error.message : String(error))
+        }
+        return
+      }
       if (disposed || !containerRef.current) return
       const monaco = support.monaco
       const uri = modelUri ? monaco.Uri.parse(modelUri) : undefined
@@ -141,8 +151,41 @@ export default function SimpleCodeEditor({
   }, [value])
 
   useEffect(() => {
-    if (focusRequest > 0) editorRef.current?.focus()
-  }, [focusRequest])
+    if (focusRequest > 0) {
+      if (editorRef.current) editorRef.current.focus()
+      else fallbackRef.current?.focus()
+    }
+  }, [focusRequest, loadError])
+
+  if (loadError) {
+    return (
+      <div
+        ref={wrapperRef}
+        className="flex overflow-hidden border border-amber-300 bg-white dark:border-amber-700 dark:bg-gray-950"
+        style={{ height: typeof height === 'number' ? `${height}px` : height }}
+        data-monaco-model-uri={modelUri}
+        data-editor-ready="true"
+        data-editor-fallback="true"
+        data-marker-count="0"
+      >
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+            Editor assistance is unavailable. Plain-text editing and backend validation still work.
+          </div>
+          <textarea
+            ref={fallbackRef}
+            value={value}
+            onChange={(event) => onChangeRef.current(event.target.value)}
+            readOnly={readOnly}
+            placeholder={placeholder}
+            aria-label={ariaLabel}
+            className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-[13px] leading-5 text-gray-900 outline-none dark:text-gray-100"
+            spellCheck={false}
+          />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div

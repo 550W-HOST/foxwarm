@@ -160,10 +160,32 @@ test('fixed bridges open, restore, activate, and explicitly close session/Agents
   assert.deepEqual(sidebarWebview.posted.at(-1).target, { kind: 'setup' });
   const setupProvider = customEditorProviders.get('foxwarm-webui.setupEditor');
   const setupDocument = setupProvider.openCustomDocument(open.args[0]);
-  const setupPanel = { title: '', webview: mockWebview() };
+  let disposeSetup;
+  const setupPanel = {
+    title: '',
+    webview: mockWebview(),
+    onDidDispose(handler) { disposeSetup = handler; return disposable(); },
+  };
   setupProvider.resolveCustomEditor(setupDocument, setupPanel);
   assert.equal(setupPanel.title, 'Setup');
   assert.match(setupPanel.webview.html, /foxwarmEmbed=setup/);
+  assert.match(setupPanel.webview.html, /focus-models/);
+
+  await chatWebview.receive({ type: 'open-setup', focus: 'models' });
+  await tick();
+  open = executed.filter(item => item.id === 'vscode.openWith').at(-1);
+  assert.equal(open.args[1], 'foxwarm-webui.setupEditor');
+  assert.equal(setupPanel.webview.posted.length, 0);
+  await setupPanel.webview.receive({ type: 'setup-ready' });
+  await tick();
+  const focusMessage = setupPanel.webview.posted.at(-1);
+  assert.match(focusMessage.nonce, /^[0-9a-f]{36}$/);
+  assert.deepEqual({ ...focusMessage, nonce: '<nonce>' }, {
+    channel: 'foxwarm-webui-host',
+    version: 1,
+    nonce: '<nonce>',
+    type: 'focus-models',
+  });
 
   assert.deepEqual(context.globalState.values.get('foxwarm-webui.openTabs.v2'), [
     { kind: 'session', sessionId: 'agent/task', title: 'Task title' },
@@ -195,6 +217,7 @@ test('fixed bridges open, restore, activate, and explicitly close session/Agents
   assert.equal(executed.length, count);
 
   tabGroupChangeHandler();
+  disposeSetup();
   disposeSidebar();
 });
 

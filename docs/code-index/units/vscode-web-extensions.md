@@ -48,6 +48,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Embeds strict leaf WebUI roots (`foxwarmEmbed=sidebar|chat|agents|setup`) through exact-source and random-nonce checked fixed messages.
 - Deterministic target URIs deduplicate editors. Generalized extension global state restores open targets and reads the older session-only key once.
 - Tab-group events publish the active Foxwarm target; ordinary editors clear sidebar selection.
+- Embedded Chat can request `open-setup` with the fixed `focus: models` field. The controller activates the stable Setup editor, waits for its nonce-bound ready message, and forwards one fixed Models-focus signal; arbitrary focus targets or commands are not bridged.
 - Sidebar terminal actions invoke the Code terminal extension rather than nesting a WebUI terminal.
 - Same-origin cookie auth is current. Separate isolated webview origins do not yet have scoped credential exchange.
 

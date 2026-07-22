@@ -98,30 +98,23 @@ function respondJson(request, body, status = 200) {
   })
 }
 
-before(async () => {
-  vite = spawn(path.join(webuiRoot, 'node_modules/.bin/vite'), ['--host', '127.0.0.1', '--port', String(port)], {
-    cwd: webuiRoot,
-    stdio: ['ignore', 'ignore', 'inherit'],
-  })
-  await waitForServer()
-
-  browser = await puppeteer.launch({
-    executablePath: chromiumPath,
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  })
-  page = await browser.newPage()
-  await page.setBypassServiceWorker(true)
-  await page.setRequestInterception(true)
-  page.on('request', (request) => {
+async function attachRequestMocks(targetPage, options = {}) {
+  await targetPage.setRequestInterception(true)
+  targetPage.on('request', (request) => {
     const url = new URL(request.url())
     requestPaths.push(url.pathname)
+    if (options.blockEditorChunks && /(monaco-editor|monaco-yaml|yaml\.worker|editor\.worker)/.test(url.pathname)) {
+      void request.abort('failed')
+      return
+    }
     if (!url.pathname.includes('/api/')) {
       void request.continue()
       return
     }
     if (url.pathname.endsWith('/api/setup/status')) {
-      void respondJson(request, statusPayload)
+      void respondJson(request, options.oobe
+        ? { ...statusPayload, oobe: true, models: { ...statusPayload.models, exists: false, rawYaml: '' } }
+        : statusPayload)
       return
     }
     if (url.pathname.endsWith('/api/models')) {
@@ -165,6 +158,23 @@ before(async () => {
     }
     void respondJson(request, {})
   })
+}
+
+before(async () => {
+  vite = spawn(path.join(webuiRoot, 'node_modules/.bin/vite'), ['--host', '127.0.0.1', '--port', String(port)], {
+    cwd: webuiRoot,
+    stdio: ['ignore', 'ignore', 'inherit'],
+  })
+  await waitForServer()
+
+  browser = await puppeteer.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  })
+  page = await browser.newPage()
+  await page.setBypassServiceWorker(true)
+  await attachRequestMocks(page)
 
   await page.goto(`${baseUrl}/preview/#setup`, { waitUntil: 'networkidle2' })
   await page.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
@@ -211,4 +221,73 @@ test('backend validation error remains final authority and is shown after Monaco
   await page.waitForFunction(() => document.body.textContent?.includes('canonical backend rejected the models config'))
   assert.deepEqual(savedRequest, { yaml: statusPayload.models.rawYaml })
   saveError = null
+})
+
+test('OOBE remains editable and savable when Monaco or YAML chunks cannot load', async () => {
+  const degradedPage = await browser.newPage()
+  await degradedPage.setCacheEnabled(false)
+  await attachRequestMocks(degradedPage, { blockEditorChunks: true, oobe: true })
+  try {
+    await degradedPage.goto(`${baseUrl}/degraded/#setup`, { waitUntil: 'networkidle2' })
+    const fallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-fallback="true"] textarea', { timeout: 15_000 })
+    assert.ok((await degradedPage.$eval('body', (body) => body.textContent || '')).includes('Plain-text editing and backend validation still work.'))
+    const yaml = 'default: local\nproviders:\n  local:\n    providerType: openai-completions\n    models: [model-a]\n'
+    await fallback.evaluate((textarea, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      setter?.call(textarea, value)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    }, yaml)
+    await degradedPage.click('button::-p-text(Save models)')
+    await degradedPage.waitForFunction(() => document.body.textContent?.includes('Models saved to'))
+    assert.deepEqual(savedRequest, { yaml })
+  } finally {
+    await degradedPage.close()
+  }
+})
+
+test('embedded Chat requests focused Models Setup and embedded Setup accepts the nonce-bound focus signal', async () => {
+  const hostPage = await browser.newPage()
+  await attachRequestMocks(hostPage)
+  const nonce = '0123456789abcdef0123456789abcdef'
+  try {
+    await hostPage.goto(`${baseUrl}/preview/host`, { waitUntil: 'networkidle2' })
+    await hostPage.evaluate(() => {
+      document.body.replaceChildren()
+      window.embedMessages = []
+      window.addEventListener('message', (event) => window.embedMessages.push(event.data))
+    })
+    await hostPage.evaluate(({ src }) => {
+      const iframe = document.createElement('iframe')
+      iframe.id = 'embedded-chat'
+      iframe.src = src
+      document.body.appendChild(iframe)
+    }, { src: `${baseUrl}/preview/?foxwarmEmbed=chat&foxwarmEmbedNonce=${nonce}&sessionId=embedded%2Fchat` })
+    const chatFrame = await hostPage.waitForFrame((frame) => frame.url().includes('foxwarmEmbed=chat'))
+    const modelButton = await chatFrame.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    await modelButton.click()
+    const configure = await chatFrame.waitForSelector('button::-p-text(Configure models…)', { timeout: 15_000 })
+    await configure.click()
+    await hostPage.waitForFunction(() => window.embedMessages.some((message) => message?.type === 'open-setup'))
+    const openSetupMessage = await hostPage.evaluate(() => window.embedMessages.find((message) => message?.type === 'open-setup'))
+    assert.deepEqual(openSetupMessage, {
+      channel: 'foxwarm-webui-embed', version: 1, nonce, type: 'open-setup', focus: 'models',
+    })
+
+    await hostPage.evaluate(({ src }) => {
+      document.getElementById('embedded-chat')?.remove()
+      const iframe = document.createElement('iframe')
+      iframe.id = 'embedded-setup'
+      iframe.src = src
+      document.body.appendChild(iframe)
+    }, { src: `${baseUrl}/preview/?foxwarmEmbed=setup&foxwarmEmbedNonce=${nonce}` })
+    const setupFrame = await hostPage.waitForFrame((frame) => frame.url().includes('foxwarmEmbed=setup'))
+    await setupFrame.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
+    await hostPage.evaluate(({ nonce: bridgeNonce }) => {
+      const iframe = document.getElementById('embedded-setup')
+      iframe?.contentWindow?.postMessage({ channel: 'foxwarm-webui-host', version: 1, nonce: bridgeNonce, type: 'focus-models' }, '*')
+    }, { nonce })
+    await setupFrame.waitForFunction(() => !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]'), { timeout: 15_000 })
+  } finally {
+    await hostPage.close()
+  }
 })
