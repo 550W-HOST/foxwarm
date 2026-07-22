@@ -20,7 +20,7 @@ Canonical cross-module semantics: [model routing](../threads/model-routing.md).
 
 ## State and behavior
 
-Active health is keyed by virtual key, resolved configuration fingerprint/generation, and canonical concrete target. Request contexts retain their selection snapshot, but an active-generation guard ignores late outcomes from stale configurations. Mutations are synchronous, so concurrent outcomes follow JavaScript completion order.
+Active health is keyed by virtual key, resolved configuration fingerprint/generation, and canonical concrete target. Request contexts retain and mutate their selection snapshot after detachment; the generation guard prevents those local outcomes from replacing/resetting newer active state. Mutations are synchronous, so concurrent outcomes follow JavaScript completion order.
 
 `session-hash` has no health state. `failover` never cools its configured last target: a countable last-target failure is the exhaustion boundary owned by the LLM outer request.
 

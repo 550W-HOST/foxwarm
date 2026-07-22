@@ -1489,10 +1489,19 @@ function isModelNotFoundProviderError(body: unknown): boolean {
     if (structuredMatch) return true;
 
     const text = strings.join('\n');
-    return /\bno\s+such\s+model\b/i.test(text)
+    const unknownModel = strings.some(value => {
+        const match = /\bunknown\s+model\b/i.exec(value);
+        if (!match) return false;
+        const suffix = value.slice(match.index + match[0].length).trim();
+        if (!suffix || /^[.:;,"'`]/.test(suffix)) return true;
+        const token = suffix.split(/\s|[,;]/, 1)[0].replace(/[.!?]+$/, '');
+        return /\d/.test(token) || /[/_-]/.test(token) || /\.[A-Za-z0-9]/.test(token);
+    });
+    return /\bmodel(?:[\s_-]+)not(?:[\s_-]+)found\b/i.test(text)
+        || /\bno\s+such\s+model\b/i.test(text)
         || /\b(?:the\s+|requested\s+)?model\s+(?:"[^"]{1,200}"|'[^']{1,200}'|`[^`]{1,200}`|[^\s,;:]{1,200})\s+(?:was\s+)?not\s+found\b/i.test(text)
         || /\b(?:the\s+|requested\s+)?model\s+(?:"[^"]{1,200}"|'[^']{1,200}'|`[^`]{1,200}`|[^\s,;:]{1,200})\s+does\s+not\s+exist\b/i.test(text)
-        || /\bunknown\s+model\b/i.test(text);
+        || unknownModel;
 }
 
 export function classifyHttpFailure(statusCode: number, body: any): { retryable: boolean; countable: boolean } {

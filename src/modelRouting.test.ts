@@ -66,7 +66,7 @@ test('failover cools a target at threshold, resets its streak after expiry, and 
   assert.equal(recordVirtualTargetFailure(request, first).consecutiveFailures, 1);
 });
 
-test('last-target failure clears route state, invalidates shared requests, and next request starts at A', () => {
+test('last-target failure clears active route state while detached concurrent requests remain terminal for themselves', () => {
   const entry = failoverEntry();
   const request = beginVirtualRoutingRequest('fallback', entry);
   const concurrentRequest = beginVirtualRoutingRequest('fallback', entry);
@@ -74,14 +74,21 @@ test('last-target failure clears route state, invalidates shared requests, and n
   recordVirtualTargetFailure(request, first);
   recordVirtualTargetFailure(request, first);
   const last = selectVirtualTarget(request, 'cache');
+  const concurrentLast = selectVirtualTarget(concurrentRequest, 'cache');
   assert.equal(last.targetKey, 'b/model');
+  assert.equal(concurrentLast.targetKey, 'b/model');
   assert.deepEqual(recordVirtualTargetFailure(request, last), {
     terminal: true,
     enteredCooldown: false,
     consecutiveFailures: 1,
   });
   assert.deepEqual(getVirtualRoutingStateForTests('fallback', entry), {});
-  assert.equal(recordVirtualTargetFailure(concurrentRequest, first).consecutiveFailures, 0);
+  assert.deepEqual(recordVirtualTargetFailure(concurrentRequest, concurrentLast), {
+    terminal: true,
+    enteredCooldown: false,
+    consecutiveFailures: 1,
+  }, 'a context detached by another final reset still terminates its own request');
+  assert.deepEqual(getVirtualRoutingStateForTests('fallback', entry), {});
   const nextRequest = beginVirtualRoutingRequest('fallback', entry);
   assert.equal(selectVirtualTarget(nextRequest, 'cache').targetKey, 'a/model');
 });
@@ -101,13 +108,14 @@ test('health is isolated by virtual key and config fingerprint', () => {
   assert.equal(selectVirtualTarget(changedRequest, 'cache').targetKey, 'a/model');
   assert.deepEqual(recordVirtualTargetFailure(firstRequest, first), {
     terminal: false,
-    enteredCooldown: false,
-    consecutiveFailures: 0,
-  }, 'an in-flight completion from a stale config must not affect the active route');
+    enteredCooldown: true,
+    consecutiveFailures: 3,
+  }, 'an in-flight completion mutates its detached request snapshot');
+  assert.deepEqual(getVirtualRoutingStateForTests('fallback', changedConfig), {}, 'stale local outcomes must not affect the active route');
   assert.equal(selectVirtualTarget(changedRequest, 'cache').targetKey, 'a/model');
 });
 
-test('old retries cannot reactivate an obsolete fingerprint or disturb the new generation', () => {
+test('old retries keep local failover semantics without reactivating or disturbing the new generation', () => {
   const oldConfig = failoverEntry('fp-old');
   const newConfig = failoverEntry('fp-new');
 
@@ -124,10 +132,21 @@ test('old retries cannot reactivate an obsolete fingerprint or disturb the new g
 
   const oldRetry = selectVirtualTarget(oldRequest, 'cache');
   assert.equal(oldRetry.targetKey, 'a/model', 'retry uses the old request snapshot without activating it');
-  assert.equal(recordVirtualTargetFailure(oldRequest, oldRetry).consecutiveFailures, 0);
+  assert.deepEqual(recordVirtualTargetFailure(oldRequest, oldRetry), {
+    terminal: false,
+    enteredCooldown: true,
+    consecutiveFailures: 2,
+  });
+  const oldLast = selectVirtualTarget(oldRequest, 'cache');
+  assert.equal(oldLast.targetKey, 'b/model', 'stale request still reaches its own next target');
+  assert.deepEqual(recordVirtualTargetFailure(oldRequest, oldLast), {
+    terminal: true,
+    enteredCooldown: false,
+    consecutiveFailures: 1,
+  }, 'stale final-target failure remains terminal for that request');
   assert.deepEqual(getVirtualRoutingStateForTests('fallback', newConfig), {
     'a/model': { consecutiveFailures: 1, cooldownUntil: 0 },
-  }, 'stale selection and completion leave the new state intact');
+  }, 'stale local failover and terminal reset leave the new state intact');
 
   assert.equal(recordVirtualTargetFailure(newRequest, newFirst).enteredCooldown, true);
   assert.equal(selectVirtualTarget(newRequest, 'cache').targetKey, 'b/model');
@@ -135,6 +154,24 @@ test('old retries cannot reactivate an obsolete fingerprint or disturb the new g
   const rolledBackRequest = beginVirtualRoutingRequest('fallback', oldConfig);
   assert.equal(selectVirtualTarget(rolledBackRequest, 'cache').targetKey, 'a/model');
   assert.deepEqual(getVirtualRoutingStateForTests('fallback', oldConfig), {}, 'an actual rollback request activates a fresh old fingerprint');
+});
+
+test('stale success resets only the detached request target', () => {
+  const oldConfig = failoverEntry('fp-old');
+  const newConfig = failoverEntry('fp-new');
+  const oldRequest = beginVirtualRoutingRequest('fallback', oldConfig);
+  const oldFirst = selectVirtualTarget(oldRequest, 'cache');
+  recordVirtualTargetFailure(oldRequest, oldFirst);
+
+  const newRequest = beginVirtualRoutingRequest('fallback', newConfig);
+  const newFirst = selectVirtualTarget(newRequest, 'cache');
+  recordVirtualTargetFailure(newRequest, newFirst);
+
+  recordVirtualTargetSuccess(oldRequest, oldFirst.targetKey);
+  assert.equal(recordVirtualTargetFailure(oldRequest, oldFirst).consecutiveFailures, 1);
+  assert.deepEqual(getVirtualRoutingStateForTests('fallback', newConfig), {
+    'a/model': { consecutiveFailures: 1, cooldownUntil: 0 },
+  });
 });
 
 test('completion-order outcomes define consecutive failures', () => {

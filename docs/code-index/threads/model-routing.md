@@ -45,7 +45,7 @@ A low-level request without a usable key receives one request-scoped random key;
 
 ## Failover health
 
-Failover health is process memory, scoped by virtual model key, configuration fingerprint, and canonical concrete target. It is not session state and is not persisted. Restart and configuration changes reset the active route state. Each independent outer request captures the active fingerprint generation once; retries continue against that request snapshot but cannot reactivate it after another configuration becomes active. Stale outcomes are ignored, while a later independent request that deliberately rolls back configuration activates a fresh generation.
+Failover health is process memory, scoped by virtual model key, configuration fingerprint, and canonical concrete target. It is not session state and is not persisted. Restart and configuration changes reset the active route state. Each independent outer request captures the active fingerprint generation once; retries and outcomes continue against that request's local snapshot after another configuration becomes active, including reaching and terminating on its own final target. Detached requests cannot publish into the newer active state, while a later independent request that deliberately rolls back configuration activates a fresh generation.
 
 Selection chooses the first configured target that is not cooling down. Outcomes are applied synchronously in completion order:
 
@@ -114,7 +114,7 @@ There is one outer LLM attempt loop, with six total attempts by default. Each vi
 
 ### D-model-routing-failover-health
 
-Failover health is process-local, configuration-fingerprinted, generation-scoped, and completion-ordered. Activation happens once per independent outer request; stale retries cannot reactivate or mutate a newer configuration. Success resets one target, cooldown expiry starts a fresh streak, and final-target failure ends the current request and clears state for the next request.
+Failover health is process-local, configuration-fingerprinted, generation-scoped, and completion-ordered. Activation happens once per independent outer request; detached retries retain local failover semantics but cannot reactivate or mutate a newer configuration. Success resets one target, cooldown expiry starts a fresh streak, and final-target failure always ends that request while only an active generation resets global route state.
 
 ### D-model-routing-usable-response
 

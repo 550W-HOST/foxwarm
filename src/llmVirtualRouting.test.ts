@@ -125,6 +125,10 @@ test('HTTP failure classification is explicit for every configured category', ()
     { error: { message: 'The model gpt-9-preview does not exist or you do not have access to it.' } },
     { message: 'Requested model vendor/model-x was not found' },
     'No such model: model-x',
+    'model not found',
+    'MODEL_NOT_FOUND',
+    'model-not-found',
+    'Unknown model: model-x',
   ]) {
     assert.deepEqual(classifyHttpFailure(400, body), { retryable: true, countable: true });
   }
@@ -133,6 +137,8 @@ test('HTTP failure classification is explicit for every configured category', ()
     { error: { type: 'not_found_error', message: 'Requested resource was not found.' } },
     { message: 'The model response format is invalid.' },
     { message: 'Invalid model input format.' },
+    { message: 'unknown model format' },
+    { message: 'Unknown model parameter' },
     'No such deployment exists',
   ]) {
     assert.deepEqual(classifyHttpFailure(400, body), { retryable: false, countable: false });

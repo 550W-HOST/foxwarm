@@ -158,7 +158,7 @@ export function selectVirtualTarget(
 }
 
 export function recordVirtualTargetSuccess(request: VirtualRoutingRequest, targetKey: string): void {
-  if (request.routing.strategy !== 'failover' || !isActiveRequest(request)) return;
+  if (request.routing.strategy !== 'failover') return;
   request.health.delete(targetKey);
 }
 
@@ -167,19 +167,23 @@ export function recordVirtualTargetFailure(
   selection: VirtualTargetSelection,
   now: number = clock(),
 ): VirtualFailureOutcome {
-  if (request.routing.strategy !== 'failover' || !isActiveRequest(request)) {
+  if (request.routing.strategy !== 'failover') {
     return { terminal: false, enteredCooldown: false, consecutiveFailures: 0 };
   }
 
   const routing = request.routing;
   if (selection.isLastTarget) {
-    // Advance the generation as well as clearing health so later completions
-    // from any request that shared the exhausted generation cannot repopulate it.
-    activeFailoverRoutes.set(request.virtualKey, {
-      fingerprint: routing.fingerprint,
-      generation: nextGeneration++,
-      health: new Map<string, TargetHealthState>(),
-    });
+    const active = isActiveRequest(request);
+    request.health.clear();
+    if (active) {
+      // Advance the global generation so later completions from requests that
+      // shared the exhausted generation publish only to their detached maps.
+      activeFailoverRoutes.set(request.virtualKey, {
+        fingerprint: routing.fingerprint,
+        generation: nextGeneration++,
+        health: new Map<string, TargetHealthState>(),
+      });
+    }
     return { terminal: true, enteredCooldown: false, consecutiveFailures: 1 };
   }
 
