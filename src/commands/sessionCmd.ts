@@ -100,7 +100,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
     case 'new': {
       const { session: newSession } = await sessionManager.createEmptySession()
       sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
-      const newSessionId = sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), newSession.id)
+      const newSessionId = await sessionManager.attachChannelDurably(getChannelId(ctx), getConversationId(ctx), newSession.id)
       ctx.reply(`✅ Created and attached to new session \`${newSessionId}\``)
       break
     }
@@ -155,7 +155,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         })
 
         sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
-        sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), result.sessionId)
+        await sessionManager.attachChannelDurably(getChannelId(ctx), getConversationId(ctx), result.sessionId)
         const createdSession = await sessionManager.getSession(result.sessionId)
         const { currentKey } = resolveModelConfig(createdSession.model)
         ctx.reply(`✅ Created session \`${result.sessionId}\` under agent \`${agentName}\` and attached current channel.\nModel: \`${currentKey}\``)
@@ -216,7 +216,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
       const suffix = subArgs[0]
       const forkedSessionId = await sessionManager.forkSession(sessionId, suffix)
       sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
-      sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), forkedSessionId)
+      await sessionManager.attachChannelDurably(getChannelId(ctx), getConversationId(ctx), forkedSessionId)
       ctx.reply(`✅ Forked child session \`${sessionId}\` → \`${forkedSessionId}\`\nMessages: ${session.history.length}`)
       break
     }

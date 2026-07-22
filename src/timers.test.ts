@@ -8,14 +8,17 @@ import {
   createTimer,
   createTimersStore,
   deleteTimer,
+  fireTimerForTests,
   initializeTimers,
   isCronTimer,
   listTimers,
   resetTimersForTests,
+  setTriggeredSessionNameFactoryForTests,
   setTimersStoreForTests,
   updateTimer,
 } from './timers';
 import * as sessionManager from './sessionManager';
+import { getAgentDir } from './config';
 import {
   tool_create_timer,
   tool_delete_timer,
@@ -110,6 +113,51 @@ test('buildTimerTriggeredMessage wraps timer content in foxwarm-message metadata
   assert.match(message, new RegExp(`localTime="[^"]*${offset.replace('+', '\\+')}"`));
   assert.match(message, /\nrun nightly sync\n<\/foxwarm-message>$/);
   assert.doesNotMatch(message, /Asia\/Shanghai/);
+});
+
+test('new-session timer allocation skips an archived generated id', async () => {
+  await withTempDir(async (dirPath) => {
+    setTimersStoreForTests(createTimersStore(path.join(dirPath, 'timers.json')));
+    await fs.ensureDir(getAgentDir('main'));
+    const ownerId = `timer_owner_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const archivedName = `timer_archived_${Date.now()}`;
+    const replacementName = `${archivedName}_2`;
+
+    try {
+      await sessionManager.createEmptySession(ownerId);
+      const archived = await sessionManager.createEmptySession(archivedName);
+      await sessionManager.appendSessionMessage(archived.session, {
+        role: 'user',
+        parts: [{ text: 'old timer generation' }],
+        __meta: { timestamp: Date.now() },
+      });
+      await sessionManager.deleteSession(archivedName);
+
+      let generated = 0;
+      setTriggeredSessionNameFactoryForTests(() => generated++ === 0 ? archivedName : replacementName);
+      const timer = await createTimer({
+        sessionId: ownerId,
+        afterSeconds: 60,
+        message: 'timer allocation payload',
+        newSession: true,
+        sessionPrefix: 'timer',
+      });
+      await fireTimerForTests(timer.id);
+
+      assert.equal(await sessionManager.getExistingSession(archivedName), null);
+      const replacement = await sessionManager.getExistingSession(replacementName);
+      assert.ok(replacement);
+      assert.equal(replacement.queue.length, 1);
+    } finally {
+      setTriggeredSessionNameFactoryForTests();
+      for (const timer of listTimers(ownerId)) {
+        await deleteTimer(timer.id, ownerId).catch(() => false);
+      }
+      for (const id of [ownerId, archivedName, replacementName]) {
+        if (sessionManager.getAllSessions().has(id)) await sessionManager.deleteSession(id).catch(() => false);
+      }
+    }
+  });
 });
 
 test('updateTimer updates message and reschedules between one-shot and cron timers', async () => {

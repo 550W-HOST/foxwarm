@@ -93,13 +93,17 @@ function normalizeChannelConfig(config: ChannelConfig): ChannelConfig {
   return normalized;
 }
 
+async function persistChannelsCritical(): Promise<void> {
+  const data: any = { channels: {} };
+  for (const [channelKey, config] of channelAttachments.entries()) {
+    data.channels[channelKey] = normalizeChannelConfig(config);
+  }
+  await channelsStore.write(data);
+}
+
 async function persistChannels(): Promise<void> {
   try {
-    const data: any = { channels: {} };
-    for (const [channelKey, config] of channelAttachments.entries()) {
-      data.channels[channelKey] = normalizeChannelConfig(config);
-    }
-    await channelsStore.write(data);
+    await persistChannelsCritical();
   } catch (e) {
     logger.error(e, 'Failed to save channels');
   }
@@ -132,6 +136,10 @@ export async function saveChannels(): Promise<void> {
   await persistChannels();
 }
 
+export async function saveChannelsCritical(): Promise<void> {
+  await persistChannelsCritical();
+}
+
 export async function importLegacyChannelAttachments(attachments: Record<string, string | ChannelConfig>): Promise<void> {
   for (const [channelKey, value] of Object.entries(attachments)) {
     if (typeof value === 'string') {
@@ -148,6 +156,21 @@ export function attachChannel(channelId: string, conversationId: string, session
   const channelKey = makeChannelKey(channelId, conversationId);
   channelAttachments.set(channelKey, normalizeChannelConfig({ sessionId, ...(configUpdates || {}) } as ChannelConfig));
   void persistChannels();
+  logger.info({ channelId, conversationId, sessionId, configUpdates }, 'Channel attached to session');
+  return sessionId;
+}
+
+export async function attachChannelDurably(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<ChannelConfig>): Promise<string> {
+  const channelKey = makeChannelKey(channelId, conversationId);
+  const previous = channelAttachments.get(channelKey);
+  channelAttachments.set(channelKey, normalizeChannelConfig({ sessionId, ...(configUpdates || {}) } as ChannelConfig));
+  try {
+    await persistChannelsCritical();
+  } catch (error) {
+    if (previous) channelAttachments.set(channelKey, previous);
+    else channelAttachments.delete(channelKey);
+    throw error;
+  }
   logger.info({ channelId, conversationId, sessionId, configUpdates }, 'Channel attached to session');
   return sessionId;
 }

@@ -18,7 +18,7 @@ import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, getNextSessionMessageSeq } from './session/archive';
 import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
-import { ensureSessionBranch, hasArchivedSessionId } from './session/archiveStore';
+import { ensureSessionBranch, hasArchivedSessionId, rollbackUncommittedSessionArchive } from './session/archiveStore';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
@@ -43,6 +43,44 @@ function systemPart(system: string): MessagePart {
 }
 
 const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
+
+let sessionIdentityLockTail: Promise<void> = Promise.resolve();
+const channelSessionCreationTails = new Map<string, Promise<void>>();
+
+async function withSessionIdentityLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = sessionIdentityLockTail;
+  let release!: () => void;
+  sessionIdentityLockTail = new Promise<void>(resolve => {
+    release = resolve;
+  });
+
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
+async function withChannelSessionCreationLock<T>(channelId: string, conversationId: string, operation: () => Promise<T>): Promise<T> {
+  const key = JSON.stringify([channelId, conversationId]);
+  const previous = channelSessionCreationTails.get(key) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  channelSessionCreationTails.set(key, current);
+
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (channelSessionCreationTails.get(key) === current) {
+      channelSessionCreationTails.delete(key);
+    }
+  }
+}
 
 export interface SessionWaitState {
   id: string;
@@ -319,7 +357,10 @@ async function hasPersistedLiveSessionId(sessionId: string): Promise<boolean> {
 async function getSessionIdReservation(sessionId: string): Promise<SessionIdReservation> {
   const resolvedSessionId = await resolveSessionId(sessionId);
   if (resolvedSessionId !== sessionId) {
-    return 'live';
+    if (await hasPersistedLiveSessionId(resolvedSessionId)) {
+      return 'live';
+    }
+    return await hasArchivedSessionId(sessionId) ? 'archived' : null;
   }
 
   if (await hasPersistedLiveSessionId(sessionId)) {
@@ -352,7 +393,7 @@ async function allocateGeneratedSessionId(): Promise<string> {
   }
 }
 
-export async function generateAvailableSessionName(agentName: string = 'main'): Promise<string> {
+async function generateAvailableSessionName(agentName: string = 'main'): Promise<string> {
   while (true) {
     const sessionName = generateSessionId();
     const sessionId = agentName === 'main' ? sessionName : `${agentName}/${sessionName}`;
@@ -471,6 +512,10 @@ async function resolveSessionId(sessionId: string): Promise<string> {
 
 // Check if a session exists in memory or on disk (metadata)
 export async function getExistingSession(sessionId: string): Promise<Session | null> {
+  return withSessionIdentityLock(() => getExistingSessionUnlocked(sessionId));
+}
+
+async function getExistingSessionUnlocked(sessionId: string): Promise<Session | null> {
   // Resolve alias first
   const realId = await resolveSessionId(sessionId);
   
@@ -480,14 +525,14 @@ export async function getExistingSession(sessionId: string): Promise<Session | n
     // with an empty history array. Delegate to getSession() so callers that
     // later save or inspect the session do not accidentally operate on an
     // unloaded placeholder and overwrite the on-disk history.
-    return await getSession(realId);
+    return await getSessionUnlocked(realId);
   }
 
   // Check if session history file exists
   const historyFile = path.join(SESSIONS_DIR, `${realId}.json`);
   if (await fs.pathExists(historyFile)) {
     // Load metadata + history via getSession
-    return await getSession(realId);
+    return await getSessionUnlocked(realId);
   }
 
   // Check metadata store
@@ -495,7 +540,7 @@ export async function getExistingSession(sessionId: string): Promise<Session | n
     const data = await fs.readJson(SESSIONS_FILE);
     const sessionsData = data.sessions || data;
     if (sessionsData[realId]) {
-      return await getSession(realId);
+      return await getSessionUnlocked(realId);
     }
   }
 
@@ -518,6 +563,11 @@ let onSessionEventUpdated: ((sessionId: string, event: SessionStreamEvent) => vo
 // latter and never needs to refetch the full list for runtime state.
 let onSessionListUpdated: (() => void) | null = null;
 let onSessionStateUpdated: ((sessionId: string) => void) | null = null;
+let sessionPersistenceFaultInjector: ((phase: 'history' | 'metadata', sessionId?: string) => void) | null = null;
+
+export function setSessionPersistenceFaultInjectorForTests(injector: ((phase: 'history' | 'metadata', sessionId?: string) => void) | null): void {
+  sessionPersistenceFaultInjector = injector;
+}
 
 // Track active in-flight LLM requests so /stop can abort the underlying HTTP call.
 const sessionAbortControllers = new Map<string, AbortController>();
@@ -660,6 +710,10 @@ async function resumeIndexingIfNeeded(sessionId: string, session: Session): Prom
 }
 
 export async function getSession(sessionId: string): Promise<Session> {
+  return withSessionIdentityLock(() => getSessionUnlocked(sessionId));
+}
+
+async function getSessionUnlocked(sessionId: string, persistNew: boolean = true): Promise<Session> {
   // Resolve alias first
   const realId = await resolveSessionId(sessionId);
   
@@ -758,20 +812,38 @@ export async function getSession(sessionId: string): Promise<Session> {
     setupSessionBroadcast(sessionId);
   }
 
+  if (isNew && persistNew) {
+    try {
+      await saveSessionCritical(realId);
+    } catch (error) {
+      await rollbackFailedSessionCreation(realId, session);
+      throw error;
+    }
+  }
+
   return session;
 }
 
 export async function createEmptySession(sessionId?: string): Promise<{ session: Session; created: boolean }> {
+  return withSessionIdentityLock(() => createEmptySessionUnlocked(sessionId));
+}
+
+async function createEmptySessionUnlocked(sessionId?: string): Promise<{ session: Session; created: boolean }> {
   const targetSessionId = sessionId || await allocateGeneratedSessionId();
-  const existingSession = await getExistingSession(targetSessionId);
+  const existingSession = await getExistingSessionUnlocked(targetSessionId);
   if (existingSession) {
     return { session: existingSession, created: false };
   }
 
   await assertSessionIdAvailableForNewLifetime(targetSessionId);
 
-  const session = await getSession(targetSessionId);
-  await saveSession(session.id);
+  const session = await getSessionUnlocked(targetSessionId, false);
+  try {
+    await saveSessionCritical(session.id);
+  } catch (error) {
+    await rollbackFailedSessionCreation(session.id, session);
+    throw error;
+  }
   return { session, created: true };
 }
 
@@ -803,18 +875,42 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
  * Create a new session with given data
  */
 export async function createSession(sessionId: string, sessionData: any): Promise<void> {
+  await withSessionIdentityLock(() => createSessionUnlocked(sessionId, sessionData));
+}
+
+async function createSessionUnlocked(sessionId: string, sessionData: any): Promise<void> {
   await assertSessionIdAvailableForNewLifetime(sessionId);
   if (sessionData && typeof sessionData === 'object') {
     delete sessionData.isolated;
     llm.ensurePromptCacheKey(sessionData as Session);
   }
   sessions.set(sessionId, sessionData);
-  await saveSession(sessionId);
+  try {
+    await saveSessionCritical(sessionId);
+  } catch (error) {
+    await rollbackFailedSessionCreation(sessionId, sessionData);
+    throw error;
+  }
   logger.info({ sessionId }, 'Session created');
+}
+
+async function rollbackFailedSessionCreation(sessionId: string, expectedSession: Session): Promise<void> {
+  if (sessions.get(sessionId) === expectedSession) sessions.delete(sessionId);
+  await fs.remove(getSessionHistoryFilePath(sessionId)).catch(() => {});
+  await rollbackUncommittedSessionArchive(sessionId).catch(error => {
+    logger.error({ err: error, sessionId }, 'Failed to roll back uncommitted session archive');
+  });
+  await saveSessionsMetadataCritical().catch(error => {
+    logger.error({ err: error, sessionId }, 'Failed to persist session-creation rollback');
+  });
 }
 
 async function saveChannels(): Promise<void> {
   await sessionChannels.saveChannels();
+}
+
+async function saveChannelsCritical(): Promise<void> {
+  await sessionChannels.saveChannelsCritical();
 }
 
 async function loadChannels(): Promise<void> {
@@ -830,17 +926,17 @@ export function validateChildSessionSuffix(suffix: string): void {
   }
 }
 
-function getSessionAgentOpsDeps() {
+function getSessionAgentOpsDeps(underIdentityLock: boolean = false) {
   return {
-    getSession,
-    getExistingSession,
+    getSession: underIdentityLock ? getSessionUnlocked : getSession,
+    getExistingSession: underIdentityLock ? getExistingSessionUnlocked : getExistingSession,
     assertSessionIdAvailableForNewLifetime,
-    createSession,
-    saveSession,
-    saveSessionsMetadata,
-    saveChannels,
+    createSession: underIdentityLock ? createSessionUnlocked : createSession,
+    saveSession: underIdentityLock ? saveSessionCritical : saveSession,
+    saveSessionsMetadata: underIdentityLock ? saveSessionsMetadataCritical : saveSessionsMetadata,
+    saveChannels: underIdentityLock ? saveChannelsCritical : saveChannels,
     updateAliasCache,
-    updateChildSessionParentIds,
+    updateChildSessionParentIds: underIdentityLock ? updateChildSessionParentIdsCritical : updateChildSessionParentIds,
     moveSessionArchiveIndex: vector.renameSessionArchiveIndex,
     getAgentMetadata,
     getSessionsMap: getAllSessions,
@@ -859,12 +955,20 @@ function getSessionHistoryDeps() {
 }
 
 function notifySessionListUpdated() {
-  onSessionListUpdated?.();
+  try {
+    onSessionListUpdated?.();
+  } catch (error) {
+    logger.error({ err: error }, 'Session list update callback failed');
+  }
 }
 
 function notifySessionUpdated(sessionId: string) {
   notifySessionListUpdated();
-  onSessionStateUpdated?.(sessionId);
+  try {
+    onSessionStateUpdated?.(sessionId);
+  } catch (error) {
+    logger.error({ err: error, sessionId }, 'Session state update callback failed');
+  }
 }
 
 setSessionRuntimeStateUpdateCallback((sessionId) => notifySessionUpdated(sessionId));
@@ -872,11 +976,11 @@ setSessionRuntimeStateUpdateCallback((sessionId) => notifySessionUpdated(session
 export { buildSessionRuntimeState, clearActiveSessionRuntimeState, formatSessionRuntimeStateSummary, setActiveSessionRuntimeState };
 export type { ActiveSessionRuntimeStateInput, SessionRuntimeState };
 
-function getAgentMetadataDeps() {
+function getAgentMetadataDeps(underIdentityLock: boolean = false) {
   return {
-    getSession,
-    getExistingSession,
-    saveSession,
+    getSession: underIdentityLock ? getSessionUnlocked : getSession,
+    getExistingSession: underIdentityLock ? getExistingSessionUnlocked : getExistingSession,
+    saveSession: underIdentityLock ? saveSessionCritical : saveSession,
     getSessionsMap: getAllSessions,
     validateAgentName,
   };
@@ -949,26 +1053,49 @@ export async function createAgentWithMainSession(options: {
     }
   }
 
-  const result = await sessionAgentOps.createAgentWithMainSession(createOptions, getSessionAgentOpsDeps());
-  if (normalizedIsolatedNode !== undefined) {
-    await setAgentIsolation(options.agentName, normalizedIsolatedNode);
-  }
-  if (normalizedInherit !== undefined) {
-    await setAgentInherit(options.agentName, normalizedInherit);
-  }
-  return result;
+  return withSessionIdentityLock(async () => {
+    const result = await sessionAgentOps.createAgentWithMainSession(createOptions, getSessionAgentOpsDeps(true));
+    if (normalizedIsolatedNode !== undefined) {
+      await sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(true), options.agentName, normalizedIsolatedNode);
+    }
+    if (normalizedInherit !== undefined) {
+      await sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(true), options.agentName, normalizedInherit);
+    }
+    return result;
+  });
 }
 
 export async function createSessionInAgent(options: {
   agentName: string;
-  sessionName: string;
+  sessionName?: string;
   displayName?: string;
   currentNode?: string;
   model?: string;
   parentSessionId?: string;
   systemPromptFiles?: string[];
 }): Promise<{ sessionId: string }> {
-  return sessionAgentOps.createSessionInAgent(options, getSessionAgentOpsDeps());
+  return withSessionIdentityLock(async () => {
+    const sessionName = options.sessionName === undefined
+      ? await generateAvailableSessionName(options.agentName)
+      : options.sessionName;
+    return sessionAgentOps.createSessionInAgent({ ...options, sessionName }, getSessionAgentOpsDeps(true));
+  });
+}
+
+export async function createSessionInAgentWithAutomaticName(
+  options: Omit<Parameters<typeof sessionAgentOps.createSessionInAgent>[0], 'sessionName'>,
+  generateName: () => string,
+): Promise<{ sessionId: string }> {
+  return withSessionIdentityLock(async () => {
+    while (true) {
+      const sessionName = generateName();
+      const sessionId = options.agentName === 'main' ? sessionName : `${options.agentName}/${sessionName}`;
+      if (await isSessionIdReserved(sessionId)) {
+        continue;
+      }
+      return sessionAgentOps.createSessionInAgent({ ...options, sessionName }, getSessionAgentOpsDeps(true));
+    }
+  });
 }
 
 export async function moveSessionToTarget(options: {
@@ -985,7 +1112,7 @@ export async function moveSessionToTarget(options: {
   aliases: string[];
   updatedChildren: string[];
 }> {
-  return sessionAgentOps.moveSessionToTarget(options, getSessionAgentOpsDeps());
+  return withSessionIdentityLock(() => sessionAgentOps.moveSessionToTarget(options, getSessionAgentOpsDeps(true)));
 }
 
 /**
@@ -997,6 +1124,47 @@ export async function moveSessionToTarget(options: {
  */
 export function attachChannel(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): string {
   return sessionChannels.attachChannel(channelId, conversationId, sessionId, configUpdates);
+}
+
+export async function attachChannelDurably(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): Promise<string> {
+  return sessionChannels.attachChannelDurably(channelId, conversationId, sessionId, configUpdates);
+}
+
+export async function getOrCreateSessionForChannel(
+  channelId: string,
+  conversationId: string,
+  options?: {
+    createSession?: () => Promise<Session>;
+    attachmentConfig?: Partial<sessionChannels.ChannelConfig>;
+  },
+): Promise<{ sessionId: string; session: Session }> {
+  return withChannelSessionCreationLock(channelId, conversationId, async () => {
+    const existingSessionId = getSessionByChannel(channelId, conversationId);
+    if (existingSessionId) {
+      return { sessionId: existingSessionId, session: await getSession(existingSessionId) };
+    }
+
+    const createdSession = options?.createSession
+      ? await options.createSession()
+      : (await createEmptySession()).session;
+    const concurrentlyAttachedSessionId = getSessionByChannel(channelId, conversationId);
+    if (concurrentlyAttachedSessionId) {
+      await rollbackFailedSessionCreation(createdSession.id, createdSession);
+      await saveChannelsCritical();
+      return {
+        sessionId: concurrentlyAttachedSessionId,
+        session: await getSession(concurrentlyAttachedSessionId),
+      };
+    }
+
+    try {
+      const sessionId = await attachChannelDurably(channelId, conversationId, createdSession.id, options?.attachmentConfig);
+      return { sessionId, session: createdSession };
+    } catch (error) {
+      await rollbackFailedSessionCreation(createdSession.id, createdSession);
+      throw error;
+    }
+  });
 }
 
 export function getSessionByChannel(channelId: string, conversationId: string): string | undefined {
@@ -1071,7 +1239,11 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @returns New session ID
  */
 export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
-  const sourceSession = await getSession(sourceSessionId);
+  return withSessionIdentityLock(() => forkSessionUnlocked(sourceSessionId, suffix, isChildSession, options));
+}
+
+async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
+  const sourceSession = await getSessionUnlocked(sourceSessionId);
   const realSourceSessionId = sourceSession.id || sourceSessionId;
   const newSessionId = await allocateForkSessionId(realSourceSessionId, suffix, isChildSession);
   const sourcePreviousPromptCacheKey = sourceSession.promptCacheKey;
@@ -1172,13 +1344,17 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   }
 
   sessions.set(newSessionId, forkedSession);
-
-  await ensureSessionBranch(newSessionId, {
-    parentSessionId: realSourceSessionId,
-    forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
-    forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
-  });
-  await appendSessionMessages(forkedSession, appendedForkMessages);
+  try {
+    await ensureSessionBranch(newSessionId, {
+      parentSessionId: realSourceSessionId,
+      forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
+      forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
+    });
+    await appendSessionMessages(forkedSession, appendedForkMessages, { strictPersistence: true, suppressGoalReminder: true });
+  } catch (error) {
+    await rollbackFailedSessionCreation(newSessionId, forkedSession);
+    throw error;
+  }
 
   logger.info({ sourceSessionId: realSourceSessionId, newSessionId, isChildSession }, 'Session forked');
 
@@ -1216,13 +1392,17 @@ export function resolveSpawnedSessionModel(
 }
 
 export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
+  return withSessionIdentityLock(() => createChildSessionUnlocked(parentSessionId, suffix, fork, options));
+}
+
+async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
   validateChildSessionSuffix(suffix);
   if (fork) {
     // Fork from parent (inherit context)
-    return await forkSession(parentSessionId, suffix, true, options);
+    return await forkSessionUnlocked(parentSessionId, suffix, true, options);
   } else {
     // Create new empty session
-    const parentSession = await getSession(parentSessionId);
+    const parentSession = await getSessionUnlocked(parentSessionId);
     const realParentSessionId = parentSession.id || parentSessionId;
     const childSessionId = await allocateChildSessionId(realParentSessionId, suffix);
 
@@ -1266,7 +1446,12 @@ export async function createChildSession(parentSessionId: string, suffix: string
     };
 
     sessions.set(childSessionId, newSession);
-    await appendSessionMessage(newSession, initialMessage);
+    try {
+      await appendSessionMessages(newSession, [initialMessage], { strictPersistence: true, suppressGoalReminder: true });
+    } catch (error) {
+      await rollbackFailedSessionCreation(childSessionId, newSession);
+      throw error;
+    }
 
     logger.info({ parentSessionId: realParentSessionId, childSessionId, fork: false }, 'Child session created');
     return childSessionId;
@@ -1295,6 +1480,15 @@ export async function updateChildSessionParentIds(oldParentSessionId: string, ne
   }, oldParentSessionId, newParentSessionId);
 }
 
+async function updateChildSessionParentIdsCritical(oldParentSessionId: string, newParentSessionId: string): Promise<string[]> {
+  return sessionRelations.updateChildSessionParentIds({
+    saveSession: saveSessionCritical,
+    saveSessionsMetadata: saveSessionsMetadataCritical,
+    getSessionsMap: getAllSessions,
+    notifySessionListUpdated,
+  }, oldParentSessionId, newParentSessionId);
+}
+
 export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
   return await sessionRelations.sendToSession({
     getExistingSession,
@@ -1309,47 +1503,51 @@ export async function sendToSession(targetSessionId: string, message: string, fr
  */
 export async function saveSession(sessionId: string): Promise<void> {
   try {
-    const session = sessions.get(sessionId);
-    if (!session) {
-      logger.warn({ sessionId }, 'Session not found for saving');
-      return;
-    }
-
-    // Initialize historyVersion if not exists
-    if (session.historyVersion === undefined) {
-      session.historyVersion = 0;
-    }
-
-    // Update message count in metadata
-    session.meta.messageCount = session.history.length;
-
-    // Ensure sessions directory exists
-    await fs.ensureDir(SESSIONS_DIR);
-
-    // Save history, persistentMemorySnapshot, parentSessionId, indexingState, historyVersion, displayName, currentNode, agent to separate file
-    const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
-    await fs.ensureDir(path.dirname(historyFile));
-    await writeSessionHistoryAtomically(sessionId, serializeSessionHistoryPayload(session));
-    
-    // Save metadata (lightweight operation)
-    await saveSessionsMetadata();
-
-    // Schedule archive-based vector indexing (non-blocking)
-    const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
-    const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
-    const lastMessage = session.history[session.history.length - 1];
-    const latestMessageTokenEstimate = lastMessage?.__meta?.seq === latestSeqHint
-      ? vector.estimateArchiveMessageTokenCount(lastMessage)
-      : undefined;
-
-    vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
-      .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
-    
-    // Notify global-list and per-session state consumers.
-    notifySessionUpdated(sessionId);
+    await saveSessionCritical(sessionId);
   } catch (e) {
     logger.error({ err: e, sessionId }, 'Failed to save session');
   }
+}
+
+async function saveSessionCritical(sessionId: string): Promise<void> {
+  const session = sessions.get(sessionId);
+  if (!session) {
+    throw new Error(`Session "${sessionId}" not found for saving.`);
+  }
+
+  // Initialize historyVersion if not exists
+  if (session.historyVersion === undefined) {
+    session.historyVersion = 0;
+  }
+
+  // Update message count in metadata
+  session.meta.messageCount = session.history.length;
+
+  // Ensure sessions directory exists
+  await fs.ensureDir(SESSIONS_DIR);
+
+  // Save history, persistentMemorySnapshot, parentSessionId, indexingState, historyVersion, displayName, currentNode, agent to separate file
+  const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
+  await fs.ensureDir(path.dirname(historyFile));
+  sessionPersistenceFaultInjector?.('history', sessionId);
+  await writeSessionHistoryAtomically(sessionId, serializeSessionHistoryPayload(session));
+
+  // Save metadata (lightweight operation)
+  await saveSessionsMetadataCritical();
+
+  // Schedule archive-based vector indexing (non-blocking)
+  const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
+  const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
+  const lastMessage = session.history[session.history.length - 1];
+  const latestMessageTokenEstimate = lastMessage?.__meta?.seq === latestSeqHint
+    ? vector.estimateArchiveMessageTokenCount(lastMessage)
+    : undefined;
+
+  vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
+    .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
+
+  // Notify global-list and per-session state consumers.
+  notifySessionUpdated(sessionId);
 }
 
 /**
@@ -1357,11 +1555,19 @@ export async function saveSession(sessionId: string): Promise<void> {
  */
 export async function saveSessionsMetadata(): Promise<void> {
   try {
-    const { data: snapshot, source } = await loadSessionsMetadataSnapshot();
-    const data: any = { sessions: {} };
-    const existingSessions = snapshot?.sessions && typeof snapshot.sessions === 'object'
-      ? snapshot.sessions
-      : {};
+    await saveSessionsMetadataCritical();
+  } catch (e) {
+    logger.error(e, 'Failed to save metadata');
+  }
+}
+
+async function saveSessionsMetadataCritical(): Promise<void> {
+  sessionPersistenceFaultInjector?.('metadata');
+  const { data: snapshot, source } = await loadSessionsMetadataSnapshot();
+  const data: any = { sessions: {} };
+  const existingSessions = snapshot?.sessions && typeof snapshot.sessions === 'object'
+    ? snapshot.sessions
+    : {};
 
     for (const [sessionId, metadata] of Object.entries(existingSessions)) {
       if (sessions.has(sessionId) || await fs.pathExists(getSessionHistoryFilePath(sessionId))) {
@@ -1378,14 +1584,15 @@ export async function saveSessionsMetadata(): Promise<void> {
       logger.warn({ source, inMemorySessionCount: sessions.size, savedSessionCount: Object.keys(data.sessions).length }, 'Saving sessions metadata using recovered baseline');
     }
 
-    await writeSessionsMetadataAtomically(data);
-  } catch (e) {
-    logger.error(e, 'Failed to save metadata');
-  }
+  await writeSessionsMetadataAtomically(data);
 }
 
 export async function loadSessions(): Promise<void> {
   try {
+    const identityMoveRecovery = await sessionAgentOps.recoverPendingSessionIdentityMove(vector.renameSessionArchiveIndex);
+    if (identityMoveRecovery !== 'none') {
+      logger.warn({ identityMoveRecovery }, 'Recovered pending session identity move');
+    }
     // Load agent metadata first
     await sessionAgentMetadata.loadAgentMetadata();
     await loadChannels();
@@ -1796,7 +2003,7 @@ export function notifySessionEvent(sessionId: string, event: SessionStreamEvent)
   }
 }
 
-export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[], options: { suppressGoalReminder?: boolean } = {}): Promise<void> {
+export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[], options: { suppressGoalReminder?: boolean; strictPersistence?: boolean } = {}): Promise<void> {
   const session = typeof sessionOrId === 'string'
     ? await getSession(sessionOrId)
     : sessionOrId;
@@ -1815,7 +2022,8 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
   const messagesToNotify = [...messages];
   const goalReminderMessage = options.suppressGoalReminder ? undefined : maybeBuildGoalReminderMessage(session);
 
-  await saveSession(session.id);
+  if (options.strictPersistence) await saveSessionCritical(session.id);
+  else await saveSession(session.id);
 
   for (const message of messagesToNotify) {
     notifyHistoryUpdate(session.id, message);

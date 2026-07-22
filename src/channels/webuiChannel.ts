@@ -1016,9 +1016,13 @@ export class WebUIChannel implements Channel {
               }
               sessionId = result.session.id;
             } else {
-              const sessionName = requestedSessionId || await sessionManager.generateAvailableSessionName(agentId);
-              sessionManager.validateSessionName(sessionName);
-              const result = await sessionManager.createSessionInAgent({ agentName: agentId, sessionName });
+              if (requestedSessionId) {
+                sessionManager.validateSessionName(requestedSessionId);
+              }
+              const result = await sessionManager.createSessionInAgent({
+                agentName: agentId,
+                ...(requestedSessionId ? { sessionName: requestedSessionId } : {}),
+              });
               sessionId = result.sessionId;
             }
 

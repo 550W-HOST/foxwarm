@@ -1,9 +1,9 @@
 import fs from 'fs-extra';
 import path from 'path';
 import * as llm from '../llm';
-import { getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, getSessionBlockArchiveLogPath, getLegacySessionFrontierPath, SESSIONS_DIR } from '../config';
+import { CHANNELS_FILE, getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, getSessionBlockArchiveLogPath, getLegacySessionFrontierPath, SESSION_ID_MOVE_JOURNAL_PATH, SESSIONS_DIR, SESSIONS_FILE } from '../config';
 import { Session } from '../types';
-import { renameSessionArchiveStore } from './archiveStore';
+import { commitSessionIdRename, renameSessionArchiveStore, renameSessionArchiveStoreForRecovery } from './archiveStore';
 
 interface SessionAgentOpsDeps {
   getSession: (sessionId: string) => Promise<Session>;
@@ -19,6 +19,103 @@ interface SessionAgentOpsDeps {
   getAgentMetadata: (agentName: string) => { isolated?: boolean; [key: string]: any };
   getSessionsMap: () => Map<string, Session>;
   getAttachmentsMap: () => Map<string, { sessionId: string; mode?: any }>;
+}
+
+type PendingSessionIdentityMove = {
+  v: 1;
+  oldSessionId: string;
+  newSessionId: string;
+  oldAgent?: string;
+  oldAliases: string[];
+  createdAt: number;
+};
+
+let identityMoveFaultInjector: ((phase: 'before-target-persistence' | 'after-target-persistence', oldSessionId: string, newSessionId: string) => void) | null = null;
+
+export function setIdentityMoveFaultInjectorForTests(
+  injector: ((phase: 'before-target-persistence' | 'after-target-persistence', oldSessionId: string, newSessionId: string) => void) | null,
+): void {
+  identityMoveFaultInjector = injector;
+}
+
+async function writePendingSessionIdentityMove(record: PendingSessionIdentityMove): Promise<void> {
+  await fs.ensureDir(path.dirname(SESSION_ID_MOVE_JOURNAL_PATH));
+  const temporaryPath = `${SESSION_ID_MOVE_JOURNAL_PATH}.${process.pid}.tmp`;
+  await fs.writeJson(temporaryPath, record, { spaces: 2 });
+  await fs.move(temporaryPath, SESSION_ID_MOVE_JOURNAL_PATH, { overwrite: true });
+}
+
+async function clearPendingSessionIdentityMove(): Promise<void> {
+  await fs.remove(SESSION_ID_MOVE_JOURNAL_PATH);
+}
+
+async function writeJsonAtomically(filePath: string, data: unknown): Promise<void> {
+  await fs.ensureDir(path.dirname(filePath));
+  const temporaryPath = `${filePath}.${process.pid}.recovery.tmp`;
+  await fs.writeJson(temporaryPath, data, { spaces: 2 });
+  await fs.move(temporaryPath, filePath, { overwrite: true });
+}
+
+export async function recoverPendingSessionIdentityMove(
+  moveSessionArchiveIndex: (oldSessionId: string, newSessionId: string) => Promise<void>,
+): Promise<'none' | 'finished' | 'rolled-back'> {
+  if (!await fs.pathExists(SESSION_ID_MOVE_JOURNAL_PATH)) return 'none';
+  const record = await fs.readJson(SESSION_ID_MOVE_JOURNAL_PATH) as Partial<PendingSessionIdentityMove>;
+  if (record.v !== 1 || typeof record.oldSessionId !== 'string' || typeof record.newSessionId !== 'string') {
+    throw new Error('Invalid pending session identity move journal.');
+  }
+  const oldSessionId = record.oldSessionId;
+  const newSessionId = record.newSessionId;
+  const metadata = await fs.pathExists(SESSIONS_FILE) ? await fs.readJson(SESSIONS_FILE) : { sessions: {} };
+  const sessionsData = metadata.sessions && typeof metadata.sessions === 'object' ? metadata.sessions : metadata;
+  const targetWasDurablyCommitted = Object.prototype.hasOwnProperty.call(sessionsData, newSessionId);
+
+  const rewriteChannels = async (from: string, to: string): Promise<void> => {
+    if (!await fs.pathExists(CHANNELS_FILE)) return;
+    const channelsData = await fs.readJson(CHANNELS_FILE);
+    for (const config of Object.values(channelsData?.channels || {}) as any[]) {
+      if (config?.sessionId === from) config.sessionId = to;
+    }
+    await writeJsonAtomically(CHANNELS_FILE, channelsData);
+  };
+
+  if (targetWasDurablyCommitted) {
+    await renameSessionArchiveStore(oldSessionId, newSessionId);
+    await moveSessionArchiveIndex(oldSessionId, newSessionId).catch(() => {});
+    await rewriteChannels(oldSessionId, newSessionId);
+    await commitSessionIdRename(oldSessionId, newSessionId);
+    await clearPendingSessionIdentityMove();
+    return 'finished';
+  }
+
+  const reversePath = async (oldPath: string, newPath: string): Promise<void> => {
+    if (!await fs.pathExists(newPath)) return;
+    await fs.ensureDir(path.dirname(oldPath));
+    await fs.move(newPath, oldPath, { overwrite: true });
+  };
+  await reversePath(path.join(SESSIONS_DIR, `${oldSessionId}.json`), path.join(SESSIONS_DIR, `${newSessionId}.json`));
+  await reversePath(getSessionArchiveLogPath(oldSessionId), getSessionArchiveLogPath(newSessionId));
+  await reversePath(getSessionArchiveImagesDir(oldSessionId), getSessionArchiveImagesDir(newSessionId));
+  await reversePath(getSessionBlockArchiveLogPath(oldSessionId), getSessionBlockArchiveLogPath(newSessionId));
+  await reversePath(getLegacySessionFrontierPath(oldSessionId), getLegacySessionFrontierPath(newSessionId));
+
+  for (const [sessionId, sessionMeta] of Object.entries(sessionsData) as Array<[string, any]>) {
+    if (sessionMeta?.parentSessionId === newSessionId) sessionMeta.parentSessionId = oldSessionId;
+    const historyPath = path.join(SESSIONS_DIR, `${sessionId}.json`);
+    if (await fs.pathExists(historyPath)) {
+      const historyData = await fs.readJson(historyPath);
+      if (historyData?.parentSessionId === newSessionId) {
+        historyData.parentSessionId = oldSessionId;
+        await writeJsonAtomically(historyPath, historyData);
+      }
+    }
+  }
+  await writeJsonAtomically(SESSIONS_FILE, metadata);
+  await rewriteChannels(newSessionId, oldSessionId);
+  renameSessionArchiveStoreForRecovery(newSessionId, oldSessionId);
+  await moveSessionArchiveIndex(newSessionId, oldSessionId).catch(() => {});
+  await clearPendingSessionIdentityMove();
+  return 'rolled-back';
 }
 
 export function validateAgentName(agentName: string): void {
@@ -80,73 +177,94 @@ async function renameSessionIdentity(options: {
 }, deps: SessionAgentOpsDeps): Promise<{ aliases: string[]; updatedChildren: string[] }> {
   const { sourceSession, sourceInputId, targetSessionId, targetAgent } = options;
   const oldRealId = sourceSession.id;
+  const oldAgent = sourceSession.agent;
 
   await deps.assertSessionIdAvailableForNewLifetime(targetSessionId);
 
   const oldAliases = sourceSession.aliases || [];
   const newAliases = [...new Set([...oldAliases, oldRealId, sourceInputId])];
+  await writePendingSessionIdentityMove({
+    v: 1,
+    oldSessionId: oldRealId,
+    newSessionId: targetSessionId,
+    oldAgent,
+    oldAliases: [...oldAliases],
+    createdAt: Date.now(),
+  });
+  const sessions = deps.getSessionsMap();
+  const attachments = deps.getAttachmentsMap();
+  const originalAttachments = new Map(
+    [...attachments.entries()].filter(([, info]) => info.sessionId === oldRealId),
+  );
+  const movedPaths: Array<{ from: string; to: string }> = [];
+  let childrenUpdated = false;
+  let archiveStoreRenamed = false;
+  let vectorIndexMoved = false;
+  let updatedChildren: string[] = [];
+
+  const movePath = async (from: string, to: string): Promise<void> => {
+    if (!await fs.pathExists(from)) return;
+    await fs.ensureDir(path.dirname(to));
+    await fs.move(from, to, { overwrite: true });
+    movedPaths.push({ from, to });
+  };
 
   sourceSession.id = targetSessionId;
   sourceSession.agent = targetAgent;
   sourceSession.aliases = newAliases;
-
-  const sessions = deps.getSessionsMap();
   sessions.delete(oldRealId);
   sessions.set(targetSessionId, sourceSession);
+  for (const [channelKey, info] of originalAttachments) {
+    attachments.set(channelKey, { ...info, sessionId: targetSessionId });
+  }
 
-  const attachments = deps.getAttachmentsMap();
-  for (const [channelKey, info] of attachments.entries()) {
-    if (info.sessionId === oldRealId) {
-      attachments.set(channelKey, { ...info, sessionId: targetSessionId });
+  try {
+    await movePath(path.join(SESSIONS_DIR, `${oldRealId}.json`), path.join(SESSIONS_DIR, `${targetSessionId}.json`));
+    await movePath(getSessionArchiveLogPath(oldRealId), getSessionArchiveLogPath(targetSessionId));
+    await movePath(getSessionArchiveImagesDir(oldRealId), getSessionArchiveImagesDir(targetSessionId));
+    await movePath(getSessionBlockArchiveLogPath(oldRealId), getSessionBlockArchiveLogPath(targetSessionId));
+    await movePath(getLegacySessionFrontierPath(oldRealId), getLegacySessionFrontierPath(targetSessionId));
+
+    childrenUpdated = true;
+    updatedChildren = await deps.updateChildSessionParentIds(oldRealId, targetSessionId);
+    await renameSessionArchiveStore(oldRealId, targetSessionId);
+    archiveStoreRenamed = true;
+    vectorIndexMoved = true;
+    await deps.moveSessionArchiveIndex(oldRealId, targetSessionId);
+
+    identityMoveFaultInjector?.('before-target-persistence', oldRealId, targetSessionId);
+    await deps.saveSession(targetSessionId);
+    await deps.saveSessionsMetadata();
+    await deps.saveChannels();
+    identityMoveFaultInjector?.('after-target-persistence', oldRealId, targetSessionId);
+    await commitSessionIdRename(oldRealId, targetSessionId);
+    deps.updateAliasCache(newAliases, targetSessionId);
+    await clearPendingSessionIdentityMove().catch(() => {});
+    return { aliases: newAliases, updatedChildren };
+  } catch (error) {
+    if (vectorIndexMoved) await deps.moveSessionArchiveIndex(targetSessionId, oldRealId).catch(() => {});
+    if (archiveStoreRenamed) await renameSessionArchiveStore(targetSessionId, oldRealId).catch(() => {});
+    if (childrenUpdated) await deps.updateChildSessionParentIds(targetSessionId, oldRealId).catch(() => {});
+    for (const { from, to } of movedPaths.reverse()) {
+      if (await fs.pathExists(to)) {
+        await fs.ensureDir(path.dirname(from));
+        await fs.move(to, from, { overwrite: true }).catch(() => {});
+      }
     }
+
+    sourceSession.id = oldRealId;
+    sourceSession.agent = oldAgent;
+    sourceSession.aliases = oldAliases;
+    sessions.delete(targetSessionId);
+    sessions.set(oldRealId, sourceSession);
+    for (const [channelKey] of originalAttachments) attachments.set(channelKey, originalAttachments.get(channelKey)!);
+    deps.updateAliasCache(oldAliases, oldRealId);
+    await deps.saveSession(oldRealId).catch(() => {});
+    await deps.saveSessionsMetadata().catch(() => {});
+    await deps.saveChannels().catch(() => {});
+    await clearPendingSessionIdentityMove().catch(() => {});
+    throw error;
   }
-
-  deps.updateAliasCache(newAliases, targetSessionId);
-
-  const oldHistoryFile = path.join(SESSIONS_DIR, `${oldRealId}.json`);
-  const newHistoryFile = path.join(SESSIONS_DIR, `${targetSessionId}.json`);
-  if (await fs.pathExists(oldHistoryFile)) {
-    await fs.ensureDir(path.dirname(newHistoryFile));
-    await fs.move(oldHistoryFile, newHistoryFile, { overwrite: true });
-  }
-
-  const oldArchiveLog = getSessionArchiveLogPath(oldRealId);
-  const newArchiveLog = getSessionArchiveLogPath(targetSessionId);
-  if (await fs.pathExists(oldArchiveLog)) {
-    await fs.ensureDir(path.dirname(newArchiveLog));
-    await fs.move(oldArchiveLog, newArchiveLog, { overwrite: true });
-  }
-
-  const oldArchiveImagesDir = getSessionArchiveImagesDir(oldRealId);
-  const newArchiveImagesDir = getSessionArchiveImagesDir(targetSessionId);
-  if (await fs.pathExists(oldArchiveImagesDir)) {
-    await fs.ensureDir(path.dirname(newArchiveImagesDir));
-    await fs.move(oldArchiveImagesDir, newArchiveImagesDir, { overwrite: true });
-  }
-
-  const oldBlockArchive = getSessionBlockArchiveLogPath(oldRealId);
-  const newBlockArchive = getSessionBlockArchiveLogPath(targetSessionId);
-  if (await fs.pathExists(oldBlockArchive)) {
-    await fs.ensureDir(path.dirname(newBlockArchive));
-    await fs.move(oldBlockArchive, newBlockArchive, { overwrite: true });
-  }
-
-  const oldFrontierFile = getLegacySessionFrontierPath(oldRealId);
-  const newFrontierFile = getLegacySessionFrontierPath(targetSessionId);
-  if (await fs.pathExists(oldFrontierFile)) {
-    await fs.ensureDir(path.dirname(newFrontierFile));
-    await fs.move(oldFrontierFile, newFrontierFile, { overwrite: true });
-  }
-
-  const updatedChildren = await deps.updateChildSessionParentIds(oldRealId, targetSessionId);
-  await renameSessionArchiveStore(oldRealId, targetSessionId);
-  await deps.moveSessionArchiveIndex(oldRealId, targetSessionId);
-
-  await deps.saveSession(targetSessionId);
-  await deps.saveSessionsMetadata();
-  await deps.saveChannels();
-
-  return { aliases: newAliases, updatedChildren };
 }
 
 export async function createSessionInAgent(options: {
@@ -279,31 +397,36 @@ export async function createAgentWithMainSession(options: {
     : undefined;
 
   if (convertSessionId) {
-    const sourceToConvert = await deps.getExistingSession(convertSessionId);
-    if (!sourceToConvert) {
-      throw new Error(`Session "${convertSessionId}" not found.`);
+    let sourceToConvert: Session | null = null;
+    let previousDisplayName: string | undefined;
+    try {
+      sourceToConvert = await deps.getExistingSession(convertSessionId);
+      if (!sourceToConvert) {
+        throw new Error(`Session "${convertSessionId}" not found.`);
+      }
+
+      previousDisplayName = sourceToConvert.displayName;
+      if (displayName !== undefined) sourceToConvert.displayName = displayName;
+      const oldSessionId = sourceToConvert.id;
+      const { aliases, updatedChildren } = await renameSessionIdentity({
+        sourceSession: sourceToConvert,
+        sourceInputId: convertSessionId,
+        targetSessionId: mainSessionId,
+        targetAgent: agentName,
+      }, deps);
+      return {
+        agentDir,
+        mainSessionId,
+        convertedFromSessionId: oldSessionId,
+        aliases,
+        updatedChildren,
+        createdMainSession: true,
+      };
+    } catch (error) {
+      if (sourceToConvert) sourceToConvert.displayName = previousDisplayName;
+      await fs.remove(agentDir).catch(() => {});
+      throw error;
     }
-
-    if (displayName !== undefined) {
-      sourceToConvert.displayName = displayName;
-    }
-
-    const oldSessionId = sourceToConvert.id;
-    const { aliases, updatedChildren } = await renameSessionIdentity({
-      sourceSession: sourceToConvert,
-      sourceInputId: convertSessionId,
-      targetSessionId: mainSessionId,
-      targetAgent: agentName,
-    }, deps);
-
-    return {
-      agentDir,
-      mainSessionId,
-      convertedFromSessionId: oldSessionId,
-      aliases,
-      updatedChildren,
-      createdMainSession: true,
-    };
   }
 
   if (!createMainSession) {
@@ -316,27 +439,32 @@ export async function createAgentWithMainSession(options: {
     };
   }
 
-  const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId: mainSessionId });
-  await deps.createSession(mainSessionId, {
-    id: mainSessionId,
-    agent: agentName,
-    displayName,
-    history: [],
-    persistentMemorySnapshot: snapshot,
-    stats: {
-      totalCachedTokens: 0,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      lastUsage: null,
-    },
-    busy: false,
-    queue: [],
-    meta: { lastMessageTime: Date.now() },
-    vectorIndexPosition: 0,
-    nextMessageSeq: 1,
-    currentNode: isolatedNode || currentNode || sourceSession?.currentNode || 'master',
-    model: model ?? sourceSession?.model,
-  });
+  try {
+    const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId: mainSessionId });
+    await deps.createSession(mainSessionId, {
+      id: mainSessionId,
+      agent: agentName,
+      displayName,
+      history: [],
+      persistentMemorySnapshot: snapshot,
+      stats: {
+        totalCachedTokens: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        lastUsage: null,
+      },
+      busy: false,
+      queue: [],
+      meta: { lastMessageTime: Date.now() },
+      vectorIndexPosition: 0,
+      nextMessageSeq: 1,
+      currentNode: isolatedNode || currentNode || sourceSession?.currentNode || 'master',
+      model: model ?? sourceSession?.model,
+    });
+  } catch (error) {
+    await fs.remove(agentDir).catch(() => {});
+    throw error;
+  }
 
   return {
     agentDir,
