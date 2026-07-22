@@ -39,6 +39,7 @@ function normalizeInlineData(item: any): InlineData | null {
   const mimeType = item.mimeType || item.mime_type;
   if (typeof item.data === 'string' && isImageMimeType(mimeType)) {
     return {
+      ...item,
       data: item.data,
       mimeType,
     };

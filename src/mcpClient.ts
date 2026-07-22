@@ -497,10 +497,52 @@ function hasPreservableMcpResultMetadata(result: Record<string, any>): boolean {
   return false;
 }
 
+function normalizeMcpImageContent(result: Record<string, any>): Record<string, any> {
+  if (!Array.isArray(result.content)) {
+    return result;
+  }
+
+  const inlineDataItems: Array<Record<string, any>> = [];
+  const remainingContent: any[] = [];
+  for (const item of result.content) {
+    const isImage = item
+      && typeof item === 'object'
+      && !Array.isArray(item)
+      && item.type === 'image'
+      && typeof item.data === 'string'
+      && typeof item.mimeType === 'string'
+      && item.mimeType.startsWith('image/');
+    if (isImage) {
+      const { type: _type, data, mimeType, ...metadata } = item;
+      inlineDataItems.push({ ...metadata, data, mimeType });
+    } else {
+      remainingContent.push(item);
+    }
+  }
+
+  if (inlineDataItems.length === 0) {
+    return result;
+  }
+
+  const normalized = { ...result };
+  if (remainingContent.length > 0) {
+    normalized.content = remainingContent;
+  } else {
+    delete normalized.content;
+  }
+  normalized.inlineDataItems = [
+    ...(Array.isArray(result.inlineDataItems) ? result.inlineDataItems : []),
+    ...inlineDataItems,
+  ];
+  return normalized;
+}
+
 export function normalizeMcpToolResult(result: any): any {
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return result;
   }
+
+  result = normalizeMcpImageContent(result);
 
   if (hasPreservableMcpResultMetadata(result)) {
     return result;

@@ -50,6 +50,7 @@ Unknown external function names are returned to Monty as runtime exceptions. The
 - `call_tool` subcalls publish ToolScript progress and are kept in the outer run result/record. They do not append each nested call as ordinary outer-session tool history.
 - `continue_script` returns stdout produced in that continuation slice; persisted status retains cumulative stdout.
 - Inline image payloads from a final result are promoted to the outer tool result and replaced with compact placeholders inside the textual result.
+- MCP image content returned through a nested unified `call_tool` is source-normalized into the same inline payload shape, then promoted through the outer ToolScript result and provider image serialization without copying base64 into textual output.
 
 ## Compatibility
 

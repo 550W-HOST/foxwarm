@@ -12,10 +12,10 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 4. Master-only builtins execute on the master after their tool-local and isolation guards pass.
 5. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
 6. `call_tool` parses a `toolId` or explicit source descriptor and resolves one concrete builtin, MCP, or node target.
-7. MCP calls run through `mcpClient.callTool`; MCP result normalization occurs at that client boundary.
+7. MCP calls run through `mcpClient.callTool`; safe text cleanup and MCP image-content promotion occur at that client boundary while non-image content remains structured.
 8. Node calls are sent through `nodesManager` over the authenticated node connection. A node-side approval interceptor may still reject the call.
 9. Master and node file wrappers use the shared file-tool core after their own path, context, and isolation handling.
-10. Results are normalized, image parts receive stable IDs, and oversized output is guarded before the next model iteration. Successful master/node patch results already carry shared per-file change-count summaries from [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
+10. Recognized image payloads are promoted to image parts and receive stable IDs before the remaining text/structured response passes through the oversized-output guard. Successful master/node patch results already carry shared per-file change-count summaries from [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 11. ToolScript nested calls use the same registered tool surfaces and appear as subcalls of the outer run.
 
 ## Modules involved
@@ -44,6 +44,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - An isolated session cannot use master file paths outside its own agent directory.
 - Unified wrappers do not bypass the concrete target's existing guards.
 - Tool output is bounded before it enters model context.
+- Recognized image bytes stay in structured image parts rather than entering text excerpts; non-image text, JSON, audio, resource, and blob content remain subject to the normal output budget.
 - MCP and node credentials remain transport/runtime state and are not exposed to the model through tool summaries.
 
 ## Compatibility
@@ -63,7 +64,7 @@ Master and node file tools share read/write semantics while retaining separate t
 
 ### D-dispatch-output-boundary
 
-Tool results remain structured through execution and are normalized/guarded exactly once before becoming model input.
+Tool results remain structured through execution and are normalized/guarded exactly once before becoming model input. Recognized image payloads are promoted to structured image parts before the generic text/structured-output guard runs; the guard applies to the remaining response and must never turn image base64 into a text excerpt or truncation marker. Non-image content receives no multimodal exemption.
 
 ## Canonical ownership
 

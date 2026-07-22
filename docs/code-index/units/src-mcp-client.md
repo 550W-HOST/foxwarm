@@ -28,6 +28,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 | standard transport connection | Streamable HTTP, SSE, and `auto` fallback lifecycle |
 | stdio pool | Config-signature keyed reuse with idle cleanup |
 | `listTools` / `callTool` | Resolve enabled server, connect, invoke, and close/release |
+| `normalizeMcpImageContent` | Promote valid MCP image blocks to Foxwarm inline-data items while preserving other content blocks |
 | `normalizeMcpToolResult` | Unwrap safe single-text results at the source boundary |
 
 ## Transport behavior
@@ -45,7 +46,9 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 - A single plain text content block with no preservable result metadata becomes a string.
 - Text that looks like a JSON object or array is parsed to that object/array.
 - JSON primitives remain strings.
-- Multi-content, non-text content, `isError`, `structuredContent`, `_meta`, annotations, and other metadata preserve the original MCP result shape.
+- Valid MCP `image` content blocks with `image/*` MIME types become `inlineDataItems`; per-image annotations and `_meta` remain attached, and pure, mixed, and multiple-image results share the normal Foxwarm image pipeline.
+- Non-image content blocks retain their original order and shape. Text, audio, resource/blob, malformed image, `isError`, `structuredContent`, `_meta`, annotations, and other metadata are not misclassified as images.
+- Multimodal promotion precedes output guarding as defined by [D-dispatch-output-boundary](../threads/tool-dispatch.md#d-dispatch-output-boundary).
 
 ## Compatibility
 

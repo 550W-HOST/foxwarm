@@ -81,9 +81,9 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 ## Behavior
 
 - `parseFunctionCallArgs` gracefully handles malformed JSON by preserving the raw text and a structured error message, preventing 400 errors on provider APIs.
-- `guardToolOutputForModel` applies a two-stage truncation: Stage A targets the `output` field specifically; Stage B catches any remaining oversized payload. Both stages save the complete text to disk and return a line-aware excerpt with location metadata, Foxwarm placeholder notes, and original line/character counts. A fallback path handles save failures.
+- `guardToolOutputForModel` applies a two-stage truncation to the non-image response that remains after image promotion: Stage A targets the `output` field specifically; Stage B catches any remaining oversized payload. Both stages save the complete text to disk and return a line-aware excerpt with location metadata, Foxwarm placeholder notes, and original line/character counts. A fallback path handles save failures. Canonical ordering is [D-dispatch-output-boundary](../threads/tool-dispatch.md#d-dispatch-output-boundary).
 - The guard preserves a curated set of shallow metadata keys (paths, IDs, status, error) in truncated summaries so the model retains actionable context.
-- `normalizeToolResultImages` unifies multiple legacy image formats (base64 payloads, `__IMAGE__:` prefixes, `__SCREENSHOT__:` prefixes, inline data items) into a consistent `MessagePart[]` with probed metadata.
+- `normalizeToolResultImages` unifies multiple legacy image formats (base64 payloads, `__IMAGE__:` prefixes, `__SCREENSHOT__:` prefixes, inline data items) into a consistent `MessagePart[]` with probed metadata; additional source metadata already attached to an inline item remains internal to that image part.
 - `cropImageById` resolves images by walking session history backwards (including archives), then uses sharp to extract a sub-region.
 - The `wait` tool's stop-current-turn behavior is suppressed when any other tool in the batch returns an error.
 
@@ -93,4 +93,4 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - The guard preserves the structured tool-result object shape; provider serializers later call `formatToolResponsePayload()` to produce string content for OpenAI Chat Completions, OpenAI Responses function_call_output, and Anthropic tool_result blocks.
 - Image normalization feeds into the message part system, enabling downstream image tools (`image_crop`, `image_write_to_file`) to reference prior tool images by ID.
 - `stringifyFunctionCallArgs` is used by OpenAI format converters to serialize tool calls for the provider API, preserving exact raw text when available.
-- The test files validate tool schema contracts (parameter naming, `defaultInject` metadata), path resolution behavior (session cwd, isolated agents), read range placeholder handling (`startLine/endLine: 0` as omitted), write parent-directory semantics (`createDirs=true`), channel naming conventions, and the unified `call_tool`/`search_tools` dispatch layer.
+- The test files validate tool schema contracts (parameter naming, `defaultInject` metadata), path resolution behavior (session cwd, isolated agents), read range placeholder handling (`startLine/endLine: 0` as omitted), write parent-directory semantics (`createDirs=true`), channel naming conventions, unified `call_tool`/`search_tools` dispatch, and MCP image results on both hidden and unified paths above and below the text guard threshold.
