@@ -217,18 +217,26 @@ async function getServerConfig(name?: string): Promise<{ name: string; config: M
 
 function getHeaders(config: McpServerConfig): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
-  
-  // Add custom headers first
-  if (config.headers && typeof config.headers === 'object') {
-    Object.assign(headers, config.headers);
-  }
-  
-  // Add Authorization header from token (can be overridden by custom headers)
+
+  // The token supplies a default; an explicitly configured header wins.
   if (config.token) {
     headers['Authorization'] = `Bearer ${config.token}`;
   }
-  
+
+  if (config.headers && typeof config.headers === 'object') {
+    for (const [key, value] of Object.entries(config.headers)) {
+      if (config.token && key.toLowerCase() === 'authorization') {
+        delete headers['Authorization'];
+      }
+      headers[key] = value;
+    }
+  }
+
   return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+export function buildMcpHttpHeadersForTests(config: McpServerConfig): Record<string, string> | undefined {
+  return getHeaders(config);
 }
 
 function requireUrl(config: McpServerConfig, transport: McpTransport): string {

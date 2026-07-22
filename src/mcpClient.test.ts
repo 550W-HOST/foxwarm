@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 
-import { createMcpConfigStore, listServers, normalizeMcpToolResult, setMcpConfigStoreForTests, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
+import { buildMcpHttpHeadersForTests, createMcpConfigStore, listServers, normalizeMcpToolResult, setMcpConfigStoreForTests, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-mcp-config-'));
@@ -90,6 +90,45 @@ test('MCP config uses lightweight no-backup writes', async () => {
     assert.deepEqual(createMcpConfigStore(filePath).listCandidatePaths(), [filePath]);
     assert.deepEqual(await listBackupMatches(filePath), []);
   });
+});
+
+test('MCP HTTP headers use the token as a default and let custom headers override it', () => {
+  assert.deepEqual(
+    buildMcpHttpHeadersForTests({ token: 'token-only' }),
+    { Authorization: 'Bearer token-only' },
+  );
+
+  assert.deepEqual(
+    buildMcpHttpHeadersForTests({ headers: { 'X-Api-Key': 'headers-only' } }),
+    { 'X-Api-Key': 'headers-only' },
+  );
+
+  assert.deepEqual(
+    buildMcpHttpHeadersForTests({
+      token: 'with-custom-header',
+      headers: { 'X-Api-Key': 'custom-value' },
+    }),
+    {
+      Authorization: 'Bearer with-custom-header',
+      'X-Api-Key': 'custom-value',
+    },
+  );
+
+  assert.deepEqual(
+    buildMcpHttpHeadersForTests({
+      token: 'must-not-win',
+      headers: { Authorization: 'Basic custom-authorization' },
+    }),
+    { Authorization: 'Basic custom-authorization' },
+  );
+
+  assert.deepEqual(
+    buildMcpHttpHeadersForTests({
+      token: 'must-not-win-with-different-casing',
+      headers: { authorization: 'Basic lowercase-authorization' },
+    }),
+    { authorization: 'Basic lowercase-authorization' },
+  );
 });
 
 test('normalizeMcpToolResult parses single JSON object and array text content', () => {
