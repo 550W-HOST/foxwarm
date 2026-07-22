@@ -31,7 +31,7 @@ Implements the SQLite/WAL archive index for raw messages, summary blocks, branch
 | Stable symbol/section | Responsibility |
 |---|---|
 | `streamJsonlLines` | Streaming line reader with explicit event-loop yields |
-| reservation-ledger load/persist/canonical-resolution helpers | Rebuild exact moved-ID reservations and map historical JSONL payload IDs |
+| reservation-ledger load/persist/canonical-resolution helpers | Validate committed alias graphs, rebuild exact moved-ID reservations, and map proven historical aliases |
 | message/block import functions | Batched parse/upsert and per-source import-state updates |
 | `bootstrapArchiveStoreFromLegacy` / `ensureBootstrapped` | Import metadata-known legacy JSONL sources once per process and reset the shared promise after failure |
 | `ensureImported` | Per-session lazy import fallback when bootstrap missed or source changed |
@@ -55,8 +55,8 @@ Implements the SQLite/WAL archive index for raw messages, summary blocks, branch
 - Effective reads walk current session then ancestors, cap each ancestor at cumulative fork points, annotate `sourceSessionId`/`inherited`, and sort by source sequence or block ID.
 - Child branch creation seeds vector checkpoints at its fork boundaries.
 - Backfill candidates are sessions whose latest local message/block exceeds the checkpoint.
-- Reservation lookup waits for bootstrap. The atomically rewritten `state/session-id-reservations.jsonl` ledger is explicit durable state: missing/malformed files self-heal from every SQLite mapping row, while SQLite loss rebuilds from the ledger. Live metadata aliases and conservative path/payload evidence backfill pre-ledger moves.
-- JSONL message/block imports and archive reads resolve multi-hop aliases to the current canonical ID. Known failed creation rollback removes partial JSONL/SQLite branch artifacts; successful moves commit alias mappings only after all strict move persistence succeeds.
+- Reservation lookup waits for bootstrap. The atomically rewritten `state/session-id-reservations.jsonl` ledger is explicit durable state: missing/syntactically malformed files self-heal from every nonconflicting SQLite mapping row, while SQLite loss rebuilds from the ledger. Conflicting valid mappings and cycles fail closed; live metadata aliases are proof for backfill.
+- A path/payload mismatch alone never establishes an alias because copied legacy fork rows have the same shape. Both IDs are reserved independently and mismatched rows are skipped for that path. JSONL imports and archive reads resolve only proven multi-hop aliases. Known failed creation rollback removes partial JSONL/SQLite branch artifacts; successful moves commit alias mappings only after all strict move persistence succeeds.
 
 ## Compatibility
 
