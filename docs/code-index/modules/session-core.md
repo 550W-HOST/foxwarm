@@ -50,6 +50,7 @@ The durable JSON implementation and backup semantics are canonical in [src-utils
 - A managed session has at most one live lease. Input addressed to an actively managed target enters its managed inbox.
 - When either side is isolated, inter-session delivery requires the same session or an explicit direct parent/child relation; unrelated and sibling sessions are denied.
 - Fork lineage never exposes parent content created after the fork point.
+- Automatic creation skips live/archived internal IDs, and explicit creation rejects archive-only reuse while persisted live sessions still hydrate. Canonical contract: [archived ID reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - Channel mutations are persisted after the in-memory map changes.
 - Goal reminders advance their sequence anchor when emitted so the same boundary is not repeated.
 

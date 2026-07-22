@@ -1,6 +1,7 @@
 # Unit: src-session-archive-store
 
 Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLineageStore.test.ts
+Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
 
@@ -11,6 +12,7 @@ Implements the SQLite/WAL archive index for raw messages, summary blocks, branch
 - Archive branch/effective-record/checkpoint/backfill types.
 - `initArchiveStore()` — open schema and await one startup bootstrap pass.
 - `initArchiveStoreSync()` — open schema without awaiting bootstrap.
+- `hasArchivedSessionId` — reports whether bootstrap/current branch metadata reserves an internal session ID.
 - `ensureSessionBranch`, `getSessionBranch` — branch and fork-point records.
 - `writeArchiveMessages`, `writeArchiveBlocks` — batched SQLite upserts for current archive appends/import.
 - `readLocalArchiveMessages`, `readLocalArchiveBlocks` — current-branch rows only.
@@ -47,6 +49,7 @@ Implements the SQLite/WAL archive index for raw messages, summary blocks, branch
 - Effective reads walk current session then ancestors, cap each ancestor at cumulative fork points, annotate `sourceSessionId`/`inherited`, and sort by source sequence or block ID.
 - Child branch creation seeds vector checkpoints at its fork boundaries.
 - Backfill candidates are sessions whose latest local message/block exceeds the checkpoint.
+- Reservation lookup waits for bootstrap, so retained JSONL paths can reconstruct branch rows after SQLite loss before a new lifetime is allocated.
 
 ## Compatibility
 
@@ -62,6 +65,8 @@ JSONL message and block logs remain active durable/import sources. Startup boots
 ## Canonical ownership
 
 Current JSONL/SQLite write and import-state behavior follows the canonical [dual-archive decision](../threads/context-compaction-and-recall.md#d-context-dual-archive).
+
+Internal session-ID lifetime reservation is canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 
 ## Design decisions
 

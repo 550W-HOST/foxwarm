@@ -46,6 +46,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - Each per-session SSE connection sends an immediate state snapshot, then message, stream, runtime, queue, and deletion updates for that session.
 - The global SSE stream is reserved for Sidebar, Architecture, and other list-wide consumers.
 - Session ordering and pinning update the shared session metadata index rather than rewriting history snapshots.
+- Named session and agent-main creation return HTTP 409 with `code: "SESSION_ID_ARCHIVED"` when the requested internal ID belongs to an archived deleted lifetime. Canonical semantics: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - CTX-BLOCK expansion delegates to the read-only archive helper and never queues, saves, or broadcasts session mutations.
 - The model-test endpoint treats request exceptions as failed HTTP results rather than scanning successful model text for an `Error:` prefix.
 - Setup routes are normal authenticated WebUI routes: `GET /api/setup/status`; `POST /api/setup/models`, `/api/setup/models/test`, `/api/setup/config`, `/api/setup/channels`, `/api/setup/weixin/login/start`, and `/api/setup/weixin/login/wait`. OOBE is reported when the models file is absent; there is no separate guest/admin role API at these routes.

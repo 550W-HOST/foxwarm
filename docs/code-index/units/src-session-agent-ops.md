@@ -1,6 +1,7 @@
 # Unit: src-session-agent-ops
 
 Files: src/session/agentOps.ts, src/session/agentMetadata.ts, src/session/agentMetadata.test.ts
+Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
 
@@ -70,6 +71,8 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 
 - Agent operations use a dependency-injection pattern (`SessionAgentOpsDeps` / `AgentMetadataDeps`) for session access, enabling testability.
 - `renameSessionIdentity` performs a multi-step atomic-ish rename: updates in-memory maps, moves history/archive/image files plus any leftover legacy frontier file on disk, updates child sessions' parent references, and persists everything.
+- New named sessions and agent-main sessions use the session-manager reservation guard. Moves that change the internal session ID reject live, alias, or retained-archive targets before moving files; display metadata changes do not enter this path.
+- Recreating an agent directory without a main session is allowed because it allocates no session lifetime. Recreating the archived main internal ID is rejected before the new directory is initialized.
 - Agent metadata is held in an in-memory `Map` backed by a single JSON file (no backup rotation). Normalization strips `skills` and cleans `isolatedNode`.
 - Isolation enforcement prevents cross-agent session moves when either source or target agent is isolated.
 - Inheritance chain resolution detects cycles and logs a warning rather than throwing.
@@ -80,5 +83,6 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - Consumed by the broader session manager which provides the `deps` implementations (session CRUD, alias cache, channel management).
 - Relies on `llm` module for prompt cache key management and system prompt snapshot building; new sessions created here pass their canonical session id into snapshot construction so session-specific memory frontmatter can match, and use a fresh key even when recording `parentSessionId` because this path does not fork/copy the parent's prefix.
 - Archive store and archive index are coordinated during session renames to keep on-disk state consistent.
+- Internal session-ID reuse and move-target rules are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - `DiskJsonData` utility provides the lightweight persistence layer with fallback/recovery semantics.
 - Test file validates round-trip persistence and normalization (no backup files created).

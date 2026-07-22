@@ -80,6 +80,7 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 - `prepareTurnParts` injects only turn-level context such as current time and session id, not channel source metadata. The generated time tag keeps only `kind="time"` plus `localTime`; the generated session tag keeps `kind="session"` plus `currentSessionId`, without redundant `hint` copies of the same values.
 - Supports managed sessions: when active, incoming messages are queued for the manager rather than processed directly.
 - Guest agent provisioning creates sessions for unauthorized users when channel config permits. `guestAgent.isolated` defaults true and uses `guestAgent.node` as the isolation node; when `isolated:false`, `guestAgent.node` is instead used as the new session's initial `currentNode` without enabling legacy isolated restrictions.
+- Unbound inbound channels create a reserved-safe session lifetime before attaching, and random guest-session names skip live and archived IDs. Canonical semantics: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - Queues messages silently when a session is already busy; the older user-facing `Request queued, currently processing another message` notice is intentionally no longer sent.
 - Final busy clearing still persists the full session after queue mutations so compact/queued-item removals are not resurrected from per-session history files on the next lazy load.
 

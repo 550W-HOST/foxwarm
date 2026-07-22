@@ -11,6 +11,7 @@ Cross-module lifecycle from public creation through lazy hydration, queued execu
 - `createAgentWithMainSession(options)` owns agent creation plus optional main session.
 - Low-level `createSession(sessionId, sessionData)` accepts a fully constructed session object, ensures its prompt-cache key, installs it in the map, and saves it. It does **not** allocate an ID from an options object.
 - `forkSession` and `createChildSession(parentSessionId, suffix, fork, options)` own fork/non-fork child creation.
+- A new session lifetime may use an internal session ID only when the ID is absent from both live persistence and the retained archive. Automatic allocators skip reserved IDs; explicit creation returns `SESSION_ID_ARCHIVED` for an archive-only collision.
 
 Canonical façade and child-ID ownership: [session core façade](../modules/session-core.md#d-session-core-facade) and [child identity](../modules/session-core.md#d-session-core-child-identity).
 
@@ -44,6 +45,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 ## Child and fork lifecycle
 
 - Agent-main children replace the `main` leaf; non-main children retain append-style IDs.
+- Fork and child allocators skip both live and archived IDs while incrementing their suffix counters.
 - Forks copy the model-visible prefix/frontier/snapshot and inherit prompt-cache/archive lineage only through the fork point.
 - Non-fork children start a fresh model-visible prefix and cache key.
 - A manual user fork calls `notifyManualForkCreated` so the parent history records the child even when no initial instruction was supplied.
@@ -62,6 +64,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 - `archiveSession(id, archived)` is a presentation/lifecycle flag, not physical deletion.
 - `deleteSession(id)` clears active runtime state and pending compact work, removes the in-memory session, detaches its channels, deletes the per-session history JSON plus any legacy frontier file, rewrites metadata/channels, and publishes deletion state.
 - Current deletion does **not** remove archive JSONL/SQLite records, archive branch metadata, vector rows/checkpoints, or independent managed/ToolScript state. Those durable sources may therefore outlive the live session record.
+- While any archive branch/log for a deleted lifetime remains discoverable, its internal session ID remains reserved. Explicit named-session creation, agent-main recreation, and internal-ID moves/renames must reject that target instead of merging generations. Agent creation without a main session remains allowed because it creates no session lifetime.
 - Agent/session move and rename operations coordinate metadata, history path, relations, attachments, archive store, and vector IDs through their dedicated façades.
 
 ## Modules and units
@@ -82,6 +85,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 - Stored legacy frontier files are startup migration inputs only; current hydration reads embedded frontier state.
 - Legacy busy fields remain concurrency/recovery compatibility data while `runtimeState` is current display state.
 - Existing non-main child ID chains retain append-style identity.
+- Existing live sessions remain hydratable when their ID also appears in the archive. Reservation checks distinguish persisted live records from archive-only deleted lifetimes.
 
 ## Design decisions
 
@@ -96,3 +100,7 @@ A manual fork remains visible to the parent even with no child instruction. The 
 ### D-lifecycle-lazy-hydration
 
 Startup loads lightweight metadata stubs and hydrates per-session history/frontier only when a session is accessed.
+
+### D-lifecycle-archived-id-reservation
+
+An internal session ID identifies one lifetime while its durable archive remains retained. Automatic allocation skips live IDs, aliases, and archive-only IDs. Explicit creation and any move/rename that changes the internal ID reject an archive-only target with the stable `SESSION_ID_ARCHIVED` code; they never combine old archive records with a new generation. Hydration of an existing persisted live lifetime is not new allocation and remains allowed even though that same ID has archive records. Display-name and other metadata-only changes do not allocate an internal ID and do not perform this check. If an agent is deleted while its main-session archive remains, recreating the same agent main session is rejected rather than inventing a different hidden main ID.
