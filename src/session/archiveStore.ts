@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import { createInterface } from 'node:readline';
-import { ARCHIVE_DB_PATH, SESSION_LOGS_DIR, getSessionArchiveLogPath, getSessionBlockArchiveLogPath } from '../config';
+import { ARCHIVE_DB_PATH, SESSION_ID_RESERVATIONS_LOG_PATH, SESSION_LOGS_DIR, getSessionArchiveLogPath, getSessionBlockArchiveLogPath } from '../config';
 import { logger } from '../common';
 import type { Message } from '../types';
 import type { ArchiveMessageRecord } from './archive';
@@ -53,7 +53,16 @@ type LineageEntry = {
 
 let db: DatabaseSync | null = null;
 const importedSessions = new Set<string>();
+const uncertainPayloadImportOwners = new Map<string, boolean>();
 let bootstrapPromise: Promise<void> | null = null;
+let reservationLedgerLoadPromise: Promise<Map<string, string>> | null = null;
+
+type SessionIdReservationRecord = {
+  v: 1;
+  sessionId: string;
+  canonicalSessionId: string;
+  timestamp: number;
+};
 
 const ARCHIVE_IMPORT_BATCH_SIZE = Math.max(1, Number(process.env.FOXWARM_ARCHIVE_IMPORT_BATCH_SIZE || 200));
 const MISSING_IMPORT_FILE_SIZE = -1;
@@ -233,6 +242,182 @@ async function streamJsonlLines(filePath: string, onLine: (line: string) => Prom
   }
 }
 
+function upsertSessionIdReservationSync(sessionId: string, canonicalSessionId: string, timestamp: number): void {
+  getDb().prepare(`
+    INSERT INTO archive_session_id_reservations (
+      session_id, canonical_session_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?)
+    ON CONFLICT(session_id) DO UPDATE SET
+      canonical_session_id = excluded.canonical_session_id,
+      updated_at = excluded.updated_at
+  `).run(sessionId, canonicalSessionId, timestamp, timestamp);
+}
+
+async function loadSessionIdReservationLedger(): Promise<Map<string, string>> {
+  if (!reservationLedgerLoadPromise) {
+    reservationLedgerLoadPromise = (async () => {
+      const reservations = new Map<string, string>();
+      let ledgerNeedsRewrite = !await fs.pathExists(SESSION_ID_RESERVATIONS_LOG_PATH);
+      if (!ledgerNeedsRewrite) {
+        const content = await fs.readFile(SESSION_ID_RESERVATIONS_LOG_PATH, 'utf8');
+        for (const rawLine of content.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line) {
+            continue;
+          }
+          let record: Partial<SessionIdReservationRecord>;
+          try {
+            record = JSON.parse(line) as Partial<SessionIdReservationRecord>;
+          } catch {
+            ledgerNeedsRewrite = true;
+            continue;
+          }
+          if (record.v !== 1
+            || typeof record.sessionId !== 'string'
+            || record.sessionId.length === 0
+            || typeof record.canonicalSessionId !== 'string'
+            || record.canonicalSessionId.length === 0) {
+            ledgerNeedsRewrite = true;
+            continue;
+          }
+          const existing = reservations.get(record.sessionId);
+          if (existing !== undefined && existing !== record.canonicalSessionId) {
+            throw new Error(`Session ID reservation ledger has conflicting mappings for "${record.sessionId}".`);
+          }
+          reservations.set(record.sessionId, record.canonicalSessionId);
+        }
+      }
+
+      const sqliteRows = getDb().prepare(`
+        SELECT session_id, canonical_session_id, updated_at
+        FROM archive_session_id_reservations
+      `).all() as Array<{ session_id: string; canonical_session_id: string; updated_at: number }>;
+      for (const row of sqliteRows) {
+        const existing = reservations.get(row.session_id);
+        if (existing !== undefined && existing !== row.canonical_session_id) {
+          throw new Error(`Session ID reservation state conflicts for "${row.session_id}" between ledger and SQLite.`);
+        }
+        if (existing === undefined) {
+          reservations.set(row.session_id, row.canonical_session_id);
+          ledgerNeedsRewrite = true;
+        }
+      }
+
+      assertValidReservationGraph(reservations);
+
+      if (ledgerNeedsRewrite) {
+        logger.warn({ reservationCount: reservations.size }, 'Repairing session ID reservation ledger from durable state');
+        await writeSessionIdReservationLedger(reservations);
+      }
+
+      const now = Date.now();
+      for (const [sessionId, canonicalSessionId] of reservations) {
+        upsertSessionIdReservationSync(sessionId, canonicalSessionId, now);
+      }
+      return reservations;
+    })().catch(error => {
+      reservationLedgerLoadPromise = null;
+      throw error;
+    });
+  }
+  return reservationLedgerLoadPromise;
+}
+
+async function writeSessionIdReservationLedger(reservations: Map<string, string>): Promise<void> {
+  const timestamp = Date.now();
+  const content = [...reservations.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([sessionId, canonicalSessionId]) => JSON.stringify({
+      v: 1,
+      sessionId,
+      canonicalSessionId,
+      timestamp,
+    } satisfies SessionIdReservationRecord))
+    .join('\n');
+  await fs.ensureDir(path.dirname(SESSION_ID_RESERVATIONS_LOG_PATH));
+  const temporaryPath = `${SESSION_ID_RESERVATIONS_LOG_PATH}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, content ? `${content}\n` : '');
+  await fs.move(temporaryPath, SESSION_ID_RESERVATIONS_LOG_PATH, { overwrite: true });
+}
+
+function assertValidReservationGraph(reservations: Map<string, string>): void {
+  for (const start of reservations.keys()) {
+    let current = start;
+    const seen = new Set<string>();
+    while (true) {
+      const next = reservations.get(current);
+      if (!next || next === current) break;
+      if (seen.has(current)) {
+        throw new Error(`Session ID reservation ledger contains an alias cycle involving "${current}".`);
+      }
+      seen.add(current);
+      current = next;
+    }
+  }
+}
+
+function resolveCanonicalReservation(reservations: Map<string, string>, sessionId: string): string {
+  let current = sessionId;
+  while (true) {
+    const next = reservations.get(current);
+    if (!next || next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+async function persistSessionIdReservation(sessionId: string, canonicalSessionId: string): Promise<void> {
+  if (!sessionId || !canonicalSessionId) {
+    return;
+  }
+
+  const reservations = await loadSessionIdReservationLedger();
+  const currentCanonical = reservations.get(sessionId);
+  if (currentCanonical !== undefined && currentCanonical !== canonicalSessionId) {
+    if (resolveCanonicalReservation(reservations, sessionId) === canonicalSessionId) return;
+    throw new Error(`Session ID reservation "${sessionId}" already maps to "${currentCanonical}", not "${canonicalSessionId}".`);
+  }
+  if (currentCanonical !== canonicalSessionId) {
+    const previousRow = getDb().prepare(`
+      SELECT canonical_session_id, created_at, updated_at
+      FROM archive_session_id_reservations
+      WHERE session_id = ?
+    `).get(sessionId) as { canonical_session_id: string; created_at: number; updated_at: number } | undefined;
+    reservations.set(sessionId, canonicalSessionId);
+    try {
+      assertValidReservationGraph(reservations);
+      upsertSessionIdReservationSync(sessionId, canonicalSessionId, Date.now());
+      await writeSessionIdReservationLedger(reservations);
+    } catch (error) {
+      if (currentCanonical === undefined) reservations.delete(sessionId);
+      else reservations.set(sessionId, currentCanonical);
+      if (previousRow) {
+        getDb().prepare(`
+          UPDATE archive_session_id_reservations
+          SET canonical_session_id = ?, created_at = ?, updated_at = ?
+          WHERE session_id = ?
+        `).run(previousRow.canonical_session_id, previousRow.created_at, previousRow.updated_at, sessionId);
+      } else {
+        getDb().prepare(`DELETE FROM archive_session_id_reservations WHERE session_id = ?`).run(sessionId);
+      }
+      throw error;
+    }
+    return;
+  }
+
+  upsertSessionIdReservationSync(sessionId, canonicalSessionId, Date.now());
+}
+
+async function resolveArchivedRecordSessionId(sessionId: string): Promise<string> {
+  const reservations = await loadSessionIdReservationLedger();
+  return resolveCanonicalReservation(reservations, sessionId);
+}
+
+export async function resolveArchivedSessionId(sessionId: string): Promise<string> {
+  await initArchiveStore();
+  return resolveArchivedRecordSessionId(sessionId);
+}
+
 function openArchiveStore(): void {
   if (db) {
     return;
@@ -253,6 +438,15 @@ function openArchiveStore(): void {
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_archive_branches_parent ON archive_branches(parent_session_id);
+
+    CREATE TABLE IF NOT EXISTS archive_session_id_reservations (
+      session_id TEXT PRIMARY KEY,
+      canonical_session_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_archive_session_id_reservations_canonical
+      ON archive_session_id_reservations(canonical_session_id);
 
     CREATE TABLE IF NOT EXISTS archive_messages (
       session_id TEXT NOT NULL,
@@ -385,6 +579,7 @@ function parseSourceBlockIdsJson(value: unknown): number[] | undefined {
 type BootstrapSessionCandidate = {
   sessionId: string;
   parentSessionId?: string;
+  aliases?: string[];
 };
 
 async function collectBootstrapSessionCandidates(): Promise<BootstrapSessionCandidate[]> {
@@ -395,14 +590,17 @@ async function collectBootstrapSessionCandidates(): Promise<BootstrapSessionCand
     const sessionsData = data?.sessions && typeof data.sessions === 'object' ? data.sessions : data;
     if (sessionsData && typeof sessionsData === 'object') {
       for (const [sessionId, sessionMeta] of Object.entries(sessionsData)) {
-        if (typeof sessionId !== 'string' || !sessionId.trim()) {
+        if (typeof sessionId !== 'string' || sessionId.length === 0) {
           continue;
         }
         const meta = (sessionMeta && typeof sessionMeta === 'object') ? sessionMeta as Record<string, any> : {};
         candidates.set(sessionId, {
           sessionId,
-          parentSessionId: typeof meta.parentSessionId === 'string' && meta.parentSessionId.trim().length > 0
-            ? meta.parentSessionId.trim()
+          parentSessionId: typeof meta.parentSessionId === 'string' && meta.parentSessionId.length > 0
+            ? meta.parentSessionId
+            : undefined,
+          aliases: Array.isArray(meta.aliases)
+            ? meta.aliases.filter((alias): alias is string => typeof alias === 'string' && alias.length > 0)
             : undefined,
         });
       }
@@ -460,10 +658,14 @@ async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: str
   let minLocalSeq = Number.POSITIVE_INFINITY;
   await streamJsonlLines(archivePath, async (line) => {
     const record = parseMessageRecord(line);
-    if (record?.sessionId === parentSessionId && record.seq > maxSeq) {
+    if (!record) {
+      return;
+    }
+    const canonicalSessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    if (canonicalSessionId === parentSessionId && record.seq > maxSeq) {
       maxSeq = record.seq;
     }
-    if (record?.sessionId === sessionId && record.seq < minLocalSeq) {
+    if (canonicalSessionId === sessionId && record.seq < minLocalSeq) {
       minLocalSeq = record.seq;
     }
   });
@@ -486,10 +688,14 @@ async function inferLegacyForkBlockId(sessionId: string, parentSessionId: string
   let minLocalId = Number.POSITIVE_INFINITY;
   await streamJsonlLines(archivePath, async (line) => {
     const record = parseBlockRecord(line);
-    if (record?.sessionId === parentSessionId && record.id > maxId) {
+    if (!record) {
+      return;
+    }
+    const canonicalSessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    if (canonicalSessionId === parentSessionId && record.id > maxId) {
       maxId = record.id;
     }
-    if (record?.sessionId === sessionId && record.id < minLocalId) {
+    if (canonicalSessionId === sessionId && record.id < minLocalId) {
       minLocalId = record.id;
     }
   });
@@ -501,23 +707,61 @@ async function inferLegacyForkBlockId(sessionId: string, parentSessionId: string
   return maxId;
 }
 
-async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
-  const candidates = await collectBootstrapSessionCandidates();
-  if (candidates.length === 0) {
-    return;
+async function findMismatchedHistoricalPayloadId(sessionId: string): Promise<string | undefined> {
+  let lastRecordSessionId: string | undefined;
+  let sawCurrentSessionId = false;
+  const inspect = async (filePath: string, parse: (line: string) => { sessionId: string } | null): Promise<void> => {
+    if (!await fs.pathExists(filePath)) return;
+    await streamJsonlLines(filePath, line => {
+      const record = parse(line);
+      if (!record) return;
+      lastRecordSessionId = record.sessionId;
+      if (record.sessionId === sessionId) sawCurrentSessionId = true;
+    });
+  };
+  await inspect(getSessionArchiveLogPath(sessionId), parseMessageRecord);
+  if (!lastRecordSessionId) {
+    await inspect(getSessionBlockArchiveLogPath(sessionId), parseBlockRecord);
   }
+  return !sawCurrentSessionId && lastRecordSessionId && lastRecordSessionId !== sessionId
+    ? lastRecordSessionId
+    : undefined;
+}
+
+async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
+  await loadSessionIdReservationLedger();
+
+  const candidates = await collectBootstrapSessionCandidates();
+  const discoveredSessionIds = new Set(candidates.map(candidate => candidate.sessionId));
+  const existingBranchRows = getDb().prepare(`SELECT session_id FROM archive_branches`).all() as Array<{ session_id: string }>;
+  for (const row of existingBranchRows) discoveredSessionIds.add(row.session_id);
 
   for (const candidate of candidates) {
     const existingBranch = getBranchInternal(candidate.sessionId);
+    for (const alias of [...(candidate.aliases || [])].reverse()) {
+      await persistSessionIdReservation(alias, candidate.sessionId);
+    }
+    if (!existingBranch) {
+      const mismatchedPayloadId = await findMismatchedHistoricalPayloadId(candidate.sessionId);
+      if (mismatchedPayloadId) {
+        // A path/payload mismatch is not proof of a move: legacy forks copied
+        // parent records into child logs. Reserve the payload identity as its
+        // own lifetime without redirecting or merging either archive.
+        uncertainPayloadImportOwners.set(`${candidate.sessionId}\0${mismatchedPayloadId}`, !discoveredSessionIds.has(mismatchedPayloadId));
+        await ensureSessionBranch(mismatchedPayloadId);
+      }
+    }
+
     if (existingBranch) {
       continue;
     }
 
     if (candidate.parentSessionId) {
-      const forkMessageSeq = await inferLegacyForkMessageSeq(candidate.sessionId, candidate.parentSessionId);
-      const forkBlockId = await inferLegacyForkBlockId(candidate.sessionId, candidate.parentSessionId);
+      const parentSessionId = await resolveArchivedRecordSessionId(candidate.parentSessionId);
+      const forkMessageSeq = await inferLegacyForkMessageSeq(candidate.sessionId, parentSessionId);
+      const forkBlockId = await inferLegacyForkBlockId(candidate.sessionId, parentSessionId);
       await ensureSessionBranch(candidate.sessionId, {
-        parentSessionId: candidate.parentSessionId,
+        parentSessionId,
         forkMessageSeq,
         forkBlockId,
       });
@@ -599,7 +843,12 @@ async function importSessionMessagesFromJsonl(sessionId: string): Promise<void> 
       return;
     }
 
-    batch.push(record);
+    const canonicalSessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    if (canonicalSessionId !== sessionId) {
+      await ensureSessionBranch(canonicalSessionId);
+      if (!uncertainPayloadImportOwners.get(`${sessionId}\0${canonicalSessionId}`)) return;
+    }
+    batch.push(canonicalSessionId === record.sessionId ? record : { ...record, sessionId: canonicalSessionId });
     if (batch.length >= ARCHIVE_IMPORT_BATCH_SIZE) {
       await flushBatch();
     }
@@ -673,7 +922,12 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
       return;
     }
 
-    batch.push(record);
+    const canonicalSessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    if (canonicalSessionId !== sessionId) {
+      await ensureSessionBranch(canonicalSessionId);
+      if (!uncertainPayloadImportOwners.get(`${sessionId}\0${canonicalSessionId}`)) return;
+    }
+    batch.push(canonicalSessionId === record.sessionId ? record : { ...record, sessionId: canonicalSessionId });
     if (batch.length >= ARCHIVE_IMPORT_BATCH_SIZE) {
       await flushBatch();
     }
@@ -752,6 +1006,27 @@ export async function initArchiveStore(): Promise<void> {
 
 export function initArchiveStoreSync(): void {
   openArchiveStore();
+}
+
+/**
+ * Return whether a session id has ever been registered in the durable archive.
+ *
+ * Deleted live sessions intentionally keep their append-only archive records.
+ * Callers that allocate new session ids must therefore treat an archived id as
+ * reserved even when it no longer exists in sessions.json or state/sessions/.
+ */
+export async function hasArchivedSessionId(sessionId: string): Promise<boolean> {
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    return false;
+  }
+
+  await initArchiveStore();
+  const reservation = getDb().prepare(`
+    SELECT 1
+    FROM archive_session_id_reservations
+    WHERE session_id = ? OR canonical_session_id = ?
+  `).get(sessionId, sessionId);
+  return reservation !== undefined || getBranchInternal(sessionId) !== null;
 }
 
 export async function ensureSessionBranch(
@@ -879,6 +1154,7 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
 
 export async function readLocalArchiveMessages(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageRecord[]> {
   await initArchiveStore();
+  sessionId = await resolveArchivedRecordSessionId(sessionId);
   await ensureImported(sessionId);
 
   const rows = getDb().prepare(`
@@ -904,6 +1180,7 @@ export async function readLocalArchiveMessages(sessionId: string, startSeq?: num
 
 export async function readEffectiveArchiveMessages(sessionId: string, startSeq?: number, endSeq?: number): Promise<EffectiveArchiveMessageRecord[]> {
   await initArchiveStore();
+  sessionId = await resolveArchivedRecordSessionId(sessionId);
   await ensureImported(sessionId);
 
   const lineage = buildLineage(sessionId);
@@ -936,6 +1213,7 @@ export async function readEffectiveArchiveMessages(sessionId: string, startSeq?:
 
 export async function readLocalArchiveBlocks(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
   await initArchiveStore();
+  sessionId = await resolveArchivedRecordSessionId(sessionId);
   await ensureImported(sessionId);
 
   const rows = getDb().prepare(`
@@ -969,6 +1247,7 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
 
 export async function readEffectiveArchiveBlocks(sessionId: string, startId?: number, endId?: number): Promise<EffectiveArchiveBlockRecord[]> {
   await initArchiveStore();
+  sessionId = await resolveArchivedRecordSessionId(sessionId);
   await ensureImported(sessionId);
 
   const lineage = buildLineage(sessionId);
@@ -1059,6 +1338,10 @@ export function setVectorCheckpointSync(
 
 export async function renameSessionArchiveStore(oldSessionId: string, newSessionId: string): Promise<void> {
   await initArchiveStore();
+  renameSessionArchiveStoreRows(oldSessionId, newSessionId);
+}
+
+function renameSessionArchiveStoreRows(oldSessionId: string, newSessionId: string): void {
   const database = getDb();
   runInTransaction(() => {
     database.prepare(`UPDATE archive_branches SET session_id = ?, updated_at = ? WHERE session_id = ?`).run(newSessionId, Date.now(), oldSessionId);
@@ -1074,8 +1357,33 @@ export async function renameSessionArchiveStore(oldSessionId: string, newSession
   }
 }
 
+export function renameSessionArchiveStoreForRecovery(oldSessionId: string, newSessionId: string): void {
+  initArchiveStoreSync();
+  renameSessionArchiveStoreRows(oldSessionId, newSessionId);
+}
+
+export async function commitSessionIdRename(oldSessionId: string, newSessionId: string): Promise<void> {
+  await initArchiveStore();
+  await persistSessionIdReservation(oldSessionId, newSessionId);
+}
+
+export async function rollbackUncommittedSessionArchive(sessionId: string): Promise<void> {
+  await initArchiveStore();
+  runInTransaction(() => {
+    getDb().prepare(`DELETE FROM archive_messages WHERE session_id = ?`).run(sessionId);
+    getDb().prepare(`DELETE FROM archive_blocks WHERE session_id = ?`).run(sessionId);
+    getDb().prepare(`DELETE FROM archive_checkpoints WHERE session_id = ?`).run(sessionId);
+    getDb().prepare(`DELETE FROM archive_import_state WHERE session_id = ?`).run(sessionId);
+    getDb().prepare(`DELETE FROM archive_branches WHERE session_id = ?`).run(sessionId);
+  });
+  importedSessions.delete(sessionId);
+  await fs.remove(getSessionArchiveLogPath(sessionId));
+  await fs.remove(getSessionBlockArchiveLogPath(sessionId));
+}
+
 export async function getVectorSearchLineage(sessionId: string): Promise<LineageEntry[]> {
   await initArchiveStore();
+  sessionId = await resolveArchivedRecordSessionId(sessionId);
   await ensureImported(sessionId);
   return buildLineage(sessionId);
 }

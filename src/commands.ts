@@ -151,7 +151,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         return
       }
       sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
-      sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), targetSessionId)
+      await sessionManager.attachChannelDurably(getChannelId(ctx), getConversationId(ctx), targetSessionId)
       const displayName = targetSession.displayName ? ` (${targetSession.displayName})` : ''
       ctx.reply(`✅ Attached to session \`${targetSessionId}\`${displayName}`)
     },

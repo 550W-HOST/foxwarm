@@ -220,6 +220,8 @@ Foxwarm's current primary configuration files live inside the data directory:
 
 For installer-based setup, `state/` and `agents/` are under `./foxwarm-data/` by default, and the installer writes `foxwarm/data_dir` so later starts keep using that data directory. For Docker Compose, `state/` and `agents/` are under `./foxwarm-data/` on the host and `/data/` in the container. Bundled skills remain in the program image/repo under `skills/`.
 
+Back up and restore the **whole data directory**, not only configuration or SQLite files. Session archive identity also depends on `state/session-id-reservations.jsonl` (committed move aliases), and an interrupted move may leave `state/session-id-move-pending.json` with explicit rollback/finish intent and target-directory ownership. Pending recovery is fail-closed before ordinary session loading. These files are durable/operator state, not disposable logs.
+
 Example `state/config.yaml` app settings:
 
 ```yaml

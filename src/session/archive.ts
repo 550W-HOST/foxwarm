@@ -24,6 +24,12 @@ export interface ArchiveMessageRecord {
   inherited?: boolean;
 }
 
+let archiveWriteFaultInjector: ((phase: 'after-jsonl-append', sessionId: string) => void) | null = null;
+
+export function setArchiveWriteFaultInjectorForTests(injector: ((phase: 'after-jsonl-append', sessionId: string) => void) | null): void {
+  archiveWriteFaultInjector = injector;
+}
+
 export function getMessageTimestamp(message: Message): number {
   return message.__meta?.timestamp || Date.now();
 }
@@ -161,6 +167,7 @@ export async function appendMessagesToArchive(session: Session, messages: Messag
   }
 
   await fs.appendFile(archiveLogPath, `${lines.join('\n')}\n`);
+  archiveWriteFaultInjector?.('after-jsonl-append', session.id);
   await writeArchiveMessages(records);
   await refreshSessionArchiveImportState(session.id, 'messages');
 }

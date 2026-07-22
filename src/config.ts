@@ -165,6 +165,8 @@ function resolveDataRootDir(): string {
 export const DATA_ROOT_DIR = resolveDataRootDir();
 export const STATE_DIR = path.join(DATA_ROOT_DIR, 'state');
 export const ARCHIVE_DB_PATH = path.join(STATE_DIR, 'archive-store.sqlite');
+export const SESSION_ID_RESERVATIONS_LOG_PATH = path.join(STATE_DIR, 'session-id-reservations.jsonl');
+export const SESSION_ID_MOVE_JOURNAL_PATH = path.join(STATE_DIR, 'session-id-move-pending.json');
 
 const CONFIG_PATH_ENV = process.env.FOXWARM_CONFIG_PATH || process.env.CONFIG_PATH;
 export const APP_CONFIG_PATH = CONFIG_PATH_ENV

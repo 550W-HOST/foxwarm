@@ -21,6 +21,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 - `buildWaitTimeoutMessage(timer)` — formats wait-timeout metadata as a `<foxwarm-system ...>payload</foxwarm-system>` wrapper
 - `createTimersStore(filePath)` — factory for the disk persistence store
 - `setTimersStoreForTests(store)` / `resetTimersForTests()` — test helpers
+- `setTriggeredSessionNameFactoryForTests` / `fireTimerForTests` — deterministic new-session allocation test hooks
 - `isTimersInitialized()` — returns initialization state
 
 ## Function Index
@@ -34,6 +35,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 | `generateTimerId()` | ~67 | Produces a random 8-char hex ID |
 | `normalizeSessionPrefix(prefix)` | ~71 | Validates and trims session prefix string |
 | `buildTriggeredSessionName(prefix)` | ~78 | Generates a unique session name with timestamp and random suffix |
+| `setTriggeredSessionNameFactoryForTests(factory)` | ~90 | Overrides generated timer-session names for deterministic allocation tests |
 | `isCronTimer(timer)` | ~82 | Checks if a timer has a cron expression |
 | `getTimerMode(timer)` | ~86 | Returns `'once'` or `'cron'` |
 | `getNextRunAtFromJob(job)` | ~90 | Extracts next invocation timestamp from a node-schedule Job |
@@ -45,6 +47,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 | `cancelTimerJob(timerId)` | ~136 | Cancels a single scheduled job |
 | `cancelAllJobs()` | ~143 | Cancels all scheduled jobs |
 | `fireTimer(timerId)` | ~148 | Executes timer delivery logic (wait-timeout or session event) |
+| `fireTimerForTests(timerId)` | ~265 | Invokes timer delivery deterministically without waiting for the scheduler |
 | `scheduleTimer(timer)` | ~210 | Schedules a timer via node-schedule (cron or one-time) |
 | `parseAbsoluteTime(at)` | ~245 | Parses a timestamp from number or ISO string |
 | `normalizeTimerScheduleArgs(args, options)` | ~315 | Shared create/update validation for mutually exclusive `at` / `afterSeconds` / `cron` schedules |
@@ -60,7 +63,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 
 - `./config` — `TIMERS_FILE`, `getAgentDir`
 - `./common` — `logger`
-- `./sessionManager` — `getExistingSession`, `queueSessionSystemEvent`, `queueSessionWaitTimeoutEvent`, `createSessionInAgent`
+- `./sessionManager` — `getExistingSession`, `queueSessionSystemEvent`, `queueSessionWaitTimeoutEvent`, `createSessionInAgentWithAutomaticName`
 - `./utils/diskJsonData` — `DiskJsonData` (persistent JSON file abstraction)
 - `./utils/localTime` — `formatLocalTimestamp`
 
@@ -68,7 +71,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 
 - Timers are stored in-memory (`Map`) and persisted to a JSON file on every mutation.
 - On `initializeTimers`, past-due one-time timers fire immediately via `setImmediate`; cron timers are re-scheduled.
-- `fireTimer` handles two paths: wait-timeout timers deliver via `queueSessionWaitTimeoutEvent` as a pure system event wrapper, while regular timers deliver via `queueSessionSystemEvent` (to existing or newly-created sessions) with the raw timer message wrapped in a single `<foxwarm-message type="timer" ...>...</foxwarm-message>` system part.
+- `fireTimer` handles two paths: wait-timeout timers deliver via `queueSessionWaitTimeoutEvent` as a pure system event wrapper, while regular timers deliver via `queueSessionSystemEvent` (to existing or newly-created sessions) with the raw timer message wrapped in a single `<foxwarm-message type="timer" ...>...</foxwarm-message>` system part. New-session timers generate/retry names inside the atomic session identity boundary, skipping live and archived candidates.
 - One-time timers are deleted after firing or on delivery failure; cron timers persist and only update `lastTriggeredAt`.
 - Input validation enforces allowed characters in `sessionPrefix`, positive timeout values, and exactly one schedule mode for creates / schedule-changing updates.
 - `updateTimer` rejects internal wait-timeout timers, verifies optional session ownership scope, preserves omitted fields, supports message/schedule/new-session target edits, and cancels/reschedules the active job so `nextRunAt` reflects the new schedule.
@@ -81,6 +84,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 - Delivers events back into the session system via `sessionManager`, which processes them as background system events.
 - Can spawn new sessions in a specified agent directory, enabling scheduled autonomous tasks.
 - Relies on `config` for file paths and agent directory resolution.
+- Automatic timer-session ID allocation follows [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 
 ## Design Decisions
 

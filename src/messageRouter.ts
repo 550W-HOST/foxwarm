@@ -780,12 +780,14 @@ export class MessageRouter {
       return null;
     }
 
-    const sessionId = await this.createGuestSession(channelId, conversationId, guestAgent);
-    const session = await sessionManager.getSession(sessionId);
-    return { sessionId, session };
+    const resolved = await sessionManager.getOrCreateSessionForChannel(channelId, conversationId, {
+      createSession: async () => ({ session: await sessionManager.getSession(await this.createGuestSession(guestAgent)), created: true }),
+      attachmentConfig: { dangerouslyAllowAllUsers: true },
+    });
+    return sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId) ? resolved : null;
   }
 
-  private async createGuestSession(channelId: string, conversationId: string, guestAgent: NormalizedGuestAgentConfig): Promise<string> {
+  private async createGuestSession(guestAgent: NormalizedGuestAgentConfig): Promise<string> {
     if (!await fs.pathExists(getAgentDir(guestAgent.agentId))) {
       throw new Error(`Guest agent source "${guestAgent.agentId}" does not exist.`);
     }
@@ -804,13 +806,10 @@ export class MessageRouter {
 
       const result = await sessionManager.createSessionInAgent({
         agentName: guestAgent.agentId,
-        sessionName: sessionManager.generateSessionId(),
       });
-      sessionManager.attachChannel(channelId, conversationId, result.sessionId, { dangerouslyAllowAllUsers: true });
       return result.sessionId;
     }
 
-    const newAgentName = await generateGuestAgentName(guestAgent.agentId);
     const isolatedNode = guestAgent.isolated
       ? (() => {
           if (!guestAgent.node) {
@@ -820,13 +819,28 @@ export class MessageRouter {
         })()
       : undefined;
 
-    const result = await sessionManager.createAgentWithMainSession({
-      agentName: newAgentName,
-      createMainSession: true,
-      inherit: guestAgent.agentId,
-      isolatedNode,
-    });
-    sessionManager.attachChannel(channelId, conversationId, result.mainSessionId, { dangerouslyAllowAllUsers: true });
+    let result: Awaited<ReturnType<typeof sessionManager.createAgentWithMainSession>> | undefined;
+    for (let attempt = 0; attempt < 32; attempt += 1) {
+      const newAgentName = await generateGuestAgentName(guestAgent.agentId);
+      try {
+        result = await sessionManager.createAgentWithMainSession({
+          agentName: newAgentName,
+          createMainSession: true,
+          inherit: guestAgent.agentId,
+          isolatedNode,
+        });
+        break;
+      } catch (error: any) {
+        const isAllocationCollision = error?.code === sessionManager.ARCHIVED_SESSION_ID_ERROR_CODE
+          || /already exists/i.test(String(error?.message || ''));
+        if (!isAllocationCollision) {
+          throw error;
+        }
+      }
+    }
+    if (!result) {
+      throw new Error(`Unable to allocate a unique guest agent name for "${guestAgent.agentId}".`);
+    }
     return result.mainSessionId;
   }
 
@@ -882,13 +896,7 @@ export class MessageRouter {
   }
 
   private async resolveSessionForIncomingMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session }> {
-    let sessionId = sessionManager.getSessionByChannel(getChannelId(ctx), getConversationId(ctx));
-    if (!sessionId) {
-      sessionId = sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx));
-    }
-
-    const session = await sessionManager.getSession(sessionId);
-    return { sessionId, session };
+    return sessionManager.getOrCreateSessionForChannel(getChannelId(ctx), getConversationId(ctx));
   }
 
   private async runSessionTurn(

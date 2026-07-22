@@ -1,6 +1,7 @@
 # Unit: src-session-agent-ops
 
 Files: src/session/agentOps.ts, src/session/agentMetadata.ts, src/session/agentMetadata.test.ts
+Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
 
@@ -13,6 +14,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - `createSessionInAgent(options, deps)` — creates a new session scoped to an agent
 - `createAgentWithSession(options, deps)` — creates a new agent directory and its initial session
 - `moveSessionToTarget(options, deps)` — renames or moves a session across agents
+- `recoverPendingSessionIdentityMove(moveSessionArchiveIndex)` — finishes or reverses the one crash-interrupted identity move before normal session loading
 - `AgentMetadata` (interface) — shape of per-agent config (isolated, isolatedNode, inherit)
 - `createAgentMetadataStore(filePath)` — factory for the disk-backed metadata store
 - `loadAgentMetadata()` — loads metadata from disk into memory
@@ -36,6 +38,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | `buildSessionId(agentName, sessionName)` | ~35 | Constructs composite session ID from agent and name |
 | `initializeAgentDirectory(options)` | ~42 | Creates agent dir, optionally copies memory from source |
 | `renameSessionIdentity(options, deps)` | ~80 | Renames session ID, moves all associated files, updates aliases and children |
+| pending-move journal helpers / `recoverPendingSessionIdentityMove` | ~top | Atomically records explicit rollback/finish intent and target-directory ownership, then performs that recovery before startup loading |
 | `createSessionInAgent(options, deps)` | ~130 | Creates a session within an existing agent with a fresh promptCacheKey and metadata |
 | `createAgentWithSession(options, deps)` | ~(truncated) | Creates agent directory then creates its initial session |
 | `moveSessionToTarget(options, deps)` | ~(truncated) | Orchestrates session move/rename with optional agent creation |
@@ -70,6 +73,8 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 
 - Agent operations use a dependency-injection pattern (`SessionAgentOpsDeps` / `AgentMetadataDeps`) for session access, enabling testability.
 - `renameSessionIdentity` performs a multi-step atomic-ish rename: updates in-memory maps, moves history/archive/image files plus any leftover legacy frontier file on disk, updates child sessions' parent references, and persists everything.
+- New named sessions and agent-main sessions run under the session-manager identity commit lock and remove a newly initialized agent directory when critical creation fails. A create-agent move completes nonmutating validation, durably records rollback intent and semantically bound target-directory ownership, then creates/copies the directory. Initialization failure and startup rollback remove only that owned directory idempotently; pending rollback keeps it until recovery, while finishing recovery keeps it permanently. Moves reject journal-unsafe, live, alias, or retained-archive targets before mutation, reverse known failed memory/file/archive/index/relation/attachment mutations, and commit the historical alias only after strict persistence succeeds. The validated journal records explicit `rolling-back`/`finishing` intent rather than inferring intent from metadata; display metadata changes do not enter this path.
+- Recreating an agent directory without a main session is allowed because it allocates no session lifetime. Recreating the archived main internal ID is rejected before the new directory is initialized.
 - Agent metadata is held in an in-memory `Map` backed by a single JSON file (no backup rotation). Normalization strips `skills` and cleans `isolatedNode`.
 - Isolation enforcement prevents cross-agent session moves when either source or target agent is isolated.
 - Inheritance chain resolution detects cycles and logs a warning rather than throwing.
@@ -80,5 +85,6 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - Consumed by the broader session manager which provides the `deps` implementations (session CRUD, alias cache, channel management).
 - Relies on `llm` module for prompt cache key management and system prompt snapshot building; new sessions created here pass their canonical session id into snapshot construction so session-specific memory frontmatter can match, and use a fresh key even when recording `parentSessionId` because this path does not fork/copy the parent's prefix.
 - Archive store and archive index are coordinated during session renames to keep on-disk state consistent.
+- Internal session-ID reuse and move-target rules are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - `DiskJsonData` utility provides the lightweight persistence layer with fallback/recovery semantics.
 - Test file validates round-trip persistence and normalization (no backup files created).

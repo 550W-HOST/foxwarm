@@ -1,6 +1,6 @@
 # Unit: src-session-manager
 
-Files: src/sessionManager.ts
+Files: src/sessionManager.ts, src/session/sessionIdAllocation.test.ts
 
 ## Purpose
 
@@ -13,6 +13,9 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ### Session identity, loading, and persistence
 
 - `buildAgentMainSessionId`, `buildChildSessionId`, `validateChildSessionSuffix` — canonical agent-main and child identifiers.
+- `ARCHIVED_SESSION_ID_ERROR_CODE`, `ArchivedSessionIdError`, `assertSessionIdAvailableForNewLifetime` — the stable explicit-creation error and unified live/archive reservation boundary.
+- `createSessionInAgentWithAutomaticName` — runs a caller-supplied automatic name generator inside the identity commit lock and retries reserved candidates.
+- `getOrCreateSessionForChannel` — per-channel serialized first-session creation and attachment, with an optional guest/session factory and attachment config.
 - `getExistingSession`, `getSession`, `createEmptySession`, `createSession`, `deleteSession`, `archiveSession` — lifecycle operations.
 - `saveSession`, `saveSessionsMetadata`, `loadSessions`, `listSessions`, `getAllSessions` — persistence and enumeration.
 - `setSessionCwd`, `setSessionChildModelDefault`, `setSessionCompactThreshold` — persisted session settings.
@@ -49,8 +52,12 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ## Internal sections
 
 - **Wait-state transition table:** maintenance items are wait-neutral; matching timeout tokens wake; stale tokens drop; `waitAllSessions` defers listed child messages until all requested sessions report.
-- **Lazy hydration:** metadata creates lightweight session objects; `getSession` loads the per-session history snapshot and renders the embedded context frontier.
-- **Child/fork creation:** copies or rebuilds prompt snapshots/cache lineage according to fork semantics and records archive lineage.
+- **Lazy hydration:** metadata creates lightweight session objects; `getSession` loads the per-session history snapshot and renders the embedded context frontier. A persisted live record remains hydratable even when archive rows exist, while an archive-only ID cannot implicitly start a new lifetime.
+- **Session ID reservation:** one non-reentrant process-wide mutex spans check through strict commit for all public session creation/move façades. Nested implementation paths use private unlocked helpers; callback descendants cannot inherit a bypass capability. Automatic random/fork/child/timer allocation skips live IDs, aliases, and retained archive IDs.
+- **Critical persistence:** creation/move paths use strict history/metadata/channel writers and roll back known failed attempts, including partial archive appends. Ordinary runtime saves remain best-effort where callers historically do not handle persistence errors.
+- **Startup recovery:** pending identity-move recovery runs outside the ordinary best-effort load catch. Journal validation or recovery failure rejects initialization so partially recovered state is never loaded as a normal session stub.
+- **Channel first-session creation:** a keyed channel/conversation lock makes lookup-create-durable-attach one flow. Factories report `{ session, created }`, so race/failure cleanup removes only a lifetime owned by that invocation and never a returned pre-existing session.
+- **Child/fork creation:** copies or rebuilds prompt snapshots/cache lineage according to fork semantics, records archive lineage, and advances suffix counters past retained IDs.
 - **Managed wakeup:** routes active managed-session input to its inbox and wakes or resumes its owner/controller with cooldown and stale-lease recovery.
 - **Queue notification:** persists queue changes, emits state callbacks, and invokes the registered router trigger when work should run.
 - **Restart recovery:** clears stale busy fields, appends/deduplicates the restart system event, retriggers queued work, and reclaims or wakes persisted managed inbox/controller state.
@@ -71,12 +78,14 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - Active `requesting-model` and `running-tool` phases are transient; persisted waits can survive restart.
 - Forks share parent prompt/cache/archive prefix lineage; non-fork children start a fresh prefix.
 - Session deletion clears runtime/pending compact state, the live map, attachments, session/legacy-frontier files, and shared metadata. It currently leaves archive store/log and vector data intact; canonical scope is documented in [session lifecycle](../threads/session-lifecycle.md#archive-and-deletion).
+- A retained archive reserves its exact internal session ID across creation surfaces; existing persisted live records are still hydrated. Concurrent in-process creators and movers cannot both commit the same target. Canonical ownership: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 
 ## Compatibility
 
 - `busy`, `busyStartedAt`, and queue-length fields remain available to existing API readers; `runtimeState` is the canonical user-facing phase.
 - Legacy channel attachment shapes and context-frontier files are handled by their dedicated readers/migrations, not by undocumented fallback logic in this façade.
 - Existing child IDs under non-main parents retain append-style semantics. Agent-main child creation replaces the `main` leaf.
+- Channel attachment no longer doubles as an implicit session allocator; creation chooses an available ID before attaching the channel.
 
 ## Design decisions
 
@@ -90,3 +99,4 @@ All queue insertion uses one wait-state transition path. Compact maintenance is 
 - Child ID construction: [D-session-core-child-identity](../modules/session-core.md#d-session-core-child-identity).
 - Prompt-cache/prefix inheritance and rotation: [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
 - Manual fork parent event: [D-lifecycle-manual-fork-event](../threads/session-lifecycle.md#d-lifecycle-manual-fork-event).
+- Archived internal-ID reservation: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).

@@ -9,8 +9,8 @@ Owns persisted channel-instance/conversation attachments to sessions, direct cha
 ## Key exports
 
 - `ChannelMode`, `ChannelConfig`, `FileDeliveryResult`, `ChannelTarget`.
-- `createChannelsStore`, test store/reset helpers, `loadChannels`, `saveChannels`, `importLegacyChannelAttachments`.
-- `attachChannel`, `detachChannel`, `detachChannelsForSession`.
+- `createChannelsStore`, test store/reset helpers, `loadChannels`, `saveChannels`, `saveChannelsCritical`, `importLegacyChannelAttachments`.
+- `attachChannel`, `attachChannelDurably`, `detachChannel`, `detachChannelsForSession`.
 - `getSessionByChannel`, `getChannelConfig`, `getChannelsBySession`, `getChannelBySession`, `getAllAttachments`.
 - `setChannelMode`, `getChannelDangerouslyAllowAllUsers`, `setChannelDangerouslyAllowAllUsers`.
 - `parseChannelTargetId`, `sendToChannelTargetId`, `sendFileToChannelTargetId`.
@@ -25,7 +25,7 @@ No runtime getter/setter aliases for `dangerouslyAllowAllGroupMembers` exist. Th
 - Store shape is `{ channels: Record<string, ChannelConfig> }`.
 - On read/current normalization, `push-only` becomes `send-only` and `dangerouslyAllowAllGroupMembers` becomes `dangerouslyAllowAllUsers`.
 - Canonical writes contain current fields only.
-- Mutations update memory and start a best-effort durable write.
+- Ordinary mutations update memory and start a best-effort durable write. Creation/command paths use `attachChannelDurably`, which awaits persistence and restores the prior in-memory binding on failure.
 
 ## Delivery behavior
 
