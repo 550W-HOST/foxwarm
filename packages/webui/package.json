@@ -6,6 +6,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test:markdown": "node --test test/markdownRenderer.test.mjs",
+    "test:setup-models": "node --test test/setupModels.test.mjs",
+    "test:setup-models-e2e": "node --test test/setupModels.e2e.mjs",
     "test:theme-e2e": "node --test test/themeMarkdownStyles.e2e.mjs",
     "test:message-overflow-e2e": "node --test test/messageOverflow.e2e.mjs",
     "test:message-width-e2e": "node --test test/messageWidth.e2e.mjs",

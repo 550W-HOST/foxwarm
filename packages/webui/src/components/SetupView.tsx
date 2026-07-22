@@ -1,6 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, Plus, RefreshCw, Settings, Trash2, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
+import {
+  buildConcreteTestRequest,
+  buildModelsYaml,
+  buildStructuredSetupRequest,
+  canTestProvider,
+  changeDefaultForProviderType,
+  changeProviderType,
+  hydrateProviderDrafts,
+  isVirtualProviderType,
+  makeDefaultProvider,
+  splitTargets,
+  type ProviderDraft,
+  type ProviderStatusDraft,
+} from '../setupModels'
 import ContentHeader from './ContentHeader'
 import SimpleCodeEditor from './SimpleCodeEditor'
 
@@ -13,7 +27,7 @@ type SetupStatus = {
     providerCount: number
     defaultModel: string | null
     rawYaml?: string
-    providers?: ProviderDraft[]
+    providers?: ProviderStatusDraft[]
     hasPlaceholderSecrets: boolean
     placeholderProviders: string[]
   }
@@ -33,15 +47,6 @@ type SetupStatus = {
     details: string[]
     lastError?: string
   }>
-}
-
-type ProviderDraft = {
-  id: string
-  providerType: string
-  baseUrl: string
-  apiKey: string
-  models: string
-  defaultModel: string
 }
 
 interface SetupViewProps {
@@ -74,15 +79,6 @@ const DEFAULT_CONFIG_YAML = `# Foxwarm config. Changes to channels are hot-reloa
 #     allowAllUsers: false
 `
 
-const makeDefaultProvider = (index = 0): ProviderDraft => ({
-  id: index === 0 ? 'openai' : `provider${index + 1}`,
-  providerType: 'openai-completions',
-  baseUrl: 'https://api.openai.com/v1',
-  apiKey: '',
-  models: 'gpt-5.2-codex\ngpt-5.3-codex\ngpt-5.4\ngpt-5.5',
-  defaultModel: 'gpt-5.2-codex',
-})
-
 function StatusPill({ ok, label }: { ok: boolean; label: string }) {
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${ok ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-200' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200'}`}>
@@ -102,36 +98,6 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
   return { imageSrc: null, raw: trimmed }
 }
 
-function yamlQuote(value: string): string {
-  return JSON.stringify(value)
-}
-
-function splitModels(value: string): string[] {
-  return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean)
-}
-
-function buildModelsYaml(providers: ProviderDraft[], defaultModelKey: string): string {
-  const usableProviders = providers
-    .map((provider) => ({ ...provider, id: provider.id.trim(), modelsList: splitModels(provider.models) }))
-    .filter((provider) => provider.id && provider.modelsList.length > 0)
-
-  const defaultKey = defaultModelKey.trim()
-    || (usableProviders[0] ? `${usableProviders[0].id}/${usableProviders[0].defaultModel || usableProviders[0].modelsList[0]}` : '')
-
-  const lines = [`default: ${yamlQuote(defaultKey)}`, 'providers:']
-  for (const provider of usableProviders) {
-    lines.push(`  ${provider.id}:`)
-    lines.push(`    providerType: ${yamlQuote(provider.providerType.trim() || 'openai-completions')}`)
-    if (provider.baseUrl.trim()) lines.push(`    baseUrl: ${yamlQuote(provider.baseUrl.trim())}`)
-    if (provider.apiKey.trim()) lines.push(`    apiKey: ${yamlQuote(provider.apiKey.trim())}`)
-    lines.push('    models:')
-    for (const model of provider.modelsList) {
-      lines.push(`      - ${yamlQuote(model)}`)
-    }
-  }
-  return `${lines.join('\n')}\n`
-}
-
 export default function SetupView({ forced = false, onClose, onSetupChanged }: SetupViewProps) {
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -141,6 +107,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
   const [modelMode, setModelMode] = useState<'form' | 'raw'>('form')
   const initializedModelModeRef = useRef(false)
   const [providers, setProviders] = useState<ProviderDraft[]>([makeDefaultProvider(0)])
+  const [concreteModelOptions, setConcreteModelOptions] = useState<string[]>([])
   const [selectedProviderIndex, setSelectedProviderIndex] = useState(0)
   const [defaultModelKey, setDefaultModelKey] = useState('openai/gpt-5.2-codex')
   const [rawModelsYaml, setRawModelsYaml] = useState('')
@@ -159,6 +126,8 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
   const channelAvailable = (status?.channels || []).some((channel) => channel.running) || true // WebUI itself is available when this page is open.
   const canLeave = !forced || (modelConfigured && channelAvailable)
   const channelRows = useMemo(() => status?.channels || [], [status])
+  const selectedProvider = providers[Math.min(selectedProviderIndex, providers.length - 1)] || providers[0]
+  const selectedProviderCanTest = canTestProvider(selectedProvider)
   const generatedModelsYaml = useMemo(() => buildModelsYaml(providers, defaultModelKey), [providers, defaultModelKey])
 
   const loadStatus = async () => {
@@ -186,15 +155,19 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
         setDefaultModelKey(data.models.defaultModel)
       }
       if (Array.isArray(data?.models?.providers) && data.models.providers.length > 0) {
-        setProviders(data.models.providers.map((provider: ProviderDraft, index: number) => ({
-          id: provider.id || `provider${index + 1}`,
-          providerType: provider.providerType || 'openai-completions',
-          baseUrl: provider.baseUrl || '',
-          apiKey: provider.apiKey || '',
-          models: provider.models || '',
-          defaultModel: provider.defaultModel || splitModels(provider.models || '')[0] || '',
-        })))
+        setProviders(hydrateProviderDrafts(data.models.providers))
         setSelectedProviderIndex(0)
+      }
+      try {
+        const modelsRes = await fetch(`${API_BASE_PATH}/models`)
+        const modelsData = await modelsRes.json().catch(() => ({}))
+        if (modelsRes.ok && Array.isArray(modelsData.models)) {
+          setConcreteModelOptions(modelsData.models
+            .filter((model: { isVirtual?: boolean; key?: unknown }) => model.isVirtual === false && typeof model.key === 'string')
+            .map((model: { key: string }) => model.key))
+        }
+      } catch {
+        setConcreteModelOptions([])
       }
       if (typeof data?.config?.rawYaml === 'string') {
         setConfigYaml(data.config.rawYaml.trim() ? data.config.rawYaml : DEFAULT_CONFIG_YAML)
@@ -217,6 +190,27 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
     setProviders((current) => current.map((provider, itemIndex) => itemIndex === index ? { ...provider, ...patch } : provider))
   }
 
+  const updateProviderType = (index: number, providerType: string) => {
+    const provider = providers[index]
+    if (provider) {
+      setDefaultModelKey((current) => changeDefaultForProviderType(current, provider, providerType))
+    }
+    setProviders((current) => current.map((provider, itemIndex) => itemIndex === index
+      ? changeProviderType(provider, providerType)
+      : provider))
+    setModelTestResult(null)
+  }
+
+  const addConcreteTarget = (index: number, target: string) => {
+    if (!target) return
+    setProviders((current) => current.map((provider, itemIndex) => {
+      if (itemIndex !== index) return provider
+      const targets = splitTargets(provider.targets)
+      if (!targets.includes(target)) targets.push(target)
+      return { ...provider, targets: targets.join('\n') }
+    }))
+  }
+
   const addProvider = () => {
     setProviders((current) => [...current, makeDefaultProvider(current.length)])
     setSelectedProviderIndex(providers.length)
@@ -234,7 +228,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
     try {
       const body = modelMode === 'raw'
         ? { yaml: rawModelsYaml }
-        : { mode: 'form', defaultModel: defaultModelKey, providers }
+        : buildStructuredSetupRequest(providers, defaultModelKey)
       const res = await fetch(`${API_BASE_PATH}/setup/models`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -263,19 +257,10 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
     setError(null)
     try {
       const provider = providers[Math.min(selectedProviderIndex, providers.length - 1)] || providers[0]
-      const testModel = provider.defaultModel || splitModels(provider.models)[0]
       const res = await fetch(`${API_BASE_PATH}/setup/models/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          providerKey: provider.id,
-          providerType: provider.providerType,
-          baseUrl: provider.baseUrl,
-          apiKey: provider.apiKey,
-          models: provider.models,
-          defaultModel: testModel,
-          testModel,
-        }),
+        body: JSON.stringify(buildConcreteTestRequest(provider)),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Model test failed (${res.status})`)
@@ -446,8 +431,11 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
                   <button type="button" onClick={addProvider} className="inline-flex items-center gap-1 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"><Plus className="h-4 w-4" /> Provider</button>
                 </div>
 
-                {providers.map((provider, index) => index === selectedProviderIndex ? (
-                  <div key={index} className="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+                {providers.map((provider, index) => {
+                  if (index !== selectedProviderIndex) return null
+                  const isVirtual = isVirtualProviderType(provider.providerType)
+                  return (
+                    <div key={index} className="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <div className="font-medium text-gray-900 dark:text-white">Provider {index + 1}</div>
                       <button type="button" disabled={providers.length <= 1} onClick={() => removeProvider(index)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-sm text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40 dark:text-red-300 dark:hover:bg-red-950/30"><Trash2 className="h-4 w-4" /> Remove</button>
@@ -457,28 +445,60 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
                         <input value={provider.id} onChange={(e) => updateProvider(index, { id: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
                       </label>
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Provider type
-                        <select value={provider.providerType} onChange={(e) => updateProvider(index, { providerType: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">
+                        <select value={provider.providerType} onChange={(e) => updateProviderType(index, e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">
                           <option value="openai-completions">openai-completions</option>
                           <option value="openai-responses">openai-responses</option>
                           <option value="openai">openai</option>
                           <option value="anthropic">anthropic</option>
+                          <option value="session-hash">session-hash</option>
+                          <option value="failover">failover</option>
                         </select>
                       </label>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Base URL
-                        <input value={provider.baseUrl} onChange={(e) => updateProvider(index, { baseUrl: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
-                      </label>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">API key <span className="font-normal text-gray-400">(optional for local gateways)</span>
-                        <input value={provider.apiKey} onChange={(e) => updateProvider(index, { apiKey: e.target.value })} type="password" className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
-                      </label>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Models (comma or newline separated)
-                        <textarea value={provider.models} onChange={(e) => updateProvider(index, { models: e.target.value })} rows={4} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
-                      </label>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Provider default model id
-                        <input value={provider.defaultModel} onChange={(e) => updateProvider(index, { defaultModel: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
-                      </label>
+                      {isVirtual ? (
+                        <>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 md:col-span-2">Concrete target model keys <span className="font-normal text-gray-400">(one exact key per line)</span>
+                            <textarea value={provider.targets} onChange={(e) => updateProvider(index, { targets: e.target.value })} rows={5} placeholder={'provider-a/model-a\nprovider-b/model-b'} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
+                          </label>
+                          {concreteModelOptions.length > 0 && (
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 md:col-span-2">Add a configured concrete model
+                              <select value="" onChange={(e) => addConcreteTarget(index, e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">
+                                <option value="">Choose a concrete model key…</option>
+                                {concreteModelOptions.map((modelKey) => <option key={modelKey} value={modelKey}>{modelKey}</option>)}
+                              </select>
+                            </label>
+                          )}
+                          {provider.providerType === 'failover' && (
+                            <>
+                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Failure threshold <span className="font-normal text-gray-400">(blank = 5)</span>
+                                <input value={provider.failureThreshold} onChange={(e) => updateProvider(index, { failureThreshold: e.target.value })} type="number" min="1" step="1" placeholder="5" className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
+                              </label>
+                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Cooldown (ms) <span className="font-normal text-gray-400">(blank = 600000)</span>
+                                <input value={provider.cooldownMs} onChange={(e) => updateProvider(index, { cooldownMs: e.target.value })} type="number" min="1" step="1" placeholder="600000" className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
+                              </label>
+                            </>
+                          )}
+                          <p className="text-xs text-gray-500 dark:text-gray-400 md:col-span-2">{provider.providerType === 'session-hash' ? 'Session hash requires at least one concrete target.' : 'Failover requires at least two concrete targets in priority order.'} Unknown keys and canonical aliases are validated by the server.</p>
+                        </>
+                      ) : (
+                        <>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Base URL
+                            <input value={provider.baseUrl} onChange={(e) => updateProvider(index, { baseUrl: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
+                          </label>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">API key <span className="font-normal text-gray-400">(optional for local gateways)</span>
+                            <input value={provider.apiKey} onChange={(e) => updateProvider(index, { apiKey: e.target.value })} type="password" className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
+                          </label>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Models (comma or newline separated)
+                            <textarea value={provider.models} onChange={(e) => updateProvider(index, { models: e.target.value })} rows={4} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
+                          </label>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Provider default model id
+                            <input value={provider.defaultModel} onChange={(e) => updateProvider(index, { defaultModel: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100" />
+                          </label>
+                        </>
+                      )}
                     </div>
-                  </div>
-                ) : null)}
+                    </div>
+                  )
+                })}
               </div>
             ) : (
               <div className="mt-4">
@@ -488,8 +508,9 @@ export default function SetupView({ forced = false, onClose, onSetupChanged }: S
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
-              <button disabled={testingModel || modelMode === 'raw'} onClick={() => void testModels()} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">{testingModel ? 'Testing…' : 'Test selected provider'}</button>
+              <button disabled={testingModel || modelMode === 'raw' || !selectedProviderCanTest} onClick={() => void testModels()} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">{testingModel ? 'Testing…' : 'Test selected provider'}</button>
               {modelMode === 'raw' && <span className="text-xs text-gray-500 dark:text-gray-400">Switch to form mode to test one provider.</span>}
+              {modelMode === 'form' && !selectedProviderCanTest && <span className="text-xs text-gray-500 dark:text-gray-400">Save virtual providers, then test them through normal model selection.</span>}
               {forced && !canLeave && <span className="text-sm text-amber-600 dark:text-amber-300">Required for first-time setup.</span>}
             </div>
             {modelTestResult && <div className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700 dark:bg-gray-950 dark:text-gray-200">{modelTestResult}</div>}
