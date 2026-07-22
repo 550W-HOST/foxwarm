@@ -336,6 +336,9 @@ test('known persistence failures roll back creation and allow the same requested
   const saveFailureForkId = `${parentId}_savefail`;
   const moveSource = makeId('failed_move_source');
   const moveTarget = makeId('failed_move_target');
+  const moveAgentSource = makeId('failed_move_agent_source');
+  const moveTargetAgent = makeId('failed_move_target_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const moveAgentTarget = `${moveTargetAgent}/main`;
   const failedAgent = makeId('failed_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
   const failedAgentMainId = `${failedAgent}/main`;
 
@@ -406,13 +409,36 @@ test('known persistence failures roll back creation and allow the same requested
     sessionManager.setSessionPersistenceFaultInjectorForTests(null);
     const retriedMove = await sessionManager.moveSessionToTarget({ sourceSessionId: moveSource, newSessionId: moveTarget });
     assert.equal(retriedMove.targetSessionId, moveTarget);
+
+    await createParent(moveAgentSource);
+    let failAgentMove = true;
+    sessionManager.setSessionPersistenceFaultInjectorForTests((phase, sessionId) => {
+      if (failAgentMove && phase === 'history' && sessionId === moveAgentTarget) {
+        failAgentMove = false;
+        throw new Error('injected target-agent move failure');
+      }
+    });
+    await assert.rejects(sessionManager.moveSessionToTarget({
+      sourceSessionId: moveAgentSource,
+      createAgent: true,
+      newAgentName: moveTargetAgent,
+    }), /injected target-agent move failure/);
+    assert.equal(await fs.pathExists(getAgentDir(moveTargetAgent)), false);
+    assert.ok(await sessionManager.getExistingSession(moveAgentSource));
+    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
+    assert.equal((await sessionManager.moveSessionToTarget({
+      sourceSessionId: moveAgentSource,
+      createAgent: true,
+      newAgentName: moveTargetAgent,
+    })).targetSessionId, moveAgentTarget);
   } finally {
     sessionManager.setSessionPersistenceFaultInjectorForTests(null);
     setArchiveWriteFaultInjectorForTests(null);
-    for (const id of [emptyId, failedAgentMainId, parentId, forkId, saveFailureForkId, moveSource, moveTarget]) {
+    for (const id of [emptyId, failedAgentMainId, parentId, forkId, saveFailureForkId, moveSource, moveTarget, moveAgentSource, moveAgentTarget]) {
       if (sessionManager.getAllSessions().has(id)) await sessionManager.deleteSession(id).catch(() => {});
     }
     await fs.remove(getAgentDir(failedAgent));
+    await fs.remove(getAgentDir(moveTargetAgent));
   }
 });
 
@@ -473,7 +499,7 @@ test('external attachment during channel creation discards the unused candidate'
       createSession: async () => {
         const candidate = await sessionManager.createEmptySession(candidateId);
         sessionManager.attachChannel(channelId, conversationId, external.session.id);
-        return candidate.session;
+        return candidate;
       },
     });
     assert.equal(resolved.sessionId, externalId);
@@ -482,6 +508,38 @@ test('external attachment during channel creation discards the unused candidate'
   } finally {
     sessionManager.detachChannel(channelId, conversationId);
     for (const id of [externalId, candidateId]) {
+      if (sessionManager.getAllSessions().has(id)) await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
+test('external attach race never deletes a factory-owned pre-existing session', async () => {
+  await sessionManager.loadSessions();
+  const channelId = makeId('existing_factory_channel');
+  const conversationId = makeId('existing_factory_conversation');
+  const victimId = makeId('existing_factory_victim');
+  const winnerId = makeId('existing_factory_winner');
+  const victim = await sessionManager.createEmptySession(victimId);
+  await sessionManager.createEmptySession(winnerId);
+  await sessionManager.appendSessionMessage(victim.session, {
+    role: 'user',
+    parts: [{ text: 'victim archive must survive' }],
+    __meta: { timestamp: Date.now() },
+  });
+  try {
+    const resolved = await sessionManager.getOrCreateSessionForChannel(channelId, conversationId, {
+      createSession: async () => {
+        sessionManager.attachChannel(channelId, conversationId, winnerId);
+        return { session: victim.session, created: false };
+      },
+    });
+    assert.equal(resolved.sessionId, winnerId);
+    assert.ok(await sessionManager.getExistingSession(victimId));
+    const archive = await sessionManager.getArchivedMessages(victimId);
+    assert.equal(archive.records[0]?.message.parts[0]?.text, 'victim archive must survive');
+  } finally {
+    sessionManager.detachChannel(channelId, conversationId);
+    for (const id of [victimId, winnerId]) {
       if (sessionManager.getAllSessions().has(id)) await sessionManager.deleteSession(id).catch(() => {});
     }
   }
@@ -629,7 +687,7 @@ test('moved historical ids remain reserved and moved archives rebuild under the 
   }
 });
 
-test('pre-ledger moved and deleted archive recovers its alias from retained jsonl evidence', () => {
+test('pre-ledger mismatched path and payload reserve both ids without inventing an alias', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-preledger-moved-deleted-'));
   const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
   const run = (source: string) => execFileSync(process.execPath, ['-e', source], {
@@ -664,14 +722,95 @@ test('pre-ledger moved and deleted archive recovers its alias from retained json
           } catch (error) {
             if (error?.code !== sm.ARCHIVED_SESSION_ID_ERROR_CODE) throw error;
           }
-          const archive = await sm.getArchivedMessages(id);
-          if (archive.records[0]?.message?.parts?.[0]?.text !== 'pre-ledger moved history') throw new Error('archive alias missing: ' + id);
         }
+        const oldArchive = await sm.getArchivedMessages('legacy_moved_old');
+        if (oldArchive.records[0]?.message?.parts?.[0]?.text !== 'pre-ledger moved history') throw new Error('payload archive missing');
+        const newArchive = await sm.getArchivedMessages('legacy_moved_new');
+        if (newArchive.records.length !== 0) throw new Error('uncertain history was merged into path identity');
         process.exit(0);
       })().catch(error => { console.error(error); process.exit(1); });
     `);
   } finally {
     fs.removeSync(tempRoot);
+  }
+});
+
+test('inherited-only legacy child log does not redirect or merge its parent archive', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-inherited-only-log-'));
+  const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
+  const configPath = path.resolve(__dirname, '../config.js');
+  const archiveStorePath = path.resolve(__dirname, 'archiveStore.js');
+  try {
+    execFileSync(process.execPath, ['-e', `
+      const fs = require('fs-extra');
+      const config = require(${JSON.stringify(configPath)});
+      const archiveStore = require(${JSON.stringify(archiveStorePath)});
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      const record = (text) => JSON.stringify({
+        v: 1, kind: 'message', sessionId: 'legacy_parent', agent: 'main', seq: 1,
+        timestamp: 1, role: 'user', message: { role: 'user', parts: [{ text }], __meta: { seq: 1, timestamp: 1 } },
+      }) + '\\n';
+      (async () => {
+        await fs.outputFile(config.getSessionArchiveLogPath('legacy_parent'), record('parent canonical history'));
+        await fs.outputFile(config.getSessionArchiveLogPath('legacy_child'), record('copied parent history'));
+        await archiveStore.initArchiveStore();
+        if (await archiveStore.resolveArchivedSessionId('legacy_parent') !== 'legacy_parent') throw new Error('parent redirected');
+        if (await archiveStore.resolveArchivedSessionId('legacy_child') !== 'legacy_child') throw new Error('child redirected');
+        if (!await archiveStore.hasArchivedSessionId('legacy_parent') || !await archiveStore.hasArchivedSessionId('legacy_child')) throw new Error('identities not reserved');
+        const child = await sm.getArchivedMessages('legacy_child');
+        if (child.records.length !== 0) throw new Error('copied parent rows merged into child reads');
+        const parent = await sm.getArchivedMessages('legacy_parent');
+        if (parent.records.length !== 1 || parent.records[0].message.parts[0]?.text !== 'parent canonical history') throw new Error('parent archive was overwritten by copied child rows');
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } finally {
+    fs.removeSync(tempRoot);
+  }
+});
+
+test('valid conflicting and cyclic alias ledgers fail closed', () => {
+  const archiveStorePath = path.resolve(__dirname, 'archiveStore.js');
+  const fixtures = [
+    {
+      name: 'conflict',
+      records: [
+        { v: 1, sessionId: 'alias_a', canonicalSessionId: 'target_b', timestamp: 1 },
+        { v: 1, sessionId: 'alias_a', canonicalSessionId: 'target_c', timestamp: 2 },
+      ],
+      expected: 'conflicting mappings',
+    },
+    {
+      name: 'cycle',
+      records: [
+        { v: 1, sessionId: 'alias_a', canonicalSessionId: 'alias_b', timestamp: 1 },
+        { v: 1, sessionId: 'alias_b', canonicalSessionId: 'alias_a', timestamp: 2 },
+      ],
+      expected: 'alias cycle',
+    },
+  ];
+  for (const fixture of fixtures) {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `foxwarm-ledger-${fixture.name}-`));
+    try {
+      fs.outputFileSync(
+        path.join(tempRoot, 'state', 'session-id-reservations.jsonl'),
+        `${fixture.records.map(record => JSON.stringify(record)).join('\n')}\n`,
+      );
+      execFileSync(process.execPath, ['-e', `
+        const archiveStore = require(${JSON.stringify(archiveStorePath)});
+        (async () => {
+          try {
+            await archiveStore.initArchiveStore();
+            throw new Error('invalid ledger unexpectedly loaded');
+          } catch (error) {
+            if (!String(error).includes(${JSON.stringify(fixture.expected)})) throw error;
+          }
+          process.exit(0);
+        })().catch(error => { console.error(error); process.exit(1); });
+      `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } finally {
+      fs.removeSync(tempRoot);
+    }
   }
 });
 
@@ -708,6 +847,85 @@ test('startup rolls back a move journal left before target persistence', () => {
       })().catch(error => { console.error(error); process.exit(1); });
     `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert.equal(fs.pathExistsSync(path.join(tempRoot, 'state', 'session-id-move-pending.json')), false);
+  } finally {
+    fs.removeSync(tempRoot);
+  }
+});
+
+test('pending move recovery rejects traversal IDs before touching filesystem state', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-pending-move-containment-'));
+  const agentOpsPath = path.resolve(__dirname, 'agentOps.js');
+  const markerPath = path.join(tempRoot, 'outside-marker');
+  try {
+    fs.outputFileSync(markerPath, 'keep');
+    fs.outputJsonSync(path.join(tempRoot, 'state', 'session-id-move-pending.json'), {
+      v: 1,
+      oldSessionId: '../../outside-marker',
+      newSessionId: 'safe_target',
+      oldAliases: [],
+      createdAt: Date.now(),
+    });
+    execFileSync(process.execPath, ['-e', `
+      const agentOps = require(${JSON.stringify(agentOpsPath)});
+      (async () => {
+        try {
+          await agentOps.recoverPendingSessionIdentityMove(async () => {});
+          throw new Error('unsafe journal unexpectedly recovered');
+        } catch (error) {
+          if (!String(error).includes('Invalid oldSessionId')) throw error;
+        }
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.equal(fs.readFileSync(markerPath, 'utf8'), 'keep');
+    assert.equal(fs.pathExistsSync(path.join(tempRoot, 'state', 'session-id-move-pending.json')), true);
+  } finally {
+    fs.removeSync(tempRoot);
+  }
+});
+
+test('failed reverse persistence keeps move journal until startup completes rollback', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-pending-move-reverse-failure-'));
+  const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
+  try {
+    execFileSync(process.execPath, ['-e', `
+      const fs = require('fs-extra');
+      const path = require('path');
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      (async () => {
+        await sm.loadSessions();
+        await sm.createEmptySession('rollback_source');
+        const childId = await sm.createChildSession('rollback_source', 'worker', false);
+        let childWrites = 0;
+        sm.setSessionPersistenceFaultInjectorForTests((phase, sessionId) => {
+          if (phase !== 'history') return;
+          if (sessionId === childId && ++childWrites === 2) throw new Error('injected reverse child save failure');
+          if (sessionId === 'rollback_target') throw new Error('injected target save failure');
+        });
+        try {
+          await sm.moveSessionToTarget({ sourceSessionId: 'rollback_source', newSessionId: 'rollback_target' });
+          throw new Error('move unexpectedly succeeded');
+        } catch (error) {
+          if (error?.name !== 'SessionMoveRollbackError' || !String(error).includes('rollback remains pending')) throw error;
+        }
+        if (!await fs.pathExists(path.join(${JSON.stringify(tempRoot)}, 'state', 'session-id-move-pending.json'))) throw new Error('journal was cleared after failed rollback');
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync(process.execPath, ['-e', `
+      const fs = require('fs-extra');
+      const path = require('path');
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      (async () => {
+        await sm.loadSessions();
+        const child = await sm.getExistingSession('rollback_source_worker');
+        if (child?.parentSessionId !== 'rollback_source') throw new Error('child parent was not recovered: ' + child?.parentSessionId);
+        if (await fs.pathExists(path.join(${JSON.stringify(tempRoot)}, 'state', 'session-id-move-pending.json'))) throw new Error('journal remained after startup recovery');
+        const retry = await sm.moveSessionToTarget({ sourceSessionId: 'rollback_source', newSessionId: 'rollback_target' });
+        if (retry.targetSessionId !== 'rollback_target') throw new Error('exact target retry failed');
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } finally {
     fs.removeSync(tempRoot);
   }

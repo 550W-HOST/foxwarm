@@ -53,6 +53,7 @@ type LineageEntry = {
 
 let db: DatabaseSync | null = null;
 const importedSessions = new Set<string>();
+const uncertainPayloadImportOwners = new Map<string, boolean>();
 let bootstrapPromise: Promise<void> | null = null;
 let reservationLedgerLoadPromise: Promise<Map<string, string>> | null = null;
 
@@ -264,20 +265,26 @@ async function loadSessionIdReservationLedger(): Promise<Map<string, string>> {
           if (!line) {
             continue;
           }
+          let record: Partial<SessionIdReservationRecord>;
           try {
-            const record = JSON.parse(line) as Partial<SessionIdReservationRecord>;
-            if (record.v !== 1
-              || typeof record.sessionId !== 'string'
-              || record.sessionId.length === 0
-              || typeof record.canonicalSessionId !== 'string'
-              || record.canonicalSessionId.length === 0) {
-              ledgerNeedsRewrite = true;
-              continue;
-            }
-            reservations.set(record.sessionId, record.canonicalSessionId);
+            record = JSON.parse(line) as Partial<SessionIdReservationRecord>;
           } catch {
             ledgerNeedsRewrite = true;
+            continue;
           }
+          if (record.v !== 1
+            || typeof record.sessionId !== 'string'
+            || record.sessionId.length === 0
+            || typeof record.canonicalSessionId !== 'string'
+            || record.canonicalSessionId.length === 0) {
+            ledgerNeedsRewrite = true;
+            continue;
+          }
+          const existing = reservations.get(record.sessionId);
+          if (existing !== undefined && existing !== record.canonicalSessionId) {
+            throw new Error(`Session ID reservation ledger has conflicting mappings for "${record.sessionId}".`);
+          }
+          reservations.set(record.sessionId, record.canonicalSessionId);
         }
       }
 
@@ -286,11 +293,17 @@ async function loadSessionIdReservationLedger(): Promise<Map<string, string>> {
         FROM archive_session_id_reservations
       `).all() as Array<{ session_id: string; canonical_session_id: string; updated_at: number }>;
       for (const row of sqliteRows) {
-        if (!reservations.has(row.session_id)) {
+        const existing = reservations.get(row.session_id);
+        if (existing !== undefined && existing !== row.canonical_session_id) {
+          throw new Error(`Session ID reservation state conflicts for "${row.session_id}" between ledger and SQLite.`);
+        }
+        if (existing === undefined) {
           reservations.set(row.session_id, row.canonical_session_id);
           ledgerNeedsRewrite = true;
         }
       }
+
+      assertValidReservationGraph(reservations);
 
       if (ledgerNeedsRewrite) {
         logger.warn({ reservationCount: reservations.size }, 'Repairing session ID reservation ledger from durable state');
@@ -327,15 +340,27 @@ async function writeSessionIdReservationLedger(reservations: Map<string, string>
   await fs.move(temporaryPath, SESSION_ID_RESERVATIONS_LOG_PATH, { overwrite: true });
 }
 
+function assertValidReservationGraph(reservations: Map<string, string>): void {
+  for (const start of reservations.keys()) {
+    let current = start;
+    const seen = new Set<string>();
+    while (true) {
+      const next = reservations.get(current);
+      if (!next || next === current) break;
+      if (seen.has(current)) {
+        throw new Error(`Session ID reservation ledger contains an alias cycle involving "${current}".`);
+      }
+      seen.add(current);
+      current = next;
+    }
+  }
+}
+
 function resolveCanonicalReservation(reservations: Map<string, string>, sessionId: string): string {
   let current = sessionId;
-  const seen = new Set<string>();
-  while (!seen.has(current)) {
-    seen.add(current);
+  while (true) {
     const next = reservations.get(current);
-    if (!next || next === current) {
-      break;
-    }
+    if (!next || next === current) break;
     current = next;
   }
   return current;
@@ -348,6 +373,10 @@ async function persistSessionIdReservation(sessionId: string, canonicalSessionId
 
   const reservations = await loadSessionIdReservationLedger();
   const currentCanonical = reservations.get(sessionId);
+  if (currentCanonical !== undefined && currentCanonical !== canonicalSessionId) {
+    if (resolveCanonicalReservation(reservations, sessionId) === canonicalSessionId) return;
+    throw new Error(`Session ID reservation "${sessionId}" already maps to "${currentCanonical}", not "${canonicalSessionId}".`);
+  }
   if (currentCanonical !== canonicalSessionId) {
     const previousRow = getDb().prepare(`
       SELECT canonical_session_id, created_at, updated_at
@@ -356,6 +385,7 @@ async function persistSessionIdReservation(sessionId: string, canonicalSessionId
     `).get(sessionId) as { canonical_session_id: string; created_at: number; updated_at: number } | undefined;
     reservations.set(sessionId, canonicalSessionId);
     try {
+      assertValidReservationGraph(reservations);
       upsertSessionIdReservationSync(sessionId, canonicalSessionId, Date.now());
       await writeSessionIdReservationLedger(reservations);
     } catch (error) {
@@ -677,7 +707,7 @@ async function inferLegacyForkBlockId(sessionId: string, parentSessionId: string
   return maxId;
 }
 
-async function inferPreLedgerMovedAlias(sessionId: string): Promise<string | undefined> {
+async function findMismatchedHistoricalPayloadId(sessionId: string): Promise<string | undefined> {
   let lastRecordSessionId: string | undefined;
   let sawCurrentSessionId = false;
   const inspect = async (filePath: string, parse: (line: string) => { sessionId: string } | null): Promise<void> => {
@@ -702,16 +732,23 @@ async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
   await loadSessionIdReservationLedger();
 
   const candidates = await collectBootstrapSessionCandidates();
+  const discoveredSessionIds = new Set(candidates.map(candidate => candidate.sessionId));
+  const existingBranchRows = getDb().prepare(`SELECT session_id FROM archive_branches`).all() as Array<{ session_id: string }>;
+  for (const row of existingBranchRows) discoveredSessionIds.add(row.session_id);
 
   for (const candidate of candidates) {
     const existingBranch = getBranchInternal(candidate.sessionId);
-    for (const alias of candidate.aliases || []) {
+    for (const alias of [...(candidate.aliases || [])].reverse()) {
       await persistSessionIdReservation(alias, candidate.sessionId);
     }
     if (!existingBranch) {
-      const inferredMovedAlias = await inferPreLedgerMovedAlias(candidate.sessionId);
-      if (inferredMovedAlias) {
-        await persistSessionIdReservation(inferredMovedAlias, candidate.sessionId);
+      const mismatchedPayloadId = await findMismatchedHistoricalPayloadId(candidate.sessionId);
+      if (mismatchedPayloadId) {
+        // A path/payload mismatch is not proof of a move: legacy forks copied
+        // parent records into child logs. Reserve the payload identity as its
+        // own lifetime without redirecting or merging either archive.
+        uncertainPayloadImportOwners.set(`${candidate.sessionId}\0${mismatchedPayloadId}`, !discoveredSessionIds.has(mismatchedPayloadId));
+        await ensureSessionBranch(mismatchedPayloadId);
       }
     }
 
@@ -807,6 +844,10 @@ async function importSessionMessagesFromJsonl(sessionId: string): Promise<void> 
     }
 
     const canonicalSessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    if (canonicalSessionId !== sessionId) {
+      await ensureSessionBranch(canonicalSessionId);
+      if (!uncertainPayloadImportOwners.get(`${sessionId}\0${canonicalSessionId}`)) return;
+    }
     batch.push(canonicalSessionId === record.sessionId ? record : { ...record, sessionId: canonicalSessionId });
     if (batch.length >= ARCHIVE_IMPORT_BATCH_SIZE) {
       await flushBatch();
@@ -882,6 +923,10 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
     }
 
     const canonicalSessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    if (canonicalSessionId !== sessionId) {
+      await ensureSessionBranch(canonicalSessionId);
+      if (!uncertainPayloadImportOwners.get(`${sessionId}\0${canonicalSessionId}`)) return;
+    }
     batch.push(canonicalSessionId === record.sessionId ? record : { ...record, sessionId: canonicalSessionId });
     if (batch.length >= ARCHIVE_IMPORT_BATCH_SIZE) {
       await flushBatch();

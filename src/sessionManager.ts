@@ -1134,7 +1134,7 @@ export async function getOrCreateSessionForChannel(
   channelId: string,
   conversationId: string,
   options?: {
-    createSession?: () => Promise<Session>;
+    createSession?: () => Promise<{ session: Session; created: boolean }>;
     attachmentConfig?: Partial<sessionChannels.ChannelConfig>;
   },
 ): Promise<{ sessionId: string; session: Session }> {
@@ -1144,12 +1144,13 @@ export async function getOrCreateSessionForChannel(
       return { sessionId: existingSessionId, session: await getSession(existingSessionId) };
     }
 
-    const createdSession = options?.createSession
+    const created = options?.createSession
       ? await options.createSession()
-      : (await createEmptySession()).session;
+      : await createEmptySession();
+    const createdSession = created.session;
     const concurrentlyAttachedSessionId = getSessionByChannel(channelId, conversationId);
     if (concurrentlyAttachedSessionId) {
-      await rollbackFailedSessionCreation(createdSession.id, createdSession);
+      if (created.created) await rollbackFailedSessionCreation(createdSession.id, createdSession);
       await saveChannelsCritical();
       return {
         sessionId: concurrentlyAttachedSessionId,
@@ -1161,7 +1162,7 @@ export async function getOrCreateSessionForChannel(
       const sessionId = await attachChannelDurably(channelId, conversationId, createdSession.id, options?.attachmentConfig);
       return { sessionId, session: createdSession };
     } catch (error) {
-      await rollbackFailedSessionCreation(createdSession.id, createdSession);
+      if (created.created) await rollbackFailedSessionCreation(createdSession.id, createdSession);
       throw error;
     }
   });
@@ -1481,12 +1482,18 @@ export async function updateChildSessionParentIds(oldParentSessionId: string, ne
 }
 
 async function updateChildSessionParentIdsCritical(oldParentSessionId: string, newParentSessionId: string): Promise<string[]> {
-  return sessionRelations.updateChildSessionParentIds({
-    saveSession: saveSessionCritical,
-    saveSessionsMetadata: saveSessionsMetadataCritical,
-    getSessionsMap: getAllSessions,
-    notifySessionListUpdated,
-  }, oldParentSessionId, newParentSessionId);
+  const updated: string[] = [];
+  for (const [sessionId, session] of sessions) {
+    if (session.parentSessionId !== oldParentSessionId) continue;
+    session.parentSessionId = newParentSessionId;
+    await saveSessionCritical(sessionId);
+    updated.push(sessionId);
+  }
+  if (updated.length > 0) {
+    await saveSessionsMetadataCritical();
+    notifySessionListUpdated();
+  }
+  return updated;
 }
 
 export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {

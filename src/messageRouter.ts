@@ -781,7 +781,7 @@ export class MessageRouter {
     }
 
     const resolved = await sessionManager.getOrCreateSessionForChannel(channelId, conversationId, {
-      createSession: async () => sessionManager.getSession(await this.createGuestSession(guestAgent)),
+      createSession: async () => ({ session: await sessionManager.getSession(await this.createGuestSession(guestAgent)), created: true }),
       attachmentConfig: { dangerouslyAllowAllUsers: true },
     });
     return sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId) ? resolved : null;
