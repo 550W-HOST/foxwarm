@@ -1,6 +1,6 @@
 # Code Index Initialization
 
-This document describes how to create a code index for a project when `~/code-index/{project}` does not exist yet or is too incomplete to be useful.
+This document describes how to create a code index when no usable index exists. Prefer repository-local `<repo-root>/docs/code-index/` for a new index unless the project explicitly uses another convention. The `~/code-index/{project}/` fallback exists so maintenance can continue on an already existing legacy index during migration; do not create a second copy merely to satisfy the lookup order. Select one root for the run and do not split writes between both.
 
 Most day-to-day work is **not** initialization. If an index already exists, usually read `overview.md`, search existing docs, inspect source, and make targeted updates. Use this document when you need to build the initial map.
 
@@ -97,25 +97,27 @@ It calls models via the production `foxwarm model` CLI (no Foxwarm server proces
 4. **Threads** — generate `threads/*.md` from module summaries.
 5. **Overview** — generate `overview.md` from modules and threads.
 
-Design decisions are not extracted by the generator. Add decisions from actual task/user context to relevant `## Design Decisions` sections.
+Design decisions are not extracted by the generator. Add only user-confirmed decisions from actual task context, following `SKILL.md`: choose one canonical owner before writing, use a thread for cross-module contracts, and use summary links rather than copying one decision across layers.
 
 ### Running
 
+The runners retain their legacy `~/code-index/{project}/` default for existing automation. For a new repository-local index, pass `--output /path/to/project/docs/code-index` (or the equivalent ToolScript `output` argument) explicitly.
+
 ```bash
 # Full generation
-python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44
 
 # Single phase (resume from cached groupings)
-python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --phase units
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --phase units
 
 # Test with specific files only
-python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --phase units --files src/main.ts,src/server.ts
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --phase units --files src/main.ts,src/server.ts
 
 # Override output directory
 python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --output /custom/index/path
 
 # Explicitly regenerate existing documents (may replace manual edits/Design Decisions)
-python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --force
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --force
 ```
 
 Options:
@@ -142,7 +144,7 @@ The script is resumable: it reuses `_work/groupings.json` only when its fingerpr
 Existing Foxwarm automation can continue using the original ToolScript entry:
 
 ```python
-run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project"})
+run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project", "output": "/path/to/my-project/docs/code-index"})
 ```
 
 It uses ToolScript host APIs such as `call_tool(...)` and `request_model_without_context(...)`; do not run that compatibility entry with ordinary Python. Prefer the standalone runner when you need strict path/output validation, fingerprinted resume state, or a long-running shell/background job.
@@ -155,7 +157,11 @@ Review and clean up generated docs:
 - add missing architectural relationships;
 - remove hallucinated claims;
 - verify important details against source;
-- add confirmed design decisions manually;
+- make all final prose public-safe English and remove secrets, credentials, local usernames/home paths, private runbooks, and agent-private memory;
+- distinguish each unit's primary files from secondary/integration references and reconcile duplicate primary ownership;
+- add confirmed design decisions manually at one canonical owner; repeated module decisions should become a thread-owned decision plus summary links;
+- move unconfirmed ideas to `Open Questions` with an `Unconfirmed` label, and remove superseded history rather than preserving an append-only changelog;
+- prefer stable symbols/sections over brittle line numbers and run available link/file/ownership/secret/CJK/terminology/similar-decision checks;
 - decide whether any area needs a top-down follow-up pass.
 
 ## Method 2 Details: Top-Down Context-Carrying Traversal
@@ -215,8 +221,8 @@ So initialization must be checkpoint-safe.
 ```text
 1. Read c1.
 2. Write/update units/a-b1-c1.md.
-3. Immediately update modules/a/b1.md with what c1 revealed.
-4. Update modules/a.md or overview.md if the new fact changes parent architecture.
+3. Immediately update modules/a/b1.md with current navigation and behavior revealed by c1.
+4. Update modules/a.md, a thread, or overview.md if the new fact changes its owned architecture or contract; link rather than copying decisions owned lower down.
 5. Mark c1 complete in _work state only after those docs are flushed.
 6. Move to c2, reloading parent docs from disk if needed.
 ```
@@ -253,14 +259,14 @@ After each micro-batch, reach a safe point:
 
 1. Unit doc is written or updated.
 2. Nearest parent module doc is updated.
-3. Important changes are propagated upward, or explicitly recorded as open questions / pending follow-up.
+3. Important navigation and current behavior are propagated upward; decisions remain at their selected canonical owner, and uncertainty is explicitly recorded as `Unconfirmed` in open questions.
 4. `_work` state is updated only after docs are flushed.
 
 If interrupted before `_work` is updated, repeat or reconcile that micro-batch later. Duplicate work is acceptable. Losing understanding is not.
 
 ## Rolling Parent Docs
 
-Do not wait for an entire directory to be complete before writing a parent module doc. Parent docs should be useful while partial.
+Do not wait for an entire directory to be complete before writing a parent module doc. Parent docs should be useful while partial, but rolling updates must not turn unit/module/thread/overview layers into duplicate decision logs.
 
 Example:
 
