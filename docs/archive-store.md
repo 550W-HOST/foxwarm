@@ -164,6 +164,6 @@ legacy `vector-index-checkpoints-v2.json` 仍可读，并会在初始化/访问�
 Session archive identity is not stored only in `archive-store.sqlite` and the per-session JSONL files:
 
 - `state/session-id-reservations.jsonl` is the authoritative durable ledger for committed session-ID move aliases. It must be included in backups and restores with the rest of the data directory.
-- `state/session-id-move-pending.json` is a temporary crash-recovery journal for one identity move. Do not delete or edit it while Foxwarm is stopped after an interrupted move; startup validates it and either finishes the committed target or retries rollback.
+- `state/session-id-move-pending.json` is a temporary crash-recovery journal for one identity move. It records explicit `finishing` or `rolling-back` intent and whether the move owns a newly created target-agent directory. Do not delete or edit it while Foxwarm is stopped after an interrupted move. Recovery runs before ordinary session loading; if validation or recovery fails, startup fails closed and the journal remains for retry instead of loading partial state.
 
 Valid conflicting ledger mappings or alias cycles fail closed rather than silently merging archives. A legacy JSONL path whose records name another session is not sufficient proof that a move occurred: legacy forks could contain copied parent rows. Foxwarm reserves uncertain identities independently and does not redirect reads without committed alias or live-metadata evidence.
