@@ -293,7 +293,10 @@ providers:
 Virtual targets must be concrete leaves; nested virtual models and duplicate
 aliases of the same concrete leaf are rejected. Virtual entries do not carry
 provider credentials, endpoint fields, model lists, request compression, or
-extra request fields/headers.
+extra request fields/headers, and they do not override context or async-compact
+values. `session-hash` does not accept failover settings; failover thresholds
+and cooldown milliseconds must be positive integers. Concrete entries do not
+accept virtual routing fields.
 
 The runtime resolves model definitions in this order:
 

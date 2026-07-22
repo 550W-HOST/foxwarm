@@ -197,6 +197,8 @@ test('structured setup conversion between concrete and virtual removes incompati
         providerType: 'openai-completions',
         baseUrl: 'https://old.test/v1',
         apiKey: 'old-secret',
+        contextLimit: 1234,
+        asyncCompact: false,
         models: ['old-model'],
         extraFields: { old: true },
       },
@@ -207,6 +209,42 @@ test('structured setup conversion between concrete and virtual removes incompati
     providerType: 'session-hash',
     targets: ['leaf/model-a'],
   });
+});
+
+test('structured virtual setup rejects failover fields on session-hash and non-positive or fractional failover values', () => {
+  const baseProviders = [{
+    id: 'leaf',
+    providerType: 'openai-completions',
+    baseUrl: 'https://example.test/v1',
+    models: 'model-a\nmodel-b',
+  }];
+  assert.throws(
+    () => buildModelsConfigFromSetupForm({
+      default: 'route',
+      providers: [...baseProviders, {
+        id: 'route',
+        providerType: 'session-hash',
+        targets: ['leaf/model-a'],
+        failureThreshold: 1,
+      }],
+    }),
+    /session-hash.*forbids failover field `failureThreshold`/,
+  );
+
+  for (const [field, value] of [['failureThreshold', '1.5'], ['failureThreshold', '0'], ['cooldownMs', '1.5'], ['cooldownMs', '0']] as const) {
+    assert.throws(
+      () => buildModelsConfigFromSetupForm({
+        default: 'route',
+        providers: [...baseProviders, {
+          id: 'route',
+          providerType: 'failover',
+          targets: ['leaf/model-a', 'leaf/model-b'],
+          [field]: value,
+        }],
+      }),
+      new RegExp(`${field} must be a positive integer`),
+    );
+  }
 });
 
 test('structured channel setup updates channels without rewriting unrelated config text', async () => {

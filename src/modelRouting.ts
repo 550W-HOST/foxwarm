@@ -6,6 +6,12 @@ type TargetHealthState = {
   cooldownUntil: number;
 };
 
+type ActiveFailoverRoute = {
+  fingerprint: string;
+  generation: number;
+  health: Map<string, TargetHealthState>;
+};
+
 export type VirtualTargetSelection = {
   targetKey: string;
   targetIndex: number;
@@ -18,45 +24,67 @@ export type VirtualFailureOutcome = {
   consecutiveFailures: number;
 };
 
+export type VirtualRoutingRequest = {
+  virtualKey: string;
+  routing: VirtualModelRoutingConfig;
+  generation: number;
+  health: Map<string, TargetHealthState>;
+};
+
 type Clock = () => number;
 
-const routeHealth = new Map<string, Map<string, TargetHealthState>>();
-const activeFailoverFingerprint = new Map<string, string>();
+const activeFailoverRoutes = new Map<string, ActiveFailoverRoute>();
+let nextGeneration = 1;
 let clock: Clock = () => Date.now();
 
-function routeScopeKey(virtualKey: string, routing: VirtualModelRoutingConfig): string {
-  return `${virtualKey}\0${routing.fingerprint}`;
+function activateFailoverRoute(virtualKey: string, routing: VirtualModelRoutingConfig): ActiveFailoverRoute {
+  const active = activeFailoverRoutes.get(virtualKey);
+  if (active?.fingerprint === routing.fingerprint) return active;
+
+  const replacement: ActiveFailoverRoute = {
+    fingerprint: routing.fingerprint,
+    generation: nextGeneration++,
+    health: new Map<string, TargetHealthState>(),
+  };
+  activeFailoverRoutes.set(virtualKey, replacement);
+  return replacement;
 }
 
-function getRouteHealth(virtualKey: string, routing: VirtualModelRoutingConfig): Map<string, TargetHealthState> {
-  const scopeKey = routeScopeKey(virtualKey, routing);
-  let health = routeHealth.get(scopeKey);
-  if (!health) {
-    health = new Map<string, TargetHealthState>();
-    routeHealth.set(scopeKey, health);
-  }
-  return health;
-}
-
-function activateFailoverRoute(virtualKey: string, routing: VirtualModelRoutingConfig): void {
-  const previousFingerprint = activeFailoverFingerprint.get(virtualKey);
-  if (previousFingerprint === routing.fingerprint) return;
-  if (previousFingerprint) {
-    routeHealth.delete(`${virtualKey}\0${previousFingerprint}`);
-  }
-  activeFailoverFingerprint.set(virtualKey, routing.fingerprint);
-}
-
-function isActiveFailoverRoute(virtualKey: string, routing: VirtualModelRoutingConfig): boolean {
-  return activeFailoverFingerprint.get(virtualKey) === routing.fingerprint;
+function isActiveRequest(request: VirtualRoutingRequest): boolean {
+  const active = activeFailoverRoutes.get(request.virtualKey);
+  return !!active
+    && active.fingerprint === request.routing.fingerprint
+    && active.generation === request.generation
+    && active.health === request.health;
 }
 
 export function clearVirtualRoutingState(virtualKey: string): void {
-  const previousFingerprint = activeFailoverFingerprint.get(virtualKey);
-  if (previousFingerprint) {
-    routeHealth.delete(`${virtualKey}\0${previousFingerprint}`);
-    activeFailoverFingerprint.delete(virtualKey);
+  activeFailoverRoutes.delete(virtualKey);
+}
+
+export function beginVirtualRoutingRequest(virtualKey: string, entry: ModelConfigEntry): VirtualRoutingRequest {
+  if (!isVirtualModelConfigEntry(entry)) {
+    throw new Error(`Model \`${virtualKey}\` is not a virtual model.`);
   }
+
+  const routing = entry.virtualRouting;
+  if (routing.strategy === 'session-hash') {
+    clearVirtualRoutingState(virtualKey);
+    return {
+      virtualKey,
+      routing,
+      generation: 0,
+      health: new Map<string, TargetHealthState>(),
+    };
+  }
+
+  const active = activateFailoverRoute(virtualKey, routing);
+  return {
+    virtualKey,
+    routing,
+    generation: active.generation,
+    health: active.health,
+  };
 }
 
 function compareDigest(left: Buffer, right: Buffer): number {
@@ -93,31 +121,23 @@ export function selectSessionHashTarget(virtualKey: string, routingKey: string, 
 }
 
 export function selectVirtualTarget(
-  virtualKey: string,
-  entry: ModelConfigEntry,
+  request: VirtualRoutingRequest,
   routingKey: string,
   now: number = clock(),
 ): VirtualTargetSelection {
-  if (!isVirtualModelConfigEntry(entry)) {
-    throw new Error(`Model \`${virtualKey}\` is not a virtual model.`);
-  }
-
-  const routing = entry.virtualRouting;
+  const { routing } = request;
   if (routing.strategy === 'session-hash') {
-    clearVirtualRoutingState(virtualKey);
-    return selectSessionHashTarget(virtualKey, routingKey, routing.targets);
+    return selectSessionHashTarget(request.virtualKey, routingKey, routing.targets);
   }
 
-  activateFailoverRoute(virtualKey, routing);
-  const health = getRouteHealth(virtualKey, routing);
   for (let index = 0; index < routing.targets.length; index += 1) {
     const targetKey = routing.targets[index];
-    const state = health.get(targetKey);
+    const state = request.health.get(targetKey);
     if (state?.cooldownUntil && state.cooldownUntil > now) {
       continue;
     }
     if (state?.cooldownUntil && state.cooldownUntil <= now) {
-      health.delete(targetKey);
+      request.health.delete(targetKey);
     }
     return {
       targetKey,
@@ -137,47 +157,43 @@ export function selectVirtualTarget(
   };
 }
 
-export function recordVirtualTargetSuccess(virtualKey: string, entry: ModelConfigEntry, targetKey: string): void {
-  if (!isVirtualModelConfigEntry(entry) || entry.virtualRouting.strategy !== 'failover') {
-    return;
-  }
-  if (!isActiveFailoverRoute(virtualKey, entry.virtualRouting)) return;
-  const health = getRouteHealth(virtualKey, entry.virtualRouting);
-  health.delete(targetKey);
+export function recordVirtualTargetSuccess(request: VirtualRoutingRequest, targetKey: string): void {
+  if (request.routing.strategy !== 'failover' || !isActiveRequest(request)) return;
+  request.health.delete(targetKey);
 }
 
 export function recordVirtualTargetFailure(
-  virtualKey: string,
-  entry: ModelConfigEntry,
+  request: VirtualRoutingRequest,
   selection: VirtualTargetSelection,
   now: number = clock(),
 ): VirtualFailureOutcome {
-  if (!isVirtualModelConfigEntry(entry) || entry.virtualRouting.strategy !== 'failover') {
-    return { terminal: false, enteredCooldown: false, consecutiveFailures: 0 };
-  }
-  if (!isActiveFailoverRoute(virtualKey, entry.virtualRouting)) {
+  if (request.routing.strategy !== 'failover' || !isActiveRequest(request)) {
     return { terminal: false, enteredCooldown: false, consecutiveFailures: 0 };
   }
 
-  const routing = entry.virtualRouting;
-  const scopeKey = routeScopeKey(virtualKey, routing);
+  const routing = request.routing;
   if (selection.isLastTarget) {
-    routeHealth.delete(scopeKey);
+    // Advance the generation as well as clearing health so later completions
+    // from any request that shared the exhausted generation cannot repopulate it.
+    activeFailoverRoutes.set(request.virtualKey, {
+      fingerprint: routing.fingerprint,
+      generation: nextGeneration++,
+      health: new Map<string, TargetHealthState>(),
+    });
     return { terminal: true, enteredCooldown: false, consecutiveFailures: 1 };
   }
 
-  const health = getRouteHealth(virtualKey, routing);
-  const previous = health.get(selection.targetKey);
+  const previous = request.health.get(selection.targetKey);
   const consecutiveFailures = (previous?.consecutiveFailures || 0) + 1;
   if (consecutiveFailures >= routing.failureThreshold) {
-    health.set(selection.targetKey, {
+    request.health.set(selection.targetKey, {
       consecutiveFailures,
       cooldownUntil: now + routing.cooldownMs,
     });
     return { terminal: false, enteredCooldown: true, consecutiveFailures };
   }
 
-  health.set(selection.targetKey, {
+  request.health.set(selection.targetKey, {
     consecutiveFailures,
     cooldownUntil: 0,
   });
@@ -185,8 +201,8 @@ export function recordVirtualTargetFailure(
 }
 
 export function resetVirtualRoutingStateForTests(): void {
-  routeHealth.clear();
-  activeFailoverFingerprint.clear();
+  activeFailoverRoutes.clear();
+  nextGeneration = 1;
   clock = () => Date.now();
 }
 
@@ -195,7 +211,8 @@ export function setVirtualRoutingClockForTests(nextClock?: Clock): void {
 }
 
 export function getVirtualRoutingStateForTests(virtualKey: string, entry: ModelConfigEntry): Record<string, TargetHealthState> {
-  if (!isVirtualModelConfigEntry(entry)) return {};
-  const health = routeHealth.get(routeScopeKey(virtualKey, entry.virtualRouting));
-  return Object.fromEntries(Array.from(health?.entries() || []).map(([key, value]) => [key, { ...value }]));
+  if (!isVirtualModelConfigEntry(entry) || entry.virtualRouting.strategy !== 'failover') return {};
+  const active = activeFailoverRoutes.get(virtualKey);
+  if (!active || active.fingerprint !== entry.virtualRouting.fingerprint) return {};
+  return Object.fromEntries(Array.from(active.health.entries()).map(([key, value]) => [key, { ...value }]));
 }

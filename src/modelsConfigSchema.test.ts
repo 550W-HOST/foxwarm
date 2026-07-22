@@ -243,6 +243,96 @@ test('session-hash accepts one concrete target as an alias and canonicalizes sin
   assert.equal(parsed.models.alias.asyncCompact, true);
 });
 
+test('canonical targets preserve slash-containing and provider-prefixed model ids as actual expansion keys', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'alias',
+    providers: {
+      foo: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://example.test/v1',
+        models: ['foo/bar'],
+      },
+      alias: {
+        providerType: 'session-hash',
+        targets: ['foo'],
+      },
+    },
+  });
+  assert.ok(parsed.models['foo/foo/bar']);
+  assert.equal(parsed.models.foo.canonicalModelKey, 'foo/foo/bar');
+  assert.equal(parsed.models['foo/foo/bar'].canonicalModelKey, 'foo/foo/bar');
+  assert.deepEqual(parsed.models.alias.virtualRouting?.targets, ['foo/foo/bar']);
+  assert.equal(parsed.models[parsed.models.alias.virtualRouting!.targets[0]].model, 'foo/bar');
+  assert.throws(
+    () => loadModelsConfigFromObject({
+      default: 'duplicate',
+      providers: {
+        foo: {
+          providerType: 'openai-completions',
+          baseUrl: 'https://example.test/v1',
+          models: ['foo/bar'],
+        },
+        duplicate: {
+          providerType: 'failover',
+          targets: ['foo', 'foo/foo/bar'],
+        },
+      },
+    }),
+    /duplicate canonical target `foo\/foo\/bar`/,
+  );
+});
+
+test('route fingerprint deterministically covers resolved concrete request plans without storing secrets', () => {
+  const raw = {
+    default: 'route',
+    providers: {
+      leaf: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://leaf.test/v1',
+        apiKey: 'super-secret-value',
+        contextLimit: 1000,
+        asyncCompact: true,
+        extraFields: { z: 1, nested: { b: 2, a: 1 } },
+        extraHeaders: { 'x-z': 'z', Authorization: 'secret-header' },
+        models: ['model-a'],
+      },
+      backup: {
+        providerType: 'anthropic',
+        baseUrl: 'https://backup.test',
+        apiKey: 'backup-secret',
+        models: ['model-b'],
+      },
+      route: {
+        providerType: 'failover',
+        targets: ['leaf/model-a', 'backup/model-b'],
+      },
+    },
+  };
+  const fingerprint = (config: any) => loadModelsConfigFromObject(config).models.route.virtualRouting!.fingerprint;
+  const baseFingerprint = fingerprint(raw);
+  const changedFingerprints = [
+    (() => { const value = structuredClone(raw); value.providers.leaf.baseUrl = 'https://changed.test/v1'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.apiKey = 'changed-secret'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.providerType = 'anthropic'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.models = ['leaf/model-a']; value.providers.route.targets[0] = 'leaf/leaf/model-a'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf.extraHeaders as any)['x-new'] = 'yes'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).requestCompression = 'gzip'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.extraFields.nested.a = 9; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.contextLimit = 2000; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.asyncCompact = false; return fingerprint(value); })(),
+  ];
+  assert.ok(changedFingerprints.every(value => value !== baseFingerprint));
+
+  const reordered = structuredClone(raw);
+  reordered.providers.leaf.extraHeaders = { Authorization: 'secret-header', 'x-z': 'z' };
+  reordered.providers.leaf.extraFields = { nested: { a: 1, b: 2 }, z: 1 };
+  assert.equal(fingerprint(reordered), baseFingerprint);
+
+  const routingJson = JSON.stringify(loadModelsConfigFromObject(raw).models.route.virtualRouting);
+  assert.doesNotMatch(routingJson, /super-secret-value|secret-header|backup-secret/);
+  assert.match(baseFingerprint, /^[0-9a-f]{64}$/);
+});
+
 test('virtual schema rejects forbidden fields, invalid target counts, unknown/nested/self targets, and canonical duplicates', () => {
   const concrete = {
     providerType: 'openai-completions',
@@ -263,6 +353,65 @@ test('virtual schema rejects forbidden fields, invalid target counts, unknown/ne
     { other: { providerType: 'session-hash', targets: ['virtual'] } },
   ), /is virtual; nested virtual routing is not supported/);
   assert.throws(() => parseVirtual({ providerType: 'failover', targets: ['concrete', 'concrete/model-a'] }), /duplicate canonical target/);
+});
+
+test('provider entries and concrete/virtual routing fields are strictly separated', () => {
+  const invalidProviderValues: unknown[] = [null, 'text', 1, []];
+  for (const value of invalidProviderValues) {
+    assert.throws(
+      () => loadModelsConfigFromObject({ default: 'bad', providers: { bad: value } }),
+      /Provider `bad` must be a plain object/,
+    );
+  }
+
+  const concrete = {
+    providerType: 'openai-completions',
+    baseUrl: 'https://example.test/v1',
+    models: ['model-a'],
+  };
+  for (const field of ['targets', 'failureThreshold', 'cooldownMs']) {
+    assert.throws(
+      () => loadModelsConfigFromObject({
+        default: 'concrete',
+        providers: { concrete: { ...concrete, [field]: field === 'targets' ? ['concrete'] : 1 } },
+      }),
+      new RegExp(`Concrete provider .* forbids routing field .*${field}`),
+    );
+  }
+
+  const parseVirtual = (entry: any) => loadModelsConfigFromObject({
+    default: 'virtual',
+    providers: { concrete, virtual: entry },
+  });
+  for (const field of ['contextLimit', 'asyncCompact']) {
+    assert.throws(
+      () => parseVirtual({ providerType: 'session-hash', targets: ['concrete'], [field]: field === 'contextLimit' ? 1000 : true }),
+      new RegExp(`forbids field .*${field}`),
+    );
+  }
+  for (const field of ['failureThreshold', 'cooldownMs']) {
+    assert.throws(
+      () => parseVirtual({ providerType: 'session-hash', targets: ['concrete'], [field]: 1 }),
+      new RegExp(`session-hash.*forbids failover field .*${field}`),
+    );
+  }
+  for (const [field, value] of [['failureThreshold', 1.5], ['failureThreshold', 0], ['cooldownMs', 1.5], ['cooldownMs', 0]] as const) {
+    assert.throws(
+      () => loadModelsConfigFromObject({
+        default: 'virtual',
+        providers: {
+          concrete,
+          second: { ...concrete, models: ['model-b'] },
+          virtual: {
+            providerType: 'failover',
+            targets: ['concrete/model-a', 'second/model-b'],
+            [field]: value,
+          },
+        },
+      }),
+      new RegExp(`${field} must be a positive integer`),
+    );
+  }
 });
 
 test('providerType continues to take precedence over the legacy provider reader', () => {

@@ -13,9 +13,9 @@ Two virtual `providerType` values are supported:
 - `session-hash` — stable session-prefix routing.
 - `failover` — ordered health-aware fallback.
 
-A virtual entry uses `targets`, containing model keys that resolve strictly to concrete leaves in the same models-config snapshot. Version 1 rejects empty targets, unknown targets, self references, virtual-to-virtual references, and aliases that resolve to the same canonical concrete target. `session-hash` accepts one or more targets; `failover` requires at least two.
+A virtual entry uses `targets`, containing model lookup keys that resolve strictly to concrete leaves in the same models-config snapshot. Canonical identity is an actual expansion key, so slash-containing model IDs remain exact and a single-model bare alias and qualified key resolve to the same leaf. Version 1 rejects empty targets, unknown targets, self references, virtual-to-virtual references, and aliases that resolve to the same canonical concrete target. `session-hash` accepts one or more targets; `failover` requires at least two.
 
-Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, or `extraHeaders`. Request connection and serialization fields always come from the selected concrete leaf.
+Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `contextLimit`, or `asyncCompact`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
 
 The resolved virtual model reports:
 
@@ -23,7 +23,7 @@ The resolved virtual model reports:
 - async compaction enabled only when every reachable leaf allows it;
 - canonical concrete target keys;
 - failover defaults of five consecutive failures and a 600,000 ms cooldown;
-- a configuration fingerprint used to isolate process-local health state.
+- a deterministic configuration fingerprint covering strategy and the complete resolved leaf request configuration. Secret inputs and header/extra maps contribute through hashes and are not retained in virtual routing metadata.
 
 ## Request flow
 
@@ -45,7 +45,7 @@ A low-level request without a usable key receives one request-scoped random key;
 
 ## Failover health
 
-Failover health is process memory, scoped by virtual model key, configuration fingerprint, and canonical concrete target. It is not session state and is not persisted. Restart and configuration changes reset the active route state. A completion from an obsolete configuration fingerprint cannot mutate the active route.
+Failover health is process memory, scoped by virtual model key, configuration fingerprint, and canonical concrete target. It is not session state and is not persisted. Restart and configuration changes reset the active route state. Each independent outer request captures the active fingerprint generation once; retries continue against that request snapshot but cannot reactivate it after another configuration becomes active. Stale outcomes are ignored, while a later independent request that deliberately rolls back configuration activates a fresh generation.
 
 Selection chooses the first configured target that is not cooling down. Outcomes are applied synchronously in completion order:
 
@@ -64,7 +64,7 @@ Failures that are retryable and count toward failover health:
 - network, DNS, TLS, timeout, and stream failures;
 - HTTP 408, 429, 5xx, and 529;
 - HTTP 401, 403, and 404;
-- model-not-found responses, including a matching HTTP 400 body;
+- model-not-found responses, including HTTP 400 bodies identified by nested structured error code/type or bounded model-specific text patterns;
 - malformed or unusable successful responses.
 
 HTTP 400, 413, and 422 are terminal and do not affect route health unless the body identifies model-not-found. Other HTTP statuses preserve the prior retry behavior but do not affect shared route health until explicitly classified.
@@ -102,7 +102,7 @@ Virtual routing remains a `providerType` contract. `session-hash` and `failover`
 
 ### D-model-routing-leaf-only
 
-Version 1 virtual targets are strict concrete leaves. Reject nesting and canonical duplicates rather than defining recursive health, attribution, or cycle semantics implicitly.
+Version 1 virtual targets are strict concrete leaves. Canonical identity is the actual qualified expansion key, not a reconstruction from the raw model ID. Reject nesting and canonical duplicates rather than defining recursive health, attribution, or cycle semantics implicitly.
 
 ### D-model-routing-prefix-hash
 
@@ -114,7 +114,7 @@ There is one outer LLM attempt loop, with six total attempts by default. Each vi
 
 ### D-model-routing-failover-health
 
-Failover health is process-local, configuration-fingerprinted, and completion-ordered. Success resets one target, cooldown expiry starts a fresh streak, and final-target failure ends the current request and clears state for the next request.
+Failover health is process-local, configuration-fingerprinted, generation-scoped, and completion-ordered. Activation happens once per independent outer request; stale retries cannot reactivate or mutate a newer configuration. Success resets one target, cooldown expiry starts a fresh streak, and final-target failure ends the current request and clears state for the next request.
 
 ### D-model-routing-usable-response
 

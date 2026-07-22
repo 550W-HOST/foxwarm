@@ -240,29 +240,38 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
     if (isVirtual) {
       const targets = splitModelIds(hasOwn(draft, 'targets') ? draft.targets : existingProvider.targets);
       nextProvider.targets = targets;
-      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders'] as const) {
+      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'contextLimit', 'asyncCompact'] as const) {
         delete nextProvider[field];
       }
-      if (hasOwn(draft, 'failureThreshold')) {
+      if (providerType === 'session-hash') {
+        for (const field of ['failureThreshold', 'cooldownMs'] as const) {
+          if (hasOwn(draft, field) && String(draft[field] ?? '').trim()) {
+            throw new Error(`Virtual provider \`${providerKey}\` (session-hash) forbids failover field \`${field}\`.`);
+          }
+        }
+        delete nextProvider.failureThreshold;
+        delete nextProvider.cooldownMs;
+      }
+      if (providerType === 'failover' && hasOwn(draft, 'failureThreshold')) {
         const rawFailureThreshold = String(draft.failureThreshold ?? '').trim();
         if (!rawFailureThreshold) {
           delete nextProvider.failureThreshold;
         } else {
           const failureThreshold = Number(rawFailureThreshold);
-          if (!Number.isFinite(failureThreshold)) {
-            throw new Error(`Virtual provider \`${providerKey}\` failureThreshold must be a number.`);
+          if (!Number.isInteger(failureThreshold) || failureThreshold < 1) {
+            throw new Error(`Virtual provider \`${providerKey}\` failureThreshold must be a positive integer.`);
           }
           nextProvider.failureThreshold = failureThreshold;
         }
       }
-      if (hasOwn(draft, 'cooldownMs')) {
+      if (providerType === 'failover' && hasOwn(draft, 'cooldownMs')) {
         const rawCooldownMs = String(draft.cooldownMs ?? '').trim();
         if (!rawCooldownMs) {
           delete nextProvider.cooldownMs;
         } else {
           const cooldownMs = Number(rawCooldownMs);
-          if (!Number.isFinite(cooldownMs)) {
-            throw new Error(`Virtual provider \`${providerKey}\` cooldownMs must be a number.`);
+          if (!Number.isInteger(cooldownMs) || cooldownMs < 1) {
+            throw new Error(`Virtual provider \`${providerKey}\` cooldownMs must be a positive integer.`);
           }
           nextProvider.cooldownMs = cooldownMs;
         }

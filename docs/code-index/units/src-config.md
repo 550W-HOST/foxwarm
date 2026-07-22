@@ -18,7 +18,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 ### Model configuration
 
-- `ProviderConfigEntry`, `ProviderModelListItem`, `ModelConfigEntry`, `ModelsConfig`, and virtual routing config types/guards.
+- `ProviderConfigEntry`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity), `ModelsConfig`, and virtual routing config types/guards.
 - `expandModelsConfig`, `loadModelsConfig`, `loadModelsConfigFromObject`, `resolveModelConfig`.
 
 ### Setup configuration
@@ -65,8 +65,8 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
 - Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly.
 - `openai`, `openai-responses`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings.
-- Invalid model lists or object entries fail with explicit validation errors.
-- `session-hash` and `failover` entries resolve strict concrete targets, safe context/async-compact values, and a route fingerprint. Their schema and semantics are canonical in [model routing](../threads/model-routing.md).
+- Invalid provider objects, model lists, and cross-strategy fields fail with provider-qualified validation errors.
+- `session-hash` and `failover` entries resolve strict concrete lookup keys, safe context/async-compact values, and a stable full-leaf configuration fingerprint. Their schema and semantics are canonical in [model routing](../threads/model-routing.md).
 
 ## Persistence behavior
 

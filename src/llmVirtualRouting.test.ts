@@ -117,7 +117,26 @@ test('HTTP failure classification is explicit for every configured category', ()
   for (const status of [400, 413, 422]) {
     assert.deepEqual(classifyHttpFailure(status, { error: 'invalid request' }), { retryable: false, countable: false });
   }
-  assert.deepEqual(classifyHttpFailure(400, { code: 'model_not_found' }), { retryable: true, countable: true });
+  for (const body of [
+    { code: 'model_not_found' },
+    { error: { code: 'model_not_found' } },
+    { error: { detail: { type: 'model_not_found_error' } } },
+    { error: { detail: { type: 'model_does_not_exist' } } },
+    { error: { message: 'The model gpt-9-preview does not exist or you do not have access to it.' } },
+    { message: 'Requested model vendor/model-x was not found' },
+    'No such model: model-x',
+  ]) {
+    assert.deepEqual(classifyHttpFailure(400, body), { retryable: true, countable: true });
+  }
+  for (const body of [
+    { error: { code: 'invalid_request_error', message: 'The model parameter is required.' } },
+    { error: { type: 'not_found_error', message: 'Requested resource was not found.' } },
+    { message: 'The model response format is invalid.' },
+    { message: 'Invalid model input format.' },
+    'No such deployment exists',
+  ]) {
+    assert.deepEqual(classifyHttpFailure(400, body), { retryable: false, countable: false });
+  }
   assert.deepEqual(classifyHttpFailure(418, { error: 'other status' }), { retryable: true, countable: false });
 });
 
@@ -180,6 +199,44 @@ test('failover uses outer attempts A x5 then rebuilds a clean Anthropic request 
     assert.equal(fallbackBody.prompt_cache_key, undefined);
     assert.equal(result.text, 'anthropic fallback ok');
     assert.equal(result.modelId, 'anthropicLeaf/claude-model');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('virtual routing requests the actual qualified leaf when a model id contains the provider prefix and slash', async () => {
+  const originalPost = axios.post;
+  const slashModels = loadModelsConfigFromObject({
+    default: 'sticky-slash',
+    providers: {
+      foo: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://slash-leaf.test/v1',
+        apiKey: 'slash-secret',
+        models: ['foo/bar'],
+      },
+      'sticky-slash': {
+        providerType: 'session-hash',
+        targets: ['foo'],
+      },
+    },
+  });
+  const calls: Array<{ url: string; body: any }> = [];
+  (axios as any).post = async (url: string, body: any) => {
+    calls.push({ url, body });
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatStream('slash ok') };
+  };
+
+  try {
+    const result = await requestLlmOnce({
+      ...baseRequest('sticky-slash'),
+      modelsConfigOverride: slashModels,
+      maxRetries: 1,
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://slash-leaf.test/v1/chat/completions');
+    assert.equal(calls[0].body.model, 'foo/bar');
+    assert.equal(result.modelId, 'foo/foo/bar');
   } finally {
     (axios as any).post = originalPost;
   }

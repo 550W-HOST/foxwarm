@@ -49,6 +49,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - Streaming progress emits throttled reasoning/text/tool-call snapshots.
 - Retry waits are abortable. Terminal failures move bounded diagnostics to error logs, emit a final retry event, and throw `LlmRequestError`; they do not create fake assistant `Error:` messages. Canonical boundary: [D-llm-request-errors](../modules/llm.md#d-llm-request-errors).
 - The historical `maxRetries` option/event field means total attempts; the default is six. Virtual attempts rebuild the complete selected concrete request, and unusable empty/reasoning-only responses retry. Canonical semantics: [model routing](../threads/model-routing.md).
+- HTTP classification recognizes nested structured model-not-found errors and bounded common text forms without broadening ordinary HTTP 400 retries. A virtual outer request captures route activation once so old retries cannot replace newer configuration state.
 - Successful results normalize into `ChatResult`, record provider-qualified model ID and usage, and may contain function calls for the router loop.
 - Display-only messages and internal `__meta` are excluded from provider input.
 

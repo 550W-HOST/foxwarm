@@ -389,6 +389,7 @@ export type VirtualModelRoutingConfig = {
 
 export type ModelConfigEntry = {
   providerKey: string;
+  canonicalModelKey?: string;
   providerType?: string;
   model: string;
   baseUrl?: string;
@@ -410,7 +411,9 @@ export type ModelsConfig = {
 let warnedTemplateModelsFallback = false;
 
 function isPlainObject(value: unknown): value is Record<string, any> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function cloneConfigValue<T>(value: T): T {
@@ -419,6 +422,24 @@ function cloneConfigValue<T>(value: T): T {
   }
 
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function stableSerializeConfigValue(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(item => stableSerializeConfigValue(item)).join(',')}]`;
+  }
+  return `{${Object.keys(value as Record<string, unknown>)
+    .filter(key => (value as Record<string, unknown>)[key] !== undefined)
+    .sort()
+    .map(key => `${JSON.stringify(key)}:${stableSerializeConfigValue((value as Record<string, unknown>)[key])}`)
+    .join(',')}}`;
+}
+
+function hashConfigValue(value: unknown): string {
+  return crypto.createHash('sha256').update(stableSerializeConfigValue(value)).digest('hex');
 }
 
 function deepMergeObjects<T extends Record<string, any> | undefined>(base: T, override: T): T {
@@ -524,6 +545,7 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
   return {
     providerKey,
+    canonicalModelKey: modelId ? `${providerKey}/${modelId}` : providerKey,
     providerType: resolvedProviderEntry.providerType,
     model: modelId,
     baseUrl: resolvedProviderEntry.baseUrl,
@@ -544,15 +566,26 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
 
 export function expandModelsConfig(rawProviderEntries: Record<string, ProviderConfigEntry>) {
   const models: Record<string, ModelConfigEntry> = {};
+  const canonicalConcreteKeyByLookupKey = new Map<string, string>();
   const displayModels: string[] = [];
 
   const virtualEntries: Array<[string, ProviderConfigEntry, VirtualProviderType]> = [];
 
-  for (const [providerKey, providerEntry] of Object.entries(rawProviderEntries || {})) {
+  for (const [providerKey, rawProviderEntry] of Object.entries(rawProviderEntries || {})) {
+    if (!isPlainObject(rawProviderEntry)) {
+      throw new Error(`Provider \`${providerKey}\` must be a plain object.`);
+    }
+    const providerEntry = rawProviderEntry as ProviderConfigEntry;
     const providerType = getProviderType(providerEntry);
     if (isVirtualProviderType(providerType)) {
       virtualEntries.push([providerKey, providerEntry, providerType]);
       continue;
+    }
+
+    for (const field of ['targets', 'failureThreshold', 'cooldownMs'] as const) {
+      if (Object.prototype.hasOwnProperty.call(providerEntry, field)) {
+        throw new Error(`Concrete provider \`${providerKey}\` (${providerType}) forbids routing field \`${field}\`.`);
+      }
     }
 
     const normalizedModels = normalizeProviderModelsField(providerKey, providerEntry);
@@ -560,6 +593,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     // Allow empty/undefined (some providers has default model)
     if (!normalizedModels || normalizedModels.length === 0) {
       models[providerKey] = buildResolvedModelEntry(providerKey, providerEntry, '');
+      canonicalConcreteKeyByLookupKey.set(providerKey, providerKey);
       displayModels.push(providerKey);
       continue;
     }
@@ -569,8 +603,11 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
       const modelId = typeof onlyModel === 'string' ? onlyModel : onlyModel.id;
       const modelOverride = typeof onlyModel === 'string' ? undefined : onlyModel;
       const resolvedEntry = buildResolvedModelEntry(providerKey, providerEntry, modelId, modelOverride);
+      const qualifiedModelKey = `${providerKey}/${modelId}`;
       models[providerKey] = resolvedEntry;
-      models[`${providerKey}/${modelId}`] = { ...resolvedEntry };
+      models[qualifiedModelKey] = { ...resolvedEntry };
+      canonicalConcreteKeyByLookupKey.set(providerKey, qualifiedModelKey);
+      canonicalConcreteKeyByLookupKey.set(qualifiedModelKey, qualifiedModelKey);
       displayModels.push(providerKey);
     } else {
       for (const rawModel of normalizedModels) {
@@ -578,6 +615,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
         const modelOverride = typeof rawModel === 'string' ? undefined : rawModel;
         const modelKey = `${providerKey}/${modelId}`;
         models[modelKey] = buildResolvedModelEntry(providerKey, providerEntry, modelId, modelOverride);
+        canonicalConcreteKeyByLookupKey.set(modelKey, modelKey);
         displayModels.push(modelKey);
       }
     }
@@ -592,19 +630,22 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'requestCompression',
     'extraFields',
     'extraHeaders',
+    'contextLimit',
+    'asyncCompact',
   ];
-
-  const canonicalConcreteKey = (entry: ModelConfigEntry): string => {
-    const modelName = typeof entry.model === 'string' ? entry.model.trim() : '';
-    return modelName
-      ? (modelName.startsWith(`${entry.providerKey}/`) ? modelName : `${entry.providerKey}/${modelName}`)
-      : entry.providerKey;
-  };
 
   for (const [virtualKey, providerEntry, providerType] of virtualEntries) {
     for (const field of forbiddenVirtualFields) {
       if (Object.prototype.hasOwnProperty.call(providerEntry, field)) {
         throw new Error(`Virtual provider \`${virtualKey}\` (${providerType}) forbids field \`${field}\`.`);
+      }
+    }
+
+    if (providerType === 'session-hash') {
+      for (const field of ['failureThreshold', 'cooldownMs'] as const) {
+        if (Object.prototype.hasOwnProperty.call(providerEntry, field)) {
+          throw new Error(`Virtual provider \`${virtualKey}\` (session-hash) forbids failover field \`${field}\`.`);
+        }
       }
     }
 
@@ -636,7 +677,10 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
       if (!targetEntry) {
         throw new Error(`Virtual provider \`${virtualKey}\` has unknown concrete target \`${target}\`.`);
       }
-      const canonicalTarget = canonicalConcreteKey(targetEntry);
+      const canonicalTarget = canonicalConcreteKeyByLookupKey.get(target);
+      if (!canonicalTarget || !models[canonicalTarget]) {
+        throw new Error(`Virtual provider \`${virtualKey}\` could not canonicalize concrete target \`${target}\`.`);
+      }
       if (seenCanonicalTargets.has(canonicalTarget)) {
         throw new Error(`Virtual provider \`${virtualKey}\` has duplicate canonical target \`${canonicalTarget}\`.`);
       }
@@ -650,21 +694,37 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
       throw new Error(`Virtual provider \`${virtualKey}\` failureThreshold must be a positive integer.`);
     }
     const cooldownMs = providerEntry.cooldownMs ?? 600_000;
-    if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) {
-      throw new Error(`Virtual provider \`${virtualKey}\` cooldownMs must be a positive number.`);
+    if (!Number.isInteger(cooldownMs) || cooldownMs < 1) {
+      throw new Error(`Virtual provider \`${virtualKey}\` cooldownMs must be a positive integer.`);
     }
 
     const contextLimit = Math.min(...leafEntries.map(entry => entry.contextLimit || CONTEXT_LIMIT));
     const asyncCompact = leafEntries.every(entry => entry.asyncCompact !== false);
-    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({
+    const fingerprint = hashConfigValue({
       strategy: providerType,
       targets,
       failureThreshold,
       cooldownMs,
-    })).digest('hex');
+      leaves: targets.map((target, index) => {
+        const entry = leafEntries[index];
+        return {
+          target,
+          providerType: entry.providerType || 'openai',
+          model: entry.model,
+          baseUrl: entry.baseUrl || null,
+          requestCompression: entry.requestCompression || null,
+          contextLimit: entry.contextLimit ?? CONTEXT_LIMIT,
+          asyncCompact: entry.asyncCompact !== false,
+          apiKeyHash: hashConfigValue(entry.apiKey || ''),
+          extraFieldsHash: hashConfigValue(entry.extraFields || {}),
+          extraHeadersHash: hashConfigValue(entry.extraHeaders || {}),
+        };
+      }),
+    });
 
     models[virtualKey] = {
       providerKey: virtualKey,
+      canonicalModelKey: virtualKey,
       providerType,
       model: '',
       contextLimit,

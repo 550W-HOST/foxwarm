@@ -29,7 +29,15 @@ import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages
 import { guardToolOutputForModel } from './toolOutputGuard';
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
-import { clearVirtualRoutingState, recordVirtualTargetFailure, recordVirtualTargetSuccess, selectVirtualTarget, VirtualTargetSelection } from './modelRouting';
+import {
+    beginVirtualRoutingRequest,
+    clearVirtualRoutingState,
+    recordVirtualTargetFailure,
+    recordVirtualTargetSuccess,
+    selectVirtualTarget,
+    VirtualRoutingRequest,
+    VirtualTargetSelection,
+} from './modelRouting';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -468,13 +476,14 @@ export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-c
 }
 
 function getModelIdForMetadata(modelEntry: ModelConfigEntry | undefined, fallbackModelKey: string): string {
+    const canonicalModelKey = typeof modelEntry?.canonicalModelKey === 'string' ? modelEntry.canonicalModelKey.trim() : '';
+    if (canonicalModelKey) return canonicalModelKey;
+
     const providerKey = typeof modelEntry?.providerKey === 'string' ? modelEntry.providerKey.trim() : '';
     const modelName = typeof modelEntry?.model === 'string' ? modelEntry.model.trim() : '';
 
     if (providerKey && modelName) {
-        return modelName.startsWith(`${providerKey}/`)
-            ? modelName
-            : `${providerKey}/${modelName}`;
+        return `${providerKey}/${modelName}`;
     }
 
     if (providerKey) {
@@ -1436,19 +1445,58 @@ class ConcreteAttemptFailure extends Error {
     }
 }
 
-function stringifyProviderErrorBody(value: any): string {
-    if (typeof value === 'string') return value;
-    try {
-        return JSON.stringify(value);
-    } catch {
-        return String(value || '');
+function collectProviderErrorStrings(value: unknown, strings: string[], structuredCodes: string[], depth = 0): void {
+    if (depth > 8 || value === null || value === undefined) return;
+    if (typeof value === 'string') {
+        strings.push(value);
+        const trimmed = value.trim();
+        if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && depth < 8) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed && typeof parsed === 'object') {
+                    collectProviderErrorStrings(parsed, strings, structuredCodes, depth + 1);
+                }
+            } catch {
+                // Provider error bodies are frequently plain text; JSON parsing
+                // is only a best-effort path for streamed structured errors.
+            }
+        }
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const item of value) collectProviderErrorStrings(item, strings, structuredCodes, depth + 1);
+        return;
+    }
+    if (typeof value !== 'object') return;
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+        if ((key === 'code' || key === 'type') && typeof nestedValue === 'string') {
+            structuredCodes.push(nestedValue);
+        }
+        collectProviderErrorStrings(nestedValue, strings, structuredCodes, depth + 1);
     }
 }
 
+function isModelNotFoundProviderError(body: unknown): boolean {
+    const strings: string[] = [];
+    const structuredCodes: string[] = [];
+    collectProviderErrorStrings(body, strings, structuredCodes);
+
+    const structuredMatch = structuredCodes.some(value => {
+        const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        return /^model_(?:not_found|does_not_exist)(?:_error)?$/.test(normalized)
+            || /^unknown_model(?:_error)?$/.test(normalized);
+    });
+    if (structuredMatch) return true;
+
+    const text = strings.join('\n');
+    return /\bno\s+such\s+model\b/i.test(text)
+        || /\b(?:the\s+|requested\s+)?model\s+(?:"[^"]{1,200}"|'[^']{1,200}'|`[^`]{1,200}`|[^\s,;:]{1,200})\s+(?:was\s+)?not\s+found\b/i.test(text)
+        || /\b(?:the\s+|requested\s+)?model\s+(?:"[^"]{1,200}"|'[^']{1,200}'|`[^`]{1,200}`|[^\s,;:]{1,200})\s+does\s+not\s+exist\b/i.test(text)
+        || /\bunknown\s+model\b/i.test(text);
+}
+
 export function classifyHttpFailure(statusCode: number, body: any): { retryable: boolean; countable: boolean } {
-    const bodyText = stringifyProviderErrorBody(body);
-    const modelNotFound = /model[_\s-]*(?:not[_\s-]*found|does[_\s-]*not[_\s-]*exist)|(?:unknown|invalid)[_\s-]*model/i.test(bodyText);
-    if (modelNotFound) {
+    if (isModelNotFoundProviderError(body)) {
         return { retryable: true, countable: true };
     }
     if (statusCode === 400 || statusCode === 413 || statusCode === 422) {
@@ -1788,6 +1836,13 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         throw new Error('modelEntryOverride does not support virtual model routing; select a configured model key instead.');
     }
 
+    // Activation is an independent-request boundary. Retries use this captured
+    // generation and cannot reactivate an obsolete configuration fingerprint.
+    const virtualRoutingRequest: VirtualRoutingRequest | undefined = isVirtualModelConfigEntry(routeEntry)
+        ? beginVirtualRoutingRequest(routeKey, routeEntry)
+        : undefined;
+    if (!virtualRoutingRequest) clearVirtualRoutingState(routeKey);
+
     // Resolve once per outer request. Every retry attempt, including virtual
     // failover attempts, shares this prefix-lineage routing key.
     const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
@@ -1829,16 +1884,14 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             let selection: VirtualTargetSelection | undefined;
             let modelEntry = routeEntry;
             let modelKey = routeKey;
-            if (isVirtualModelConfigEntry(routeEntry)) {
-                selection = selectVirtualTarget(routeKey, routeEntry, promptCacheKey);
+            if (virtualRoutingRequest) {
+                selection = selectVirtualTarget(virtualRoutingRequest, promptCacheKey);
                 modelKey = selection.targetKey;
                 const concreteEntry = resolvedModel.modelsConfig.models[modelKey];
                 if (!concreteEntry || isVirtualModelConfigEntry(concreteEntry)) {
                     throw new Error(`Virtual model \`${routeKey}\` resolved invalid concrete target \`${modelKey}\`.`);
                 }
                 modelEntry = concreteEntry;
-            } else {
-                clearVirtualRoutingState(routeKey);
             }
 
             const plan = buildConcreteRequestPlan({
@@ -1919,8 +1972,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 }
 
                 const result = parseConcreteProviderResponse(plan, resp);
-                if (isVirtualModelConfigEntry(routeEntry) && selection) {
-                    recordVirtualTargetSuccess(routeKey, routeEntry, selection.targetKey);
+                if (virtualRoutingRequest && selection) {
+                    recordVirtualTargetSuccess(virtualRoutingRequest, selection.targetKey);
                 }
                 await logResponse({
                     status: `${response.status} ${response.statusText}`.trim(),
@@ -1984,8 +2037,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 }, `LLM attempt failed (${attempt}/${maxAttempts})`);
 
                 let routeTerminal = false;
-                if (failure.countable && isVirtualModelConfigEntry(routeEntry) && selection) {
-                    routeTerminal = recordVirtualTargetFailure(routeKey, routeEntry, selection).terminal;
+                if (failure.countable && virtualRoutingRequest && selection) {
+                    routeTerminal = recordVirtualTargetFailure(virtualRoutingRequest, selection).terminal;
                 }
                 const final = !failure.retryable || routeTerminal || attempt === maxAttempts;
                 const retryEvent: LlmRetryEvent = {
