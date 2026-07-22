@@ -92,6 +92,7 @@ interface ChatProps {
   onOpenCodeNewWindow?: () => void
   onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
   onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
+  onOpenModelSettings?: () => void
   sendKeyMode?: 'modEnter' | 'enter'
   groupTools?: boolean
   showUsageBadge?: boolean
@@ -203,7 +204,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -319,31 +320,23 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     }
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-
-    const fetchModels = async () => {
-      try {
-        const res = await fetch(`${API_BASE_PATH}/models`)
-        if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
-        const data = await res.json()
-        if (!cancelled) {
-          setModelOptions(Array.isArray(data.models) ? data.models : [])
-        }
-      } catch (error) {
-        console.error('Failed to fetch models:', error)
-        if (!cancelled) {
-          setModelError(error instanceof Error ? error.message : 'Failed to load models')
-          setModelOptions([])
-        }
-      }
-    }
-
-    fetchModels()
-    return () => {
-      cancelled = true
+  const fetchModels = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE_PATH}/models`)
+      if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
+      const data = await res.json()
+      setModelOptions(Array.isArray(data.models) ? data.models : [])
+      setModelError(null)
+    } catch (error) {
+      console.error('Failed to fetch models:', error)
+      setModelError(error instanceof Error ? error.message : 'Failed to load models')
+      setModelOptions([])
     }
   }, [])
+
+  useEffect(() => {
+    void fetchModels()
+  }, [fetchModels])
 
   useEffect(() => {
     if (!sessionBusy) {
@@ -1577,6 +1570,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         modelError={modelError}
         onChangeModel={updateSessionModel}
         onChangeChildModel={updateChildModel}
+        onRefreshModels={fetchModels}
+        onOpenModelSettings={onOpenModelSettings || (() => {})}
         sendKeyMode={sendKeyMode}
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
@@ -1651,6 +1646,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   && prev.onOpenCodeNewWindow === next.onOpenCodeNewWindow
   && prev.onOpenCodeFile === next.onOpenCodeFile
   && prev.onOpenCodeCommit === next.onOpenCodeCommit
+  && prev.onOpenModelSettings === next.onOpenModelSettings
 ))
 
 export default Chat

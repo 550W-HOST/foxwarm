@@ -4,7 +4,7 @@ import yaml from 'js-yaml';
 import {
   APP_CONFIG_PATH,
   AppConfig,
-  DEFAULT_MODELS_CONFIG_PATH,
+  getActiveModelsConfigPath,
   ProviderConfigEntry,
   loadModelsConfigFromObject,
 } from './config';
@@ -65,7 +65,7 @@ export function validateModelsConfigYaml(rawYaml: string): Record<string, any> {
   return config;
 }
 
-export function writeRawModelsConfig(rawYaml: string, filePath: string = DEFAULT_MODELS_CONFIG_PATH): Record<string, any> {
+export function writeRawModelsConfig(rawYaml: string, filePath: string = getActiveModelsConfigPath()): Record<string, any> {
   const config = validateModelsConfigYaml(rawYaml);
   fs.ensureDirSync(path.dirname(filePath));
   fs.writeFileSync(filePath, rawYaml, 'utf8');

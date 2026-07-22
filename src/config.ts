@@ -115,7 +115,6 @@ export type AppConfig = {
   paths?: {
     agentsDir?: string;
     skillsDir?: string;
-    modelsConfigPath?: string;
     mcpConfigPath?: string;
   };
   channels?: Record<string, AnyChannelConfig>;
@@ -348,9 +347,12 @@ export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 16384;
 export const THINKING_BUDGET = APP_CONFIG.llm?.thinkingBudget || 10000;
 
 // Models configuration
-export const DEFAULT_MODELS_CONFIG_PATH = path.join(STATE_DIR, 'models.yaml');
+export function resolveDataModelsConfigPath(dataRoot: string = DATA_ROOT_DIR): string {
+  return path.join(dataRoot, 'state', 'models.yaml');
+}
+
+export const DEFAULT_MODELS_CONFIG_PATH = resolveDataModelsConfigPath();
 export const MODELS_CONFIG_TEMPLATE_PATH = path.join(BASE_DIR, 'templates', 'models.example.yaml');
-export const MODELS_CONFIG_PATH = resolvePathValue(process.env.MODELS_CONFIG_PATH || APP_CONFIG.paths?.modelsConfigPath, DEFAULT_MODELS_CONFIG_PATH);
 
 export type ModelConfigOverride = {
   contextLimit?: number;
@@ -746,30 +748,33 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
   return { models, displayModels: orderedDisplayModels };
 }
 
-function getResolvedModelsConfigPath(): string {
-  if (process.env.MODELS_CONFIG_PATH) {
-    return MODELS_CONFIG_PATH;
-  }
-
-  if (fs.existsSync(DEFAULT_MODELS_CONFIG_PATH)) {
-    return DEFAULT_MODELS_CONFIG_PATH;
-  }
-
-  if (fs.existsSync(MODELS_CONFIG_TEMPLATE_PATH)) {
-    if (!warnedTemplateModelsFallback) {
-      warnedTemplateModelsFallback = true;
-      console.warn(
-        `[config] state/models.yaml not found; falling back to template models config: ${MODELS_CONFIG_TEMPLATE_PATH}`
-      );
-    }
-    return MODELS_CONFIG_TEMPLATE_PATH;
-  }
-
+export function getActiveModelsConfigPath(): string {
   return DEFAULT_MODELS_CONFIG_PATH;
 }
 
+export function getModelsConfigReadPath(
+  activePath: string = getActiveModelsConfigPath(),
+  templatePath: string = MODELS_CONFIG_TEMPLATE_PATH,
+): string {
+  if (fs.existsSync(activePath)) {
+    return activePath;
+  }
+
+  if (fs.existsSync(templatePath)) {
+    if (!warnedTemplateModelsFallback) {
+      warnedTemplateModelsFallback = true;
+      console.warn(
+        `[config] state/models.yaml not found; falling back to template models config: ${templatePath}`
+      );
+    }
+    return templatePath;
+  }
+
+  return activePath;
+}
+
 export function loadModelsConfig(): ModelsConfig {
-  const resolvedPath = getResolvedModelsConfigPath();
+  const resolvedPath = getModelsConfigReadPath();
 
   try {
     const rawText = fs.readFileSync(resolvedPath, 'utf8');
@@ -778,7 +783,7 @@ export function loadModelsConfig(): ModelsConfig {
   } catch (e) {
     throw new Error(
       `Loading models config (${resolvedPath}) error: ${e}. ` +
-      `Set MODELS_CONFIG_PATH, or create ${DEFAULT_MODELS_CONFIG_PATH} from ${MODELS_CONFIG_TEMPLATE_PATH}.`
+      `Create ${getActiveModelsConfigPath()} from ${MODELS_CONFIG_TEMPLATE_PATH}.`
     );
   }
 }

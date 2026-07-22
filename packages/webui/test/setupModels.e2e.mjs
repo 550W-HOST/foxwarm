@@ -15,6 +15,9 @@ let vite
 let browser
 let page
 let savedRequest
+let savedRequestPath
+let saveError = null
+const requestPaths = []
 
 const statusPayload = {
   oobe: false,
@@ -24,7 +27,7 @@ const statusPayload = {
     templatePath: 'templates/models.example.yaml',
     providerCount: 3,
     defaultModel: 'route',
-    rawYaml: 'default: route\nproviders: {}\n',
+    rawYaml: 'default: 42\nproviders:\n  route:\n    providerType: failover\n    targets: [leaf/model-a]\n',
     providers: [
       {
         id: 'leaf',
@@ -112,6 +115,7 @@ before(async () => {
   await page.setRequestInterception(true)
   page.on('request', (request) => {
     const url = new URL(request.url())
+    requestPaths.push(url.pathname)
     if (!url.pathname.includes('/api/')) {
       void request.continue()
       return
@@ -134,8 +138,13 @@ before(async () => {
       return
     }
     if (url.pathname.endsWith('/api/setup/models') && request.method() === 'POST') {
+      savedRequestPath = url.pathname
       savedRequest = JSON.parse(request.postData() || '{}')
-      void respondJson(request, { success: true, models: { ...statusPayload.models, rawYaml: 'saved' } })
+      if (saveError) {
+        void respondJson(request, { error: saveError }, 400)
+      } else {
+        void respondJson(request, { success: true, models: { ...statusPayload.models, rawYaml: savedRequest.yaml } })
+      }
       return
     }
     if (url.pathname.endsWith('/api/sessions')) {
@@ -157,10 +166,9 @@ before(async () => {
     void respondJson(request, {})
   })
 
-  await page.goto(`${baseUrl}/#setup`, { waitUntil: 'networkidle2' })
+  await page.goto(`${baseUrl}/preview/#setup`, { waitUntil: 'networkidle2' })
   await page.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
-  const formButton = await page.waitForSelector('button::-p-text(Form)')
-  await formButton.click()
+  await page.waitForSelector('[data-monaco-model-uri][data-editor-ready="true"]', { timeout: 15_000 })
 })
 
 after(async () => {
@@ -168,46 +176,39 @@ after(async () => {
   vite?.kill('SIGTERM')
 })
 
-test('virtual setup cards hydrate discriminated controls, disable transient tests, and submit only routing fields', async () => {
-  const stickyTab = await page.waitForSelector('button::-p-text(sticky)')
-  await stickyTab.click()
-  await page.waitForFunction(() => document.body.textContent?.includes('Session hash requires at least one concrete target.'))
+test('Models setup is raw-only and associates distinct static schemas with both editors', async () => {
+  const bodyText = await page.$eval('body', (body) => body.textContent || '')
+  assert.equal(bodyText.includes('Test selected provider'), false)
+  assert.equal(bodyText.includes('Provider 1'), false)
+  assert.equal(await page.$('button::-p-text(Form)'), null)
 
-  const stickyInputs = await page.$$eval('input', (inputs) => inputs.map((input) => ({ type: input.type, value: input.value })))
-  assert.equal(stickyInputs.some((input) => input.type === 'password'), false)
-  const testButton = await page.waitForSelector('button::-p-text(Test selected provider)')
-  assert.equal(await testButton.evaluate((button) => button.disabled), true)
-  assert.ok((await page.$eval('body', (body) => body.textContent)).includes('Save virtual providers, then test them through normal model selection.'))
+  const editorUris = await page.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri')))
+  assert.deepEqual(editorUris.sort(), [
+    'inmemory://foxwarm/setup/foxwarm-config.yaml',
+    'inmemory://foxwarm/setup/foxwarm-models.yaml',
+  ])
+  assert.ok(requestPaths.includes('/preview/api/setup/status'))
+})
 
-  const suggestionOptions = await page.$$eval('option', (options) => options.map((option) => option.value))
-  assert.ok(suggestionOptions.includes('leaf/model-a'))
-  assert.ok(suggestionOptions.includes('leaf/model-b'))
-  assert.equal(suggestionOptions.includes('route'), false)
-  assert.equal(suggestionOptions.includes('sticky'), false)
+test('schema markers remain advisory and do not disable raw save', async () => {
+  await page.waitForFunction(() => {
+    const editor = document.querySelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
+    return Number(editor?.getAttribute('data-marker-count') || 0) > 0
+  }, { timeout: 15_000 })
 
-  const routeTab = await page.waitForSelector('button::-p-text(route)')
-  await routeTab.click()
-  await page.waitForFunction(() => document.body.textContent?.includes('Failover requires at least two concrete targets in priority order.'))
-  const numbers = await page.$$eval('input[type=number]', (inputs) => inputs.map((input) => input.value))
-  assert.deepEqual(numbers, ['5', '600000'])
-
-  await page.$$eval('input[type=number]', (inputs) => inputs.forEach((input) => {
-    input.value = ''
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    input.dispatchEvent(new Event('change', { bubbles: true }))
-  }))
   const saveButton = await page.waitForSelector('button::-p-text(Save models)')
+  assert.equal(await saveButton.evaluate((button) => button.disabled), false)
   await saveButton.click()
   await page.waitForFunction(() => document.body.textContent?.includes('Models saved to'))
+  assert.deepEqual(savedRequest, { yaml: statusPayload.models.rawYaml })
+  assert.equal(savedRequestPath, '/preview/api/setup/models')
+})
 
-  const route = savedRequest.providers.find((provider) => provider.id === 'route')
-  assert.deepEqual(route, {
-    id: 'route',
-    providerType: 'failover',
-    isVirtual: true,
-    targets: ['leaf/model-a', 'leaf/model-b'],
-  })
-  assert.equal(Object.hasOwn(route, 'baseUrl'), false)
-  assert.equal(Object.hasOwn(route, 'apiKey'), false)
-  assert.equal(Object.hasOwn(route, 'models'), false)
+test('backend validation error remains final authority and is shown after Monaco diagnostics', async () => {
+  saveError = 'canonical backend rejected the models config'
+  const saveButton = await page.waitForSelector('button::-p-text(Save models)')
+  await saveButton.click()
+  await page.waitForFunction(() => document.body.textContent?.includes('canonical backend rejected the models config'))
+  assert.deepEqual(savedRequest, { yaml: statusPayload.models.rawYaml })
+  saveError = null
 })

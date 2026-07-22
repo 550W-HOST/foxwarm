@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowUp, Mic, Paperclip, Plus, Square } from 'lucide-react'
+import { ArrowUp, Mic, Paperclip, Plus, Settings, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import {
   applySlashCommandSuggestion,
@@ -32,6 +32,8 @@ interface ChatComposerProps {
   modelError?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
+  onRefreshModels: () => Promise<void>
+  onOpenModelSettings: () => void
   sendKeyMode?: 'modEnter' | 'enter'
   onHeightChange?: (height: number) => void
   onSend: (payload: { text: string; attachments: File[] }) => Promise<boolean>
@@ -80,6 +82,8 @@ function ModelSelector({
   error,
   onChangeModel,
   onChangeChildModel,
+  onRefreshModels,
+  onOpenModelSettings,
 }: {
   options: ModelOption[]
   currentModelKey?: string
@@ -91,13 +95,27 @@ function ModelSelector({
   error?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
+  onRefreshModels: () => Promise<void>
+  onOpenModelSettings: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({})
   const rootRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const currentIsDefault = !sessionModel
   const childFollows = !childModelDefault
+
+  const toggleOpen = useCallback(() => {
+    setOpen((current) => {
+      const next = !current
+      if (next) {
+        setRefreshing(true)
+        void onRefreshModels().finally(() => setRefreshing(false))
+      }
+      return next
+    })
+  }, [onRefreshModels])
 
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
@@ -219,7 +237,7 @@ function ModelSelector({
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={toggleOpen}
         className="inline-flex h-8 max-w-[19rem] shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -232,7 +250,7 @@ function ModelSelector({
             <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault}>child {childModelDefault}</span>
           </>
         )}
-        {busy && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
+        {(busy || refreshing) && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
         {error && <span className="shrink-0 text-red-500 dark:text-red-300">!</span>}
       </button>
 
@@ -249,7 +267,7 @@ function ModelSelector({
             <div className="px-2 py-2 text-center">Current</div>
             <div className="px-2 py-2 text-center">Child</div>
           </div>
-          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 78 : 42) : undefined }}>
+          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 114 : 78) : undefined }}>
             {renderRow({
               key: null,
               label: 'default / follow',
@@ -267,6 +285,19 @@ function ModelSelector({
             }))}
           </div>
           {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
+          <div className="border-t border-gray-200 p-1.5 dark:border-gray-700">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                onOpenModelSettings()
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
+            >
+              <Settings className="h-3.5 w-3.5" />
+              Configure models…
+            </button>
+          </div>
         </div>,
         document.body,
       )}
@@ -289,6 +320,8 @@ const ChatComposer = memo(function ChatComposer({
   modelError,
   onChangeModel,
   onChangeChildModel,
+  onRefreshModels,
+  onOpenModelSettings,
   sendKeyMode = 'modEnter',
   onHeightChange,
   onSend,
@@ -1215,6 +1248,8 @@ const ChatComposer = memo(function ChatComposer({
               error={modelError}
               onChangeModel={onChangeModel}
               onChangeChildModel={onChangeChildModel}
+              onRefreshModels={onRefreshModels}
+              onOpenModelSettings={onOpenModelSettings}
             />
           </div>
           <button

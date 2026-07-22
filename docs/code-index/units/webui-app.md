@@ -28,6 +28,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Hash routing restores normal tabs plus current singleton Agents/Setup tabs; old agents/architecture/setup/oobe hash aliases remain inbound readers.
 - Workbench supports split panes and drag/reorder for chat, terminal, Agents, Setup, and Code. Closing an active tab advances the hash to the store-selected fallback before hydration can recreate it.
 - `GET /setup/status` controls forced OOBE. Missing models route to `system:setup`; close requests are ignored until status no longer reports OOBE.
+- App owns model-settings navigation from Chat: it activates or creates the singleton `system:setup` tab through the workbench API and increments a transient Models-editor focus request.
 - Initial/global `GET /sessions` plus global `sessions-updated` stream serve Sidebar, Architecture, metadata, terminal list concerns, and title counts. A request gate prevents an older response overwriting a newer list.
 - Chat per-session runtime/history remains inside Chat.
 - Desktop expanded/collapsed sidebar and mobile shell share the same current tab records.
@@ -60,6 +61,7 @@ Workbench store/layout, Sidebar, Chat, Architecture, Setup, terminal view, WebUI
 - Old route hashes hydrate current singleton tabs.
 - Code preference storage keys and old extension editor-restore state are handled by their current owners.
 - Removed workspace/file tabs are normalized by [webui-workbench](./webui-workbench.md).
+- Model-settings navigation follows [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation); no direct hash-writing compatibility entry point is added.
 
 ## Design decisions
 

@@ -77,10 +77,11 @@ Across OpenAI Chat Completions, OpenAI Responses, Anthropic, and compatible conc
 
 - Session and WebUI model selection continue to expose the configured virtual key.
 - `ChatResult.modelId`, assistant `__meta.modelId`, logs, and retry diagnostics identify the concrete leaf used by that attempt or success.
-- Setup raw YAML uses the canonical config validator and remains byte-preserving after validation.
+- WebUI Setup presents Models as raw YAML only. Its local static schema and current-document suggestions are advisory; save uses the canonical config validator and remains byte-preserving after validation.
 - Structured setup input accepts virtual targets and failover settings; setup diagnostics expose `isVirtual`, `targets`, `failureThreshold`, and `cooldownMs`. The model-list API also exposes provider type, virtual status, resolved targets, and effective context limit without leaf credentials.
 - The one-shot model CLI lists and accepts virtual keys while reusing production routing.
 - Raw model readers that need concrete credentials, such as the bundled web-search helper, skip virtual entries and inspect concrete providers only.
+- The active models file follows [D-config-models-data-path](../units/src-config.md#d-config-models-data-path); the packaged template is only a missing-file read fallback.
 
 ## Modules and units
 

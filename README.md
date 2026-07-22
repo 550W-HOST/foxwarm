@@ -298,11 +298,7 @@ values. `session-hash` does not accept failover settings; failover thresholds
 and cooldown milliseconds must be positive integers. Concrete entries do not
 accept virtual routing fields.
 
-The runtime resolves model definitions in this order:
-
-1. `MODELS_CONFIG_PATH` if set
-2. `state/models.yaml`
-3. `templates/models.example.yaml` fallback
+The runtime resolves model definitions from `state/models.yaml` under the active Foxwarm data directory. If that file is missing, `templates/models.example.yaml` is a read-only fallback; Setup still edits the data-directory file and treats its absence as OOBE.
 
 The template fallback is mainly a fallback for development and diagnostics; OOBE treats missing `state/models.yaml` as first-time setup.
 

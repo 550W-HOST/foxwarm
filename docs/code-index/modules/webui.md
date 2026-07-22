@@ -44,6 +44,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - Browser terminals are identified by node and cwd, not chat session ID.
 - Optional official Code assets remain outside the main WebUI bundle.
 - Missing model configuration forces the singleton Setup tab and prevents it from closing until setup status clears.
+- Models/app YAML assistance uses frontend-owned static schemas and local unsaved-document suggestions; canonical saves remain backend-validated.
 
 ## Canonical threads
 
@@ -72,10 +73,14 @@ Chat, terminal, Agents, Setup, and Code use one tab/pane workbench. Agents and S
 
 Mounted Chat owns per-session state/stream. Global list streaming remains for list-wide UI and never substitutes for Chat runtime state.
 
+### D-webui-model-settings-navigation
+
+The Chat model popup refreshes `/api/models` whenever it opens. Its settings action activates the existing singleton Setup tab through App, requests focus for the Models YAML editor, and never mutates the hash directly or creates a second Setup instance. This callback path preserves workbench ownership, split-pane behavior, and deployment subpaths.
+
 ### D-webui-removed-workspace
 
 The former custom workspace/file browser remains removed. Persisted records are discarded; Code is the supported browser editing integration.
 
 ## Canonical ownership
 
-Commit marker ownership: [D-code-model-commit-marker](../threads/code-integration.md#d-code-model-commit-marker). Chat follow ownership: [D-chat-user-follow-intent](../units/webui-chat.md#d-chat-user-follow-intent).
+Commit marker ownership: [D-code-model-commit-marker](../threads/code-integration.md#d-code-model-commit-marker). Chat follow ownership: [D-chat-user-follow-intent](../units/webui-chat.md#d-chat-user-follow-intent). YAML assistance ownership: [D-editor-local-yaml-assistance](../units/webui-editor.md#d-editor-local-yaml-assistance).

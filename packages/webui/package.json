@@ -7,6 +7,7 @@
     "build": "tsc && vite build",
     "test:markdown": "node --test test/markdownRenderer.test.mjs",
     "test:setup-models": "node --test test/setupModels.test.mjs",
+    "test:config-editor": "node --test test/configEditor.test.mjs",
     "test:setup-models-e2e": "node --test test/setupModels.e2e.mjs",
     "test:theme-e2e": "node --test test/themeMarkdownStyles.e2e.mjs",
     "test:message-overflow-e2e": "node --test test/messageOverflow.e2e.mjs",
@@ -37,12 +38,14 @@
     "katex": "^0.17.0",
     "lucide-react": "^0.575.0",
     "marked": "^17.0.3",
-    "monaco-editor": "^0.55.1",
+    "monaco-editor": "^0.54.0",
+    "monaco-yaml": "^5.5.1",
     "preact": "^10.28.4",
     "qrcode": "^1.5.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-resizable-panels": "^4.10.0",
+    "yaml": "^2.9.0",
     "zustand": "^5.0.12"
   },
   "devDependencies": {

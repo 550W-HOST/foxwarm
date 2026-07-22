@@ -445,6 +445,7 @@ function App() {
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [route, setRoute] = useState<RouteState>(initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
+  const [focusModelsRequest, setFocusModelsRequest] = useState(0)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[]>([])
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [showSessionList, setShowSessionList] = useState<boolean>(() => !window.location.hash)
@@ -1369,7 +1370,8 @@ function App() {
     navigateToTab(tab.id)
   }
 
-  const openSetupView = () => {
+  const openSetupView = (options?: { focusModels?: boolean }) => {
+    if (options?.focusModels) setFocusModelsRequest((current) => current + 1)
     const tab = tabsById[SETUP_TAB_ID] || makeSetupTab()
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
@@ -1448,6 +1450,7 @@ function App() {
             openCodeFile(request, workspaceTarget)
           }}
           onOpenCodeCommit={openCodeCommit}
+          onOpenModelSettings={() => openSetupView({ focusModels: true })}
           sendKeyMode={sendKeyMode}
           groupTools={groupTools}
           showUsageBadge={showUsageBadge}
@@ -1476,6 +1479,7 @@ function App() {
             forced={setupOobe}
             onClose={setupOobe ? undefined : () => { void closeWorkbenchTab(tab.id) }}
             onSetupChanged={() => { void fetchSetupStatus() }}
+            focusModelsRequest={focusModelsRequest}
           />
         </Suspense>
       )

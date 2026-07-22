@@ -17,7 +17,7 @@ A rich chat composer component for the web UI that handles text input with slash
 |----------|------|-------------|
 | `persistDraft(sessionId, value)` | ~62 | Saves or removes draft text in localStorage |
 | `formatModelLabel(option, defaultModelKey)` | ~67 | Formats a model option label with default indicator |
-| `ModelSelector(props)` | ~72–230 | Popup component for selecting current and child models |
+| `ModelSelector(props)` | ~72–310 | Popup component for selecting current and child models or opening model settings |
 | `updatePopupPosition()` | ~97–120 | Calculates fixed positioning for the model selector popup |
 | `applyCurrentModel(model)` | ~140 | Calls onChangeModel unless busy |
 | `applyChildModel(model)` | ~145 | Calls onChangeChildModel unless busy |
@@ -51,11 +51,12 @@ A rich chat composer component for the web UI that handles text input with slash
 - Notifies parent of height changes via `onHeightChange` using ResizeObserver.
 - Calls `onDraftEdited` whenever the draft text changes.
 - Model selector renders as a portal-based fixed popup with outside-click and Escape dismissal.
+- Opening the model popup requests a fresh `/api/models` list through Chat, so long-lived/multi-pane composers do not keep stale choices. Its `Configure models…` footer delegates to App rather than changing location itself.
 - Adds semantic CSS hooks (`foxwarm-chat-composer-form`, `foxwarm-chat-composer-textarea`, `foxwarm-attachment-chip`) used by optional UI style layers such as 550A; these hooks should not change composer behavior or draft/attachment data flow.
 
 ## Integration
 
 - Consumed by the chat view, receiving session state, model configuration, and callbacks for sending messages, changing models, and transcribing audio.
 - Relies on `chatShared` utilities for slash-command logic and textarea auto-resize.
-- Model changes propagate up through `onChangeModel`/`onChangeChildModel` to session management.
+- Model changes propagate up through `onChangeModel`/`onChangeChildModel` to session management. Model refresh and settings navigation propagate through `onRefreshModels`/`onOpenModelSettings`; canonical navigation behavior is [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
 - Attachments and text are bundled and sent via `onSend` to the parent message-handling layer.

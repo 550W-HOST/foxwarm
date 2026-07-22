@@ -1,40 +1,37 @@
-# Unit: webui-editor
+# Unit: WebUI editor
 
-Files: packages/webui/src/components/SimpleCodeEditor.tsx, packages/webui/src/components/DiffPreview.tsx
+Files: packages/webui/src/components/SimpleCodeEditor.tsx, packages/webui/src/components/DiffPreview.tsx, packages/webui/src/yamlMonacoSupport.ts, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/modelsYamlCompletions.ts, packages/webui/src/workers/yaml.worker.ts, packages/webui/test/configEditor.test.mjs
 
 ## Purpose
 
-Provides reusable code editing and diff visualization components for the WebUI. `SimpleCodeEditor` lazy-loads Monaco for configuration/code editing surfaces, and `DiffPreview` renders side-by-side or unified diffs with syntax highlighting.
+Provides reusable code editing and diff visualization components for the WebUI. `SimpleCodeEditor` lazy-loads a Monaco/YAML support singleton for configuration editing, while `DiffPreview` renders side-by-side or unified diffs with syntax highlighting.
 
-## Key Exports
+## Key exports
 
-- `SimpleCodeEditor` — Async-loading Monaco editor wrapper with configurable height and placeholder support
-- `DiffPreview` — Memoized diff visualization component supporting unified and split view modes
-
-## Function Index
-
-| Function | Lines (approx) | Description |
-|----------|----------------|-------------|
-| `currentTheme()` (SimpleCodeEditor) | ~22 | Returns 'vs-dark' or 'vs' based on document class |
-| `SimpleCodeEditor({ value, onChange, ... })` | ~25–120 | Async-loads Monaco and creates an editor with dynamic language/value sync |
-| `start()` (inside SimpleCodeEditor useEffect) | ~47–87 | Dynamically imports Monaco, creates model and editor |
-| `DiffPreview({ oldText, newText, diffViewMode, filePath })` | ~10–145 | Renders unified or split diff with word-level highlighting |
-| `handleOldScroll(e)` | ~15–24 | Syncs scroll position from old pane to new pane |
-| `handleNewScroll(e)` | ~26–35 | Syncs scroll position from new pane to old pane |
-
-## Dependencies
-
-- `../utils/languages` — `getMonacoLanguage` for file-path-to-language mapping
-- `./chatShared` — `Diff` (line/word diff algorithm)
-- `./SyntaxHighlightedText` — `SyntaxHighlightedText` component for token-level highlighting in diffs
+- `SimpleCodeEditor` — Monaco wrapper with explicit model URIs, focus requests, read-only/language/value synchronization, and advisory marker state.
+- `loadYamlMonacoSupport` — lazy singleton that installs Monaco editor/YAML workers, registers static schemas, and owns current-document model completions.
+- `MODELS_CONFIG_SCHEMA`, `APP_CONFIG_SCHEMA`, and their distinct in-memory model URIs.
+- `parseModelsYamlSuggestions` and `createModelsYamlCompletionProvider` — derive model/target completions from unsaved YAML.
+- `DiffPreview` — memoized unified/split diff visualization.
 
 ## Behavior
 
-- **SimpleCodeEditor** lazily imports Monaco inside a `useEffect`, uses refs to capture the latest value/placeholder so the model is created with current data even if imports resolve late. Supports configurable height and language switching.
-- **DiffPreview** computes line-level diffs via `Diff.diffLines`, then refines adjacent removed+added pairs with `Diff.diffWords` for inline highlighting. Split mode synchronizes horizontal and vertical scroll between the two panes using a debounce-style ref guard.
+- Monaco, `monaco-yaml`, the generic editor worker, and the YAML language worker remain outside the initial application bundle and load on first editor use.
+- The models and app-config editors use distinct stable model URIs and distinct embedded static schemas. Schema loading never calls a backend schema endpoint and remote schema requests are disabled.
+- Static schemas document current fields, suggest known provider/channel values while permitting custom extensions, mark retained legacy spellings as deprecated, and intentionally allow unknown properties.
+- Diagnostics, completion, and hover are advisory. Formatting is disabled so editor assistance does not rewrite configuration text, and backend validation remains the save authority.
+- Models `default` completion includes concrete and virtual keys from the current unsaved document. Virtual `targets` completion includes concrete keys only. Parsing is debounced; invalid partial YAML retains the last valid local suggestions and never uploads editor text.
+- `SimpleCodeEditor` preserves the latest value while its lazy imports resolve, updates marker-count test metadata, follows theme changes, and disposes the editor, model, listeners, and per-model completion state on unmount.
+- `DiffPreview` computes line-level diffs and word-level refinements for adjacent remove/add pairs. Split mode synchronizes both scroll axes with a guarded handoff.
 
 ## Integration
 
-- `SimpleCodeEditor` is used in setup/configuration surfaces where a Monaco-backed inline editor is needed without adding Monaco to the initial bundle.
-- `DiffPreview` is used in chat and review flows to show file change proposals before acceptance.
-- The former full-page WebUI file editor (`FileEditorView` + `MonacoFileEditor`) was removed with the WebUI workspace feature on 2026-07-06.
+- Setup owns the two stable YAML models and supplies a transient focus request when Chat opens model settings.
+- `configEditor.test.mjs` covers static schema boundaries, custom/legacy provider-type behavior, concrete-versus-virtual suggestions, and last-valid retention. Setup browser tests exercise the real YAML worker and advisory markers.
+- The former full-page WebUI file editor was removed with the custom workspace feature; Code remains the general browser editing integration.
+
+## Design decisions
+
+### D-editor-local-yaml-assistance
+
+Models and app-config editing use static frontend-owned schemas and local unsaved-document completions. No backend schema API or per-keystroke document upload is introduced. Monaco diagnostics are advisory, remote schema fetches and automatic formatting stay disabled, and canonical backend validation decides whether Save succeeds.

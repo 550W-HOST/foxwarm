@@ -1,11 +1,11 @@
 # Unit: src-config
 
-Files: src/config.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts
+Files: src/config.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts
 Secondary files: templates/models.example.yaml, README.md
 
 ## Purpose
 
-Owns application/model configuration types, path resolution, YAML readers/writers, provider/model expansion, and setup-form transformations. It supports selected environment path overrides; it does not migrate a `.env` file into YAML.
+Owns application/model configuration types, path resolution, YAML readers/writers, provider/model expansion, and setup-form transformations. It supports selected environment path overrides for application infrastructure, but the active models file follows the data directory only. It does not migrate a `.env` file into YAML.
 
 ## Key exports
 
@@ -34,9 +34,9 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 - Program root: `BASE_DIR`.
 - Data root precedence: `FOXWARM_DATA_DIR`, then the checkout's `data_dir` pointer file, then `BASE_DIR`.
 - App config path: `FOXWARM_CONFIG_PATH` or compatibility `CONFIG_PATH`, otherwise `<data-root>/state/config.yaml`.
-- Models path: `MODELS_CONFIG_PATH`, otherwise `<data-root>/state/models.yaml`; when the default file is absent, the packaged template is a read fallback.
+- Models path: always `<data-root>/state/models.yaml`. Neither app config nor the generic `MODELS_CONFIG_PATH` environment variable overrides it. When the active file is absent, the packaged template is a read-only runtime fallback.
 - MCP path: `MCP_CONFIG_PATH`, then `paths.mcpConfigPath`, then `<state>/mcp.json`.
-- Agent, skill, model, and MCP paths may also be selected through their documented app-config fields.
+- Agent, skill, and MCP paths may also be selected through their documented app-config fields.
 - The archive moved-ID reservation ledger is explicit durable state at `<data-root>/state/session-id-reservations.jsonl`.
 - The temporary crash-recovery journal for one in-progress identity move is `<data-root>/state/session-id-move-pending.json`.
 
@@ -78,7 +78,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 
 ## Compatibility
 
-- `CONFIG_PATH`, model-root `models`, provider `model`, and provider `provider` are documented readers.
+- `CONFIG_PATH`, model-root `models`, provider `model`, and provider `provider` are documented readers. The removed app-config `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override are not readers.
 - `TRIGGER_PORT`, `WEBUI_PORT`, and `WORKSPACE_DIR` remain exported compatibility aliases.
 - New writes use current YAML shapes; no `.env` migration contract exists.
 
@@ -95,3 +95,7 @@ Environment support is limited to explicit path/data-root overrides. It does not
 ### D-config-read-old-write-current
 
 Persisted external configuration keeps narrow legacy readers while generated setup output uses current `providers`/`models` fields.
+
+### D-config-models-data-path
+
+The mutable models configuration has one active location: `<data-root>/state/models.yaml`. Runtime reads, Setup diagnostics/OOBE, raw and structured Setup writes, and normal model resolution all use that path. The packaged example may be read only when the active file is missing; it is never the write target. The former `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override remain removed rather than becoming compatibility readers.

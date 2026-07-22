@@ -48,10 +48,11 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 - Debug view fetches the session debug file payload and builds/copies current internal JSON.
 - Timeline defaults to a recent subset with explicit full expansion.
 - Horizontal containment remains on the chat/timeline boundaries while tables/output own intentional inner scrolling.
+- Chat fetches model options on mount and again whenever the composer popup opens. The popup's settings action is passed upward to App; Chat does not own Setup routing.
 
 ## Dependencies
 
-ChatComposer, ChatTimeline, ProcessingStatus, chat shared types/renderers, ToolScript progress context, and `API_BASE_PATH`.
+ChatComposer, ChatTimeline, ProcessingStatus, chat shared types/renderers, ToolScript progress context, and `API_BASE_PATH`. Model-settings navigation is canonical in [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
 
 ## Design decisions
 

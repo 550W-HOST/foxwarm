@@ -15,7 +15,7 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
@@ -196,7 +196,7 @@ function buildQueuedPreviewMessages(queue: QueueItem[] | undefined): Message[] {
 }
 
 
-export function getModelsSetupDiagnostics(modelsPath: string = DEFAULT_MODELS_CONFIG_PATH) {
+export function getModelsSetupDiagnostics(modelsPath: string = getActiveModelsConfigPath()) {
   const exists = fs.existsSync(modelsPath);
   const rawYaml = exists ? readRawTextFileIfExists(modelsPath) : '';
   const raw = rawYaml ? (yaml.load(rawYaml) as any) || {} : undefined;
@@ -725,18 +725,19 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            fs.ensureDirSync(path.dirname(DEFAULT_MODELS_CONFIG_PATH));
+            const modelsPath = getActiveModelsConfigPath();
+            fs.ensureDirSync(path.dirname(modelsPath));
             const hasRawYaml = Object.prototype.hasOwnProperty.call(req.body || {}, 'yaml');
             if (hasRawYaml) {
               // Raw mode is intentionally raw: validate first, then write the
               // user-provided text byte-for-byte instead of parse + dump, so
               // comments, key order, quoting, and custom formatting survive.
-              writeRawModelsConfig(String(req.body?.yaml ?? ''), DEFAULT_MODELS_CONFIG_PATH);
+              writeRawModelsConfig(String(req.body?.yaml ?? ''), modelsPath);
             } else {
-              const existingRaw = readRawTextFileIfExists(DEFAULT_MODELS_CONFIG_PATH);
+              const existingRaw = readRawTextFileIfExists(modelsPath);
               const existingConfig = existingRaw.trim() ? ((yaml.load(existingRaw) as any) || {}) : {};
               const config = buildModelsConfigFromSetupForm(req.body || {}, existingConfig);
-              fs.writeFileSync(DEFAULT_MODELS_CONFIG_PATH, dumpSetupYaml(config), 'utf8');
+              fs.writeFileSync(modelsPath, dumpSetupYaml(config), 'utf8');
             }
 
             // Validate by resolving the newly written config.

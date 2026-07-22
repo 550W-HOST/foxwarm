@@ -1,58 +1,56 @@
 # Unit: WebUI Setup view
 
 Files: packages/webui/src/components/SetupView.tsx, packages/webui/src/setupModels.ts, packages/webui/test/setupModels.test.mjs, packages/webui/test/setupModels.e2e.mjs
-Secondary files: packages/webui/package.json
+Secondary files: packages/webui/package.json, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/components/SimpleCodeEditor.tsx
 
 ## Purpose
 
-Authenticated setup/configuration UI for first-run model configuration and later model/channel updates. It supports discriminated concrete/virtual model-provider forms, raw models YAML, transient concrete-provider testing, full app-config YAML editing with managed-channel reload, and Weixin QR login.
+Authenticated setup/configuration UI for first-run model configuration and later model/channel updates. Models are presented only as raw YAML; the view also edits full app-config YAML, reloads managed channels after config save, and supports Weixin QR login. Structured model helpers remain for generated OOBE text, tests, and the retained backend request contract, not as a visible graphical editor.
 
 ## Export
 
-- default `SetupView({ forced?, onClose?, onSetupChanged? })`.
+- default `SetupView({ forced?, onClose?, onSetupChanged?, focusModelsRequest? })`.
 
 ## API contract
 
-All requests append to `API_BASE_PATH` and use the normal authenticated WebUI routes:
+All requests append to `API_BASE_PATH` and use normal authenticated WebUI routes:
 
 | Method/path | Use |
 |---|---|
-| `GET /setup/status` | OOBE flag, models diagnostics/raw YAML, full app-config YAML, channel runtime statuses |
-| `GET /models` | Concrete model-key suggestions for virtual target editing; virtual entries are excluded |
-| `POST /setup/models` | Save raw YAML byte-for-byte after validation or build current config from form providers |
-| `POST /setup/models/test` | One transient provider/model request; does not persist first |
+| `GET /setup/status` | OOBE flag, model diagnostics/raw YAML, full app-config YAML, and channel runtime status |
+| `POST /setup/models` | Validate and save raw models YAML byte-for-byte |
 | `POST /setup/config` | Validate/write full app config and call `reloadManagedChannels` |
-| `POST /setup/weixin/login/start` | Start/force a QR login session |
-| `POST /setup/weixin/login/wait` | Check one session; on success update channel config and reload |
+| `POST /setup/weixin/login/start` | Start or replace a QR login session |
+| `POST /setup/weixin/login/wait` | Check one login session; on success update channel config and reload |
+
+The server retains structured `/setup/models` request handling and `/setup/models/test` compatibility for non-UI callers, but this view does not expose the former provider-card form or transient test controls.
 
 ## Behavior
 
-- Existing non-empty models YAML starts in raw mode; absent YAML starts with structured provider form.
-- Raw models save preserves user text after validation. Structured save sends provider drafts/default selection for current config generation.
-- Concrete provider cards edit connection/model fields and retain the existing transient test flow. Virtual `session-hash` cards edit target keys; `failover` additionally edits optional positive-integer threshold/cooldown values whose blanks select backend defaults.
-- Virtual target input uses one exact concrete lookup key per line, rejects exact duplicate lines and insufficient target counts in the browser, and leaves unknown-key and canonical-alias validation to the canonical backend model resolver.
-- Structured request and generated-YAML helpers serialize fields by provider-type discriminant, keep virtual providers independent of concrete model lists, use a virtual provider ID as its default key, and clear mutually exclusive fields when provider type changes.
-- Virtual cards cannot invoke the transient provider test endpoint; saved virtual routes are exercised through normal model selection. Canonical routing/configuration semantics: [model routing](../threads/model-routing.md).
-- App config editor edits the entire `state/config.yaml`, preserving unknown top-level fields through raw text rather than serializing only channels.
-- Config save restarts every managed channel through `reloadManagedChannels` and displays started results.
-- Weixin start renders returned image/base64/pairing URL; wait persists connected token/user/channel fields server-side.
-- Forced mode is closable only after models config exists; WebUI itself makes the current channel-availability check non-blocking.
+- Models always render as a raw YAML editor. If the active file is missing or empty, Setup initializes editable text from a generated current-shape example rather than turning the packaged template into a write target.
+- Raw model and app-config saves preserve user text after canonical backend validation. Comments, key order, quoting, custom fields, and formatting survive.
+- The two editors use distinct model URIs and static frontend schemas. Suggestions/markers are advisory and never disable Save; canonical behavior is [D-editor-local-yaml-assistance](./webui-editor.md#d-editor-local-yaml-assistance).
+- Model suggestions are derived from current unsaved YAML: defaults include concrete and virtual keys, while virtual targets include concrete keys only.
+- App-config save reloads every managed channel and reports started results.
+- Weixin start renders image/base64/pairing payloads; wait persists connected token/user/channel fields server-side.
+- Forced mode is closable only after the active models file exists. WebUI itself makes the channel-availability check non-blocking.
+- A positive `focusModelsRequest` scrolls to the Models section and focuses its Monaco editor.
 
 ## Integration
 
-- Normal App uses singleton `system:setup`; missing models forces this tab and rejects close.
+- Normal App owns singleton `system:setup`; a missing active models file forces this tab and rejects close.
+- The active file is the data-directory models path; diagnostics and writes do not follow the removed generic override. Canonical path contract: [D-config-models-data-path](./src-config.md#d-config-models-data-path).
+- Chat's model popup opens/activates this singleton and requests Models focus through App.
 - Code's Setup custom editor mounts the same non-forced leaf view and lets the extension own close/restore identity.
-- `onSetupChanged` lets App re-read status after successful model/config/login changes.
+- `onSetupChanged` lets App refresh setup/OOBE status after successful model/config/login changes.
 
 ## Function index
 
-- `SetupView` — loads setup/model diagnostics and renders the discriminated setup workflow.
-- `hydrateProviderDrafts` — converts setup status arrays/numbers into editable provider drafts.
-- `changeProviderType` / `changeDefaultForProviderType` — clear mutually exclusive fields and normalize an affected default key on concrete/virtual transitions.
-- `validateProviderDrafts` — enforces browser-known provider/model/target/integer constraints.
-- `buildStructuredSetupRequest` — emits the field-discriminated structured save body.
-- `buildModelsYaml` — previews the corresponding current YAML shape without changing raw-YAML persistence.
-- `buildConcreteTestRequest` / `canTestProvider` — retain transient testing only for concrete providers.
+- `SetupView` — loads status and renders checklist, raw models/config editors, channel status, and Weixin controls.
+- `loadStatus` — refreshes diagnostics and hydrates raw editor text.
+- `saveModels` / `saveConfig` — send raw YAML to backend-authoritative validators/writers.
+- `startWeixinLogin` / `waitWeixinLogin` — manage pairing and persisted channel setup.
+- `buildModelsYaml` / `makeDefaultProvider` in `setupModels.ts` — retained pure helpers used to generate initial raw YAML and verify the structured backend contract.
 
 ## Design decisions
 
@@ -62,7 +60,11 @@ Raw models/app configuration is validated then written without parse-and-redump 
 
 ### D-setup-model-oobe
 
-OOBE is the absence of models configuration. The forced Setup tab remains until the server status clears that condition.
+OOBE is the absence of the active data-directory models configuration. The forced Setup tab remains until the server status clears that condition.
+
+### D-setup-models-raw-only
+
+The visible Models workflow is raw YAML only. Keep structured request parsing/helpers as a backend compatibility boundary, but do not expose the former graphical provider form or provider-test controls in Setup.
 
 ## Canonical ownership
 

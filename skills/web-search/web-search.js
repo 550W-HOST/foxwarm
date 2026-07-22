@@ -236,14 +236,6 @@ function getDataRootDir() {
   return BASE_DIR;
 }
 
-function resolveAppConfigPath() {
-  const envValue = process.env.FOXWARM_CONFIG_PATH || process.env.CONFIG_PATH;
-  if (envValue?.trim()) {
-    return resolveBaseRelativePath(envValue);
-  }
-  return path.join(getDataRootDir(), 'state', 'config.yaml');
-}
-
 function resolveModelsConfigPath(explicitPath = '') {
   if (explicitPath?.trim()) {
     return resolveBaseRelativePath(explicitPath);
@@ -251,16 +243,6 @@ function resolveModelsConfigPath(explicitPath = '') {
   if (process.env.WEB_SEARCH_MODELS_CONFIG_PATH?.trim()) {
     return resolveBaseRelativePath(process.env.WEB_SEARCH_MODELS_CONFIG_PATH);
   }
-  if (process.env.MODELS_CONFIG_PATH?.trim()) {
-    return resolveBaseRelativePath(process.env.MODELS_CONFIG_PATH);
-  }
-
-  const appConfigPath = resolveAppConfigPath();
-  const appConfig = readYamlFile(appConfigPath) || {};
-  if (appConfig.paths?.modelsConfigPath) {
-    return resolveBaseRelativePath(appConfig.paths.modelsConfigPath);
-  }
-
   return path.join(getDataRootDir(), 'state', 'models.yaml');
 }
 
