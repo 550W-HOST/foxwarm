@@ -7,7 +7,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 ## Steps
 
 1. The LLM returns one or more tool calls in a `ChatResult`.
-2. The message-processing loop calls the builtin dispatcher with the tool name, arguments, and session context.
+2. The message-processing loop schedules the batch in model order. Adjacent direct `exec` calls form a bounded parallel segment; every other direct or unified tool is a serial barrier.
 3. Direct builtins resolve their effective execution node and run the current isolated-session permission checks.
 4. Master-only builtins execute on the master after their tool-local and isolation guards pass.
 5. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
@@ -46,6 +46,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - Tool output is bounded before it enters model context.
 - Recognized image bytes stay in structured image parts rather than entering text excerpts; non-image text, JSON, audio, resource, and blob content remain subject to the normal output budget.
 - MCP and node credentials remain transport/runtime state and are not exposed to the model through tool summaries.
+- Tool batches emit one result for every call and append one tool message only after the batch settles. Image/result parts and function responses remain in original model-call order rather than completion order.
 
 ## Compatibility
 
@@ -66,6 +67,10 @@ Master and node file tools share read/write semantics while retaining separate t
 ### D-dispatch-output-boundary
 
 Tool results remain structured through execution and are normalized/guarded exactly once before becoming model input. Recognized image payloads are promoted to structured image parts before the generic text/structured-output guard runs; the guard applies to the remaining response and must never turn image base64 into a text excerpt or truncation marker. Non-image content receives no multimodal exemption.
+
+### D-dispatch-exec-parallel-segments
+
+Phase-one batch concurrency is intentionally narrow: only adjacent direct calls whose tool name is exactly `exec` run concurrently, with an internal maximum concurrency of four. Every non-`exec` call—including unified `call_tool`, MCP, node-dynamic, ToolScript, file, session, and wait/control tools—flushes the previous exec segment and runs serially. Each exec segment snapshots session node/cwd routing once, settles all calls, then replays cwd changes in model-call order before the next barrier; the last model call therefore owns the resulting session cwd. Results, images, errors, and progress stay model-ordered and one failure does not discard siblings. A stop request waits for the active segment, skips later barriers, and does not claim to terminate already-started operating-system processes. This is an internal scheduler contract, not a public configuration or generalized resource-lock API.
 
 ## Canonical ownership
 

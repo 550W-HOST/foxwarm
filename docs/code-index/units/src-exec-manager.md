@@ -52,6 +52,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 - All public functions are thin async delegates to the underlying manager instance, adding only the default `nodeId: 'master'`.
 - The exec handler uses shared timeout resolution: finite requests above 60 seconds wait for only 60 seconds, while forwarding the requested/effective warning into either foreground or background-switch result formatting.
 - The registry file persists running exec state to disk for crash recovery.
+- Parallel direct-exec batches still use the same persistent manager. Segment-level cwd synchronization is deferred by the tool wrapper and replayed in model order before later tool barriers; process lifecycle tracking remains per exec ID.
 
 ## Integration
 

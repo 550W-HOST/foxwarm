@@ -1122,195 +1122,361 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 /**
  * Execute tools and return results as a single message with multiple parts
  */
-export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
-    const parts = [];
-    let stopCurrentTurn = false;
-    let batchHasError = false;
+const PARALLEL_EXEC_LIMIT = 4;
 
-    const normalizeToolResult = (rawResult: any): any => {
-        if (rawResult === undefined) return { output: '(No output)' };
-        if (rawResult === null) return { output: null };
-        if (typeof rawResult === 'string' || typeof rawResult === 'number' || typeof rawResult === 'boolean') {
-            return { output: rawResult };
+type ToolExecutionSnapshot = {
+    currentNode: string;
+    cwd?: string;
+};
+
+type PreparedToolCall = {
+    call: FunctionCall;
+    index: number;
+    toolId: string;
+    toolFn: any;
+    toolArgs: Record<string, any>;
+    sessionId: string;
+    targetNode: string;
+    executionNode: string;
+    permissionNode: string;
+    result?: any;
+    sessionSnapshot?: ToolExecutionSnapshot;
+};
+
+type ExecutedToolCall = PreparedToolCall & {
+    result: any;
+    imageParts: MessagePart[];
+    stopCurrentTurn: boolean;
+    waitForReply: boolean;
+    explicitWaitId?: string;
+    deferredExecCwdSync?: { nextCwd: string };
+};
+
+function normalizeExecutedToolResult(rawResult: any): any {
+    if (rawResult === undefined) return { output: '(No output)' };
+    if (rawResult === null) return { output: null };
+    if (typeof rawResult === 'string' || typeof rawResult === 'number' || typeof rawResult === 'boolean') {
+        return { output: rawResult };
+    }
+    if (typeof rawResult === 'object') return rawResult;
+    return { output: String(rawResult) };
+}
+
+function buildToolArgsPreview(call: FunctionCall): string {
+    let argStr = '';
+    if (call.argsParseError && typeof call.rawArgsText === 'string') {
+        argStr = call.rawArgsText;
+    } else if (call.name === 'exec') {
+        argStr = call.args.command;
+    } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
+        argStr = call.args.filePath;
+    } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
+        argStr = typeof call.args.input === 'string' ? call.args.input : '';
+    } else if (call.name === 'read' || call.name === 'read_memory') {
+        const { filePath, startLine, endLine } = call.args;
+        argStr = filePath + (startLine ? ` (lines ${startLine}-${endLine})` : '');
+    } else if (call.args) {
+        const keys = Object.keys(call.args);
+        if (keys.length === 1) {
+            const value = call.args[keys[0]];
+            argStr = typeof value === 'object' ? JSON.stringify(value) : value;
+        } else {
+            argStr = keys.map(key => {
+                const value = call.args[key];
+                return `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`;
+            }).join('\n');
         }
-        if (typeof rawResult === 'object') {
-            return rawResult;
-        }
-        return { output: String(rawResult) };
-    };
+    }
+    return argStr.length > 200 ? `${argStr.substring(0, 197)}...` : argStr;
+}
 
-    const consumeInlineData = async (result: any, toolId: string, fallbackLabel: string): Promise<any> => {
-        if (!result || typeof result !== 'object') return result;
-
-        const normalized = await normalizeToolResultImages(result, toolId, fallbackLabel);
-        if (normalized.imageParts.length > 0) {
-            parts.push(...normalized.imageParts);
-        }
-
-        return normalized.result;
-    };
-
-    const extractToolLoopControl = (result: any): any => {
-        if (!result || typeof result !== 'object' || !result.__toolLoopControl || typeof result.__toolLoopControl !== 'object') {
-            return result;
-        }
-
-        stopCurrentTurn = stopCurrentTurn || !!result.__toolLoopControl.stopCurrentTurn;
-        const { __toolLoopControl, ...rest } = result;
-        return rest;
-    };
-
-    const hasToolResponseError = (result: any): boolean => {
-        if (!result || typeof result !== 'object') {
-            return false;
-        }
-        return result.error !== undefined && result.error !== null;
-    };
-    
-    for (const [index, call] of functionCalls.entries()) {
-        const toolFn = (tools as any)[call.name];
-        const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        
-        // Log what's being executed
-        let argStr = '';
-        if (call.argsParseError && typeof call.rawArgsText === 'string') {
-            argStr = call.rawArgsText;
-        } else if (call.name === 'exec') {
-            argStr = call.args.command;
-        } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
-            argStr = call.args.filePath;
-        } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
-            argStr = typeof call.args.input === 'string' ? call.args.input : '';
-        } else if (call.name === 'read' || call.name === 'read_memory') {
-            const { filePath, startLine, endLine } = call.args;
-            argStr = filePath + (startLine ? ` (lines ${startLine}-${endLine})` : '');
-        } else if (call.args) {
-            const keys = Object.keys(call.args);
-            if (keys.length === 1) {
-                const value = call.args[keys[0]];
-                // If value is object, stringify it
-                argStr = typeof value === 'object' ? JSON.stringify(value) : value;
-            } else {
-                argStr = keys.map(key => {
-                    const value = call.args[key];
-                    const valueStr = typeof value === 'object' ? JSON.stringify(value) : value;
-                    return `${key}: ${valueStr}`;
-                }).join('\n');
-            }
-        }
-        if (argStr.length > 200) argStr = argStr.substring(0, 197) + '...';
-        logger.info({ tool: call.name, args: argStr }, 'Executing tool');
+async function prepareToolCall(
+    call: FunctionCall,
+    index: number,
+    total: number,
+    toolContext: any,
+    session: any,
+    snapshot?: ToolExecutionSnapshot,
+    notifyStart = true,
+): Promise<PreparedToolCall> {
+    const toolFn = (tools as any)[call.name];
+    const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const argsPreview = buildToolArgsPreview(call);
+    if (notifyStart) {
+        logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
         if (toolContext.broadcast && session.verbose) {
-            // Exclude webui as it gets updates via onHistoryUpdate
-            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argStr}\``, { excludePlatforms: ['webui'] });
+            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argsPreview}\``, { excludePlatforms: ['webui'] });
         }
+    }
 
-        let result;
-        if (call.argsParseError) {
-            result = buildInvalidToolArgsResult(call);
-        }
-        
-        const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
-        const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
-        const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
-        const sessionId = toolContext.sessionId || 'main';
-        
-        // Get current node for this session
-        const currentNode = await nodesManager.getCurrentNode(sessionId) || 'master';
-        
-        // Determine target node: explicit node param > current node > master.
-        const targetNode = normalizeRequestedNode(nodeParam, currentNode);
-        
-        // Remove node parameter from args before execution
-        const toolArgs = { ...call.args };
-        if (supportsExplicitNode) {
-            delete toolArgs.node;
-        }
-        
-        // Tools that must run on master because they depend on host-local
-        // session/channel/agent/vector/MCP state rather than remote node files.
-        const forceMaster = tools.isMasterOnlyToolName(call.name);
-        const executionNode = forceMaster ? 'master' : targetNode;
-        const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
-        const toolStartedAt = Date.now();
-        const argsPreview = argStr.length > 500 ? `${argStr.slice(0, 500)}…` : argStr;
+    const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
+    const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
+    const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
+    const sessionId = toolContext.sessionId || 'main';
+    const currentNode = snapshot?.currentNode || await nodesManager.getCurrentNode(sessionId) || 'master';
+    const targetNode = normalizeRequestedNode(nodeParam, currentNode);
+    const toolArgs = { ...call.args };
+    if (supportsExplicitNode) delete toolArgs.node;
+    const executionNode = tools.isMasterOnlyToolName(call.name) ? 'master' : targetNode;
+    const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
+    if (notifyStart) {
+        const startedAt = Date.now();
         await Promise.resolve(toolContext.onToolStart?.({
             id: toolId,
             name: call.name,
             index,
-            total: functionCalls.length,
+            total,
             executionNode,
-            argsPreview,
-            startedAt: toolStartedAt,
+            argsPreview: argsPreview.length > 500 ? `${argsPreview.slice(0, 500)}…` : argsPreview,
+            startedAt,
         }));
-
-        // Check isolated session tool permission (includes path access check for master)
-        try {
-            if (!result?.error) {
-                await checkToolPermission(call.name, sessionId, permissionNode, toolArgs);
-            }
-        } catch (e: any) {
-            result = { error: e.message || String(e) };
-        }
-        
-        if (result?.error) {
-            // Skip tool execution if permission check failed
-        } else {
-        
-        if (executionNode !== 'master') {
-            // Execute on remote node
-            try {
-                result = normalizeToolResult(await nodesManager.executeTool(executionNode, call.name, toolArgs, sessionId));
-            } catch (e: any) {
-                result = { error: e.message || String(e) };
-            }
-        } else if (toolFn) {
-            // Execute locally on master
-            const localToolContext = call.name === 'send_file' || call.name === 'image_write_to_file'
-                ? { ...toolContext, runtimeNodeId: targetNode, toolUseId: toolId }
-                : { ...toolContext, toolUseId: toolId };
-            try {
-                result = normalizeToolResult(await toolFn(toolArgs, localToolContext));
-            } catch (e: any) {
-                result = { error: e?.message || String(e) };
-            }
-        } else {
-            result = { error: `Unknown tool: ${call.name}` };
-        }
-        } // End if (result?.error)
-
-        result = extractToolLoopControl(result);
-        result = await consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
-        result = await guardToolOutputForModel(result, {
-            sessionId,
-            session,
-            toolName: call.name,
-            toolUseId: toolId,
-            nodeId: executionNode,
-        });
-
-        batchHasError = batchHasError || hasToolResponseError(result);
-        
-        parts.push({
-            functionResponse: {
-                tool_use_id: toolId,
-                name: call.name,
-                response: result
-            }
-        });
     }
-    
-    const toolMessage: Message = {
-        role: 'tool',
-        parts: parts
-    };
 
+    return {
+        call,
+        index,
+        toolId,
+        toolFn,
+        toolArgs,
+        sessionId,
+        targetNode,
+        executionNode,
+        permissionNode,
+        result: call.argsParseError ? buildInvalidToolArgsResult(call) : undefined,
+        sessionSnapshot: snapshot,
+    };
+}
+
+async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any): Promise<ExecutedToolCall> {
+    let result = prepared.result;
+    let imageParts: MessagePart[] = [];
+    let stopCurrentTurn = false;
+    let waitForReply = false;
+    let explicitWaitId: string | undefined;
+    let deferredExecCwdSync: { nextCwd: string } | undefined;
+
+    try {
+        if (!result?.error) {
+            await checkToolPermission(prepared.call.name, prepared.sessionId, prepared.permissionNode, prepared.toolArgs);
+        }
+        if (!result?.error && prepared.executionNode !== 'master') {
+            result = normalizeExecutedToolResult(await nodesManager.executeTool(
+                prepared.executionNode,
+                prepared.call.name,
+                prepared.toolArgs,
+                prepared.sessionId,
+                prepared.sessionSnapshot,
+            ));
+        } else if (!result?.error && prepared.toolFn) {
+            const runtimeContext = prepared.call.name === 'send_file' || prepared.call.name === 'image_write_to_file'
+                ? { ...toolContext, runtimeNodeId: prepared.targetNode, toolUseId: prepared.toolId }
+                : { ...toolContext, toolUseId: prepared.toolId };
+            const localToolContext = prepared.sessionSnapshot
+                ? {
+                    ...runtimeContext,
+                    session: { ...toolContext.session, currentNode: prepared.sessionSnapshot.currentNode, cwd: prepared.sessionSnapshot.cwd },
+                    deferSessionCwdSync: prepared.call.name === 'exec',
+                }
+                : runtimeContext;
+            result = normalizeExecutedToolResult(await prepared.toolFn(prepared.toolArgs, localToolContext));
+        } else if (!result?.error) {
+            result = { error: `Unknown tool: ${prepared.call.name}` };
+        }
+
+        if (result && typeof result === 'object') {
+            if (result.__toolLoopControl && typeof result.__toolLoopControl === 'object') {
+                stopCurrentTurn = !!result.__toolLoopControl.stopCurrentTurn;
+            }
+            if (result.__toolPostAction && typeof result.__toolPostAction === 'object') {
+                waitForReply = result.__toolPostAction.waitForReply === true;
+                explicitWaitId = typeof result.__toolPostAction.explicitWaitId === 'string'
+                    ? result.__toolPostAction.explicitWaitId
+                    : undefined;
+            }
+            if (result.__execBatchCwdSync && typeof result.__execBatchCwdSync.nextCwd === 'string') {
+                deferredExecCwdSync = { nextCwd: result.__execBatchCwdSync.nextCwd };
+            }
+            const { __toolLoopControl, __toolPostAction, __execBatchCwdSync, ...visibleResult } = result;
+            result = visibleResult;
+        }
+
+        const normalizedImages = await normalizeToolResultImages(
+            result,
+            prepared.toolId,
+            `[Inline data returned by ${prepared.call.name}]`,
+        );
+        imageParts = normalizedImages.imageParts;
+        result = normalizedImages.result;
+    } catch (error: any) {
+        result = { error: error?.message || String(error) };
+        imageParts = [];
+    }
+
+    return {
+        ...prepared,
+        result: normalizeExecutedToolResult(result),
+        imageParts,
+        stopCurrentTurn,
+        waitForReply,
+        explicitWaitId,
+        deferredExecCwdSync,
+    };
+}
+
+async function runBoundedToolCalls(
+    prepared: PreparedToolCall[],
+    toolContext: any,
+): Promise<Array<ExecutedToolCall | undefined>> {
+    const results: Array<ExecutedToolCall | undefined> = new Array(prepared.length);
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(PARALLEL_EXEC_LIMIT, prepared.length) }, async () => {
+        while (true) {
+            const index = nextIndex++;
+            if (index >= prepared.length) return;
+            try {
+                results[index] = await runPreparedToolCall(prepared[index], toolContext);
+            } catch (error: any) {
+                results[index] = buildFailedToolCall(prepared[index], error);
+            }
+        }
+    });
+    await Promise.allSettled(workers);
+    return results;
+}
+
+function buildFailedToolCall(prepared: PreparedToolCall, error: any): ExecutedToolCall {
+    return {
+        ...prepared,
+        result: { error: error?.message || String(error) },
+        imageParts: [],
+        stopCurrentTurn: false,
+        waitForReply: false,
+    };
+}
+
+function buildSkippedToolCall(prepared: PreparedToolCall): ExecutedToolCall {
+    return {
+        ...prepared,
+        result: { error: 'Tool call was not started because the session was stopped.' },
+        imageParts: [],
+        stopCurrentTurn: false,
+        waitForReply: false,
+    };
+}
+
+async function replayDeferredExecCwd(execution: ExecutedToolCall): Promise<ExecutedToolCall> {
+    if (!execution.deferredExecCwdSync) return execution;
+    try {
+        const { applyDeferredExecCwdSync } = await import('./tools/execTools');
+        return {
+            ...execution,
+            result: await applyDeferredExecCwdSync(execution.sessionId, execution.result, execution.deferredExecCwdSync),
+            deferredExecCwdSync: undefined,
+        };
+    } catch (error: any) {
+        return {
+            ...execution,
+            result: { error: error?.message || String(error) },
+            deferredExecCwdSync: undefined,
+        };
+    }
+}
+
+/**
+ * Execute tools and return results as a single message with multiple parts.
+ * Adjacent direct exec calls share a node/cwd snapshot and run concurrently;
+ * every other tool is a serial ordering barrier.
+ */
+export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
+    const executions: ExecutedToolCall[] = [];
+    let cursor = 0;
+
+    while (cursor < functionCalls.length) {
+        if (session?.stopping) {
+            for (; cursor < functionCalls.length; cursor++) {
+                const prepared = await prepareToolCall(functionCalls[cursor], cursor, functionCalls.length, toolContext, session, undefined, false);
+                executions.push(buildSkippedToolCall(prepared));
+            }
+            break;
+        }
+
+        if (functionCalls[cursor].name !== 'exec') {
+            const prepared = await prepareToolCall(functionCalls[cursor], cursor, functionCalls.length, toolContext, session);
+            executions.push(await runPreparedToolCall(prepared, toolContext));
+            cursor++;
+            continue;
+        }
+
+        const segmentStart = cursor;
+        while (cursor < functionCalls.length && functionCalls[cursor].name === 'exec') cursor++;
+        const snapshot: ToolExecutionSnapshot = {
+            currentNode: await nodesManager.getCurrentNode(toolContext.sessionId || 'main') || 'master',
+            cwd: typeof session?.cwd === 'string' ? session.cwd : undefined,
+        };
+        const preparedSegment: PreparedToolCall[] = [];
+        for (let index = segmentStart; index < cursor; index++) {
+            preparedSegment.push(await prepareToolCall(
+                functionCalls[index],
+                index,
+                functionCalls.length,
+                toolContext,
+                session,
+                snapshot,
+            ));
+        }
+        const settled = await runBoundedToolCalls(preparedSegment, toolContext);
+        for (let index = 0; index < preparedSegment.length; index++) {
+            executions.push(await replayDeferredExecCwd(settled[index] || buildSkippedToolCall(preparedSegment[index])));
+        }
+    }
+
+    const parts: MessagePart[] = [];
+    let stopCurrentTurn = false;
+    let batchHasError = false;
+    let waitForReply = false;
+    const explicitWaitIds: string[] = [];
+
+    for (const execution of executions) {
+        let result = execution.result;
+        try {
+            result = await guardToolOutputForModel(result, {
+                sessionId: execution.sessionId,
+                session,
+                toolName: execution.call.name,
+                toolUseId: execution.toolId,
+                nodeId: execution.executionNode,
+            });
+        } catch (error: any) {
+            result = { error: error?.message || String(error) };
+        }
+        parts.push(...execution.imageParts, {
+            functionResponse: {
+                tool_use_id: execution.toolId,
+                name: execution.call.name,
+                response: result,
+            },
+        });
+        stopCurrentTurn = stopCurrentTurn || execution.stopCurrentTurn;
+        batchHasError = batchHasError || !!(result && typeof result === 'object' && result.error !== undefined && result.error !== null);
+        waitForReply = waitForReply || execution.waitForReply;
+        if (execution.explicitWaitId) explicitWaitIds.push(execution.explicitWaitId);
+    }
+
+    if (stopCurrentTurn && batchHasError) {
+        for (const waitId of explicitWaitIds) {
+            await sessionManager.clearSessionWaitById(toolContext.sessionId || session?.id, waitId);
+        }
+    }
+
+    const toolMessage: Message = { role: 'tool', parts };
     if (stopCurrentTurn && !batchHasError) {
         (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true };
-    } else if (stopCurrentTurn && batchHasError) {
+    } else if (stopCurrentTurn) {
         logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
-
+    if (waitForReply) {
+        (toolMessage as any).__toolPostAction = { waitForReply: true };
+    }
     return toolMessage;
 }
 

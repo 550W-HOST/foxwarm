@@ -25,7 +25,7 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 | `disconnectNode(nodeId, reason?)` | Forcibly removes a non-master runtime node, rejects pending operations for it, and closes its WebSocket. |
 | `getCurrentNode(sessionId)` / `setCurrentNode(sessionId, nodeId)` | Reads or validates a session's current node selection. |
 | `getNode(nodeId)` / `listNodes()` / `listNodesWithTools()` | Query runtime node state and dynamic capabilities. |
-| `executeNodeTool(...)` / `executeTool(...)` | Dispatches a tool call locally for `master` or over WebSocket for a remote node. |
+| `executeNodeTool(...)` / `executeTool(...)` | Dispatches a tool call locally for `master` or over WebSocket for a remote node; direct parallel exec may provide a node/cwd routing snapshot. |
 | `handleToolResponse(...)` / `handleToolError(...)` | Resolves/rejects a pending remote tool call by call id. |
 | `adaptLegacyRemoteNodeToolResult(result)` | Converts the explicitly supported old remote-node image result shapes to current structured inline data without mutating canonical or malformed values. |
 | `readFileFromNode(...)` / `writeFileToNode(...)` | Reads/writes local or remote files through the node file-transfer protocol. |
@@ -58,6 +58,7 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 - `disconnectNode` is used by administrative `/node remove` and `/node move` flows so deleting or renaming approved credentials also removes online runtime state and rejects pending work for the old node id.
 - Node-originated session access is allowed only when the target session's `currentNode` matches the node id or the session's agent is isolated and bound to that node.
 - Local/master execution passes `__runtimeNodeId` through tool context when needed, then strips it from user-visible tool args.
+- Remote dispatch normally reads current session routing at call time. A direct parallel-exec segment may pass its one captured current-node/cwd snapshot so all calls in that segment route consistently even if live session metadata changes while they run.
 - Remote model-tool responses pass through one isolated compatibility adapter before their pending call resolves. Master-local and MCP results never enter this adapter. The adapter's complete deletion contract is canonical in [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 
 ## Integration

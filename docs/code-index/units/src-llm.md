@@ -1,6 +1,6 @@
 # Unit: src-llm
 
-Files: src/llm.ts, src/llm.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts
+Files: src/llm.ts, src/llm.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/parallelToolExecution.test.ts
 
 ## Purpose
 
@@ -10,7 +10,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 
 - `chat(parts, session, iteration?, options?)` — optionally append user parts, request one provider turn from current model-visible history, update stats, and append the model result.
 - `requestLlmOnce(options)` — provider request without automatic session-history orchestration.
-- `executeTools(functionCalls, toolContext, session)` — normal tool batch with progress/control handling.
+- `executeTools(functionCalls, toolContext, session)` — model-ordered tool batch execution with serial barriers, bounded adjacent direct-exec segments, progress/control folding, and one final tool message.
 - `buildSessionSystemPromptSnapshot(options)` — framework prompt, memory, skill catalog, and dynamic hints.
 - `generatePromptCacheKey`, `ensurePromptCacheKey`.
 - `sanitizeProviderRequestPayload`, `isAbortError`.
@@ -52,6 +52,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - HTTP classification recognizes nested structured model-not-found errors and bounded common text forms without broadening ordinary HTTP 400 retries. A virtual outer request captures route activation once so old retries cannot replace newer configuration state.
 - Successful results normalize into `ChatResult`, record provider-qualified model ID and usage, and may contain function calls for the router loop.
 - Display-only messages and internal `__meta` are excluded from provider input.
+- Tool execution keeps per-call result/image/control state local. Adjacent direct `exec` calls use a bounded parallel segment; all other tools are barriers, and final parts are flattened in original call order. Canonical scheduling contract: [D-dispatch-exec-parallel-segments](../threads/tool-dispatch.md#d-dispatch-exec-parallel-segments).
 
 ## Compatibility
 

@@ -314,6 +314,16 @@ export async function startSessionWait(sessionId: string, options: {
   return state;
 }
 
+export async function clearSessionWaitById(sessionId: string | undefined, waitId: string): Promise<boolean> {
+  if (!sessionId) return false;
+  const session = await getExistingSession(sessionId);
+  const wait = getSessionWaitState(session);
+  if (!session || !wait || wait.id !== waitId) return false;
+  clearSessionWaitState(session);
+  await saveSession(session.id);
+  return true;
+}
+
 export async function queueSessionWaitTimeoutEvent(sessionId: string, waitId: string, message: string): Promise<void> {
   await enqueueSessionItem(sessionId, {
     type: 'background',

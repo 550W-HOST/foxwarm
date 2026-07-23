@@ -25,6 +25,7 @@ export interface ToolContext {
     broadcast?: (text: string, options?: any) => Promise<void>;
     queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot') => Promise<void>;
     runtimeNodeId?: string;
+    deferSessionCwdSync?: boolean;
 }
 
 // Tool function type
