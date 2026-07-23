@@ -79,6 +79,29 @@ async function badgeState(id) {
   }))
 }
 
+async function badgePosition(id) {
+  return page.$eval(`#${id}`, (fixture) => {
+    const timeline = fixture.querySelector('.foxwarm-chat-timeline')
+    const row = timeline?.firstElementChild
+    const message = row?.firstElementChild
+    const anchor = fixture.querySelector('[data-usage-badge-anchor]')
+    const badge = fixture.querySelector('[data-usage-badge]')
+    const rect = (element) => {
+      const { left, right, top, bottom, width, height } = element.getBoundingClientRect()
+      return { left, right, top, bottom, width, height }
+    }
+    return {
+      timeline: rect(timeline),
+      message: rect(message),
+      anchor: rect(anchor),
+      badge: rect(badge),
+      anchorPosition: getComputedStyle(anchor).position,
+      anchorTransform: anchor.style.transform,
+      documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    }
+  })
+}
+
 before(async () => {
   const assetNames = await readdir(assetsDirectory)
   const cssAsset = assetNames.find(name => /^index-.*\.css$/.test(name))
@@ -88,7 +111,7 @@ before(async () => {
 
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:24px}</style></head><body><main>${['concrete', 'virtual', 'missing', 'invalid', 'groupSame', 'groupDifferent', 'longMobile', 'hidden'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:1400px;max-width:100%;min-width:0;margin-bottom:24px}</style></head><body><main>${['concrete', 'virtual', 'missing', 'invalid', 'groupSame', 'groupDifferent', 'longMobile', 'hidden'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -152,7 +175,45 @@ test('collapsed tool-group details aggregate calls without attributing them to t
   assert.ok(different.text.includes(' – '), 'different persisted call times render as an accurate range')
 })
 
-test('expanded long model keys remain contained on desktop and mobile, and the setting still hides badges', async () => {
+test('desktop expansion preserves the external lower-right gap until timeline-space clamping is necessary', async () => {
+  await mountFixture(1600)
+  const collapsed = await badgePosition('concrete')
+  assert.equal(collapsed.anchorTransform, '')
+  assert.ok(Math.abs(collapsed.badge.left - collapsed.message.right - 8) <= 1, 'collapsed badge keeps its original external gap')
+
+  await page.click('#concrete [data-usage-badge]')
+  const wide = await badgePosition('concrete')
+  assert.ok(Math.abs(wide.badge.left - wide.message.right - 8) <= 1, 'wide expanded badge remains wholly outside with the original gap')
+  assert.ok(wide.badge.right <= wide.timeline.right + 1)
+
+  await page.setViewport({ width: 700, height: 900, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
+  await page.waitForFunction(() => {
+    const timeline = document.querySelector('#concrete .foxwarm-chat-timeline')
+    const badge = document.querySelector('#concrete [data-usage-badge]')
+    return timeline && badge && Math.abs(timeline.getBoundingClientRect().right - badge.getBoundingClientRect().right) <= 1
+  })
+  const resized = await badgePosition('concrete')
+  assert.ok(resized.badge.right <= resized.timeline.right + 1)
+  assert.ok(resized.badge.left < resized.message.right + 7, 'the resize clamp shifts only when the preferred outside position no longer fits')
+
+  await page.setViewport({ width: 1600, height: 900, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
+  await page.waitForFunction(() => {
+    const timeline = document.querySelector('#concrete .foxwarm-chat-timeline')
+    const message = timeline?.firstElementChild?.firstElementChild
+    const badge = document.querySelector('#concrete [data-usage-badge]')
+    return message && badge && Math.abs(badge.getBoundingClientRect().left - message.getBoundingClientRect().right - 8) <= 1
+  })
+})
+
+test('constrained desktop clamps expanded long keys to the timeline edge without overflow', async () => {
+  await mountFixture(900)
+  await page.click('#longMobile [data-usage-badge]')
+  const constrained = await badgePosition('longMobile')
+  assert.ok(Math.abs(constrained.badge.right - constrained.timeline.right) <= 1, 'only the expanded panel is shifted to align with the actual timeline edge')
+  assert.ok(constrained.documentOverflow <= 1, `constrained document overflowed by ${constrained.documentOverflow}px`)
+})
+
+test('mobile expansion stays in the existing flow layout, and the setting still hides badges', async () => {
   await mountFixture(1100)
   await page.click('#longMobile [data-usage-badge]')
   let layout = await badgeState('longMobile')
@@ -163,6 +224,7 @@ test('expanded long model keys remain contained on desktop and mobile, and the s
   await mountFixture(390)
   await page.click('#longMobile [data-usage-badge]')
   layout = await badgeState('longMobile')
+  assert.equal((await badgePosition('longMobile')).anchorPosition, 'static')
   assert.ok(layout.fixtureOverflow <= 1, `mobile fixture overflowed by ${layout.fixtureOverflow}px`)
   assert.ok(layout.documentOverflow <= 1, `mobile document overflowed by ${layout.documentOverflow}px`)
 })

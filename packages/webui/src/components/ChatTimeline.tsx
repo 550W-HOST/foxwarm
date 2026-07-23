@@ -1,4 +1,4 @@
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Eye, Code, FileJson, Copy, Check } from 'lucide-react'
 import {
   IconToggleButton,
@@ -223,18 +223,56 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
   attribution: UsageAttribution
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [expandedClampOffset, setExpandedClampOffset] = useState(0)
+  const anchorRef = useRef<HTMLDivElement>(null)
   const toggleExpanded = useCallback(() => setExpanded(current => !current), [])
+
+  useLayoutEffect(() => {
+    if (!expanded || isMobile) {
+      setExpandedClampOffset(0)
+      return
+    }
+
+    const anchor = anchorRef.current
+    const timeline = anchor?.closest<HTMLElement>('.foxwarm-chat-timeline')
+    if (!anchor || !timeline) return
+
+    const clampToTimeline = () => {
+      const anchorRect = anchor.getBoundingClientRect()
+      const timelineRight = timeline.getBoundingClientRect().right
+      // The inline offset has already moved this rect left; restore the preferred
+      // external position before calculating the minimum required clamp.
+      const preferredRight = anchorRect.right + expandedClampOffset
+      const nextOffset = Math.max(0, preferredRight - timelineRight)
+      setExpandedClampOffset(current => Math.abs(current - nextOffset) < 0.5 ? current : nextOffset)
+    }
+
+    clampToTimeline()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(clampToTimeline)
+    observer?.observe(anchor)
+    observer?.observe(timeline)
+    window.addEventListener('resize', clampToTimeline)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', clampToTimeline)
+    }
+  }, [expanded, expandedClampOffset, isMobile])
 
   if (isMobile) {
     return (
-      <div className="pointer-events-none mb-2 mt-1 flex justify-end pr-1">
+      <div data-usage-badge-anchor className="pointer-events-none mb-2 mt-1 flex justify-end pr-1">
         <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} expanded={expanded} onToggle={toggleExpanded} />
       </div>
     )
   }
 
   return (
-    <div className={`pointer-events-none absolute bottom-0 right-0 z-10 ${expanded ? 'max-w-full' : 'translate-x-[calc(100%+0.5rem)]'}`}>
+    <div
+      ref={anchorRef}
+      data-usage-badge-anchor
+      className={`pointer-events-none absolute bottom-0 right-0 z-10 translate-x-[calc(100%+0.5rem)] ${expanded ? 'max-w-full' : ''}`}
+      style={expanded ? { transform: `translateX(calc(100% + 0.5rem - ${expandedClampOffset}px))` } : undefined}
+    >
       <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} expanded={expanded} onToggle={toggleExpanded} />
     </div>
   )
