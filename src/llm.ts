@@ -1966,7 +1966,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
         usage = resp?.usage ? {
             inputTokens: resp.usage.prompt_tokens,
             outputTokens: resp.usage.completion_tokens,
-            cachedTokens: 0,
+            cachedTokens: resp?.usage.prompt_tokens_details?.cached_tokens || 0,
         } : null;
     } else {
         usage = resp?.usage ? {
