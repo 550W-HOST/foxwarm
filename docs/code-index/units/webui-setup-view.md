@@ -35,7 +35,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - Weixin start renders image/base64/pairing payloads; wait persists connected token/user/channel fields server-side.
 - Forced mode is closable only after the active models file exists. WebUI itself makes the channel-availability check non-blocking.
 - A positive `focusModelsRequest` scrolls to the Models section and focuses its Monaco editor.
-- If editor assistance cannot load, the Models and app-config surfaces remain controlled plain-text editors, so OOBE can still be completed and canonical backend validation still owns Save.
+- If lazy editor support loading or configuration rejects, the Models and app-config surfaces remain controlled plain-text editors, so OOBE can still be completed and canonical backend validation still owns Save. Internal worker health is not probed after initialization; Monaco remains editable if schema assistance later degrades.
 
 ## Integration
 

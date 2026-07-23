@@ -1,6 +1,7 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import puppeteer from 'puppeteer-core'
@@ -12,6 +13,8 @@ const baseUrl = `http://127.0.0.1:${port}`
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 
 let vite
+let preview
+let productionBaseUrl
 let browser
 let page
 let savedRequest
@@ -78,16 +81,35 @@ const statusPayload = {
   channels: [],
 }
 
-async function waitForServer() {
+async function waitForServer(targetBaseUrl = baseUrl) {
   const deadline = Date.now() + 15_000
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(baseUrl)
+      const response = await fetch(targetBaseUrl)
       if (response.ok) return
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   throw new Error('Vite dev server did not start')
+}
+
+async function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : 0
+      server.close((error) => error ? reject(error) : resolve(port))
+    })
+  })
+}
+
+async function waitForProcess(child, label) {
+  const [code, signal] = await new Promise((resolve) => {
+    child.once('exit', (exitCode, exitSignal) => resolve([exitCode, exitSignal]))
+  })
+  if (code !== 0) throw new Error(`${label} failed with code ${code ?? signal}`)
 }
 
 function respondJson(request, body, status = 200) {
@@ -161,7 +183,21 @@ async function attachRequestMocks(targetPage, options = {}) {
 }
 
 before(async () => {
-  vite = spawn(path.join(webuiRoot, 'node_modules/.bin/vite'), ['--host', '127.0.0.1', '--port', String(port)], {
+  const viteBin = path.join(webuiRoot, 'node_modules/.bin/vite')
+  await waitForProcess(spawn(viteBin, ['build'], {
+    cwd: webuiRoot,
+    stdio: ['ignore', 'ignore', 'inherit'],
+  }), 'production WebUI build')
+
+  const previewPort = await getFreePort()
+  productionBaseUrl = `http://127.0.0.1:${previewPort}`
+  preview = spawn(viteBin, ['preview', '--host', '127.0.0.1', '--port', String(previewPort), '--strictPort'], {
+    cwd: webuiRoot,
+    stdio: ['ignore', 'ignore', 'inherit'],
+  })
+  await waitForServer(productionBaseUrl)
+
+  vite = spawn(viteBin, ['--host', '127.0.0.1', '--port', String(port)], {
     cwd: webuiRoot,
     stdio: ['ignore', 'ignore', 'inherit'],
   })
@@ -184,6 +220,7 @@ before(async () => {
 after(async () => {
   await browser?.close()
   vite?.kill('SIGTERM')
+  preview?.kill('SIGTERM')
 })
 
 test('Models setup is raw-only and associates distinct static schemas with both editors', async () => {
@@ -214,6 +251,31 @@ test('schema markers remain advisory and do not disable raw save', async () => {
   assert.equal(savedRequestPath, '/preview/api/setup/models')
 })
 
+test('production worker provides real schema markers and current-document completions', async () => {
+  const productionPage = await browser.newPage()
+  await productionPage.setBypassServiceWorker(true)
+  await attachRequestMocks(productionPage)
+  try {
+    await productionPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    const modelEditor = '[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]'
+    await productionPage.waitForFunction((selector) => {
+      const editor = document.querySelector(selector)
+      return editor?.getAttribute('data-editor-ready') === 'true'
+        && editor?.getAttribute('data-editor-fallback') !== 'true'
+        && Number(editor?.getAttribute('data-marker-count') || 0) > 0
+    }, { timeout: 20_000 }, modelEditor)
+
+    const editorSurface = await productionPage.waitForSelector(`${modelEditor} .view-lines`, { visible: true })
+    await editorSurface.click({ offset: { x: 90, y: 10 } })
+    await productionPage.keyboard.press('Space')
+    await productionPage.waitForSelector('.suggest-widget.visible .monaco-list-row', { timeout: 10_000 })
+    const suggestions = await productionPage.$$eval('.suggest-widget.visible .monaco-list-row', (rows) => rows.map((row) => row.textContent || ''))
+    assert.ok(suggestions.some((label) => label.includes('route')))
+  } finally {
+    await productionPage.close()
+  }
+})
+
 test('backend validation error remains final authority and is shown after Monaco diagnostics', async () => {
   saveError = 'canonical backend rejected the models config'
   const saveButton = await page.waitForSelector('button::-p-text(Save models)')
@@ -223,7 +285,7 @@ test('backend validation error remains final authority and is shown after Monaco
   saveError = null
 })
 
-test('OOBE remains editable and savable when Monaco or YAML chunks cannot load', async () => {
+test('OOBE remains editable and savable when lazy Monaco/YAML support import rejects', async () => {
   const degradedPage = await browser.newPage()
   await degradedPage.setCacheEnabled(false)
   await attachRequestMocks(degradedPage, { blockEditorChunks: true, oobe: true })
