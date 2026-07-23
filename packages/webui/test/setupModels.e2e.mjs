@@ -21,6 +21,7 @@ let savedRequest
 let savedRequestPath
 let saveError = null
 const requestPaths = []
+const modelUpdateRequests = []
 
 const statusPayload = {
   oobe: false,
@@ -160,6 +161,17 @@ async function attachRequestMocks(targetPage, options = {}) {
       } else {
         void respondJson(request, { success: true, models: { ...statusPayload.models, rawYaml: savedRequest.yaml } })
       }
+      return
+    }
+    if (/\/api\/sessions\/[^/]+\/model$/.test(url.pathname) && request.method() === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      modelUpdateRequests.push({ path: url.pathname, body })
+      void respondJson(request, {
+        id: decodeURIComponent(url.pathname.split('/').at(-2) || ''),
+        model: body.model || null,
+        modelKey: body.model || 'route',
+        defaultModelKey: 'route',
+      })
       return
     }
     if (url.pathname.endsWith('/api/sessions')) {
@@ -515,8 +527,9 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
   }
 })
 
-test('embedded Chat requests focused Models Setup and embedded Setup accepts the nonce-bound focus signal', async () => {
+test('embedded model filter selects one result and keeps the accessible Setup bridge', async () => {
   const hostPage = await browser.newPage()
+  await hostPage.setViewport({ width: 390, height: 700 })
   await attachRequestMocks(hostPage)
   const nonce = '0123456789abcdef0123456789abcdef'
   try {
@@ -530,13 +543,83 @@ test('embedded Chat requests focused Models Setup and embedded Setup accepts the
       const iframe = document.createElement('iframe')
       iframe.id = 'embedded-chat'
       iframe.src = src
+      iframe.style.cssText = 'border:0;width:100vw;height:100vh'
       document.body.appendChild(iframe)
     }, { src: `${baseUrl}/preview/?foxwarmEmbed=chat&foxwarmEmbedNonce=${nonce}&sessionId=embedded%2Fchat` })
     const chatFrame = await hostPage.waitForFrame((frame) => frame.url().includes('foxwarmEmbed=chat'))
     const modelButton = await chatFrame.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
     await modelButton.click()
-    const configure = await chatFrame.waitForSelector('button::-p-text(Configure models…)', { timeout: 15_000 })
-    await configure.click()
+    const filter = await chatFrame.waitForSelector('input[aria-label="Filter models"]', { timeout: 15_000 })
+    await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    assert.equal(await filter.evaluate((input) => input.value), '')
+
+    const configure = await chatFrame.waitForSelector('button[aria-label="Configure models"]', { timeout: 15_000 })
+    assert.equal((await configure.evaluate((button) => button.textContent || '')).trim(), '')
+    assert.equal(await configure.evaluate((button) => button.title), 'Configure models')
+    const popupLayout = await chatFrame.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const popupRect = popup.getBoundingClientRect()
+      const settingsRect = popup.querySelector('button[aria-label="Configure models"]')?.getBoundingClientRect()
+      const filterRect = popup.querySelector('input[aria-label="Filter models"]')?.getBoundingClientRect()
+      return {
+        left: popupRect.left,
+        right: popupRect.right,
+        viewportWidth: window.innerWidth,
+        settingsRight: settingsRect?.right || 0,
+        filterLeft: filterRect?.left || 0,
+        filterRight: filterRect?.right || 0,
+      }
+    })
+    assert.ok(popupLayout.left >= 0)
+    assert.ok(popupLayout.right <= popupLayout.viewportWidth)
+    assert.ok(popupLayout.settingsRight <= popupLayout.filterLeft)
+    assert.ok(popupLayout.filterRight <= popupLayout.right)
+
+    const updatesBefore = modelUpdateRequests.length
+    await filter.type('LEAF')
+    await chatFrame.waitForFunction(() => (
+      document.querySelectorAll('button[title="leaf/model-a"], button[title="leaf/model-b"]').length === 2
+    ))
+    await filter.press('Enter')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(modelUpdateRequests.length, updatesBefore)
+    assert.ok(await chatFrame.$('[data-model-selector-popup="true"]'))
+
+    await filter.evaluate((input) => input.select())
+    await filter.type('missing-model')
+    await chatFrame.waitForFunction(() => !document.querySelector('button[title="sticky"], button[title="route"], button[title="leaf/model-a"], button[title="leaf/model-b"]'))
+    await filter.press('Enter')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(modelUpdateRequests.length, updatesBefore)
+
+    await filter.evaluate((input) => input.select())
+    await filter.type('STICKY')
+    await chatFrame.waitForSelector('button[title="sticky"]')
+    await filter.evaluate((input) => {
+      input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: 'STICKY' }))
+      input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', isComposing: true }))
+      input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'STICKY' }))
+    })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(modelUpdateRequests.length, updatesBefore)
+
+    await filter.press('Enter')
+    const updateDeadline = Date.now() + 5_000
+    while (modelUpdateRequests.length === updatesBefore && Date.now() < updateDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.deepEqual(modelUpdateRequests.at(-1), {
+      path: '/preview/api/sessions/embedded%2Fchat/model',
+      body: { model: 'sticky' },
+    })
+    await chatFrame.waitForSelector('[data-model-selector-popup="true"]', { hidden: true })
+
+    await modelButton.click()
+    const reopenedFilter = await chatFrame.waitForSelector('input[aria-label="Filter models"]')
+    await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    assert.equal(await reopenedFilter.evaluate((input) => input.value), '')
+    assert.equal(await chatFrame.$$eval('button[title="leaf/model-a"], button[title="leaf/model-b"], button[title="sticky"], button[title="route"]', (buttons) => buttons.length), 4)
+    const reopenedConfigure = await chatFrame.waitForSelector('button[aria-label="Configure models"]')
+    await reopenedConfigure.click()
     await hostPage.waitForFunction(() => window.embedMessages.some((message) => message?.type === 'open-setup'))
     const openSetupMessage = await hostPage.evaluate(() => window.embedMessages.find((message) => message?.type === 'open-setup'))
     assert.deepEqual(openSetupMessage, {
@@ -559,5 +642,27 @@ test('embedded Chat requests focused Models Setup and embedded Setup accepts the
     await setupFrame.waitForFunction(() => !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]'), { timeout: 15_000 })
   } finally {
     await hostPage.close()
+  }
+})
+
+test('normal Chat keeps the icon-only model settings callback and singleton Setup focus', async () => {
+  const normalPage = await browser.newPage()
+  await attachRequestMocks(normalPage)
+  try {
+    await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
+    const modelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    await modelButton.click()
+    await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    const configure = await normalPage.waitForSelector('button[aria-label="Configure models"]')
+    assert.equal((await configure.evaluate((button) => button.textContent || '')).trim(), '')
+    await configure.click()
+    await normalPage.waitForSelector('[data-tab-id="system:setup"]', { timeout: 15_000 })
+    await normalPage.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
+    await normalPage.waitForFunction(() => (
+      !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
+    ), { timeout: 15_000 })
+    assert.equal(await normalPage.$$eval('[data-tab-id="system:setup"]', (tabs) => tabs.length), 1)
+  } finally {
+    await normalPage.close()
   }
 })

@@ -9,6 +9,7 @@ import {
   type SlashCommandOption,
   type SlashCommandSuggestion,
 } from './chatShared'
+import { filterModelOptions, formatModelLabel } from './modelFilter'
 
 export type ModelOption = {
   key: string
@@ -68,10 +69,6 @@ function persistDraft(sessionId: string, value: string) {
   }
 }
 
-function formatModelLabel(option: ModelOption, defaultModelKey?: string) {
-  return `${option.label}${option.key === defaultModelKey || option.isDefault ? ' · default' : ''}`
-}
-
 function ModelSelector({
   options,
   currentModelKey,
@@ -102,28 +99,36 @@ function ModelSelector({
   onOpenModelSettings: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [filterQuery, setFilterQuery] = useState('')
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({})
   const rootRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const popupRef = useRef<HTMLDivElement | null>(null)
+  const filterInputRef = useRef<HTMLInputElement | null>(null)
+  const filterComposingRef = useRef(false)
   const wasOpenRef = useRef(false)
   const currentIsDefault = !sessionModel
   const childFollows = !childModelDefault
+  const filteredOptions = useMemo(
+    () => filterModelOptions(options, filterQuery, defaultModelKey),
+    [defaultModelKey, filterQuery, options],
+  )
 
   const toggleOpen = useCallback(() => {
-    setOpen((current) => {
-      const next = !current
-      if (next) {
-        void onRefreshModels()
-      }
-      return next
-    })
-  }, [onRefreshModels])
+    if (open) {
+      setOpen(false)
+      return
+    }
+    setFilterQuery('')
+    filterComposingRef.current = false
+    setOpen(true)
+    void onRefreshModels()
+  }, [onRefreshModels, open])
 
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
-    const width = Math.min(420, Math.max(320, Math.min(window.innerWidth - 16, rect.width + 150)))
+    const width = Math.min(420, Math.max(0, window.innerWidth - 16), Math.max(320, rect.width + 150))
     const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
     const preferredMaxHeight = Math.min(360, Math.max(220, window.innerHeight - 24))
     const spaceAbove = Math.max(0, rect.top - 12)
@@ -188,7 +193,7 @@ function ModelSelector({
     let focusFrame = 0
     if (open) {
       focusFrame = requestAnimationFrame(() => {
-        popupRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+        filterInputRef.current?.focus()
       })
     } else if (wasOpenRef.current) {
       buttonRef.current?.focus()
@@ -208,6 +213,15 @@ function ModelSelector({
     if (busy) return
     void onChangeChildModel(model).catch(() => {})
   }, [busy, onChangeChildModel])
+
+  const handleFilterKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return
+    if (filterComposingRef.current || event.nativeEvent.isComposing) return
+    if (busy || filteredOptions.length !== 1) return
+    event.preventDefault()
+    applyCurrentModel(filteredOptions[0].key)
+    setOpen(false)
+  }, [applyCurrentModel, busy, filteredOptions])
 
   const renderCheckbox = (checked: boolean, label: string) => (
     <span
@@ -299,7 +313,7 @@ function ModelSelector({
               childChecked: childFollows,
               defaultRow: true,
             })}
-            {options.map((option) => renderRow({
+            {filteredOptions.map((option) => renderRow({
               key: option.key,
               label: formatModelLabel(option, defaultModelKey),
               title: option.key,
@@ -308,18 +322,31 @@ function ModelSelector({
             }))}
           </div>
           {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
-          <div className="border-t border-gray-200 p-1.5 dark:border-gray-700">
+          <div className="flex min-w-0 items-center gap-1.5 border-t border-gray-200 p-1.5 dark:border-gray-700">
             <button
               type="button"
               onClick={() => {
                 setOpen(false)
                 onOpenModelSettings()
               }}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
+              aria-label="Configure models"
+              title="Configure models"
             >
-              <Settings className="h-3.5 w-3.5" />
-              Configure models…
+              <Settings aria-hidden="true" className="h-3.5 w-3.5" />
             </button>
+            <input
+              ref={filterInputRef}
+              type="search"
+              value={filterQuery}
+              onChange={(event) => setFilterQuery(event.target.value)}
+              onKeyDown={handleFilterKeyDown}
+              onCompositionStart={() => { filterComposingRef.current = true }}
+              onCompositionEnd={() => { filterComposingRef.current = false }}
+              aria-label="Filter models"
+              placeholder="Filter models"
+              className="h-8 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 text-xs text-gray-800 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:placeholder:text-gray-500"
+            />
           </div>
         </div>,
         document.body,

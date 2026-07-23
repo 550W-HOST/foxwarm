@@ -9,6 +9,7 @@
     "test:setup-models": "node --test test/setupModels.test.mjs",
     "test:config-editor": "node --test test/configEditor.test.mjs",
     "test:model-options": "node --test test/modelOptionsLoader.test.mjs",
+    "test:model-filter": "node --test test/modelFilter.test.mjs",
     "test:setup-models-e2e": "node --test test/setupModels.e2e.mjs",
     "test:theme-e2e": "node --test test/themeMarkdownStyles.e2e.mjs",
     "test:message-overflow-e2e": "node --test test/messageOverflow.e2e.mjs",

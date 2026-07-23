@@ -104,11 +104,14 @@ test('model popup refreshes models and opens the singleton Setup models editor',
   await page.waitForFunction(() => document.activeElement?.matches('button[aria-haspopup="dialog"]'))
   await modelButton.click()
   await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
+  await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
   const requestDeadline = Date.now() + 5_000
   while (modelListRequestCount <= previousRequests && Date.now() < requestDeadline) {
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
-  const configureButton = await page.waitForSelector('button::-p-text(Configure models…)', { timeout: 15_000 })
+  const configureButton = await page.waitForSelector('button[aria-label="Configure models"]', { timeout: 15_000 })
+  assert.equal((await configureButton.evaluate((button) => button.textContent || '')).trim(), '')
+  assert.equal(await configureButton.evaluate((button) => button.title), 'Configure models')
   await configureButton.click()
 
   await waitForSystemTab('system:setup', 'Foxwarm Setup')
