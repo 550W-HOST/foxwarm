@@ -12,6 +12,7 @@ Owns reusable cross-package implementations for patch application, file/exec/bro
 - [shared-code-helper-ipc](../units/shared-code-helper-ipc.md) — terminal-scoped helper executable and capability-authenticated local IPC.
 - [shared-persistent-exec](../units/shared-persistent-exec.md) — foreground/background process lifecycle, logs, registry, recovery, and notifications.
 - [shared-output-truncation](../units/shared-output-truncation.md) — Unicode-safe line-aware excerpts and metadata footer.
+- [shared-config-schemas](../units/shared-config-schemas.md) — pure public-safe App/Models Draft-07 schemas shared by browser consumers.
 
 Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk-json-durability), not duplicated here.
 
@@ -23,6 +24,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 - `PersistentExecManager` and shared timeout/cwd resolution.
 - `truncateOutputForDisplay`.
 - `formatToolResponsePayload`, `formatStructuredValue`, token estimation, and small WebUI rendering helpers.
+- `APP_CONFIG_SCHEMA`, `MODELS_CONFIG_SCHEMA`, and `KNOWN_PROVIDER_TYPES` through the `configSchemas` package export.
 - `executeVscodeNodeService`, `VSCODE_NODE_SERVICE_VERSIONS`.
 - `CodeHelperIpcServer` and fixed open/add request types.
 

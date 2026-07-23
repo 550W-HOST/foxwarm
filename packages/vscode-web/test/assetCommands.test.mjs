@@ -25,6 +25,23 @@ test('root exposes optional Code build and download commands outside normal buil
   assert.equal(codePackage.scripts['build:code'], 'node scripts/build-code-docker.mjs')
   assert.equal(codePackage.scripts['build:code:local'], 'node scripts/build-code-oss.mjs')
   assert.equal(codePackage.scripts['download:code'], 'node scripts/prepare-assets.mjs')
+  assert.equal(codePackage.scripts['prepare:yaml-extension'], 'node scripts/prepare-yaml-extension.mjs')
+})
+
+test('Red Hat YAML Web extension has a stable Open VSX digest and reviewed MIT notices', async () => {
+  const pin = await readJson(path.join(packageRoot, 'yaml-extension-version.json'))
+  assert.equal(pin.extensionId, 'redhat.vscode-yaml')
+  assert.equal(pin.version, '1.24.0')
+  assert.equal(pin.license, 'MIT')
+  assert.match(pin.artifact, /^https:\/\/open-vsx\.org\/api\/redhat\/vscode-yaml\/1\.24\.0\/file\//)
+  assert.match(pin.sha256, /^[0-9a-f]{64}$/)
+  assert.doesNotMatch(pin.artifact, /marketplace\.visualstudio\.com/)
+  assert.match(await readFile(path.join(packageRoot, pin.licenseFile), 'utf8'), /MIT License/)
+  assert.match(await readFile(path.join(packageRoot, pin.noticesFile), 'utf8'), /THIRD-PARTY SOFTWARE NOTICES/)
+
+  const help = await execFileAsync(process.execPath, [path.join(packageRoot, 'scripts/prepare-yaml-extension.mjs'), '--help'])
+  assert.match(help.stdout, /SHA-256 verifies/)
+  assert.match(help.stdout, /redhat\.vscode-yaml@1\.24\.0/)
 })
 
 test('Code preparation commands document pinned, explicit behavior', async () => {
@@ -46,6 +63,8 @@ test('Code preparation commands document pinned, explicit behavior', async () =>
 
 test('source build uses the official standalone web packaging task and verifies its output', async () => {
   const source = await readFile(path.join(packageRoot, 'scripts/build-code-oss.mjs'), 'utf8')
+  const downloadSource = await readFile(path.join(packageRoot, 'scripts/prepare-assets.mjs'), 'utf8')
+  const yamlSource = await readFile(path.join(packageRoot, 'scripts/yaml-extension-assets.mjs'), 'utf8')
   const dockerWrapper = await readFile(path.join(packageRoot, 'scripts/build-code-docker.mjs'), 'utf8')
   const builderDockerfile = await readFile(path.join(packageRoot, 'Dockerfile.code-oss'), 'utf8')
   const runtimeDockerfile = await readFile(path.join(repoRoot, 'Dockerfile'), 'utf8')
@@ -56,6 +75,12 @@ test('source build uses the official standalone web packaging task and verifies 
   assert.match(source, /vscode-web-min-ci/)
   assert.match(source, /workbench\.web\.main\.internal\.js/)
   assert.match(source, /product\.licenseName !== 'MIT'/)
+  assert.match(source, /prepareYamlExtension/)
+  assert.match(downloadSource, /prepareYamlExtension/)
+  assert.match(yamlSource, /createHash\('sha256'\)/)
+  assert.match(yamlSource, /manifest\.browser !== '\.\/dist\/extension-web'/)
+  assert.match(yamlSource, /honor-effective-telemetry-default-without-opt-in-prompt/)
+  assert.match(yamlSource, /expected one match/)
   assert.match(dockerWrapper, /Dockerfile\.code-oss/)
   assert.match(dockerWrapper, /process\.getuid/)
   assert.match(builderDockerfile, /^FROM node:24\.17\.0-bookworm/m)

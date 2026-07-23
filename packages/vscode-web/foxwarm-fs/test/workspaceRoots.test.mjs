@@ -12,6 +12,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
 const require = createRequire(import.meta.url);
 const {
   isExactWorkspaceRoot,
+  normalizeConfigFilesResponse,
   normalizeWorkspaceRootsResponse,
 } = require('../dist/extension.js');
 
@@ -49,6 +50,33 @@ test('same app/data path has one deterministic combined workspace name', () => {
   assert.equal(roots.app.path, roots.data.path);
   assert.equal(roots.app.name, 'Foxwarm App & Data');
   assert.equal(roots.data.name, 'Foxwarm App & Data');
+});
+
+test('normalizes authoritative master config files and rejects remote or relative descriptors', () => {
+  assert.deepEqual(normalizeConfigFilesResponse({
+    version: 1,
+    configFiles: {
+      app: { nodeId: 'master', path: '/data/state/./config.yaml' },
+      models: { nodeId: 'master', path: '/data/state/models.yaml' },
+    },
+  }), {
+    app: { kind: 'app', nodeId: 'master', path: '/data/state/config.yaml' },
+    models: { kind: 'models', nodeId: 'master', path: '/data/state/models.yaml' },
+  });
+  assert.throws(() => normalizeConfigFilesResponse({
+    version: 1,
+    configFiles: {
+      app: { nodeId: 'worker-1', path: '/data/state/config.yaml' },
+      models: { nodeId: 'master', path: '/data/state/models.yaml' },
+    },
+  }), /must use the master node/);
+  assert.throws(() => normalizeConfigFilesResponse({
+    version: 1,
+    configFiles: {
+      app: { nodeId: 'master', path: 'config.yaml' },
+      models: { nodeId: 'master', path: '/data/state/models.yaml' },
+    },
+  }), /absolute POSIX/);
 });
 
 test('rejects remote, relative, and malformed workspace-root responses', () => {

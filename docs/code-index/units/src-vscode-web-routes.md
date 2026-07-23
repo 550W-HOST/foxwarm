@@ -18,7 +18,7 @@ Cross-module behavior: [Code integration](../threads/code-integration.md).
 
 - `GET /vscode-web` / trailing slash — workbench bootstrap or actionable non-cacheable 503 when required assets are absent.
 - `/vscode-web/static/*` — prepared official workbench assets under normal WebUI authentication.
-- `/vscode-web/extensions/foxwarm-{fs,terminal,scm,webui}/*` — bundled browser-extension assets under normal authentication.
+- `/vscode-web/extensions/foxwarm-{fs,terminal,scm,webui}/*` and optional `/vscode-web/extensions/redhat-vscode-yaml/*` — bundled browser-extension assets under normal authentication.
 - `/vscode-web/webview/<process-capability>/...` — narrowly scoped official `pre/` webview bootstrap; capability URL is supplied only to an authenticated workbench.
 
 Required official asset files are loaded from `FOXWARM_VSCODE_WEB_ASSET_DIR` or the ignored package asset directory. `FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN`, `FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI`, and `FOXWARM_VSCODE_WEB_WORKSPACE_PATH` select current deployment behavior.
@@ -27,7 +27,7 @@ Required official asset files are loaded from `FOXWARM_VSCODE_WEB_ASSET_DIR` or 
 
 Authenticated routes under `/api/vscode-web/fs` implement stat, directory read, file read/write, directory create, delete, and rename against real absolute POSIX paths. File read/write cap is 50 MiB.
 
-`GET /api/vscode-web/fs/workspace-roots` returns only the fixed versioned master app/data root descriptors used by the filesystem extension commands. It is non-cacheable and contains no configuration document or credential.
+`GET /api/vscode-web/fs/workspace-roots` returns fixed versioned master app/data root descriptors plus exact active app/models file descriptors. It is non-cacheable and contains no configuration document or credential.
 
 `master` executes locally. Other node IDs require an online node advertising compatible `vscode-fs`; absent/old/offline nodes return explicit service errors.
 
@@ -46,6 +46,7 @@ Master Git uses argument-array process spawning. Remote status/content use `vsco
 - Uses `foxwarm://node+<node-id>/<absolute-path>` folder URIs.
 - Direct launches may open one folder; embedded and commit launches use a persistent `foxwarm.code-workspace`.
 - The bootstrap installs fixed browser extensions as additional builtins.
+- The persistent workspace supplies opt-out defaults for Red Hat telemetry, SchemaStore, Kubernetes CRD fetching, and extension recommendations while preserving explicit values already stored in that workspace.
 - A versioned same-origin parent-source-checked request/ack bridge accepts only fixed add-folder/open-file/open-commit requests.
 - Runtime URLs are derived from the actual browser path so reverse-proxy prefixes survive even when a stripping proxy does not provide `X-Forwarded-Prefix`.
 - Missing individual assets are 404; missing required workbench assets produce the 503 setup page.

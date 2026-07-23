@@ -8,6 +8,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 - [VS Code Web routes](../units/src-vscode-web-routes.md) — workbench/static/webview serving and filesystem/Git APIs.
 - [VS Code Web extensions](../units/vscode-web-extensions.md) — asset preparation, filesystem, terminal, SCM, and Foxwarm WebUI browser extensions.
+- [Shared config schemas](../units/shared-config-schemas.md) — public-safe Draft-07 objects reused by Setup and Code.
 - [WebUI app](../units/webui-app.md) — Code launch planning, persistent iframe host, tool-file actions, commit cards, and dynamic public paths.
 - [shared VS Code node service](../units/shared-vscode-node-service.md) — fixed filesystem/Git service implementation.
 - [terminal router](../units/src-terminal-router.md) — local/remote PTY lifecycle and browser streams.
@@ -19,6 +20,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 - Preferred resources use `foxwarm://node+<nodeId>/<absolute-posix-path>`.
 - Direct new-tab launches can open one folder. Embedded launches use a persistent `foxwarm.code-workspace`, so later folders append without replacing the iframe or losing editor/terminal state.
 - The filesystem extension exposes fixed commands for the authoritative master app and data roots. They add an exact normalized root to the current multi-root workspace, then open Explorer and reveal it; they never derive these roots from a session node or cwd.
+- A pinned MIT Red Hat YAML Web extension consumes the same static config schemas as Setup through a local contributor. Only the authoritative master app/models file URIs match.
 - Main WebUI presents the feature as **Code** while route/package identifiers remain `/vscode-web`.
 
 ## WebUI launch and bridge
@@ -78,6 +80,10 @@ Embedded Code uses one persistent multi-root workspace and persistent iframe. Ne
 ### D-code-fixed-remote-services
 
 Filesystem, Git, PTY, and helper behavior use authenticated fixed versioned services, not model tools or shell credentials.
+
+### D-code-config-schema-assistance
+
+Setup and Code reuse one public-safe build-time source for the Models and App Draft-07 schemas; they do not expose a schema endpoint or configuration values. Code bundles the pinned MIT Red Hat YAML Web extension from a SHA-256-verified Open VSX artifact and registers local schema content through its contributor API. Association is restricted to the exact normalized `foxwarm://node+master/...` URIs for the active app and models files returned by the authoritative fixed server response; remote nodes, arbitrary same filenames, and unrelated YAML do not match. The persistent Foxwarm workspace disables Red Hat telemetry, SchemaStore, Kubernetes CRD fetching, and extension recommendations by default without overwriting explicit values already stored in that workspace. A reviewed fail-closed preparation patch makes the telemetry library treat the effective disabled default as configured; all other vendor files remain unchanged. Diagnostics, hover, and completion are advisory: Setup keeps canonical backend validation, while a direct Code save can bypass those semantic validators. Missing optional YAML assets degrade to a clear extension-host log and do not disable Foxwarm filesystem commands.
 
 ### D-code-master-workspace-roots
 

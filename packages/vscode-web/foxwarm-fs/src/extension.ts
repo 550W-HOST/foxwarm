@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { FoxwarmFileSystemProvider } from './provider';
 import { buildFoxwarmNodeUriString, parseFoxwarmUri } from './foxwarmUri';
 import { normalizeFoxwarmOpenRequest, type FoxwarmOpenRequest } from './openRequest';
+import { registerFoxwarmConfigSchemas } from './configSchemas';
 import {
   isExactWorkspaceRoot,
   normalizeWorkspaceRootsResponse,
@@ -10,7 +11,14 @@ import {
 } from './workspaceRoots';
 export { buildFoxwarmNodeUriString, parseFoxwarmUri } from './foxwarmUri';
 export { normalizeFoxwarmOpenRequest } from './openRequest';
-export { isExactWorkspaceRoot, normalizeWorkspaceRootsResponse } from './workspaceRoots';
+export {
+  FOXWARM_APP_SCHEMA_URI,
+  FOXWARM_MODELS_SCHEMA_URI,
+  getFoxwarmConfigSchemaContent,
+  getFoxwarmConfigSchemaUri,
+  registerFoxwarmConfigSchemas,
+} from './configSchemas';
+export { isExactWorkspaceRoot, normalizeConfigFilesResponse, normalizeWorkspaceRootsResponse } from './workspaceRoots';
 
 async function waitForInitialWorkspaceFolders(): Promise<readonly vscode.WorkspaceFolder[]> {
   const deadline = Date.now() + 15_000;
@@ -244,6 +252,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('foxwarm-fs.addFolderToWorkspace', addExplorerFolderToWorkspace),
     vscode.commands.registerCommand('foxwarm-fs.handleOpenRequest', (request: FoxwarmOpenRequest) => handleOpenRequest(request, provider)),
   );
+  void provider.getConfigFiles()
+    .then((files) => registerFoxwarmConfigSchemas(files))
+    .catch((error) => console.warn(`Foxwarm config schema support could not start: ${error instanceof Error ? error.message : String(error)}`));
   console.log('Foxwarm filesystem provider registered for foxwarm://node+<nodeId>/<absolute-path>.');
 }
 

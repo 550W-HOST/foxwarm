@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { prepareYamlExtension, yamlExtensionDirForWorkbenchOut } from './yaml-extension-assets.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, '..');
@@ -135,6 +136,7 @@ async function main() {
   await fs.rm(outDir, { recursive: true, force: true });
   await fs.mkdir(path.dirname(outDir), { recursive: true });
   await runProcess('mv', [tmpDir, outDir]);
+  await prepareYamlExtension({ outDir: yamlExtensionDirForWorkbenchOut(outDir) });
   console.log(`Prepared VS Code Web assets at ${outDir}`);
 }
 

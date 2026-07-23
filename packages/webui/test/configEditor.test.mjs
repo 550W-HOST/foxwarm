@@ -13,7 +13,7 @@ const tempDir = await mkdtemp(path.join(os.tmpdir(), 'foxwarm-config-editor-test
 async function loadModule(entry, outfile) {
   const output = path.join(tempDir, outfile)
   await build({
-    entryPoints: [path.join(webuiRoot, entry)],
+    entryPoints: [path.isAbsolute(entry) ? entry : path.join(webuiRoot, entry)],
     outfile: output,
     bundle: true,
     platform: 'node',
@@ -23,6 +23,7 @@ async function loadModule(entry, outfile) {
 }
 
 const schemas = await loadModule('src/yamlConfigSchemas.ts', 'schemas.cjs')
+const sharedSchemas = await loadModule(path.resolve(webuiRoot, '../shared/src/configSchemas.ts'), 'shared-schemas.cjs')
 const completions = await loadModule('src/modelsYamlCompletions.ts', 'completions.cjs')
 const validateModelsSchema = new Ajv({ allErrors: true, strict: false }).compile(schemas.MODELS_CONFIG_SCHEMA)
 
@@ -39,6 +40,15 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties.additionalProperties, true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.paths.properties, 'modelsConfigPath'), false)
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
+})
+
+test('WebUI schema wrappers reuse the shared canonical schema objects without a duplicate copy', async () => {
+  assert.deepEqual(schemas.MODELS_CONFIG_SCHEMA, sharedSchemas.MODELS_CONFIG_SCHEMA)
+  assert.deepEqual(schemas.APP_CONFIG_SCHEMA, sharedSchemas.APP_CONFIG_SCHEMA)
+  assert.deepEqual([...schemas.KNOWN_PROVIDER_TYPES], [...sharedSchemas.KNOWN_PROVIDER_TYPES])
+  const wrapperSource = await readFile(path.join(webuiRoot, 'src/yamlConfigSchemas.ts'), 'utf8')
+  assert.match(wrapperSource, /shared\/src\/configSchemas/)
+  assert.doesNotMatch(wrapperSource, /Foxwarm models configuration|providerEntry|channelEntry/)
 })
 
 test('models schema deliberately accepts current, legacy, custom, and backend-tolerant fixtures', () => {

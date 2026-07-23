@@ -1,6 +1,7 @@
 # Unit: WebUI editor
 
 Files: packages/webui/src/components/SimpleCodeEditor.tsx, packages/webui/src/components/DiffPreview.tsx, packages/webui/src/yamlMonacoSupport.ts, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/modelsYamlCompletions.ts, packages/webui/src/workers/yaml.worker.ts, packages/webui/test/configEditor.test.mjs
+Secondary files: packages/shared/src/configSchemas.ts
 
 ## Purpose
 
@@ -10,14 +11,14 @@ Provides reusable code editing and diff visualization components for the WebUI. 
 
 - `SimpleCodeEditor` — Monaco wrapper with explicit model URIs, focus requests, read-only/language/value synchronization, and advisory marker state.
 - `loadYamlMonacoSupport` — lazy singleton that installs Monaco editor/YAML workers, registers static schemas, and owns current-document model completions.
-- `MODELS_CONFIG_SCHEMA`, `APP_CONFIG_SCHEMA`, and their distinct in-memory model URIs.
+- Shared `MODELS_CONFIG_SCHEMA` / `APP_CONFIG_SCHEMA` objects plus WebUI-local distinct in-memory model URIs and file-match wrappers.
 - `parseModelsYamlSuggestions` and `createModelsYamlCompletionProvider` — derive model/target completions from unsaved YAML.
 - `DiffPreview` — memoized unified/split diff visualization.
 
 ## Behavior
 
 - Monaco, `monaco-yaml`, the generic editor worker, and the YAML language worker remain outside the initial application bundle and load on first editor use.
-- The models and app-config editors use distinct stable model URIs and distinct embedded static schemas. Schema loading never calls a backend schema endpoint and remote schema requests are disabled.
+- The models and app-config editors use distinct stable model URIs and shared static schema objects; only model URI/file-match wrappers remain WebUI-local. Schema loading never calls a backend schema endpoint and remote schema requests are disabled.
 - Static schemas document current fields, suggest known provider/channel values while permitting custom extensions, mark retained legacy spellings as deprecated, and intentionally allow unknown properties.
 - Diagnostics, completion, and hover are advisory. Formatting is disabled so editor assistance does not rewrite configuration text, and backend validation remains the save authority.
 - The models root `default` is optional like the backend loader. Virtual conditionals honor current `providerType` precedence and apply the same target/forbidden-field diagnostics when only legacy `provider` selects a strategy. `extraHeaders` values remain backend-tolerant.
@@ -30,7 +31,7 @@ Provides reusable code editing and diff visualization components for the WebUI. 
 ## Integration
 
 - Setup owns the two stable YAML models and supplies a transient focus request when Chat opens model settings.
-- `configEditor.test.mjs` validates current, legacy, custom, and backend-tolerant fixtures with Ajv, plus schema boundaries, suggestions, last-valid retention, and the worker-compatible Monaco pin. Setup browser tests exercise normal schema/completion behavior against the production worker bundle and verify that a rejected lazy support import falls back to a savable textarea.
+- `configEditor.test.mjs` validates shared-import parity, current/legacy/custom/backend-tolerant fixtures with Ajv, schema boundaries, suggestions, last-valid retention, and the worker-compatible Monaco pin. Setup browser tests exercise normal schema/completion behavior against the production worker bundle and verify that a rejected lazy support import falls back to a savable textarea.
 - The former full-page WebUI file editor was removed with the custom workspace feature; Code remains the general browser editing integration.
 
 ## Design decisions

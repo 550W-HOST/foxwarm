@@ -10,3 +10,4 @@ export * from './webuiToolRendering';
 export * from './outputTruncation';
 export * from './gitCommitDetails';
 export * from './applyPatch';
+export * from './configSchemas';

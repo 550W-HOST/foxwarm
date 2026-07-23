@@ -43,6 +43,10 @@ let rootsPayload = {
     app: { nodeId: 'master', path: '/srv/foxwarm' },
     data: { nodeId: 'master', path: '/var/lib/foxwarm' },
   },
+  configFiles: {
+    app: { nodeId: 'master', path: '/var/lib/foxwarm/state/config.yaml' },
+    models: { nodeId: 'master', path: '/var/lib/foxwarm/state/models.yaml' },
+  },
 };
 
 const vscodeMock = {
@@ -80,6 +84,7 @@ const vscodeMock = {
     } },
     textDocuments: [],
   },
+  extensions: { getExtension: () => undefined },
   commands: {
     registerCommand: (id, handler) => { commands.set(id, handler); return { dispose() {} }; },
     executeCommand: async (id, ...args) => { executed.push({ id, args }); },

@@ -1,6 +1,6 @@
 # Unit: VS Code Web package and extensions
 
-Files: packages/vscode-web/README.md, packages/vscode-web/package.json, packages/vscode-web/code-oss-version.json, packages/vscode-web/Dockerfile.code-oss, packages/vscode-web/scripts/build-code-docker.mjs, packages/vscode-web/scripts/build-code-oss.mjs, packages/vscode-web/scripts/prepare-assets.mjs, packages/vscode-web/test/assetCommands.test.mjs, packages/vscode-web/foxwarm-fs/, packages/vscode-web/foxwarm-terminal/, packages/vscode-web/foxwarm-scm/, packages/vscode-web/foxwarm-webui/, skills/webui-markers/SKILL.md
+Files: packages/vscode-web/README.md, packages/vscode-web/package.json, packages/vscode-web/code-oss-version.json, packages/vscode-web/yaml-extension-version.json, packages/vscode-web/Dockerfile.code-oss, packages/vscode-web/scripts/build-code-docker.mjs, packages/vscode-web/scripts/build-code-oss.mjs, packages/vscode-web/scripts/prepare-assets.mjs, packages/vscode-web/scripts/prepare-yaml-extension.mjs, packages/vscode-web/scripts/yaml-extension-assets.mjs, packages/vscode-web/test/assetCommands.test.mjs, packages/vscode-web/test/yamlSchema.e2e.mjs, packages/vscode-web/foxwarm-fs/, packages/vscode-web/foxwarm-terminal/, packages/vscode-web/foxwarm-scm/, packages/vscode-web/foxwarm-webui/, skills/webui-markers/SKILL.md
 Secondary files: package.json, .gitignore
 
 ## Purpose
@@ -16,6 +16,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - `npm run download:code` fetches the pinned Microsoft `web-standalone` product build for licensed/internal use; its product license is distinct from Code - OSS MIT.
 - Package-local `prepare:assets` remains an alias of pinned download.
 - Workbench assets and source/dependency caches are intentionally absent from Git and ordinary `npm run build`.
+- Both workbench preparation paths also download, SHA-256 verify, license-check, and extract the pinned stable `redhat.vscode-yaml` Web extension from Open VSX. The reviewed MIT license and notices are tracked; the artifact remains in ignored optional assets. Preparation applies only a fail-closed exact bundle patch so the telemetry library recognizes the effective disabled default; all other vendor files remain byte-for-byte unchanged.
 
 ## `foxwarm-fs`
 
@@ -24,6 +25,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Implements stat/read-directory/read-file/write-file/create-directory/delete/rename through authenticated routes.
 - Contributes Add Folder and fixed hidden add-folder/open-file bridge handling.
 - Contributes command-palette actions for the authoritative master app and data roots. They use the fixed authenticated workspace-roots response, add or relabel only the exact URI without replacing unrelated roots, assign stable labels, and open/reveal the root in Explorer.
+- Activates the optional Red Hat YAML contributor API and supplies bundled shared App/Models schemas only for exact authoritative master config URIs. Missing YAML assets or APIs log and leave filesystem commands active.
 - The supported path is Foxwarm's persistent multi-root workbench. The commands wait for its ordinary folder-change event and keep no global/workspace reload intent; direct bare empty/single-folder launches do not guarantee focus after a workbench reload.
 - File watching is a no-op except immediate local events for provider writes; search providers are absent.
 
@@ -63,6 +65,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Official browser extension API (`vscode`).
 - Shared VS Code node-service/Git details modules.
 - WebUI fixed bridges and backend route/terminal services.
+- Shared pure config schemas and the pinned MIT Red Hat YAML Web extension.
 - esbuild for the four browser-extension bundles.
 
 ## Compatibility
@@ -78,3 +81,4 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Read-only SCM/commit boundary: [D-code-read-only-scm](../threads/code-integration.md#d-code-read-only-scm).
 - Commit marker interaction: [D-code-model-commit-marker](../threads/code-integration.md#d-code-model-commit-marker).
 - Master app/data folder commands: [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots).
+- Config schema reuse and exact association: [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).
