@@ -23,6 +23,8 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Preferred URI: `foxwarm://node+<nodeId>/<absolute-path>`; reads the earlier `foxwarm://node/<nodeId>/...` form and writes current shape.
 - Implements stat/read-directory/read-file/write-file/create-directory/delete/rename through authenticated routes.
 - Contributes Add Folder and fixed hidden add-folder/open-file bridge handling.
+- Contributes command-palette actions for the authoritative master app and data roots. They use the fixed authenticated workspace-roots response, add or relabel only the exact URI without replacing unrelated roots, assign stable labels, and open/reveal the root in Explorer.
+- The supported path is Foxwarm's persistent multi-root workbench. The commands wait for its ordinary folder-change event and keep no global/workspace reload intent; direct bare empty/single-folder launches do not guarantee focus after a workbench reload.
 - File watching is a no-op except immediate local events for provider writes; search providers are absent.
 
 ## `foxwarm-terminal`
@@ -75,3 +77,4 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Terminal detach/reattach/kill lifecycle: [D-code-terminal-lifecycle](../threads/code-integration.md#d-code-terminal-lifecycle).
 - Read-only SCM/commit boundary: [D-code-read-only-scm](../threads/code-integration.md#d-code-read-only-scm).
 - Commit marker interaction: [D-code-model-commit-marker](../threads/code-integration.md#d-code-model-commit-marker).
+- Master app/data folder commands: [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots).

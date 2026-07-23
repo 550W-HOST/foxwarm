@@ -75,6 +75,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - Structured setup accepts virtual target/failover fields; raw virtual YAML remains byte-preserving after validation.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.
 - Template models config is a read fallback only and logs once; it is not silently copied into mutable state.
+- Code's fixed workspace-root response consumes the exported `BASE_DIR` and resolved `DATA_ROOT_DIR`; it does not introduce a second data-root resolver. See [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots).
 
 ## Compatibility
 

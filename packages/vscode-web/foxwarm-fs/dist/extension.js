@@ -32,7 +32,9 @@ __export(extension_exports, {
   activate: () => activate,
   buildFoxwarmNodeUriString: () => buildFoxwarmNodeUriString,
   deactivate: () => deactivate,
+  isExactWorkspaceRoot: () => isExactWorkspaceRoot,
   normalizeFoxwarmOpenRequest: () => normalizeFoxwarmOpenRequest,
+  normalizeWorkspaceRootsResponse: () => normalizeWorkspaceRootsResponse,
   parseFoxwarmUri: () => parseFoxwarmUri
 });
 module.exports = __toCommonJS(extension_exports);
@@ -94,6 +96,115 @@ function buildFoxwarmNodeUriString(nodeId, realPath) {
   const encodedNodeId = encodeURIComponent(nodeId);
   const encodedPath = realPath.split("/").map((segment, index) => index === 0 ? "" : encodeURIComponent(segment)).join("/");
   return `foxwarm://node+${encodedNodeId}${encodedPath}`;
+}
+
+// src/openRequest.ts
+function normalizeFoxwarmAbsolutePath(value) {
+  if (typeof value !== "string") {
+    throw new Error("Foxwarm path must be a string.");
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/") || trimmed.includes("\0")) {
+    throw new Error("Foxwarm path must be an absolute POSIX path.");
+  }
+  const segments = [];
+  for (const segment of trimmed.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
+}
+function normalizeLine(value, label) {
+  if (value === void 0 || value === null) return void 0;
+  if (!Number.isInteger(value) || Number(value) < 1) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return Number(value);
+}
+function normalizeFoxwarmOpenRequest(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Foxwarm open request.");
+  }
+  const request = value;
+  if (typeof request.nodeId !== "string" || !/^[A-Za-z0-9._-]+$/.test(request.nodeId)) {
+    throw new Error("Foxwarm node id is invalid.");
+  }
+  const nodeId = request.nodeId;
+  const path = normalizeFoxwarmAbsolutePath(request.path);
+  if (request.kind === "addFolder") {
+    return { kind: "addFolder", nodeId, path };
+  }
+  if (request.kind === "openFile") {
+    const startLine = normalizeLine(request.startLine, "startLine");
+    const startColumn = normalizeLine(request.startColumn, "startColumn");
+    const endLine = normalizeLine(request.endLine, "endLine");
+    if (startColumn !== void 0 && startLine === void 0) {
+      throw new Error("startColumn requires startLine.");
+    }
+    if (startLine !== void 0 && endLine !== void 0 && endLine < startLine) {
+      throw new Error("endLine must not be before startLine.");
+    }
+    return {
+      kind: "openFile",
+      nodeId,
+      path,
+      ...startLine !== void 0 ? { startLine } : {},
+      ...startColumn !== void 0 ? { startColumn } : {},
+      ...endLine !== void 0 ? { endLine } : {}
+    };
+  }
+  throw new Error("Unsupported Foxwarm open request kind.");
+}
+
+// src/workspaceRoots.ts
+function normalizeRoot(value, kind) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Foxwarm ${kind} workspace root is missing.`);
+  }
+  const root = value;
+  if (root.nodeId !== "master") {
+    throw new Error(`Foxwarm ${kind} workspace root must use the master node.`);
+  }
+  return {
+    kind,
+    nodeId: "master",
+    path: normalizeFoxwarmAbsolutePath(root.path)
+  };
+}
+function normalizeWorkspaceRootsResponse(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Foxwarm workspace roots response.");
+  }
+  const response = value;
+  if (response.version !== 1 || !response.roots || typeof response.roots !== "object" || Array.isArray(response.roots)) {
+    throw new Error("Unsupported Foxwarm workspace roots response.");
+  }
+  const roots = response.roots;
+  const app = normalizeRoot(roots.app, "app");
+  const data = normalizeRoot(roots.data, "data");
+  if (app.path === data.path) {
+    const sharedName = "Foxwarm App & Data";
+    return {
+      app: { ...app, name: sharedName },
+      data: { ...data, name: sharedName }
+    };
+  }
+  return {
+    app: { ...app, name: "Foxwarm App" },
+    data: { ...data, name: "Foxwarm Data" }
+  };
+}
+function isExactWorkspaceRoot(uri, target) {
+  try {
+    const parsed = parseFoxwarmUri(uri);
+    return parsed.nodeId === target.nodeId && normalizeFoxwarmAbsolutePath(parsed.realPath) === normalizeFoxwarmAbsolutePath(target.path);
+  } catch {
+    return false;
+  }
 }
 
 // src/provider.ts
@@ -205,6 +316,19 @@ var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
   notifyExternalChange(uri) {
     this.fireSoon({ type: vscode.FileChangeType.Changed, uri });
   }
+  async getWorkspaceRoots() {
+    const response = await fetch(`${this.apiBase}/workspace-roots`, { credentials: "include" });
+    if (!response.ok) {
+      let message = `Foxwarm workspace root request failed (${response.status}).`;
+      try {
+        const payload = await response.json();
+        if (typeof payload.error === "string" && payload.error) message = payload.error;
+      } catch {
+      }
+      throw new Error(message);
+    }
+    return normalizeWorkspaceRootsResponse(await response.json());
+  }
   async fetchJson(uri, operation) {
     const response = await this.fetch(uri, operation);
     return response.json();
@@ -241,68 +365,6 @@ var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
     this.changeEmitter.fire(events);
   }
 };
-
-// src/openRequest.ts
-function normalizeFoxwarmAbsolutePath(value) {
-  if (typeof value !== "string") {
-    throw new Error("Foxwarm path must be a string.");
-  }
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("/") || trimmed.includes("\0")) {
-    throw new Error("Foxwarm path must be an absolute POSIX path.");
-  }
-  const segments = [];
-  for (const segment of trimmed.split("/")) {
-    if (!segment || segment === ".") continue;
-    if (segment === "..") {
-      segments.pop();
-      continue;
-    }
-    segments.push(segment);
-  }
-  return `/${segments.join("/")}`;
-}
-function normalizeLine(value, label) {
-  if (value === void 0 || value === null) return void 0;
-  if (!Number.isInteger(value) || Number(value) < 1) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-  return Number(value);
-}
-function normalizeFoxwarmOpenRequest(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Invalid Foxwarm open request.");
-  }
-  const request = value;
-  if (typeof request.nodeId !== "string" || !/^[A-Za-z0-9._-]+$/.test(request.nodeId)) {
-    throw new Error("Foxwarm node id is invalid.");
-  }
-  const nodeId = request.nodeId;
-  const path = normalizeFoxwarmAbsolutePath(request.path);
-  if (request.kind === "addFolder") {
-    return { kind: "addFolder", nodeId, path };
-  }
-  if (request.kind === "openFile") {
-    const startLine = normalizeLine(request.startLine, "startLine");
-    const startColumn = normalizeLine(request.startColumn, "startColumn");
-    const endLine = normalizeLine(request.endLine, "endLine");
-    if (startColumn !== void 0 && startLine === void 0) {
-      throw new Error("startColumn requires startLine.");
-    }
-    if (startLine !== void 0 && endLine !== void 0 && endLine < startLine) {
-      throw new Error("endLine must not be before startLine.");
-    }
-    return {
-      kind: "openFile",
-      nodeId,
-      path,
-      ...startLine !== void 0 ? { startLine } : {},
-      ...startColumn !== void 0 ? { startColumn } : {},
-      ...endLine !== void 0 ? { endLine } : {}
-    };
-  }
-  throw new Error("Unsupported Foxwarm open request kind.");
-}
 
 // src/extension.ts
 async function waitForInitialWorkspaceFolders() {
@@ -382,6 +444,61 @@ async function addFoxwarmFolder(request) {
   await folderAdded;
   return { status: "added", uri: uriString };
 }
+async function waitForManagedWorkspaceUpdate(context, target, start, deleteCount, uri) {
+  let settled = false;
+  let listener;
+  let finish = () => {
+  };
+  const changed = new Promise((resolve) => {
+    finish = (value) => {
+      if (settled) return;
+      settled = true;
+      listener?.dispose();
+      resolve(value);
+    };
+    listener = vscode2.workspace.onDidChangeWorkspaceFolders(() => {
+      const folder = vscode2.workspace.workspaceFolders?.find((candidate) => candidate.name === target.name && isExactWorkspaceRoot(candidate.uri, target));
+      if (folder) finish(folder.uri);
+    });
+  });
+  context.subscriptions.push(listener, { dispose: () => finish(void 0) });
+  const accepted = vscode2.workspace.updateWorkspaceFolders(start, deleteCount, { uri, name: target.name });
+  if (!accepted) {
+    finish(void 0);
+    throw new Error(`Could not update ${target.name} in the current workspace.`);
+  }
+  return changed;
+}
+async function revealWorkspaceRoot(uri) {
+  await vscode2.commands.executeCommand("workbench.view.explorer");
+  await vscode2.commands.executeCommand("revealInExplorer", uri);
+}
+async function openManagedWorkspaceRoot(kind, provider, context) {
+  const target = (await provider.getWorkspaceRoots())[kind];
+  const uri = vscode2.Uri.parse(buildFoxwarmNodeUriString(target.nodeId, target.path));
+  const stat = await vscode2.workspace.fs.stat(uri);
+  if ((stat.type & vscode2.FileType.Directory) === 0) {
+    throw new Error(`${target.name} is not a directory: ${target.path}`);
+  }
+  const folders = vscode2.workspace.workspaceFolders ?? [];
+  const existingIndex = folders.findIndex((folder) => isExactWorkspaceRoot(folder.uri, target));
+  const existing = existingIndex >= 0 ? folders[existingIndex] : void 0;
+  let finalUri = existing?.uri ?? uri;
+  if (existing?.name !== target.name) {
+    finalUri = await waitForManagedWorkspaceUpdate(
+      context,
+      target,
+      existing ? existingIndex : folders.length,
+      existing ? 1 : 0,
+      existing?.uri ?? uri
+    );
+  }
+  if (finalUri) await revealWorkspaceRoot(finalUri);
+  return {
+    status: existing ? "existing" : "added",
+    uri: (finalUri ?? existing?.uri ?? uri).toString(true)
+  };
+}
 async function openFoxwarmFolder() {
   const value = await vscode2.window.showInputBox({
     title: "Open Foxwarm Folder",
@@ -449,6 +566,8 @@ function activate(context) {
       isReadonly: false
     }),
     vscode2.commands.registerCommand("foxwarm-fs.openFolder", openFoxwarmFolder),
+    vscode2.commands.registerCommand("foxwarm-fs.openAppFolder", () => openManagedWorkspaceRoot("app", provider, context)),
+    vscode2.commands.registerCommand("foxwarm-fs.openDataFolder", () => openManagedWorkspaceRoot("data", provider, context)),
     vscode2.commands.registerCommand("foxwarm-fs.addFolderToWorkspace", addExplorerFolderToWorkspace),
     vscode2.commands.registerCommand("foxwarm-fs.handleOpenRequest", (request) => handleOpenRequest(request, provider))
   );

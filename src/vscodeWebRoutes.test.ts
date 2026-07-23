@@ -7,6 +7,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { HttpServer } from './httpServer';
 import { registerVscodeWebRoutes } from './vscodeWebRoutes';
+import { BASE_DIR, DATA_ROOT_DIR } from './config';
 import { nodesManager } from './nodes/manager';
 import { executeVscodeNodeService, serializeVscodeNodeServiceError } from '../packages/shared/dist/vscodeNodeService';
 import type { WebSocket } from 'ws';
@@ -82,6 +83,21 @@ test('VS Code Web route, extension assets, and filesystem API require the WebUI 
     assert.equal(fsWithBearer.status, 200);
     const statPayload = await fsWithBearer.json() as { type?: number };
     assert.equal(statPayload.type, 1);
+
+    const rootsNoAuth = await fetch(`${baseUrl}/api/vscode-web/fs/workspace-roots`);
+    assert.equal(rootsNoAuth.status, 401);
+    const rootsWithCookie = await fetch(`${baseUrl}/api/vscode-web/fs/workspace-roots`, { headers: cookieHeaders() });
+    assert.equal(rootsWithCookie.status, 200);
+    assert.equal(rootsWithCookie.headers.get('cache-control'), 'no-store');
+    const rootsPayload = await rootsWithCookie.json() as Record<string, any>;
+    assert.deepEqual(rootsPayload, {
+      version: 1,
+      roots: {
+        app: { nodeId: 'master', path: BASE_DIR },
+        data: { nodeId: 'master', path: DATA_ROOT_DIR },
+      },
+    });
+    assert.equal(JSON.stringify(rootsPayload).includes(TEST_TOKEN), false);
   });
 });
 

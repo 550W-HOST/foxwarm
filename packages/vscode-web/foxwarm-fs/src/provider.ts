@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { parseFoxwarmUri } from './foxwarmUri';
+import { normalizeWorkspaceRootsResponse, type FoxwarmWorkspaceRootKind, type FoxwarmWorkspaceRoot } from './workspaceRoots';
 
 const API_PREFIX = '/api/vscode-web/fs';
 
@@ -125,6 +126,21 @@ export class FoxwarmFileSystemProvider implements vscode.FileSystemProvider {
 
   notifyExternalChange(uri: vscode.Uri): void {
     this.fireSoon({ type: vscode.FileChangeType.Changed, uri });
+  }
+
+  async getWorkspaceRoots(): Promise<Record<FoxwarmWorkspaceRootKind, FoxwarmWorkspaceRoot>> {
+    const response = await fetch(`${this.apiBase}/workspace-roots`, { credentials: 'include' });
+    if (!response.ok) {
+      let message = `Foxwarm workspace root request failed (${response.status}).`;
+      try {
+        const payload = await response.json() as { error?: unknown };
+        if (typeof payload.error === 'string' && payload.error) message = payload.error;
+      } catch {
+        // Keep the status-based error for non-JSON responses.
+      }
+      throw new Error(message);
+    }
+    return normalizeWorkspaceRootsResponse(await response.json());
   }
 
   private async fetchJson<T>(uri: vscode.Uri, operation: string): Promise<T> {

@@ -18,6 +18,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 - Official workbench assets are optional and excluded from the main WebUI bundle, Git, and ordinary build.
 - Preferred resources use `foxwarm://node+<nodeId>/<absolute-posix-path>`.
 - Direct new-tab launches can open one folder. Embedded launches use a persistent `foxwarm.code-workspace`, so later folders append without replacing the iframe or losing editor/terminal state.
+- The filesystem extension exposes fixed commands for the authoritative master app and data roots. They add an exact normalized root to the current multi-root workspace, then open Explorer and reveal it; they never derive these roots from a session node or cwd.
 - Main WebUI presents the feature as **Code** while route/package identifiers remain `/vscode-web`.
 
 ## WebUI launch and bridge
@@ -77,6 +78,10 @@ Embedded Code uses one persistent multi-root workspace and persistent iframe. Ne
 ### D-code-fixed-remote-services
 
 Filesystem, Git, PTY, and helper behavior use authenticated fixed versioned services, not model tools or shell credentials.
+
+### D-code-master-workspace-roots
+
+Code commands for the Foxwarm app and data folders obtain `BASE_DIR` and the resolved `DATA_ROOT_DIR` from a fixed authenticated Code filesystem response. Both targets always use the master node, regardless of the current workspace, session node, or cwd. In the supported persistent multi-root workbench, commands append rather than replace workspace folders, compare normalized exact URIs for idempotence, reconcile a preexisting exact-root descriptor in place with its final stable label, await the ordinary workspace-folder change, and reveal the root in Explorer. When both runtime roots are the same path, they share one combined workspace folder instead of creating duplicate aliases. No reload-resume state or ownership protocol is used. A direct bare empty/single-folder Code launch may still add the root best-effort, but post-reload Explorer focus is not guaranteed and is outside this command contract.
 
 ### D-code-terminal-lifecycle
 

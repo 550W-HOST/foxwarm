@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import { spawn } from 'child_process';
 import crypto from 'crypto';
 import type { HttpServer } from './httpServer';
-import { BASE_DIR, STATE_DIR } from './config';
+import { BASE_DIR, DATA_ROOT_DIR, STATE_DIR } from './config';
 import { logger } from './common';
 import { nodesManager, NodeServiceRequestError } from './nodes/manager';
 import { normalizeVscodeGitContentRef, readVscodeGitCommitDetails, VscodeGitCommitDetailsError, VSCODE_GIT_COMMIT_SERVICE_VERSION } from '../packages/shared/dist/gitCommitDetails';
@@ -1178,6 +1178,21 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     handler: async (_req, res) => {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.send('<!doctype html><meta charset="utf-8"><title>Foxwarm Code callback</title><script>window.close();</script>');
+    },
+  });
+
+  httpServer.addRoute({
+    path: `${VSCODE_WEB_API_PREFIX}/workspace-roots`,
+    method: 'GET',
+    handler: async (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        version: 1,
+        roots: {
+          app: { nodeId: 'master', path: BASE_DIR },
+          data: { nodeId: 'master', path: DATA_ROOT_DIR },
+        },
+      });
     },
   });
 

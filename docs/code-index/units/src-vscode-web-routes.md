@@ -27,6 +27,8 @@ Required official asset files are loaded from `FOXWARM_VSCODE_WEB_ASSET_DIR` or 
 
 Authenticated routes under `/api/vscode-web/fs` implement stat, directory read, file read/write, directory create, delete, and rename against real absolute POSIX paths. File read/write cap is 50 MiB.
 
+`GET /api/vscode-web/fs/workspace-roots` returns only the fixed versioned master app/data root descriptors used by the filesystem extension commands. It is non-cacheable and contains no configuration document or credential.
+
 `master` executes locally. Other node IDs require an online node advertising compatible `vscode-fs`; absent/old/offline nodes return explicit service errors.
 
 ### Git API
@@ -71,3 +73,4 @@ Workbench, static, extension, filesystem, and Git routes use WebUI authenticatio
 ## Canonical ownership
 
 Remote service ownership: [D-code-fixed-remote-services](../threads/code-integration.md#d-code-fixed-remote-services). Git mutation boundary: [D-code-read-only-scm](../threads/code-integration.md#d-code-read-only-scm).
+Master app/data workspace command ownership: [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots).
