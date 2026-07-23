@@ -1,5 +1,5 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
-import type { KeyboardEvent, MouseEvent, ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import { Eye, FileJson, Download } from 'lucide-react'
 import {
   IconToggleButton,
@@ -628,12 +628,15 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     </div>
   ) : null
 
-  const header = (extraClass = '', onClick?: (e: MouseEvent<HTMLDivElement>) => void, includeCallPreview = false, includeExpandedCall = false) => (
-    <div
-      className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]} ${extraClass}`.trim()}
-      onClick={onClick}
-    >
-      <div className="flex min-w-0 items-center gap-2">
+  const header = (includeCallPreview = false, includeExpandedCall = false) => (
+    <div className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]}`}>
+      <div
+        className="foxwarm-tool-header-toggle flex min-w-0 cursor-pointer items-center gap-2 hover:text-gray-900 dark:hover:text-gray-100"
+        onClick={(e) => {
+          e.stopPropagation()
+          setExpanded(current => !current)
+        }}
+      >
         <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
         {includeCallPreview && call && <div className="foxwarm-tool-call-summary min-w-0 max-w-full flex-1 truncate whitespace-nowrap">{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
       </div>
@@ -647,8 +650,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   return (
     <div
-      className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} min-w-0 max-w-full text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
-      onClick={!expanded ? () => setExpanded(true) : undefined}
+      className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} min-w-0 max-w-full text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''}`}
     >
       <ThreadLineButton
         expanded={expanded}
@@ -663,20 +665,20 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
       {viewMode === 'json' ? (
         <div className={baseTextClass}>
-          {header(expanded ? 'cursor-pointer hover:text-gray-900 dark:hover:text-gray-100' : '', expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined)}
+          {header()}
           <pre className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : clampContentStyle(6)}>{jsonText}</pre>
         </div>
       ) : !expanded ? (
         <div className={baseTextClass}>
           <div className="space-y-1">
-            {header('', undefined, true)}
+            {header(true)}
             {responsePreview && !hasToolScriptProgress && <div className="foxwarm-tool-result-preview pr-2 text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>}
             {hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} />}
           </div>
         </div>
       ) : (
         <div className={baseTextClass}>
-          {header('cursor-pointer hover:text-gray-900 dark:hover:text-gray-100', (e) => { e.stopPropagation(); setExpanded(false) }, false, true)}
+          {header(false, true)}
 
           {(hasResponseContent || hasToolScriptProgress) && (
             <div className="foxwarm-tool-expanded-content foxwarm-tool-result-content mt-1 min-w-0 max-w-full cursor-default pr-2" onClick={(e) => e.stopPropagation()}>

@@ -123,6 +123,44 @@ async function readVisualState(id) {
   })
 }
 
+async function readCollapseTargetState(id) {
+  return page.$eval(`#${id}`, (root) => {
+    const card = root.querySelector('.foxwarm-tool-card')
+    const header = root.querySelector('.foxwarm-tool-header')
+    const toggle = root.querySelector('.foxwarm-tool-header-toggle')
+    const args = root.querySelector('.foxwarm-tool-call-args')
+    const result = root.querySelector('.foxwarm-tool-result-content, .foxwarm-tool-result-preview')
+    return {
+      expanded: !!args,
+      cardCursor: getComputedStyle(card).cursor,
+      headerCursor: getComputedStyle(header).cursor,
+      toggleCursor: getComputedStyle(toggle).cursor,
+      argsCursor: args ? getComputedStyle(args).cursor : null,
+      resultCursor: result ? getComputedStyle(result).cursor : null,
+      cardHasPointerClass: card.classList.contains('cursor-pointer'),
+      headerHasPointerClass: header.classList.contains('cursor-pointer'),
+      toggleHasPointerClass: toggle.classList.contains('cursor-pointer'),
+    }
+  })
+}
+
+function assertCollapseTargetState(state, expanded) {
+  assert.equal(state.expanded, expanded)
+  assert.notEqual(state.cardCursor, 'pointer')
+  assert.notEqual(state.headerCursor, 'pointer')
+  assert.equal(state.toggleCursor, 'pointer')
+  assert.equal(state.cardHasPointerClass, false)
+  assert.equal(state.headerHasPointerClass, false)
+  assert.equal(state.toggleHasPointerClass, true)
+  if (state.argsCursor !== null) assert.notEqual(state.argsCursor, 'pointer')
+  if (state.resultCursor !== null) assert.notEqual(state.resultCursor, 'pointer')
+}
+
+async function clickWithoutToggling(selector, expectedExpanded) {
+  await page.$eval(selector, (element) => element.click())
+  assert.equal(await page.$eval('#exec', root => !!root.querySelector('.foxwarm-tool-call-args')), expectedExpanded)
+}
+
 function assertCollapsed(state) {
   assert.equal(state.summaryWhiteSpace, 'nowrap')
   assert.equal(state.summaryOverflow, 'hidden')
@@ -200,5 +238,29 @@ test('dark and mobile 550A retain header continuity and bounded call/result cont
     assertCollapsed(await readVisualState('exec'))
     await page.click('#exec .foxwarm-tool-tag')
     assertExpanded(await readVisualState('exec'))
+  }
+})
+
+test('only the top tool header row advertises and handles collapse toggling', async () => {
+  for (const fixture of [
+    { width: 900, height: 800 },
+    { width: 390, height: 760, style: '550a', dark: true },
+  ]) {
+    await mountFixture(fixture)
+    assertCollapseTargetState(await readCollapseTargetState('exec'), false)
+
+    await clickWithoutToggling('#exec .foxwarm-tool-card', false)
+    await clickWithoutToggling('#exec .foxwarm-tool-header', false)
+    await clickWithoutToggling('#exec .foxwarm-tool-result-preview', false)
+
+    await page.click('#exec .foxwarm-tool-header-toggle')
+    assertCollapseTargetState(await readCollapseTargetState('exec'), true)
+
+    await clickWithoutToggling('#exec .foxwarm-tool-header', true)
+    await clickWithoutToggling('#exec .foxwarm-tool-call-args', true)
+    await clickWithoutToggling('#exec .foxwarm-tool-result-content', true)
+
+    await page.click('#exec .foxwarm-tool-header-toggle')
+    assertCollapseTargetState(await readCollapseTargetState('exec'), false)
   }
 })
