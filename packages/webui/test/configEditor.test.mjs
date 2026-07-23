@@ -108,6 +108,12 @@ test('Monaco stays on the worker-compatible pinned release used by the real-work
   assert.equal(packageJson.version, '0.54.0')
 })
 
+test('Setup gives both YAML editors the exact responsive height contract', async () => {
+  const setupSource = await readFile(path.join(webuiRoot, 'src/components/SetupView.tsx'), 'utf8')
+  assert.match(setupSource, /SETUP_EDITOR_HEIGHT\s*=\s*['"]calc\(min\(600px, 80vh\)\)['"]/)
+  assert.equal((setupSource.match(/height=\{SETUP_EDITOR_HEIGHT\}/g) || []).length, 2)
+})
+
 test('models schema suggests known provider types while accepting custom strings and documents legacy readers', () => {
   const provider = schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties
   assert.deepEqual(provider.properties.providerType.anyOf[0].enum, [...schemas.KNOWN_PROVIDER_TYPES])

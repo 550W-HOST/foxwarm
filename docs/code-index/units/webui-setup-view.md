@@ -30,6 +30,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - Models always render as a raw YAML editor. If the active file is missing or empty, Setup initializes editable text from a generated current-shape example rather than turning the packaged template into a write target.
 - Raw model and app-config saves preserve user text after canonical backend validation. Comments, key order, quoting, custom fields, and formatting survive.
 - The two editors use distinct model URIs and static frontend schemas. Suggestions/markers are advisory and never disable Save; canonical behavior is [D-editor-local-yaml-assistance](./webui-editor.md#d-editor-local-yaml-assistance).
+- Both YAML editor wrappers use the exact responsive height `calc(min(600px, 80vh))`; the same wrapper height applies to Monaco and the plain-text fallback without widening the mobile layout.
 - Model suggestions are derived from current unsaved YAML: defaults include concrete and virtual keys, while virtual targets include concrete keys only.
 - App-config save reloads every managed channel and reports started results.
 - Weixin start renders image/base64/pairing payloads; wait persists connected token/user/channel fields server-side.
@@ -66,6 +67,10 @@ OOBE is the absence of the active data-directory models configuration. The force
 ### D-setup-models-raw-only
 
 The visible Models workflow is raw YAML only. Keep structured request parsing/helpers as a backend compatibility boundary, but do not expose the former graphical provider form or provider-test controls in Setup.
+
+### D-setup-editor-height
+
+The Models YAML and app-config YAML areas both use the exact CSS height `calc(min(600px, 80vh))`. Keep that contract for desktop, mobile, and the controlled plain-text fallback.
 
 ## Canonical ownership
 

@@ -182,6 +182,57 @@ async function attachRequestMocks(targetPage, options = {}) {
   })
 }
 
+async function runMonacoEditorAction(targetPage, modelUri, action, payload = {}) {
+  return targetPage.evaluate(async ({ targetModelUri, editorAction, actionPayload }) => {
+    const monacoUrl = performance.getEntriesByType('resource')
+      .map((entry) => entry.name)
+      .find((name) => /\/node_modules\/\.vite\/deps\/monaco-editor\.js(?:\?|$)/.test(name))
+    if (!monacoUrl) throw new Error('Monaco module URL was not loaded')
+    const monaco = await import(monacoUrl)
+    const editor = monaco.editor.getEditors().find((candidate) => candidate.getModel()?.uri.toString() === targetModelUri)
+    if (!editor) throw new Error(`Monaco editor not found: ${targetModelUri}`)
+
+    if (editorAction === 'replace-value') {
+      editor.getModel().setValue(actionPayload.value)
+    } else if (editorAction === 'select') {
+      const { anchorLine, anchorColumn, activeLine, activeColumn } = actionPayload
+      editor.setSelection(new monaco.Selection(anchorLine, anchorColumn, activeLine, activeColumn))
+      editor.focus()
+    } else if (editorAction === 'position') {
+      editor.setPosition({ lineNumber: actionPayload.line, column: actionPayload.column })
+      editor.focus()
+    } else if (editorAction === 'focus') {
+      editor.focus()
+    } else if (editorAction === 'screen-position') {
+      const visiblePosition = editor.getScrolledVisiblePosition({ lineNumber: actionPayload.line, column: actionPayload.column })
+      const editorRect = editor.getDomNode()?.getBoundingClientRect()
+      if (!visiblePosition || !editorRect) throw new Error('Editor position is not visible')
+      return {
+        x: editorRect.left + visiblePosition.left,
+        y: editorRect.top + visiblePosition.top + visiblePosition.height / 2,
+      }
+    }
+
+    const selection = editor.getSelection()
+    return {
+      value: editor.getValue(),
+      direction: selection?.getDirection(),
+      rtlDirection: monaco.SelectionDirection.RTL,
+      ltrDirection: monaco.SelectionDirection.LTR,
+      selection: selection ? {
+        startLineNumber: selection.startLineNumber,
+        startColumn: selection.startColumn,
+        endLineNumber: selection.endLineNumber,
+        endColumn: selection.endColumn,
+        positionLineNumber: selection.positionLineNumber,
+        positionColumn: selection.positionColumn,
+        selectionStartLineNumber: selection.selectionStartLineNumber,
+        selectionStartColumn: selection.selectionStartColumn,
+      } : null,
+    }
+  }, { targetModelUri: modelUri, editorAction: action, actionPayload: payload })
+}
+
 before(async () => {
   const viteBin = path.join(webuiRoot, 'node_modules/.bin/vite')
   await waitForProcess(spawn(viteBin, ['build'], {
@@ -235,6 +286,149 @@ test('Models setup is raw-only and associates distinct static schemas with both 
     'inmemory://foxwarm/setup/foxwarm-models.yaml',
   ])
   assert.ok(requestPaths.includes('/preview/api/setup/status'))
+})
+
+test('both Setup editors use the responsive 600px/80vh height without mobile overflow', async () => {
+  const measureEditors = (targetPage) => targetPage.$$eval('[data-monaco-model-uri]', (editors) => editors.map((editor) => {
+    const rect = editor.getBoundingClientRect()
+    return {
+      authoredHeight: editor.style.height,
+      computedHeight: Number.parseFloat(getComputedStyle(editor).height),
+      width: rect.width,
+      viewportWidth: window.innerWidth,
+      expectedHeight: Math.min(600, window.innerHeight * 0.8),
+      documentWidth: document.documentElement.scrollWidth,
+    }
+  }))
+
+  const desktopEditors = await measureEditors(page)
+  assert.equal(desktopEditors.length, 2)
+  for (const editor of desktopEditors) {
+    assert.ok(['calc(min(600px, 80vh))', 'min(600px, 80vh)'].includes(editor.authoredHeight))
+    assert.ok(Math.abs(editor.computedHeight - editor.expectedHeight) < 1)
+    assert.ok(editor.width <= editor.viewportWidth)
+  }
+
+  const mobilePage = await browser.newPage()
+  await mobilePage.setViewport({ width: 390, height: 700 })
+  await attachRequestMocks(mobilePage)
+  try {
+    await mobilePage.goto(`${baseUrl}/mobile/#setup`, { waitUntil: 'networkidle2' })
+    await mobilePage.waitForSelector('[data-monaco-model-uri][data-editor-ready="true"]', { timeout: 15_000 })
+    const mobileEditors = await measureEditors(mobilePage)
+    assert.equal(mobileEditors.length, 2)
+    for (const editor of mobileEditors) {
+      assert.ok(Math.abs(editor.computedHeight - 560) < 1)
+      assert.ok(editor.width <= editor.viewportWidth)
+      assert.ok(editor.documentWidth <= editor.viewportWidth)
+    }
+  } finally {
+    await mobilePage.close()
+  }
+})
+
+test('both Setup Monaco editors replace forward and reverse selections on the first typed key', async () => {
+  const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
+  const configUri = 'inmemory://foxwarm/setup/foxwarm-config.yaml'
+  const modelsBaseline = 'alpha beta\nsecond line\nthird line\n'
+  const configBaseline = 'alpha beta\nsecond line\nthird line\n'
+
+  const originalModels = (await runMonacoEditorAction(page, modelsUri, 'snapshot')).value
+  const originalConfig = (await runMonacoEditorAction(page, configUri, 'snapshot')).value
+  const dragStart = await runMonacoEditorAction(page, modelsUri, 'screen-position', { line: 1, column: 12 })
+  const dragEnd = await runMonacoEditorAction(page, modelsUri, 'screen-position', { line: 1, column: 10 })
+  await page.mouse.move(dragStart.x, dragStart.y)
+  await page.mouse.down()
+  await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 8 })
+  await page.mouse.up()
+  let state = await runMonacoEditorAction(page, modelsUri, 'snapshot')
+  assert.equal(state.direction, state.rtlDirection)
+  await page.keyboard.press('x')
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  assert.equal((await runMonacoEditorAction(page, modelsUri, 'snapshot')).value, originalModels.replace('42', 'x'))
+
+  await runMonacoEditorAction(page, modelsUri, 'replace-value', { value: modelsBaseline })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  state = await runMonacoEditorAction(page, modelsUri, 'select', {
+    anchorLine: 1, anchorColumn: 1, activeLine: 1, activeColumn: 6,
+  })
+  assert.equal(state.direction, state.ltrDirection)
+  await page.keyboard.type('F')
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal((await runMonacoEditorAction(page, modelsUri, 'snapshot')).value, 'F beta\nsecond line\nthird line\n')
+
+  await runMonacoEditorAction(page, configUri, 'replace-value', { value: configBaseline })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  state = await runMonacoEditorAction(page, configUri, 'select', {
+    anchorLine: 3, anchorColumn: 6, activeLine: 2, activeColumn: 1,
+  })
+  assert.equal(state.direction, state.rtlDirection)
+  await page.keyboard.type('Y')
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal((await runMonacoEditorAction(page, configUri, 'snapshot')).value, 'alpha beta\nY line\n')
+
+  await runMonacoEditorAction(page, configUri, 'replace-value', { value: 'abcd\n' })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  await runMonacoEditorAction(page, configUri, 'position', { line: 1, column: 4 })
+  await page.keyboard.down('Shift')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.up('Shift')
+  state = await runMonacoEditorAction(page, configUri, 'snapshot')
+  assert.equal(state.direction, state.rtlDirection)
+  await page.keyboard.type('Z')
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal((await runMonacoEditorAction(page, configUri, 'snapshot')).value, 'aZd\n')
+
+  await runMonacoEditorAction(page, configUri, 'position', { line: 1, column: 4 })
+  await page.keyboard.type('!')
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal((await runMonacoEditorAction(page, configUri, 'snapshot')).value, 'aZd!\n')
+
+  const externallyResetModels = 'default: 42\nproviders:\n  local: {}\n'
+  await runMonacoEditorAction(page, modelsUri, 'replace-value', { value: externallyResetModels })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  state = await runMonacoEditorAction(page, modelsUri, 'select', {
+    anchorLine: 1, anchorColumn: 12, activeLine: 1, activeColumn: 10,
+  })
+  assert.equal(state.direction, state.rtlDirection)
+  await page.click('button::-p-text(Refresh)')
+  await page.waitForFunction(() => !document.body.textContent?.includes('Loading setup status…'))
+  await page.waitForFunction(async ({ modelsModelUri, configModelUri, expectedModels, expectedConfig }) => {
+    const monacoUrl = performance.getEntriesByType('resource')
+      .map((entry) => entry.name)
+      .find((name) => /\/node_modules\/\.vite\/deps\/monaco-editor\.js(?:\?|$)/.test(name))
+    if (!monacoUrl) return false
+    const monaco = await import(monacoUrl)
+    const editors = monaco.editor.getEditors()
+    return editors.find((editor) => editor.getModel()?.uri.toString() === modelsModelUri)?.getValue() === expectedModels
+      && editors.find((editor) => editor.getModel()?.uri.toString() === configModelUri)?.getValue() === expectedConfig
+  }, {}, { modelsModelUri: modelsUri, configModelUri: configUri, expectedModels: statusPayload.models.rawYaml, expectedConfig: originalConfig })
+  state = await runMonacoEditorAction(page, modelsUri, 'snapshot')
+  assert.equal(state.direction, state.rtlDirection)
+  assert.deepEqual(state.selection, {
+    startLineNumber: 1,
+    startColumn: 10,
+    endLineNumber: 1,
+    endColumn: 12,
+    positionLineNumber: 1,
+    positionColumn: 10,
+    selectionStartLineNumber: 1,
+    selectionStartColumn: 12,
+  })
+  await runMonacoEditorAction(page, modelsUri, 'focus')
+  await page.keyboard.press('r')
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal((await runMonacoEditorAction(page, modelsUri, 'snapshot')).value, statusPayload.models.rawYaml.replace('42', 'r'))
+  await page.click('button::-p-text(Refresh)')
+  await page.waitForFunction(async ({ modelUri, expectedValue }) => {
+    const monacoUrl = performance.getEntriesByType('resource')
+      .map((entry) => entry.name)
+      .find((name) => /\/node_modules\/\.vite\/deps\/monaco-editor\.js(?:\?|$)/.test(name))
+    if (!monacoUrl) return false
+    const monaco = await import(monacoUrl)
+    return monaco.editor.getEditors().find((editor) => editor.getModel()?.uri.toString() === modelUri)?.getValue() === expectedValue
+  }, {}, { modelUri: modelsUri, expectedValue: statusPayload.models.rawYaml })
 })
 
 test('schema markers remain advisory and do not disable raw save', async () => {
@@ -293,12 +487,26 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     await degradedPage.goto(`${baseUrl}/degraded/#setup`, { waitUntil: 'networkidle2' })
     const fallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-fallback="true"] textarea', { timeout: 15_000 })
     assert.ok((await degradedPage.$eval('body', (body) => body.textContent || '')).includes('Plain-text editing and backend validation still work.'))
-    const yaml = 'default: local\nproviders:\n  local:\n    providerType: openai-completions\n    models: [model-a]\n'
+    const fallbackHeights = await degradedPage.$$eval('[data-editor-fallback="true"]', (editors) => editors.map((editor) => ({
+      height: Number.parseFloat(getComputedStyle(editor).height),
+      expected: Math.min(600, window.innerHeight * 0.8),
+    })))
+    assert.equal(fallbackHeights.length, 2)
+    assert.ok(fallbackHeights.every(({ height, expected }) => Math.abs(height - expected) < 1))
+
+    const initialYaml = 'default: local\nproviders:\n  local:\n    providerType: openai-completions\n    models: [model-a]\n'
     await fallback.evaluate((textarea, value) => {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
       setter?.call(textarea, value)
       textarea.dispatchEvent(new Event('input', { bubbles: true }))
-    }, yaml)
+    }, initialYaml)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await fallback.evaluate((textarea) => {
+      textarea.focus()
+      textarea.setSelectionRange(9, 14, 'backward')
+    })
+    await degradedPage.keyboard.press('x')
+    const yaml = initialYaml.replace('local', 'x')
     await degradedPage.click('button::-p-text(Save models)')
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Models saved to'))
     assert.deepEqual(savedRequest, { yaml })

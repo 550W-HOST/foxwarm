@@ -45,6 +45,7 @@ interface SetupViewProps {
 }
 
 const DEFAULT_MODELS_YAML = buildModelsYaml([makeDefaultProvider(0)], 'openai/gpt-5.2-codex')
+const SETUP_EDITOR_HEIGHT = 'calc(min(600px, 80vh))'
 
 const DEFAULT_CONFIG_YAML = `# Foxwarm config. Changes to channels are hot-reloaded after Save.
 # Other settings may require a process restart to take effect.
@@ -312,7 +313,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                 value={rawModelsYaml}
                 onChange={setRawModelsYaml}
                 language="yaml"
-                height={360}
+                height={SETUP_EDITOR_HEIGHT}
                 modelUri={MODELS_YAML_MODEL_URI}
                 focusRequest={focusModelsRequest}
                 ariaLabel="Models YAML editor"
@@ -349,7 +350,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
             </div>
 
             <div className="mt-4">
-              <SimpleCodeEditor value={configYaml} onChange={setConfigYaml} language="yaml" height={360} modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
+              <SimpleCodeEditor value={configYaml} onChange={setConfigYaml} language="yaml" height={SETUP_EDITOR_HEIGHT} modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
             </div>
             <div className="mt-4 flex items-center gap-2">
               <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config and reload channels'}</button>

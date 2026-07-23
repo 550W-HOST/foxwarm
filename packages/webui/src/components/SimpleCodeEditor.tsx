@@ -141,12 +141,10 @@ export default function SimpleCodeEditor({
     const editor = editorRef.current
     if (!editor) return
     if (editor.getValue() !== value) {
-      const position = editor.getPosition()
+      // Keep each anchor as well as its active cursor so reverse selections survive controlled resets.
+      const selections = editor.getSelections()
       editor.setValue(value)
-      if (position) {
-        const lineCount = editor.getModel()?.getLineCount() || 1
-        editor.setPosition({ lineNumber: Math.min(position.lineNumber, lineCount), column: position.column })
-      }
+      if (selections) editor.setSelections(selections)
     }
   }, [value])
 

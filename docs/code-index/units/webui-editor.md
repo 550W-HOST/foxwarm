@@ -23,7 +23,7 @@ Provides reusable code editing and diff visualization components for the WebUI. 
 - Diagnostics, completion, and hover are advisory. Formatting is disabled so editor assistance does not rewrite configuration text, and backend validation remains the save authority.
 - The models root `default` is optional like the backend loader. Virtual conditionals honor current `providerType` precedence and apply the same target/forbidden-field diagnostics when only legacy `provider` selects a strategy. `extraHeaders` values remain backend-tolerant.
 - Models `default` completion includes concrete and virtual keys from the current unsaved document. Virtual `targets` completion includes concrete keys only. Parsing is debounced; invalid partial YAML retains the last valid local suggestions and never uploads editor text.
-- `SimpleCodeEditor` preserves the latest value while its lazy imports resolve, updates marker-count test metadata, follows theme changes, and disposes the editor, model, listeners, and per-model completion state on unmount.
+- `SimpleCodeEditor` preserves the latest value while its lazy imports resolve, updates marker-count test metadata, follows theme changes, and disposes the editor, model, listeners, and per-model completion state on unmount. Parent-driven value replacement snapshots and restores Monaco's complete selections rather than only the active cursor, retaining each anchor/active direction so the next key still replaces a reverse selection.
 - A rejection while lazy Monaco/YAML modules load or while YAML support is configured degrades to a labeled controlled plain-text textarea. Editing, read-only state, focus requests, and backend Save remain available; the rejected singleton promise is cleared so a later mount can retry. There is intentionally no hidden readiness probe or worker-restart protocol after initialization: if a worker later fails internally, Monaco stays editable, schema intelligence may degrade, and the user can reload while backend validation remains authoritative.
 - `monaco-editor` is pinned to `0.54.0`: the real-worker marker E2E fails on `0.55.1` because `monaco-yaml@5.5.1` / `monaco-worker-manager@2.0.1` does not initialize its YAML foreign worker under that changed worker protocol, falling back to a generic worker without `doValidation`. The package-version contract test prevents an unexplained upgrade; the browser E2E proves the actual YAML worker.
 - `DiffPreview` computes line-level diffs and word-level refinements for adjacent remove/add pairs. Split mode synchronizes both scroll axes with a guarded handoff.
@@ -31,7 +31,7 @@ Provides reusable code editing and diff visualization components for the WebUI. 
 ## Integration
 
 - Setup owns the two stable YAML models and supplies a transient focus request when Chat opens model settings.
-- `configEditor.test.mjs` validates shared-import parity, current/legacy/custom/backend-tolerant fixtures with Ajv, schema boundaries, suggestions, last-valid retention, and the worker-compatible Monaco pin. Setup browser tests exercise normal schema/completion behavior against the production worker bundle and verify that a rejected lazy support import falls back to a savable textarea.
+- `configEditor.test.mjs` validates shared-import parity, current/legacy/custom/backend-tolerant fixtures with Ajv, schema boundaries, suggestions, last-valid retention, the Setup height contract, and the worker-compatible Monaco pin. Setup browser tests exercise production schema/completion behavior, forward and reverse selection replacement in both editors (including parent-driven value reset), and the savable controlled-textarea fallback.
 - The former full-page WebUI file editor was removed with the custom workspace feature; Code remains the general browser editing integration.
 
 ## Design decisions
@@ -39,3 +39,7 @@ Provides reusable code editing and diff visualization components for the WebUI. 
 ### D-editor-local-yaml-assistance
 
 Models and app-config editing use static frontend-owned schemas and local unsaved-document completions. No backend schema API or per-keystroke document upload is introduced. Monaco diagnostics are advisory, remote schema fetches and automatic formatting stay disabled, and canonical backend validation decides whether Save succeeds.
+
+### D-editor-controlled-selection
+
+Controlled parent value updates must preserve Monaco's complete selection state, including reverse anchor/active direction. Do not reduce a selection to its active cursor during synchronization: the first subsequent typed key must replace forward, right-to-left, and bottom-to-top selections consistently. The plain-text fallback retains native controlled-textarea behavior.
