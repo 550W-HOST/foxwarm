@@ -1,6 +1,6 @@
 # Unit: shared-persistent-exec
 
-Files: packages/shared/src/persistentExec.ts
+Files: packages/shared/src/persistentExec.ts, packages/shared/src/persistentExec.test.ts
 
 ## Purpose
 
@@ -52,6 +52,8 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 | `PersistentExecManager.removeRunningExec(id)` | ~300 | Removes entry from registry and map |
 | `PersistentExecManager.loadRegistry()` | ~280 | Loads running exec registry from disk on startup |
 | `PersistentExecManager.saveRegistry()` | ~290 | Persists current running execs map to disk |
+| `PersistentExecManager.commitRegistryMutation()` | registry helpers | Serializes one in-memory registry mutation with its durable replacement write |
+| `PersistentExecManager.initializeOnce()` | initialization | Loads/reconciles the registry behind a shared concurrent-initialization promise |
 | `PersistentExecManager.startReconcileLoop()` | ~270 | Starts periodic reconciliation interval |
 | `PersistentExecManager.dispose()` | ~275 | Stops reconcile loop and cleans up |
 
@@ -64,7 +66,7 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 
 - Spawns commands inside a generated wrapper script (bash on POSIX, PowerShell on Windows) that handles log redirection, exit code capture, and cwd recording via atomic file writes.
 - The child process writes a paths JSON file so the parent can discover log/status/cwd paths without race conditions.
-- Tracks running processes in an in-memory map backed by a JSON registry file on disk, enabling recovery after restarts.
+- Tracks running processes in an in-memory map backed by a JSON registry file on disk, enabling recovery after restarts. Start, notification-mark, and removal mutations share one mutation/persistence chain so concurrent exec lifecycle changes cannot overwrite newer registry snapshots; concurrent initialization calls also share one load/reconcile operation.
 - A periodic reconcile loop polls status files of background processes and dispatches completion notifications via the configured `completionDispatcher`.
 - Uses `isPidRunning` as a fallback to detect processes that died without writing a status file, synthesizing an error status in that case.
 - Output formatting handles truncation with shared line-aware per-line and whole-line omission placeholders, plus token estimation for inline display decisions.

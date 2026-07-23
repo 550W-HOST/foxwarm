@@ -262,8 +262,10 @@ function formatTime(date = new Date()): string {
 export class PersistentExecManager {
   private runningExecs = new Map<string, RunningExecEntry>();
   private initialized = false;
+  private initializationPromise: Promise<void> | null = null;
   private reconcileTimer: NodeJS.Timeout | null = null;
   private reconcileChain: Promise<void> = Promise.resolve();
+  private registryMutationChain: Promise<void> = Promise.resolve();
   private readonly completionDispatcher: ExecCompletionDispatcher;
 
   constructor(private readonly options: PersistentExecManagerOptions) {
@@ -290,6 +292,17 @@ export class PersistentExecManager {
       await fs.remove(tempPath).catch(() => {});
       throw err;
     }
+  }
+
+  private async commitRegistryMutation<T>(mutate: () => T): Promise<T> {
+    let result!: T;
+    const operation = this.registryMutationChain.then(async () => {
+      result = mutate();
+      await this.saveRunningExecs();
+    });
+    this.registryMutationChain = operation.then(() => undefined, () => undefined);
+    await operation;
+    return result;
   }
 
   private async loadRunningExecs(): Promise<void> {
@@ -330,17 +343,19 @@ export class PersistentExecManager {
   }
 
   private async removeRunningExec(id: string): Promise<void> {
-    if (!this.runningExecs.delete(id)) return;
-    await this.saveRunningExecs();
+    await this.commitRegistryMutation(() => {
+      this.runningExecs.delete(id);
+    });
   }
 
   private async updateRunningExec(id: string, updates: Partial<RunningExecEntry>): Promise<RunningExecEntry | null> {
-    const current = this.runningExecs.get(id);
-    if (!current) return null;
-    const updated = { ...current, ...updates };
-    this.runningExecs.set(id, updated);
-    await this.saveRunningExecs();
-    return updated;
+    return await this.commitRegistryMutation(() => {
+      const current = this.runningExecs.get(id);
+      if (!current) return null;
+      const updated = { ...current, ...updates };
+      this.runningExecs.set(id, updated);
+      return updated;
+    });
   }
 
   private async waitForResolvedExecPaths(pathsPath: string, fallback: ResolvedExecPaths): Promise<ResolvedExecPaths> {
@@ -362,6 +377,15 @@ export class PersistentExecManager {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    if (!this.initializationPromise) {
+      this.initializationPromise = this.initializeOnce().finally(() => {
+        this.initializationPromise = null;
+      });
+    }
+    await this.initializationPromise;
+  }
+
+  private async initializeOnce(): Promise<void> {
     await this.loadRunningExecs();
     let changed = false;
     for (const [id, entry] of this.runningExecs.entries()) {
@@ -481,8 +505,9 @@ export class PersistentExecManager {
       notifyOnCompletion: false,
     };
 
-    this.runningExecs.set(entry.id, entry);
-    await this.saveRunningExecs();
+    await this.commitRegistryMutation(() => {
+      this.runningExecs.set(entry.id, entry);
+    });
     this.options.logger?.info?.({ execId: entry.id, pid: entry.pid, sessionId, nodeId }, 'Persistent exec started');
     return entry;
   }
