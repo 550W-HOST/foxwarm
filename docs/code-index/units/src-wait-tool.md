@@ -49,6 +49,7 @@ Tests the `wait` tool functionality, including timeout behavior, `waitAllSession
 - Tests interaction between compaction queue items and waitAll deferred queues
 - Covers router immediate-reply behavior around commands/authorization and confirms busy user messages are enqueued without a queued/busy acknowledgement.
 - Confirms generic `wait({})` remains supported and derives `idle` through the runtime-state builder while still storing a wait token for wake semantics.
+- Confirms session clear removes an armed generic wait, and executor coverage verifies that an explicit wait whose stop is suppressed by a sibling error clears only its own token. Flagged handoff integration is covered by `src-tools-session-agent` under [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).
 
 ## Integration
 

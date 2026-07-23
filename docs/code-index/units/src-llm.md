@@ -53,6 +53,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - Successful results normalize into `ChatResult`, record provider-qualified model ID and usage, and may contain function calls for the router loop.
 - Display-only messages and internal `__meta` are excluded from provider input.
 - Tool execution keeps per-call result/image/control state local. Adjacent direct `exec` calls use a bounded parallel segment; all other tools are barriers, and final parts are flattened in original call order. Canonical scheduling contract: [D-dispatch-exec-parallel-segments](../threads/tool-dispatch.md#d-dispatch-exec-parallel-segments).
+- Tool-result internals fold explicit wait-token cleanup and successful handoff post-actions without exposing hidden sentinels to providers. The router owns post-append wait arming under [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).
 
 ## Compatibility
 

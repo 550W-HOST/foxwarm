@@ -1086,6 +1086,11 @@ export class MessageRouter {
           results: this.getToolResultProgress(toolResultMsg),
         });
 
+        const waitForReply = (toolResultMsg as any).__toolPostAction?.waitForReply === true;
+        if (waitForReply && !session.stopping && !session.meta?.wait) {
+          await sessionManager.startSessionWait(session.id);
+        }
+
         const managedStateAfterTools = getManagedSessionState(session);
         if (managedStateAfterTools?.currentStep?.runMode === 'tool') {
           managedStateAfterTools.lastStepResult = {
@@ -1098,11 +1103,6 @@ export class MessageRouter {
           break;
         }
 
-        if ((toolResultMsg as any).__toolLoopControl?.stopCurrentTurn) {
-          logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
-          break;
-        }
-
         if (session.stopping) {
           logger.info({ sessionId: session.id, iteration }, 'Session stopping flag detected after tool execution, halting tool call loop');
           session.stopping = false;
@@ -1112,6 +1112,16 @@ export class MessageRouter {
           finalResponse = finalResponse
             ? finalResponse + '\n\n_[Execution stopped by user]_'
             : '_[Execution stopped by user]_';
+          break;
+        }
+
+        if ((toolResultMsg as any).__toolLoopControl?.stopCurrentTurn) {
+          logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
+          break;
+        }
+
+        if (waitForReply) {
+          logger.info({ sessionId: session.id, iteration }, 'Successful handoff requested a generic reply wait');
           break;
         }
 

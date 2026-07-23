@@ -427,6 +427,19 @@ test('wait without timeout works and does not schedule a timeout wake', async ()
   });
 });
 
+test('clearSession removes an armed generic wait', async () => {
+  const sessionId = makeSessionId('wait_clear_session');
+  try {
+    await sessionManager.getSession(sessionId);
+    await sessionManager.startSessionWait(sessionId);
+    assert.equal(typeof (await sessionManager.getSession(sessionId)).meta.wait?.id, 'string');
+    await sessionManager.clearSession(sessionId);
+    assert.equal((await sessionManager.getSession(sessionId)).meta.wait, undefined);
+  } finally {
+    await cleanupSession(sessionId);
+  }
+});
+
 test('wait with timeoutSeconds 0 works as no timeout', async () => {
   await withTempTimerStore(async () => {
     const sessionId = makeSessionId('wait_zero_timeout');

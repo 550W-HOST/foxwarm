@@ -1454,6 +1454,7 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
     lastMessageTime: Date.now(),
     messageCount: 0,
   };
+  delete session.meta.wait;
 
   await deps.saveSession(session.id);
 }

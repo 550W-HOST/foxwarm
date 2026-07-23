@@ -72,6 +72,7 @@ test('executeTools suppresses wait when a later tool in the batch returns an err
     assert.equal(toolMessage.parts[1].functionResponse?.name, 'read');
     assert.notEqual(toolMessage.parts[1].functionResponse?.response?.error, undefined);
     assert.notEqual(toolMessage.parts[1].functionResponse?.response?.error, null);
+    assert.equal((await sessionManager.getSession(sessionId)).meta.wait, undefined);
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
@@ -94,6 +95,7 @@ test('executeTools suppresses wait when an earlier tool in the batch returns an 
     assert.equal(toolMessage.parts[0].functionResponse?.name, 'read');
     assert.notEqual(toolMessage.parts[0].functionResponse?.response?.error, undefined);
     assert.notEqual(toolMessage.parts[0].functionResponse?.response?.error, null);
+    assert.equal((await sessionManager.getSession(sessionId)).meta.wait, undefined);
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
@@ -121,6 +123,74 @@ test('executeTools keeps wait behavior for successful send_to_session handoff ba
     assert.deepEqual(toolMessage.parts.map(part => part.functionResponse?.name), ['send_to_session', 'wait']);
     assert.equal(toolMessage.parts[0].functionResponse?.response?.error, undefined);
     assert.equal(toolMessage.parts[1].functionResponse?.response?.error, undefined);
+    assert.equal(typeof (await sessionManager.getSession(sourceSessionId)).meta.wait?.id, 'string');
+  } finally {
+    await sessionManager.deleteSession(sourceSessionId).catch(() => false);
+    await sessionManager.deleteSession(targetSessionId).catch(() => false);
+  }
+});
+
+test('successful flagged handoff keeps its post-batch wait request despite a sibling error', async () => {
+  const sourceSessionId = makeSessionId('flagged_error_source');
+  const targetSessionId = makeSessionId('flagged_error_target');
+  await sessionManager.getSession(sourceSessionId);
+  await sessionManager.getSession(targetSessionId);
+  try {
+    const source = await sessionManager.getSession(sourceSessionId);
+    const toolMessage: any = await executeTools([
+      { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'hello', waitForReply: true } },
+      { id: 'missing-read', name: 'read', args: { filePath: makeMissingFilePath() } },
+    ], { sessionId: sourceSessionId, session: source }, source);
+    assert.deepEqual(toolMessage.__toolPostAction, { waitForReply: true });
+    assert.equal(hasStopCurrentTurn(toolMessage), false);
+    assert.equal(source.meta.wait, undefined);
+    assert.equal(toolMessage.parts.length, 2);
+  } finally {
+    await sessionManager.deleteSession(sourceSessionId).catch(() => false);
+    await sessionManager.deleteSession(targetSessionId).catch(() => false);
+  }
+});
+
+test('multiple successful flagged handoffs coalesce and all failed handoffs request no wait', async () => {
+  const sourceSessionId = makeSessionId('flagged_many_source');
+  const targetA = makeSessionId('flagged_many_a');
+  const targetB = makeSessionId('flagged_many_b');
+  const source = await sessionManager.getSession(sourceSessionId);
+  await sessionManager.getSession(targetA);
+  await sessionManager.getSession(targetB);
+  try {
+    const successful: any = await executeTools([
+      { id: 'send-a', name: 'send_to_session', args: { sessionId: targetA, message: 'a', waitForReply: true } },
+      { id: 'send-b', name: 'send_to_session', args: { sessionId: targetB, message: 'b', waitForReply: true } },
+    ], { sessionId: sourceSessionId, session: source }, source);
+    assert.deepEqual(successful.__toolPostAction, { waitForReply: true });
+
+    const failed: any = await executeTools([
+      { id: 'missing-a', name: 'send_to_session', args: { sessionId: makeSessionId('missing_a'), message: 'a', waitForReply: true } },
+      { id: 'missing-b', name: 'send_to_session', args: { sessionId: makeSessionId('missing_b'), message: 'b', waitForReply: true } },
+    ], { sessionId: sourceSessionId, session: source }, source);
+    assert.equal(failed.__toolPostAction, undefined);
+  } finally {
+    await sessionManager.deleteSession(sourceSessionId).catch(() => false);
+    await sessionManager.deleteSession(targetA).catch(() => false);
+    await sessionManager.deleteSession(targetB).catch(() => false);
+  }
+});
+
+test('flagged handoff plus explicit wait remains deterministic when a sibling fails', async () => {
+  const sourceSessionId = makeSessionId('flagged_explicit_source');
+  const targetSessionId = makeSessionId('flagged_explicit_target');
+  const source = await sessionManager.getSession(sourceSessionId);
+  await sessionManager.getSession(targetSessionId);
+  try {
+    const toolMessage: any = await executeTools([
+      { id: 'send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'hello', waitForReply: true } },
+      { id: 'wait', name: 'wait', args: {} },
+      { id: 'missing', name: 'read', args: { filePath: makeMissingFilePath() } },
+    ], { sessionId: sourceSessionId, session: source }, source);
+    assert.deepEqual(toolMessage.__toolPostAction, { waitForReply: true });
+    assert.equal(hasStopCurrentTurn(toolMessage), false);
+    assert.equal(source.meta.wait, undefined);
   } finally {
     await sessionManager.deleteSession(sourceSessionId).catch(() => false);
     await sessionManager.deleteSession(targetSessionId).catch(() => false);
