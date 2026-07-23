@@ -23,6 +23,19 @@ export type WriteFileToolPathOptions = {
   parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined;
 };
 
+export function formatWriteContentRefRetryHint(filePath: string, contentRef: string, createDirs = false): string {
+  const params = [
+    `filePath: ${JSON.stringify(filePath)}`,
+    `contentRef: ${JSON.stringify(contentRef)}`,
+    'overwrite: true',
+    ...(createDirs ? ['createDirs: true'] : []),
+  ].join(', ');
+  const action = createDirs
+    ? 'retry and create the missing parent directories'
+    : 'confirm overwriting';
+  return ` The attempted content is cached. To ${action} without generating the same content again, call write({ ${params} }).`;
+}
+
 const INLINE_IMAGE_MIME: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',

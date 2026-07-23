@@ -6,6 +6,7 @@ import path from 'path';
 import { apply_patch, buildBrowserScreenshotResult, exec, read, write } from './nodeTools';
 import { getNodeAgentDir } from './nodeFileTransfer';
 import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
+import { formatWriteContentRefRetryHint } from './fileToolCore';
 import { resolveExecTimeoutSeconds } from './persistentExec';
 
 function uniqueAgent(prefix: string): string {
@@ -49,6 +50,19 @@ test('node exec schema allows oversized timeout values and documents clamping', 
   assert.equal(timeout.minimum, 1);
   assert.equal(Object.prototype.hasOwnProperty.call(timeout, 'maximum'), false);
   assert.match(String(timeout.description), /above the 60s maximum are clamped/i);
+});
+
+test('shared write contentRef retry hints are executable and JSON-escape actual arguments', () => {
+  const filePath = 'quoted "path"\\line\nnote.txt';
+  const contentRef = 'write_ref"\\line\nvalue';
+  assert.equal(
+    formatWriteContentRefRetryHint(filePath, contentRef),
+    ' The attempted content is cached. To confirm overwriting without generating the same content again, call write({ filePath: "quoted \\"path\\"\\\\line\\nnote.txt", contentRef: "write_ref\\"\\\\line\\nvalue", overwrite: true }).',
+  );
+  assert.equal(
+    formatWriteContentRefRetryHint(filePath, contentRef, true),
+    ' The attempted content is cached. To retry and create the missing parent directories without generating the same content again, call write({ filePath: "quoted \\"path\\"\\\\line\\nnote.txt", contentRef: "write_ref\\"\\\\line\\nvalue", overwrite: true, createDirs: true }).',
+  );
 });
 
 test('shared exec timeout resolution clamps only oversized finite values', () => {

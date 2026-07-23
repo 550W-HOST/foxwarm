@@ -138,7 +138,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - **Shared read/write core**: After master-specific path resolution, isolation checks, and `contentRef` handling, `readResolvedPath` / `writeResolvedPath` delegate file/directory/image read and write-parent semantics to `packages/shared/src/fileToolCore.ts`.
 - **Read range placeholders**: `startLine` / `endLine` values of `0` are treated as omitted for file and directory reads, so provider-emitted optional numeric placeholders do not produce empty reads.
 - **Write parent dirs**: `write` requires parent directories to already exist by default. Passing `createDirs=true` explicitly creates missing parent directories. The shared core first attempts the actual write, then diagnoses parent-path failures so symlinked parent directories work normally. Missing-parent failures report the first missing parent path and, when possible, return a `contentRef` retry hint so large content can be reused.
-- **Pending write refs**: Large file writes that fail validation produce a `contentRef` token cached in memory (TTL 15 min, max 2 MB per entry, 8 MB total). The model can retry the write using the ref without re-sending content.
+- **Pending write refs**: Large file writes that fail validation produce a `contentRef` token cached in memory (TTL 15 min, max 2 MB per entry, 8 MB total). Failure guidance provides an executable `write({ ... })` retry call with the actual escaped path, reference, and required flags, so the model can reuse the cached attempt without generating the same content again.
 - **Command execution**: `tool_exec` delegates to `execManager` for persistent processes with configurable timeouts, foreground/background modes, and working-directory tracking. Its schema has no hard maximum so finite requests above 60 seconds reach the shared resolver, clamp to 60, and produce a warning in the immediate result footer; minimum/finite validation remains strict.
 - **Exec cwd sync notice**: When a command changes the session cwd, the `exec` tool appends a `SESSION CWD CHANGED` notice at the end of the tool output and states that the new cwd becomes the default for later `exec/read/edit/write/apply_patch` calls. Parallel segments defer this mutation/notice until every segment member settles, then replay it in model order before the next barrier under [D-dispatch-exec-parallel-segments](../threads/tool-dispatch.md#d-dispatch-exec-parallel-segments).
 - **Permission gating**: Tools are partitioned into master-only vs. general, and isolated sessions are restricted by the current `checkToolPermission` rule set plus tool-local guards.
@@ -164,6 +164,8 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - Browser tools delegate to `browserManager` for web automation capabilities.
 
 ## Design Decisions
+
+- [2026-07-23] Pending-write retry guidance must show a directly executable `write({ ... })` call containing the actual JSON-escaped `filePath`, `contentRef`, `overwrite: true`, and `createDirs: true` when required. State that the attempted content is cached and should not be generated again; avoid ambiguous resend-oriented wording.
 
 - [2026-07-22] Model-facing archive retrieval schemas must distinguish `target`, `vector_query`, and `contentFilter`; do not retain the old ambiguous `query` field for `recall` or `get_session_messages`.
 

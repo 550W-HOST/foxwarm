@@ -37,7 +37,8 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `readFileToolPath(fullPath, displayPath, startLine, endLine)` (fileToolCore) | ~126 | Reads file/directory/image; handles line ranges and 0-bound compatibility |
 | `findWriteParentIssue(fullPath)` (fileToolCore) | ~158 | Returns the first missing/non-directory parent for write targets, following symlinked directories |
 | `formatWriteParentIssueMessage(issue, retryHint)` (fileToolCore) | ~181 | Formats write parent errors consistently for master/node callers |
-| `writeFileToolPath(fullPath, content, options)` (fileToolCore) | ~202 | Attempts the real filesystem write first, then enriches parent-path failures with diagnostics |
+| `formatWriteContentRefRetryHint(filePath, contentRef, createDirs)` (fileToolCore) | ~26 | Formats an executable, JSON-escaped cached-content retry call for write failures |
+| `writeFileToolPath(fullPath, content, options)` (fileToolCore) | ~205 | Attempts the real filesystem write first, then enriches parent-path failures with diagnostics |
 | `resolveToolPath(filePath, ctx)` | ~27 | Resolves a node tool file path using session context |
 | `read(args, ctx)` | ~107 | Tool: reads a file or directory |
 | `write(args, ctx)` | ~112 | Tool: writes content to a file; requires existing parent dirs unless `createDirs=true` |

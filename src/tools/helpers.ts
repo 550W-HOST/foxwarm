@@ -9,6 +9,7 @@ import { formatApplyPatchOperationSummary } from '../../packages/shared/dist/app
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
 import {
     findWriteParentIssue,
+    formatWriteContentRefRetryHint,
     formatWriteParentIssueMessage,
     readFileToolPath,
     writeFileToolPath,
@@ -16,7 +17,7 @@ import {
 } from '../../packages/shared/dist/fileToolCore';
 
 export { expandHomePath, resolveAgentPath };
-export { findWriteParentIssue, formatWriteParentIssueMessage, type WriteParentIssue };
+export { findWriteParentIssue, formatWriteContentRefRetryHint, formatWriteParentIssueMessage, type WriteParentIssue };
 
 // Tool context type
 export interface ToolContext {
