@@ -236,14 +236,6 @@ function getDataRootDir() {
   return BASE_DIR;
 }
 
-function resolveAppConfigPath() {
-  const envValue = process.env.FOXWARM_CONFIG_PATH || process.env.CONFIG_PATH;
-  if (envValue?.trim()) {
-    return resolveBaseRelativePath(envValue);
-  }
-  return path.join(getDataRootDir(), 'state', 'config.yaml');
-}
-
 function resolveModelsConfigPath(explicitPath = '') {
   if (explicitPath?.trim()) {
     return resolveBaseRelativePath(explicitPath);
@@ -251,16 +243,6 @@ function resolveModelsConfigPath(explicitPath = '') {
   if (process.env.WEB_SEARCH_MODELS_CONFIG_PATH?.trim()) {
     return resolveBaseRelativePath(process.env.WEB_SEARCH_MODELS_CONFIG_PATH);
   }
-  if (process.env.MODELS_CONFIG_PATH?.trim()) {
-    return resolveBaseRelativePath(process.env.MODELS_CONFIG_PATH);
-  }
-
-  const appConfigPath = resolveAppConfigPath();
-  const appConfig = readYamlFile(appConfigPath) || {};
-  if (appConfig.paths?.modelsConfigPath) {
-    return resolveBaseRelativePath(appConfig.paths.modelsConfigPath);
-  }
-
   return path.join(getDataRootDir(), 'state', 'models.yaml');
 }
 
@@ -334,6 +316,12 @@ function findGptModelCandidates(explicitModelsConfigPath = '') {
 
   for (const [providerKey, providerEntry] of Object.entries(providers)) {
     const providerType = providerTypeOf(providerEntry);
+    // Virtual providers contain references to concrete configured models, not
+    // credentials or request endpoints of their own. Candidate discovery must
+    // inspect only the concrete provider entries below.
+    if (providerType === 'session-hash' || providerType === 'failover') {
+      continue;
+    }
     const models = normalizeModelsField(providerEntry);
     const baseUrl = String(providerEntry?.baseUrl || DEFAULT_OPENAI_BASE_URL).trim();
     const apiKey = String(providerEntry?.apiKey || '').trim();
@@ -1007,4 +995,11 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  findGptModelCandidates,
+  chooseGptCandidate,
+};

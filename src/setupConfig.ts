@@ -4,7 +4,7 @@ import yaml from 'js-yaml';
 import {
   APP_CONFIG_PATH,
   AppConfig,
-  DEFAULT_MODELS_CONFIG_PATH,
+  getActiveModelsConfigPath,
   ProviderConfigEntry,
   loadModelsConfigFromObject,
 } from './config';
@@ -19,6 +19,9 @@ export type ProviderSetupDraft = {
   models?: string;
   model?: string;
   defaultModel?: string;
+  targets?: string | string[];
+  failureThreshold?: number | string;
+  cooldownMs?: number | string;
 };
 
 function hasOwn(value: unknown, key: string): boolean {
@@ -62,7 +65,7 @@ export function validateModelsConfigYaml(rawYaml: string): Record<string, any> {
   return config;
 }
 
-export function writeRawModelsConfig(rawYaml: string, filePath: string = DEFAULT_MODELS_CONFIG_PATH): Record<string, any> {
+export function writeRawModelsConfig(rawYaml: string, filePath: string = getActiveModelsConfigPath()): Record<string, any> {
   const config = validateModelsConfigYaml(rawYaml);
   fs.ensureDirSync(path.dirname(filePath));
   fs.writeFileSync(filePath, rawYaml, 'utf8');
@@ -150,6 +153,9 @@ export function writeAppConfigWithChannels(channels: AppConfig['channels'], file
 }
 
 function splitModelIds(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item || '').trim()).filter(Boolean);
+  }
   return String(value || '')
     .split(/[\n,]/)
     .map((item) => item.trim())
@@ -197,6 +203,9 @@ function normalizeProviderDrafts(body: any): ProviderSetupDraft[] {
     baseUrl: body?.baseUrl,
     apiKey: body?.apiKey,
     models: body?.models || body?.model,
+    targets: body?.targets,
+    failureThreshold: body?.failureThreshold,
+    cooldownMs: body?.cooldownMs,
     defaultModel: body?.defaultModel,
   }];
 }
@@ -217,12 +226,6 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
       continue;
     }
 
-    const rawModelList = hasOwn(draft, 'models') ? draft.models : draft.model;
-    const modelIds = splitModelIds(rawModelList);
-    if (modelIds.length === 0) {
-      throw new Error(`Provider \`${providerKey}\` requires at least one model id.`);
-    }
-
     const existingProvider = isPlainObject(existingProviders[providerKey])
       ? cloneConfigValue(existingProviders[providerKey]) as ProviderConfigEntry & Record<string, any>
       : {} as ProviderConfigEntry & Record<string, any>;
@@ -232,6 +235,59 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
 
     const providerType = String(draft?.providerType || existingProvider.providerType || existingProvider.provider || 'openai-completions').trim();
     nextProvider.providerType = providerType || 'openai-completions';
+
+    const isVirtual = providerType === 'session-hash' || providerType === 'failover';
+    if (isVirtual) {
+      const targets = splitModelIds(hasOwn(draft, 'targets') ? draft.targets : existingProvider.targets);
+      nextProvider.targets = targets;
+      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'contextLimit', 'asyncCompact'] as const) {
+        delete nextProvider[field];
+      }
+      if (providerType === 'session-hash') {
+        for (const field of ['failureThreshold', 'cooldownMs'] as const) {
+          if (hasOwn(draft, field) && String(draft[field] ?? '').trim()) {
+            throw new Error(`Virtual provider \`${providerKey}\` (session-hash) forbids failover field \`${field}\`.`);
+          }
+        }
+        delete nextProvider.failureThreshold;
+        delete nextProvider.cooldownMs;
+      }
+      if (providerType === 'failover' && hasOwn(draft, 'failureThreshold')) {
+        const rawFailureThreshold = String(draft.failureThreshold ?? '').trim();
+        if (!rawFailureThreshold) {
+          delete nextProvider.failureThreshold;
+        } else {
+          const failureThreshold = Number(rawFailureThreshold);
+          if (!Number.isInteger(failureThreshold) || failureThreshold < 1) {
+            throw new Error(`Virtual provider \`${providerKey}\` failureThreshold must be a positive integer.`);
+          }
+          nextProvider.failureThreshold = failureThreshold;
+        }
+      }
+      if (providerType === 'failover' && hasOwn(draft, 'cooldownMs')) {
+        const rawCooldownMs = String(draft.cooldownMs ?? '').trim();
+        if (!rawCooldownMs) {
+          delete nextProvider.cooldownMs;
+        } else {
+          const cooldownMs = Number(rawCooldownMs);
+          if (!Number.isInteger(cooldownMs) || cooldownMs < 1) {
+            throw new Error(`Virtual provider \`${providerKey}\` cooldownMs must be a positive integer.`);
+          }
+          nextProvider.cooldownMs = cooldownMs;
+        }
+      }
+      nextProviders[providerKey] = nextProvider;
+      continue;
+    }
+
+    delete nextProvider.targets;
+    delete nextProvider.failureThreshold;
+    delete nextProvider.cooldownMs;
+    const rawModelList = hasOwn(draft, 'models') ? draft.models : draft.model;
+    const modelIds = splitModelIds(rawModelList);
+    if (modelIds.length === 0) {
+      throw new Error(`Provider \`${providerKey}\` requires at least one model id.`);
+    }
 
     if (hasOwn(draft, 'baseUrl')) {
       const baseUrl = String(draft.baseUrl || '').trim();
@@ -263,7 +319,8 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
   }
 
   const firstProviderKey = Object.keys(nextProviders)[0];
-  const firstModels = nextProviders[firstProviderKey].models || [];
+  const firstProvider = nextProviders[firstProviderKey];
+  const firstModels = firstProvider.models || [];
   const firstModelId = firstModels.length > 0 ? getModelEntryId(firstModels[0]) : '';
   const fallbackDefault = firstProviderKey && firstModelId ? `${firstProviderKey}/${firstModelId}` : firstProviderKey;
   const defaultKey = String(body?.defaultModel || body?.default || '').trim() || fallbackDefault;

@@ -10,6 +10,7 @@ const tokenFile = process.env.FOXWARM_E2E_TOKEN_FILE || new URL('../../../test/s
 let browser
 let page
 let authToken
+let modelListRequestCount = 0
 
 async function waitForSystemTab(tabId, heading) {
   await page.waitForSelector(`[data-tab-id=${JSON.stringify(tabId)}]`, { timeout: 15_000 })
@@ -36,6 +37,9 @@ before(async () => {
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   })
   page = await browser.newPage()
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/api/models')) modelListRequestCount += 1
+  })
   await page.setViewport({ width: 1440, height: 900 })
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
   await page.waitForFunction(() => !!window.alphabotTest, { timeout: 15_000 })
@@ -88,6 +92,38 @@ test('closing active system and chat tabs advances the route instead of hydratin
   assert.notEqual(decodeURIComponent(await page.evaluate(() => window.location.hash)), `#tab/${chatTabId}`)
 })
 
+test('model popup refreshes models and opens the singleton Setup models editor', async () => {
+  await page.setViewport({ width: 1440, height: 900 })
+  const sessionId = 'e2e-model-settings-session'
+  await page.evaluate((id) => { window.location.hash = `session/${encodeURIComponent(id)}` }, sessionId)
+  const modelButton = await page.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+  const previousRequests = modelListRequestCount
+  await modelButton.click()
+  await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
+  await page.keyboard.press('Escape')
+  await page.waitForFunction(() => document.activeElement?.matches('button[aria-haspopup="dialog"]'))
+  await modelButton.click()
+  await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
+  await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+  const requestDeadline = Date.now() + 5_000
+  while (modelListRequestCount <= previousRequests && Date.now() < requestDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  const configureButton = await page.waitForSelector('button[aria-label="Configure models"]', { timeout: 15_000 })
+  assert.equal((await configureButton.evaluate((button) => button.textContent || '')).trim(), '')
+  assert.equal(await configureButton.evaluate((button) => button.title), 'Configure models')
+  await configureButton.click()
+
+  await waitForSystemTab('system:setup', 'Foxwarm Setup')
+  await page.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
+  await page.waitForFunction(() => {
+    const active = document.activeElement
+    return !!active?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
+  }, { timeout: 15_000 })
+  assert.equal(await page.$$eval('[data-tab-id="system:setup"]', (elements) => elements.length), 1)
+  assert.ok(modelListRequestCount > previousRequests)
+})
+
 test('system tabs remain workbench tabs on a mobile viewport', async () => {
   await page.setViewport({ width: 390, height: 844, isMobile: true })
   await page.evaluate(() => { window.location.hash = 'setup' })
@@ -133,6 +169,8 @@ test('forced OOBE Setup still rejects workbench close requests', async () => {
     await forcedPage.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
     await forcedPage.waitForSelector('[data-tab-id="system:setup"]', { timeout: 15_000 })
     await forcedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
+    await forcedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
+    assert.equal(await forcedPage.$('button::-p-text(Form)'), null)
     await forcedPage.click('[data-tab-id="system:setup"] button[title="Close tab"]')
     await new Promise((resolve) => setTimeout(resolve, 150))
     assert.ok(await forcedPage.$('[data-tab-id="system:setup"]'))

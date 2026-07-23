@@ -93,6 +93,51 @@ test('model CLI reads stdin and rejects unknown model keys and empty responses',
   );
 });
 
+test('model CLI lists and forwards virtual model keys through the production request contract', async () => {
+  const virtualRuntime = runtime({
+    loadModelsConfig: () => ({
+      default: 'sticky',
+      displayModels: ['sticky', 'provider/model'],
+      models: {
+        sticky: {
+          providerKey: 'sticky',
+          providerType: 'session-hash',
+          model: '',
+          virtualRouting: {
+            strategy: 'session-hash',
+            targets: ['provider/model'],
+          },
+        },
+        'provider/model': {
+          providerKey: 'provider',
+          providerType: 'openai',
+          model: 'model',
+          baseUrl: 'https://example.invalid/v1',
+        },
+      },
+    }),
+  });
+  const listOutput = captureStream();
+  assert.equal(await runModelCli(['--list'], { stdout: listOutput.stream, runtimeLoader: () => virtualRuntime }), 0);
+  assert.match(listOutput.value(), /sticky \(default\)/);
+  assert.match(listOutput.value(), /provider: session-hash/);
+
+  let selectedModel;
+  const requestOutput = captureStream();
+  assert.equal(await runModelCli(['--model', 'sticky', '--prompt', 'hello'], {
+    stdout: requestOutput.stream,
+    runtimeLoader: () => ({
+      ...virtualRuntime,
+      requestLlmOnce: async options => {
+        selectedModel = options.model;
+        return { text: 'virtual ok', modelId: 'provider/model' };
+      },
+    }),
+  }), 0);
+  assert.equal(selectedModel, 'sticky');
+  assert.equal(requestOutput.value(), 'virtual ok\n');
+});
+
 test('top-level CLI returns nonzero for unknown subcommands without spawning a child', async () => {
   const stdout = captureStream();
   const stderr = captureStream();

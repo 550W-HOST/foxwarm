@@ -10,6 +10,7 @@ import { NodeTransferFilePayload, NodeTransferWriteResult, readNodeTransferFile,
 import * as sessionManager from '../sessionManager';
 import { WebSocket } from 'ws';
 import { isReservedNodeId } from './registry';
+import { adaptLegacyRemoteNodeToolResult } from './legacyToolResultCompatibility';
 
 interface ToolDefinition {
   name: string;
@@ -446,7 +447,13 @@ export class NodesManager {
   /**
    * Execute a tool on a node
    */
-  async executeTool(nodeId: string, toolName: string, args: Record<string, any>, sessionId: string): Promise<any> {
+  async executeTool(
+    nodeId: string,
+    toolName: string,
+    args: Record<string, any>,
+    sessionId: string,
+    routingSnapshot?: { currentNode: string; cwd?: string },
+  ): Promise<any> {
     const node = this.nodes.get(nodeId);
     if (!node) {
       throw new Error(`Node \`${nodeId}\` not found`);
@@ -483,7 +490,9 @@ export class NodesManager {
       // Only send sessionCwd when the session's currentNode matches the target node.
       // When using call_tool to temporarily execute on a remote node, session.cwd
       // is a master-local path and should not be forwarded.
-      const shouldSendCwd = session.currentNode === nodeId && typeof session.cwd === 'string';
+      const routedCurrentNode = routingSnapshot?.currentNode || session.currentNode;
+      const routedCwd = routingSnapshot ? routingSnapshot.cwd : session.cwd;
+      const shouldSendCwd = routedCurrentNode === nodeId && typeof routedCwd === 'string';
       const timeoutMs = 62000;
 
       node.ws!.send(JSON.stringify({
@@ -494,7 +503,7 @@ export class NodesManager {
         sessionId,
         agentName: session.agent || 'main',
         timeoutMs,
-        ...(shouldSendCwd ? { sessionCwd: session.cwd } : {}),
+        ...(shouldSendCwd ? { sessionCwd: routedCwd } : {}),
       }));
       
       // Set timeout
@@ -514,7 +523,7 @@ export class NodesManager {
     const call = this.toolCalls.get(callId);
     if (call) {
       this.toolCalls.delete(callId);
-      call.resolve(result);
+      call.resolve(adaptLegacyRemoteNodeToolResult(result));
       logger.info({ callId, tool: call.name }, 'Tool response received');
     } else {
       logger.warn({ callId }, 'Tool response for unknown call');

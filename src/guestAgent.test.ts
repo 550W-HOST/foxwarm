@@ -138,6 +138,55 @@ test('guestAgent single mode binds new unauthorized conversation to a new sessio
   }
 });
 
+test('concurrent guest provisioning for one unbound conversation creates one session', async () => {
+  await sessionManager.loadSessions();
+  const originalConfig = readAppConfigFile();
+  const router = new MessageRouter() as any;
+  const createdAgents: string[] = [];
+  const createdSessions: string[] = [];
+
+  try {
+    const baseAgent = makeId('guest_concurrent_base');
+    createdAgents.push(baseAgent);
+    const base = await sessionManager.createAgentWithMainSession({ agentName: baseAgent });
+    createdSessions.push(base.mainSessionId);
+    const beforeIds = new Set(sessionManager.getAllSessions().keys());
+    const channelId = makeId('guest_concurrent_channel');
+    const conversationId = makeId('guest_concurrent_conversation');
+    writeAppConfigFile({
+      ...originalConfig,
+      channels: {
+        ...(originalConfig.channels || {}),
+        [channelId]: { type: 'weixin', guestAgent: { agentId: baseAgent, isolated: false } },
+      },
+    } as AppConfig);
+    const ctx = makeCtx(channelId, conversationId, 'guest-concurrent-user', []);
+
+    const results = await Promise.all(
+      Array.from({ length: 100 }, () => router.maybeCreateGuestSessionForUnauthorizedMessage(ctx)),
+    );
+    const ids = new Set(results.map((result: any) => result?.sessionId));
+    assert.equal(ids.size, 1);
+    const [sessionId] = [...ids] as string[];
+    assert.ok(sessionId);
+    assert.equal(sessionManager.getSessionByChannel(channelId, conversationId), sessionId);
+    assert.equal(sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId), true);
+    assert.deepEqual(
+      [...sessionManager.getAllSessions().keys()].filter(id => !beforeIds.has(id)),
+      [sessionId],
+    );
+    createdSessions.push(sessionId);
+  } finally {
+    writeAppConfigFile(originalConfig);
+    for (const sessionId of createdSessions) {
+      try { await sessionManager.deleteSession(sessionId); } catch {}
+    }
+    for (const agentName of createdAgents) {
+      await cleanupAgent(agentName);
+    }
+  }
+});
+
 test('guestAgent inherited mode creates a derived agent main session with inherit + isolation', async () => {
   await sessionManager.loadSessions();
   const originalChat = llm.chat;
@@ -205,6 +254,86 @@ test('guestAgent inherited mode creates a derived agent main session with inheri
     createdAgents.push(session.agent || '');
     assert.equal(derivedCallCount, 1);
   } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).buildSessionSystemPromptSnapshot = originalMemory;
+    (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
+    writeAppConfigFile(originalConfig);
+    for (const sessionId of createdSessions) {
+      try { await sessionManager.deleteSession(sessionId); } catch {}
+    }
+    for (const agentName of createdAgents) {
+      await cleanupAgent(agentName);
+    }
+  }
+});
+
+test('guestAgent inherited mode retries when the first generated main id is archived', async () => {
+  await sessionManager.loadSessions();
+  const originalChat = llm.chat;
+  const originalMemory = llm.buildSessionSystemPromptSnapshot;
+  const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
+  const originalConfig = readAppConfigFile();
+  const originalRandom = Math.random;
+  const router = new MessageRouter();
+  const createdAgents: string[] = [];
+  const createdSessions: string[] = [];
+
+  (vector as any).scheduleSessionArchiveIndex = async () => 0;
+  (llm as any).buildSessionSystemPromptSnapshot = async () => '';
+
+  try {
+    const baseAgent = makeId('guest_retry_base');
+    createdAgents.push(baseAgent);
+    const base = await sessionManager.createAgentWithMainSession({ agentName: baseAgent });
+    createdSessions.push(base.mainSessionId);
+
+    const archivedRandom = 0.123456789;
+    const replacementRandom = 0.987654321;
+    const archivedAgent = `${baseAgent}_${archivedRandom.toString(36).slice(2, 8)}`;
+    const replacementAgent = `${baseAgent}_${replacementRandom.toString(36).slice(2, 8)}`;
+    const archivedMainId = `${archivedAgent}/main`;
+    const archived = await sessionManager.createAgentWithMainSession({ agentName: archivedAgent });
+    await sessionManager.appendSessionMessage(archived.mainSessionId, {
+      role: 'user',
+      parts: [{ text: 'old inherited guest generation' }],
+      __meta: { timestamp: Date.now() },
+    });
+    await sessionManager.deleteSession(archivedMainId);
+    await cleanupAgent(archivedAgent);
+
+    const channelId = makeId('guest_retry_channel');
+    const conversationId = makeId('guest_retry_conversation');
+    writeAppConfigFile({
+      ...originalConfig,
+      channels: {
+        ...(originalConfig.channels || {}),
+        [channelId]: {
+          type: 'weixin',
+          guestAgent: { agentId: baseAgent, mode: 'inherited', isolated: false },
+        },
+      },
+    } as AppConfig);
+
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      await appendStubUserMessage(activeSession, parts);
+      await appendStubModelMessage(activeSession, 'guest retry reply');
+      return { text: 'guest retry reply' };
+    };
+
+    let randomCalls = 0;
+    Math.random = () => randomCalls++ === 0 ? archivedRandom : replacementRandom;
+    await router.handleMessage(
+      makeCtx(channelId, conversationId, 'guest-retry-user', []),
+      { parts: [{ text: 'retry archived candidate' }], channelUserId: conversationId, conversationId, username: 'guest-retry-user' },
+    );
+
+    const sessionId = sessionManager.getSessionByChannel(channelId, conversationId);
+    assert.equal(sessionId, `${replacementAgent}/main`);
+    assert.equal(await sessionManager.getExistingSession(archivedMainId), null);
+    createdSessions.push(sessionId!);
+    createdAgents.push(replacementAgent);
+  } finally {
+    Math.random = originalRandom;
     (llm as any).chat = originalChat;
     (llm as any).buildSessionSystemPromptSnapshot = originalMemory;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;

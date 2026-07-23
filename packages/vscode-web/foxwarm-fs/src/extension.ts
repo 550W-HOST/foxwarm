@@ -2,8 +2,23 @@ import * as vscode from 'vscode';
 import { FoxwarmFileSystemProvider } from './provider';
 import { buildFoxwarmNodeUriString, parseFoxwarmUri } from './foxwarmUri';
 import { normalizeFoxwarmOpenRequest, type FoxwarmOpenRequest } from './openRequest';
+import { registerFoxwarmConfigSchemas } from './configSchemas';
+import {
+  isExactWorkspaceRoot,
+  normalizeWorkspaceRootsResponse,
+  type FoxwarmWorkspaceRoot,
+  type FoxwarmWorkspaceRootKind,
+} from './workspaceRoots';
 export { buildFoxwarmNodeUriString, parseFoxwarmUri } from './foxwarmUri';
 export { normalizeFoxwarmOpenRequest } from './openRequest';
+export {
+  FOXWARM_APP_SCHEMA_URI,
+  FOXWARM_MODELS_SCHEMA_URI,
+  getFoxwarmConfigSchemaContent,
+  getFoxwarmConfigSchemaUri,
+  registerFoxwarmConfigSchemas,
+} from './configSchemas';
+export { isExactWorkspaceRoot, normalizeConfigFilesResponse, normalizeWorkspaceRootsResponse } from './workspaceRoots';
 
 async function waitForInitialWorkspaceFolders(): Promise<readonly vscode.WorkspaceFolder[]> {
   const deadline = Date.now() + 15_000;
@@ -87,6 +102,76 @@ async function addFoxwarmFolder(request: FoxwarmOpenRequest): Promise<{ status: 
   return { status: 'added', uri: uriString };
 }
 
+async function waitForManagedWorkspaceUpdate(
+  context: vscode.ExtensionContext,
+  target: FoxwarmWorkspaceRoot,
+  start: number,
+  deleteCount: number,
+  uri: vscode.Uri,
+): Promise<vscode.Uri | undefined> {
+  let settled = false;
+  let listener: vscode.Disposable | undefined;
+  let finish: (value: vscode.Uri | undefined) => void = () => {};
+  const changed = new Promise<vscode.Uri | undefined>((resolve) => {
+    finish = (value) => {
+      if (settled) return;
+      settled = true;
+      listener?.dispose();
+      resolve(value);
+    };
+    listener = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      const folder = vscode.workspace.workspaceFolders?.find((candidate) => (
+        candidate.name === target.name && isExactWorkspaceRoot(candidate.uri, target)
+      ));
+      if (folder) finish(folder.uri);
+    });
+  });
+  context.subscriptions.push(listener!, { dispose: () => finish(undefined) });
+  const accepted = vscode.workspace.updateWorkspaceFolders(start, deleteCount, { uri, name: target.name });
+  if (!accepted) {
+    finish(undefined);
+    throw new Error(`Could not update ${target.name} in the current workspace.`);
+  }
+  return changed;
+}
+
+async function revealWorkspaceRoot(uri: vscode.Uri): Promise<void> {
+  await vscode.commands.executeCommand('workbench.view.explorer');
+  await vscode.commands.executeCommand('revealInExplorer', uri);
+}
+
+async function openManagedWorkspaceRoot(
+  kind: FoxwarmWorkspaceRootKind,
+  provider: FoxwarmFileSystemProvider,
+  context: vscode.ExtensionContext,
+): Promise<{ status: 'added' | 'existing'; uri: string }> {
+  const target = (await provider.getWorkspaceRoots())[kind];
+  const uri = vscode.Uri.parse(buildFoxwarmNodeUriString(target.nodeId, target.path));
+  const stat = await vscode.workspace.fs.stat(uri);
+  if ((stat.type & vscode.FileType.Directory) === 0) {
+    throw new Error(`${target.name} is not a directory: ${target.path}`);
+  }
+
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const existingIndex = folders.findIndex((folder) => isExactWorkspaceRoot(folder.uri, target));
+  const existing = existingIndex >= 0 ? folders[existingIndex] : undefined;
+  let finalUri: vscode.Uri | undefined = existing?.uri ?? uri;
+  if (existing?.name !== target.name) {
+    finalUri = await waitForManagedWorkspaceUpdate(
+      context,
+      target,
+      existing ? existingIndex : folders.length,
+      existing ? 1 : 0,
+      existing?.uri ?? uri,
+    );
+  }
+  if (finalUri) await revealWorkspaceRoot(finalUri);
+  return {
+    status: existing ? 'existing' : 'added',
+    uri: (finalUri ?? existing?.uri ?? uri).toString(true),
+  };
+}
+
 async function openFoxwarmFolder(): Promise<void> {
   const value = await vscode.window.showInputBox({
     title: 'Open Foxwarm Folder',
@@ -162,9 +247,14 @@ export function activate(context: vscode.ExtensionContext): void {
       isReadonly: false,
     }),
     vscode.commands.registerCommand('foxwarm-fs.openFolder', openFoxwarmFolder),
+    vscode.commands.registerCommand('foxwarm-fs.openAppFolder', () => openManagedWorkspaceRoot('app', provider, context)),
+    vscode.commands.registerCommand('foxwarm-fs.openDataFolder', () => openManagedWorkspaceRoot('data', provider, context)),
     vscode.commands.registerCommand('foxwarm-fs.addFolderToWorkspace', addExplorerFolderToWorkspace),
     vscode.commands.registerCommand('foxwarm-fs.handleOpenRequest', (request: FoxwarmOpenRequest) => handleOpenRequest(request, provider)),
   );
+  void provider.getConfigFiles()
+    .then((files) => registerFoxwarmConfigSchemas(files))
+    .catch((error) => console.warn(`Foxwarm config schema support could not start: ${error instanceof Error ? error.message : String(error)}`));
   console.log('Foxwarm filesystem provider registered for foxwarm://node+<nodeId>/<absolute-path>.');
 }
 

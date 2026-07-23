@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { exec, read, write } from './nodeTools';
+import { apply_patch, buildBrowserScreenshotResult, exec, read, write } from './nodeTools';
 import { getNodeAgentDir } from './nodeFileTransfer';
 import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
+import { formatWriteContentRefRetryHint } from './fileToolCore';
 import { resolveExecTimeoutSeconds } from './persistentExec';
 
 function uniqueAgent(prefix: string): string {
@@ -16,6 +17,31 @@ async function cleanupAgent(agentName: string) {
   await fs.remove(getNodeAgentDir(agentName)).catch(() => {});
 }
 
+test('shared CLI browser screenshots use the canonical structured image result', () => {
+  const buffer = Buffer.from('png-image-bytes');
+  const result = buildBrowserScreenshotResult({
+    id: 'tab_fixture',
+    url: 'https://example.test/',
+    title: 'Example',
+  }, buffer);
+
+  assert.deepEqual(result, {
+    id: 'tab_fixture',
+    url: 'https://example.test/',
+    title: 'Example',
+    output: '[Screenshot of tab_fixture]',
+    mimeType: 'image/png',
+    sizeBytes: buffer.length,
+    inlineData: {
+      data: buffer.toString('base64'),
+      mimeType: 'image/png',
+    },
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'screenshot'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'image'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'encoding'), false);
+});
+
 test('node exec schema allows oversized timeout values and documents clamping', () => {
   const definition = CLI_NODE_CAPABILITIES.tools.find(entry => entry.name === 'exec');
   assert.ok(definition);
@@ -24,6 +50,19 @@ test('node exec schema allows oversized timeout values and documents clamping', 
   assert.equal(timeout.minimum, 1);
   assert.equal(Object.prototype.hasOwnProperty.call(timeout, 'maximum'), false);
   assert.match(String(timeout.description), /above the 60s maximum are clamped/i);
+});
+
+test('shared write contentRef retry hints are executable and JSON-escape actual arguments', () => {
+  const filePath = 'quoted "path"\\line\nnote.txt';
+  const contentRef = 'write_ref"\\line\nvalue';
+  assert.equal(
+    formatWriteContentRefRetryHint(filePath, contentRef),
+    ' The attempted content is cached. To confirm overwriting without generating the same content again, call write({ filePath: "quoted \\"path\\"\\\\line\\nnote.txt", contentRef: "write_ref\\"\\\\line\\nvalue", overwrite: true }).',
+  );
+  assert.equal(
+    formatWriteContentRefRetryHint(filePath, contentRef, true),
+    ' The attempted content is cached. To retry and create the missing parent directories without generating the same content again, call write({ filePath: "quoted \\"path\\"\\\\line\\nnote.txt", contentRef: "write_ref\\"\\\\line\\nvalue", overwrite: true, createDirs: true }).',
+  );
 });
 
 test('shared exec timeout resolution clamps only oversized finite values', () => {
@@ -100,6 +139,40 @@ test('node write accepts symlinked parent dirs without createDirs', async () => 
     await fs.symlink(realParent, symlinkParent, 'dir');
     await write({ filePath: 'linked-parent/note.txt', content: 'via symlink' }, { session: { agent: agentName } });
     assert.equal(await fs.readFile(path.join(realParent, 'note.txt'), 'utf8'), 'via symlink');
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});
+
+test('node apply_patch reports added and updated line counts', async () => {
+  const agentName = uniqueAgent('node_apply_patch_counts');
+  const baseDir = getNodeAgentDir(agentName);
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(path.join(baseDir, 'note.txt'), 'old\nkeep');
+    const result = await apply_patch({
+      input: [
+        '*** Begin Patch',
+        '*** Update File: note.txt',
+        '@@',
+        '-old',
+        '+new',
+        '+extra',
+        ' keep',
+        '*** Add File: added.txt',
+        '+first',
+        '+second',
+        '*** End Patch',
+      ].join('\n'),
+    }, { session: { agent: agentName } });
+
+    assert.equal(result, [
+      'Patch applied successfully.',
+      '- Updated note.txt (+2 -1)',
+      '- Added added.txt (+2)',
+    ].join('\n'));
+    assert.equal(await fs.readFile(path.join(baseDir, 'note.txt'), 'utf8'), 'new\nextra\nkeep');
+    assert.equal(await fs.readFile(path.join(baseDir, 'added.txt'), 'utf8'), 'first\nsecond');
   } finally {
     await cleanupAgent(agentName);
   }

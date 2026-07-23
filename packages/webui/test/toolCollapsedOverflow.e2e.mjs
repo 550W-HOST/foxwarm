@@ -160,7 +160,7 @@ test('desktop collapsed exec/wait/edit summaries stay one-line ellipsized and Co
   assert.ok(expandedPath.rootOverflow <= 1)
 
   await page.click('#exec .foxwarm-tool-tag')
-  const expandedExec = await page.$eval('#exec .foxwarm-tool-expanded-content .whitespace-pre-wrap', (content) => {
+  const expandedExec = await page.$eval('#exec .foxwarm-tool-call-args .whitespace-pre-wrap', (content) => {
     const style = getComputedStyle(content)
     return {
       whiteSpace: style.whiteSpace,
@@ -179,7 +179,7 @@ test('mobile 550A collapsed exec/wait/edit summaries retain the same one-line bo
   await assertCollapsedTools()
 
   await page.click('#wait .foxwarm-tool-tag')
-  const expandedWait = await page.$eval('#wait .foxwarm-tool-expanded-content .whitespace-pre-wrap', (content) => {
+  const expandedWait = await page.$eval('#wait .foxwarm-tool-call-args .whitespace-pre-wrap', (content) => {
     const style = getComputedStyle(content)
     return {
       whiteSpace: style.whiteSpace,

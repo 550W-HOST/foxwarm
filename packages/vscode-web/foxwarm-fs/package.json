@@ -8,6 +8,8 @@
   "activationEvents": [
     "onFileSystem:foxwarm",
     "onCommand:foxwarm-fs.openFolder",
+    "onCommand:foxwarm-fs.openAppFolder",
+    "onCommand:foxwarm-fs.openDataFolder",
     "onCommand:foxwarm-fs.addFolderToWorkspace",
     "onCommand:foxwarm-fs.handleOpenRequest"
   ],
@@ -18,6 +20,18 @@
         "title": "Foxwarm: Add Folder...",
         "category": "Foxwarm",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "foxwarm-fs.openAppFolder",
+        "title": "Open Foxwarm app folder",
+        "category": "Foxwarm",
+        "icon": "$(folder-library)"
+      },
+      {
+        "command": "foxwarm-fs.openDataFolder",
+        "title": "Open Foxwarm data folder",
+        "category": "Foxwarm",
+        "icon": "$(database)"
       },
       {
         "command": "foxwarm-fs.handleOpenRequest",

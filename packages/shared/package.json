@@ -30,6 +30,10 @@
     "./tokenCount": {
       "types": "./dist/tokenCount.d.ts",
       "default": "./dist/tokenCount.js"
+    },
+    "./configSchemas": {
+      "types": "./dist/configSchemas.d.ts",
+      "default": "./dist/configSchemas.js"
     }
   },
   "dependencies": {

@@ -15,7 +15,7 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
@@ -196,9 +196,9 @@ function buildQueuedPreviewMessages(queue: QueueItem[] | undefined): Message[] {
 }
 
 
-function getModelsSetupDiagnostics() {
-  const exists = fs.existsSync(DEFAULT_MODELS_CONFIG_PATH);
-  const rawYaml = exists ? readRawTextFileIfExists(DEFAULT_MODELS_CONFIG_PATH) : '';
+export function getModelsSetupDiagnostics(modelsPath: string = getActiveModelsConfigPath()) {
+  const exists = fs.existsSync(modelsPath);
+  const rawYaml = exists ? readRawTextFileIfExists(modelsPath) : '';
   const raw = rawYaml ? (yaml.load(rawYaml) as any) || {} : undefined;
   const providers = raw?.providers || raw?.models || {};
   const providerEntries = providers && typeof providers === 'object' && !Array.isArray(providers) ? Object.entries(providers as Record<string, ProviderConfigEntry>) : [];
@@ -209,13 +209,15 @@ function getModelsSetupDiagnostics() {
     .map(([key]) => key);
 
   return {
-    path: DEFAULT_MODELS_CONFIG_PATH,
+    path: modelsPath,
     templatePath: MODELS_CONFIG_TEMPLATE_PATH,
     exists,
     providerCount,
     defaultModel,
     rawYaml,
     providers: providerEntries.map(([key, entry]) => {
+      const providerType = entry.providerType || entry.provider || 'openai-completions';
+      const isVirtual = providerType === 'session-hash' || providerType === 'failover';
       const rawModels = Array.isArray(entry.models) ? entry.models : Array.isArray(entry.model) ? entry.model : (entry.model ? [entry.model] : []);
       const models = rawModels
         .map((item: any) => typeof item === 'string' ? item : item?.id)
@@ -224,10 +226,14 @@ function getModelsSetupDiagnostics() {
       const defaultPrefix = `${key}/`;
       return {
         id: key,
-        providerType: entry.providerType || entry.provider || 'openai-completions',
+        providerType,
+        isVirtual,
         baseUrl: entry.baseUrl || '',
         apiKey: entry.apiKey || '',
         models,
+        targets: Array.isArray(entry.targets) ? entry.targets : [],
+        failureThreshold: entry.failureThreshold ?? (providerType === 'failover' ? 5 : null),
+        cooldownMs: entry.cooldownMs ?? (providerType === 'failover' ? 600_000 : null),
         defaultModel: defaultModel?.startsWith(defaultPrefix) ? defaultModel.slice(defaultPrefix.length) : '',
       };
     }),
@@ -349,6 +355,9 @@ function buildWebUiModelsPayload(currentModel?: string) {
         label: key,
         isDefault: key === defaultKey,
         contextLimit: entry?.contextLimit || null,
+        providerType: entry?.providerType || null,
+        isVirtual: !!entry?.virtualRouting,
+        targets: entry?.virtualRouting?.targets || [],
       };
     }),
   };
@@ -716,18 +725,19 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            fs.ensureDirSync(path.dirname(DEFAULT_MODELS_CONFIG_PATH));
+            const modelsPath = getActiveModelsConfigPath();
+            fs.ensureDirSync(path.dirname(modelsPath));
             const hasRawYaml = Object.prototype.hasOwnProperty.call(req.body || {}, 'yaml');
             if (hasRawYaml) {
               // Raw mode is intentionally raw: validate first, then write the
               // user-provided text byte-for-byte instead of parse + dump, so
               // comments, key order, quoting, and custom formatting survive.
-              writeRawModelsConfig(String(req.body?.yaml ?? ''), DEFAULT_MODELS_CONFIG_PATH);
+              writeRawModelsConfig(String(req.body?.yaml ?? ''), modelsPath);
             } else {
-              const existingRaw = readRawTextFileIfExists(DEFAULT_MODELS_CONFIG_PATH);
+              const existingRaw = readRawTextFileIfExists(modelsPath);
               const existingConfig = existingRaw.trim() ? ((yaml.load(existingRaw) as any) || {}) : {};
               const config = buildModelsConfigFromSetupForm(req.body || {}, existingConfig);
-              fs.writeFileSync(DEFAULT_MODELS_CONFIG_PATH, dumpSetupYaml(config), 'utf8');
+              fs.writeFileSync(modelsPath, dumpSetupYaml(config), 'utf8');
             }
 
             // Validate by resolving the newly written config.
@@ -953,8 +963,9 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to create agent');
             const message = e instanceof Error ? e.message : String(e);
-            const status = /already exists/i.test(message) ? 409 : 400;
-            res.status(status).json({ error: message });
+            const code = typeof e?.code === 'string' ? e.code : undefined;
+            const status = code === sessionManager.ARCHIVED_SESSION_ID_ERROR_CODE || /already exists/i.test(message) ? 409 : 400;
+            res.status(status).json({ error: message, ...(code ? { code } : {}) });
           }
         },
       });
@@ -1015,9 +1026,13 @@ export class WebUIChannel implements Channel {
               }
               sessionId = result.session.id;
             } else {
-              const sessionName = requestedSessionId || sessionManager.generateSessionId();
-              sessionManager.validateSessionName(sessionName);
-              const result = await sessionManager.createSessionInAgent({ agentName: agentId, sessionName });
+              if (requestedSessionId) {
+                sessionManager.validateSessionName(requestedSessionId);
+              }
+              const result = await sessionManager.createSessionInAgent({
+                agentName: agentId,
+                ...(requestedSessionId ? { sessionName: requestedSessionId } : {}),
+              });
               sessionId = result.sessionId;
             }
 
@@ -1036,8 +1051,11 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to create session');
             const message = e instanceof Error ? e.message : String(e);
-            const status = /already exists/i.test(message) ? 409 : /does not exist|invalid/i.test(message) ? 400 : 500;
-            res.status(status).json({ error: message });
+            const code = typeof e?.code === 'string' ? e.code : undefined;
+            const status = code === sessionManager.ARCHIVED_SESSION_ID_ERROR_CODE || /already exists/i.test(message)
+              ? 409
+              : /does not exist|invalid/i.test(message) ? 400 : 500;
+            res.status(status).json({ error: message, ...(code ? { code } : {}) });
           }
         },
       });

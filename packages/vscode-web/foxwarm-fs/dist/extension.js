@@ -29,14 +29,22 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/extension.ts
 var extension_exports = {};
 __export(extension_exports, {
+  FOXWARM_APP_SCHEMA_URI: () => FOXWARM_APP_SCHEMA_URI,
+  FOXWARM_MODELS_SCHEMA_URI: () => FOXWARM_MODELS_SCHEMA_URI,
   activate: () => activate,
   buildFoxwarmNodeUriString: () => buildFoxwarmNodeUriString,
   deactivate: () => deactivate,
+  getFoxwarmConfigSchemaContent: () => getFoxwarmConfigSchemaContent,
+  getFoxwarmConfigSchemaUri: () => getFoxwarmConfigSchemaUri,
+  isExactWorkspaceRoot: () => isExactWorkspaceRoot,
+  normalizeConfigFilesResponse: () => normalizeConfigFilesResponse,
   normalizeFoxwarmOpenRequest: () => normalizeFoxwarmOpenRequest,
-  parseFoxwarmUri: () => parseFoxwarmUri
+  normalizeWorkspaceRootsResponse: () => normalizeWorkspaceRootsResponse,
+  parseFoxwarmUri: () => parseFoxwarmUri,
+  registerFoxwarmConfigSchemas: () => registerFoxwarmConfigSchemas
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode2 = __toESM(require("vscode"));
+var vscode3 = __toESM(require("vscode"));
 
 // src/provider.ts
 var vscode = __toESM(require("vscode"));
@@ -94,6 +102,143 @@ function buildFoxwarmNodeUriString(nodeId, realPath) {
   const encodedNodeId = encodeURIComponent(nodeId);
   const encodedPath = realPath.split("/").map((segment, index) => index === 0 ? "" : encodeURIComponent(segment)).join("/");
   return `foxwarm://node+${encodedNodeId}${encodedPath}`;
+}
+
+// src/openRequest.ts
+function normalizeFoxwarmAbsolutePath(value) {
+  if (typeof value !== "string") {
+    throw new Error("Foxwarm path must be a string.");
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/") || trimmed.includes("\0")) {
+    throw new Error("Foxwarm path must be an absolute POSIX path.");
+  }
+  const segments = [];
+  for (const segment of trimmed.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
+}
+function normalizeLine(value, label) {
+  if (value === void 0 || value === null) return void 0;
+  if (!Number.isInteger(value) || Number(value) < 1) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return Number(value);
+}
+function normalizeFoxwarmOpenRequest(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Foxwarm open request.");
+  }
+  const request = value;
+  if (typeof request.nodeId !== "string" || !/^[A-Za-z0-9._-]+$/.test(request.nodeId)) {
+    throw new Error("Foxwarm node id is invalid.");
+  }
+  const nodeId = request.nodeId;
+  const path = normalizeFoxwarmAbsolutePath(request.path);
+  if (request.kind === "addFolder") {
+    return { kind: "addFolder", nodeId, path };
+  }
+  if (request.kind === "openFile") {
+    const startLine = normalizeLine(request.startLine, "startLine");
+    const startColumn = normalizeLine(request.startColumn, "startColumn");
+    const endLine = normalizeLine(request.endLine, "endLine");
+    if (startColumn !== void 0 && startLine === void 0) {
+      throw new Error("startColumn requires startLine.");
+    }
+    if (startLine !== void 0 && endLine !== void 0 && endLine < startLine) {
+      throw new Error("endLine must not be before startLine.");
+    }
+    return {
+      kind: "openFile",
+      nodeId,
+      path,
+      ...startLine !== void 0 ? { startLine } : {},
+      ...startColumn !== void 0 ? { startColumn } : {},
+      ...endLine !== void 0 ? { endLine } : {}
+    };
+  }
+  throw new Error("Unsupported Foxwarm open request kind.");
+}
+
+// src/workspaceRoots.ts
+function normalizeRoot(value, kind) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Foxwarm ${kind} workspace root is missing.`);
+  }
+  const root = value;
+  if (root.nodeId !== "master") {
+    throw new Error(`Foxwarm ${kind} workspace root must use the master node.`);
+  }
+  return {
+    kind,
+    nodeId: "master",
+    path: normalizeFoxwarmAbsolutePath(root.path)
+  };
+}
+function normalizeConfigFile(value, kind) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Foxwarm ${kind} config file is missing.`);
+  }
+  const file = value;
+  if (file.nodeId !== "master") {
+    throw new Error(`Foxwarm ${kind} config file must use the master node.`);
+  }
+  return {
+    kind,
+    nodeId: "master",
+    path: normalizeFoxwarmAbsolutePath(file.path)
+  };
+}
+function normalizeWorkspaceRootsResponse(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Foxwarm workspace roots response.");
+  }
+  const response = value;
+  if (response.version !== 1 || !response.roots || typeof response.roots !== "object" || Array.isArray(response.roots)) {
+    throw new Error("Unsupported Foxwarm workspace roots response.");
+  }
+  const roots = response.roots;
+  const app = normalizeRoot(roots.app, "app");
+  const data = normalizeRoot(roots.data, "data");
+  if (app.path === data.path) {
+    const sharedName = "Foxwarm App & Data";
+    return {
+      app: { ...app, name: sharedName },
+      data: { ...data, name: sharedName }
+    };
+  }
+  return {
+    app: { ...app, name: "Foxwarm App" },
+    data: { ...data, name: "Foxwarm Data" }
+  };
+}
+function normalizeConfigFilesResponse(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Foxwarm workspace roots response.");
+  }
+  const response = value;
+  if (response.version !== 1 || !response.configFiles || typeof response.configFiles !== "object" || Array.isArray(response.configFiles)) {
+    throw new Error("Unsupported Foxwarm config files response.");
+  }
+  const files = response.configFiles;
+  return {
+    app: normalizeConfigFile(files.app, "app"),
+    models: normalizeConfigFile(files.models, "models")
+  };
+}
+function isExactWorkspaceRoot(uri, target) {
+  try {
+    const parsed = parseFoxwarmUri(uri);
+    return parsed.nodeId === target.nodeId && normalizeFoxwarmAbsolutePath(parsed.realPath) === normalizeFoxwarmAbsolutePath(target.path);
+  } catch {
+    return false;
+  }
 }
 
 // src/provider.ts
@@ -205,6 +350,25 @@ var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
   notifyExternalChange(uri) {
     this.fireSoon({ type: vscode.FileChangeType.Changed, uri });
   }
+  async getWorkspaceRoots() {
+    return normalizeWorkspaceRootsResponse(await this.getWorkspaceMetadata());
+  }
+  async getConfigFiles() {
+    return normalizeConfigFilesResponse(await this.getWorkspaceMetadata());
+  }
+  async getWorkspaceMetadata() {
+    const response = await fetch(`${this.apiBase}/workspace-roots`, { credentials: "include" });
+    if (!response.ok) {
+      let message = `Foxwarm workspace root request failed (${response.status}).`;
+      try {
+        const payload = await response.json();
+        if (typeof payload.error === "string" && payload.error) message = payload.error;
+      } catch {
+      }
+      throw new Error(message);
+    }
+    return response.json();
+  }
   async fetchJson(uri, operation) {
     const response = await this.fetch(uri, operation);
     return response.json();
@@ -242,80 +406,316 @@ var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
   }
 };
 
-// src/openRequest.ts
-function normalizeFoxwarmAbsolutePath(value) {
-  if (typeof value !== "string") {
-    throw new Error("Foxwarm path must be a string.");
-  }
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("/") || trimmed.includes("\0")) {
-    throw new Error("Foxwarm path must be an absolute POSIX path.");
-  }
-  const segments = [];
-  for (const segment of trimmed.split("/")) {
-    if (!segment || segment === ".") continue;
-    if (segment === "..") {
-      segments.pop();
-      continue;
+// src/configSchemas.ts
+var vscode2 = __toESM(require("vscode"));
+
+// ../../shared/src/configSchemas.ts
+var KNOWN_PROVIDER_TYPES = [
+  "openai-completions",
+  "openai-responses",
+  "openai",
+  "anthropic",
+  "session-hash",
+  "failover"
+];
+var knownProviderType = {
+  anyOf: [
+    { enum: KNOWN_PROVIDER_TYPES },
+    { type: "string" }
+  ],
+  description: "Provider protocol or virtual routing strategy. Known Foxwarm values are suggested; custom provider types remain valid."
+};
+var effectiveProviderTypeIs = (providerType) => ({
+  anyOf: [
+    {
+      required: ["providerType"],
+      properties: { providerType: { const: providerType } }
+    },
+    {
+      required: ["provider"],
+      properties: { provider: { const: providerType } },
+      anyOf: [
+        { not: { required: ["providerType"] } },
+        { properties: { providerType: { enum: ["", null, false] } } }
+      ]
     }
-    segments.push(segment);
+  ]
+});
+var positiveInteger = {
+  type: "integer",
+  minimum: 1
+};
+var modelOverrideProperties = {
+  contextLimit: { type: "integer", minimum: 1, description: "Context window size in tokens." },
+  extraFields: { type: "object", additionalProperties: true, description: "Provider-specific request fields." },
+  extraHeaders: { type: "object", additionalProperties: true, description: "Provider-specific HTTP headers. Values are passed through to the canonical backend loader." }
+};
+var modelItem = {
+  anyOf: [
+    { type: "string" },
+    {
+      type: "object",
+      required: ["id"],
+      additionalProperties: true,
+      properties: {
+        id: { type: "string", minLength: 1, description: "Provider model identifier." },
+        ...modelOverrideProperties
+      }
+    }
+  ]
+};
+var providerEntry = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    providerType: knownProviderType,
+    provider: { ...knownProviderType, deprecated: true, description: "Legacy spelling for providerType. Prefer providerType." },
+    baseUrl: { type: "string", description: "Provider API base URL." },
+    apiKey: { type: "string", description: "Provider credential. Keep this file private." },
+    models: { type: "array", items: modelItem, description: "Preferred provider model list." },
+    model: {
+      deprecated: true,
+      description: "Legacy spelling for models. Prefer models.",
+      anyOf: [
+        { type: "string" },
+        { type: "array", items: modelItem }
+      ]
+    },
+    contextLimit: modelOverrideProperties.contextLimit,
+    asyncCompact: { type: "boolean", description: "Whether background compaction may use this provider." },
+    requestCompression: { enum: ["gzip", "br"], description: "Optional request-body compression." },
+    extraFields: modelOverrideProperties.extraFields,
+    extraHeaders: modelOverrideProperties.extraHeaders,
+    targets: { type: "array", items: { type: "string", minLength: 1 }, uniqueItems: true, description: "Concrete model keys used by a virtual provider." },
+    failureThreshold: { ...positiveInteger, description: "Consecutive failures before a non-final failover target cools down." },
+    cooldownMs: { ...positiveInteger, description: "Failover cooldown duration in milliseconds." }
+  },
+  allOf: [
+    {
+      if: effectiveProviderTypeIs("session-hash"),
+      then: {
+        required: ["targets"],
+        properties: { targets: { minItems: 1 } },
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "contextLimit", "asyncCompact", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+      }
+    },
+    {
+      if: effectiveProviderTypeIs("failover"),
+      then: {
+        required: ["targets"],
+        properties: { targets: { minItems: 2 } },
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "contextLimit", "asyncCompact"].map((field) => ({ required: [field] })) }
+      }
+    },
+    {
+      if: { not: { anyOf: [effectiveProviderTypeIs("session-hash"), effectiveProviderTypeIs("failover")] } },
+      then: {
+        not: { anyOf: ["targets", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+      }
+    }
+  ]
+};
+var MODELS_CONFIG_SCHEMA = {
+  $id: "https://foxwarm.dev/schemas/models-config.json",
+  $schema: "http://json-schema.org/draft-07/schema#",
+  title: "Foxwarm models configuration",
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    default: { type: "string", minLength: 1, description: "Default concrete or virtual model key." },
+    providers: {
+      type: "object",
+      minProperties: 1,
+      additionalProperties: providerEntry,
+      description: "Preferred provider map."
+    },
+    models: {
+      type: "object",
+      minProperties: 1,
+      additionalProperties: providerEntry,
+      deprecated: true,
+      description: "Legacy root spelling for providers. Prefer providers."
+    }
+  },
+  anyOf: [{ required: ["providers"] }, { required: ["models"] }]
+};
+var guestAgent = {
+  type: "object",
+  additionalProperties: true,
+  required: ["agentId"],
+  properties: {
+    agentId: { type: "string" },
+    mode: { enum: ["single", "inherited"] },
+    isolated: { type: "boolean" },
+    node: { type: "string" }
   }
-  return `/${segments.join("/")}`;
+};
+var channelEntry = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    type: {
+      anyOf: [
+        { enum: ["telegram", "matrix", "wework", "weixin"] },
+        { type: "string" }
+      ],
+      description: "Known managed channel type or a custom channel type."
+    },
+    enabled: { type: "boolean" },
+    allowedUsers: { type: "array", items: { type: "string" } },
+    guestAgent,
+    botToken: { type: "string" },
+    mainAttachUser: { type: "string" },
+    homeserver: { type: "string" },
+    accessToken: { type: "string" },
+    botUserId: { type: "string" },
+    webhookUrl: { type: "string" },
+    token: { type: "string" },
+    encodingAESKey: { type: "string" },
+    listenPort: { type: "integer", minimum: 1, maximum: 65535 },
+    listenPath: { type: "string" },
+    selfName: { type: "string" },
+    baseUrl: { type: "string" },
+    routeTag: { type: "string" },
+    allowAllUsers: { type: "boolean" },
+    longPollTimeoutMs: { type: "integer", minimum: 1 },
+    loginBotType: { type: "string" },
+    aibot: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        stream: { type: "boolean" },
+        streamMaxContentBytes: { type: "integer", minimum: 1 },
+        websocket: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            enabled: { type: "boolean" },
+            botId: { type: "string" },
+            secret: { type: "string" },
+            url: { type: "string" },
+            heartbeatMs: { type: "integer", minimum: 1 },
+            reconnectMs: { type: "integer", minimum: 1 }
+          }
+        }
+      }
+    }
+  }
+};
+var APP_CONFIG_SCHEMA = {
+  $id: "https://foxwarm.dev/schemas/app-config.json",
+  $schema: "http://json-schema.org/draft-07/schema#",
+  title: "Foxwarm application configuration",
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    bot: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        name: { type: "string" },
+        enableWebUI: { type: "boolean" },
+        enableTrigger: { type: "boolean" },
+        httpPort: { type: "integer", minimum: 1, maximum: 65535 },
+        enableTUI: { type: "boolean" }
+      }
+    },
+    llm: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        ollamaBaseUrl: { type: "string" },
+        contextLimit: { type: "integer", minimum: 1 },
+        compactPercent: { type: "number", exclusiveMinimum: 0, maximum: 1 },
+        compactBlockLevelMinTokens: { type: "integer", minimum: 1 },
+        compactBlockLevelForceTokens: { type: "integer", minimum: 1 },
+        compactBlockCandidateFraction: { type: "number", minimum: 0, maximum: 1 },
+        compactBlockForceCompactFraction: { type: "number", minimum: 0, maximum: 1 },
+        compactMessageForceCompactFraction: { type: "number", minimum: 0, maximum: 1 },
+        maxOutput: { type: "integer", minimum: 1 },
+        thinkingBudget: { type: "integer", minimum: 0 },
+        openaiBaseUrl: { type: "string" },
+        openaiApiKey: { type: "string" },
+        anthropicBaseUrl: { type: "string" },
+        anthropicApiKey: { type: "string" }
+      }
+    },
+    paths: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        agentsDir: { type: "string" },
+        skillsDir: { type: "string" },
+        mcpConfigPath: { type: "string" }
+      }
+    },
+    channels: {
+      type: "object",
+      additionalProperties: channelEntry
+    },
+    asrService: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        enabled: { type: "boolean" },
+        url: { type: "string" },
+        key: { type: "string" }
+      }
+    }
+  }
+};
+
+// src/configSchemas.ts
+var FOXWARM_YAML_CONTRIBUTOR = "foxwarm-config";
+var FOXWARM_MODELS_SCHEMA_URI = "foxwarm-config://schemas/models";
+var FOXWARM_APP_SCHEMA_URI = "foxwarm-config://schemas/app";
+function getFoxwarmConfigSchemaUri(resource, files) {
+  try {
+    const uri = vscode2.Uri.parse(resource);
+    if (isExactWorkspaceRoot(uri, files.models)) return FOXWARM_MODELS_SCHEMA_URI;
+    if (isExactWorkspaceRoot(uri, files.app)) return FOXWARM_APP_SCHEMA_URI;
+    return void 0;
+  } catch {
+    return void 0;
+  }
 }
-function normalizeLine(value, label) {
-  if (value === void 0 || value === null) return void 0;
-  if (!Number.isInteger(value) || Number(value) < 1) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-  return Number(value);
+function getFoxwarmConfigSchemaContent(uri) {
+  if (uri === FOXWARM_MODELS_SCHEMA_URI) return JSON.stringify(MODELS_CONFIG_SCHEMA);
+  if (uri === FOXWARM_APP_SCHEMA_URI) return JSON.stringify(APP_CONFIG_SCHEMA);
+  throw new Error(`Unknown Foxwarm config schema URI: ${uri}`);
 }
-function normalizeFoxwarmOpenRequest(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Invalid Foxwarm open request.");
+async function registerFoxwarmConfigSchemas(files, extensions2 = vscode2.extensions) {
+  const yamlExtension = extensions2?.getExtension("redhat.vscode-yaml");
+  if (!yamlExtension) {
+    console.info("Foxwarm config schema support is unavailable because redhat.vscode-yaml is not installed.");
+    return false;
   }
-  const request = value;
-  if (typeof request.nodeId !== "string" || !/^[A-Za-z0-9._-]+$/.test(request.nodeId)) {
-    throw new Error("Foxwarm node id is invalid.");
+  const api = await yamlExtension.activate();
+  if (!api || typeof api.registerContributor !== "function") {
+    console.info("Foxwarm config schema support is unavailable because redhat.vscode-yaml did not expose its contributor API.");
+    return false;
   }
-  const nodeId = request.nodeId;
-  const path = normalizeFoxwarmAbsolutePath(request.path);
-  if (request.kind === "addFolder") {
-    return { kind: "addFolder", nodeId, path };
-  }
-  if (request.kind === "openFile") {
-    const startLine = normalizeLine(request.startLine, "startLine");
-    const startColumn = normalizeLine(request.startColumn, "startColumn");
-    const endLine = normalizeLine(request.endLine, "endLine");
-    if (startColumn !== void 0 && startLine === void 0) {
-      throw new Error("startColumn requires startLine.");
-    }
-    if (startLine !== void 0 && endLine !== void 0 && endLine < startLine) {
-      throw new Error("endLine must not be before startLine.");
-    }
-    return {
-      kind: "openFile",
-      nodeId,
-      path,
-      ...startLine !== void 0 ? { startLine } : {},
-      ...startColumn !== void 0 ? { startColumn } : {},
-      ...endLine !== void 0 ? { endLine } : {}
-    };
-  }
-  throw new Error("Unsupported Foxwarm open request kind.");
+  const registered = api.registerContributor(
+    FOXWARM_YAML_CONTRIBUTOR,
+    ((resource) => getFoxwarmConfigSchemaUri(resource, files)),
+    getFoxwarmConfigSchemaContent
+  );
+  if (!registered) console.info("Foxwarm config schema contributor was already registered.");
+  return registered;
 }
 
 // src/extension.ts
 async function waitForInitialWorkspaceFolders() {
   const deadline = Date.now() + 15e3;
   while (Date.now() < deadline) {
-    const folders = vscode2.workspace.workspaceFolders;
+    const folders = vscode3.workspace.workspaceFolders;
     if (folders && folders.length > 0) return folders;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("Code workspace folders did not finish loading.");
 }
 function getCurrentNodeId() {
-  const folder = vscode2.workspace.workspaceFolders?.[0];
+  const folder = vscode3.workspace.workspaceFolders?.[0];
   if (!folder) {
     return "master";
   }
@@ -326,7 +726,7 @@ function getCurrentNodeId() {
   }
 }
 function getCurrentPath() {
-  const folder = vscode2.workspace.workspaceFolders?.[0];
+  const folder = vscode3.workspace.workspaceFolders?.[0];
   if (!folder) {
     return "/";
   }
@@ -341,7 +741,7 @@ async function addFoxwarmFolder(request) {
   if (normalized.kind !== "addFolder") {
     throw new Error("Expected an addFolder request.");
   }
-  const uri = vscode2.Uri.parse(buildFoxwarmNodeUriString(normalized.nodeId, normalized.path));
+  const uri = vscode3.Uri.parse(buildFoxwarmNodeUriString(normalized.nodeId, normalized.path));
   const uriString = uri.toString(true);
   const workspaceFolders = await waitForInitialWorkspaceFolders();
   const existing = workspaceFolders.some((folder) => {
@@ -362,14 +762,14 @@ async function addFoxwarmFolder(request) {
       folderChangeListener?.dispose();
       reject(new Error(`Timed out while adding ${normalized.path} to the current workspace.`));
     }, 15e3);
-    folderChangeListener = vscode2.workspace.onDidChangeWorkspaceFolders((event) => {
+    folderChangeListener = vscode3.workspace.onDidChangeWorkspaceFolders((event) => {
       if (!event.added.some((folder) => folder.uri.toString(true) === uriString)) return;
       if (folderChangeTimeout) clearTimeout(folderChangeTimeout);
       folderChangeListener?.dispose();
       resolve();
     });
   });
-  const accepted = vscode2.workspace.updateWorkspaceFolders(
+  const accepted = vscode3.workspace.updateWorkspaceFolders(
     workspaceFolders.length,
     0,
     { uri }
@@ -382,8 +782,63 @@ async function addFoxwarmFolder(request) {
   await folderAdded;
   return { status: "added", uri: uriString };
 }
+async function waitForManagedWorkspaceUpdate(context, target, start, deleteCount, uri) {
+  let settled = false;
+  let listener;
+  let finish = () => {
+  };
+  const changed = new Promise((resolve) => {
+    finish = (value) => {
+      if (settled) return;
+      settled = true;
+      listener?.dispose();
+      resolve(value);
+    };
+    listener = vscode3.workspace.onDidChangeWorkspaceFolders(() => {
+      const folder = vscode3.workspace.workspaceFolders?.find((candidate) => candidate.name === target.name && isExactWorkspaceRoot(candidate.uri, target));
+      if (folder) finish(folder.uri);
+    });
+  });
+  context.subscriptions.push(listener, { dispose: () => finish(void 0) });
+  const accepted = vscode3.workspace.updateWorkspaceFolders(start, deleteCount, { uri, name: target.name });
+  if (!accepted) {
+    finish(void 0);
+    throw new Error(`Could not update ${target.name} in the current workspace.`);
+  }
+  return changed;
+}
+async function revealWorkspaceRoot(uri) {
+  await vscode3.commands.executeCommand("workbench.view.explorer");
+  await vscode3.commands.executeCommand("revealInExplorer", uri);
+}
+async function openManagedWorkspaceRoot(kind, provider, context) {
+  const target = (await provider.getWorkspaceRoots())[kind];
+  const uri = vscode3.Uri.parse(buildFoxwarmNodeUriString(target.nodeId, target.path));
+  const stat = await vscode3.workspace.fs.stat(uri);
+  if ((stat.type & vscode3.FileType.Directory) === 0) {
+    throw new Error(`${target.name} is not a directory: ${target.path}`);
+  }
+  const folders = vscode3.workspace.workspaceFolders ?? [];
+  const existingIndex = folders.findIndex((folder) => isExactWorkspaceRoot(folder.uri, target));
+  const existing = existingIndex >= 0 ? folders[existingIndex] : void 0;
+  let finalUri = existing?.uri ?? uri;
+  if (existing?.name !== target.name) {
+    finalUri = await waitForManagedWorkspaceUpdate(
+      context,
+      target,
+      existing ? existingIndex : folders.length,
+      existing ? 1 : 0,
+      existing?.uri ?? uri
+    );
+  }
+  if (finalUri) await revealWorkspaceRoot(finalUri);
+  return {
+    status: existing ? "existing" : "added",
+    uri: (finalUri ?? existing?.uri ?? uri).toString(true)
+  };
+}
 async function openFoxwarmFolder() {
-  const value = await vscode2.window.showInputBox({
+  const value = await vscode3.window.showInputBox({
     title: "Open Foxwarm Folder",
     prompt: "Absolute path on the current Foxwarm node.",
     value: getCurrentPath(),
@@ -396,21 +851,21 @@ async function openFoxwarmFolder() {
 }
 async function addExplorerFolderToWorkspace(uri) {
   const target = parseFoxwarmUri(uri);
-  const stat = await vscode2.workspace.fs.stat(uri);
-  if ((stat.type & vscode2.FileType.Directory) === 0) throw new Error(`${target.realPath} is not a directory.`);
+  const stat = await vscode3.workspace.fs.stat(uri);
+  if ((stat.type & vscode3.FileType.Directory) === 0) throw new Error(`${target.realPath} is not a directory.`);
   await addFoxwarmFolder({ kind: "addFolder", nodeId: target.nodeId, path: target.realPath });
 }
 async function openFoxwarmFile(request, provider) {
   const normalized = normalizeFoxwarmOpenRequest(request);
   if (normalized.kind !== "openFile") throw new Error("Expected an openFile request.");
-  const uri = vscode2.Uri.parse(buildFoxwarmNodeUriString(normalized.nodeId, normalized.path));
-  const stat = await vscode2.workspace.fs.stat(uri);
-  if ((stat.type & vscode2.FileType.Directory) !== 0) {
+  const uri = vscode3.Uri.parse(buildFoxwarmNodeUriString(normalized.nodeId, normalized.path));
+  const stat = await vscode3.workspace.fs.stat(uri);
+  if ((stat.type & vscode3.FileType.Directory) !== 0) {
     throw new Error(`${normalized.path} is a directory, not a file.`);
   }
-  const existing = vscode2.workspace.textDocuments.find((document2) => document2.uri.toString(true) === uri.toString(true));
+  const existing = vscode3.workspace.textDocuments.find((document2) => document2.uri.toString(true) === uri.toString(true));
   if (!existing?.isDirty) provider.notifyExternalChange(uri);
-  const document = existing ?? await vscode2.workspace.openTextDocument(uri);
+  const document = existing ?? await vscode3.workspace.openTextDocument(uri);
   let selection;
   if (normalized.startLine !== void 0) {
     if (normalized.startLine > document.lineCount) {
@@ -418,19 +873,19 @@ async function openFoxwarmFile(request, provider) {
     }
     if (normalized.startColumn !== void 0) {
       const line = document.lineAt(normalized.startLine - 1);
-      const position = new vscode2.Position(normalized.startLine - 1, Math.min(normalized.startColumn - 1, line.text.length));
-      selection = new vscode2.Range(position, position);
+      const position = new vscode3.Position(normalized.startLine - 1, Math.min(normalized.startColumn - 1, line.text.length));
+      selection = new vscode3.Range(position, position);
     } else {
       const endLine = Math.min(normalized.endLine ?? normalized.startLine, document.lineCount);
-      selection = new vscode2.Range(
-        new vscode2.Position(normalized.startLine - 1, 0),
+      selection = new vscode3.Range(
+        new vscode3.Position(normalized.startLine - 1, 0),
         document.lineAt(endLine - 1).range.end
       );
     }
   }
-  await vscode2.window.showTextDocument(document, { preview: true, selection });
+  await vscode3.window.showTextDocument(document, { preview: true, selection });
   if (existing?.isDirty) {
-    void vscode2.window.showWarningMessage(`${normalized.path} has unsaved Code changes; the external file was not reloaded.`);
+    void vscode3.window.showWarningMessage(`${normalized.path} has unsaved Code changes; the external file was not reloaded.`);
   }
   return { status: "opened", uri: uri.toString(true) };
 }
@@ -444,14 +899,17 @@ async function handleOpenRequest(request, provider) {
 function activate(context) {
   const provider = FoxwarmFileSystemProvider.fromExtensionContext(context);
   context.subscriptions.push(
-    vscode2.workspace.registerFileSystemProvider("foxwarm", provider, {
+    vscode3.workspace.registerFileSystemProvider("foxwarm", provider, {
       isCaseSensitive: true,
       isReadonly: false
     }),
-    vscode2.commands.registerCommand("foxwarm-fs.openFolder", openFoxwarmFolder),
-    vscode2.commands.registerCommand("foxwarm-fs.addFolderToWorkspace", addExplorerFolderToWorkspace),
-    vscode2.commands.registerCommand("foxwarm-fs.handleOpenRequest", (request) => handleOpenRequest(request, provider))
+    vscode3.commands.registerCommand("foxwarm-fs.openFolder", openFoxwarmFolder),
+    vscode3.commands.registerCommand("foxwarm-fs.openAppFolder", () => openManagedWorkspaceRoot("app", provider, context)),
+    vscode3.commands.registerCommand("foxwarm-fs.openDataFolder", () => openManagedWorkspaceRoot("data", provider, context)),
+    vscode3.commands.registerCommand("foxwarm-fs.addFolderToWorkspace", addExplorerFolderToWorkspace),
+    vscode3.commands.registerCommand("foxwarm-fs.handleOpenRequest", (request) => handleOpenRequest(request, provider))
   );
+  void provider.getConfigFiles().then((files) => registerFoxwarmConfigSchemas(files)).catch((error) => console.warn(`Foxwarm config schema support could not start: ${error instanceof Error ? error.message : String(error)}`));
   console.log("Foxwarm filesystem provider registered for foxwarm://node+<nodeId>/<absolute-path>.");
 }
 function deactivate() {

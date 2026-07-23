@@ -8,7 +8,7 @@ import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH } from './config';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry } from './config';
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
@@ -29,6 +29,15 @@ import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages
 import { guardToolOutputForModel } from './toolOutputGuard';
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
+import {
+    beginVirtualRoutingRequest,
+    clearVirtualRoutingState,
+    recordVirtualTargetFailure,
+    recordVirtualTargetSuccess,
+    selectVirtualTarget,
+    VirtualRoutingRequest,
+    VirtualTargetSelection,
+} from './modelRouting';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -151,6 +160,7 @@ type RequestLlmOnceOptions = {
     systemPrompt: string;
     model?: string;
     modelEntryOverride?: ModelConfigEntry;
+    modelsConfigOverride?: ModelsConfig;
     sessionId?: string;
     promptCacheKey?: string;
     iteration?: number;
@@ -171,6 +181,8 @@ export type LlmRetryEvent = {
     kind: 'http-error' | 'request-error' | 'response-error';
     reason: string;
     status?: string;
+    modelId?: string;
+    virtualModelKey?: string;
 };
 
 export type LlmRequestErrorDetails = {
@@ -214,7 +226,11 @@ type ModelStreamProgressSnapshot = {
 
 const MODEL_STREAM_EVENT_THROTTLE_MS = 80;
 const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
-export const DEFAULT_LLM_MAX_RETRIES = 5;
+export const DEFAULT_LLM_MAX_ATTEMPTS = 6;
+// Compatibility alias: maxRetries has always meant total attempts, not retries
+// after an initial request. Keep the public name while making the semantics
+// explicit internally.
+export const DEFAULT_LLM_MAX_RETRIES = DEFAULT_LLM_MAX_ATTEMPTS;
 const LLM_RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000];
 const MAX_RAW_STREAM_LOG_CHARS = 5 * 1024 * 1024;
 
@@ -460,13 +476,14 @@ export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-c
 }
 
 function getModelIdForMetadata(modelEntry: ModelConfigEntry | undefined, fallbackModelKey: string): string {
+    const canonicalModelKey = typeof modelEntry?.canonicalModelKey === 'string' ? modelEntry.canonicalModelKey.trim() : '';
+    if (canonicalModelKey) return canonicalModelKey;
+
     const providerKey = typeof modelEntry?.providerKey === 'string' ? modelEntry.providerKey.trim() : '';
     const modelName = typeof modelEntry?.model === 'string' ? modelEntry.model.trim() : '';
 
     if (providerKey && modelName) {
-        return modelName.startsWith(`${providerKey}/`)
-            ? modelName
-            : `${providerKey}/${modelName}`;
+        return `${providerKey}/${modelName}`;
     }
 
     if (providerKey) {
@@ -1105,195 +1122,361 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 /**
  * Execute tools and return results as a single message with multiple parts
  */
-export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
-    const parts = [];
-    let stopCurrentTurn = false;
-    let batchHasError = false;
+const PARALLEL_EXEC_LIMIT = 4;
 
-    const normalizeToolResult = (rawResult: any): any => {
-        if (rawResult === undefined) return { output: '(No output)' };
-        if (rawResult === null) return { output: null };
-        if (typeof rawResult === 'string' || typeof rawResult === 'number' || typeof rawResult === 'boolean') {
-            return { output: rawResult };
+type ToolExecutionSnapshot = {
+    currentNode: string;
+    cwd?: string;
+};
+
+type PreparedToolCall = {
+    call: FunctionCall;
+    index: number;
+    toolId: string;
+    toolFn: any;
+    toolArgs: Record<string, any>;
+    sessionId: string;
+    targetNode: string;
+    executionNode: string;
+    permissionNode: string;
+    result?: any;
+    sessionSnapshot?: ToolExecutionSnapshot;
+};
+
+type ExecutedToolCall = PreparedToolCall & {
+    result: any;
+    imageParts: MessagePart[];
+    stopCurrentTurn: boolean;
+    waitForReply: boolean;
+    explicitWaitId?: string;
+    deferredExecCwdSync?: { nextCwd: string };
+};
+
+function normalizeExecutedToolResult(rawResult: any): any {
+    if (rawResult === undefined) return { output: '(No output)' };
+    if (rawResult === null) return { output: null };
+    if (typeof rawResult === 'string' || typeof rawResult === 'number' || typeof rawResult === 'boolean') {
+        return { output: rawResult };
+    }
+    if (typeof rawResult === 'object') return rawResult;
+    return { output: String(rawResult) };
+}
+
+function buildToolArgsPreview(call: FunctionCall): string {
+    let argStr = '';
+    if (call.argsParseError && typeof call.rawArgsText === 'string') {
+        argStr = call.rawArgsText;
+    } else if (call.name === 'exec') {
+        argStr = call.args.command;
+    } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
+        argStr = call.args.filePath;
+    } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
+        argStr = typeof call.args.input === 'string' ? call.args.input : '';
+    } else if (call.name === 'read' || call.name === 'read_memory') {
+        const { filePath, startLine, endLine } = call.args;
+        argStr = filePath + (startLine ? ` (lines ${startLine}-${endLine})` : '');
+    } else if (call.args) {
+        const keys = Object.keys(call.args);
+        if (keys.length === 1) {
+            const value = call.args[keys[0]];
+            argStr = typeof value === 'object' ? JSON.stringify(value) : value;
+        } else {
+            argStr = keys.map(key => {
+                const value = call.args[key];
+                return `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`;
+            }).join('\n');
         }
-        if (typeof rawResult === 'object') {
-            return rawResult;
-        }
-        return { output: String(rawResult) };
-    };
+    }
+    return argStr.length > 200 ? `${argStr.substring(0, 197)}...` : argStr;
+}
 
-    const consumeInlineData = async (result: any, toolId: string, fallbackLabel: string): Promise<any> => {
-        if (!result || typeof result !== 'object') return result;
-
-        const normalized = await normalizeToolResultImages(result, toolId, fallbackLabel);
-        if (normalized.imageParts.length > 0) {
-            parts.push(...normalized.imageParts);
-        }
-
-        return normalized.result;
-    };
-
-    const extractToolLoopControl = (result: any): any => {
-        if (!result || typeof result !== 'object' || !result.__toolLoopControl || typeof result.__toolLoopControl !== 'object') {
-            return result;
-        }
-
-        stopCurrentTurn = stopCurrentTurn || !!result.__toolLoopControl.stopCurrentTurn;
-        const { __toolLoopControl, ...rest } = result;
-        return rest;
-    };
-
-    const hasToolResponseError = (result: any): boolean => {
-        if (!result || typeof result !== 'object') {
-            return false;
-        }
-        return result.error !== undefined && result.error !== null;
-    };
-    
-    for (const [index, call] of functionCalls.entries()) {
-        const toolFn = (tools as any)[call.name];
-        const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        
-        // Log what's being executed
-        let argStr = '';
-        if (call.argsParseError && typeof call.rawArgsText === 'string') {
-            argStr = call.rawArgsText;
-        } else if (call.name === 'exec') {
-            argStr = call.args.command;
-        } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
-            argStr = call.args.filePath;
-        } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
-            argStr = typeof call.args.input === 'string' ? call.args.input : '';
-        } else if (call.name === 'read' || call.name === 'read_memory') {
-            const { filePath, startLine, endLine } = call.args;
-            argStr = filePath + (startLine ? ` (lines ${startLine}-${endLine})` : '');
-        } else if (call.args) {
-            const keys = Object.keys(call.args);
-            if (keys.length === 1) {
-                const value = call.args[keys[0]];
-                // If value is object, stringify it
-                argStr = typeof value === 'object' ? JSON.stringify(value) : value;
-            } else {
-                argStr = keys.map(key => {
-                    const value = call.args[key];
-                    const valueStr = typeof value === 'object' ? JSON.stringify(value) : value;
-                    return `${key}: ${valueStr}`;
-                }).join('\n');
-            }
-        }
-        if (argStr.length > 200) argStr = argStr.substring(0, 197) + '...';
-        logger.info({ tool: call.name, args: argStr }, 'Executing tool');
+async function prepareToolCall(
+    call: FunctionCall,
+    index: number,
+    total: number,
+    toolContext: any,
+    session: any,
+    snapshot?: ToolExecutionSnapshot,
+    notifyStart = true,
+): Promise<PreparedToolCall> {
+    const toolFn = (tools as any)[call.name];
+    const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const argsPreview = buildToolArgsPreview(call);
+    if (notifyStart) {
+        logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
         if (toolContext.broadcast && session.verbose) {
-            // Exclude webui as it gets updates via onHistoryUpdate
-            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argStr}\``, { excludePlatforms: ['webui'] });
+            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argsPreview}\``, { excludePlatforms: ['webui'] });
         }
+    }
 
-        let result;
-        if (call.argsParseError) {
-            result = buildInvalidToolArgsResult(call);
-        }
-        
-        const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
-        const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
-        const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
-        const sessionId = toolContext.sessionId || 'main';
-        
-        // Get current node for this session
-        const currentNode = await nodesManager.getCurrentNode(sessionId) || 'master';
-        
-        // Determine target node: explicit node param > current node > master.
-        const targetNode = normalizeRequestedNode(nodeParam, currentNode);
-        
-        // Remove node parameter from args before execution
-        const toolArgs = { ...call.args };
-        if (supportsExplicitNode) {
-            delete toolArgs.node;
-        }
-        
-        // Tools that must run on master because they depend on host-local
-        // session/channel/agent/vector/MCP state rather than remote node files.
-        const forceMaster = tools.isMasterOnlyToolName(call.name);
-        const executionNode = forceMaster ? 'master' : targetNode;
-        const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
-        const toolStartedAt = Date.now();
-        const argsPreview = argStr.length > 500 ? `${argStr.slice(0, 500)}…` : argStr;
+    const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
+    const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
+    const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
+    const sessionId = toolContext.sessionId || 'main';
+    const currentNode = snapshot?.currentNode || await nodesManager.getCurrentNode(sessionId) || 'master';
+    const targetNode = normalizeRequestedNode(nodeParam, currentNode);
+    const toolArgs = { ...call.args };
+    if (supportsExplicitNode) delete toolArgs.node;
+    const executionNode = tools.isMasterOnlyToolName(call.name) ? 'master' : targetNode;
+    const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
+    if (notifyStart) {
+        const startedAt = Date.now();
         await Promise.resolve(toolContext.onToolStart?.({
             id: toolId,
             name: call.name,
             index,
-            total: functionCalls.length,
+            total,
             executionNode,
-            argsPreview,
-            startedAt: toolStartedAt,
+            argsPreview: argsPreview.length > 500 ? `${argsPreview.slice(0, 500)}…` : argsPreview,
+            startedAt,
         }));
-
-        // Check isolated session tool permission (includes path access check for master)
-        try {
-            if (!result?.error) {
-                await checkToolPermission(call.name, sessionId, permissionNode, toolArgs);
-            }
-        } catch (e: any) {
-            result = { error: e.message || String(e) };
-        }
-        
-        if (result?.error) {
-            // Skip tool execution if permission check failed
-        } else {
-        
-        if (executionNode !== 'master') {
-            // Execute on remote node
-            try {
-                result = normalizeToolResult(await nodesManager.executeTool(executionNode, call.name, toolArgs, sessionId));
-            } catch (e: any) {
-                result = { error: e.message || String(e) };
-            }
-        } else if (toolFn) {
-            // Execute locally on master
-            const localToolContext = call.name === 'send_file' || call.name === 'image_write_to_file'
-                ? { ...toolContext, runtimeNodeId: targetNode, toolUseId: toolId }
-                : { ...toolContext, toolUseId: toolId };
-            try {
-                result = normalizeToolResult(await toolFn(toolArgs, localToolContext));
-            } catch (e: any) {
-                result = { error: e?.message || String(e) };
-            }
-        } else {
-            result = { error: `Unknown tool: ${call.name}` };
-        }
-        } // End if (result?.error)
-
-        result = extractToolLoopControl(result);
-        result = await consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
-        result = await guardToolOutputForModel(result, {
-            sessionId,
-            session,
-            toolName: call.name,
-            toolUseId: toolId,
-            nodeId: executionNode,
-        });
-
-        batchHasError = batchHasError || hasToolResponseError(result);
-        
-        parts.push({
-            functionResponse: {
-                tool_use_id: toolId,
-                name: call.name,
-                response: result
-            }
-        });
     }
-    
-    const toolMessage: Message = {
-        role: 'tool',
-        parts: parts
-    };
 
+    return {
+        call,
+        index,
+        toolId,
+        toolFn,
+        toolArgs,
+        sessionId,
+        targetNode,
+        executionNode,
+        permissionNode,
+        result: call.argsParseError ? buildInvalidToolArgsResult(call) : undefined,
+        sessionSnapshot: snapshot,
+    };
+}
+
+async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any): Promise<ExecutedToolCall> {
+    let result = prepared.result;
+    let imageParts: MessagePart[] = [];
+    let stopCurrentTurn = false;
+    let waitForReply = false;
+    let explicitWaitId: string | undefined;
+    let deferredExecCwdSync: { nextCwd: string } | undefined;
+
+    try {
+        if (!result?.error) {
+            await checkToolPermission(prepared.call.name, prepared.sessionId, prepared.permissionNode, prepared.toolArgs);
+        }
+        if (!result?.error && prepared.executionNode !== 'master') {
+            result = normalizeExecutedToolResult(await nodesManager.executeTool(
+                prepared.executionNode,
+                prepared.call.name,
+                prepared.toolArgs,
+                prepared.sessionId,
+                prepared.sessionSnapshot,
+            ));
+        } else if (!result?.error && prepared.toolFn) {
+            const runtimeContext = prepared.call.name === 'send_file' || prepared.call.name === 'image_write_to_file'
+                ? { ...toolContext, runtimeNodeId: prepared.targetNode, toolUseId: prepared.toolId }
+                : { ...toolContext, toolUseId: prepared.toolId };
+            const localToolContext = prepared.sessionSnapshot
+                ? {
+                    ...runtimeContext,
+                    session: { ...toolContext.session, currentNode: prepared.sessionSnapshot.currentNode, cwd: prepared.sessionSnapshot.cwd },
+                    deferSessionCwdSync: prepared.call.name === 'exec',
+                }
+                : runtimeContext;
+            result = normalizeExecutedToolResult(await prepared.toolFn(prepared.toolArgs, localToolContext));
+        } else if (!result?.error) {
+            result = { error: `Unknown tool: ${prepared.call.name}` };
+        }
+
+        if (result && typeof result === 'object') {
+            if (result.__toolLoopControl && typeof result.__toolLoopControl === 'object') {
+                stopCurrentTurn = !!result.__toolLoopControl.stopCurrentTurn;
+            }
+            if (result.__toolPostAction && typeof result.__toolPostAction === 'object') {
+                waitForReply = result.__toolPostAction.waitForReply === true;
+                explicitWaitId = typeof result.__toolPostAction.explicitWaitId === 'string'
+                    ? result.__toolPostAction.explicitWaitId
+                    : undefined;
+            }
+            if (result.__execBatchCwdSync && typeof result.__execBatchCwdSync.nextCwd === 'string') {
+                deferredExecCwdSync = { nextCwd: result.__execBatchCwdSync.nextCwd };
+            }
+            const { __toolLoopControl, __toolPostAction, __execBatchCwdSync, ...visibleResult } = result;
+            result = visibleResult;
+        }
+
+        const normalizedImages = await normalizeToolResultImages(
+            result,
+            prepared.toolId,
+            `[Inline data returned by ${prepared.call.name}]`,
+        );
+        imageParts = normalizedImages.imageParts;
+        result = normalizedImages.result;
+    } catch (error: any) {
+        result = { error: error?.message || String(error) };
+        imageParts = [];
+    }
+
+    return {
+        ...prepared,
+        result: normalizeExecutedToolResult(result),
+        imageParts,
+        stopCurrentTurn,
+        waitForReply,
+        explicitWaitId,
+        deferredExecCwdSync,
+    };
+}
+
+async function runBoundedToolCalls(
+    prepared: PreparedToolCall[],
+    toolContext: any,
+): Promise<Array<ExecutedToolCall | undefined>> {
+    const results: Array<ExecutedToolCall | undefined> = new Array(prepared.length);
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(PARALLEL_EXEC_LIMIT, prepared.length) }, async () => {
+        while (true) {
+            const index = nextIndex++;
+            if (index >= prepared.length) return;
+            try {
+                results[index] = await runPreparedToolCall(prepared[index], toolContext);
+            } catch (error: any) {
+                results[index] = buildFailedToolCall(prepared[index], error);
+            }
+        }
+    });
+    await Promise.allSettled(workers);
+    return results;
+}
+
+function buildFailedToolCall(prepared: PreparedToolCall, error: any): ExecutedToolCall {
+    return {
+        ...prepared,
+        result: { error: error?.message || String(error) },
+        imageParts: [],
+        stopCurrentTurn: false,
+        waitForReply: false,
+    };
+}
+
+function buildSkippedToolCall(prepared: PreparedToolCall): ExecutedToolCall {
+    return {
+        ...prepared,
+        result: { error: 'Tool call was not started because the session was stopped.' },
+        imageParts: [],
+        stopCurrentTurn: false,
+        waitForReply: false,
+    };
+}
+
+async function replayDeferredExecCwd(execution: ExecutedToolCall): Promise<ExecutedToolCall> {
+    if (!execution.deferredExecCwdSync) return execution;
+    try {
+        const { applyDeferredExecCwdSync } = await import('./tools/execTools');
+        return {
+            ...execution,
+            result: await applyDeferredExecCwdSync(execution.sessionId, execution.result, execution.deferredExecCwdSync),
+            deferredExecCwdSync: undefined,
+        };
+    } catch (error: any) {
+        return {
+            ...execution,
+            result: { error: error?.message || String(error) },
+            deferredExecCwdSync: undefined,
+        };
+    }
+}
+
+/**
+ * Execute tools and return results as a single message with multiple parts.
+ * Adjacent direct exec calls share a node/cwd snapshot and run concurrently;
+ * every other tool is a serial ordering barrier.
+ */
+export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
+    const executions: ExecutedToolCall[] = [];
+    let cursor = 0;
+
+    while (cursor < functionCalls.length) {
+        if (session?.stopping) {
+            for (; cursor < functionCalls.length; cursor++) {
+                const prepared = await prepareToolCall(functionCalls[cursor], cursor, functionCalls.length, toolContext, session, undefined, false);
+                executions.push(buildSkippedToolCall(prepared));
+            }
+            break;
+        }
+
+        if (functionCalls[cursor].name !== 'exec') {
+            const prepared = await prepareToolCall(functionCalls[cursor], cursor, functionCalls.length, toolContext, session);
+            executions.push(await runPreparedToolCall(prepared, toolContext));
+            cursor++;
+            continue;
+        }
+
+        const segmentStart = cursor;
+        while (cursor < functionCalls.length && functionCalls[cursor].name === 'exec') cursor++;
+        const snapshot: ToolExecutionSnapshot = {
+            currentNode: await nodesManager.getCurrentNode(toolContext.sessionId || 'main') || 'master',
+            cwd: typeof session?.cwd === 'string' ? session.cwd : undefined,
+        };
+        const preparedSegment: PreparedToolCall[] = [];
+        for (let index = segmentStart; index < cursor; index++) {
+            preparedSegment.push(await prepareToolCall(
+                functionCalls[index],
+                index,
+                functionCalls.length,
+                toolContext,
+                session,
+                snapshot,
+            ));
+        }
+        const settled = await runBoundedToolCalls(preparedSegment, toolContext);
+        for (let index = 0; index < preparedSegment.length; index++) {
+            executions.push(await replayDeferredExecCwd(settled[index] || buildSkippedToolCall(preparedSegment[index])));
+        }
+    }
+
+    const parts: MessagePart[] = [];
+    let stopCurrentTurn = false;
+    let batchHasError = false;
+    let waitForReply = false;
+    const explicitWaitIds: string[] = [];
+
+    for (const execution of executions) {
+        let result = execution.result;
+        try {
+            result = await guardToolOutputForModel(result, {
+                sessionId: execution.sessionId,
+                session,
+                toolName: execution.call.name,
+                toolUseId: execution.toolId,
+                nodeId: execution.executionNode,
+            });
+        } catch (error: any) {
+            result = { error: error?.message || String(error) };
+        }
+        parts.push(...execution.imageParts, {
+            functionResponse: {
+                tool_use_id: execution.toolId,
+                name: execution.call.name,
+                response: result,
+            },
+        });
+        stopCurrentTurn = stopCurrentTurn || execution.stopCurrentTurn;
+        batchHasError = batchHasError || !!(result && typeof result === 'object' && result.error !== undefined && result.error !== null);
+        waitForReply = waitForReply || execution.waitForReply;
+        if (execution.explicitWaitId) explicitWaitIds.push(execution.explicitWaitId);
+    }
+
+    if (stopCurrentTurn && batchHasError) {
+        for (const waitId of explicitWaitIds) {
+            await sessionManager.clearSessionWaitById(toolContext.sessionId || session?.id, waitId);
+        }
+    }
+
+    const toolMessage: Message = { role: 'tool', parts };
     if (stopCurrentTurn && !batchHasError) {
         (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true };
-    } else if (stopCurrentTurn && batchHasError) {
+    } else if (stopCurrentTurn) {
         logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
-
+    if (waitForReply) {
+        (toolMessage as any).__toolPostAction = { waitForReply: true };
+    }
     return toolMessage;
 }
 
@@ -1376,6 +1559,7 @@ export async function chat(
     if (result.allParts && result.allParts.length > 0) {
         const assistantMeta = {
             ...(result.modelId ? { modelId: result.modelId } : {}),
+            ...(result.virtualModelKey ? { virtualModelKey: result.virtualModelKey } : {}),
             ...(result.usage ? { usage: result.usage } : {}),
         };
         const assistantMsg: Message = {
@@ -1389,39 +1573,154 @@ export async function chat(
     return result;
 }
 
-export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
-    const fixedContents = fixToolCalls(options.contents || []);
-    let messages, url, headers, data;
+type ConcreteRequestPlan = {
+    modelEntry: ModelConfigEntry;
+    modelKey: string;
+    modelId: string;
+    providerType: string;
+    url: string;
+    headers: Record<string, any>;
+    data: any;
+    requestBody: any;
+    compressionHeaders: Record<string, string>;
+    useOpenAIResponsesApi: boolean;
+    useOpenAIChatCompletionsApi: boolean;
+    useStreamingApi: boolean;
+};
 
-    const resolvedModel = resolveModelConfig(options.model);
-    const modelEntry = options.modelEntryOverride || resolvedModel.modelEntry;
-    const modelKey = options.modelEntryOverride
-        ? `${options.modelEntryOverride.providerKey || 'setup'}/${options.modelEntryOverride.model || 'model'}`
-        : resolvedModel.currentKey;
+class ConcreteAttemptFailure extends Error {
+    readonly kind: LlmRetryEvent['kind'];
+    readonly status?: string;
+    readonly retryable: boolean;
+    readonly countable: boolean;
+    readonly logDetail?: Record<string, any>;
+
+    constructor(message: string, options: {
+        kind: LlmRetryEvent['kind'];
+        status?: string;
+        retryable: boolean;
+        countable: boolean;
+        logDetail?: Record<string, any>;
+    }) {
+        super(message);
+        this.name = 'ConcreteAttemptFailure';
+        this.kind = options.kind;
+        this.status = options.status;
+        this.retryable = options.retryable;
+        this.countable = options.countable;
+        this.logDetail = options.logDetail;
+    }
+}
+
+function collectProviderErrorStrings(value: unknown, strings: string[], structuredCodes: string[], depth = 0): void {
+    if (depth > 8 || value === null || value === undefined) return;
+    if (typeof value === 'string') {
+        strings.push(value);
+        const trimmed = value.trim();
+        if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && depth < 8) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed && typeof parsed === 'object') {
+                    collectProviderErrorStrings(parsed, strings, structuredCodes, depth + 1);
+                }
+            } catch {
+                // Provider error bodies are frequently plain text; JSON parsing
+                // is only a best-effort path for streamed structured errors.
+            }
+        }
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const item of value) collectProviderErrorStrings(item, strings, structuredCodes, depth + 1);
+        return;
+    }
+    if (typeof value !== 'object') return;
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+        if ((key === 'code' || key === 'type') && typeof nestedValue === 'string') {
+            structuredCodes.push(nestedValue);
+        }
+        collectProviderErrorStrings(nestedValue, strings, structuredCodes, depth + 1);
+    }
+}
+
+function isModelNotFoundProviderError(body: unknown): boolean {
+    const strings: string[] = [];
+    const structuredCodes: string[] = [];
+    collectProviderErrorStrings(body, strings, structuredCodes);
+
+    const structuredMatch = structuredCodes.some(value => {
+        const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        return /^model_(?:not_found|does_not_exist)(?:_error)?$/.test(normalized)
+            || /^unknown_model(?:_error)?$/.test(normalized);
+    });
+    if (structuredMatch) return true;
+
+    const text = strings.join('\n');
+    const unknownModel = strings.some(value => {
+        const match = /\bunknown\s+model\b/i.exec(value);
+        if (!match) return false;
+        const suffix = value.slice(match.index + match[0].length).trim();
+        if (!suffix || /^[.:;,"'`]/.test(suffix)) return true;
+        const token = suffix.split(/\s|[,;]/, 1)[0].replace(/[.!?]+$/, '');
+        return /\d/.test(token) || /[/_-]/.test(token) || /\.[A-Za-z0-9]/.test(token);
+    });
+    return /\bmodel(?:[\s_-]+)not(?:[\s_-]+)found\b/i.test(text)
+        || /\bno\s+such\s+model\b/i.test(text)
+        || /\b(?:the\s+|requested\s+)?model\s+(?:"[^"]{1,200}"|'[^']{1,200}'|`[^`]{1,200}`|[^\s,;:]{1,200})\s+(?:was\s+)?not\s+found\b/i.test(text)
+        || /\b(?:the\s+|requested\s+)?model\s+(?:"[^"]{1,200}"|'[^']{1,200}'|`[^`]{1,200}`|[^\s,;:]{1,200})\s+does\s+not\s+exist\b/i.test(text)
+        || unknownModel;
+}
+
+export function classifyHttpFailure(statusCode: number, body: any): { retryable: boolean; countable: boolean } {
+    if (isModelNotFoundProviderError(body)) {
+        return { retryable: true, countable: true };
+    }
+    if (statusCode === 400 || statusCode === 413 || statusCode === 422) {
+        return { retryable: false, countable: false };
+    }
+    if (statusCode === 401 || statusCode === 403 || statusCode === 404
+        || statusCode === 408 || statusCode === 429 || statusCode === 529
+        || (statusCode >= 500 && statusCode <= 599)) {
+        return { retryable: true, countable: true };
+    }
+    // Preserve the previous retry behavior for other HTTP statuses without
+    // allowing an unclassified client response to poison shared route health.
+    return { retryable: true, countable: false };
+}
+
+function buildConcreteRequestPlan(options: {
+    request: RequestLlmOnceOptions;
+    fixedContents: Message[];
+    modelEntry: ModelConfigEntry;
+    modelKey: string;
+    promptCacheKey: string;
+    attempt: number;
+}): ConcreteRequestPlan {
+    const { request, fixedContents, modelEntry, modelKey, promptCacheKey, attempt } = options;
     const providerType = modelEntry?.providerType || 'openai';
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
     const modelName = modelEntry?.model || '';
     const modelId = getModelIdForMetadata(modelEntry, modelKey);
-    const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
+    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
 
     if (!baseUrl) {
-        throw new Error('Model config has no baseUrl');
+        throw new Error(`Model config \`${modelKey}\` has no baseUrl`);
     }
 
-    const iteration = options.iteration || 0;
-    logger.info(`Requesting LLM (${modelKey}, type ${providerType}, iteration ${iteration})...`);
-
-    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
-    const availableToolDefinitions = options.toolDefinitions ?? [];
-    const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh' :
-                         THINKING_BUDGET >= 4000 ? 'high' :
-                         THINKING_BUDGET >= 2000 ? 'medium' :
-                         THINKING_BUDGET > 0 ? 'low'
-                         : undefined;
+    const availableToolDefinitions = request.toolDefinitions ?? [];
+    const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh'
+        : THINKING_BUDGET >= 4000 ? 'high'
+        : THINKING_BUDGET >= 2000 ? 'medium'
+        : THINKING_BUDGET > 0 ? 'low'
+        : undefined;
+    let messages: any;
+    let url: string;
+    let headers: Record<string, any>;
+    let data: any;
 
     if (useOpenAIResponsesApi) {
         messages = convertToOpenAIResponsesFormatProvider(fixedContents);
@@ -1432,22 +1731,19 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             'user-agent': 'codex-tui/0.118.0 (Debian 13.0.0; x86_64) xterm.js_6.1.0-beta.191_ (codex-tui; 0.118.0)',
             'originator': 'codex-tui',
             'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
-                crypto.createHash('md5').update(`turn_id_${options.sessionId || 'default'}_${Date.now()}`).digest('hex')
+                crypto.createHash('md5').update(`turn_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex')
             }","sandbox":"seccomp"}`,
-            'x-client-request-id': crypto.createHash('md5').update(`req_id_${options.sessionId || 'default'}_${Date.now()}`).digest('hex'),
+            'x-client-request-id': crypto.createHash('md5').update(`req_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex'),
         };
-
         data = {
             model: modelName,
-            instructions: options.systemPrompt,
-            input: [
-                ...messages
-            ],
+            instructions: request.systemPrompt,
+            input: [...messages],
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
                 type: 'function',
                 name: fd.name,
                 description: fd.description,
-                parameters: fd.parameters
+                parameters: fd.parameters,
             })) : undefined,
             tool_choice: 'auto',
             parallel_tool_calls: true,
@@ -1468,7 +1764,6 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
             'user-agent': 'foxwarm/1.0',
         };
-
         data = {
             model: modelName,
             max_tokens: MAX_OUTPUT,
@@ -1477,21 +1772,21 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             stream: true,
             stream_options: { include_usage: true },
             messages: [
-                ...(options.systemPrompt?.trim()
-                    ? [{ role: 'system', content: options.systemPrompt }]
-                    : []),
-                ...messages
+                ...(request.systemPrompt?.trim() ? [{ role: 'system', content: request.systemPrompt }] : []),
+                ...messages,
             ],
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
                 type: 'function',
                 function: {
                     name: fd.name,
                     description: fd.description,
-                    parameters: fd.parameters
-                }
-            })) : undefined
+                    parameters: fd.parameters,
+                },
+            })) : undefined,
         };
     } else {
+        // Preserve current custom-provider behavior: any concrete provider type
+        // not recognized as OpenAI-compatible uses Anthropic serialization.
         messages = convertToAnthropicFormat(fixedContents, modelEntry);
         url = `${baseUrl}/v1/messages`;
         headers = {
@@ -1501,24 +1796,21 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             'anthropic-beta': 'interleaved-thinking-2025-05-14',
             'user-agent': 'foxwarm/1.0',
         };
-
         data = {
             model: modelName,
             max_tokens: MAX_OUTPUT,
-            thinking: THINKING_BUDGET ? { type: "enabled", budget_tokens: THINKING_BUDGET } : undefined,
-            system: options.systemPrompt,
-            messages: messages,
+            thinking: THINKING_BUDGET ? { type: 'enabled', budget_tokens: THINKING_BUDGET } : undefined,
+            system: request.systemPrompt,
+            messages,
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
                 name: fd.name,
                 description: fd.description,
-                input_schema: fd.parameters
-            })) : undefined
+                input_schema: fd.parameters,
+            })) : undefined,
         };
     }
 
-    const templateVars: Record<string, string> = {
-        SESSION_CACHE_KEY: promptCacheKey,
-    };
+    const templateVars: Record<string, string> = { SESSION_CACHE_KEY: promptCacheKey };
     const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
     Object.assign(data, extraFields);
     if (useOpenAIResponsesApi && extraFields.reasoning && typeof extraFields.reasoning === 'object') {
@@ -1527,9 +1819,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         data.reasoning = {
             ...(data.reasoning || {}),
             ...extraReasoning,
-            summary: hasSummaryOverride
-                ? extraReasoning.summary
-                : ((data.reasoning as any)?.summary || 'auto'),
+            summary: hasSummaryOverride ? extraReasoning.summary : ((data.reasoning as any)?.summary || 'auto'),
         };
     }
 
@@ -1542,29 +1832,203 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             omittedPathCount: Math.max(0, sanitizedRequestPayload.paths.length - 20),
             providerType,
             modelKey,
-            sessionId: options.sessionId,
+            sessionId: request.sessionId,
         }, 'Sanitized lone surrogate code units from provider request payload');
     }
 
-    const maxRetries = Math.max(1, options.maxRetries ?? DEFAULT_LLM_MAX_RETRIES);
-    const logFiles = await logRequest(data, iteration);
-    const responseAttempts: any[] = [];
-    const buildChatResult = (result: Omit<ChatResult, 'modelId'>): ChatResult => ({
-        ...result,
+    const { requestBody, requestHeaders: compressionHeaders } = maybeCompressLlmRequestBody(data, modelEntry);
+    return {
+        modelEntry,
+        modelKey,
         modelId,
-    });
-    const throwWithLoggedFailure = async (message: string, details: LlmRequestErrorDetails = {}): Promise<never> => {
-        await moveInteractionLogsToErrorDir(logFiles);
-        throw new LlmRequestError(message, {
-            modelId,
-            maxRetries,
-            attempts: responseAttempts,
-            ...details,
-        });
+        providerType,
+        url,
+        headers: {
+            ...headers,
+            ...expandTemplateVariables(modelEntry.extraHeaders || {}, templateVars),
+        },
+        data,
+        requestBody,
+        compressionHeaders,
+        useOpenAIResponsesApi,
+        useOpenAIChatCompletionsApi,
+        useStreamingApi,
     };
+}
 
-    let response: AxiosResponse;
-    let resp: any;
+function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): ChatResult {
+    let responseText = '';
+    const allParts: Message['parts'] = [];
+
+    if (plan.useOpenAIResponsesApi) {
+        const outputItems = Array.isArray(resp?.output) ? resp.output : [];
+        for (const item of outputItems) {
+            if (item.type === 'reasoning') {
+                const summaryText = Array.isArray(item.summary)
+                    ? item.summary.map((entry: any) => entry?.text || entry?.summary || '').filter(Boolean).join('\n')
+                    : '';
+                allParts.push({
+                    thinking: summaryText,
+                    providerMeta: {
+                        thinkingSummaries: item.summary?.map((x: any) => x.text),
+                        encryptedThinking: item.encrypted_content,
+                    },
+                });
+                continue;
+            }
+            if (item.type === 'message' && item.role === 'assistant') {
+                for (const contentPart of item.content || []) {
+                    if (contentPart.type === 'output_text' && typeof contentPart.text === 'string') {
+                        responseText += contentPart.text;
+                        allParts.push({ text: contentPart.text });
+                    } else if (contentPart.type === 'refusal' && typeof contentPart.refusal === 'string') {
+                        responseText += contentPart.refusal;
+                        allParts.push({ text: contentPart.refusal });
+                    }
+                }
+                continue;
+            }
+            if (item.type === 'function_call') {
+                const parsedArgs = parseFunctionCallArgs(item.arguments);
+                const callId = item.call_id || item.id;
+                if (parsedArgs.argsParseError) {
+                    logger.warn({ providerType: plan.providerType, callId, toolName: item.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI Responses tool arguments; converting to structured tool error');
+                }
+                allParts.push({ functionCall: { id: callId, name: item.name, ...parsedArgs } });
+            }
+        }
+    } else if (plan.useOpenAIChatCompletionsApi) {
+        const choice = resp?.choices?.[0];
+        const message = choice?.message;
+        if (message?.reasoning_content) {
+            logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
+            allParts.push({ thinking: message.reasoning_content });
+        }
+        if (typeof message?.content === 'string') {
+            responseText = message.content;
+            allParts.push({ text: message.content });
+        }
+        if (Array.isArray(message?.tool_calls)) {
+            for (const toolCall of message.tool_calls) {
+                if (toolCall.type === 'function') {
+                    const parsedArgs = parseFunctionCallArgs(toolCall.function.arguments);
+                    if (parsedArgs.argsParseError) {
+                        logger.warn({ providerType: plan.providerType, callId: toolCall.id, toolName: toolCall.function.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI chat tool arguments; converting to structured tool error');
+                    }
+                    allParts.push({
+                        functionCall: { id: toolCall.id, name: toolCall.function.name, ...parsedArgs },
+                    });
+                }
+            }
+        }
+    } else if (Array.isArray(resp?.content)) {
+        for (const rawBlock of resp.content) {
+            const block = rawBlock as AnthropicContentBlock;
+            if (block.type === 'text') {
+                const blockText = typeof block.text === 'string' ? block.text : '';
+                const extractedParts = blockText ? extractAnthropicThinkingTaggedParts(blockText) : null;
+                if (extractedParts) {
+                    for (const part of extractedParts) {
+                        if (part.text) responseText += part.text;
+                        allParts.push(part);
+                    }
+                } else {
+                    responseText += blockText;
+                    allParts.push({ text: blockText });
+                }
+            } else if (block.type === 'thinking') {
+                const thinkingPart: MessagePart = { thinking: block.thinking };
+                if (block.signature) thinkingPart.providerMeta = { signature: block.signature };
+                allParts.push(thinkingPart);
+            } else if (block.type === 'tool_use') {
+                allParts.push({ functionCall: { id: block.id, name: block.name, args: block.input } });
+            }
+        }
+    }
+
+    const toolCalls = allParts.filter(part => !!part.functionCall).map(part => part.functionCall!);
+    if (!responseText.trim() && toolCalls.length === 0) {
+        throw new ConcreteAttemptFailure('Model response contained no non-whitespace content or tool call', {
+            kind: 'response-error',
+            retryable: true,
+            countable: true,
+        });
+    }
+
+    let usage: TokenUsage = null;
+    if (plan.useOpenAIResponsesApi) {
+        const cached = resp?.usage?.input_tokens_details?.cached_tokens || 0;
+        usage = resp?.usage ? {
+            inputTokens: resp.usage.input_tokens - cached,
+            outputTokens: resp.usage.output_tokens,
+            cachedTokens: cached,
+        } : null;
+    } else if (plan.useOpenAIChatCompletionsApi) {
+        const cached = resp?.usage.prompt_tokens_details?.cached_tokens || 0;
+        usage = resp?.usage ? {
+            inputTokens: resp.usage.prompt_tokens - cached,
+            outputTokens: resp.usage.completion_tokens,
+            cachedTokens: cached,
+        } : null;
+    } else {
+        usage = resp?.usage ? {
+            inputTokens: resp.usage.input_tokens,
+            outputTokens: resp.usage.output_tokens,
+            cachedTokens: resp.usage.cache_read_input_tokens || 0,
+        } : null;
+    }
+
+    return {
+        text: responseText,
+        modelId: plan.modelId,
+        usage,
+        toolCalls,
+        allParts: allParts.length > 0 ? allParts : undefined,
+    };
+}
+
+export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
+    const fixedContents = fixToolCalls(options.contents || []);
+    const resolvedModel = options.modelsConfigOverride
+        ? (() => {
+            const modelsConfig = options.modelsConfigOverride!;
+            const defaultKey = modelsConfig.default;
+            const currentKey = options.model && modelsConfig.models[options.model] ? options.model : defaultKey;
+            return {
+                modelsConfig,
+                defaultKey,
+                currentKey,
+                modelEntry: modelsConfig.models[currentKey] || modelsConfig.models[defaultKey],
+            };
+        })()
+        : resolveModelConfig(options.model);
+    const routeEntry = options.modelEntryOverride || resolvedModel.modelEntry;
+    const routeKey = options.modelEntryOverride
+        ? `${options.modelEntryOverride.providerKey || 'setup'}/${options.modelEntryOverride.model || 'model'}`
+        : resolvedModel.currentKey;
+    if (!routeEntry) {
+        throw new Error(`Unable to resolve model config for \`${routeKey}\`.`);
+    }
+    if (options.modelEntryOverride && isVirtualModelConfigEntry(routeEntry)) {
+        throw new Error('modelEntryOverride does not support virtual model routing; select a configured model key instead.');
+    }
+
+    // Activation is an independent-request boundary. Retries use this captured
+    // generation and cannot reactivate an obsolete configuration fingerprint.
+    const virtualRoutingRequest: VirtualRoutingRequest | undefined = isVirtualModelConfigEntry(routeEntry)
+        ? beginVirtualRoutingRequest(routeKey, routeEntry)
+        : undefined;
+    if (!virtualRoutingRequest) clearVirtualRoutingState(routeKey);
+
+    // Resolve once per outer request. Every retry attempt, including virtual
+    // failover attempts, shares this prefix-lineage routing key.
+    const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
+    const requestedMaxAttempts = options.maxRetries ?? DEFAULT_LLM_MAX_ATTEMPTS;
+    const maxAttempts = Number.isFinite(requestedMaxAttempts)
+        ? Math.max(1, Math.floor(requestedMaxAttempts))
+        : DEFAULT_LLM_MAX_ATTEMPTS;
+    const iteration = options.iteration || 0;
+    const responseAttempts: any[] = [];
     const abortController = new AbortController();
     const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
     const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
@@ -1573,19 +2037,11 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         sessionId: options.sessionId,
         iteration,
     });
-
-    if (shouldRegisterAbortController) {
-        sessionManager.registerSessionAbortController(options.sessionId!, abortController);
-    }
-    if (shouldNotifySessionEvents) {
-        modelStreamEmitter.reset();
-    }
+    let logFiles: LlmInteractionLogFiles | null = null;
+    const virtualRequestSelections: Array<{ attempt: number; modelId: string }> = [];
 
     const notifyRetry = async (event: LlmRetryEvent): Promise<void> => {
-        if (!options.onRetry) {
-            return;
-        }
-
+        if (!options.onRetry) return;
         try {
             await options.onRetry(event);
         } catch (error) {
@@ -1593,68 +2049,90 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         }
     };
 
-    const { requestBody, requestHeaders: compressionHeaders } = maybeCompressLlmRequestBody(data, modelEntry);
-    let completedAttempt = 0;
+    if (shouldRegisterAbortController) {
+        sessionManager.registerSessionAbortController(options.sessionId!, abortController);
+    }
+    if (shouldNotifySessionEvents) modelStreamEmitter.reset();
 
     try {
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            if (attempt > 1 && shouldNotifySessionEvents) modelStreamEmitter.reset();
+
+            let selection: VirtualTargetSelection | undefined;
+            let modelEntry = routeEntry;
+            let modelKey = routeKey;
+            if (virtualRoutingRequest) {
+                selection = selectVirtualTarget(virtualRoutingRequest, promptCacheKey);
+                modelKey = selection.targetKey;
+                const concreteEntry = resolvedModel.modelsConfig.models[modelKey];
+                if (!concreteEntry || isVirtualModelConfigEntry(concreteEntry)) {
+                    throw new Error(`Virtual model \`${routeKey}\` resolved invalid concrete target \`${modelKey}\`.`);
+                }
+                modelEntry = concreteEntry;
+            }
+
+            const plan = buildConcreteRequestPlan({
+                request: options,
+                fixedContents,
+                modelEntry,
+                modelKey,
+                promptCacheKey,
+                attempt,
+            });
+            logger.info({
+                modelKey,
+                providerType: plan.providerType,
+                iteration,
+                attempt,
+                maxAttempts,
+                ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
+            }, 'Requesting LLM');
+            if (isVirtualModelConfigEntry(routeEntry)) {
+                virtualRequestSelections.push({ attempt, modelId: plan.modelId });
+                const virtualRequestLog = {
+                    virtualModelKey: routeKey,
+                    selections: virtualRequestSelections,
+                    selectedModelId: plan.modelId,
+                    request: plan.data,
+                };
+                if (!logFiles) {
+                    logFiles = await logRequest(virtualRequestLog, iteration);
+                } else {
+                    await fs.writeJson(logFiles.requestPath, virtualRequestLog, { spaces: 2 }).catch(error => {
+                        logger.warn({ err: error, virtualModelKey: routeKey, attempt }, 'Failed to update virtual LLM request log');
+                    });
+                }
+            } else if (!logFiles) {
+                logFiles = await logRequest(plan.data, iteration);
+            }
+
             let attemptRawStreamLog: ReturnType<typeof createRawStreamLogCapture> | null = null;
+            let resp: any;
+            let response: AxiosResponse | undefined;
             try {
-                response = await axios.post(url, requestBody, {
-                    headers: { ...headers, ...compressionHeaders, ...expandTemplateVariables(modelEntry.extraHeaders || {}, templateVars) },
+                response = await axios.post(plan.url, plan.requestBody, {
+                    headers: { ...plan.headers, ...plan.compressionHeaders },
                     timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
                     validateStatus: () => true,
                     signal: abortController.signal,
-                    ...(useStreamingApi ? { responseType: 'stream' as const } : {}),
+                    ...(plan.useStreamingApi ? { responseType: 'stream' as const } : {}),
                 });
 
-                if (useStreamingApi) {
-                    if (response.status !== 200) {
-                        const errorBody = await readStreamAsText(response.data, abortController.signal);
-                        const responseLog = {
-                            status: response.status + ' ' + response.statusText,
-                            headers: response.headers,
-                            body: errorBody
-                        };
-                        responseAttempts.push({
-                            attempt,
-                            kind: 'http-error',
-                            ...responseLog,
-                        });
-                        await logResponse({
-                            ...responseLog,
-                            attempts: responseAttempts,
-                        }, logFiles);
-                        logger.error({
-                            status: responseLog.status,
-                            headers: responseLog.headers,
-                            body: errorBody
-                        }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
-                        const delayMs = getLlmRetryDelayMs(attempt);
-                        const retryEvent: LlmRetryEvent = {
-                            attempt,
-                            maxRetries,
-                            kind: 'http-error',
-                            status: responseLog.status,
-                            reason: summarizeRetryReason(errorBody || responseLog.status),
-                        };
-                        if (attempt === maxRetries) {
-                            await notifyRetry({ ...retryEvent, final: true });
-                            return throwWithLoggedFailure(`API request failed after ${maxRetries} attempts`, {
-                                attempt,
-                                kind: retryEvent.kind,
-                                status: retryEvent.status,
-                            });
-                        }
-                        await notifyRetry({
-                            ...retryEvent,
-                            nextAttempt: attempt + 1,
-                            delayMs,
-                        });
-                        await sleepWithSignal(delayMs, abortController.signal);
-                        continue;
-                    }
+                if (response.status !== 200) {
+                    const errorBody = plan.useStreamingApi
+                        ? await readStreamAsText(response.data, abortController.signal)
+                        : response.data;
+                    const status = `${response.status} ${response.statusText}`.trim();
+                    const classification = classifyHttpFailure(response.status, errorBody);
+                    throw new ConcreteAttemptFailure(summarizeRetryReason(errorBody || status), {
+                        kind: 'http-error',
+                        status,
+                        ...classification,
+                        logDetail: { headers: response.headers, body: errorBody },
+                    });
+                }
 
+                if (plan.useStreamingApi) {
                     attemptRawStreamLog = createRawStreamLogCapture();
                     const streamCollectOptions = {
                         onProgress: shouldNotifySessionEvents
@@ -1663,121 +2141,108 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                         onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
                         onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
                     };
-
-                    if (useOpenAIResponsesApi) {
-                        resp = await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, streamCollectOptions);
-                    } else {
-                        resp = await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, streamCollectOptions);
-                    }
-
-                    await logResponse({
-                        status: response.status + ' ' + response.statusText,
-                        headers: response.headers,
-                        body: resp,
-                        rawStream: attemptRawStreamLog.snapshot(),
-                        ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),
-                    }, logFiles);
+                    resp = plan.useOpenAIResponsesApi
+                        ? await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, streamCollectOptions)
+                        : await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, streamCollectOptions);
                 } else {
                     resp = response.data;
-                    await logResponse({
-                        status: response.status + ' ' + response.statusText,
-                        headers: response.headers,
-                        body: resp,
-                        ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),
-                    }, logFiles);
                 }
 
-                if (response.status !== 200) {
-                    const responseLog = {
-                        status: response.status + ' ' + response.statusText,
-                        headers: response.headers,
-                        body: resp,
-                    };
+                const result = parseConcreteProviderResponse(plan, resp);
+                if (virtualRoutingRequest && selection) {
+                    recordVirtualTargetSuccess(virtualRoutingRequest, selection.targetKey);
+                }
+                await logResponse({
+                    status: `${response.status} ${response.statusText}`.trim(),
+                    headers: response.headers,
+                    body: resp,
+                    ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
+                    ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),
+                }, logFiles);
+                return virtualRoutingRequest
+                    ? { ...result, virtualModelKey: routeKey }
+                    : result;
+            } catch (error: any) {
+                if (isAbortError(error)) {
                     responseAttempts.push({
                         attempt,
-                        kind: 'http-error',
-                        ...responseLog,
-                    });
-                    await logResponse({
-                        ...responseLog,
-                        attempts: responseAttempts,
-                    }, logFiles);
-                    logger.error({
-                        status: responseLog.status,
-                        headers: responseLog.headers,
-                        body: resp
-                    }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
-                    const delayMs = getLlmRetryDelayMs(attempt);
-                    const retryEvent: LlmRetryEvent = {
-                        attempt,
-                        maxRetries,
-                        kind: 'http-error',
-                        status: responseLog.status,
-                        reason: summarizeRetryReason(resp?.error?.message || resp?.error || responseLog.status),
-                    };
-                    if (attempt === maxRetries) {
-                        await notifyRetry({ ...retryEvent, final: true });
-                        return throwWithLoggedFailure(`API request failed after ${maxRetries} attempts`, {
-                            attempt,
-                            kind: retryEvent.kind,
-                            status: retryEvent.status,
-                        });
-                    }
-                    await notifyRetry({
-                        ...retryEvent,
-                        nextAttempt: attempt + 1,
-                        delayMs,
-                    });
-                    await sleepWithSignal(delayMs, abortController.signal);
-                    continue;
-                }
-                completedAttempt = attempt;
-                break;
-            } catch (e: any) {
-                if (isLlmRequestError(e)) {
-                    throw e;
-                }
-
-                if (isAbortError(e)) {
-                    responseAttempts.push({
-                        attempt,
+                        modelId: plan.modelId,
+                        ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
                         kind: 'abort',
-                        error: e?.message || String(e),
-                        code: e?.code,
-                        name: e?.name,
+                        error: error?.message || String(error),
+                        code: error?.code,
+                        name: error?.name,
                         ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                     });
                     await logResponse({ attempts: responseAttempts }, logFiles);
                     await moveInteractionLogsToErrorDir(logFiles);
-                    throw e;
+                    throw error;
                 }
+
+                const failure = error instanceof ConcreteAttemptFailure
+                    ? error
+                    : new ConcreteAttemptFailure(summarizeRetryReason(error), {
+                        kind: 'request-error',
+                        status: (error as AxiosResponse)?.status ? String((error as AxiosResponse).status) : undefined,
+                        retryable: true,
+                        countable: true,
+                        logDetail: {
+                            error: error?.message || String(error),
+                            code: error?.code,
+                            name: error?.name,
+                            ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
+                        },
+                    });
 
                 responseAttempts.push({
                     attempt,
-                    kind: 'request-error',
-                    error: e?.message || String(e),
-                    code: e?.code,
-                    name: e?.name,
-                    ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
+                    modelId: plan.modelId,
+                    ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
+                    kind: failure.kind,
+                    status: failure.status,
+                    error: failure.message,
+                    ...(failure.logDetail || (failure.kind === 'response-error' ? {
+                        headers: response?.headers,
+                        body: resp,
+                        ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
+                    } : {})),
                 });
                 await logResponse({ attempts: responseAttempts }, logFiles);
-                logger.error({ status: (e as AxiosResponse)?.status }, `LLM API Network Error (Attempt ${attempt}/${maxRetries})`);
-                const delayMs = getLlmRetryDelayMs(attempt);
+                logger.error({
+                    modelId: plan.modelId,
+                    virtualModelKey: isVirtualModelConfigEntry(routeEntry) ? routeKey : undefined,
+                    kind: failure.kind,
+                    status: failure.status,
+                }, `LLM attempt failed (${attempt}/${maxAttempts})`);
+
+                let routeTerminal = false;
+                if (failure.countable && virtualRoutingRequest && selection) {
+                    routeTerminal = recordVirtualTargetFailure(virtualRoutingRequest, selection).terminal;
+                }
+                const final = !failure.retryable || routeTerminal || attempt === maxAttempts;
                 const retryEvent: LlmRetryEvent = {
                     attempt,
-                    maxRetries,
-                    kind: 'request-error',
-                    reason: summarizeRetryReason(e),
-                    status: (e as AxiosResponse)?.status ? String((e as AxiosResponse).status) : undefined,
+                    maxRetries: maxAttempts,
+                    kind: failure.kind,
+                    reason: failure.message,
+                    status: failure.status,
+                    modelId: plan.modelId,
+                    ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
                 };
-                if (attempt === maxRetries) {
+                if (final) {
                     await notifyRetry({ ...retryEvent, final: true });
-                    return throwWithLoggedFailure(`API request failed after ${maxRetries} attempts: ${e?.message || e}`, {
+                    await moveInteractionLogsToErrorDir(logFiles);
+                    throw new LlmRequestError(`API request failed after ${attempt} attempts: ${failure.message}`, {
+                        modelId: plan.modelId,
                         attempt,
-                        kind: retryEvent.kind,
-                        status: retryEvent.status,
+                        maxRetries: maxAttempts,
+                        kind: failure.kind,
+                        status: failure.status,
+                        attempts: responseAttempts,
                     });
                 }
+
+                const delayMs = getLlmRetryDelayMs(attempt);
                 await notifyRetry({
                     ...retryEvent,
                     nextAttempt: attempt + 1,
@@ -1793,175 +2258,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         }
     }
 
-    let responseText = '';
-    const allParts: Message['parts'] = [];
-
-    if (useOpenAIResponsesApi) {
-        const outputItems = Array.isArray(resp.output) ? resp.output : [];
-
-        if (outputItems.length === 0) {
-            await notifyRetry({
-                attempt: completedAttempt || maxRetries,
-                maxRetries,
-                final: true,
-                kind: 'response-error',
-                reason: 'No response from OpenAI Responses API',
-            });
-            return throwWithLoggedFailure('No response from OpenAI Responses API', {
-                attempt: completedAttempt || undefined,
-                kind: 'response-error',
-            });
-        }
-
-        for (const item of outputItems) {
-            if (item.type === 'reasoning') {
-                const summaryText = Array.isArray(item.summary)
-                    ? item.summary
-                        .map((entry: any) => entry?.text || entry?.summary || '')
-                        .filter(Boolean)
-                        .join('\n')
-                    : '';
-                allParts.push({
-                    thinking: summaryText,
-                    providerMeta: {
-                        thinkingSummaries: item.summary?.map((x: any) => x.text),
-                        encryptedThinking: item.encrypted_content,
-                    },
-                });
-                continue;
-            }
-
-            if (item.type === 'message' && item.role === 'assistant') {
-                for (const contentPart of item.content || []) {
-                    if (contentPart.type === 'output_text' && contentPart.text) {
-                        responseText += contentPart.text;
-                        allParts.push({ text: contentPart.text });
-                    } else if (contentPart.type === 'refusal' && contentPart.refusal) {
-                        responseText += contentPart.refusal;
-                        allParts.push({ text: contentPart.refusal });
-                    }
-                }
-                continue;
-            }
-
-            if (item.type === 'function_call') {
-                const parsedArgs = parseFunctionCallArgs(item.arguments);
-                const callId = item.call_id || item.id;
-                if (parsedArgs.argsParseError) {
-                    logger.warn({ providerType, callId, toolName: item.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI Responses tool arguments; converting to structured tool error');
-                }
-                allParts.push({
-                    functionCall: {
-                        id: callId,
-                        name: item.name,
-                        ...parsedArgs,
-                    }
-                });
-            }
-        }
-    } else if (useOpenAIChatCompletionsApi) {
-        const choice = resp.choices?.[0];
-        if (!choice) {
-            await notifyRetry({
-                attempt: completedAttempt || maxRetries,
-                maxRetries,
-                final: true,
-                kind: 'response-error',
-                reason: 'No response from OpenAI API',
-            });
-            return throwWithLoggedFailure('No response from OpenAI API', {
-                attempt: completedAttempt || undefined,
-                kind: 'response-error',
-            });
-        }
-
-        const message = choice.message;
-
-        if (message.reasoning_content) {
-            logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
-            allParts.push({ thinking: message.reasoning_content });
-        }
-
-        if (message.content) {
-            responseText = message.content;
-            allParts.push({ text: message.content });
-        }
-
-        if (message.tool_calls) {
-            for (const toolCall of message.tool_calls) {
-                if (toolCall.type === 'function') {
-                    const parsedArgs = parseFunctionCallArgs(toolCall.function.arguments);
-                    if (parsedArgs.argsParseError) {
-                        logger.warn({ providerType, callId: toolCall.id, toolName: toolCall.function.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI chat tool arguments; converting to structured tool error');
-                    }
-                    allParts.push({
-                        functionCall: {
-                            id: toolCall.id,
-                            name: toolCall.function.name,
-                            ...parsedArgs,
-                        }
-                    });
-                }
-            }
-        }
-    } else {
-        if (resp.content) {
-            for (const rawBlock of resp.content) {
-                const block = rawBlock as AnthropicContentBlock;
-                if (block.type === 'text') {
-                    const extractedParts = block.text ? extractAnthropicThinkingTaggedParts(block.text) : null;
-                    if (extractedParts) {
-                        for (const part of extractedParts) {
-                            if (part.text) {
-                                responseText += part.text;
-                            }
-                            allParts.push(part);
-                        }
-                    } else {
-                        responseText += block.text;
-                        allParts.push({ text: block.text });
-                    }
-                } else if (block.type === 'thinking') {
-                    const thinkingPart: MessagePart = { thinking: block.thinking };
-                    if (block.signature) {
-                        thinkingPart.providerMeta = { signature: block.signature };
-                    }
-                    allParts.push(thinkingPart);
-                } else if (block.type === 'tool_use') {
-                    allParts.push({ functionCall: { id: block.id, name: block.name, args: block.input } });
-                }
-            }
-        }
-    }
-
-    let usage: TokenUsage = null;
-    if (useOpenAIResponsesApi) {
-        const cached = resp.usage?.input_tokens_details?.cached_tokens || 0;
-        usage = resp.usage ? {
-            inputTokens: resp.usage.input_tokens - cached,
-            outputTokens: resp.usage.output_tokens,
-            cachedTokens: cached
-        } : null;
-    } else if (useOpenAIChatCompletionsApi) {
-        usage = resp.usage ? {
-            inputTokens: resp.usage.prompt_tokens,
-            outputTokens: resp.usage.completion_tokens,
-            cachedTokens: 0
-        } : null;
-    } else {
-        usage = resp.usage ? {
-            inputTokens: resp.usage.input_tokens,
-            outputTokens: resp.usage.output_tokens,
-            cachedTokens: resp.usage.cache_read_input_tokens || 0
-        } : null;
-    }
-
-    const toolCalls = allParts.filter(x => x.functionCall).map(x => x.functionCall);
-
-    return buildChatResult({
-        text: responseText,
-        usage,
-        toolCalls,
-        allParts: allParts.length > 0 ? allParts : undefined,
+    throw new LlmRequestError(`API request failed after ${maxAttempts} attempts`, {
+        maxRetries: maxAttempts,
+        attempts: responseAttempts,
     });
 }

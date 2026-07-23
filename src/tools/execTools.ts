@@ -15,6 +15,10 @@ import {
     waitForExecCompletion,
 } from '../execManager';
 
+export interface DeferredExecCwdSync {
+    nextCwd: string;
+}
+
 async function maybeSyncSessionCwdFromExec(ctx: ToolContext, entry: { initialCwd?: string }, nextCwd: string | null | undefined): Promise<string | null> {
     if (!ctx.sessionId || typeof nextCwd !== 'string' || nextCwd.trim().length === 0) {
         return null;
@@ -43,6 +47,25 @@ function appendCwdNotice(result: string, cwdNotice: string | null): string {
     return cwdNotice ? `${result}\n\n${cwdNotice}` : result;
 }
 
+export async function applyDeferredExecCwdSync(
+    sessionId: string,
+    result: any,
+    cwdSync: DeferredExecCwdSync,
+): Promise<any> {
+    const syncResult = await sessionManager.setSessionCwd(sessionId, cwdSync.nextCwd);
+    if (!syncResult.changed || !syncResult.current) {
+        return result;
+    }
+    const defaultNote = 'This cwd will be used as the default cwd for subsequent exec/read/edit/write/apply_patch tool calls.';
+    const notice = syncResult.previous
+        ? `SESSION CWD CHANGED: \`${syncResult.previous}\` → \`${syncResult.current}\`. ${defaultNote}`
+        : `SESSION CWD CHANGED: \`${syncResult.current}\`. ${defaultNote}`;
+    if (typeof result === 'object' && result !== null && typeof result.output === 'string') {
+        return { ...result, output: appendCwdNotice(result.output, notice) };
+    }
+    return { output: appendCwdNotice(String(result?.output ?? result ?? '(No output)'), notice) };
+}
+
 export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     const { command, cwd, timeout } = args;
     const resolvedTimeout = resolveExecTimeoutSeconds(timeout);
@@ -67,16 +90,24 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     const status = await waitForExecCompletion(execEntry.id, timeoutSeconds * 1000);
     if (status) {
         try {
-            const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readFinishedExecWorkingDirectory(execEntry));
+            const nextCwd = await readFinishedExecWorkingDirectory(execEntry);
             const result = await buildForegroundExecResult(execEntry, status, resolvedTimeout.warning);
+            if (ctx.deferSessionCwdSync && typeof nextCwd === 'string' && nextCwd.trim()) {
+                return { output: result, __execBatchCwdSync: { nextCwd: nextCwd.trim() } };
+            }
+            const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, nextCwd);
             return appendCwdNotice(result, cwdNotice);
         } finally {
             await finalizeForegroundExec(execEntry.id);
         }
     }
 
-    const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, await readLiveExecWorkingDirectory(execEntry));
+    const nextCwd = await readLiveExecWorkingDirectory(execEntry);
     await markExecForBackgroundNotification(execEntry.id);
     const result = await buildBackgroundTimeoutResult(execEntry, timeoutSeconds, resolvedTimeout.warning);
+    if (ctx.deferSessionCwdSync && typeof nextCwd === 'string' && nextCwd.trim()) {
+        return { output: result, __execBatchCwdSync: { nextCwd: nextCwd.trim() } };
+    }
+    const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, nextCwd);
     return appendCwdNotice(result, cwdNotice);
 }

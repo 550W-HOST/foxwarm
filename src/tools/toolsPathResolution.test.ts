@@ -163,6 +163,35 @@ test('write can reuse cached contentRef after existing-file refusal', async () =
   }
 });
 
+test('write existing-file refusal gives an exact executable contentRef call with escaped arguments', async () => {
+  const agentDir = getAgentDir('main');
+  const baseDir = path.join(agentDir, '.temp', `write-ref-hint-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const filePath = 'quoted "path"\\line\nnote.txt';
+  const fullPath = path.join(baseDir, filePath);
+  const ctx = {
+    sessionId: `main/write_ref_hint_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    session: { agent: 'main', cwd: baseDir },
+  };
+
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(fullPath, 'old');
+
+    await assert.rejects(
+      () => write({ filePath, content: 'secret cached content' }, ctx as any),
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        const contentRef = extractWriteContentRef(err);
+        assert.equal(message, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file. The attempted content is cached. To confirm overwriting without generating the same content again, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true }). The contentRef expires in 15 minutes and only works in this session/agent for the same path.`);
+        assert.doesNotMatch(message, /secret cached content|resend/i);
+        return true;
+      },
+    );
+  } finally {
+    await fs.remove(baseDir);
+  }
+});
+
 test('write requires existing parent directories by default and can retry missing-parent contentRef with createDirs', async () => {
   const agentDir = getAgentDir('main');
   const baseDir = path.join(agentDir, '.temp', `write-mkdir-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -184,6 +213,8 @@ test('write requires existing parent directories by default and can retry missin
         assert.match(message, /contentRef/);
         assert.doesNotMatch(message, /cached missing parent content/);
         contentRef = extractWriteContentRef(err);
+        assert.ok(message.includes(` The attempted content is cached. To retry and create the missing parent directories without generating the same content again, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true, createDirs: true }).`));
+        assert.doesNotMatch(message, /resend/i);
         return true;
       },
     );
@@ -197,6 +228,14 @@ test('write requires existing parent directories by default and can retry missin
   } finally {
     await fs.remove(baseDir);
   }
+});
+
+test('write schema explains that contentRef replaces regenerated content', () => {
+  const definition = definitions.find(entry => entry.name === 'write');
+  assert.ok(definition);
+  const description = String((definition.parameters.properties as any).contentRef.description);
+  assert.equal(description, 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. Use with overwrite=true and the same filePath to reuse the cached attempted content; omit content because the model does not need to generate the same content again.');
+  assert.doesNotMatch(description, /resend/i);
 });
 
 test('write createDirs=true creates missing parent directories for direct content', async () => {

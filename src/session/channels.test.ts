@@ -6,15 +6,39 @@ import path from 'path';
 import { Channel, registerChannel, unregisterChannel } from '../channel';
 import {
   attachChannel,
+  attachChannelDurably,
   createChannelsStore,
   createSessionBroadcast,
   getChannelConfig,
+  getSessionByChannel,
   importLegacyChannelAttachments,
   loadChannels,
   resetChannelsForTests,
   saveChannels,
   setChannelsStoreForTests,
 } from './channels';
+
+test('durable channel attach rolls back memory when persistence fails', async () => {
+  await withTempDir(async dirPath => {
+    const store = createChannelsStore(path.join(dirPath, 'channels.json'));
+    const originalWrite = store.write.bind(store);
+    let fail = true;
+    (store as any).write = async (...args: any[]) => {
+      if (fail) {
+        fail = false;
+        throw new Error('injected channel persistence failure');
+      }
+      return originalWrite(...args);
+    };
+    setChannelsStoreForTests(store);
+    await assert.rejects(
+      attachChannelDurably('failure-channel', 'failure-conversation', 'failure-session'),
+      /injected channel persistence failure/,
+    );
+    assert.equal(getSessionByChannel('failure-channel', 'failure-conversation'), undefined);
+    assert.equal(await attachChannelDurably('failure-channel', 'failure-conversation', 'failure-session'), 'failure-session');
+  });
+});
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-channels-store-'));

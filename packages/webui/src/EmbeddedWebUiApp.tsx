@@ -8,7 +8,7 @@ import GlobalUiSettingsMenu from './components/GlobalUiSettingsMenu'
 import CreateTabButton from './components/CreateTabButton'
 import { API_BASE_PATH } from './config'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
-import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
+import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
 import { applyLatestSessionListRequest, createLatestSessionListRequestGate } from './sessionListRefresh'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
@@ -321,12 +321,24 @@ export function EmbeddedAgentsApp({ target }: { target: Extract<FoxwarmEmbeddedT
   )
 }
 
-export function EmbeddedSetupApp({ target: _target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'setup' }> }) {
+export function EmbeddedSetupApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'setup' }> }) {
   useEmbeddedPreferences()
+  const [focusModelsRequest, setFocusModelsRequest] = useState(0)
+  useEffect(() => {
+    const handleHostMessage = (event: MessageEvent) => {
+      if (event.source !== window.parent) return
+      if (readFoxwarmFocusModelsMessage(event.data, target.nonce)) {
+        setFocusModelsRequest((current) => current + 1)
+      }
+    }
+    window.addEventListener('message', handleHostMessage)
+    postFoxwarmEmbedHostMessage(target.nonce, { type: 'setup-ready' })
+    return () => window.removeEventListener('message', handleHostMessage)
+  }, [target.nonce])
   return (
     <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-gray-50 dark:bg-gray-950">
       <Suspense fallback={<EmbeddedLeafFallback label="Setup" />}>
-        <SetupView />
+        <SetupView focusModelsRequest={focusModelsRequest} />
       </Suspense>
     </div>
   )
@@ -355,6 +367,7 @@ export function EmbeddedChatApp({ target }: { target: Extract<FoxwarmEmbeddedTar
         sendKeyMode={preferences.sendKeyMode}
         groupTools={preferences.groupTools}
         showUsageBadge={preferences.showUsageBadge}
+        onOpenModelSettings={() => postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-setup', focus: 'models' })}
         onOpenCodeCommit={(commit) => postFoxwarmEmbedHostMessage(target.nonce, {
           type: 'open-commit', nodeId: commit.nodeId, path: commit.path, commitId: commit.commitId,
         })}

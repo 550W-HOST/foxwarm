@@ -19,6 +19,36 @@ test('shouldBroadcastChannelText accepts non-empty trimmed text', () => {
   assert.equal(shouldBroadcastChannelText('\nhello\n'), true);
 });
 
+test('MessageRouter concurrent unbound-channel resolution returns one attached lifetime', async () => {
+  await sessionManager.loadSessions();
+  const router = new MessageRouter() as any;
+  const channelId = `router-concurrent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const conversationId = `conversation-${Math.random().toString(36).slice(2, 8)}`;
+  const ctx = {
+    platform: 'test',
+    channelType: 'test',
+    channelId,
+    channelUserId: conversationId,
+    conversationId,
+  };
+  const beforeIds = new Set(sessionManager.getAllSessions().keys());
+
+  const results = await Promise.all(
+    Array.from({ length: 100 }, () => router.resolveSessionForIncomingMessage(ctx)),
+  );
+  const ids = new Set(results.map((result: any) => result.sessionId));
+  assert.equal(ids.size, 1);
+  const [sessionId] = [...ids] as string[];
+  assert.equal(sessionManager.getSessionByChannel(channelId, conversationId), sessionId);
+  assert.deepEqual(
+    [...sessionManager.getAllSessions().keys()].filter(id => !beforeIds.has(id)),
+    [sessionId],
+  );
+
+  sessionManager.detachChannel(channelId, conversationId);
+  await sessionManager.deleteSession(sessionId);
+});
+
 test('MessageRouter queued turn start keeps WeWork stream-bound and unbound inputs separate', () => {
   const router = new MessageRouter() as any;
   const session: any = {

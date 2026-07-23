@@ -9,7 +9,9 @@
     "build:code": "node scripts/build-code-docker.mjs",
     "build:code:local": "node scripts/build-code-oss.mjs",
     "download:code": "node scripts/prepare-assets.mjs",
+    "prepare:yaml-extension": "node scripts/prepare-yaml-extension.mjs",
     "test": "node --test test/*.test.mjs && npm --prefix foxwarm-fs run test && npm --prefix foxwarm-terminal run test && npm --prefix foxwarm-scm run test && npm --prefix foxwarm-webui run test",
+    "test:e2e:yaml": "node --test test/yamlSchema.e2e.mjs",
     "prepare:assets": "npm run download:code"
   }
 }

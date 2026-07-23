@@ -19,20 +19,33 @@ import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  const { suffix, fork = false, message, node, noFurtherAssistantReply } = args;
+  const { suffix, fork = false, message, node, noFurtherAssistantReply, waitForReply } = args;
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
+  }
+  if (waitForReply !== undefined && typeof waitForReply !== 'boolean') {
+    throw new Error('waitForReply must be a boolean when provided.');
+  }
+  if (waitForReply === true && (typeof message !== 'string' || !message.trim())) {
+    throw new Error('create_child_session with waitForReply=true requires a non-empty initial message.');
   }
 
   const currentSessionId = ctx.sessionId;
   const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork, { node });
 
   if (message) {
-    sessionManager.sendToSession(childSessionId, message, currentSessionId).catch(err => {
-      logger.error({ err, childSessionId }, 'Failed to send initial message to child session');
-    });
+    if (waitForReply === true) {
+      await sessionManager.sendToSession(childSessionId, message, currentSessionId);
+    } else {
+      sessionManager.sendToSession(childSessionId, message, currentSessionId).catch(err => {
+        logger.error({ err, childSessionId }, 'Failed to send initial message to child session');
+      });
+    }
     const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Initial message sent.`;
+    if (waitForReply === true) {
+      return { output, __toolPostAction: { waitForReply: true } };
+    }
     return noFurtherAssistantReply
       ? { ...buildEndTurnResult(), output }
       : output;
@@ -45,17 +58,23 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 }
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
-  const { sessionId, message, noFurtherAssistantReply } = args;
+  const { sessionId, message, noFurtherAssistantReply, waitForReply } = args;
   const fromSessionId = ctx?.sessionId;
 
   if (!sessionId || typeof sessionId !== 'string') {
     throw new Error('sessionId is required');
+  }
+  if (waitForReply !== undefined && typeof waitForReply !== 'boolean') {
+    throw new Error('waitForReply must be a boolean when provided.');
   }
 
   const result = await sessionManager.sendToSession(sessionId, message, fromSessionId);
   const output = result.resolvedSessionId !== result.requestedSessionId
     ? `Message sent to session \`${result.resolvedSessionId}\` (requested \`${result.requestedSessionId}\`)`
     : `Message sent to session \`${result.resolvedSessionId}\``;
+  if (waitForReply === true) {
+    return { output, __toolPostAction: { waitForReply: true } };
+  }
   return noFurtherAssistantReply
     ? { ...buildEndTurnResult(), output }
     : output;
@@ -66,6 +85,7 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   const timeoutSeconds = normalizeWaitTimeoutSeconds(args?.timeoutSeconds);
   const waitAllSessions = normalizeWaitAllSessions(args?.waitAllSessions);
   const waitExecIds = normalizeWaitExecIds(args?.waitExecIds);
+  let explicitWaitId: string | undefined;
 
   if (ctx?.sessionId) {
     const waitState = await sessionManager.startSessionWait(ctx.sessionId, {
@@ -74,6 +94,7 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
       waitAllSessions,
       waitExecIds,
     });
+    explicitWaitId = waitState.id;
 
     if (timeoutSeconds !== undefined) {
       await timers.createWaitTimeoutTimer({
@@ -86,7 +107,10 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
     throw new Error('Cannot use wait timeout without session context.');
   }
 
-  return buildEndTurnResult(typeof reason === 'string' ? reason : undefined);
+  return {
+    ...buildEndTurnResult(typeof reason === 'string' ? reason : undefined),
+    ...(explicitWaitId ? { __toolPostAction: { explicitWaitId } } : {}),
+  };
 }
 
 export async function tool_submit_compact_plan() {

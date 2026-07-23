@@ -7,6 +7,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { HttpServer } from './httpServer';
 import { registerVscodeWebRoutes } from './vscodeWebRoutes';
+import { APP_CONFIG_PATH, BASE_DIR, DATA_ROOT_DIR, DEFAULT_MODELS_CONFIG_PATH } from './config';
 import { nodesManager } from './nodes/manager';
 import { executeVscodeNodeService, serializeVscodeNodeServiceError } from '../packages/shared/dist/vscodeNodeService';
 import type { WebSocket } from 'ws';
@@ -75,6 +76,16 @@ test('VS Code Web route, extension assets, and filesystem API require the WebUI 
     const webUiExtensionManifest = await webUiExtensionWithCookie.json() as { name?: string };
     assert.equal(webUiExtensionManifest.name, '@foxwarm/vscode-web-foxwarm-webui');
 
+    const yamlExtensionNoAuth = await fetch(`${baseUrl}/vscode-web/extensions/redhat-vscode-yaml/package.json`);
+    const yamlExtensionWithCookie = await fetch(`${baseUrl}/vscode-web/extensions/redhat-vscode-yaml/package.json`, { headers: cookieHeaders() });
+    assert.ok(yamlExtensionWithCookie.status === 200 || yamlExtensionWithCookie.status === 404);
+    if (yamlExtensionWithCookie.status === 200) {
+      assert.equal(yamlExtensionNoAuth.status, 401);
+      assert.equal((await yamlExtensionWithCookie.json() as { publisher?: string }).publisher, 'redhat');
+    } else {
+      assert.equal(yamlExtensionNoAuth.status, 404);
+    }
+
     const fsNoAuth = await fetch(`${baseUrl}/api/vscode-web/fs/stat?nodeId=master&path=${encodeURIComponent(__filename)}`);
     assert.equal(fsNoAuth.status, 401);
 
@@ -82,6 +93,25 @@ test('VS Code Web route, extension assets, and filesystem API require the WebUI 
     assert.equal(fsWithBearer.status, 200);
     const statPayload = await fsWithBearer.json() as { type?: number };
     assert.equal(statPayload.type, 1);
+
+    const rootsNoAuth = await fetch(`${baseUrl}/api/vscode-web/fs/workspace-roots`);
+    assert.equal(rootsNoAuth.status, 401);
+    const rootsWithCookie = await fetch(`${baseUrl}/api/vscode-web/fs/workspace-roots`, { headers: cookieHeaders() });
+    assert.equal(rootsWithCookie.status, 200);
+    assert.equal(rootsWithCookie.headers.get('cache-control'), 'no-store');
+    const rootsPayload = await rootsWithCookie.json() as Record<string, any>;
+    assert.deepEqual(rootsPayload, {
+      version: 1,
+      roots: {
+        app: { nodeId: 'master', path: BASE_DIR },
+        data: { nodeId: 'master', path: DATA_ROOT_DIR },
+      },
+      configFiles: {
+        app: { nodeId: 'master', path: APP_CONFIG_PATH },
+        models: { nodeId: 'master', path: DEFAULT_MODELS_CONFIG_PATH },
+      },
+    });
+    assert.equal(JSON.stringify(rootsPayload).includes(TEST_TOKEN), false);
   });
 });
 
@@ -174,6 +204,12 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-terminal/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-scm/);
         assert.match(html, /\/vscode-web\/extensions\/foxwarm-webui/);
+        assert.match(html, /\/vscode-web\/extensions\/redhat-vscode-yaml/);
+        assert.ok((html.match(/extensions\/redhat-vscode-yaml/g) || []).length >= 2);
+        assert.match(html, /redhat\.telemetry\.enabled/);
+        assert.match(html, /yaml\.schemaStore\.enable/);
+        assert.match(html, /yaml\.kubernetesCRDStore\.enable/);
+        assert.match(html, /yaml\.extension\.recommendations/);
         assert.match(html, /&quot;scheme&quot;:&quot;foxwarm&quot;/);
         assert.match(html, /&quot;authority&quot;:&quot;node\+master&quot;/);
         assert.match(html, /&quot;path&quot;:&quot;\/tmp\/hello%20world&quot;/);
@@ -209,6 +245,19 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
         const embeddedHtml = await embeddedWorkbench.text();
         assert.match(embeddedHtml, /&quot;workspaceUri&quot;/);
         assert.match(embeddedHtml, /foxwarm\.code-workspace/);
+        const workspacePath = process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH!;
+        const workspace = await fs.readJson(workspacePath) as { settings: Record<string, unknown> };
+        assert.deepEqual(workspace.settings, {
+          'redhat.telemetry.enabled': false,
+          'yaml.schemaStore.enable': false,
+          'yaml.kubernetesCRDStore.enable': false,
+          'yaml.extension.recommendations': false,
+        });
+        workspace.settings['redhat.telemetry.enabled'] = true;
+        await fs.writeJson(workspacePath, workspace);
+        const repeatedEmbedded = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
+        assert.equal(repeatedEmbedded.status, 200);
+        assert.equal((await fs.readJson(workspacePath) as { settings: Record<string, unknown> }).settings['redhat.telemetry.enabled'], true);
       });
     });
   } finally {
@@ -250,6 +299,7 @@ test('VS Code Web workbench bootstrap honors forwarded base path prefixes', asyn
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-terminal/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-scm/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-webui/);
+        assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/redhat-vscode-yaml/);
         assert.match(html, /\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\//);
         assert.match(html, /https:\/\/example\.test\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\/\{\{uuid\}\}\//);
         assert.match(html, /&quot;webEndpointUrlTemplate&quot;:&quot;https:\/\/example\.test\/proxy-prefix\/vscode-web\/static&quot;/);

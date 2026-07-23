@@ -13,6 +13,7 @@ import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
+import { createLatestRequestGate, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import {
   CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
@@ -92,6 +93,7 @@ interface ChatProps {
   onOpenCodeNewWindow?: () => void
   onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
   onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
+  onOpenModelSettings?: () => void
   sendKeyMode?: 'modEnter' | 'enter'
   groupTools?: boolean
   showUsageBadge?: boolean
@@ -203,7 +205,7 @@ async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPat
   }
 }
 
-const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -225,6 +227,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [asrAvailable, setAsrAvailable] = useState(false)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelBusy, setModelBusy] = useState(false)
+  const [modelsRefreshing, setModelsRefreshing] = useState(false)
   const [modelError, setModelError] = useState<string | null>(null)
   const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
   const [resolvedSessionFilePath, setResolvedSessionFilePath] = useState<string | null>(null)
@@ -263,6 +266,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const userInteractionVersionRef = useRef(0)
   const capturedInteractionVersionRef = useRef(0)
   const resizeRestoreFrameRef = useRef<number | null>(null)
+  const modelRequestGateRef = useRef(createLatestRequestGate())
 
   useEffect(() => {
     setStreamingAssistantDraft(null)
@@ -319,31 +323,26 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     }
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-
-    const fetchModels = async () => {
-      try {
-        const res = await fetch(`${API_BASE_PATH}/models`)
-        if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
-        const data = await res.json()
-        if (!cancelled) {
-          setModelOptions(Array.isArray(data.models) ? data.models : [])
-        }
-      } catch (error) {
-        console.error('Failed to fetch models:', error)
-        if (!cancelled) {
-          setModelError(error instanceof Error ? error.message : 'Failed to load models')
-          setModelOptions([])
-        }
+  const fetchModels = useCallback(async () => {
+    await runLatestModelOptionsRequest(modelRequestGateRef.current, async () => {
+      const res = await fetch(`${API_BASE_PATH}/models`)
+      if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
+      const data = await res.json()
+      return (Array.isArray(data.models) ? data.models : []) as ModelOption[]
+    }, (state) => {
+      if (state.options) setModelOptions(state.options)
+      if (state.error !== undefined) {
+        setModelError(state.error)
+        if (state.error) console.error('Failed to fetch models:', state.error)
       }
-    }
-
-    fetchModels()
-    return () => {
-      cancelled = true
-    }
+      if (state.loading !== undefined) setModelsRefreshing(state.loading)
+    })
   }, [])
+
+  useEffect(() => {
+    void fetchModels()
+    return () => modelRequestGateRef.current.invalidate()
+  }, [fetchModels])
 
   useEffect(() => {
     if (!sessionBusy) {
@@ -1577,6 +1576,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         modelError={modelError}
         onChangeModel={updateSessionModel}
         onChangeChildModel={updateChildModel}
+        onRefreshModels={fetchModels}
+        modelsRefreshing={modelsRefreshing}
+        onOpenModelSettings={onOpenModelSettings || (() => {})}
         sendKeyMode={sendKeyMode}
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
@@ -1651,6 +1653,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   && prev.onOpenCodeNewWindow === next.onOpenCodeNewWindow
   && prev.onOpenCodeFile === next.onOpenCodeFile
   && prev.onOpenCodeCommit === next.onOpenCodeCommit
+  && prev.onOpenModelSettings === next.onOpenModelSettings
 ))
 
 export default Chat

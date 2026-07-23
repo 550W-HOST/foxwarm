@@ -25,7 +25,7 @@ export const definitions = [
                 type: 'object',
                 properties: { 
                     content: { type: 'string' },
-                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. Use with overwrite=true and the same filePath to write the cached content without resending it.' },
+                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. Use with overwrite=true and the same filePath to reuse the cached attempted content; omit content because the model does not need to generate the same content again.' },
                     filePath: { type: 'string' },
                     overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' },
                     createDirs: { type: 'boolean', description: 'Create missing parent directories before writing. Default: false' }
@@ -238,13 +238,14 @@ Example:
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. If handing off to the child is your final step for this turn, call wait afterward in the same response. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',
+            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. Set waitForReply=true to finish this turn and arm the existing generic wait after a successful initial handoff; any next event wakes it, usually but not guaranteed to be the child reply. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',
             parameters: {
                 type: 'object',
                 properties: {
                     suffix: { type: 'string', description: 'Suffix/session leaf for identification (e.g., "task1", "research"). For main sessions it replaces the `main` leaf; otherwise it is appended to the session ID.' },
                     fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: false', default: false },
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
+                    waitForReply: { type: 'boolean', description: 'After a successful initial message handoff, finish this turn and arm a generic any-event wait. This usually wakes for the child reply but is not target-filtered or a completion wait. Requires a non-empty message.' },
                     node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' }
                 },
                 required: ['suffix']
@@ -253,12 +254,13 @@ Example:
         {
             name: 'send_to_session',
             defaultInject: true,
-            description: 'Send a message to a specific agent/session. Literal sessionId `<main>` resolves to the current agent\'s main session; `<parent>` resolves to the current session\'s parent session and errors clearly if there is no parent. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call wait in parallel in the same response.',
+            description: 'Send a message to a specific agent/session. Literal sessionId `<main>` resolves to the current agent\'s main session; `<parent>` resolves to the current session\'s parent session and errors clearly if there is no parent. Isolated sessions can only communicate with parent/child sessions. Set waitForReply=true to finish this turn and arm the existing generic any-event wait after a successful handoff; it usually but not necessarily wakes for the target reply.',
             parameters: {
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID, or `<main>` for this agent\'s main session, or `<parent>` for this session\'s parent session.' },
-                    message: { type: 'string', description: 'Message to send' }
+                    message: { type: 'string', description: 'Message to send' },
+                    waitForReply: { type: 'boolean', description: 'After successful delivery, finish this turn and arm a generic any-event wait. This is equivalent to ordinary wait({}), not a target-filtered or completion wait.' }
                 },
                 required: ['sessionId', 'message']
             }

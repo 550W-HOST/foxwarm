@@ -1,0 +1,68 @@
+# Unit: src-llm
+
+Files: src/llm.ts, src/llm.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/llmVirtualMessageMeta.test.ts, src/parallelToolExecution.test.ts
+
+## Purpose
+
+Owns provider request routing, Anthropic conversion/parsing, session prompt snapshots, prompt-cache keys, retries/aborts, interaction logs, stream progress, unified result parsing, tool execution batches, and one-shot requests. OpenAI conversion/stream assembly is delegated to `src/llmProviders/openai.ts`.
+
+## Key exports
+
+- `chat(parts, session, iteration?, options?)` — optionally append user parts, request one provider turn from current model-visible history, update stats, and append the model result.
+- `requestLlmOnce(options)` — provider request without automatic session-history orchestration.
+- `executeTools(functionCalls, toolContext, session)` — model-ordered tool batch execution with serial barriers, bounded adjacent direct-exec segments, progress/control folding, and one final tool message.
+- `buildSessionSystemPromptSnapshot(options)` — framework prompt, memory, skill catalog, and dynamic hints.
+- `generatePromptCacheKey`, `ensurePromptCacheKey`.
+- `sanitizeProviderRequestPayload`, `isAbortError`.
+- `LlmRequestError`, `isLlmRequestError`, retry event types/defaults/delay helper.
+- `getOpenAIRequestApi(providerType)` — exact OpenAI surface routing.
+- `DEFAULT_LLM_MAX_ATTEMPTS` plus compatibility `DEFAULT_LLM_MAX_RETRIES`; `classifyHttpFailure`.
+- `fixToolCalls(contents)` — provider-safe tool-call/response history normalization.
+
+## Provider routing
+
+| `providerType` | Request path / format |
+|---|---|
+| `openai`, `openai-responses` | OpenAI Responses API at `<baseUrl>/responses` |
+| `openai-completions` | OpenAI Chat Completions at `<baseUrl>/chat/completions` |
+| `anthropic` | Anthropic Messages at `<baseUrl>/v1/messages` |
+| `session-hash`, `failover` | Resolve a concrete leaf per outer attempt, then use that leaf's protocol |
+
+`getOpenAIRequestApi()` returns null for other values; the current request branch then uses Anthropic-format handling. Custom provider types therefore need Anthropic-compatible behavior unless source routing is extended.
+
+## Tool-response formatting
+
+Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolResponseFormatting.ts` through the built shared package. Structured tool responses remain structured internally; the shared formatter owns provider-facing text. Image parts are promoted separately and accompanied by image guidance. Canonical decision: [D-llm-shared-response-format](../modules/llm.md#d-llm-shared-response-format).
+
+## Prompt snapshot behavior
+
+- Framework prompt precedence: top-level agent framework prompt, then documented legacy main-agent framework fallback.
+- Memory is resolved across inherited/current agents with session frontmatter filters.
+- Visible skills are listed as compact metadata; full skill docs remain on-demand.
+- Dynamic hints include agent folder and layered-context recall guidance.
+- Prompt-cache keys are random UUIDs tied to model-facing prefix lineage and persisted by normal session callers. Canonical lineage: [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
+
+## Request behavior
+
+- Provider payloads are sanitized for lone surrogates and may be gzip/brotli compressed per model config.
+- OpenAI and Anthropic payloads receive current tool schemas and current Foxwarm system/source wrappers.
+- Streaming progress emits throttled reasoning/text/tool-call snapshots.
+- Retry waits are abortable. Terminal failures move bounded diagnostics to error logs, emit a final retry event, and throw `LlmRequestError`; they do not create fake assistant `Error:` messages. Canonical boundary: [D-llm-request-errors](../modules/llm.md#d-llm-request-errors).
+- The historical `maxRetries` option/event field means total attempts; the default is six. Virtual attempts rebuild the complete selected concrete request, and unusable empty/reasoning-only responses retry. Canonical semantics: [model routing](../threads/model-routing.md).
+- HTTP classification recognizes nested structured model-not-found errors and bounded common text forms without broadening ordinary HTTP 400 retries. A virtual outer request captures route activation once so old retries cannot replace newer configuration state.
+- Successful results normalize into `ChatResult`, record the provider-qualified concrete model ID and usage, and may contain function calls for the router loop. A virtual route additionally carries its resolved configuration key through `ChatResult.virtualModelKey` into every successful provider-generated assistant message, including tool-call-only turns; canonical semantics are owned by [D-model-routing-concrete-attribution](../threads/model-routing.md#d-model-routing-concrete-attribution).
+- Display-only messages and internal `__meta` are excluded from provider input.
+- Tool execution keeps per-call result/image/control state local. Adjacent direct `exec` calls use a bounded parallel segment; all other tools are barriers, and final parts are flattened in original call order. Canonical scheduling contract: [D-dispatch-exec-parallel-segments](../threads/tool-dispatch.md#d-dispatch-exec-parallel-segments).
+- Tool-result internals fold explicit wait-token cleanup and successful handoff post-actions without exposing hidden sentinels to providers. The router owns post-append wait arming under [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).
+
+## Compatibility
+
+- Existing legacy bracketed system/source content is recognized during serialization/history repair. New wrappers use current Foxwarm tags.
+- Documented legacy system-prompt location and memory frontmatter shapes remain readers.
+- Provider/model field compatibility is owned by [src-config](./src-config.md#compatibility).
+
+## Design decisions
+
+### D-llm-provider-router
+
+Provider type selects one current request protocol: Responses, Chat Completions, or Anthropic Messages. Provider-specific message/stream code is separated where it has a stable boundary.

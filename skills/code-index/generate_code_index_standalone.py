@@ -29,6 +29,17 @@ EXCLUDE_SUFFIXES = (".map", ".d.ts", ".min.js", ".bundle.js", ".lock", ".bak")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 
+CODE_INDEX_GOVERNANCE_PROMPT = """Code-index governance:
+- Write concise, public-safe English only.
+- Never copy secrets, real credentials, local usernames/home-directory paths, private deployment/runbook details, or agent-private collaboration memory.
+- Use source-relative paths. If an environment-specific source-code literal is essential to explain behavior, keep it minimal and label it explicitly as a source-code literal; never copy a real secret value.
+- Prefer stable symbols and section names over brittle line numbers.
+- Each source file has one primary-owning unit; mention other files only as secondary/integration references.
+- Treat the index as a current map, not an append-only changelog. Do not invent Design Decisions; put uncertainty in Open Questions labeled Unconfirmed.
+- A decision has one canonical owner: unit for one semantic unit, module for several units in one module, thread for a cross-module contract, or overview for a project-wide principle. Other layers use only a short summary and canonical link.
+- Repeated decisions across modules signal a thread. A repeated critical security/data-integrity/persisted-data/external-contract invariant must be the same short sentence verbatim and include its canonical link or ID.
+"""
+
 
 class GeneratorError(RuntimeError):
     """Expected, user-facing generator failure."""
@@ -312,13 +323,16 @@ Rules:
 - Group related small files; large files can be their own unit.
 - Keep tests with their source unit.
 - Every listed file must appear exactly once.
+- Assignment means primary ownership; integration references may be mentioned later but do not own the file.
 - Names must be unique lowercase kebab-case slugs.
 - Use only paths from the supplied list.
 
 Return ONLY a JSON array of objects:
 {{"name":"unit-name","files":["path.ts"],"description":"brief description"}}
 
-Files:\n{summary}"""
+Files:\n{summary}
+
+{CODE_INDEX_GOVERNANCE_PROMPT}"""
     response = call_model(prompt, model=model, timeout=timeout, cli_command=cli_command)
     return validate_groupings(parse_json_array(response, "unit groupings"), source_root, file_list)
 
@@ -369,14 +383,17 @@ Unit: {group['name']}
 Description: {group['description']}
 Files: {', '.join(group['files'])}
 
-Include: ## Purpose, ## Key Exports, ## Function Index (all named functions/methods of 5+ lines), ## Dependencies, ## Behavior, and ## Integration. Start with ## Purpose. Do not include source code.
+Treat the listed files as this unit's primary-owned files. Mention any other file only as a secondary/integration reference.
+Include: ## Purpose, ## Primary Files, ## Secondary / Integration Files (when any), ## Key Exports, ## Function Index (all named functions/methods of 5+ lines, located by stable symbol/section; line numbers optional), ## Dependencies, ## Behavior, and ## Integration. Start with ## Purpose. Do not include source code.
 
-Source:{source_text}"""
+Source:{source_text}
+
+{CODE_INDEX_GOVERNANCE_PROMPT}"""
         summary = validated_markdown(
             call_model(prompt, model=model, timeout=timeout, cli_command=cli_command),
             f"unit {group['name']}",
         )
-        content = f"# Unit: {group['name']}\n\nFiles: {', '.join(group['files'])}\n\n{summary}"
+        content = f"# Unit: {group['name']}\n\nPrimary files: {', '.join(group['files'])}\n\n{summary}"
         write_generated_doc(unit_path, content, force=force)
         results.append({"name": group["name"], "path": str(unit_path), "files": group["files"]})
     return results
@@ -433,7 +450,9 @@ Every unit must appear exactly once. Names must be unique lowercase kebab-case s
 Return ONLY JSON objects shaped as:
 {{"name":"module-name","units":["unit.md"],"responsibility":"one sentence"}}
 
-Units:\n{briefs}"""
+Units:\n{briefs}
+
+{CODE_INDEX_GOVERNANCE_PROMPT}"""
     raw_plan = parse_json_array(
         call_model(plan_prompt, model=model, timeout=timeout, cli_command=cli_command),
         "module plan",
@@ -453,9 +472,11 @@ Module: {module['name']}
 Responsibility: {module['responsibility']}
 Units: {', '.join(module['units'])}
 
-Include: ## Responsibility, ## Key Units, ## Public Interfaces, ## Invariants, and an empty ## Design Decisions section. Start with ## Responsibility.
+Include: ## Responsibility, ## Key Units, ## Public Interfaces, ## Invariants, ## Open Questions, and an empty ## Design Decisions section. Start with ## Responsibility. Do not copy unit-owned decisions; add only summary links if the input already provides a canonical decision reference.
 
-Unit summaries:\n{source}"""
+Unit summaries:\n{source}
+
+{CODE_INDEX_GOVERNANCE_PROMPT}"""
         summary = validated_markdown(
             call_model(prompt, model=model, timeout=timeout, cli_command=cli_command),
             f"module {module['name']}",
@@ -500,7 +521,7 @@ def generate_threads(output_dir, model=None, timeout=120, cli_command=None, forc
     if not module_files:
         raise GeneratorError("No non-empty module documents exist; cannot generate threads.")
     source = "\n\n---\n\n".join(path.read_text(encoding="utf-8", errors="ignore")[:3_000] for path in module_files)
-    prompt = f"""Identify 4-6 important cross-module flows from these module summaries.
+    prompt = f"""Identify 4-6 important cross-module flows from these module summaries. Repeated cross-module contracts or decisions are strong signals for thread selection.
 For each flow emit exactly:
 ===THREAD: lowercase-kebab-name===
 ## Overview
@@ -514,7 +535,9 @@ For each flow emit exactly:
 ## Design Decisions
 ===END===
 
-Module summaries:\n{source}"""
+Module summaries:\n{source}
+
+{CODE_INDEX_GOVERNANCE_PROMPT}"""
     parsed = parse_threads(call_model(prompt, model=model, timeout=timeout, cli_command=cli_command))
     results = []
     for thread in parsed:
@@ -543,8 +566,11 @@ def generate_overview(output_dir, project, model=None, timeout=120, cli_command=
     source_material = "\n\n---\n\n".join(source_parts)
     prompt = f"""Generate a concise, navigational code-index overview for {project}.
 Include what the project is, architecture, core design principles, tech stack, module index, and thread index.
+Do not copy module/thread decisions into the overview; use short links unless a principle is genuinely project-wide and overview-owned.
 
-Source material:\n{source_material}"""
+Source material:\n{source_material}
+
+{CODE_INDEX_GOVERNANCE_PROMPT}"""
     overview = validated_markdown(
         call_model(prompt, model=model, timeout=timeout, cli_command=cli_command),
         "overview",

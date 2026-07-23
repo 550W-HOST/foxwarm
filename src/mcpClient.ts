@@ -217,18 +217,26 @@ async function getServerConfig(name?: string): Promise<{ name: string; config: M
 
 function getHeaders(config: McpServerConfig): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
-  
-  // Add custom headers first
-  if (config.headers && typeof config.headers === 'object') {
-    Object.assign(headers, config.headers);
-  }
-  
-  // Add Authorization header from token (can be overridden by custom headers)
+
+  // The token supplies a default; an explicitly configured header wins.
   if (config.token) {
     headers['Authorization'] = `Bearer ${config.token}`;
   }
-  
+
+  if (config.headers && typeof config.headers === 'object') {
+    for (const [key, value] of Object.entries(config.headers)) {
+      if (config.token && key.toLowerCase() === 'authorization') {
+        delete headers['Authorization'];
+      }
+      headers[key] = value;
+    }
+  }
+
   return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+export function buildMcpHttpHeadersForTests(config: McpServerConfig): Record<string, string> | undefined {
+  return getHeaders(config);
 }
 
 function requireUrl(config: McpServerConfig, transport: McpTransport): string {
@@ -489,10 +497,52 @@ function hasPreservableMcpResultMetadata(result: Record<string, any>): boolean {
   return false;
 }
 
+function normalizeMcpImageContent(result: Record<string, any>): Record<string, any> {
+  if (!Array.isArray(result.content)) {
+    return result;
+  }
+
+  const inlineDataItems: Array<Record<string, any>> = [];
+  const remainingContent: any[] = [];
+  for (const item of result.content) {
+    const isImage = item
+      && typeof item === 'object'
+      && !Array.isArray(item)
+      && item.type === 'image'
+      && typeof item.data === 'string'
+      && typeof item.mimeType === 'string'
+      && item.mimeType.startsWith('image/');
+    if (isImage) {
+      const { type: _type, data, mimeType, ...metadata } = item;
+      inlineDataItems.push({ ...metadata, data, mimeType });
+    } else {
+      remainingContent.push(item);
+    }
+  }
+
+  if (inlineDataItems.length === 0) {
+    return result;
+  }
+
+  const normalized = { ...result };
+  if (remainingContent.length > 0) {
+    normalized.content = remainingContent;
+  } else {
+    delete normalized.content;
+  }
+  normalized.inlineDataItems = [
+    ...(Array.isArray(result.inlineDataItems) ? result.inlineDataItems : []),
+    ...inlineDataItems,
+  ];
+  return normalized;
+}
+
 export function normalizeMcpToolResult(result: any): any {
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return result;
   }
+
+  result = normalizeMcpImageContent(result);
 
   if (hasPreservableMcpResultMetadata(result)) {
     return result;

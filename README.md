@@ -220,6 +220,8 @@ Foxwarm's current primary configuration files live inside the data directory:
 
 For installer-based setup, `state/` and `agents/` are under `./foxwarm-data/` by default, and the installer writes `foxwarm/data_dir` so later starts keep using that data directory. For Docker Compose, `state/` and `agents/` are under `./foxwarm-data/` on the host and `/data/` in the container. Bundled skills remain in the program image/repo under `skills/`.
 
+Back up and restore the **whole data directory**, not only configuration or SQLite files. Session archive identity also depends on `state/session-id-reservations.jsonl` (committed move aliases), and an interrupted move may leave `state/session-id-move-pending.json` with explicit rollback/finish intent and target-directory ownership. Pending recovery is fail-closed before ordinary session loading. These files are durable/operator state, not disposable logs.
+
 Example `state/config.yaml` app settings:
 
 ```yaml
@@ -258,11 +260,45 @@ Provider notes:
 - `anthropic` uses Anthropic-compatible requests
 - OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
 
-The runtime resolves model definitions in this order:
+Virtual models reference concrete model keys from the same file. `session-hash`
+uses prompt-cache prefix lineage for stable rendezvous routing; `failover` tries
+targets in order and keeps short-lived process-local health state:
 
-1. `MODELS_CONFIG_PATH` if set
-2. `state/models.yaml`
-3. `templates/models.example.yaml` fallback
+```yaml
+default: sticky
+providers:
+  # Define concrete providers first (the order in the file is not significant).
+  openai:
+    providerType: openai-completions
+    baseUrl: https://api.openai.com/v1
+    apiKey: your-openai-key
+    models: [gpt-5.4]
+  backup:
+    providerType: anthropic
+    baseUrl: https://api.anthropic.com
+    apiKey: your-anthropic-key
+    models: [claude-sonnet-4-6]
+
+  sticky:
+    providerType: session-hash
+    targets: [openai/gpt-5.4, backup/claude-sonnet-4-6]
+
+  resilient:
+    providerType: failover
+    targets: [openai/gpt-5.4, backup/claude-sonnet-4-6]
+    failureThreshold: 5  # optional default
+    cooldownMs: 600000   # optional default: 10 minutes
+```
+
+Virtual targets must be concrete leaves; nested virtual models and duplicate
+aliases of the same concrete leaf are rejected. Virtual entries do not carry
+provider credentials, endpoint fields, model lists, request compression, or
+extra request fields/headers, and they do not override context or async-compact
+values. `session-hash` does not accept failover settings; failover thresholds
+and cooldown milliseconds must be positive integers. Concrete entries do not
+accept virtual routing fields.
+
+The runtime resolves model definitions from `state/models.yaml` under the active Foxwarm data directory. If that file is missing, `templates/models.example.yaml` is a read-only fallback; Setup still edits the data-directory file and treats its absence as OOBE.
 
 The template fallback is mainly a fallback for development and diagnostics; OOBE treats missing `state/models.yaml` as first-time setup.
 
@@ -474,6 +510,7 @@ foxwarm/
 
 ## Documentation
 
+- [Code Index](docs/code-index/README.md)
 - [Architecture](docs/architecture.md)
 - [Session Management](docs/session-management.md)
 - [Multi-Agent Guide](docs/multi-agent.md)
@@ -483,6 +520,21 @@ foxwarm/
 - [ToolScript examples](examples/toolscript/README.md)
 
 ## Development
+
+### Code index workflow for contributors and coding agents
+
+Foxwarm keeps a repository-local code index for both human contributors and coding agents. Before inspecting or modifying code:
+
+1. Read the [code-index governance guide](docs/code-index/README.md) and [architecture overview](docs/code-index/overview.md).
+2. Read the relevant module, thread, and unit documents as whole files.
+3. Verify important claims against current source and tests; the index is a map, while source and tests remain authoritative.
+
+After changing source:
+
+1. Update the affected `docs/code-index/` documents in the same branch and pull request. Refresh unit behavior, file ownership, and stable-symbol indexes as relevant; update parent navigation only when boundaries change.
+2. Record each Design Decision at exactly one canonical owner: unit, module, thread, or overview. Other documents use a short summary and link. Repetition across modules is a signal to create or use a thread.
+3. Keep the index public-safe English. Do not add credentials, private paths, deployment runbooks, or private operational context.
+4. Run `npm run quality:code-index` before submitting.
 
 ```bash
 npm run build        # backend/shared/cli-node build

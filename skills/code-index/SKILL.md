@@ -1,97 +1,130 @@
 ---
 name: code-index
-description: "Use and maintain project code indexes under ~/code-index/{project}: architecture overview, module/thread docs, semantic units, and design decisions."
+description: "Use and maintain layered project code indexes: architecture overview, module/thread docs, semantic units, and governed design decisions."
 ---
 
 # Code Index
 
-A **code index** is a layered, agent-oriented documentation tree stored outside the source repo. It helps development agents quickly understand a project before editing code.
+A **code index** is a layered, agent-oriented map of a source repository. It helps development agents orient themselves before editing code, but it is not the source of truth. Verify important claims against current source before making risky changes.
+
+## Resolve the Index Root
+
+During the repository-local migration, resolve the index root in this order:
+
+1. Prefer `<repo-root>/docs/code-index/` when it exists.
+2. Otherwise fall back to an existing `~/code-index/{project}/` index until migration is complete.
+3. If neither exists, follow the initialization workflow; prefer the repository-local location for a new index unless the project explicitly uses another convention.
+4. Use one resolved root for the whole task. Do not split updates across both locations or copy an existing index merely to satisfy this lookup rule.
+
+In the rest of this skill, `<index-root>` means that resolved directory.
 
 ```text
-~/code-index/{project}/
+<index-root>/
 ├── overview.md          # Project-wide architecture, principles, navigation
-├── threads/             # Cross-module feature flows
+├── threads/             # Cross-module end-to-end contracts and flows
 ├── modules/             # Module/subtree summaries
 ├── units/               # Bottom-level semantic unit summaries
 └── _work/               # Optional temporary initialization/checkpoint state
 ```
 
-The index is a **map**, not the source of truth. Use it to orient yourself, then verify important details against current source before making risky changes.
+## Most Common Workflow: Read or Update an Existing Index
 
-## Most Common Use: Read or Update an Existing Index
+Before inspecting or modifying code:
 
-When you are about to inspect or modify code:
-
-1. Read `~/code-index/{project}/overview.md` for orientation.
-2. Search the index first: `rg "<term>" ~/code-index/{project}`.
+1. Resolve the index root and read `<index-root>/overview.md`.
+2. Search the index first: `rg "<term>" <index-root>`.
 3. Read relevant `modules/` and `threads/` docs.
-4. Read relevant `units/` docs for file/semantic-unit detail.
-5. Read code-index markdown files **as whole files by default**. These docs should stay small enough to skim. If a doc is genuinely large, use `rg` to locate the needed section first, especially `## Design Decisions`.
-6. Verify important claims against source code before editing.
-7. After changing source code, update the corresponding unit/module/thread docs.
+4. Read relevant `units/` docs for file and semantic-unit detail.
+5. Read code-index Markdown files as whole files by default. They should remain small enough to skim. If one is genuinely large, locate the needed section first, especially `## Design Decisions`.
+6. Verify important claims against source.
 
-## Structure
+After changing source:
+
+1. Update the affected unit's current file ownership, purpose, behavior, exports, stable-symbol function index, tests, and integration notes as applicable.
+2. Update affected module/thread/overview navigation and current behavior or contracts.
+3. Before writing any decision, choose its one canonical owner. Updating several related docs does **not** mean appending the same decision to every layer.
+4. Run available code-index checks and review the diff for stale or duplicated material.
+
+## Document Roles and Ownership
 
 ### `overview.md`
 
-Project-wide overview: what the project is, module map, core design principles, tech stack, key invariants, and where to start reading.
+Project-wide overview: what the project is, module map, core principles, tech stack, project-wide invariants, and where to start reading.
 
 ### `modules/{name}.md`
 
-Module or source-subtree summaries. They cover responsibility, boundaries, child modules/units, public interfaces, invariants, tests/validation, pitfalls, and relevant design decisions.
-
-Nested module docs are allowed when useful:
-
-```text
-modules/a.md
-modules/a/b1.md
-modules/a/b2.md
-```
-
-If a project uses flat filenames instead, document the convention in `overview.md`.
+A module or source-subtree summary: responsibility, boundaries, children, public interfaces, current invariants, tests, pitfalls, and navigation. Nested module docs are allowed when useful.
 
 ### `threads/{name}.md`
 
-Cross-module feature flows, such as request lifecycle, state persistence, tool dispatch, streaming pipeline, or external integration flow.
+A cross-module end-to-end contract or flow, such as request lifecycle, state persistence, tool dispatch, streaming, or an external integration. When several modules begin repeating the same decision, treat that as a signal to create or use a thread doc as the canonical owner.
 
 ### `units/{name}.md`
 
-Bottom-level semantic units. A unit may be one file, a small related file group, or one large-file section/class/export. Unit docs should explain purpose, key exports/functions, dependencies/callers, side effects, edge cases, tests, and how the unit fits into its parent module.
+A bottom-level semantic unit: one file, a small related file group, or one large-file section/class/export. Explain purpose, parent context, stable symbols, dependencies/callers, behavior, side effects, edge cases, tests, and integration.
 
-## Design Decisions
+Each source file should have at most one unit claiming **primary ownership**. A unit may list other files as **secondary/integration references**, but must not imply that it owns them. Prefer stable symbols and section names over brittle line numbers; add line numbers only when they materially help and are likely to remain useful.
 
-Record user-confirmed design decisions in the relevant module/thread docs under `## Design Decisions`:
+## Public-Safe, English-Only Content
 
-```markdown
-## Design Decisions
+A code index may be committed or shared. Keep all final index content public-safe and in English.
 
-- [2026-03-15] Background jobs must commit state only at safe points.
-- [2026-05-30] Directory listing is handled by the file-read tool.
-```
+Do not write:
 
-Decision notes should mainly come from actual user decisions or user-confirmed elaborations. Do not record an agent's unconfirmed guess as a decision. If an uncertain judgment must be preserved, label it clearly as unconfirmed / agent speculation.
+- secrets, tokens, private keys, or real credentials;
+- local usernames, machine-specific home-directory paths, or private host layout;
+- private deployment/runbook details;
+- agent-private collaboration notes, personal memory, or chat-only operational context.
 
-Decision extraction is not built into this skill because the correct source depends on actual usage context.
+Use source-relative paths and generic placeholders instead. Never copy a real secret value. If behavior genuinely depends on a source-code literal that would otherwise look environment- or deployment-specific, include only the minimum necessary literal and label it explicitly as a **source-code literal**, not as a live value or recommendation.
+
+Translate user-confirmed Design Decisions accurately into English. Preserve the contract and rationale; do not preserve private wording or identifying details that are not part of the software contract.
+
+## Design Decision Governance
+
+The index is an **active map**, not an append-only changelog.
+
+- Keep only the currently effective, user-confirmed contract and useful rationale.
+- Replace or remove superseded text; Git history preserves old versions.
+- Put unconfirmed ideas in `## Open Questions`, explicitly labeled `Unconfirmed`, rather than in `## Design Decisions`.
+- Curate or split a document when decision density makes it hard to navigate.
+
+Every decision has exactly one canonical owner:
+
+| Owner | Use when the contract applies to |
+| --- | --- |
+| Unit | One semantic unit only |
+| Module | Multiple units inside one module |
+| Thread | Multiple modules in one end-to-end contract or flow |
+| Overview | The whole project as a general principle |
+
+Choose the narrowest owner that fully covers the contract. Record the full decision, rationale, and date only there. If another layer needs visibility, write one short English summary plus a link to the canonical decision; do not duplicate the full decision, rationale, or date. Give frequently referenced decisions a stable ID or stable heading so links survive nearby edits.
+
+Exception: a critical security, data-integrity, persisted-data, or external-contract invariant may be repeated where omission would create material risk. The repeated text must be the same short sentence verbatim and include the canonical decision link or ID. Keep all rationale and history only at the canonical owner.
+
+## Maintenance Quality Checks
+
+Keep docs concise and navigational. Prefer practical coding guidance and stable terminology over exhaustive prose. Do not routinely regenerate a curated index; use targeted updates, and correct docs whenever they conflict with source.
+
+Use project-provided lint/check scripts when available. Otherwise review or automate checks for:
+
+- broken internal links and missing referenced files;
+- multiple units claiming primary ownership of one source file;
+- secrets, credential-shaped values, local usernames, and home-directory paths;
+- CJK or other non-English prose in maintained docs;
+- inconsistent terminology and unstable line-number-heavy references;
+- suspiciously similar Design Decisions across unit/module/thread/overview layers.
+
+Similar decisions should trigger owner reconciliation, not automatic deletion: select the canonical owner, replace other copies with summary links, and create/use a thread when the contract crosses modules.
 
 ## Creating a New Index
 
-First-time index creation is less common than reading/updating an existing index, so the detailed workflow is in a companion document:
+First-time initialization is less common than targeted maintenance. Read `INITIALIZATION.md` before assigning workers or running a generator. Supporting resources include:
 
-- `INITIALIZATION.md` — choose and run an initial creation method:
-  - batch generator / bottom-up map-reduce;
-  - agent-guided top-down traversal with compaction-safe checkpoints.
-- `WORKER.md` — prompt for a simple assigned-scope/bottom-up worker.
-- `TOP_DOWN_CHILD.md` — prompt for a child/subagent session doing top-down/context-carrying traversal.
-- `generate_code_index.py` — existing Foxwarm ToolScript batch generator, kept for `run_script` compatibility.
-- `generate_code_index_standalone.py` — standalone Python batch generator; it calls the production `foxwarm model` CLI, validates all model-selected paths/names, and preserves existing docs unless `--force` is explicit.
+- `WORKER.md` — assigned-scope/bottom-up worker guide;
+- `TOP_DOWN_CHILD.md` — context-carrying top-down traversal guide;
+- `generate_code_index.py` — Foxwarm ToolScript-compatible batch generator;
+- `generate_code_index_standalone.py` — standalone Python batch generator;
+- `tests/test_generate_code_index.py` — generator safety and governance tests.
 
-When initializing a code index from scratch, explicitly read `INITIALIZATION.md` from this skill directory before assigning workers or running the generator.
-
-## Maintenance Guidelines
-
-- Keep docs concise and navigational.
-- Prefer practical coding guidance over generic summaries.
-- Keep `overview.md` and parent module docs current enough that a future agent can choose where to read next.
-- Update units/modules/threads as part of source-code changes.
-- Do not routinely regenerate the whole index once humans/agents have curated it; prefer targeted updates.
-- If generated docs conflict with source, source wins and docs should be corrected.
+Generators create a first draft only. Review generated content under this skill's public-safety, ownership, decision, and maintenance rules before treating it as an active index.

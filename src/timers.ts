@@ -68,6 +68,7 @@ export function resetTimersForTests(): void {
   cancelAllJobs();
   timers.clear();
   initialized = false;
+  triggeredSessionNameFactory = buildTriggeredSessionName;
 }
 
 function generateTimerId(): string {
@@ -84,6 +85,12 @@ function normalizeSessionPrefix(prefix?: string): string {
 
 function buildTriggeredSessionName(prefix: string): string {
   return `${prefix}_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`;
+}
+
+let triggeredSessionNameFactory = buildTriggeredSessionName;
+
+export function setTriggeredSessionNameFactoryForTests(factory?: (prefix: string) => string): void {
+  triggeredSessionNameFactory = factory || buildTriggeredSessionName;
 }
 
 export function isCronTimer(timer: SessionTimer): boolean {
@@ -211,13 +218,12 @@ async function fireTimer(timerId: string): Promise<void> {
         throw new Error(`Target agent "${agentName}" not found.`);
       }
 
-      const sessionName = buildTriggeredSessionName(normalizeSessionPrefix(timer.sessionPrefix));
-      const { sessionId } = await sessionManager.createSessionInAgent({
+      const prefix = normalizeSessionPrefix(timer.sessionPrefix);
+      const { sessionId } = await sessionManager.createSessionInAgentWithAutomaticName({
         agentName,
-        sessionName,
         currentNode: timer.currentNode,
         model: timer.model,
-      });
+      }, () => triggeredSessionNameFactory(prefix));
 
       await sessionManager.queueSessionSystemEvent(
         sessionId,
@@ -257,6 +263,10 @@ async function fireTimer(timerId: string): Promise<void> {
   cancelTimerJob(timer.id);
   timers.delete(timer.id);
   await saveTimers();
+}
+
+export async function fireTimerForTests(timerId: string): Promise<void> {
+  await fireTimer(timerId);
 }
 
 function scheduleTimer(timer: SessionTimer): void {

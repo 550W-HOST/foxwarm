@@ -219,9 +219,10 @@ What it does:
 - extracts source into `<dir>/foxwarm-node/`
 - writes `<dir>/.env`
 - creates local state under `<dir>/data/`
-- runs `npm ci`
 - uses the prebuilt bundle from the archive when available
-- builds only if required artifacts are missing
+- skips shared/CLI dependency installation and builds when `client.bundle.js` is present
+- separately attempts `npm ci --omit=dev` for the optional PTY runtime; failure continues without remote terminal capability
+- only when `client.bundle.js` is missing, requires npm and runs the shared/CLI install-and-build fallback
 - starts the node client in the **foreground by default**
 
 If you want background mode instead:

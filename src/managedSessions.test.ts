@@ -107,7 +107,8 @@ test('message router queues direct user messages into managed inbox instead of a
   const originalChat = llm.chat;
   const channelId = `managed-router-${Date.now()}`;
   const conversationId = `conv-${Math.random().toString(36).slice(2, 7)}`;
-  const sessionId = sessionManager.attachChannel(channelId, conversationId);
+  const { session: managedTarget } = await sessionManager.createEmptySession();
+  const sessionId = sessionManager.attachChannel(channelId, conversationId, managedTarget.id);
   const ownerSessionId = `managed-router-owner-${Date.now()}`;
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {

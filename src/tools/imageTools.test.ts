@@ -21,12 +21,10 @@ async function makePngBase64(width: number, height: number, rgb: { r: number; g:
   return buffer.toString('base64');
 }
 
-test('normalizeToolResultImages standardizes browser-style base64 image payloads', async () => {
+test('normalizeToolResultImages extracts canonical structured image payloads', async () => {
   const base64 = await makePngBase64(4, 3);
   const normalized = await normalizeToolResultImages({
-    image: base64,
-    format: 'png',
-    encoding: 'base64',
+    inlineData: { data: base64, mimeType: 'image/png' },
     tabId: 'demo-tab',
   }, 'call_image', '[Inline data returned by browser_screenshot]');
 
@@ -36,8 +34,53 @@ test('normalizeToolResultImages standardizes browser-style base64 image payloads
   assert.equal(normalized.imageParts[0].imageMeta?.height, 3);
   assert.equal(normalized.result.output, '[Inline data returned by browser_screenshot]');
   assert.equal(normalized.result.tabId, 'demo-tab');
-  assert.equal(Object.prototype.hasOwnProperty.call(normalized.result, 'image'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(normalized.result, 'inlineData'), false);
 });
+
+test('generic image extraction does not interpret remote-node compatibility shapes', async () => {
+  const results = [
+    { output: '__IMAGE__:image/png:ordinary-text-payload' },
+    { output: '__SCREENSHOT__:ordinary-text-payload' },
+    { image: 'ordinary-image-field', format: 'png', encoding: 'base64' },
+    { screenshot: 'ordinary-screenshot-field', mimeType: 'image/png' },
+    { inlineData: { data: 'old-mime-field', mime_type: 'image/png' } },
+  ];
+
+  for (const result of results) {
+    const normalized = await normalizeToolResultImages(result, 'call_plain', '[fallback]');
+    assert.strictEqual(normalized.result, result);
+    assert.deepEqual(normalized.imageParts, []);
+  }
+});
+
+test('generic image extraction keeps multiple canonical images and non-image metadata', async () => {
+  const first = await makePngBase64(2, 2);
+  const second = await makePngBase64(3, 1);
+  const normalized = await normalizeToolResultImages({
+    output: 'two images',
+    source: 'canonical fixture',
+    inlineDataItems: [
+      { data: first, mimeType: 'image/png' },
+      { data: second, mimeType: 'image/png' },
+    ],
+  }, 'call_multiple', '[fallback]');
+
+  assert.equal(normalized.imageParts.length, 2);
+  assert.deepEqual(normalized.imageParts.map(part => part.imageMeta?.imageId), ['call_multiple#1', 'call_multiple#2']);
+  assert.deepEqual(normalized.result, { output: 'two images', source: 'canonical fixture' });
+});
+
+test('generic image extraction leaves an invalid-only canonical field untouched', async () => {
+  const result = {
+    output: 'invalid image remains structured',
+    inlineData: { data: 'not-an-image', mimeType: 'application/octet-stream' },
+  };
+  const normalized = await normalizeToolResultImages(result, 'call_invalid', '[fallback]');
+  assert.strictEqual(normalized.result, result);
+  assert.deepEqual(normalized.imageParts, []);
+});
+
+test.todo('Phase 2: preserve invalid entries when inlineDataItems mixes valid and invalid canonical items');
 
 test('image_crop loads prior tool image by id and returns another inline image', async () => {
   const originalGetExistingSession = sessionManager.getExistingSession;

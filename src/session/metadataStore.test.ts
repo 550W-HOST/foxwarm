@@ -79,14 +79,22 @@ test('session history store uses lightweight no-backup config and still round-tr
     assert.deepEqual(store.listCandidatePaths(), [filePath]);
 
     await store.write({
-      history: [{ role: 'user', parts: [{ text: 'hello' }] }],
+      history: [{
+        role: 'model',
+        parts: [{ text: 'hello' }],
+        __meta: { modelId: 'anthropic/claude', virtualModelKey: 'fallback' },
+      }],
       queue: [{ type: 'trigger', parts: [{ text: 'queued' }] }],
       persistentMemorySnapshot: 'snapshot',
     });
 
     const loaded = await store.readFromPath();
     assert.deepEqual(loaded, {
-      history: [{ role: 'user', parts: [{ text: 'hello' }] }],
+      history: [{
+        role: 'model',
+        parts: [{ text: 'hello' }],
+        __meta: { modelId: 'anthropic/claude', virtualModelKey: 'fallback' },
+      }],
       queue: [{ type: 'trigger', parts: [{ text: 'queued' }] }],
       persistentMemorySnapshot: 'snapshot',
     });

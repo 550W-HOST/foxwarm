@@ -5,9 +5,11 @@ import * as sessionManager from '../sessionManager';
 import { WORKSPACE_DIR, getAgentMemoryDir } from '../config';
 import { checkPathAccess } from '../isolatedCheck';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from '../applyPatch';
+import { formatApplyPatchOperationSummary } from '../../packages/shared/dist/applyPatch';
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
 import {
     findWriteParentIssue,
+    formatWriteContentRefRetryHint,
     formatWriteParentIssueMessage,
     readFileToolPath,
     writeFileToolPath,
@@ -15,7 +17,7 @@ import {
 } from '../../packages/shared/dist/fileToolCore';
 
 export { expandHomePath, resolveAgentPath };
-export { findWriteParentIssue, formatWriteParentIssueMessage, type WriteParentIssue };
+export { findWriteParentIssue, formatWriteContentRefRetryHint, formatWriteParentIssueMessage, type WriteParentIssue };
 
 // Tool context type
 export interface ToolContext {
@@ -24,6 +26,7 @@ export interface ToolContext {
     broadcast?: (text: string, options?: any) => Promise<void>;
     queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot') => Promise<void>;
     runtimeNodeId?: string;
+    deferSessionCwdSync?: boolean;
 }
 
 // Tool function type
@@ -241,7 +244,7 @@ export async function applyPatchOperations(input: string, resolveOperationPath: 
                 const content = await fs.readFile(fullPath, 'utf8');
                 const updatedContent = applyUpdatePatch(content, operation.lines, displayPath);
                 await fs.writeFile(fullPath, updatedContent);
-                summaries.push(`Updated ${displayPath}`);
+                summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
                 continue;
             }
 
@@ -251,7 +254,7 @@ export async function applyPatchOperations(input: string, resolveOperationPath: 
                 }
                 await fs.ensureDir(path.dirname(fullPath));
                 await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
-                summaries.push(`Added ${displayPath}`);
+                summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
                 continue;
             }
 
@@ -259,7 +262,7 @@ export async function applyPatchOperations(input: string, resolveOperationPath: 
                 throw new Error(`Cannot delete missing file: ${displayPath}`);
             }
             await fs.remove(fullPath);
-            summaries.push(`Deleted ${displayPath}`);
+            summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
         } catch (err) {
             const succeeded = summaries.length > 0
                 ? `\nOperations already applied (these changes are already on disk):\n${summaries.map(line => `- ${line}`).join('\n')}\n`

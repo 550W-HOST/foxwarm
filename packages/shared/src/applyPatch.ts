@@ -3,6 +3,11 @@ export type ApplyPatchOperation =
   | { action: 'add'; filePath: string; lines: string[] }
   | { action: 'delete'; filePath: string };
 
+export interface ApplyPatchLineCounts {
+  added: number;
+  deleted: number;
+}
+
 interface ApplyPatchChunk {
   origIndex: number;
   delLines: string[];
@@ -414,4 +419,35 @@ export function applyUpdatePatch(content: string, lines: string[], filePath: str
 
 export function buildAddedFileContent(lines: string[]): string {
   return lines.join('\n');
+}
+
+export function countApplyPatchOperationLines(operation: ApplyPatchOperation): ApplyPatchLineCounts {
+  if (operation.action === 'add') {
+    return { added: operation.lines.length, deleted: 0 };
+  }
+
+  if (operation.action === 'delete') {
+    return { added: 0, deleted: 0 };
+  }
+
+  let added = 0;
+  let deleted = 0;
+  for (const line of operation.lines) {
+    if (line.startsWith('+')) added += 1;
+    if (line.startsWith('-')) deleted += 1;
+  }
+  return { added, deleted };
+}
+
+export function formatApplyPatchOperationSummary(operation: ApplyPatchOperation, displayPath = operation.filePath): string {
+  if (operation.action === 'delete') {
+    return `Deleted ${displayPath}`;
+  }
+
+  const counts = countApplyPatchOperationLines(operation);
+  if (operation.action === 'add') {
+    return `Added ${displayPath} (+${counts.added})`;
+  }
+
+  return `Updated ${displayPath} (+${counts.added} -${counts.deleted})`;
 }

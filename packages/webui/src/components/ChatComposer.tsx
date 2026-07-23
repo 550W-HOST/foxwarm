@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowUp, Mic, Paperclip, Plus, Square } from 'lucide-react'
+import { ArrowUp, Mic, Paperclip, Plus, Settings, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import {
   applySlashCommandSuggestion,
@@ -9,6 +9,7 @@ import {
   type SlashCommandOption,
   type SlashCommandSuggestion,
 } from './chatShared'
+import { filterModelOptions, formatModelLabel } from './modelFilter'
 
 export type ModelOption = {
   key: string
@@ -29,9 +30,12 @@ interface ChatComposerProps {
   childModelDefault?: string | null
   effectiveChildModelKey?: string
   modelBusy?: boolean
+  modelsRefreshing?: boolean
   modelError?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
+  onRefreshModels: () => Promise<void>
+  onOpenModelSettings: () => void
   sendKeyMode?: 'modEnter' | 'enter'
   onHeightChange?: (height: number) => void
   onSend: (payload: { text: string; attachments: File[] }) => Promise<boolean>
@@ -65,10 +69,6 @@ function persistDraft(sessionId: string, value: string) {
   }
 }
 
-function formatModelLabel(option: ModelOption, defaultModelKey?: string) {
-  return `${option.label}${option.key === defaultModelKey || option.isDefault ? ' · default' : ''}`
-}
-
 function ModelSelector({
   options,
   currentModelKey,
@@ -77,9 +77,12 @@ function ModelSelector({
   childModelDefault,
   effectiveChildModelKey,
   busy,
+  refreshing,
   error,
   onChangeModel,
   onChangeChildModel,
+  onRefreshModels,
+  onOpenModelSettings,
 }: {
   options: ModelOption[]
   currentModelKey?: string
@@ -88,21 +91,44 @@ function ModelSelector({
   childModelDefault?: string | null
   effectiveChildModelKey?: string
   busy: boolean
+  refreshing: boolean
   error?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
+  onRefreshModels: () => Promise<void>
+  onOpenModelSettings: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [filterQuery, setFilterQuery] = useState('')
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({})
   const rootRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const popupRef = useRef<HTMLDivElement | null>(null)
+  const filterInputRef = useRef<HTMLInputElement | null>(null)
+  const filterComposingRef = useRef(false)
+  const wasOpenRef = useRef(false)
   const currentIsDefault = !sessionModel
   const childFollows = !childModelDefault
+  const filteredOptions = useMemo(
+    () => filterModelOptions(options, filterQuery, defaultModelKey),
+    [defaultModelKey, filterQuery, options],
+  )
+
+  const toggleOpen = useCallback(() => {
+    if (open) {
+      setOpen(false)
+      return
+    }
+    setFilterQuery('')
+    filterComposingRef.current = false
+    setOpen(true)
+    void onRefreshModels()
+  }, [onRefreshModels, open])
 
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
-    const width = Math.min(420, Math.max(320, Math.min(window.innerWidth - 16, rect.width + 150)))
+    const width = Math.min(420, Math.max(0, window.innerWidth - 16), Math.max(320, rect.width + 150))
     const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
     const preferredMaxHeight = Math.min(360, Math.max(220, window.innerHeight - 24))
     const spaceAbove = Math.max(0, rect.top - 12)
@@ -144,7 +170,10 @@ function ModelSelector({
       setOpen(false)
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setOpen(false)
+      }
     }
     const handleReposition = () => updatePopupPosition()
 
@@ -160,6 +189,21 @@ function ModelSelector({
     }
   }, [open, updatePopupPosition])
 
+  useEffect(() => {
+    let focusFrame = 0
+    if (open) {
+      focusFrame = requestAnimationFrame(() => {
+        filterInputRef.current?.focus()
+      })
+    } else if (wasOpenRef.current) {
+      buttonRef.current?.focus()
+    }
+    wasOpenRef.current = open
+    return () => {
+      if (focusFrame) cancelAnimationFrame(focusFrame)
+    }
+  }, [open])
+
   const applyCurrentModel = useCallback((model: string | null) => {
     if (busy) return
     void onChangeModel(model).catch(() => {})
@@ -169,6 +213,15 @@ function ModelSelector({
     if (busy) return
     void onChangeChildModel(model).catch(() => {})
   }, [busy, onChangeChildModel])
+
+  const handleFilterKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return
+    if (filterComposingRef.current || event.nativeEvent.isComposing) return
+    if (busy || filteredOptions.length !== 1) return
+    event.preventDefault()
+    applyCurrentModel(filteredOptions[0].key)
+    setOpen(false)
+  }, [applyCurrentModel, busy, filteredOptions])
 
   const renderCheckbox = (checked: boolean, label: string) => (
     <span
@@ -219,7 +272,7 @@ function ModelSelector({
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={toggleOpen}
         className="inline-flex h-8 max-w-[19rem] shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -232,15 +285,17 @@ function ModelSelector({
             <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault}>child {childModelDefault}</span>
           </>
         )}
-        {busy && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
+        {(busy || refreshing) && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
         {error && <span className="shrink-0 text-red-500 dark:text-red-300">!</span>}
       </button>
 
       {open && createPortal(
         <div
+          ref={popupRef}
           className="z-[1000] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
           style={popupStyle}
           role="dialog"
+          aria-modal="false"
           aria-label="Model selection"
           data-model-selector-popup="true"
         >
@@ -249,7 +304,7 @@ function ModelSelector({
             <div className="px-2 py-2 text-center">Current</div>
             <div className="px-2 py-2 text-center">Child</div>
           </div>
-          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 78 : 42) : undefined }}>
+          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 114 : 78) : undefined }}>
             {renderRow({
               key: null,
               label: 'default / follow',
@@ -258,7 +313,7 @@ function ModelSelector({
               childChecked: childFollows,
               defaultRow: true,
             })}
-            {options.map((option) => renderRow({
+            {filteredOptions.map((option) => renderRow({
               key: option.key,
               label: formatModelLabel(option, defaultModelKey),
               title: option.key,
@@ -267,6 +322,32 @@ function ModelSelector({
             }))}
           </div>
           {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
+          <div className="flex min-w-0 items-center gap-1.5 border-t border-gray-200 p-1.5 dark:border-gray-700">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                onOpenModelSettings()
+              }}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
+              aria-label="Configure models"
+              title="Configure models"
+            >
+              <Settings aria-hidden="true" className="h-3.5 w-3.5" />
+            </button>
+            <input
+              ref={filterInputRef}
+              type="search"
+              value={filterQuery}
+              onChange={(event) => setFilterQuery(event.target.value)}
+              onKeyDown={handleFilterKeyDown}
+              onCompositionStart={() => { filterComposingRef.current = true }}
+              onCompositionEnd={() => { filterComposingRef.current = false }}
+              aria-label="Filter models"
+              placeholder="Filter models"
+              className="h-8 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 text-xs text-gray-800 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:placeholder:text-gray-500"
+            />
+          </div>
         </div>,
         document.body,
       )}
@@ -286,9 +367,12 @@ const ChatComposer = memo(function ChatComposer({
   childModelDefault,
   effectiveChildModelKey,
   modelBusy = false,
+  modelsRefreshing = false,
   modelError,
   onChangeModel,
   onChangeChildModel,
+  onRefreshModels,
+  onOpenModelSettings,
   sendKeyMode = 'modEnter',
   onHeightChange,
   onSend,
@@ -1212,9 +1296,12 @@ const ChatComposer = memo(function ChatComposer({
               childModelDefault={childModelDefault}
               effectiveChildModelKey={effectiveChildModelKey}
               busy={modelBusy}
+              refreshing={modelsRefreshing}
               error={modelError}
               onChangeModel={onChangeModel}
               onChangeChildModel={onChangeChildModel}
+              onRefreshModels={onRefreshModels}
+              onOpenModelSettings={onOpenModelSettings}
             />
           </div>
           <button

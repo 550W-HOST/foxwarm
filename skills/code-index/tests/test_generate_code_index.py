@@ -8,6 +8,7 @@ from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "generate_code_index_standalone.py"
+SKILL_ROOT = MODULE_PATH.parent
 SPEC = importlib.util.spec_from_file_location("generate_code_index", MODULE_PATH)
 generator = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(generator)
@@ -145,6 +146,74 @@ class GeneratorSafetyTests(unittest.TestCase):
         (self.output / "units").symlink_to(outside, target_is_directory=True)
         with self.assertRaises(generator.ValidationError):
             generator.ensure_output_directory(self.output, "units")
+
+
+class CodeIndexGovernanceTests(unittest.TestCase):
+    def read_skill_file(self, name):
+        return (SKILL_ROOT / name).read_text(encoding="utf-8")
+
+    def test_skill_prefers_repo_local_index_then_legacy_fallback(self):
+        skill = self.read_skill_file("SKILL.md")
+        repo_local = "<repo-root>/docs/code-index/"
+        fallback = "~/code-index/{project}/"
+        self.assertIn(repo_local, skill)
+        self.assertIn(fallback, skill)
+        self.assertLess(skill.index(repo_local), skill.index(fallback))
+        self.assertIn("Do not split updates across both locations", skill)
+
+    def test_skill_defines_public_safe_active_map_and_canonical_ownership(self):
+        skill = self.read_skill_file("SKILL.md")
+        required = [
+            "public-safe and in English",
+            "Never copy a real secret value",
+            "source-code literal",
+            "active map",
+            "not an append-only changelog",
+            "exactly one canonical owner",
+            "Unit | One semantic unit only",
+            "Module | Multiple units inside one module",
+            "Thread | Multiple modules in one end-to-end contract or flow",
+            "Overview | The whole project as a general principle",
+            "create or use a thread doc as the canonical owner",
+            "summary plus a link to the canonical decision",
+            "same short sentence verbatim",
+            "primary ownership",
+            "Prefer stable symbols and section names over brittle line numbers",
+            "suspiciously similar Design Decisions",
+        ]
+        for phrase in required:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, skill)
+
+    def test_worker_and_top_down_guides_do_not_promote_duplicate_decisions(self):
+        for name in ("WORKER.md", "TOP_DOWN_CHILD.md", "INITIALIZATION.md"):
+            content = self.read_skill_file(name)
+            with self.subTest(name=name):
+                self.assertIn("canonical owner", content)
+                self.assertIn("thread", content.lower())
+                self.assertIn("public-safe English", content)
+
+    def test_generator_prompts_carry_governance_guardrails(self):
+        prompt = generator.CODE_INDEX_GOVERNANCE_PROMPT
+        for phrase in (
+            "public-safe English only",
+            "Never copy secrets, real credentials",
+            "local usernames/home-directory paths",
+            "one primary-owning unit",
+            "not an append-only changelog",
+            "one canonical owner",
+            "Repeated decisions across modules signal a thread",
+            "same short sentence verbatim",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, prompt)
+
+        toolscript = self.read_skill_file("generate_code_index.py")
+        self.assertIn("CODE_INDEX_GOVERNANCE_PROMPT", toolscript)
+        self.assertIn("Repeated decisions across modules signal a thread", toolscript)
+        standalone = self.read_skill_file("generate_code_index_standalone.py")
+        self.assertGreaterEqual(standalone.count("{CODE_INDEX_GOVERNANCE_PROMPT}"), 5)
+        self.assertGreaterEqual(toolscript.count("{CODE_INDEX_GOVERNANCE_PROMPT}"), 5)
 
 
 if __name__ == "__main__":

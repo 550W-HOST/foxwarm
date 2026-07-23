@@ -11,6 +11,7 @@ import * as managedSessions from './managedSessions';
 import * as tools from './tools';
 import * as mcpClient from './mcpClient';
 import { getAgentDir } from './config';
+import { convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, getToolScriptRunForTests, resetToolScriptRunsForTests } from './toolscript';
 import type { Session } from './types';
 
@@ -33,6 +34,8 @@ function asMain(body: string): string {
     '',
   ].join('\n');
 }
+
+const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnSUs8AAAAASUVORK5CYII=';
 
 test('run_script executes internal call_tool without surfacing nested tool history entries', async () => {
   await resetToolScriptRunsForTests();
@@ -309,6 +312,55 @@ test('run_script receives parsed MCP JSON text results through unified call_tool
       ok: true,
       items: [{ name: 'foxwarm' }],
     });
+  } finally {
+    (mcpClient as any).callTool = originalCallTool;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('run_script promotes MCP image content through the outer tool and provider image pipeline', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_mcp_image');
+  const session = await sessionManager.getSession(sessionId);
+  const originalCallTool = mcpClient.callTool;
+
+  (mcpClient as any).callTool = async () => mcpClient.normalizeMcpToolResult({
+    content: [{ type: 'image', mimeType: 'image/png', data: TINY_PNG_BASE64 }],
+  });
+
+  try {
+    const toolMessage = await executeTools([{
+      id: 'run-script-mcp-image',
+      name: 'run_script',
+      args: {
+        code: asMain('return call_tool({"source": "mcp", "server": "fixture", "name": "render_image", "args": {}})'),
+      },
+    }], { sessionId, session }, session);
+
+    const imagePart = toolMessage.parts.find(part => part.inlineData);
+    assert.ok(imagePart);
+    assert.equal(imagePart.toolUseId, 'run-script-mcp-image');
+    assert.equal(imagePart.inlineData?.data, TINY_PNG_BASE64);
+    assert.equal(imagePart.imageMeta?.imageId, 'run-script-mcp-image#1');
+
+    const response = toolMessage.parts.find(part => part.functionResponse)?.functionResponse?.response;
+    assert.ok(response);
+    const serializedResponse = JSON.stringify(response);
+    assert.equal(serializedResponse.includes(TINY_PNG_BASE64), false);
+    assert.doesNotMatch(serializedResponse, /TOOL OUTPUT TOO LONG|foxwarm: line too long/i);
+    assert.equal(response.result?.inlineDataItems, '[1 image(s) promoted]');
+
+    const providerItems = convertToOpenAIResponsesFormat([toolMessage]);
+    const providerOutput = providerItems.find((item: any) => item.type === 'function_call_output');
+    assert.ok(providerOutput);
+    assert.ok(Array.isArray(providerOutput.output));
+    const providerImage = providerOutput.output.find((item: any) => item.type === 'input_image');
+    const providerText = providerOutput.output.find((item: any) => item.type === 'input_text');
+    assert.equal(providerImage?.image_url, `data:image/png;base64,${TINY_PNG_BASE64}`);
+    assert.match(String(providerText?.text), /\[IMAGE: id=run-script-mcp-image#1, size=1x1\]/);
+    assert.equal(String(providerText?.text).includes(TINY_PNG_BASE64), false);
+    assert.doesNotMatch(String(providerText?.text), /TOOL OUTPUT TOO LONG|foxwarm: line too long/i);
   } finally {
     (mcpClient as any).callTool = originalCallTool;
     await resetToolScriptRunsForTests();

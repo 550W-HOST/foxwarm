@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 
-import { createMcpConfigStore, listServers, normalizeMcpToolResult, setMcpConfigStoreForTests, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
+import { buildMcpHttpHeadersForTests, createMcpConfigStore, listServers, normalizeMcpToolResult, setMcpConfigStoreForTests, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-mcp-config-'));
@@ -92,6 +92,45 @@ test('MCP config uses lightweight no-backup writes', async () => {
   });
 });
 
+test('MCP HTTP headers use the token as a default and let custom headers override it', () => {
+  assert.deepEqual(
+    buildMcpHttpHeadersForTests({ token: 'token-only' }),
+    { Authorization: 'Bearer token-only' },
+  );
+
+  assert.deepEqual(
+    buildMcpHttpHeadersForTests({ headers: { 'X-Api-Key': 'headers-only' } }),
+    { 'X-Api-Key': 'headers-only' },
+  );
+
+  assert.deepEqual(
+    buildMcpHttpHeadersForTests({
+      token: 'with-custom-header',
+      headers: { 'X-Api-Key': 'custom-value' },
+    }),
+    {
+      Authorization: 'Bearer with-custom-header',
+      'X-Api-Key': 'custom-value',
+    },
+  );
+
+  assert.deepEqual(
+    buildMcpHttpHeadersForTests({
+      token: 'must-not-win',
+      headers: { Authorization: 'Basic custom-authorization' },
+    }),
+    { Authorization: 'Basic custom-authorization' },
+  );
+
+  assert.deepEqual(
+    buildMcpHttpHeadersForTests({
+      token: 'must-not-win-with-different-casing',
+      headers: { authorization: 'Basic lowercase-authorization' },
+    }),
+    { authorization: 'Basic lowercase-authorization' },
+  );
+});
+
 test('normalizeMcpToolResult parses single JSON object and array text content', () => {
   assert.deepEqual(
     normalizeMcpToolResult({
@@ -128,7 +167,86 @@ test('normalizeMcpToolResult keeps plain text and JSON primitives as strings', (
   );
 });
 
-test('normalizeMcpToolResult preserves multi-content, non-text content, and metadata shapes', () => {
+test('normalizeMcpToolResult promotes pure and multiple MCP image content blocks', () => {
+  assert.deepEqual(
+    normalizeMcpToolResult({
+      content: [{ type: 'image', mimeType: 'image/png', data: 'small-image-base64' }],
+      isError: false,
+    }),
+    {
+      inlineDataItems: [{ mimeType: 'image/png', data: 'small-image-base64' }],
+      isError: false,
+    },
+  );
+
+  assert.deepEqual(
+    normalizeMcpToolResult({
+      content: [
+        { type: 'image', mimeType: 'image/png', data: 'first-image-base64' },
+        { type: 'image', mimeType: 'image/jpeg', data: 'second-image-base64' },
+      ],
+    }),
+    {
+      inlineDataItems: [
+        { mimeType: 'image/png', data: 'first-image-base64' },
+        { mimeType: 'image/jpeg', data: 'second-image-base64' },
+      ],
+    },
+  );
+});
+
+test('normalizeMcpToolResult promotes images from mixed content without changing other content types', () => {
+  const textContent = { type: 'text', text: 'caption' };
+  const resourceContent = {
+    type: 'resource',
+    resource: {
+      uri: 'file:///example.bin',
+      mimeType: 'application/octet-stream',
+      blob: 'resource-blob-base64',
+    },
+  };
+  const audioContent = {
+    type: 'audio',
+    mimeType: 'audio/wav',
+    data: 'audio-base64',
+  };
+  const malformedImageContent = {
+    type: 'image',
+    mimeType: 'application/octet-stream',
+    data: 'not-declared-as-an-image',
+  };
+
+  assert.deepEqual(
+    normalizeMcpToolResult({
+      content: [
+        textContent,
+        {
+          type: 'image',
+          mimeType: 'image/webp',
+          data: 'image-base64',
+          annotations: { audience: ['assistant'], priority: 0.8 },
+          _meta: { source: 'fixture' },
+        },
+        resourceContent,
+        audioContent,
+        malformedImageContent,
+      ],
+      structuredContent: { count: 1 },
+    }),
+    {
+      content: [textContent, resourceContent, audioContent, malformedImageContent],
+      structuredContent: { count: 1 },
+      inlineDataItems: [{
+        mimeType: 'image/webp',
+        data: 'image-base64',
+        annotations: { audience: ['assistant'], priority: 0.8 },
+        _meta: { source: 'fixture' },
+      }],
+    },
+  );
+});
+
+test('normalizeMcpToolResult preserves multi-content, non-image content, and metadata shapes', () => {
   const multiContent = {
     content: [
       { type: 'text', text: '{"ok":true}' },
@@ -137,10 +255,13 @@ test('normalizeMcpToolResult preserves multi-content, non-text content, and meta
   };
   assert.strictEqual(normalizeMcpToolResult(multiContent), multiContent);
 
-  const imageContent = {
-    content: [{ type: 'image', mimeType: 'image/png', data: 'abc123' }],
+  const resourceContent = {
+    content: [{
+      type: 'resource',
+      resource: { uri: 'file:///example.txt', mimeType: 'text/plain', text: 'abc123' },
+    }],
   };
-  assert.strictEqual(normalizeMcpToolResult(imageContent), imageContent);
+  assert.strictEqual(normalizeMcpToolResult(resourceContent), resourceContent);
 
   const errorResult = {
     content: [{ type: 'text', text: '{"message":"failed"}' }],

@@ -40,6 +40,17 @@ EXCLUDE_EXTENSIONS = [
     ".map", ".d.ts", ".min.js", ".bundle.js", ".lock",
 ]
 
+CODE_INDEX_GOVERNANCE_PROMPT = """Code-index governance:
+- Write concise, public-safe English only.
+- Never copy secrets, real credentials, local usernames/home-directory paths, private deployment/runbook details, or agent-private collaboration memory.
+- Use source-relative paths. If an environment-specific source-code literal is essential to explain behavior, keep it minimal and label it explicitly as a source-code literal; never copy a real secret value.
+- Prefer stable symbols and section names over brittle line numbers.
+- Each source file has one primary-owning unit; mention other files only as secondary/integration references.
+- Treat the index as a current map, not an append-only changelog. Do not invent Design Decisions; put uncertainty in Open Questions labeled Unconfirmed.
+- A decision has one canonical owner: unit for one semantic unit, module for several units in one module, thread for a cross-module contract, or overview for a project-wide principle. Other layers use only a short summary and canonical link.
+- Repeated decisions across modules signal a thread. A repeated critical security/data-integrity/persisted-data/external-contract invariant must be the same short sentence verbatim and include its canonical link or ID.
+"""
+
 
 def scan_files(source, files_filter, include_extensions):
     """Scan source tree and return list of {path, lines} dicts."""
@@ -123,6 +134,7 @@ Rules:
 - Large files (> 500 lines) should be their own unit
 - Medium files (200-500 lines) are typically their own unit
 - Test files (*.test.ts) should be grouped with their corresponding source file's unit
+- Group assignment means primary ownership; later integration references do not own the file
 - Each unit gets a short kebab-case name for its output filename
 
 Output a JSON array where each item is:
@@ -131,7 +143,9 @@ Output a JSON array where each item is:
 Source files:
 {file_summary}
 
-Return ONLY the JSON array, no markdown fences, no other text."""
+Return ONLY the JSON array, no markdown fences, no other text.
+
+{CODE_INDEX_GOVERNANCE_PROMPT}"""
 
     response = request_model_without_context(prompt)
     text = response["text"].strip()
@@ -201,17 +215,25 @@ Files: {', '.join(files)}
 
 Analyze the source code and produce a concise unit summary in markdown.
 
+Treat the listed files as this unit's primary-owned files. Mention any other file only as a secondary/integration reference.
+
 Include these sections:
 ## Purpose
 What this unit does (1-3 sentences)
+
+## Primary Files
+Source-relative files this unit owns
+
+## Secondary / Integration Files
+Files referenced for integration context but not owned (omit if none)
 
 ## Key Exports
 Main types, classes, functions exported (bullet list)
 
 ## Function Index
 A markdown table of ALL named functions/methods in this unit (exported AND internal helpers).
-Columns: Function | Lines (approximate) | Description (one phrase)
-Example row: | `advanceExecution(args)` | ~150 | Main interpreter loop, dispatches host calls |
+Columns: Function | Stable location (symbol/section; line optional) | Description (one phrase)
+Example row: | `advanceExecution(args)` | `advanceExecution` | Main interpreter loop, dispatches host calls |
 Include every function that is 5+ lines. Order by appearance in file.
 
 ## Dependencies
@@ -227,6 +249,8 @@ Keep it concise and factual. Do NOT include source code.
 
 Source:{files_text}
 
+{CODE_INDEX_GOVERNANCE_PROMPT}
+
 Write the markdown summary now (start with ## Purpose):"""
 
         response = request_model_without_context(prompt)
@@ -234,7 +258,7 @@ Write the markdown summary now (start with ## Purpose):"""
 
         # Write unit file
         unit_path = output_dir + "/units/" + name + ".md"
-        header = f"# Unit: {name}\n\nFiles: {', '.join(files)}\n\n"
+        header = f"# Unit: {name}\n\nPrimary files: {', '.join(files)}\n\n"
         call_tool("write", {"filePath": unit_path, "content": header + summary, "overwrite": True})
         results.append({"name": name, "path": unit_path, "files": files})
 
@@ -275,7 +299,9 @@ Output a JSON array where each item is:
 Unit briefs:
 {briefs_text}
 
-Return ONLY the JSON array, no markdown fences, no other text."""
+Return ONLY the JSON array, no markdown fences, no other text.
+
+{CODE_INDEX_GOVERNANCE_PROMPT}"""
 
     response = request_model_without_context(plan_prompt)
     text = response["text"].strip()
@@ -345,11 +371,18 @@ How other modules interact with this one (key functions, events, data flows)
 ## Invariants
 Important constraints and rules
 
+## Open Questions
+Unconfirmed items only, each labeled Unconfirmed
+
 ## Design Decisions
 (leave empty for now - will be filled from user decision history)
 
 Unit summaries:
 {relevant_content}
+
+Do not copy unit-owned decisions; add only summary links if the input already provides a canonical decision reference.
+
+{CODE_INDEX_GOVERNANCE_PROMPT}
 
 Write the module document now (start with ## Responsibility):"""
 
@@ -383,7 +416,7 @@ def generate_threads(output_dir):
 
     prompt = f"""You are generating cross-module feature flow documentation.
 
-Based on the module summaries below, identify 4-6 key cross-module flows and document each.
+Based on the module summaries below, identify 4-6 key cross-module flows and document each. Repeated cross-module contracts or decisions are strong signals for thread selection.
 
 A thread describes an end-to-end feature spanning multiple modules. Good threads might include:
 - Request lifecycle (input → orchestration → execution → response)
@@ -401,6 +434,8 @@ Each thread should have: ## Overview, ## Steps (numbered), ## Modules Involved, 
 
 Module summaries:
 {module_contents}
+
+{CODE_INDEX_GOVERNANCE_PROMPT}
 
 Generate the thread documents now:"""
 
@@ -457,9 +492,12 @@ Write a concise overview covering:
 6. **Thread Index** - list with one-line descriptions
 
 Keep it navigational and concise.
+Do not copy module/thread decisions into the overview; use short links unless a principle is genuinely project-wide and overview-owned.
 
 Source material:
 {all_content}
+
+{CODE_INDEX_GOVERNANCE_PROMPT}
 
 Write the overview markdown now:"""
 

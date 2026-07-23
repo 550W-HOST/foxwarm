@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import { spawn } from 'child_process';
 import crypto from 'crypto';
 import type { HttpServer } from './httpServer';
-import { BASE_DIR, STATE_DIR } from './config';
+import { APP_CONFIG_PATH, BASE_DIR, DATA_ROOT_DIR, DEFAULT_MODELS_CONFIG_PATH, STATE_DIR } from './config';
 import { logger } from './common';
 import { nodesManager, NodeServiceRequestError } from './nodes/manager';
 import { normalizeVscodeGitContentRef, readVscodeGitCommitDetails, VscodeGitCommitDetailsError, VSCODE_GIT_COMMIT_SERVICE_VERSION } from '../packages/shared/dist/gitCommitDetails';
@@ -17,18 +17,26 @@ const VSCODE_WEB_FS_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-fs
 const VSCODE_WEB_TERMINAL_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-terminal`;
 const VSCODE_WEB_SCM_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-scm`;
 const VSCODE_WEB_WEBUI_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm-webui`;
+const VSCODE_WEB_YAML_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/redhat-vscode-yaml`;
 const VSCODE_WEB_WEBVIEW_RELATIVE_ROUTE = `webview/${crypto.randomBytes(24).toString('hex')}`;
 const VSCODE_WEB_WEBVIEW_ROUTE = `${VSCODE_WEB_ROUTE}/${VSCODE_WEB_WEBVIEW_RELATIVE_ROUTE}`;
 const VSCODE_WEB_ASSET_DIR_ENV = 'FOXWARM_VSCODE_WEB_ASSET_DIR';
 const VSCODE_WEB_DEFAULT_FOLDER_URI_ENV = 'FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI';
 const VSCODE_WEB_WORKSPACE_PATH_ENV = 'FOXWARM_VSCODE_WEB_WORKSPACE_PATH';
 const VSCODE_WEB_WEBVIEW_ORIGIN_ENV = 'FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN';
+const VSCODE_WEB_YAML_EXTENSION_DIR_ENV = 'FOXWARM_VSCODE_YAML_EXTENSION_DIR';
 const DEFAULT_VSCODE_WEB_ASSET_DIR = path.join(BASE_DIR, 'packages', 'vscode-web', 'assets', 'vscode-web');
 const DEFAULT_VSCODE_WEB_WORKSPACE_PATH = path.join(STATE_DIR, 'vscode-web', 'foxwarm.code-workspace');
 const MAX_WRITE_BYTES = 50 * 1024 * 1024;
 const MAX_READ_BYTES = 50 * 1024 * 1024;
 const MAX_GIT_OUTPUT_BYTES = 10 * 1024 * 1024;
 const MAX_GIT_CONTENT_BYTES = 10 * 1024 * 1024;
+const VSCODE_YAML_PRIVACY_DEFAULTS = {
+  'redhat.telemetry.enabled': false,
+  'yaml.schemaStore.enable': false,
+  'yaml.kubernetesCRDStore.enable': false,
+  'yaml.extension.recommendations': false,
+} as const;
 
 const VSCODE_FILE_TYPE = {
   Unknown: 0,
@@ -590,6 +598,12 @@ function resolveVscodeWebAssetDir(): string {
   return path.isAbsolute(configured) ? configured : path.resolve(BASE_DIR, configured);
 }
 
+function resolveVscodeYamlExtensionDir(): string {
+  const configured = process.env[VSCODE_WEB_YAML_EXTENSION_DIR_ENV]?.trim();
+  if (configured) return path.isAbsolute(configured) ? configured : path.resolve(BASE_DIR, configured);
+  return path.join(path.dirname(resolveVscodeWebAssetDir()), 'extensions', 'redhat.vscode-yaml');
+}
+
 function getPreparedVscodeWebAssetDir(): string | undefined {
   const assetDir = resolveVscodeWebAssetDir();
   const requiredFiles = [
@@ -683,8 +697,27 @@ function ensureFoxwarmWorkspace(initialFolderUri: string): string {
   if (!fs.existsSync(workspacePath)) {
     fs.outputJsonSync(workspacePath, {
       folders: [{ uri: initialFolderUri }],
-      settings: {},
+      settings: VSCODE_YAML_PRIVACY_DEFAULTS,
     }, { spaces: 2 });
+  } else {
+    try {
+      const workspace = fs.readJsonSync(workspacePath) as { settings?: Record<string, unknown> };
+      if (workspace && typeof workspace === 'object' && !Array.isArray(workspace)) {
+        const settings = workspace.settings && typeof workspace.settings === 'object' && !Array.isArray(workspace.settings)
+          ? workspace.settings
+          : {};
+        let changed = workspace.settings !== settings;
+        for (const [key, value] of Object.entries(VSCODE_YAML_PRIVACY_DEFAULTS)) {
+          if (!Object.prototype.hasOwnProperty.call(settings, key)) {
+            settings[key] = value;
+            changed = true;
+          }
+        }
+        if (changed) fs.outputJsonSync(workspacePath, { ...workspace, settings }, { spaces: 2 });
+      }
+    } catch {
+      // Leave a malformed preexisting workspace untouched so Code can report it.
+    }
   }
   return buildMasterFoxwarmUri(workspacePath);
 }
@@ -713,6 +746,7 @@ function buildWorkbenchConfiguration(req: express.Request) {
   const terminalExtensionPath = getExternalPath(req, VSCODE_WEB_TERMINAL_EXTENSION_ROUTE);
   const scmExtensionPath = getExternalPath(req, VSCODE_WEB_SCM_EXTENSION_ROUTE);
   const webUiExtensionPath = getExternalPath(req, VSCODE_WEB_WEBUI_EXTENSION_ROUTE);
+  const yamlExtensionPath = getExternalPath(req, VSCODE_WEB_YAML_EXTENSION_ROUTE);
   const webviewPath = getExternalPath(req, VSCODE_WEB_WEBVIEW_ROUTE);
   const callbackRoute = `${getExternalRouteBasePath(req)}/callback`;
   const baseUrl = `${origin}${staticBasePath}`;
@@ -720,6 +754,7 @@ function buildWorkbenchConfiguration(req: express.Request) {
   const terminalExtensionUri = `${origin}${terminalExtensionPath}`;
   const scmExtensionUri = `${origin}${scmExtensionPath}`;
   const webUiExtensionUri = `${origin}${webUiExtensionPath}`;
+  const yamlExtensionUri = `${origin}${yamlExtensionPath}`;
   const externalUrl = new URL(origin);
   const configuredWebviewOrigin = process.env[VSCODE_WEB_WEBVIEW_ORIGIN_ENV]?.trim().replace(/\/+$/, '');
   if (configuredWebviewOrigin && !/^https?:\/\/\{\{uuid\}\}\.[A-Za-z0-9.-]+(?::\d+)?$/.test(configuredWebviewOrigin)) {
@@ -751,12 +786,13 @@ function buildWorkbenchConfiguration(req: express.Request) {
         webEndpointUrlTemplate: baseUrl,
         webviewContentExternalBaseUrlTemplate: `${webviewBaseUrl}/`,
       },
-      additionalBuiltinExtensions: [toUriComponents(fsExtensionUri), toUriComponents(terminalExtensionUri), toUriComponents(scmExtensionUri), toUriComponents(webUiExtensionUri)],
+      additionalBuiltinExtensions: [toUriComponents(fsExtensionUri), toUriComponents(terminalExtensionUri), toUriComponents(scmExtensionUri), toUriComponents(webUiExtensionUri), toUriComponents(yamlExtensionUri)],
       configurationDefaults: {
         'window.menuBarVisibility': 'visible',
         'terminal.integrated.defaultProfile.linux': 'Foxwarm Terminal',
         'terminal.integrated.defaultProfile.osx': 'Foxwarm Terminal',
         'terminal.integrated.defaultProfile.windows': 'Foxwarm Terminal',
+        ...VSCODE_YAML_PRIVACY_DEFAULTS,
       },
     },
   };
@@ -1034,6 +1070,7 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
       toUriComponents(extensionUrl('extensions/foxwarm-terminal')),
       toUriComponents(extensionUrl('extensions/foxwarm-scm')),
       toUriComponents(extensionUrl('extensions/foxwarm-webui')),
+      toUriComponents(extensionUrl('extensions/redhat-vscode-yaml')),
     ];
     create(document.body, {
       ...config,
@@ -1141,6 +1178,7 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     { route: VSCODE_WEB_TERMINAL_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-terminal') },
     { route: VSCODE_WEB_SCM_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-scm') },
     { route: VSCODE_WEB_WEBUI_EXTENSION_ROUTE, dir: path.join(BASE_DIR, 'packages', 'vscode-web', 'foxwarm-webui') },
+    { route: VSCODE_WEB_YAML_EXTENSION_ROUTE, dir: resolveVscodeYamlExtensionDir() },
   ];
   for (const extension of extensionRoutes) {
     if (fs.existsSync(extension.dir)) {
@@ -1178,6 +1216,25 @@ export function registerVscodeWebRoutes(httpServer: HttpServer): void {
     handler: async (_req, res) => {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.send('<!doctype html><meta charset="utf-8"><title>Foxwarm Code callback</title><script>window.close();</script>');
+    },
+  });
+
+  httpServer.addRoute({
+    path: `${VSCODE_WEB_API_PREFIX}/workspace-roots`,
+    method: 'GET',
+    handler: async (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        version: 1,
+        roots: {
+          app: { nodeId: 'master', path: BASE_DIR },
+          data: { nodeId: 'master', path: DATA_ROOT_DIR },
+        },
+        configFiles: {
+          app: { nodeId: 'master', path: APP_CONFIG_PATH },
+          models: { nodeId: 'master', path: DEFAULT_MODELS_CONFIG_PATH },
+        },
+      });
     },
   });
 

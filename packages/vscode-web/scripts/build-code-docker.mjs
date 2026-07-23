@@ -45,7 +45,7 @@ async function main() {
     '--env', 'HOME=/tmp/foxwarm-code-home',
     '--env', 'npm_config_cache=/workspace/packages/vscode-web/.cache/npm',
   )
-  for (const name of ['FOXWARM_CODE_OSS_COMMIT', 'FOXWARM_CODE_OSS_REPOSITORY', 'FOXWARM_CODE_OSS_CACHE_DIR', 'FOXWARM_VSCODE_WEB_ASSET_DIR']) {
+  for (const name of ['FOXWARM_CODE_OSS_COMMIT', 'FOXWARM_CODE_OSS_REPOSITORY', 'FOXWARM_CODE_OSS_CACHE_DIR', 'FOXWARM_VSCODE_WEB_ASSET_DIR', 'FOXWARM_VSCODE_YAML_EXTENSION_DIR']) {
     if (process.env[name]) runArgs.push('--env', name)
   }
   runArgs.push(

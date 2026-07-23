@@ -184,7 +184,9 @@ window.addEventListener('message', event => {
     } else if (data.type === 'open-agents') {
       vscode.postMessage({ type: 'open-agents' });
     } else if (data.type === 'open-setup') {
-      vscode.postMessage({ type: 'open-setup' });
+      vscode.postMessage({ type: 'open-setup', ...(data.focus === 'models' ? { focus: 'models' } : {}) });
+    } else if (data.type === 'setup-ready') {
+      vscode.postMessage({ type: 'setup-ready' });
     } else if (data.type === 'open-terminal') {
       vscode.postMessage({ type: 'open-terminal' });
     } else if (data.type === 'open-commit') {
@@ -192,7 +194,7 @@ window.addEventListener('message', event => {
     }
     return;
   }
-  if (!data || data.channel !== '${FOXWARM_EMBED_HOST_CHANNEL}' || data.version !== ${FOXWARM_EMBED_VERSION} || data.nonce !== bridgeNonce || data.type !== 'active-target') return;
+  if (!data || data.channel !== '${FOXWARM_EMBED_HOST_CHANNEL}' || data.version !== ${FOXWARM_EMBED_VERSION} || data.nonce !== bridgeNonce || (data.type !== 'active-target' && data.type !== 'focus-models')) return;
   frame.contentWindow.postMessage(data, ${JSON.stringify(frameOrigin)});
 });
 <\/script></body></html>`;
@@ -202,7 +204,8 @@ function normalizeHostMessage(value) {
   const type = value.type;
   if (type === "sidebar-ready") return { type };
   if (type === "open-agents") return { type };
-  if (type === "open-setup") return { type };
+  if (type === "open-setup") return { type, ...value.focus === "models" ? { focus: "models" } : {} };
+  if (type === "setup-ready") return { type };
   if (type === "open-terminal") return { type };
   if (type === "open-session") {
     const request = normalizeOpenSessionRequest(value);
@@ -231,6 +234,8 @@ var FoxwarmWebUiController = class {
     this.context = context;
     this.sessionTitles = /* @__PURE__ */ new Map();
     this.sidebarBridge = null;
+    this.setupBridge = null;
+    this.pendingModelsFocus = false;
     this.webUiBaseUrl = deriveWebUiBaseUrl(context.extensionUri);
   }
   getStoredTargets() {
@@ -283,9 +288,27 @@ var FoxwarmWebUiController = class {
     if (!request) throw new Error("Expected a valid Foxwarm session id.");
     await this.openTarget({ kind: "session", ...request });
   }
-  async handleHostMessage(value) {
+  publishModelsFocus() {
+    const bridge = this.setupBridge;
+    if (!this.pendingModelsFocus || !bridge?.ready) return;
+    this.pendingModelsFocus = false;
+    void bridge.webview.postMessage({
+      channel: FOXWARM_EMBED_HOST_CHANNEL,
+      version: FOXWARM_EMBED_VERSION,
+      nonce: bridge.nonce,
+      type: "focus-models"
+    });
+  }
+  async handleHostMessage(value, sourceWebview) {
     const message = normalizeHostMessage(value);
     if (!message) return;
+    if (message.type === "setup-ready") {
+      if (this.setupBridge?.webview === sourceWebview) {
+        this.setupBridge.ready = true;
+        this.publishModelsFocus();
+      }
+      return;
+    }
     if (message.type === "sidebar-ready") {
       this.publishActiveTarget();
       return;
@@ -299,7 +322,9 @@ var FoxwarmWebUiController = class {
       return;
     }
     if (message.type === "open-setup") {
+      if (message.focus === "models") this.pendingModelsFocus = true;
       await this.openTarget({ kind: "setup" });
+      this.publishModelsFocus();
       return;
     }
     if (message.type === "open-terminal") {
@@ -339,7 +364,7 @@ var FoxwarmWebUiController = class {
     view.webview.options = { enableScripts: true };
     view.webview.html = buildEmbeddedWebviewHtml(this.webUiBaseUrl, { kind: "sidebar" }, nonce);
     this.context.subscriptions.push(view.webview.onDidReceiveMessage((message) => {
-      void this.handleHostMessage(message);
+      void this.handleHostMessage(message, view.webview);
     }));
     this.context.subscriptions.push(view.onDidDispose(() => {
       if (this.sidebarBridge?.webview === view.webview) this.sidebarBridge = null;
@@ -352,10 +377,17 @@ var FoxwarmWebUiController = class {
     const target = document.target;
     const title = target.kind === "session" ? this.sessionTitles.get(target.sessionId) : target.kind === "agents" ? "Agents" : "Setup";
     if (title) panel.title = title;
+    const nonce = randomNonce();
     panel.webview.options = { enableScripts: true };
-    panel.webview.html = buildEmbeddedWebviewHtml(this.webUiBaseUrl, target.kind === "session" ? { kind: "chat", sessionId: target.sessionId, ...title ? { title } : {} } : target);
+    panel.webview.html = buildEmbeddedWebviewHtml(this.webUiBaseUrl, target.kind === "session" ? { kind: "chat", sessionId: target.sessionId, ...title ? { title } : {} } : target, nonce);
+    if (target.kind === "setup") {
+      this.setupBridge = { webview: panel.webview, nonce, ready: false };
+      this.context.subscriptions.push(panel.onDidDispose(() => {
+        if (this.setupBridge?.webview === panel.webview) this.setupBridge = null;
+      }));
+    }
     this.context.subscriptions.push(panel.webview.onDidReceiveMessage((message) => {
-      void this.handleHostMessage(message);
+      void this.handleHostMessage(message, panel.webview);
     }));
   }
 };

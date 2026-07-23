@@ -11,6 +11,7 @@ It is intentionally separate from `packages/webui` so the VS Code workbench and 
 - Browser web extension: `foxwarm-terminal`, served from `/vscode-web/extensions/foxwarm-terminal/`.
 - Browser web extension: `foxwarm-scm`, served from `/vscode-web/extensions/foxwarm-scm/`.
 - Browser web extension: `foxwarm-webui`, served from `/vscode-web/extensions/foxwarm-webui/`.
+- Pinned Red Hat YAML Web extension, served from `/vscode-web/extensions/redhat-vscode-yaml/` when optional assets are prepared.
 - Optional official VS Code Web static assets served from `/vscode-web/static/` when prepared.
 - URI shape: `foxwarm://node+<nodeId>/<absolute-path>`.
   - `node` is the namespace/type layer.
@@ -50,11 +51,19 @@ The terminal extension also uses same-origin cookie auth for `POST /api/terminal
 
 `foxwarm-webui` contributes a dedicated **Foxwarm** Activity Bar container. Its WebviewView contains a thin outer bridge and an iframe loading the normal WebUI in the strict `foxwarmEmbed=sidebar` mode. That mode renders the session list, search/view controls, Agents and Terminal entries, settings, and the existing New agent/New session dialogs, but not the WebUI workbench shell. The narrow settings menu is end-aligned so it remains inside the view. Session, Agents, Setup, and Terminal actions send only fixed versioned messages checked against the exact iframe source plus a random per-view nonce. Terminal keeps the normal split-button/dropdown surface but currently maps either create action to `foxwarm-terminal.newTerminal` in the outer Code extension host; the displayed custom Node/Path values are reserved for later wiring, and the nested sidebar never creates a WebUI terminal tab.
 
-Each selected session opens through a read-only custom editor at a deterministic synthetic `foxwarm-chat:` URI. The editor iframe uses `foxwarmEmbed=chat`, renders exactly one normal `Chat`, and therefore fetches only `GET /api/sessions/:id/history` and listens only to `/api/sessions/:id/stream` for session state. Agents and Setup use stable singleton `foxwarm-agents:` / `foxwarm-setup:` custom-editor identities and strict leaf roots that reuse `ArchitectureView` / `SetupView`; Agents owns the global session data its dashboard requires, while Setup owns only setup APIs. Hidden editors retain context. Opening the same identity reveals the existing editor, generalized extension global state restores all open Foxwarm editors after a Code page reload, and an explicit editor close removes that target from restoration state. The previous session-only restore key is read once and migrated by writing the generalized state.
+Each selected session opens through a read-only custom editor at a deterministic synthetic `foxwarm-chat:` URI. The editor iframe uses `foxwarmEmbed=chat`, renders exactly one normal `Chat`, and therefore fetches only `GET /api/sessions/:id/history` and listens only to `/api/sessions/:id/stream` for session state. Agents and Setup use stable singleton `foxwarm-agents:` / `foxwarm-setup:` custom-editor identities and strict leaf roots that reuse `ArchitectureView` / `SetupView`; Agents owns the global session data its dashboard requires, while Setup owns only setup APIs. Chat's model settings action activates the stable Setup editor and sends a nonce-bound one-shot request to focus the Models editor after the Setup leaf reports ready. Hidden editors retain context. Opening the same identity reveals the existing editor, generalized extension global state restores all open Foxwarm editors after a Code page reload, and an explicit editor close removes that target from restoration state. The previous session-only restore key is read once and migrated by writing the generalized state.
 
 The extension watches Code's tab-group change events rather than polling. It classifies only its three fixed custom-editor view types and sends a nonce-bound `active-target` message back through the sidebar bridge. The sidebar highlights the active session row, Agents button, or Setup/settings entry; switching to an ordinary file, Welcome, or another non-Foxwarm editor clears all three selections. Session links inside embedded Chat or Agents ask the host extension to open the matching chat editor, while commit markers retain the fixed `foxwarm-scm.openCommitDetails` bridge.
 
 The embed URLs never contain the WebUI token. They use the normal WebUI cookie and are intended for the current same-public-origin deployment, including reverse-proxy base paths. Chrome and Firefox E2E cover HTTPS with a stripping `/alphabot/` proxy. A separately configured wildcard webview origin—and localhost's default hashed webview origin—can make the inner WebUI a third-party-cookie context; a scoped cross-origin embed credential exchange is intentionally not part of this first phase, so those isolated-origin deployments may show the login view until that flow is designed.
+
+## Foxwarm YAML schemas
+
+The optional asset workflow pins the stable MIT `redhat.vscode-yaml` Web extension from Open VSX by version and SHA-256 digest. Its reviewed license and third-party notices are tracked under `third-party/redhat-vscode-yaml/`; the extracted extension stays under ignored optional assets and is served locally without a marketplace dependency. Preparation applies only one fail-closed exact-match patch so its telemetry helper treats Foxwarm's effective disabled default as configured instead of showing an opt-in prompt; all other vendor files remain byte-for-byte unchanged. Event transmission and external schema catalogs remain disabled by the workspace settings.
+
+The `foxwarm-fs` extension registers shared, bundled Draft-07 schemas through Red Hat YAML's contributor API. Association is intentionally narrow: only the exact normalized master-node URIs for the active app config and models config returned by the authenticated fixed workspace metadata response match. A remote node at the same path, another file with the same basename, and unrelated YAML receive no Foxwarm schema. No config values, credentials, schema endpoint, or external schema URL are involved.
+
+The persistent Foxwarm workspace defaults Red Hat telemetry, SchemaStore, Kubernetes CRD fetching, and extension recommendations to disabled while preserving explicit values already stored in that workspace. Schema completion, hover, and diagnostics are advisory. Setup still validates through the backend before saving; editing and saving directly in Code can bypass that semantic validation.
 
 ## Terminal profile
 
@@ -132,6 +141,12 @@ npm run build:code
 
 The command builds and runs `Dockerfile.code-oss`, a pinned Node 24 builder containing the upstream Linux native-build prerequisites. Inside that container, the source builder shallow-fetches the commit recorded in `code-oss-version.json`, verifies that its product configuration is `Code - OSS` / `MIT`, installs the upstream dependencies, downloads its declared builtin extensions, and runs upstream's standalone `vscode-web-min-ci` packager. That current packager bundles the web entry points directly from TypeScript source with esbuild, avoiding the all-in-one desktop/server declaration build and symbol mangler. The source and dependency cache lives under ignored `packages/vscode-web/.cache/code-oss/` by default and is written with the invoking user's uid/gid.
 
+Both Code preparation paths also verify and extract the pinned Red Hat YAML Web artifact. To prepare only that optional extension (for example when an existing workbench asset directory is already available), run:
+
+```sh
+npm --prefix packages/vscode-web run prepare:yaml-extension
+```
+
 This is a large optional build. Expect several GB of temporary/cache usage and a running Docker daemon. Useful overrides are forwarded into the container:
 
 ```sh
@@ -196,5 +211,8 @@ Launch URLs are derived from the dynamic WebUI API base path and preserve revers
 npm --prefix packages/shared run build
 npx tsc --noEmit
 npm --prefix packages/vscode-web test
+npm --prefix packages/vscode-web run test:e2e:yaml
 node --test lib/vscodeWebRoutes.test.js
 ```
+
+The YAML E2E skips when the optional official workbench, pinned YAML extension, or Chromium is absent.

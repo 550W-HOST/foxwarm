@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { prepareYamlExtension, yamlExtensionDirForWorkbenchOut } from './yaml-extension-assets.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const packageRoot = path.resolve(scriptDir, '..')
@@ -207,6 +208,7 @@ async function main() {
     nodeVersion,
     builtAt: new Date().toISOString(),
   })
+  await prepareYamlExtension({ outDir: yamlExtensionDirForWorkbenchOut(options.outDir) })
   // Preserve the expensive source/dependency cache, but discard reproducible
   // intermediate trees after validated assets have been published.
   await Promise.all([
