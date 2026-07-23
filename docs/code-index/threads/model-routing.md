@@ -76,7 +76,7 @@ Across OpenAI Chat Completions, OpenAI Responses, Anthropic, and compatible conc
 ## Surfaces and attribution
 
 - Session and WebUI model selection continue to expose the configured virtual key.
-- `ChatResult.modelId`, assistant `__meta.modelId`, logs, and retry diagnostics identify the concrete leaf used by that attempt or success.
+- `ChatResult.modelId` and assistant `__meta.modelId` identify the canonical concrete leaf that actually succeeded. When the resolved route is virtual, successful results/messages additionally carry that resolved configuration key as optional `virtualModelKey`; concrete, user, tool, synthetic, failed, and legacy messages omit it. Logs and retry diagnostics continue to identify both the attempted concrete leaf and virtual route where applicable.
 - WebUI Setup presents Models as raw YAML only. Its local static schema and current-document suggestions are advisory; save uses the canonical config validator and remains byte-preserving after validation.
 - Structured setup input accepts virtual targets and failover settings; setup diagnostics expose `isVirtual`, `targets`, `failureThreshold`, and `cooldownMs`. The model-list API also exposes provider type, virtual status, resolved targets, and effective context limit without leaf credentials.
 - The one-shot model CLI lists and accepts virtual keys while reusing production routing.
@@ -123,4 +123,4 @@ A provider success requires non-whitespace assistant content or a tool call. Rea
 
 ### D-model-routing-concrete-attribution
 
-Configured selection surfaces retain the virtual key, while result/history attribution records the concrete leaf that actually succeeded.
+Configured selection surfaces retain the virtual key. Successful results and provider-generated assistant history record the canonical concrete Foxwarm leaf that actually succeeded in the existing `modelId`; when and only when the resolved route was virtual, they also record its resolved models-config key as optional `virtualModelKey`. Resolve that key at routing time rather than inferring it later from mutable session selection. Do not substitute upstream vendor-reported model aliases, duplicate the concrete identity under a new field, or annotate user, tool, synthetic, failed, or legacy messages.

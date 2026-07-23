@@ -13,7 +13,7 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `Message` — Role-tagged message with parts and metadata
 - `Session` — Full session state including history, queue, stats, model config, and context frontier
 - `QueueItem` / `QueueSource` — Inbound work items and their origin metadata; `QueueSource.weworkStreamId` carries WeWork stream/card binding from channel intake into the turn loop
-- `ChatResult` — LLM response envelope with text, provider-prefixed model id, usage, and tool calls
+- `ChatResult` — LLM response envelope with text, provider-prefixed concrete model id, optional resolved virtual model key, usage, and tool calls
 - `ToolDefinition` / `ToolFunction` — Tool schema and handler signature
 - `SessionStreamEvent` — Real-time WebUI streaming/progress events
 - `ChannelTurnProgress`, `ChannelTurnToolRef`, `ChannelTurnToolResult` — Transient per-turn channel display progress for LLM/tool status, currently consumed by WeWork stream-card aggregation; `tool-calls-start` can carry model text for atomic text+running-tool card updates.
@@ -33,7 +33,7 @@ None. This file has no imports from other project modules or external packages.
 
 ## Behavior
 
-Pure type declarations with no runtime logic, state changes, or side effects. The `Session` interface defines mutable state shape (busy flags, queue, history, stopping flag) that is managed elsewhere, plus metadata such as optional WebUI `sidebarOrder` sibling ordering and `pinned` presentation state. The `Message.modelVisible` field controls whether a message is included in LLM context. Model-message `__meta` may carry `usage`, `modelId`, `contextBlock`, `contextFrontierItem`, and `preservedFromBlockId`; LLM request construction strips `__meta` before provider calls. `ContextFrontierItem` is a discriminated union supporting layered compaction.
+Pure type declarations with no runtime logic, state changes, or side effects. The `Session` interface defines mutable state shape (busy flags, queue, history, stopping flag) that is managed elsewhere, plus metadata such as optional WebUI `sidebarOrder` sibling ordering and `pinned` presentation state. The `Message.modelVisible` field controls whether a message is included in LLM context. Model-message `__meta` may carry `usage`, concrete `modelId`, optional `virtualModelKey`, `contextBlock`, `contextFrontierItem`, and `preservedFromBlockId`; LLM request construction strips `__meta` before provider calls. Canonical model-attribution semantics belong to [D-model-routing-concrete-attribution](../threads/model-routing.md#d-model-routing-concrete-attribution). `ContextFrontierItem` is a discriminated union supporting layered compaction.
 
 ## Integration
 

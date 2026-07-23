@@ -1559,6 +1559,7 @@ export async function chat(
     if (result.allParts && result.allParts.length > 0) {
         const assistantMeta = {
             ...(result.modelId ? { modelId: result.modelId } : {}),
+            ...(result.virtualModelKey ? { virtualModelKey: result.virtualModelKey } : {}),
             ...(result.usage ? { usage: result.usage } : {}),
         };
         const assistantMsg: Message = {
@@ -2157,7 +2158,9 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                     ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                     ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),
                 }, logFiles);
-                return result;
+                return virtualRoutingRequest
+                    ? { ...result, virtualModelKey: routeKey }
+                    : result;
             } catch (error: any) {
                 if (isAbortError(error)) {
                     responseAttempts.push({

@@ -205,6 +205,7 @@ test('failover uses outer attempts A x5 then rebuilds a clean Anthropic request 
     assert.equal(fallbackBody.prompt_cache_key, undefined);
     assert.equal(result.text, 'anthropic fallback ok');
     assert.equal(result.modelId, 'anthropicLeaf/claude-model');
+    assert.equal(result.virtualModelKey, 'fallback');
   } finally {
     (axios as any).post = originalPost;
   }
@@ -243,6 +244,7 @@ test('virtual routing requests the actual qualified leaf when a model id contain
     assert.equal(calls[0].url, 'https://slash-leaf.test/v1/chat/completions');
     assert.equal(calls[0].body.model, 'foo/bar');
     assert.equal(result.modelId, 'foo/foo/bar');
+    assert.equal(result.virtualModelKey, 'sticky-slash');
   } finally {
     (axios as any).post = originalPost;
   }
@@ -299,6 +301,7 @@ test('session-hash resolves the prefix-lineage key once and stays on the same HR
       promptCacheKey: 'key-0',
     }));
     assert.equal(result.modelId, 'openaiLeaf/chat-model');
+    assert.equal(result.virtualModelKey, 'sticky');
     assert.deepEqual(calls.map(call => call.url), [
       'https://openai-leaf.test/v1/chat/completions',
       'https://openai-leaf.test/v1/chat/completions',
@@ -414,6 +417,7 @@ test('empty, whitespace-only, and reasoning-only responses retry while tool call
       const result = await withImmediateRetryTimers(() => requestLlmOnce(baseRequest('openaiLeaf/chat-model', 2)));
       assert.equal(calls, 2);
       assert.equal(result.text, 'chat ok');
+      assert.equal(result.virtualModelKey, undefined);
     });
 
     await t.test('OpenAI Responses retries reasoning-only output', async () => {
@@ -430,6 +434,7 @@ test('empty, whitespace-only, and reasoning-only responses retry while tool call
       const result = await withImmediateRetryTimers(() => requestLlmOnce(baseRequest('responsesLeaf/responses-model', 2)));
       assert.equal(calls, 2);
       assert.equal(result.text, 'responses ok');
+      assert.equal(result.virtualModelKey, undefined);
     });
 
     await t.test('Anthropic retries thinking-only output', async () => {
@@ -448,6 +453,7 @@ test('empty, whitespace-only, and reasoning-only responses retry while tool call
       const result = await withImmediateRetryTimers(() => requestLlmOnce(baseRequest('anthropicLeaf/claude-model', 2)));
       assert.equal(calls, 2);
       assert.equal(result.text, 'anthropic ok');
+      assert.equal(result.virtualModelKey, undefined);
     });
 
     for (const [model, response] of [

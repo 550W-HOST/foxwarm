@@ -1,6 +1,6 @@
 # Unit: src-llm
 
-Files: src/llm.ts, src/llm.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/parallelToolExecution.test.ts
+Files: src/llm.ts, src/llm.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/llmVirtualMessageMeta.test.ts, src/parallelToolExecution.test.ts
 
 ## Purpose
 
@@ -50,7 +50,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - Retry waits are abortable. Terminal failures move bounded diagnostics to error logs, emit a final retry event, and throw `LlmRequestError`; they do not create fake assistant `Error:` messages. Canonical boundary: [D-llm-request-errors](../modules/llm.md#d-llm-request-errors).
 - The historical `maxRetries` option/event field means total attempts; the default is six. Virtual attempts rebuild the complete selected concrete request, and unusable empty/reasoning-only responses retry. Canonical semantics: [model routing](../threads/model-routing.md).
 - HTTP classification recognizes nested structured model-not-found errors and bounded common text forms without broadening ordinary HTTP 400 retries. A virtual outer request captures route activation once so old retries cannot replace newer configuration state.
-- Successful results normalize into `ChatResult`, record provider-qualified model ID and usage, and may contain function calls for the router loop.
+- Successful results normalize into `ChatResult`, record the provider-qualified concrete model ID and usage, and may contain function calls for the router loop. A virtual route additionally carries its resolved configuration key through `ChatResult.virtualModelKey` into every successful provider-generated assistant message, including tool-call-only turns; canonical semantics are owned by [D-model-routing-concrete-attribution](../threads/model-routing.md#d-model-routing-concrete-attribution).
 - Display-only messages and internal `__meta` are excluded from provider input.
 - Tool execution keeps per-call result/image/control state local. Adjacent direct `exec` calls use a bounded parallel segment; all other tools are barriers, and final parts are flattened in original call order. Canonical scheduling contract: [D-dispatch-exec-parallel-segments](../threads/tool-dispatch.md#d-dispatch-exec-parallel-segments).
 - Tool-result internals fold explicit wait-token cleanup and successful handoff post-actions without exposing hidden sentinels to providers. The router owns post-append wait arming under [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).

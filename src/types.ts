@@ -84,6 +84,8 @@ export interface Message {
     seq?: number;
     /** Canonical provider-prefixed model id used to create this model message. */
     modelId?: string;
+    /** Resolved virtual models-config key requested for this model message, when applicable. */
+    virtualModelKey?: string;
     /** Token usage reported for the model call that produced this model message. */
     usage?: TokenUsage;
     /** Structured CTX-BLOCK metadata for rendered layered-context block messages. */
@@ -277,6 +279,8 @@ export interface ChatResult {
   text: string;
   /** Canonical provider-prefixed model id used for the LLM request. */
   modelId?: string;
+  /** Resolved virtual models-config key requested for the LLM request, when applicable. */
+  virtualModelKey?: string;
   usage?: TokenUsage;
   toolCalls?: Array<FunctionCall>;
   allParts?: MessagePart[];

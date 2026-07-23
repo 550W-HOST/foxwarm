@@ -541,6 +541,8 @@ test('chat stores each model request usage and model id on its assistant message
     assert.equal(assistantMessages.length, 2);
     assert.equal(assistantMessages[0].__meta?.modelId, 'anthropic/claude-sonnet-4-5');
     assert.equal(assistantMessages[1].__meta?.modelId, 'anthropic/claude-sonnet-4-5');
+    assert.equal(assistantMessages[0].__meta?.virtualModelKey, undefined);
+    assert.equal(assistantMessages[1].__meta?.virtualModelKey, undefined);
     assert.deepEqual(assistantMessages[0].__meta?.usage, {
       inputTokens: 12,
       outputTokens: 5,

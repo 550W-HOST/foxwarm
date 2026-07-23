@@ -134,6 +134,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
   let payloadText: string;
   let toolDenied = false;
   let modelId: string | undefined;
+  let virtualModelKey: string | undefined;
 
   try {
     logger.info({ sessionId, requestId }, 'BTW background request started');
@@ -143,6 +144,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
       registerAbortController: false,
     });
     modelId = result.modelId;
+    virtualModelKey = result.virtualModelKey;
 
     if (result.toolCalls?.length) {
       toolDenied = true;
@@ -156,7 +158,10 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
     payloadText = formatBtwError(error);
   }
 
-  const text = await appendBtwResult(sessionId, payloadText, modelId ? { modelId } : {});
+  const text = await appendBtwResult(sessionId, payloadText, {
+    ...(modelId ? { modelId } : {}),
+    ...(virtualModelKey ? { virtualModelKey } : {}),
+  });
   logger.info({ sessionId, requestId, toolDenied }, 'BTW background request finished');
   return { text, toolDenied };
 }
