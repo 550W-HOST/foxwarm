@@ -1,4 +1,4 @@
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Eye, Code, FileJson, Copy, Check } from 'lucide-react'
 import {
   IconToggleButton,
@@ -60,6 +60,11 @@ type NormalizedTokenUsage = {
   outputTokens: number
 }
 
+type UsageAttribution = {
+  models: string[]
+  timestamps: Array<number | null | 'invalid'>
+}
+
 const toTokenCount = (value: unknown): number | null => {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
@@ -98,6 +103,52 @@ const formatUsageTitle = (usage: NormalizedTokenUsage, callCount?: number) => {
   return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}${callCount ? ` • calls ${callCount}` : ''}`
 }
 
+const formatUsageModel = (msg: Message): string => {
+  const modelId = typeof msg.__meta?.modelId === 'string' && msg.__meta.modelId.trim()
+    ? msg.__meta.modelId.trim()
+    : null
+  const virtualModelKey = typeof msg.__meta?.virtualModelKey === 'string' && msg.__meta.virtualModelKey.trim()
+    ? msg.__meta.virtualModelKey.trim()
+    : null
+
+  if (virtualModelKey) return `${virtualModelKey} → ${modelId || 'unavailable'}`
+  return modelId || 'unavailable'
+}
+
+const getUsageTimestamp = (msg: Message): number | null | 'invalid' => {
+  const timestamp = msg.__meta?.timestamp
+  if (timestamp === undefined || timestamp === null) return null
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || Number.isNaN(new Date(timestamp).getTime())) return 'invalid'
+  return timestamp
+}
+
+const getMessageUsageAttribution = (msg: Message): UsageAttribution => ({
+  models: [formatUsageModel(msg)],
+  timestamps: [getUsageTimestamp(msg)],
+})
+
+const formatUsageTime = (timestamp: number): string => new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: 'short',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+}).format(new Date(timestamp))
+
+const formatUsageModels = (models: string[]): string => [...new Set(models)].join(' • ')
+
+const formatUsageTimes = (timestamps: UsageAttribution['timestamps']): string => {
+  const valid = [...new Set(timestamps.filter((timestamp): timestamp is number => typeof timestamp === 'number'))].sort((a, b) => a - b)
+  const labels = valid.length > 1
+    ? [`${formatUsageTime(valid[0])} – ${formatUsageTime(valid[valid.length - 1])}`]
+    : valid.map(formatUsageTime)
+  if (timestamps.includes(null)) labels.push('unavailable')
+  if (timestamps.includes('invalid')) labels.push('invalid timestamp')
+  return labels.join(' • ') || 'unavailable'
+}
+
 const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'muted' | 'normal' | 'warning' }) => {
   const colorClass = tone === 'warning'
     ? 'text-orange-600 dark:text-orange-400'
@@ -113,32 +164,116 @@ const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; t
   )
 }
 
-const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount }: { usage: NormalizedTokenUsage; isMobile: boolean; callCount?: number }) {
+const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount, attribution, expanded, onToggle }: {
+  usage: NormalizedTokenUsage
+  isMobile: boolean
+  callCount?: number
+  attribution: UsageAttribution
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const stopUsageBadgeEvent = (event: { stopPropagation: () => void }) => event.stopPropagation()
+
   return (
-    <span
-      className={`${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center rounded-md border border-slate-200 bg-white/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85`}
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-label={expanded ? 'Hide token usage details' : 'Show token usage details'}
+      data-usage-badge
+      className={`${expanded ? 'flex max-w-full flex-col items-stretch gap-1.5 text-left' : `${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center`} pointer-events-auto rounded-md border border-slate-200 bg-white/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85 ${expanded ? 'w-fit' : ''} cursor-pointer appearance-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500`}
       title={formatUsageTitle(usage, callCount)}
+      onPointerDown={stopUsageBadgeEvent}
+      onClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onToggle()
+      }}
     >
-      {callCount ? <ModelUsageRow label="×" value={callCount} tone="normal" /> : null}
-      <ModelUsageRow label="C" value={usage.cachedTokens} tone="muted" />
-      <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
-      <ModelUsageRow label="O" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
-    </span>
+      {expanded ? (
+        <>
+          {callCount ? <ModelUsageRow label="Calls" value={callCount} tone="normal" /> : null}
+          <ModelUsageRow label="Cached" value={usage.cachedTokens} tone="muted" />
+          <ModelUsageRow label="Input" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
+          <ModelUsageRow label="Output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
+          <span className="flex min-w-0 items-baseline justify-between gap-2 text-slate-500 dark:text-slate-400">
+            <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">Time</span>
+            <span className="min-w-0 break-all text-right text-[10px] font-semibold leading-snug">{formatUsageTimes(attribution.timestamps)}</span>
+          </span>
+          <span className="flex min-w-0 items-baseline justify-between gap-2 text-slate-500 dark:text-slate-400">
+            <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">Model</span>
+            <span className="min-w-0 break-all text-right text-[10px] font-semibold leading-snug">{formatUsageModels(attribution.models)}</span>
+          </span>
+        </>
+      ) : (
+        <>
+          {callCount ? <ModelUsageRow label="×" value={callCount} tone="normal" /> : null}
+          <ModelUsageRow label="C" value={usage.cachedTokens} tone="muted" />
+          <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
+          <ModelUsageRow label="O" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
+        </>
+      )}
+    </button>
   )
 })
 
-const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callCount }: { usage: NormalizedTokenUsage; isMobile: boolean; callCount?: number }) {
+const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callCount, attribution }: {
+  usage: NormalizedTokenUsage
+  isMobile: boolean
+  callCount?: number
+  attribution: UsageAttribution
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [expandedClampOffset, setExpandedClampOffset] = useState(0)
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const toggleExpanded = useCallback(() => setExpanded(current => !current), [])
+
+  useLayoutEffect(() => {
+    if (!expanded || isMobile) {
+      setExpandedClampOffset(0)
+      return
+    }
+
+    const anchor = anchorRef.current
+    const timeline = anchor?.closest<HTMLElement>('.foxwarm-chat-timeline')
+    if (!anchor || !timeline) return
+
+    const clampToTimeline = () => {
+      const anchorRect = anchor.getBoundingClientRect()
+      const timelineRight = timeline.getBoundingClientRect().right
+      // The inline offset has already moved this rect left; restore the preferred
+      // external position before calculating the minimum required clamp.
+      const preferredRight = anchorRect.right + expandedClampOffset
+      const nextOffset = Math.max(0, preferredRight - timelineRight)
+      setExpandedClampOffset(current => Math.abs(current - nextOffset) < 0.5 ? current : nextOffset)
+    }
+
+    clampToTimeline()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(clampToTimeline)
+    observer?.observe(anchor)
+    observer?.observe(timeline)
+    window.addEventListener('resize', clampToTimeline)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', clampToTimeline)
+    }
+  }, [expanded, expandedClampOffset, isMobile])
+
   if (isMobile) {
     return (
-      <div className="pointer-events-none mb-2 mt-1 flex justify-end pr-1">
-        <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} />
+      <div data-usage-badge-anchor className="pointer-events-none mb-2 mt-1 flex justify-end pr-1">
+        <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} expanded={expanded} onToggle={toggleExpanded} />
       </div>
     )
   }
 
   return (
-    <div className="pointer-events-none absolute bottom-0 right-0 z-10 translate-x-[calc(100%+0.5rem)]">
-      <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} />
+    <div
+      ref={anchorRef}
+      data-usage-badge-anchor
+      className={`pointer-events-none absolute bottom-0 right-0 z-10 translate-x-[calc(100%+0.5rem)] ${expanded ? 'max-w-full' : ''}`}
+      style={expanded ? { transform: `translateX(calc(100% + 0.5rem - ${expandedClampOffset}px))` } : undefined}
+    >
+      <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} expanded={expanded} onToggle={toggleExpanded} />
     </div>
   )
 })
@@ -363,6 +498,7 @@ interface MessageRowProps {
   summaryTagItems: ToolTagItem[]
   groupUsage: NormalizedTokenUsage | null
   groupUsageCallCount: number
+  groupUsageAttribution: UsageAttribution
   keepToolGroupExpanded: boolean
   showToolGroupSummary: boolean
   groupExpanded: boolean
@@ -387,6 +523,7 @@ const MessageRow = memo(function MessageRow({
   summaryTagItems,
   groupUsage,
   groupUsageCallCount,
+  groupUsageAttribution,
   keepToolGroupExpanded,
   showToolGroupSummary,
   groupExpanded,
@@ -418,6 +555,7 @@ const MessageRow = memo(function MessageRow({
     ? (isCollapsedToolGroup ? (showToolGroupSummary ? groupUsage : null) : usage)
     : null
   const displayUsageCallCount = isCollapsedToolGroup && showToolGroupSummary && groupUsageCallCount > 0 ? groupUsageCallCount : undefined
+  const displayUsageAttribution = isCollapsedToolGroup ? groupUsageAttribution : usage ? getMessageUsageAttribution(msg) : null
   const allowOverflow = (displayUsage && !isMobile) || hasToolParts || isInToolGroup
   const contextBlock = useMemo(() => msg.role === 'model' ? getContextBlockMetaFromMessage(msg) : null, [msg])
   const firstTextPartIndex = useMemo(() => msg.parts.findIndex(p => typeof p.text === 'string' && p.text.trim()), [msg.parts])
@@ -478,7 +616,7 @@ const MessageRow = memo(function MessageRow({
             )}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
             {isCollapsedToolGroup ? null : (hasInterleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
-            {displayUsage && <ModelUsageAnchor usage={displayUsage} isMobile={isMobile} callCount={displayUsageCallCount} />}
+            {displayUsage && displayUsageAttribution && <ModelUsageAnchor usage={displayUsage} isMobile={isMobile} callCount={displayUsageCallCount} attribution={displayUsageAttribution} />}
           </div>
         )}
       </div>
@@ -496,6 +634,7 @@ const MessageRow = memo(function MessageRow({
   prev.summaryTagItems === next.summaryTagItems &&
   prev.groupUsage === next.groupUsage &&
   prev.groupUsageCallCount === next.groupUsageCallCount &&
+  prev.groupUsageAttribution === next.groupUsageAttribution &&
   prev.keepToolGroupExpanded === next.keepToolGroupExpanded &&
   prev.showToolGroupSummary === next.showToolGroupSummary &&
   prev.groupExpanded === next.groupExpanded &&
@@ -626,9 +765,10 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       return items
     }
 
-    const getToolGroupUsage = (startIdx: number): { usage: NormalizedTokenUsage | null; callCount: number } => {
+    const getToolGroupUsage = (startIdx: number): { usage: NormalizedTokenUsage | null; callCount: number; attribution: UsageAttribution } => {
       const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
       let callCount = 0
+      const attribution: UsageAttribution = { models: [], timestamps: [] }
 
       for (let i = startIdx; i < messages.length; i++) {
         if (shouldStopAtIdx(startIdx, i)) break
@@ -643,17 +783,21 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             total.inputTokens += usage.inputTokens
             total.outputTokens += usage.outputTokens
             callCount++
+            const messageAttribution = getMessageUsageAttribution(m)
+            attribution.models.push(...messageAttribution.models)
+            attribution.timestamps.push(...messageAttribution.timestamps)
           }
         }
       }
 
-      return { usage: callCount > 0 ? total : null, callCount }
+      return { usage: callCount > 0 ? total : null, callCount, attribution }
     }
 
     const startIdxByIndex = messages.map((_, idx) => getToolGroupStartIdx(idx))
     const summaryTagItemsByStart = new Map<number, ToolTagItem[]>()
     const groupUsageByStart = new Map<number, NormalizedTokenUsage | null>()
     const groupUsageCallCountByStart = new Map<number, number>()
+    const groupUsageAttributionByStart = new Map<number, UsageAttribution>()
     const keepExpandedByStart = new Map<number, boolean>()
     startIdxByIndex.forEach((startIdx) => {
       if (!summaryTagItemsByStart.has(startIdx)) {
@@ -662,6 +806,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
         summaryTagItemsByStart.set(startIdx, items)
         groupUsageByStart.set(startIdx, groupUsage.usage)
         groupUsageCallCountByStart.set(startIdx, groupUsage.callCount)
+        groupUsageAttributionByStart.set(startIdx, groupUsage.attribution)
         keepExpandedByStart.set(startIdx, startIdx === finalStandaloneStartIdx)
       }
     })
@@ -677,6 +822,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       summaryTagItemsByIndex: startIdxByIndex.map((startIdx) => summaryTagItemsByStart.get(startIdx) || EMPTY_TOOL_TAG_ITEMS),
       groupUsageByIndex: startIdxByIndex.map((startIdx) => groupUsageByStart.get(startIdx) || null),
       groupUsageCallCountByIndex: startIdxByIndex.map((startIdx) => groupUsageCallCountByStart.get(startIdx) || 0),
+      groupUsageAttributionByIndex: startIdxByIndex.map((startIdx) => groupUsageAttributionByStart.get(startIdx) || { models: [], timestamps: [] }),
       keepExpandedByIndex: startIdxByIndex.map((startIdx) => keepExpandedByStart.get(startIdx) || false),
       shouldRenderSummary: startIdxByIndex.map((startIdx, idx) => idx === startIdx && (summaryTagItemsByStart.get(startIdx)?.length || 0) > 0),
     }
@@ -713,6 +859,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             summaryTagItems={toolGroupMeta.summaryTagItemsByIndex[idx]}
             groupUsage={toolGroupMeta.groupUsageByIndex[idx]}
             groupUsageCallCount={toolGroupMeta.groupUsageCallCountByIndex[idx]}
+            groupUsageAttribution={toolGroupMeta.groupUsageAttributionByIndex[idx]}
             keepToolGroupExpanded={toolGroupMeta.keepExpandedByIndex[idx]}
             showToolGroupSummary={toolGroupMeta.shouldRenderSummary[idx]}
             groupExpanded={expandedToolGroups.has(groupKey)}
