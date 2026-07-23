@@ -130,6 +130,7 @@ async function readCollapseTargetState(id) {
     const toggle = root.querySelector('.foxwarm-tool-header-toggle')
     const args = root.querySelector('.foxwarm-tool-call-args')
     const result = root.querySelector('.foxwarm-tool-result-content, .foxwarm-tool-result-preview')
+    const summary = root.querySelector('.foxwarm-tool-call-summary')
     return {
       expanded: !!args,
       cardCursor: getComputedStyle(card).cursor,
@@ -137,9 +138,12 @@ async function readCollapseTargetState(id) {
       toggleCursor: getComputedStyle(toggle).cursor,
       argsCursor: args ? getComputedStyle(args).cursor : null,
       resultCursor: result ? getComputedStyle(result).cursor : null,
+      toggleColor: getComputedStyle(toggle).color,
+      summaryColor: summary ? getComputedStyle(summary).color : null,
       cardHasPointerClass: card.classList.contains('cursor-pointer'),
       headerHasPointerClass: header.classList.contains('cursor-pointer'),
       toggleHasPointerClass: toggle.classList.contains('cursor-pointer'),
+      toggleHasTextHoverClass: [...toggle.classList].some(className => className.startsWith('hover:text-') || className.startsWith('dark:hover:text-')),
     }
   })
 }
@@ -152,8 +156,18 @@ function assertCollapseTargetState(state, expanded) {
   assert.equal(state.cardHasPointerClass, false)
   assert.equal(state.headerHasPointerClass, false)
   assert.equal(state.toggleHasPointerClass, true)
+  assert.equal(state.toggleHasTextHoverClass, false)
   if (state.argsCursor !== null) assert.notEqual(state.argsCursor, 'pointer')
   if (state.resultCursor !== null) assert.notEqual(state.resultCursor, 'pointer')
+}
+
+async function assertHeaderHoverKeepsTextColor(id) {
+  await page.mouse.move(0, 0)
+  const before = await readCollapseTargetState(id)
+  await page.hover(`#${id} .foxwarm-tool-header-toggle`)
+  const hovered = await readCollapseTargetState(id)
+  assert.equal(hovered.toggleColor, before.toggleColor)
+  assert.equal(hovered.summaryColor, before.summaryColor)
 }
 
 async function clickWithoutToggling(selector, expectedExpanded) {
@@ -248,6 +262,7 @@ test('only the top tool header row advertises and handles collapse toggling', as
   ]) {
     await mountFixture(fixture)
     assertCollapseTargetState(await readCollapseTargetState('exec'), false)
+    await assertHeaderHoverKeepsTextColor('exec')
 
     await clickWithoutToggling('#exec .foxwarm-tool-card', false)
     await clickWithoutToggling('#exec .foxwarm-tool-header', false)
@@ -255,6 +270,7 @@ test('only the top tool header row advertises and handles collapse toggling', as
 
     await page.click('#exec .foxwarm-tool-header-toggle')
     assertCollapseTargetState(await readCollapseTargetState('exec'), true)
+    await assertHeaderHoverKeepsTextColor('exec')
 
     await clickWithoutToggling('#exec .foxwarm-tool-header', true)
     await clickWithoutToggling('#exec .foxwarm-tool-call-args', true)

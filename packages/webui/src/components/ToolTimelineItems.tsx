@@ -631,7 +631,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const header = (includeCallPreview = false, includeExpandedCall = false) => (
     <div className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]}`}>
       <div
-        className="foxwarm-tool-header-toggle flex min-w-0 cursor-pointer items-center gap-2 hover:text-gray-900 dark:hover:text-gray-100"
+        className="foxwarm-tool-header-toggle flex min-w-0 cursor-pointer items-center gap-2"
         onClick={(e) => {
           e.stopPropagation()
           setExpanded(current => !current)
