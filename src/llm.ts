@@ -1964,10 +1964,11 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
             cachedTokens: cached,
         } : null;
     } else if (plan.useOpenAIChatCompletionsApi) {
+        const cached = resp?.usage.prompt_tokens_details?.cached_tokens || 0;
         usage = resp?.usage ? {
-            inputTokens: resp.usage.prompt_tokens,
+            inputTokens: resp.usage.prompt_tokens - cached,
             outputTokens: resp.usage.completion_tokens,
-            cachedTokens: resp?.usage.prompt_tokens_details?.cached_tokens || 0,
+            cachedTokens: cached,
         } : null;
     } else {
         usage = resp?.usage ? {
