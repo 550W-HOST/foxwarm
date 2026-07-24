@@ -135,6 +135,7 @@ type CompactJobOperation = {
   sourceEnd: number;
   sourceBlockIds?: number[];
   summary: string;
+  memoryFacts?: ExtractedMemoryFact[];
 };
 
 type CompactJobResult =
@@ -161,8 +162,8 @@ type CompactJobResult =
         rawStartSeq: number;
         rawEndSeq: number;
         summary: string;
+        memoryFacts?: ExtractedMemoryFact[];
       }>;
-      memoryFacts: ExtractedMemoryFact[];
       preserveMessages: Array<{ seq: number; operationIndex: number }>;
       removePreservedMessages: number[];
       replacedItemCount: number;
@@ -789,8 +790,8 @@ async function removeOldCompactCompletionFrontierItems(sessionId: string, fronti
   return frontier.filter(item => item.kind !== 'message' || !removableSeqs.has(item.seq));
 }
 
-export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; }> {
-  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; }> = [];
+export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; memoryFacts?: ExtractedMemoryFact[]; }> {
+  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; memoryFacts?: ExtractedMemoryFact[]; }> = [];
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   for (let planIndex = 0; planIndex < plan.createBlocks.length; planIndex += 1) {
@@ -838,6 +839,7 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
         sourceStart: block.sourceStart,
         sourceEnd: block.sourceEnd,
         summary: block.summary,
+        memoryFacts: block.memoryFacts,
       });
       continue;
     }
@@ -887,6 +889,7 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
       sourceEnd: block.sourceEnd,
       sourceBlockIds,
       summary: block.summary,
+      memoryFacts: block.memoryFacts,
     });
   }
 
@@ -1031,7 +1034,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
         consumedFrontierCount: splitIndex,
         operations: [],
         createdBlocks: [],
-        memoryFacts: [],
         preserveMessages: [],
         removePreservedMessages: [],
         replacedItemCount: droppedDisplayOnlyCount,
@@ -1152,6 +1154,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       sourceEnd: operation.sourceEnd,
       sourceBlockIds: operation.sourceBlockIds,
       summary: operation.summary,
+      memoryFacts: operation.memoryFacts,
     })),
     createdBlocks: operations.map(operation => ({
       level: operation.level,
@@ -1162,8 +1165,8 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       rawStartSeq: operation.rawStartSeq,
       rawEndSeq: operation.rawEndSeq,
       summary: operation.summary,
+      memoryFacts: operation.memoryFacts,
     })),
-    memoryFacts: compactPlan.memoryFacts || [],
     preserveMessages,
     removePreservedMessages,
     replacedItemCount: operations.reduce((sum, operation) => sum + (operation.frontierEndIndex - operation.frontierStartIndex + 1), 0) + removePreservedMessages.length,
@@ -1228,19 +1231,19 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     compactedSkillNames,
   );
 
-  if (result.memoryFacts.length > 0 && createdRecords.length > 0) {
-    const sourceStartSeq = Math.min(...createdRecords.map(record => record.rawStartSeq));
-    const sourceEndSeq = Math.max(...createdRecords.map(record => record.rawEndSeq));
+  for (const record of createdRecords) {
+    if (!record.memoryFacts?.length) continue;
     void vector.indexMemoryFactsFromCompaction({
       sessionId,
       agent: session.agent || 'main',
-      facts: result.memoryFacts,
-      sourceKind: 'compact',
-      sourceStartSeq,
-      sourceEndSeq,
-      createdAt: Date.now(),
+      facts: record.memoryFacts,
+      sourceStartSeq: record.rawStartSeq,
+      sourceEndSeq: record.rawEndSeq,
+      blockId: record.id,
+      blockLevel: record.level,
+      createdAt: record.createdAt,
     }).catch((err) => {
-      logger.warn({ err, sessionId, factCount: result.memoryFacts.length }, 'Failed to index compact memory facts');
+      logger.warn({ err, sessionId, blockId: record.id, factCount: record.memoryFacts?.length || 0 }, 'Failed to index compact memory facts');
     });
   }
   return true;

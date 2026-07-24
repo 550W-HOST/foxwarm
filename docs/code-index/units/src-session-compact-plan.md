@@ -14,7 +14,7 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 - `clampCompactFraction`, `calculateBlockCompactionWindow` — candidate/force window math.
 - `buildMessageCandidateItem`, `buildBlockCandidateItem`, target-level and filtering helpers.
 - `buildCompactPromptText` — sectioned goal, range, summary, preservation, quota, and fact instructions.
-- `normalizeMemoryFacts` — best-effort fact parsing/sanitization.
+- `normalizeMemoryFacts` — best-effort per-block fact parsing/sanitization with plan-wide caps and deduplication.
 - `validateCompactPlanArgs` — structural, range, overlap, barrier, and quota validation.
 - `buildCompactPlanValidationFeedback` — actionable retry text.
 
@@ -24,7 +24,7 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 |---|---|
 | `calculateBlockCompactionWindow` | Oldest candidate window, newest hard keep, and high-backlog requested coverage |
 | `buildCompactPromptText` | One planning prompt over validated candidate segments and run policies |
-| `normalizeMemoryFacts` | Optional fact JSON parsing that cannot invalidate the block plan |
+| `normalizeMemoryFacts` | Optional `createBlocksJson[].memoryFacts` parsing that cannot invalidate the block plan |
 | `validateCompactPlanArgs` | Canonical tool-argument parser and validator |
 | `buildCompactPlanValidationFeedback` | Converts validation detail into bounded retry guidance |
 
@@ -49,11 +49,11 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 - `removePreservedMessages` can name only previously marked preserved frontier entries listed to the planner.
 - Preserved raw tokens do not count as replaced quota; stranded single-block lifts do not count as block reduction.
 - Quota coverage may accumulate across segments, but one operation never crosses a segment.
-- Optional malformed memory facts are skipped rather than failing a valid compaction plan.
+- Optional malformed block memory facts are skipped rather than failing a valid compaction plan; the bounded total and text deduplication apply across all created blocks.
 
 ## Integration
 
-- `COMPACT_PLAN_TOOL_DEFINITION` stays in the stable model-facing schema.
+- `COMPACT_PLAN_TOOL_DEFINITION` keeps the stable plan-tool shape while facts are nested only in each `createBlocksJson` object; it has no top-level fact argument.
 - The dedicated compact runtime accepts the plan tool and rejects other calls with feedback.
 - Validated operations are consumed by [src-session-history](./src-session-history.md).
 - Cross-module behavior and rationale are canonical in [context compaction and recall](../threads/context-compaction-and-recall.md).

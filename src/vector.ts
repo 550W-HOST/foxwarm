@@ -87,9 +87,10 @@ type CompactMemoryFactIndexInput = {
     sessionId: string;
     agent?: string;
     facts: ExtractedMemoryFact[];
-    sourceKind?: 'compact';
     sourceStartSeq: number;
     sourceEndSeq: number;
+    blockId: number;
+    blockLevel: number;
     createdAt?: number;
 };
 
@@ -185,8 +186,17 @@ function buildFilterPredicate(options?: SearchOptions): string | undefined {
             const blockClause = typeof entry.maxBlockId === 'number'
                 ? `(memory_kind = 'block' AND block_id <= ${entry.maxBlockId})`
                 : `(memory_kind = 'block')`;
-            const factClause = typeof entry.maxMessageSeq === 'number'
-                ? `(memory_kind = 'fact' AND raw_start_seq <= ${entry.maxMessageSeq})`
+            const factClauses: string[] = [];
+            if (typeof entry.maxBlockId === 'number') {
+                factClauses.push(`(block_id IS NOT NULL AND block_id <= ${entry.maxBlockId})`);
+            }
+            if (typeof entry.maxMessageSeq === 'number') {
+                // Legacy fact rows predate block identity. Their text can summarize
+                // the full source span, so a crossing range must not be clipped/reused.
+                factClauses.push(`(block_id IS NULL AND raw_end_seq <= ${entry.maxMessageSeq})`);
+            }
+            const factClause = factClauses.length > 0
+                ? `(memory_kind = 'fact' AND (${factClauses.join(' OR ')}))`
                 : `(memory_kind = 'fact')`;
             return `(${sessionClause} AND (${rawClause} OR ${blockClause} OR ${factClause}))`;
         });
@@ -517,7 +527,7 @@ function buildMemoryFactHash(fact: ExtractedMemoryFact): string {
         .slice(0, 24);
 }
 
-function formatMemoryFactText(fact: ExtractedMemoryFact, sourceStartSeq: number, sourceEndSeq: number): string {
+function formatMemoryFactText(fact: ExtractedMemoryFact, sourceStartSeq: number, sourceEndSeq: number, blockId: number, blockLevel: number): string {
     const lines = [
         `Memory fact (${fact.kind})`,
         fact.text.trim(),
@@ -529,7 +539,7 @@ function formatMemoryFactText(fact: ExtractedMemoryFact, sourceStartSeq: number,
     if (fact.attributedTo) {
         lines.push(`Attribution: ${fact.attributedTo}`);
     }
-    lines.push(`Source: compacted messages ${formatSeqLabel(sourceStartSeq, sourceEndSeq)}`);
+    lines.push(`Source: CTX-BLOCK L${blockLevel} B#${blockId}, raw messages ${formatSeqLabel(sourceStartSeq, sourceEndSeq)}`);
     return lines.join('\n');
 }
 
@@ -575,7 +585,7 @@ function createRowsFromMemoryFacts(input: CompactMemoryFactIndexInput): Omit<Vec
         }
 
         const hash = buildMemoryFactHash({ ...fact, text });
-        const messageId = `${input.sessionId}:fact:${hash}`;
+        const messageId = `${input.sessionId}:fact:B${input.blockId}:${hash}`;
         const id = `${messageId}:0`;
         if (seenIds.has(id)) {
             continue;
@@ -583,7 +593,7 @@ function createRowsFromMemoryFacts(input: CompactMemoryFactIndexInput): Omit<Vec
         seenIds.add(id);
 
         const attributedTo = fact.attributedTo || 'both';
-        const rowText = formatMemoryFactText({ ...fact, text, attributedTo }, startSeq, endSeq);
+        const rowText = formatMemoryFactText({ ...fact, text, attributedTo }, startSeq, endSeq, input.blockId, input.blockLevel);
         rows.push({
             id,
             message_id: messageId,
@@ -604,8 +614,8 @@ function createRowsFromMemoryFacts(input: CompactMemoryFactIndexInput): Omit<Vec
             chunk_count: 1,
             text: rowText,
             chunk_text: truncateToTokenLimit(rowText, EMBEDDING_MAX_LENGTH),
-            block_id: null as number | null,
-            block_level: null as number | null,
+            block_id: input.blockId,
+            block_level: input.blockLevel,
             source_kind: `memory_fact:${fact.kind}`,
             source_start: startSeq,
             source_end: endSeq,
@@ -640,6 +650,8 @@ async function indexMemoryFactsFromCompaction(input: CompactMemoryFactIndexInput
         factCount: hydratedRows.length,
         sourceStartSeq: input.sourceStartSeq,
         sourceEndSeq: input.sourceEndSeq,
+        blockId: input.blockId,
+        blockLevel: input.blockLevel,
     }, 'Indexed compact memory facts');
 
     return hydratedRows.length;
@@ -1463,12 +1475,25 @@ function buildMemoryPreview(text: string, maxChars: number = 420): string {
 }
 
 async function clipResultToLineageBoundary(result: any, options?: SearchOptions): Promise<any> {
-    if (!options?.lineageSessions?.length || result.kind !== 'raw') {
-        return result;
-    }
+    if (!options?.lineageSessions?.length) return result;
 
     const lineageEntry = options.lineageSessions.find(entry => entry.sessionId === result.session_id);
-    if (!lineageEntry || typeof lineageEntry.maxMessageSeq !== 'number') {
+    if (!lineageEntry) return result;
+
+    if (result.kind === 'fact') {
+        const blockId = Number(result.block_id);
+        if (Number.isInteger(blockId) && blockId > 0) {
+            return typeof lineageEntry.maxBlockId === 'number' && blockId > lineageEntry.maxBlockId
+                ? null
+                : result;
+        }
+        const legacyEndSeq = Number(result.raw_end_seq ?? result.end_seq ?? result.seq ?? 0);
+        return typeof lineageEntry.maxMessageSeq === 'number' && legacyEndSeq > lineageEntry.maxMessageSeq
+            ? null
+            : result;
+    }
+
+    if (result.kind !== 'raw' || typeof lineageEntry.maxMessageSeq !== 'number') {
         return result;
     }
 

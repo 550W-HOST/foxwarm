@@ -16,6 +16,7 @@ import {
 import { isModelVisibleMessage } from './messageVisibility';
 import { parseFoxwarmOpeningTag } from '../utils/promptWrappers';
 import { isSystemPayloadTextPart } from '../utils/systemMessageParts';
+import type { ExtractedMemoryFact } from './compactPlan';
 
 const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
   'This session has been compacted.',
@@ -41,6 +42,7 @@ export interface ArchiveBlockRecord {
   rawStartTimestamp?: number;
   rawEndTimestamp?: number;
   summary: string;
+  memoryFacts?: ExtractedMemoryFact[];
   createdAt: number;
   sourceSessionId?: string;
   inherited?: boolean;
@@ -55,6 +57,7 @@ export interface CreateArchiveBlockInput {
   rawStartSeq: number;
   rawEndSeq: number;
   summary: string;
+  memoryFacts?: ExtractedMemoryFact[];
 }
 
 export type ContextFrontierAnnotationResult = {
@@ -226,7 +229,8 @@ async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveB
       rawEndSeq: block.rawEndSeq,
       rawStartTimestamp: startRecord[0]?.timestamp,
       rawEndTimestamp: endRecord[0]?.timestamp,
-      summary: block.summary,
+      summary: formatArchiveBlockSummary(block.summary, block.memoryFacts),
+      ...(block.memoryFacts?.length ? { memoryFacts: block.memoryFacts } : {}),
       createdAt,
     };
   }));
@@ -289,6 +293,23 @@ export function getArchiveBlockEndTimestamp(record: ArchiveBlockTimeRangeInput):
 export function formatArchiveBlockTimeRange(record: ArchiveBlockTimeRangeInput): string {
   const range = formatLocalTimeRange(getArchiveBlockStartTimestamp(record), getArchiveBlockEndTimestamp(record));
   return range ? ` time ${range}` : '';
+}
+
+export function formatArchiveBlockMemoryFactsSection(memoryFacts: ExtractedMemoryFact[] | undefined): string {
+  if (!memoryFacts?.length) return '';
+  const items = memoryFacts.map((fact) => {
+    const optional = [
+      fact.context?.trim() ? `context: ${fact.context.trim()}` : '',
+      fact.attributedTo ? `attributed to: ${fact.attributedTo}` : '',
+    ].filter(Boolean);
+    return `- **${fact.kind}:** ${fact.text.trim()}${optional.length ? ` _(${optional.join('; ')})_` : ''}`;
+  });
+  return `### Memory facts\n${items.join('\n')}`;
+}
+
+export function formatArchiveBlockSummary(summary: string, memoryFacts?: ExtractedMemoryFact[]): string {
+  const section = formatArchiveBlockMemoryFactsSection(memoryFacts);
+  return section ? `${summary.trim()}\n\n${section}` : summary;
 }
 
 export type ArchiveBlockContextTextInput = Pick<ArchiveBlockRecord, 'id' | 'level' | 'rawStartSeq' | 'rawEndSeq' | 'summary'> & ArchiveBlockTimeRangeInput;

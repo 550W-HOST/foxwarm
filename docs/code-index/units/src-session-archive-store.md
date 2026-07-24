@@ -43,7 +43,7 @@ Implements the SQLite/WAL archive index for raw messages, summary blocks, branch
 - `archive_branches` — session, optional parent, message/block fork points.
 - `archive_session_id_reservations` — exact committed historical ID to current canonical-ID mappings mirrored by the durable ledger.
 - `archive_messages` — session-local sequence records and serialized message JSON.
-- `archive_blocks` — block level/source/range/summary records.
+- `archive_blocks` — block level/source/range/summary records plus optional serialized normalized memory facts.
 - `archive_checkpoints` — raw tail and block vector-index progress.
 - `archive_import_state` — message/block JSONL size and mtime per session.
 

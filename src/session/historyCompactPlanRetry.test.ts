@@ -495,3 +495,50 @@ test('compact planning LLM final failure aborts without rewriting session histor
     }
   }
 });
+
+test('compact commit persists block facts and survives best-effort fact indexing failure', async () => {
+  const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
+  const vector = await import('../vector');
+  const session = await makeCompactableSession(archive, makeSessionId('compact_block_facts_index_failure'));
+  const saveCounter = { count: 0 };
+  const originalChat = llm.chat;
+  const originalIndexFacts = vector.indexMemoryFactsFromCompaction;
+
+  try {
+    (llm as any).chat = async (
+      _parts: MessagePart[] | null,
+      _activeSession: Session,
+      _iteration: number,
+      options?: { appendMessage?: (message: Message) => Promise<void> | void },
+    ): Promise<ChatResult> => {
+      const toolCall = {
+        id: 'compact-plan-with-block-facts',
+        name: 'submit_compact_plan',
+        args: {
+          createBlocksJson: JSON.stringify([{
+            level: 1,
+            sourceKind: 'message',
+            sourceStart: 1,
+            sourceEnd: 2,
+            summary: 'summary whose durable facts are framework-rendered',
+            memoryFacts: [{ kind: 'decision', text: 'Keep compact facts attached to their creating block.', attributedTo: 'user' }],
+          }]),
+        },
+      };
+      await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] }));
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    (vector as any).indexMemoryFactsFromCompaction = async () => { throw new Error('embedding unavailable'); };
+
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, saveCounter), session.id, { keepPercent: 0.5 }, 'await');
+
+    const [block] = await layeredContext.readArchiveBlocksByIdRange(session.id, 1, 1);
+    assert.deepEqual(block.memoryFacts, [{ kind: 'decision', text: 'Keep compact facts attached to their creating block.', attributedTo: 'user' }]);
+    assert.match(block.summary, /### Memory facts/);
+    assert.match(String(session.history[0].parts[0].text), /### Memory facts/);
+    assert(session.history.some(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"'))));
+  } finally {
+    (llm as any).chat = originalChat;
+    (vector as any).indexMemoryFactsFromCompaction = originalIndexFacts;
+  }
+});

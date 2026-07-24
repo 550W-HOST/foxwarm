@@ -19,7 +19,7 @@ This thread owns the end-to-end contract that keeps long sessions within model l
 - Each block source level below 3,000 summary tokens is ineligible. At or above 3,000, only the oldest floor(40%) is exposed. At or above 5,000, the plan must cover 20% of source blocks, clamped to feasible legal multi-block segments.
 - Prior compact-completed notices are transparent candidate noise: they neither enter summaries nor split legal ranges. Other protected lifecycle items, preserved raw items, missing records, and non-candidate blocks are hard range barriers. Display-only messages are transparent and excluded from quota denominators.
 - The planning request keeps the normal model-facing tool schema for prompt-cache stability, but compact runtime gating accepts only one `submit_compact_plan` call. Plain text, missing calls, invalid calls, and invalid plans receive bounded retry feedback within 15 total planning rounds.
-- The plan may create layered summary blocks, preserve a small set of exact raw messages, remove previously preserved frontier entries, and submit optional durable memory facts.
+- The plan may create layered summary blocks, preserve a small set of exact raw messages, remove previously preserved frontier entries, and attach optional durable memory facts to each created block.
 
 Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelForceTokens=5000`, `compactBlockCandidateFraction=0.4`, `compactBlockForceCompactFraction=0.2`, and `compactMessageForceCompactFraction=0.2`.
 
@@ -27,7 +27,7 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 
 - A successful job replaces only the consumed compatible frontier prefix, writes blocks, updates history/frontier state, and rotates `promptCacheKey` because the model-facing prefix changed.
 - A stale/incompatible snapshot, exhausted invalid plan, or terminal `LlmRequestError` aborts without rewriting live history/frontier.
-- Optional memory facts are indexed after commit on a best-effort basis; malformed facts or index failure never roll back compaction.
+- Block-associated durable memory facts are rendered into stored block summaries and indexed after commit on a best-effort basis; malformed facts or index failure never roll back compaction.
 - The main session receives one current compact-completion session-boundary marker and continues normal work. A successful commit removes older pure compact-completion notices from the whole active frontier, including the force-kept tail, while their archive records remain immutable and recallable.
 
 ### 4. Durable archive and lineage
@@ -104,6 +104,16 @@ During the dedicated compact phase, runtime accepts only `submit_compact_plan` a
 ### D-context-hard-candidate-policy
 
 Raw and block candidate quotas are computed after visibility, atomic grouping, and protection barriers. A plan may accumulate coverage across legal segments but one operation cannot cross a segment.
+
+### D-context-block-associated-memory-facts
+
+Durable compact facts belong only in the `memoryFacts` array of their matching `createBlocksJson` entry.
+
+- The planner does not submit a top-level fact payload or repeat facts in summary prose.
+- Normalized facts remain optional archive-block data. The framework appends a deterministic Markdown `Memory facts` section to the stored summary, so later layered compaction sees prior facts in source summaries.
+- Total fact caps and text deduplication apply across the whole plan, not once per block. JSONL/SQLite readers tolerate historical blocks without this field.
+- Best-effort vector rows retain each creating block's identity, level, and raw source range; failures never undo the durable compact commit.
+- Fork-lineage semantic search admits a fact-bearing inherited block only through its block cap. Legacy fact rows without block identity must end at or before the message fork cap; crossing facts are discarded, never range-clipped for recall.
 
 ### D-context-preserved-raw
 

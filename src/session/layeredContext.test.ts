@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { annotateHistoryWithContextFrontierMetadata, formatArchiveBlockContextText, formatArchiveBlockTimeRange, isCompactCompletionSystemText, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
+import { annotateHistoryWithContextFrontierMetadata, formatArchiveBlockContextText, formatArchiveBlockSummary, formatArchiveBlockTimeRange, isCompactCompletionSystemText, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { formatCompactionCompletionMarker } from './history';
 import { Message } from '../types';
 import { formatLocalTimeRange } from '../utils/localTime';
@@ -157,4 +157,16 @@ test('annotateHistoryWithContextFrontierMetadata adds block and preserved raw me
   assert.deepEqual(result.history[0].__meta?.contextFrontierItem, { kind: 'block', id: 7, level: 1, rawStartSeq: 10, rawEndSeq: 12 });
   assert.equal(result.history[1].__meta?.preservedFromBlockId, 7);
   assert.deepEqual(result.history[1].__meta?.contextFrontierItem, { kind: 'message', seq: 11, preservedFromBlockId: 7 });
+});
+
+
+test('block summary appends a stable generated memory-facts section', () => {
+  const summary = formatArchiveBlockSummary('Original continuation summary.', [{
+    kind: 'decision',
+    text: 'Use block-associated durable facts.',
+    context: 'Compaction contract',
+    attributedTo: 'user',
+  }]);
+  assert.equal(summary, 'Original continuation summary.\n\n### Memory facts\n- **decision:** Use block-associated durable facts. _(context: Compaction contract; attributed to: user)_');
+  assert.equal(formatArchiveBlockSummary('Old block summary.'), 'Old block summary.');
 });
