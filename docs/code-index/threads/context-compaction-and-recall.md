@@ -17,7 +17,7 @@ This thread owns the end-to-end contract that keeps long sessions within model l
 
 - Raw-message candidates require more than 2,000 estimated tokens and, when eligible, must replace at least 20% of eligible raw tokens by default.
 - Each block source level below 3,000 summary tokens is ineligible. At or above 3,000, only the oldest floor(40%) is exposed. At or above 5,000, the plan must cover 20% of source blocks, clamped to feasible legal multi-block segments.
-- Protected lifecycle items, preserved raw items, missing records, and non-candidate blocks are hard range barriers. Display-only messages are transparent and excluded from quota denominators.
+- Prior compact-completed notices are transparent candidate noise: they neither enter summaries nor split legal ranges. Other protected lifecycle items, preserved raw items, missing records, and non-candidate blocks are hard range barriers. Display-only messages are transparent and excluded from quota denominators.
 - The planning request keeps the normal model-facing tool schema for prompt-cache stability, but compact runtime gating accepts only one `submit_compact_plan` call. Plain text, missing calls, invalid calls, and invalid plans receive bounded retry feedback within 15 total planning rounds.
 - The plan may create layered summary blocks, preserve a small set of exact raw messages, remove previously preserved frontier entries, and submit optional durable memory facts.
 
@@ -28,7 +28,7 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 - A successful job replaces only the consumed compatible frontier prefix, writes blocks, updates history/frontier state, and rotates `promptCacheKey` because the model-facing prefix changed.
 - A stale/incompatible snapshot, exhausted invalid plan, or terminal `LlmRequestError` aborts without rewriting live history/frontier.
 - Optional memory facts are indexed after commit on a best-effort basis; malformed facts or index failure never roll back compaction.
-- The main session receives one compact-completion session-boundary marker and continues normal work.
+- The main session receives one current compact-completion session-boundary marker and continues normal work. A successful commit removes older pure compact-completion notices from the whole active frontier, including the force-kept tail, while their archive records remain immutable and recallable.
 
 ### 4. Durable archive and lineage
 
@@ -88,6 +88,8 @@ The WebUI block endpoint expands exactly one layer into structured timeline mess
 ### D-context-compact-completion
 
 Compact completion is a single self-closing `<foxwarm-system kind="session-boundary" event="compact-completed" ... />` marker. Additional continuation text and compacted-skill guidance are escaped into its `hint` attribute. There is no tag body, separate payload part, or leading `Compaction completed.` line.
+
+Only the newest pure compact-completion notice remains in active model-visible history after a later successful compact. Older current/legacy completion notices are transparent to planning, never become summary text, and are removed from the complete compatible frontier at commit time (including force-kept tail items); durable archive records are never rewritten. Other session-boundary events and messages containing real user/tool/content remain protected. Failed or non-committing compaction leaves the frontier unchanged.
 
 Canonical implementation: `formatCompactionCompletionMarker()` in [src-session-history](../units/src-session-history.md).
 

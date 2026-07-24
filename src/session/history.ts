@@ -38,7 +38,7 @@ import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatSessionGoalReminderText } from './goal';
-import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
 
 const TOOL_NOISE_TOKEN_THRESHOLD = 200;
@@ -581,6 +581,12 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       // they are dropped when an enclosing visible range is rewritten.
       continue;
     }
+    if (shouldRemoveOldCompactCompletionMessage(record.message)) {
+      // A previous compact-completed notice is replaced by the one emitted at
+      // the end of this successful commit. It is transparent here so it does
+      // not split otherwise legal ranges or enter a summary.
+      continue;
+    }
     if (shouldIgnoreMessageInCompactCandidates(record.message)) {
       // Model-visible lifecycle/session-boundary messages are protected hard
       // boundaries even though they are not useful summary candidates.
@@ -762,6 +768,25 @@ async function filterDisplayOnlyAndRemovedPreservedMessageFrontierItems(sessionI
   }
 
   return removePreservedMessageFrontierItems(visibleFrontier, removePreservedSeqs);
+}
+
+async function removeOldCompactCompletionFrontierItems(sessionId: string, frontier: ContextFrontierItem[]): Promise<ContextFrontierItem[]> {
+  const messageSeqs = frontier
+    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
+    .map(item => item.seq);
+  if (messageSeqs.length === 0) {
+    return frontier;
+  }
+
+  const records = await readArchiveMessagesBySeqRange(sessionId, Math.min(...messageSeqs), Math.max(...messageSeqs));
+  const removableSeqs = new Set(records
+    .filter(record => shouldRemoveOldCompactCompletionMessage(record.message))
+    .map(record => record.seq));
+  if (removableSeqs.size === 0) {
+    return frontier;
+  }
+
+  return frontier.filter(item => item.kind !== 'message' || !removableSeqs.has(item.seq));
 }
 
 export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; }> {
@@ -1183,7 +1208,10 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     rewrittenOlderFrontier.push(...await filterDisplayOnlyAndRemovedPreservedMessageFrontierItems(sessionId, olderFrontier.slice(cursor), removePreservedSeqs));
   }
 
-  const newFrontier = [...rewrittenOlderFrontier, ...currentFrontier.slice(result.consumedFrontierCount)];
+  const newFrontier = await removeOldCompactCompletionFrontierItems(
+    sessionId,
+    [...rewrittenOlderFrontier, ...currentFrontier.slice(result.consumedFrontierCount)],
+  );
 
   // Scan compacted messages for load_skill calls to remind agent after compaction
   const compactedSkillNames = extractCompactedSkillNames(session.history, result.consumedFrontierCount);

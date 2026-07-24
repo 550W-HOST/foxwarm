@@ -78,6 +78,48 @@ export function isIgnoredCompactLifecycleSystemText(text: string): boolean {
   return COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES.some(prefix => text.startsWith(prefix));
 }
 
+/**
+ * Returns true only for a prior compaction-completion notification. Unlike
+ * other session-boundary messages, these are transient continuation notices:
+ * the next successful compact commit replaces them with one current notice.
+ */
+export function isCompactCompletionSystemText(text: string): boolean {
+  const tag = parseFoxwarmOpeningTag(text);
+  if (tag?.tagName === 'foxwarm-system') {
+    return tag.attrs.kind === 'session-boundary' && tag.attrs.event === 'compact-completed';
+  }
+  return text.startsWith('Compaction completed.')
+    || text.startsWith('**COMPACTION COMPLETED.')
+    || text.startsWith('Manual compaction completed.');
+}
+
+/**
+ * A compact-completion message may carry a goal/lifecycle system part, but
+ * must not be removed when it also carries real conversation/tool content.
+ */
+export function shouldRemoveOldCompactCompletionMessage(message: Message): boolean {
+  if (!isModelVisibleMessage(message)) {
+    return false;
+  }
+
+  const parts = message.parts || [];
+  const hasCompletionMarker = parts.some(part => (
+    typeof part.system === 'string' && isCompactCompletionSystemText(part.system.trim())
+  ));
+  if (!hasCompletionMarker) {
+    return false;
+  }
+
+  return !parts.some(part => (
+    (typeof part.text === 'string' && part.text.trim().length > 0 && !isSystemPayloadTextPart(part))
+    || (typeof part.thinking === 'string' && part.thinking.trim().length > 0)
+    || !!part.functionCall
+    || !!part.functionResponse
+    || !!part.inlineData
+    || !!(part as any).inlineDataRef
+  ));
+}
+
 export function shouldIgnoreMessageInCompactCandidates(message: Message): boolean {
   if (!isModelVisibleMessage(message)) {
     return true;
