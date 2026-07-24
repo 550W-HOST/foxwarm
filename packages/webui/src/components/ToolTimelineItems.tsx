@@ -158,11 +158,11 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
     : 'foxwarm-tool-code-path whitespace-normal break-words'
   if (!onOpenCodeFile) return <span className={`${layoutClass} ${pathClass}`}>{prefix}{filePath}</span>
   return (
-    <span className={`foxwarm-tool-code-path-wrap ${layoutClass} ${collapsed ? 'inline-flex items-baseline gap-1' : ''}`}>
+    <span className={`foxwarm-tool-code-path-wrap ${layoutClass} ${collapsed ? 'inline-flex items-center gap-1' : ''}`}>
       {prefix}
       <button
         type="button"
-        className="foxwarm-tool-code-open inline-flex shrink-0 p-0 align-text-bottom leading-none text-current hover:opacity-70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1"
+        className="foxwarm-tool-code-open inline-flex shrink-0 p-0 align-text-top leading-none text-current hover:opacity-70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1"
         title={`Open ${filePath} in Code`}
         aria-label={`Open ${filePath} in Code`}
         onClick={(event) => {

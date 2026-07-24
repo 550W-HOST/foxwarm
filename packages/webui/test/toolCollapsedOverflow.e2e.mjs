@@ -143,6 +143,15 @@ test('desktop collapsed exec/wait/edit summaries stay one-line ellipsized and di
   await mountFixture({ width: 900, height: 700 })
   await assertCollapsedTools()
 
+  const collapsedAlignment = await page.$eval('#edit .foxwarm-tool-code-path-wrap', (wrap) => {
+    const button = wrap.querySelector('.foxwarm-tool-code-open')
+    const path = wrap.querySelector('.foxwarm-tool-code-path')
+    const buttonRect = button.getBoundingClientRect()
+    const pathRect = path.getBoundingClientRect()
+    return Math.abs((buttonRect.top + buttonRect.height / 2) - (pathRect.top + pathRect.height / 2))
+  })
+  assert.ok(collapsedAlignment <= 1, 'collapsed Code icon and path share a centered cross axis')
+
   for (const id of ['read', 'write', 'edit', 'apply']) {
     const pathAction = await page.$eval(`#${id} .foxwarm-tool-code-open`, (button) => ({
       tagName: button.tagName,
@@ -186,6 +195,12 @@ test('desktop collapsed exec/wait/edit summaries stay one-line ellipsized and di
   assert.ok(['anywhere', 'break-word'].includes(expandedPath.overflowWrap))
   assert.ok(expandedPath.height > expandedPath.lineHeight * 1.5, 'expanded long path wraps onto multiple lines')
   assert.ok(expandedPath.rootOverflow <= 1)
+  const expandedAlignment = await page.$eval('#edit .foxwarm-tool-call-args .foxwarm-tool-code-path-wrap', (wrap) => {
+    const button = wrap.querySelector('.foxwarm-tool-code-open')
+    const path = wrap.querySelector('.foxwarm-tool-code-path')
+    return Math.abs(button.getBoundingClientRect().top - path.getBoundingClientRect().top)
+  })
+  assert.ok(expandedAlignment <= 1, 'expanded Code icon aligns with the first path text line')
 
   await page.click('#exec .foxwarm-tool-tag')
   const expandedExec = await page.$eval('#exec .foxwarm-tool-call-args .whitespace-pre-wrap', (content) => {
