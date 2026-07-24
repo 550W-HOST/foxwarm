@@ -37,8 +37,8 @@ test('child instructions and reminders recommend one flagged handoff and the bra
   assert.match(reminder, /^<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="parent\/main">\nReminder:[\s\S]*\n<\/foxwarm-system>$/);
   assert.match(completion, /\[NO_ACTION\]/);
   assert.match(reminder, /\[NO_ACTION\]/);
-  assert.match(completion, /waitForReply: true/);
-  assert.match(reminder, /waitForReply: true/);
+  assert.match(completion, /waitAfterHandoff: true/);
+  assert.match(reminder, /waitAfterHandoff: true/);
   assert.doesNotMatch(completion, /wait\(\{\}\)/);
   assert.doesNotMatch(reminder, /wait\(\{\}\)/);
   assert.doesNotMatch(completion, /noFurtherAssistantReply/);

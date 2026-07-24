@@ -138,7 +138,7 @@ test('successful flagged handoff keeps its post-batch wait request despite a sib
   try {
     const source = await sessionManager.getSession(sourceSessionId);
     const toolMessage: any = await executeTools([
-      { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'hello', waitForReply: true } },
+      { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'hello', waitAfterHandoff: true } },
       { id: 'missing-read', name: 'read', args: { filePath: makeMissingFilePath() } },
     ], { sessionId: sourceSessionId, session: source }, source);
     assert.deepEqual(toolMessage.__toolPostAction, { waitForReply: true });
@@ -160,14 +160,14 @@ test('multiple successful flagged handoffs coalesce and all failed handoffs requ
   await sessionManager.getSession(targetB);
   try {
     const successful: any = await executeTools([
-      { id: 'send-a', name: 'send_to_session', args: { sessionId: targetA, message: 'a', waitForReply: true } },
-      { id: 'send-b', name: 'send_to_session', args: { sessionId: targetB, message: 'b', waitForReply: true } },
+      { id: 'send-a', name: 'send_to_session', args: { sessionId: targetA, message: 'a', waitAfterHandoff: true } },
+      { id: 'send-b', name: 'send_to_session', args: { sessionId: targetB, message: 'b', waitAfterHandoff: true } },
     ], { sessionId: sourceSessionId, session: source }, source);
     assert.deepEqual(successful.__toolPostAction, { waitForReply: true });
 
     const failed: any = await executeTools([
-      { id: 'missing-a', name: 'send_to_session', args: { sessionId: makeSessionId('missing_a'), message: 'a', waitForReply: true } },
-      { id: 'missing-b', name: 'send_to_session', args: { sessionId: makeSessionId('missing_b'), message: 'b', waitForReply: true } },
+      { id: 'missing-a', name: 'send_to_session', args: { sessionId: makeSessionId('missing_a'), message: 'a', waitAfterHandoff: true } },
+      { id: 'missing-b', name: 'send_to_session', args: { sessionId: makeSessionId('missing_b'), message: 'b', waitAfterHandoff: true } },
     ], { sessionId: sourceSessionId, session: source }, source);
     assert.equal(failed.__toolPostAction, undefined);
   } finally {
@@ -184,7 +184,7 @@ test('flagged handoff plus explicit wait remains deterministic when a sibling fa
   await sessionManager.getSession(targetSessionId);
   try {
     const toolMessage: any = await executeTools([
-      { id: 'send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'hello', waitForReply: true } },
+      { id: 'send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'hello', waitAfterHandoff: true } },
       { id: 'wait', name: 'wait', args: {} },
       { id: 'missing', name: 'read', args: { filePath: makeMissingFilePath() } },
     ], { sessionId: sourceSessionId, session: source }, source);

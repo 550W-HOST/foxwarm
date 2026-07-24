@@ -169,7 +169,7 @@ For inter-session traffic:
 
 - avoid pure confirmation messages with no new information or action;
 - child sessions should report completion through the required reply path;
-- if the final action is a handoff, send the handoff and then wait;
+- if the final action is a handoff, prefer one handoff call with `waitAfterHandoff: true`; replies are still delivered normally when the flag is false, and the resulting wait is generic rather than target-filtered or completion-based;
 - if no parent reply is needed and no action remains, use the session's configured no-action convention if one was provided.
 
 ## Session goals

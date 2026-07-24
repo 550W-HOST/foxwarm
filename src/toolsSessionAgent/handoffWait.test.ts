@@ -32,11 +32,50 @@ async function appendStubModel(session: Session, parts: MessagePart[]): Promise<
   await sessionManager.appendSessionMessage(session, { role: 'model', parts });
 }
 
-test('handoff schemas expose exact optional waitForReply booleans', () => {
+test('handoff schemas expose only exact optional waitAfterHandoff booleans', () => {
   for (const name of ['send_to_session', 'create_child_session']) {
     const definition = definitions.find(item => item.name === name)!;
-    assert.equal(definition.parameters.properties.waitForReply?.type, 'boolean');
-    assert.equal(definition.parameters.required?.includes('waitForReply'), false);
+    assert.equal(definition.parameters.properties.waitAfterHandoff?.type, 'boolean');
+    assert.equal(definition.parameters.required?.includes('waitAfterHandoff'), false);
+    assert.equal(definition.parameters.properties.waitForReply, undefined);
+    const description = definition.parameters.properties.waitAfterHandoff?.description || '';
+    assert.match(description, /after a successful .*handoff, finish this turn and enter a generic any-event wait/i);
+    assert.match(description, /replies are delivered normally whether this is true or false/i);
+    assert.match(description, /not target-filtered or a completion wait/i);
+  }
+});
+
+test('handoff runtime validates waitAfterHandoff and does not compatibility-read waitForReply', async () => {
+  const sourceId = makeId('handoff_rename_source');
+  const targetId = makeId('handoff_rename_target');
+  const source = await resetSession(sourceId);
+  await resetSession(targetId);
+  try {
+    await assert.rejects(
+      () => tool_send_to_session({ sessionId: targetId, message: 'bad', waitAfterHandoff: 'yes' }, { sessionId: sourceId, session: source }),
+      /waitAfterHandoff must be a boolean/i,
+    );
+    await assert.rejects(
+      () => tool_create_child_session({ suffix: 'bad', message: 'bad', waitAfterHandoff: 'yes' }, { sessionId: sourceId, session: source }),
+      /waitAfterHandoff must be a boolean/i,
+    );
+
+    const legacySend: any = await tool_send_to_session(
+      { sessionId: targetId, message: 'legacy name is ignored', waitForReply: true },
+      { sessionId: sourceId, session: source },
+    );
+    assert.equal(typeof legacySend, 'string');
+
+    const legacyCreate: any = await tool_create_child_session(
+      { suffix: 'legacy', waitForReply: true },
+      { sessionId: sourceId, session: source },
+    );
+    assert.equal(typeof legacyCreate, 'string');
+    const [childId] = sessionManager.getChildSessionIds(sourceId);
+    await sessionManager.deleteSession(childId).catch(() => false);
+  } finally {
+    await sessionManager.deleteSession(sourceId).catch(() => false);
+    await sessionManager.deleteSession(targetId).catch(() => false);
   }
 });
 
@@ -46,12 +85,12 @@ test('send_to_session requests post-batch wait only after successful delivery', 
   const source = await resetSession(sourceId);
   await resetSession(targetId);
   try {
-    const result: any = await tool_send_to_session({ sessionId: targetId, message: 'hello', waitForReply: true }, { sessionId: sourceId, session: source });
+    const result: any = await tool_send_to_session({ sessionId: targetId, message: 'hello', waitAfterHandoff: true }, { sessionId: sourceId, session: source });
     assert.deepEqual(result.__toolPostAction, { waitForReply: true });
     assert.match(result.output, /Message sent/);
 
     await assert.rejects(
-      () => tool_send_to_session({ sessionId: makeId('missing'), message: 'hello', waitForReply: true }, { sessionId: sourceId, session: source }),
+      () => tool_send_to_session({ sessionId: makeId('missing'), message: 'hello', waitAfterHandoff: true }, { sessionId: sourceId, session: source }),
       /not found/i,
     );
   } finally {
@@ -60,18 +99,18 @@ test('send_to_session requests post-batch wait only after successful delivery', 
   }
 });
 
-test('create_child_session waitForReply validates initial message and awaits send success', async () => {
+test('create_child_session waitAfterHandoff validates initial message and awaits send success', async () => {
   const parentId = makeId('create_wait_parent');
   const parent = await resetSession(parentId);
   try {
     await assert.rejects(
-      () => tool_create_child_session({ suffix: 'no-message', waitForReply: true }, { sessionId: parentId, session: parent }),
+      () => tool_create_child_session({ suffix: 'no-message', waitAfterHandoff: true }, { sessionId: parentId, session: parent }),
       /requires a non-empty initial message/i,
     );
     assert.deepEqual(sessionManager.getChildSessionIds(parentId), []);
 
     const result: any = await tool_create_child_session(
-      { suffix: 'worker', message: 'do work', waitForReply: true },
+      { suffix: 'worker', message: 'do work', waitAfterHandoff: true },
       { sessionId: parentId, session: parent },
     );
     assert.deepEqual(result.__toolPostAction, { waitForReply: true });
@@ -93,7 +132,7 @@ test('create_child_session send failure returns no wait request', async () => {
   try {
     await assert.rejects(
       () => tool_create_child_session(
-        { suffix: 'worker', message: 'do work', waitForReply: true },
+        { suffix: 'worker', message: 'do work', waitAfterHandoff: true },
         { sessionId: parentId, session: parent },
       ),
       /injected initial send failure/,
@@ -121,7 +160,7 @@ test('router appends every result, arms flagged generic wait despite a sibling e
   (llm as any).chat = async (parts: MessagePart[] | null, active: Session) => {
     calls++;
     await appendStubUser(active, parts);
-    const sendCall = { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetId, message: 'work', waitForReply: true } };
+    const sendCall = { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetId, message: 'work', waitAfterHandoff: true } };
     const errorCall = { id: 'sibling-error', name: 'read', args: { filePath: `/missing-handoff-${Date.now()}` } };
     await appendStubModel(active, [{ functionCall: sendCall }, { functionCall: errorCall }]);
     return { text: '', toolCalls: [sendCall, errorCall] };
@@ -163,7 +202,7 @@ test('fast reply queued before wait arm wakes immediately after the flagged hand
     calls++;
     await appendStubUser(active, parts);
     if (calls === 1) {
-      const call = { id: 'fast-send', name: 'send_to_session', args: { sessionId: targetId, message: 'work', waitForReply: true } };
+      const call = { id: 'fast-send', name: 'send_to_session', args: { sessionId: targetId, message: 'work', waitAfterHandoff: true } };
       await appendStubModel(active, [{ functionCall: call }]);
       return { text: '', toolCalls: [call] };
     }

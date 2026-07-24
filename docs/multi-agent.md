@@ -65,6 +65,7 @@ send_to_session({
   suffix: string,
   fork?: boolean,
   message?: string,
+  waitAfterHandoff?: boolean,
   node?: string,
   isolated?: boolean,
 }
@@ -73,6 +74,7 @@ send_to_session({
 说明：
 - `fork: true` 会继承当前上下文
 - `message` 可用于直接下发第一条任务
+- `waitAfterHandoff: true` 会在初始消息成功交接后结束当前回合，并进入通用的任意事件 wait；需要非空 `message`
 - `node` / `isolated` 可让 child session 绑定到特定 node
 
 ### `send_to_session`
@@ -81,18 +83,23 @@ send_to_session({
 {
   sessionId: string,
   message: string,
+  waitAfterHandoff?: boolean,
 }
 ```
 
 用于跨 session 协作、测试交接、结果回报等。
 
-如果这次 handoff 就是你当前回合的最后一步，推荐在同一条 assistant 工具调用里紧跟一个：
+如果成功 handoff 后就应结束当前回合并等待下一个事件，推荐直接设置：
 
 ```ts
-wait({})
+send_to_session({
+  sessionId: 'main_analysis',
+  message: 'Review complete.',
+  waitAfterHandoff: true,
+})
 ```
 
-这样可以在发送 handoff 后直接结束当前回合，避免模型再补一段多余文本。
+无论 `waitAfterHandoff` 是 `true` 还是 `false`，后续回复都会正常投递；该选项只决定 handoff 成功后当前回合是否进入通用的任意事件 wait。这个 wait 不按目标 session 过滤，也不是任务完成等待。旧的 handoff + 显式 `wait({})` 方式仍然支持。
 
 ### `wait`
 

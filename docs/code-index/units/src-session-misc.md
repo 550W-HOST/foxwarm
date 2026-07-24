@@ -80,7 +80,7 @@ Provides session archiving (persisting messages with inline data extraction), pa
 - **Managed state**: Tracks session ownership via leases with TTL (15 min), manages pending inbox for managed sessions, routes queue items based on managed status.
 - **Message visibility**: Supports display-only messages that are hidden from the model (replaced with placeholder text during inference).
 - **Snapshot refresh**: Auto-refreshes session prompt snapshots after 1 hour of inactivity, with graceful error handling that doesn't block processing.
-- **Child reminder**: Detects `[NO_ACTION]` signals from child sessions to suppress completion reminders, builds instruction/reminder text for inter-session handoff protocol, and recommends one flagged `send_to_session(..., waitForReply:true)` call rather than a separate explicit wait. Reminder system events use one `<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="...">reminder</foxwarm-system>` part instead of a generic `hint` wrapper or split `systemPayload`.
+- **Child reminder**: Detects `[NO_ACTION]` signals from child sessions to suppress completion reminders, builds instruction/reminder text for inter-session handoff protocol, and recommends one flagged `send_to_session(..., waitAfterHandoff:true)` call rather than a separate explicit wait. Reminder system events use one `<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="...">reminder</foxwarm-system>` part instead of a generic `hint` wrapper or split `systemPayload`.
 
 ## Integration
 
