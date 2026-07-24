@@ -25,7 +25,7 @@ export const definitions = [
                 type: 'object',
                 properties: { 
                     content: { type: 'string' },
-                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. Use with overwrite=true and the same filePath to reuse the cached attempted content; omit content because the model does not need to generate the same content again.' },
+                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. The attempted content is already cached. For a cached retry, use `contentRef` with `overwrite=true` and the same `filePath`, and omit `content`. To intentionally correct or replace the attempted content, omit `contentRef` and call `write` with newly generated `content` plus the required overwrite/createDirs flags instead. Never pass `content` and `contentRef` together.' },
                     filePath: { type: 'string' },
                     overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' },
                     createDirs: { type: 'boolean', description: 'Create missing parent directories before writing. Default: false' }
