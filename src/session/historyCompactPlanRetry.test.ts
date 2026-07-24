@@ -243,7 +243,7 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
   }
 });
 
-test('ignored lifecycle messages are hard compact segment barriers and survive neighboring range replacement', async () => {
+test('prior compact-completion notices are transparent to planning and replaced by one current marker', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const sessionId = makeSessionId('compact_lifecycle_barrier');
   const session: Session = {
@@ -283,15 +283,15 @@ test('ignored lifecycle messages are hard compact segment barriers and survive n
     ): Promise<ChatResult> => {
       firstPrompt = flattenPrompt(parts);
       const toolCall = {
-        id: 'compact-before-lifecycle-boundary',
+        id: 'compact-across-prior-completion',
         name: 'submit_compact_plan',
         args: {
           createBlocksJson: JSON.stringify([{
             level: 1,
             sourceKind: 'message',
             sourceStart: 1,
-            sourceEnd: 1,
-            summary: 'summary before protected lifecycle boundary',
+            sourceEnd: 3,
+            summary: 'summary across a prior compact completion marker',
           }]),
         },
       };
@@ -306,11 +306,85 @@ test('ignored lifecycle messages are hard compact segment barriers and survive n
       'await',
     );
 
-    assert.match(firstPrompt, /Segment 1: raw message candidates.*M#1/s);
-    assert.match(firstPrompt, /Segment 2: raw message candidates.*M#3/s);
+    assert.match(firstPrompt, /Segment 1: raw message candidates.*M#1.*M#3/s);
+    assert.doesNotMatch(firstPrompt, /Segment 2: raw message candidates/);
     assert.equal(session.contextFrontier?.[0]?.kind, 'block');
-    assert.deepEqual(session.contextFrontier?.[1], { kind: 'message', seq: 2 });
-    assert(session.history.some(message => message.parts.some(part => part.system === lifecycleText)));
+    assert.equal(session.contextFrontier?.some(item => item.kind === 'message' && item.seq === 2), false);
+    assert.equal(session.history.filter(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"'))).length, 1);
+    const archived = await archive.readArchiveMessagesBySeqRange(session.id, 2, 2);
+    assert.equal(archived[0]?.message.parts[0]?.system, lifecycleText);
+  } finally {
+    (llm as any).chat = originalChat;
+    if (!SAVE_GENERATED_SESSION_LOGS) {
+      await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.jsonl`)).catch(() => {});
+      await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.blocks.jsonl`)).catch(() => {});
+    }
+  }
+});
+
+test('successful compaction removes prior completion notices from the force-kept tail but preserves other boundaries and archives', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const sessionId = makeSessionId('compact_completion_tail_cleanup');
+  const session: Session = {
+    id: sessionId,
+    agent: 'main',
+    history: [],
+    persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false,
+    queue: [],
+    meta: { lastMessageTime: Date.now() },
+    nextMessageSeq: 1,
+    nextBlockId: 1,
+    contextFrontier: [],
+    historyVersion: 0,
+    promptCacheKey: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    goalState: { goal: 'keep current goal', remindEvery: 10, anchorSeq: 0, updatedAt: Date.now() },
+  } as Session;
+  const oldCompletion = '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent" currentSessionId="child" />';
+  const inheritedBoundary = '<foxwarm-system kind="session-boundary" event="history-inherited" parentSessionId="parent" currentSessionId="child" />';
+  const messages: Message[] = [
+    { role: 'user', parts: [{ text: `older first ${'alpha '.repeat(3000)}` }], __meta: { timestamp: 1000 } },
+    { role: 'model', parts: [{ text: `older second ${'bravo '.repeat(3000)}` }], __meta: { timestamp: 2000 } },
+    { role: 'user', parts: [{ system: oldCompletion }, { system: '<foxwarm-system kind="goal-reminder" />' }], __meta: { timestamp: 3000 } },
+    { role: 'user', parts: [{ system: inheritedBoundary }], __meta: { timestamp: 4000 } },
+    { role: 'user', parts: [{ text: 'recent real user content' }], __meta: { timestamp: 5000 } },
+  ];
+  await archive.appendMessagesToArchive(session, messages);
+  session.history = messages;
+  session.contextFrontier = messages.map(message => ({ kind: 'message' as const, seq: message.__meta!.seq! }));
+  const saveCounter = { count: 0 };
+  const originalChat = llm.chat;
+
+  try {
+    (llm as any).chat = async (_parts: MessagePart[] | null, _activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void> | void }): Promise<ChatResult> => {
+      const toolCall = {
+        id: 'compact-tail-cleanup',
+        name: 'submit_compact_plan',
+        args: {
+          createBlocksJson: JSON.stringify([{
+            level: 1,
+            sourceKind: 'message',
+            sourceStart: 1,
+            sourceEnd: 2,
+            summary: 'summary replacing the older raw pair',
+          }]),
+        },
+      };
+      await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] }));
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, saveCounter), session.id, { keepPercent: 0.6 }, 'await');
+
+    const compactCompletions = session.history.filter(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"')));
+    assert.equal(compactCompletions.length, 1, 'only the current compact completion remains active');
+    assert(compactCompletions[0].parts.some(part => (part.system || '').includes('goal-reminder')), 'current completion retains the current goal reminder');
+    assert.equal(session.contextFrontier?.some(item => item.kind === 'message' && item.seq === 3), false, 'old completion is removed even from the force-kept tail');
+    assert.equal(session.history.some(message => message.parts.some(part => part.system === inheritedBoundary)), true, 'unrelated session boundary remains active');
+    assert.equal(session.history.some(message => message.parts.some(part => part.text === 'recent real user content')), true, 'real content remains active');
+    const archived = await archive.readArchiveMessagesBySeqRange(session.id, 3, 3);
+    assert.equal(archived[0]?.message.parts[0]?.system, oldCompletion, 'old completion remains in durable archive');
   } finally {
     (llm as any).chat = originalChat;
     if (!SAVE_GENERATED_SESSION_LOGS) {
@@ -373,6 +447,14 @@ test('compact planning stops after bounded plain-text/no-tool retries without re
 test('compact planning LLM final failure aborts without rewriting session history or queuing a compact result', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const session = await makeCompactableSession(archive, makeSessionId('compact_llm_final_failure'));
+  const priorCompletion: Message = {
+    role: 'user',
+    parts: [{ system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent" currentSessionId="child" />' }],
+    __meta: { timestamp: 5000 },
+  };
+  await archive.appendMessagesToArchive(session, [priorCompletion]);
+  session.history.push(priorCompletion);
+  session.contextFrontier?.push({ kind: 'message', seq: priorCompletion.__meta!.seq! });
   const saveCounter = { count: 0 };
   const originalChat = llm.chat;
   const originalHistory = structuredClone(session.history);
@@ -404,11 +486,59 @@ test('compact planning LLM final failure aborts without rewriting session histor
     assert.equal(session.promptCacheKey, originalPromptCacheKey);
     assert.equal(session.historyVersion, 0);
     assert.equal(sessionHistory.hasPendingCompactWork(session.id), false);
+    assert(session.contextFrontier?.some(item => item.kind === 'message' && item.seq === priorCompletion.__meta!.seq), 'failed planning leaves prior completion untouched');
   } finally {
     (llm as any).chat = originalChat;
     if (!SAVE_GENERATED_SESSION_LOGS) {
       await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.jsonl`)).catch(() => {});
       await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.blocks.jsonl`)).catch(() => {});
     }
+  }
+});
+
+test('compact commit persists block facts and survives best-effort fact indexing failure', async () => {
+  const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
+  const vector = await import('../vector');
+  const session = await makeCompactableSession(archive, makeSessionId('compact_block_facts_index_failure'));
+  const saveCounter = { count: 0 };
+  const originalChat = llm.chat;
+  const originalIndexFacts = vector.indexMemoryFactsFromCompaction;
+
+  try {
+    (llm as any).chat = async (
+      _parts: MessagePart[] | null,
+      _activeSession: Session,
+      _iteration: number,
+      options?: { appendMessage?: (message: Message) => Promise<void> | void },
+    ): Promise<ChatResult> => {
+      const toolCall = {
+        id: 'compact-plan-with-block-facts',
+        name: 'submit_compact_plan',
+        args: {
+          createBlocksJson: JSON.stringify([{
+            level: 1,
+            sourceKind: 'message',
+            sourceStart: 1,
+            sourceEnd: 2,
+            summary: 'summary whose durable facts are framework-rendered',
+            memoryFacts: [{ kind: 'decision', text: 'Keep compact facts attached to their creating block.', attributedTo: 'user' }],
+          }]),
+        },
+      };
+      await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] }));
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    (vector as any).indexMemoryFactsFromCompaction = async () => { throw new Error('embedding unavailable'); };
+
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, saveCounter), session.id, { keepPercent: 0.5 }, 'await');
+
+    const [block] = await layeredContext.readArchiveBlocksByIdRange(session.id, 1, 1);
+    assert.deepEqual(block.memoryFacts, [{ kind: 'decision', text: 'Keep compact facts attached to their creating block.', attributedTo: 'user' }]);
+    assert.match(block.summary, /### Memory facts/);
+    assert.match(String(session.history[0].parts[0].text), /### Memory facts/);
+    assert(session.history.some(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"'))));
+  } finally {
+    (llm as any).chat = originalChat;
+    (vector as any).indexMemoryFactsFromCompaction = originalIndexFacts;
   }
 });

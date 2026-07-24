@@ -1008,6 +1008,11 @@ export class MessageRouter {
           throw e;
         }
 
+        // llm.chat appends non-null parts to canonical history before returning.
+        // Keep only unsent inputs across a pre-LLM compact boundary; otherwise a
+        // compact commit between tool iterations would replay this turn's user
+        // input in the next provider request.
+        parts = null;
         finalResponse = result.text;
         finalUsage = result.usage;
 

@@ -43,7 +43,8 @@ Model-facing `contentFilter` and final preview filtering are owned by the shared
 ## Indexing behavior
 
 - Raw archive records become overlapping segment rows; block summaries become one row per block.
-- Compact facts use deterministic normalized-text IDs inside the session and encode fact kind/attribution/source range in existing columns.
+- Compact facts use deterministic normalized-text IDs scoped to their creating block and encode fact kind/attribution, block identity/level, and that block's raw source range in existing columns.
+- Inherited fact rows use the block fork cap. Legacy null-block facts require their entire raw range to precede the message fork cap and are discarded rather than clipped if they cross it.
 - Raw rebuild writes bounded batches and advances a safe checkpoint after each completed batch.
 - Startup backfill is asynchronous. Search can be temporarily incomplete while checkpoints show pending archive content.
 - Concurrent index requests for one session are coalesced/scheduled rather than running duplicate rebuilds.

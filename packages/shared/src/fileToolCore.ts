@@ -33,7 +33,10 @@ export function formatWriteContentRefRetryHint(filePath: string, contentRef: str
   const action = createDirs
     ? 'retry and create the missing parent directories'
     : 'confirm overwriting';
-  return ` The attempted content is cached. To ${action} without generating the same content again, call write({ ${params} }).`;
+  const replacementRequirements = createDirs
+    ? 'the same `filePath` and `createDirs: true`'
+    : 'the same `filePath` and `overwrite: true`';
+  return ` The attempted content is already cached. Do not include or pass the \`content\` argument when using \`contentRef\`; it is unnecessary. To ${action}, call write({ ${params} }). If you intentionally want to correct or replace the attempted content instead, omit \`contentRef\` and call \`write\` with the new \`content\` plus ${replacementRequirements}. Never pass \`content\` and \`contentRef\` together.`;
 }
 
 const INLINE_IMAGE_MIME: Record<string, string> = {

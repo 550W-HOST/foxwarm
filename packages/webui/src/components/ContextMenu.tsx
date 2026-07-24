@@ -17,6 +17,13 @@ export type ContextMenuItem = {
   onSelect?: () => void
   disabled?: boolean
   danger?: boolean
+  checked?: boolean
+  trailingControl?: {
+    label: ReactNode
+    checked: boolean
+    onSelect: () => void
+    disabled?: boolean
+  }
 }
 
 export type ContextMenuEntry = ContextMenuItem | { key: string; type: 'separator' }
@@ -132,22 +139,52 @@ export default function ContextMenu({
           ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
           : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700/70'
 
-        return (
+        const itemClass = `flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors ${entry.disabled ? 'cursor-not-allowed opacity-50' : toneClass}`
+
+        const itemButton = (
           <button
             key={entry.key}
             type="button"
-            role="menuitem"
+            role={entry.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+            aria-checked={entry.checked}
             disabled={entry.disabled}
             onClick={() => {
               if (entry.disabled) return
               entry.onSelect?.()
               onClose()
             }}
-            className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors ${entry.disabled ? 'cursor-not-allowed opacity-50' : toneClass}`}
+            className={entry.trailingControl ? itemClass : `${itemClass} w-full`}
           >
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">{entry.icon}</span>
             <span className="min-w-0 flex-1 truncate">{entry.label}</span>
           </button>
+        )
+
+        if (!entry.trailingControl) {
+          return itemButton
+        }
+
+        const control = entry.trailingControl
+        return (
+          <div key={entry.key} className="flex w-full items-stretch">
+            {itemButton}
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={control.checked}
+              disabled={control.disabled}
+              onClick={(event) => {
+                event.stopPropagation()
+                if (control.disabled) return
+                control.onSelect()
+                onClose()
+              }}
+              className={`mr-3 inline-flex shrink-0 items-center gap-1 text-sm transition-colors ${control.checked ? 'text-blue-700 dark:text-blue-300' : 'text-gray-700 hover:text-blue-700 dark:text-gray-200 dark:hover:text-blue-300'} ${control.disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+            >
+              <span aria-hidden="true" className={`inline-flex h-3 w-3 items-center justify-center rounded-[1px] border-2 text-[8px] font-bold leading-none ${control.checked ? 'border-blue-600 bg-blue-600 text-white dark:border-blue-400 dark:bg-blue-400 dark:text-gray-950' : 'border-gray-500 bg-white text-transparent dark:border-gray-400 dark:bg-gray-900'}`}>✓</span>
+              <span>{control.label}</span>
+            </button>
+          </div>
         )
       })}
     </div>,

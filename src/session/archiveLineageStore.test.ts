@@ -36,6 +36,7 @@ test('archive store reads inherited and local messages/blocks without copying pa
     rawStartSeq: 1,
     rawEndSeq: 2,
     summary: 'alpha summary block',
+    memoryFacts: [{ kind: 'convention', text: 'Archive block facts stay with their block.', attributedTo: 'assistant' }],
   }]);
 
   await archiveStore.ensureSessionBranch('child', {
@@ -91,7 +92,7 @@ test('archive store reads inherited and local messages/blocks without copying pa
       rawEndTimestamp: record.rawEndTimestamp,
     })),
     [
-      { id: 1, inherited: true, source: 'parent', summary: 'alpha summary block', rawStartTimestamp: 1000, rawEndTimestamp: 2000 },
+      { id: 1, inherited: true, source: 'parent', summary: 'alpha summary block\n\n### Memory facts\n- **convention:** Archive block facts stay with their block. _(attributed to: assistant)_', rawStartTimestamp: 1000, rawEndTimestamp: 2000 },
       { id: 2, inherited: false, source: 'child', summary: 'gamma child local block', rawStartTimestamp: 4000, rawEndTimestamp: 4000 },
     ],
   );
@@ -105,6 +106,7 @@ test('archive store reads inherited and local messages/blocks without copying pa
   assert.match(String(combinedPreview), /- Covers: msg#1-2/);
   assert.match(String(combinedPreview), /- Source: messages msg#1-2/);
   assert.match(String(combinedPreview), /alpha summary block/);
+  assert.match(String(combinedPreview), /### Memory facts/);
   assert.match(String(combinedPreview), /alpha parent one/);
 
   const frontierPreview = await toolsSessionAgent.tool_recall({
@@ -115,6 +117,10 @@ test('archive store reads inherited and local messages/blocks without copying pa
   assert.match(String(frontierPreview), /\[inherited from parent\]/);
   assert.match(String(frontierPreview), /\[local\]/);
   assert.match(String(frontierPreview), /gamma child local block/);
+
+  assert.deepEqual(archivedBlocks[0].memoryFacts, [{ kind: 'convention', text: 'Archive block facts stay with their block.', attributedTo: 'assistant' }]);
+  const parentBlockLog = await fs.readFile(config.getSessionBlockArchiveLogPath('parent'), 'utf8');
+  assert.deepEqual(JSON.parse(parentBlockLog.trim()).memoryFacts, [{ kind: 'convention', text: 'Archive block facts stay with their block.', attributedTo: 'assistant' }]);
 
   const childArchiveLog = await fs.readFile(config.getSessionArchiveLogPath('child'), 'utf8');
   assert.equal(childArchiveLog.trim().split('\n').length, 1, 'child raw archive should contain only local messages');

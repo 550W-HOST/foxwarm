@@ -10,8 +10,8 @@ Manages the current layered context frontier for sessions: an ordered list of ra
 
 - `ArchiveBlockRecord` — interface for a persisted summary block with metadata
 - `CreateArchiveBlockInput` — interface for creating new archive blocks
-- `isIgnoredCompactLifecycleSystemText(text)` — checks if text is a compaction lifecycle marker
-- `shouldIgnoreMessageInCompactCandidates(message)` — determines if a message should be skipped during compaction
+- `isIgnoredCompactLifecycleSystemText(text)` / `isCompactCompletionSystemText(text)` — distinguish general compact lifecycle noise from a removable prior completion notice
+- `shouldIgnoreMessageInCompactCandidates(message)` / `shouldRemoveOldCompactCompletionMessage(message)` — distinguish compact candidate exclusion from safe old-completion frontier removal
 - `ensureContextFrontier(session)` — initializes frontier from current history message seq metadata if not present
 - `appendMessagesToContextFrontier(session, messages)` — adds new message seq refs to an existing frontier
 - `appendBlocksToArchive(session, blocks)` — creates and writes archive block records
@@ -24,6 +24,7 @@ Manages the current layered context frontier for sessions: an ordered list of ra
 - `cloneSessionFrontier(session)` — deep-clones the session's frontier
 - `formatArchiveBlockTimeRange(record)` — formats the time range string for a block
 - `formatArchiveBlockContextText(record)` — formats the full context text for a block
+- `formatArchiveBlockMemoryFactsSection` / `formatArchiveBlockSummary` — deterministic generated durable-fact section appended to new block summaries
 
 ## Function Index
 
@@ -64,8 +65,8 @@ Manages the current layered context frontier for sessions: an ordered list of ra
 - Active frontier persistence is embedded in per-session history JSON via `contextFrontier`; this unit no longer reads or writes standalone `.frontier.json` files.
 - When rendering the frontier, messages are fetched from the archive by seq range and blocks are rendered as model messages with text like `[CTX-BLOCK L1 B#3 raw#10-#12 time ...]`; rendered block messages carry `__meta.contextBlock`, and rendered raw preserved messages carry `__meta.preservedFromBlockId` plus `__meta.contextFrontierItem`.
 - `annotateHistoryWithContextFrontierMetadata` is used by runtime load and migrations to ensure existing rendered messages have the same structured metadata as freshly rendered frontier messages; it never parses legacy frontier files.
-- Compaction lifecycle messages (placeholders, legacy bold `**COMPACTION COMPLETED...**` markers, and new `<foxwarm-system kind="session-boundary" event="compact-completed" ...>` wrappers) are filtered out when selecting compaction candidates. Continuation text inside the wrapper body, or legacy following `systemPayload` text such as “You can continue working now”, is treated as lifecycle/system payload rather than real user content.
-- Block records include raw timestamp ranges resolved from the archive at creation time.
+- Compaction lifecycle messages are excluded from compact summary content. Prior pure current/legacy compact-completion notices are additionally transparent to candidate ranges and are removable from the active frontier at a later successful commit; other lifecycle/session-boundary events remain barriers. Continuation text inside the wrapper body, or legacy following `systemPayload` text such as “You can continue working now”, is treated as lifecycle/system payload rather than real user content. Canonical retention contract: [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion).
+- Block records include raw timestamp ranges resolved from the archive at creation time. New records may persist normalized `memoryFacts`; the framework appends their stable Markdown section to the stored summary so frontier rendering and later block compaction inherit it without model-written duplication.
 
 ## Design Decisions
 

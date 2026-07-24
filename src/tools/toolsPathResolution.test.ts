@@ -182,7 +182,7 @@ test('write existing-file refusal gives an exact executable contentRef call with
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         const contentRef = extractWriteContentRef(err);
-        assert.equal(message, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file. The attempted content is cached. To confirm overwriting without generating the same content again, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true }). The contentRef expires in 15 minutes and only works in this session/agent for the same path.`);
+        assert.equal(message, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file. The attempted content is already cached. Do not include or pass the \`content\` argument when using \`contentRef\`; it is unnecessary. To confirm overwriting, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true }). If you intentionally want to correct or replace the attempted content instead, omit \`contentRef\` and call \`write\` with the new \`content\` plus the same \`filePath\` and \`overwrite: true\`. Never pass \`content\` and \`contentRef\` together. The contentRef expires in 15 minutes and only works in this session/agent for the same path.`);
         assert.doesNotMatch(message, /secret cached content|resend/i);
         return true;
       },
@@ -213,7 +213,7 @@ test('write requires existing parent directories by default and can retry missin
         assert.match(message, /contentRef/);
         assert.doesNotMatch(message, /cached missing parent content/);
         contentRef = extractWriteContentRef(err);
-        assert.ok(message.includes(` The attempted content is cached. To retry and create the missing parent directories without generating the same content again, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true, createDirs: true }).`));
+        assert.ok(message.includes(` The attempted content is already cached. Do not include or pass the \`content\` argument when using \`contentRef\`; it is unnecessary. To retry and create the missing parent directories, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true, createDirs: true }). If you intentionally want to correct or replace the attempted content instead, omit \`contentRef\` and call \`write\` with the new \`content\` plus the same \`filePath\` and \`createDirs: true\`. Never pass \`content\` and \`contentRef\` together.`));
         assert.doesNotMatch(message, /resend/i);
         return true;
       },
@@ -230,11 +230,11 @@ test('write requires existing parent directories by default and can retry missin
   }
 });
 
-test('write schema explains that contentRef replaces regenerated content', () => {
+test('write schema explicitly prohibits content alongside contentRef', () => {
   const definition = definitions.find(entry => entry.name === 'write');
   assert.ok(definition);
   const description = String((definition.parameters.properties as any).contentRef.description);
-  assert.equal(description, 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. Use with overwrite=true and the same filePath to reuse the cached attempted content; omit content because the model does not need to generate the same content again.');
+  assert.equal(description, 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. The attempted content is already cached. For a cached retry, use `contentRef` with `overwrite=true` and the same `filePath`, and omit `content`. To intentionally correct or replace the attempted content, omit `contentRef` and call `write` with newly generated `content` plus the required overwrite/createDirs flags instead. Never pass `content` and `contentRef` together.');
   assert.doesNotMatch(description, /resend/i);
 });
 

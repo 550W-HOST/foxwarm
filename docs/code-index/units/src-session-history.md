@@ -57,8 +57,8 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 - The planning model uses the live prompt-cache key on a clone because the pre-commit prefix/schema lineage is unchanged; canonical ownership is [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
 - Async, awaited, and auto modes use one engine. A terminal provider error, exhausted plan loop, or stale prefix leaves live history/frontier unchanged.
 - Successful prefix replacement rotates `promptCacheKey`.
-- Protected lifecycle/frontier items are segment barriers; display-only messages are transparent and not summarized.
-- Compact facts are indexed only after success and are best-effort.
+- Protected lifecycle/frontier items are segment barriers; display-only messages are transparent and not summarized. Prior pure compact-completion notices are the narrow exception: they are transparent to candidate ranges and removed from the entire compatible active frontier only on successful commit, before one current notice is appended. Canonical contract: [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion).
+- Each created block carries its normalized facts through archive append; its facts are indexed only after success with that block identity/level/raw range, and indexing is best-effort.
 - Goal reminders remain separate system parts from compact-completion metadata.
 - Temporary compact progress may be broadcast without becoming authoritative final history.
 

@@ -16,6 +16,7 @@ import {
 import { isModelVisibleMessage } from './messageVisibility';
 import { parseFoxwarmOpeningTag } from '../utils/promptWrappers';
 import { isSystemPayloadTextPart } from '../utils/systemMessageParts';
+import type { ExtractedMemoryFact } from './compactPlan';
 
 const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
   'This session has been compacted.',
@@ -41,6 +42,7 @@ export interface ArchiveBlockRecord {
   rawStartTimestamp?: number;
   rawEndTimestamp?: number;
   summary: string;
+  memoryFacts?: ExtractedMemoryFact[];
   createdAt: number;
   sourceSessionId?: string;
   inherited?: boolean;
@@ -55,6 +57,7 @@ export interface CreateArchiveBlockInput {
   rawStartSeq: number;
   rawEndSeq: number;
   summary: string;
+  memoryFacts?: ExtractedMemoryFact[];
 }
 
 export type ContextFrontierAnnotationResult = {
@@ -76,6 +79,48 @@ export function isIgnoredCompactLifecycleSystemText(text: string): boolean {
       || COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES.some(prefix => hint.startsWith(prefix));
   }
   return COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES.some(prefix => text.startsWith(prefix));
+}
+
+/**
+ * Returns true only for a prior compaction-completion notification. Unlike
+ * other session-boundary messages, these are transient continuation notices:
+ * the next successful compact commit replaces them with one current notice.
+ */
+export function isCompactCompletionSystemText(text: string): boolean {
+  const tag = parseFoxwarmOpeningTag(text);
+  if (tag?.tagName === 'foxwarm-system') {
+    return tag.attrs.kind === 'session-boundary' && tag.attrs.event === 'compact-completed';
+  }
+  return text.startsWith('Compaction completed.')
+    || text.startsWith('**COMPACTION COMPLETED.')
+    || text.startsWith('Manual compaction completed.');
+}
+
+/**
+ * A compact-completion message may carry a goal/lifecycle system part, but
+ * must not be removed when it also carries real conversation/tool content.
+ */
+export function shouldRemoveOldCompactCompletionMessage(message: Message): boolean {
+  if (!isModelVisibleMessage(message)) {
+    return false;
+  }
+
+  const parts = message.parts || [];
+  const hasCompletionMarker = parts.some(part => (
+    typeof part.system === 'string' && isCompactCompletionSystemText(part.system.trim())
+  ));
+  if (!hasCompletionMarker) {
+    return false;
+  }
+
+  return !parts.some(part => (
+    (typeof part.text === 'string' && part.text.trim().length > 0 && !isSystemPayloadTextPart(part))
+    || (typeof part.thinking === 'string' && part.thinking.trim().length > 0)
+    || !!part.functionCall
+    || !!part.functionResponse
+    || !!part.inlineData
+    || !!(part as any).inlineDataRef
+  ));
 }
 
 export function shouldIgnoreMessageInCompactCandidates(message: Message): boolean {
@@ -184,7 +229,8 @@ async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveB
       rawEndSeq: block.rawEndSeq,
       rawStartTimestamp: startRecord[0]?.timestamp,
       rawEndTimestamp: endRecord[0]?.timestamp,
-      summary: block.summary,
+      summary: formatArchiveBlockSummary(block.summary, block.memoryFacts),
+      ...(block.memoryFacts?.length ? { memoryFacts: block.memoryFacts } : {}),
       createdAt,
     };
   }));
@@ -247,6 +293,23 @@ export function getArchiveBlockEndTimestamp(record: ArchiveBlockTimeRangeInput):
 export function formatArchiveBlockTimeRange(record: ArchiveBlockTimeRangeInput): string {
   const range = formatLocalTimeRange(getArchiveBlockStartTimestamp(record), getArchiveBlockEndTimestamp(record));
   return range ? ` time ${range}` : '';
+}
+
+export function formatArchiveBlockMemoryFactsSection(memoryFacts: ExtractedMemoryFact[] | undefined): string {
+  if (!memoryFacts?.length) return '';
+  const items = memoryFacts.map((fact) => {
+    const optional = [
+      fact.context?.trim() ? `context: ${fact.context.trim()}` : '',
+      fact.attributedTo ? `attributed to: ${fact.attributedTo}` : '',
+    ].filter(Boolean);
+    return `- **${fact.kind}:** ${fact.text.trim()}${optional.length ? ` _(${optional.join('; ')})_` : ''}`;
+  });
+  return `### Memory facts\n${items.join('\n')}`;
+}
+
+export function formatArchiveBlockSummary(summary: string, memoryFacts?: ExtractedMemoryFact[]): string {
+  const section = formatArchiveBlockMemoryFactsSection(memoryFacts);
+  return section ? `${summary.trim()}\n\n${section}` : summary;
 }
 
 export type ArchiveBlockContextTextInput = Pick<ArchiveBlockRecord, 'id' | 'level' | 'rawStartSeq' | 'rawEndSeq' | 'summary'> & ArchiveBlockTimeRangeInput;

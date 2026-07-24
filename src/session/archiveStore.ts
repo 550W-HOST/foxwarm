@@ -7,6 +7,7 @@ import { logger } from '../common';
 import type { Message } from '../types';
 import type { ArchiveMessageRecord } from './archive';
 import type { ArchiveBlockRecord } from './layeredContext';
+import type { ExtractedMemoryFact } from './compactPlan';
 import { loadSessionsMetadataSnapshot } from './metadataStore';
 
 export type ArchiveBranchRecord = {
@@ -472,6 +473,7 @@ function openArchiveStore(): void {
       raw_start_timestamp INTEGER,
       raw_end_timestamp INTEGER,
       summary TEXT NOT NULL,
+      memory_facts_json TEXT,
       created_at INTEGER NOT NULL,
       PRIMARY KEY (session_id, id)
     );
@@ -507,6 +509,9 @@ function openArchiveStore(): void {
   } catch {}
   try {
     db.exec(`ALTER TABLE archive_blocks ADD COLUMN source_block_ids_json TEXT`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE archive_blocks ADD COLUMN memory_facts_json TEXT`);
   } catch {}
 }
 
@@ -881,8 +886,8 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
   const insert = database.prepare(`
     INSERT OR IGNORE INTO archive_blocks (
       session_id, agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
-      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let batch: ArchiveBlockRecord[] = [];
@@ -909,6 +914,7 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
           record.rawStartTimestamp ?? null,
           record.rawEndTimestamp ?? null,
           record.summary,
+          record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null,
           record.createdAt,
         );
       }
@@ -949,6 +955,27 @@ async function ensureImported(sessionId: string): Promise<void> {
   await importSessionMessagesFromJsonl(sessionId);
   await importSessionBlocksFromJsonl(sessionId);
   importedSessions.add(sessionId);
+}
+
+function parseMemoryFactsJson(value: unknown): ExtractedMemoryFact[] | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return undefined;
+    const facts = parsed.filter((fact): fact is ExtractedMemoryFact => (
+      !!fact && typeof fact === 'object'
+      && ['decision', 'preference', 'fact', 'convention', 'environment'].includes((fact as any).kind)
+      && typeof (fact as any).text === 'string' && (fact as any).text.trim().length > 0
+    )).map((fact: any) => ({
+      kind: fact.kind,
+      text: fact.text,
+      ...(typeof fact.context === 'string' && fact.context.trim() ? { context: fact.context } : {}),
+      ...(['user', 'assistant', 'both'].includes(fact.attributedTo) ? { attributedTo: fact.attributedTo } : {}),
+    }));
+    return facts.length ? facts : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function getBranchInternal(sessionId: string): ArchiveBranchRecord | null {
@@ -1126,8 +1153,8 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
   const insert = database.prepare(`
     INSERT OR REPLACE INTO archive_blocks (
       session_id, agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
-      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   runInTransaction(() => {
     for (const record of records) {
@@ -1145,6 +1172,7 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
         record.rawStartTimestamp ?? null,
         record.rawEndTimestamp ?? null,
         record.summary,
+        record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null,
         record.createdAt,
       );
     }
@@ -1217,7 +1245,7 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
   await ensureImported(sessionId);
 
   const rows = getDb().prepare(`
-    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json, raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
+    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json, raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
     FROM archive_blocks
     WHERE session_id = ?
       AND (? IS NULL OR id >= ?)
@@ -1241,6 +1269,7 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
     rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
     rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp),
     summary: String(row.summary || ''),
+    ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
     createdAt: Number(row.created_at),
   }));
 }

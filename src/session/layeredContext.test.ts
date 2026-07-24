@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { annotateHistoryWithContextFrontierMetadata, formatArchiveBlockContextText, formatArchiveBlockTimeRange, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import { annotateHistoryWithContextFrontierMetadata, formatArchiveBlockContextText, formatArchiveBlockSummary, formatArchiveBlockTimeRange, isCompactCompletionSystemText, isIgnoredCompactLifecycleSystemText, renderBlockMessage, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { formatCompactionCompletionMarker } from './history';
 import { Message } from '../types';
 import { formatLocalTimeRange } from '../utils/localTime';
@@ -41,6 +41,26 @@ test('ignores pure compact lifecycle messages but keeps messages with real non-s
     __meta: { seq: 11 },
   };
   assert.equal(shouldIgnoreMessageInCompactCandidates(mixedContent), false);
+});
+
+test('identifies only removable compact-completion notices without treating other boundaries or real content as disposable', () => {
+  const completion = '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent" currentSessionId="child" />';
+  assert.equal(isCompactCompletionSystemText(completion), true);
+  assert.equal(isCompactCompletionSystemText('Compaction completed. You can continue working now.'), true);
+  assert.equal(isCompactCompletionSystemText('<foxwarm-system kind="session-boundary" event="history-inherited" parentSessionId="parent" currentSessionId="child" />'), false);
+
+  assert.equal(shouldRemoveOldCompactCompletionMessage({
+    role: 'user',
+    parts: [{ system: completion }, { system: '<foxwarm-system kind="goal-reminder" />' }],
+  }), true);
+  assert.equal(shouldRemoveOldCompactCompletionMessage({
+    role: 'user',
+    parts: [{ system: completion }, { text: 'actual user content must survive' }],
+  }), false);
+  assert.equal(shouldRemoveOldCompactCompletionMessage({
+    role: 'user',
+    parts: [{ system: '<foxwarm-system kind="session-boundary" event="history-inherited" parentSessionId="parent" currentSessionId="child" />' }],
+  }), false);
 });
 
 test('formatCompactionCompletionMarker uses foxwarm metadata without a duplicate legacy prefix', () => {
@@ -137,4 +157,16 @@ test('annotateHistoryWithContextFrontierMetadata adds block and preserved raw me
   assert.deepEqual(result.history[0].__meta?.contextFrontierItem, { kind: 'block', id: 7, level: 1, rawStartSeq: 10, rawEndSeq: 12 });
   assert.equal(result.history[1].__meta?.preservedFromBlockId, 7);
   assert.deepEqual(result.history[1].__meta?.contextFrontierItem, { kind: 'message', seq: 11, preservedFromBlockId: 7 });
+});
+
+
+test('block summary appends a stable generated memory-facts section', () => {
+  const summary = formatArchiveBlockSummary('Original continuation summary.', [{
+    kind: 'decision',
+    text: 'Use block-associated durable facts.',
+    context: 'Compaction contract',
+    attributedTo: 'user',
+  }]);
+  assert.equal(summary, 'Original continuation summary.\n\n### Memory facts\n- **decision:** Use block-associated durable facts. _(context: Compaction contract; attributed to: user)_');
+  assert.equal(formatArchiveBlockSummary('Old block summary.'), 'Old block summary.');
 });

@@ -10,6 +10,7 @@ import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/
 import type { Session, SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
+import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { applyLatestSessionListRequest, createLatestSessionListRequestGate } from './sessionListRefresh'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
@@ -442,6 +443,7 @@ function App() {
   const initialRoute = getHashState()
 
   const [sessions, setSessions] = useState<Session[]>([])
+  const { idleNotificationModes, toggleIdleNotificationMode } = useSessionIdleNotifications(sessions)
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [route, setRoute] = useState<RouteState>(initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
@@ -1818,6 +1820,8 @@ function App() {
           onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
           onCreateAgent={handleCreateAgent}
           onCreateSession={handleCreateSession}
+          idleNotificationModes={idleNotificationModes}
+          onToggleIdleNotificationMode={toggleIdleNotificationMode}
         />,
       ))
     }
@@ -1872,6 +1876,8 @@ function App() {
             onCreateSession={handleCreateSession}
             onToggleCollapsed={() => setSidebarCollapsed(true)}
             isPeek={false}
+            idleNotificationModes={idleNotificationModes}
+            onToggleIdleNotificationMode={toggleIdleNotificationMode}
           />
           <div
             className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-blue-400/40"

@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
+import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import { compareSessionListSessions, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 
@@ -46,6 +47,8 @@ interface SessionListCoreProps {
   toolbarContainerClassName?: string
   listContainerClassName?: string
   dragEnabled?: boolean
+  idleNotificationModes?: Record<string, SessionIdleNotificationMode>
+  onToggleIdleNotificationMode?: (sessionId: string, mode: SessionIdleNotificationMode) => void
 }
 
 export interface SessionMoveRequest {
@@ -461,7 +464,7 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, onToggleIdleNotificationMode }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
@@ -1152,6 +1155,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const session = sessionMap.get(contextMenu.sessionId)
     const isArchived = session?.archived || false
     const isPinned = session?.pinned || false
+    const idleNotificationMode = idleNotificationModes[contextMenu.sessionId]
     const hasParent = !!session?.parentSessionId
     const parentSession = hasParent ? sessionMap.get(session!.parentSessionId!) : undefined
     const grandparentId = parentSession?.parentSessionId || undefined
@@ -1180,6 +1184,22 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         icon: <GitFork size={14} />,
         label: 'Fork',
         onSelect: () => { void forkSession(contextMenu.sessionId) },
+      },
+      {
+        key: 'idle-notification',
+        icon: idleNotificationMode
+          ? <BellRing size={14} className="text-blue-600 dark:text-blue-300" />
+          : <Bell size={14} />,
+        label: 'Notify on idle',
+        checked: idleNotificationMode === 'once',
+        disabled: !onToggleIdleNotificationMode,
+        onSelect: () => onToggleIdleNotificationMode?.(contextMenu.sessionId, 'once'),
+        trailingControl: {
+          label: 'always',
+          checked: idleNotificationMode === 'always',
+          disabled: !onToggleIdleNotificationMode,
+          onSelect: () => onToggleIdleNotificationMode?.(contextMenu.sessionId, 'always'),
+        },
       },
       ...(hasParent && grandparentId && !isPinned ? [{
         key: 'promote-up',

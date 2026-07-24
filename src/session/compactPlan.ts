@@ -43,6 +43,7 @@ export interface LayeredCreateBlockPlan {
   sourceStart: number;
   sourceEnd: number;
   summary: string;
+  memoryFacts?: ExtractedMemoryFact[];
 }
 
 export type MemoryFactKind = 'decision' | 'preference' | 'fact' | 'convention' | 'environment';
@@ -57,7 +58,6 @@ export interface ExtractedMemoryFact {
 
 export interface CompactPlan {
   createBlocks: LayeredCreateBlockPlan[];
-  memoryFacts?: ExtractedMemoryFact[];
   preserveMessages?: number[];
   removePreservedMessages?: number[];
 }
@@ -157,7 +157,7 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
     properties: {
       createBlocksJson: {
         type: 'string',
-        description: 'JSON array string for createBlocks. Each item should be an object like {"level":1,"sourceKind":"message","sourceStart":10,"sourceEnd":12,"summary":"..."}. Use [] when the only operation is removePreservedMessages.',
+        description: 'JSON array string for createBlocks. Each item should be an object like {"level":1,"sourceKind":"message","sourceStart":10,"sourceEnd":12,"summary":"...","memoryFacts":[{"kind":"decision","text":"durable fact"}]}. memoryFacts is optional and belongs only to that created block. Use [] when the only operation is removePreservedMessages.',
       },
       preserveMessages: {
         type: 'array',
@@ -168,10 +168,6 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
         type: 'array',
         items: { type: 'number' },
         description: 'Optional list of previously preserved raw message seq numbers to remove from working history/frontier. This never deletes archive records or summary blocks, and can only target messages listed as preserved in the compact prompt.',
-      },
-      memoryFactsJson: {
-        type: 'string',
-        description: 'Optional JSON array string for durable memory facts extracted from the compacted source range. Each item should be {"kind":"decision|preference|fact|convention|environment","text":"self-contained fact","context":"optional reason/source","attributedTo":"user|assistant|both"}. Invalid/omitted facts are ignored and never affect block creation.',
       },
     },
     required: ['createBlocksJson'],
@@ -239,63 +235,30 @@ function normalizePositiveIntegerArray(rawArgs: Record<string, any>, key: 'prese
   return result;
 }
 
-export function normalizeMemoryFacts(rawArgs: Record<string, any>): ExtractedMemoryFact[] {
-  const rawFacts = parseOptionalJsonArray(rawArgs.memoryFactsJson)
-    || parseOptionalJsonArray(rawArgs.factsJson)
-    || parseOptionalJsonArray(rawArgs.memoryFacts)
-    || parseOptionalJsonArray(rawArgs.facts);
-
-  if (!rawFacts) {
-    return [];
-  }
+export function normalizeMemoryFacts(rawValue: unknown, options: { seenTexts?: Set<string>; maxFacts?: number } = {}): ExtractedMemoryFact[] {
+  const rawFacts = parseOptionalJsonArray(rawValue);
+  if (!rawFacts) return [];
 
   const facts: ExtractedMemoryFact[] = [];
-  const seenTexts = new Set<string>();
-
+  const seenTexts = options.seenTexts || new Set<string>();
+  const maxFacts = options.maxFacts ?? MAX_MEMORY_FACTS_PER_PLAN;
   for (const rawFact of rawFacts) {
-    if (facts.length >= MAX_MEMORY_FACTS_PER_PLAN) {
-      break;
-    }
-    if (!rawFact || typeof rawFact !== 'object') {
-      continue;
-    }
-
+    if (facts.length >= maxFacts) break;
+    if (!rawFact || typeof rawFact !== 'object') continue;
     const entry = rawFact as Record<string, any>;
     const kind = String(entry.kind || '').trim() as MemoryFactKind;
-    if (!MEMORY_FACT_KINDS.has(kind)) {
-      continue;
-    }
-
-    const text = typeof entry.text === 'string'
-      ? trimCompactFactText(entry.text, MAX_MEMORY_FACT_TEXT_CHARS)
-      : '';
-    if (!text) {
-      continue;
-    }
-
+    if (!MEMORY_FACT_KINDS.has(kind)) continue;
+    const text = typeof entry.text === 'string' ? trimCompactFactText(entry.text, MAX_MEMORY_FACT_TEXT_CHARS) : '';
+    if (!text) continue;
     const dedupeKey = text.toLowerCase();
-    if (seenTexts.has(dedupeKey)) {
-      continue;
-    }
+    if (seenTexts.has(dedupeKey)) continue;
     seenTexts.add(dedupeKey);
-
-    const context = typeof entry.context === 'string'
-      ? trimCompactFactText(entry.context, MAX_MEMORY_FACT_CONTEXT_CHARS)
-      : undefined;
-
+    const context = typeof entry.context === 'string' ? trimCompactFactText(entry.context, MAX_MEMORY_FACT_CONTEXT_CHARS) : undefined;
     const rawAttribution = entry.attributedTo ?? entry.attributed_to;
     const attributedTo = MEMORY_FACT_ATTRIBUTIONS.has(String(rawAttribution || '').trim() as MemoryFactAttribution)
-      ? String(rawAttribution).trim() as MemoryFactAttribution
-      : undefined;
-
-    facts.push({
-      kind,
-      text,
-      ...(context ? { context } : {}),
-      ...(attributedTo ? { attributedTo } : {}),
-    });
+      ? String(rawAttribution).trim() as MemoryFactAttribution : undefined;
+    facts.push({ kind, text, ...(context ? { context } : {}), ...(attributedTo ? { attributedTo } : {}) });
   }
-
   return facts;
 }
 
@@ -560,7 +523,7 @@ export function buildCompactPromptText(options: {
     `Review the older candidate items above and finish by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
     'Rules:',
     '- Pass summary-block creations via createBlocksJson as a JSON array string. Use createBlocksJson: "[]" if you only need to remove previously preserved raw messages.',
-    '- Optionally pass durable extracted facts via memoryFactsJson as a JSON array string. Memory facts are separate from block summaries; they are used only for long-term semantic search and invalid/omitted facts will be ignored.',
+    '- Each createBlocksJson entry may include memoryFacts: an array of durable facts tied to exactly that source range. Invalid/omitted facts are ignored and never affect block creation; do not repeat them manually in summary prose.',
     '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
     '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim unless listed in removePreservedMessages.',
     '- Use preserveMessages for a small number of raw message seqs that must remain verbatim even though they are covered by a newly created message-source block. The system will extract them after the covering block in working history.',
@@ -592,11 +555,11 @@ export function buildCompactPromptText(options: {
     '- Informational range: "User shared X. Key identifiers: Y, Z. No decision yet."',
     '',
     'Memory facts:',
-    '- For memoryFactsJson, extract only durable facts worth future retrieval: explicit user decisions, preferences, project conventions, technical discoveries, environment/deploy constraints, or stable identifiers. Do not include trivial chat, tool mechanics, transient progress, or stale TODOs.',
+    '- Put durable facts only in the memoryFacts array of their matching createBlocksJson entry: explicit user decisions, preferences, project conventions, technical discoveries, environment/deploy constraints, or stable identifiers. Do not include trivial chat, tool mechanics, transient progress, or stale TODOs.',
     '- Each memory fact must be self-contained and understandable outside this conversation. Keep the original conversation language when practical. Use kind decision/preference/fact/convention/environment and attributedTo user/assistant/both when clear.',
     '',
     `You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including invalid-tool and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,
-    `Do not read or write agent memory during compaction. If durable project/user/workflow/rule facts should outlive this session, include them in memoryFactsJson and then call ${COMPACT_PLAN_TOOL_NAME}.`,
+    `Do not read or write agent memory during compaction. If durable project/user/workflow/rule facts should outlive this session, attach them to the matching createBlocksJson entry's memoryFacts and then call ${COMPACT_PLAN_TOOL_NAME}.`,
     '',
     ...(guidance ? ['Additional guidance from compaction requester:', guidance, ''] : []),
   );
@@ -613,6 +576,8 @@ function buildCompactPlanValidationSummary(details: CompactPlanValidationDetails
 
 function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPlanValidationDetails): LayeredCreateBlockPlan[] {
   let rawCreateBlocks = rawArgs.createBlocks;
+  const seenMemoryFactTexts = new Set<string>();
+  let remainingMemoryFacts = MAX_MEMORY_FACTS_PER_PLAN;
 
   if (typeof rawArgs.createBlocksJson === 'string' && rawArgs.createBlocksJson.trim()) {
     try {
@@ -668,7 +633,12 @@ function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPla
     if (sourceKind === 'block' && Number.isInteger(level) && level < 2) {
       details.createBlockErrors.push(`createBlocks[${index}] uses sourceKind=block so level must be >= 2.`);
     }
-    return [{ level, sourceKind, sourceStart, sourceEnd, summary } as LayeredCreateBlockPlan];
+    const memoryFacts = normalizeMemoryFacts((entry as any).memoryFacts, {
+      seenTexts: seenMemoryFactTexts,
+      maxFacts: remainingMemoryFacts,
+    });
+    remainingMemoryFacts -= memoryFacts.length;
+    return [{ level, sourceKind, sourceStart, sourceEnd, summary, ...(memoryFacts.length > 0 ? { memoryFacts } : {}) } as LayeredCreateBlockPlan];
   });
 }
 
@@ -880,7 +850,6 @@ export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateI
 
   return {
     createBlocks: normalizeCreateBlocks(rawArgs, noopDetails),
-    memoryFacts: normalizeMemoryFacts(rawArgs),
     preserveMessages: normalizePositiveIntegerArray(rawArgs, 'preserveMessages', noopDetails),
     removePreservedMessages: normalizePositiveIntegerArray(rawArgs, 'removePreservedMessages', noopDetails),
   };
@@ -892,6 +861,6 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
     error.message,
     'Use only ranges shown in one Segment header; do not cross segment boundaries, different block levels, or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
     'Use preserveMessages only for raw messages covered by a newly created message-source block; use removePreservedMessages only for messages listed as previously preserved in the prompt.',
-    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. Do not read or write agent memory during compaction; use memoryFactsJson for durable facts instead.`,
+    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. Do not read or write agent memory during compaction; attach durable facts to the matching createBlocksJson entry's memoryFacts instead.`,
   ].join(' ');
 }

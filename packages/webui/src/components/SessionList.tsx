@@ -1,6 +1,7 @@
 import { Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
+import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
 import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
@@ -40,6 +41,8 @@ interface SessionListProps {
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
+  idleNotificationModes: Record<string, SessionIdleNotificationMode>
+  onToggleIdleNotificationMode: (sessionId: string, mode: SessionIdleNotificationMode) => void
 }
 
 export default function SessionList({
@@ -75,6 +78,8 @@ export default function SessionList({
   onCreateTerminalTab,
   onCreateAgent,
   onCreateSession,
+  idleNotificationModes,
+  onToggleIdleNotificationMode,
 }: SessionListProps) {
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
@@ -150,6 +155,8 @@ export default function SessionList({
           currentSession={currentSession}
           onSelectSession={onSelectSession}
           onKeepSession={onKeepSession}
+          idleNotificationModes={idleNotificationModes}
+          onToggleIdleNotificationMode={onToggleIdleNotificationMode}
           dragEnabled={false}
           toolbarContainerClassName="mx-auto w-full max-w-4xl p-2 sm:p-4 sm:pb-2"
           listContainerClassName="mx-auto w-full max-w-4xl p-2 sm:p-4 sm:pt-1"

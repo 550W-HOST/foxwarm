@@ -57,11 +57,11 @@ test('shared write contentRef retry hints are executable and JSON-escape actual 
   const contentRef = 'write_ref"\\line\nvalue';
   assert.equal(
     formatWriteContentRefRetryHint(filePath, contentRef),
-    ' The attempted content is cached. To confirm overwriting without generating the same content again, call write({ filePath: "quoted \\"path\\"\\\\line\\nnote.txt", contentRef: "write_ref\\"\\\\line\\nvalue", overwrite: true }).',
+    ' The attempted content is already cached. Do not include or pass the `content` argument when using `contentRef`; it is unnecessary. To confirm overwriting, call write({ filePath: "quoted \\"path\\"\\\\line\\nnote.txt", contentRef: "write_ref\\"\\\\line\\nvalue", overwrite: true }). If you intentionally want to correct or replace the attempted content instead, omit `contentRef` and call `write` with the new `content` plus the same `filePath` and `overwrite: true`. Never pass `content` and `contentRef` together.',
   );
   assert.equal(
     formatWriteContentRefRetryHint(filePath, contentRef, true),
-    ' The attempted content is cached. To retry and create the missing parent directories without generating the same content again, call write({ filePath: "quoted \\"path\\"\\\\line\\nnote.txt", contentRef: "write_ref\\"\\\\line\\nvalue", overwrite: true, createDirs: true }).',
+    ' The attempted content is already cached. Do not include or pass the `content` argument when using `contentRef`; it is unnecessary. To retry and create the missing parent directories, call write({ filePath: "quoted \\"path\\"\\\\line\\nnote.txt", contentRef: "write_ref\\"\\\\line\\nvalue", overwrite: true, createDirs: true }). If you intentionally want to correct or replace the attempted content instead, omit `contentRef` and call `write` with the new `content` plus the same `filePath` and `createDirs: true`. Never pass `content` and `contentRef` together.',
   );
 });
 

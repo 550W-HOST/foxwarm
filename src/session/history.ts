@@ -38,7 +38,7 @@ import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatSessionGoalReminderText } from './goal';
-import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates } from './layeredContext';
+import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
 
 const TOOL_NOISE_TOKEN_THRESHOLD = 200;
@@ -135,6 +135,7 @@ type CompactJobOperation = {
   sourceEnd: number;
   sourceBlockIds?: number[];
   summary: string;
+  memoryFacts?: ExtractedMemoryFact[];
 };
 
 type CompactJobResult =
@@ -161,8 +162,8 @@ type CompactJobResult =
         rawStartSeq: number;
         rawEndSeq: number;
         summary: string;
+        memoryFacts?: ExtractedMemoryFact[];
       }>;
-      memoryFacts: ExtractedMemoryFact[];
       preserveMessages: Array<{ seq: number; operationIndex: number }>;
       removePreservedMessages: number[];
       replacedItemCount: number;
@@ -581,6 +582,12 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
       // they are dropped when an enclosing visible range is rewritten.
       continue;
     }
+    if (shouldRemoveOldCompactCompletionMessage(record.message)) {
+      // A previous compact-completed notice is replaced by the one emitted at
+      // the end of this successful commit. It is transparent here so it does
+      // not split otherwise legal ranges or enter a summary.
+      continue;
+    }
     if (shouldIgnoreMessageInCompactCandidates(record.message)) {
       // Model-visible lifecycle/session-boundary messages are protected hard
       // boundaries even though they are not useful summary candidates.
@@ -764,8 +771,27 @@ async function filterDisplayOnlyAndRemovedPreservedMessageFrontierItems(sessionI
   return removePreservedMessageFrontierItems(visibleFrontier, removePreservedSeqs);
 }
 
-export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; }> {
-  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; }> = [];
+async function removeOldCompactCompletionFrontierItems(sessionId: string, frontier: ContextFrontierItem[]): Promise<ContextFrontierItem[]> {
+  const messageSeqs = frontier
+    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
+    .map(item => item.seq);
+  if (messageSeqs.length === 0) {
+    return frontier;
+  }
+
+  const records = await readArchiveMessagesBySeqRange(sessionId, Math.min(...messageSeqs), Math.max(...messageSeqs));
+  const removableSeqs = new Set(records
+    .filter(record => shouldRemoveOldCompactCompletionMessage(record.message))
+    .map(record => record.seq));
+  if (removableSeqs.size === 0) {
+    return frontier;
+  }
+
+  return frontier.filter(item => item.kind !== 'message' || !removableSeqs.has(item.seq));
+}
+
+export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; memoryFacts?: ExtractedMemoryFact[]; }> {
+  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; memoryFacts?: ExtractedMemoryFact[]; }> = [];
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   for (let planIndex = 0; planIndex < plan.createBlocks.length; planIndex += 1) {
@@ -813,6 +839,7 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
         sourceStart: block.sourceStart,
         sourceEnd: block.sourceEnd,
         summary: block.summary,
+        memoryFacts: block.memoryFacts,
       });
       continue;
     }
@@ -862,6 +889,7 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
       sourceEnd: block.sourceEnd,
       sourceBlockIds,
       summary: block.summary,
+      memoryFacts: block.memoryFacts,
     });
   }
 
@@ -1006,7 +1034,6 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
         consumedFrontierCount: splitIndex,
         operations: [],
         createdBlocks: [],
-        memoryFacts: [],
         preserveMessages: [],
         removePreservedMessages: [],
         replacedItemCount: droppedDisplayOnlyCount,
@@ -1127,6 +1154,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       sourceEnd: operation.sourceEnd,
       sourceBlockIds: operation.sourceBlockIds,
       summary: operation.summary,
+      memoryFacts: operation.memoryFacts,
     })),
     createdBlocks: operations.map(operation => ({
       level: operation.level,
@@ -1137,8 +1165,8 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       rawStartSeq: operation.rawStartSeq,
       rawEndSeq: operation.rawEndSeq,
       summary: operation.summary,
+      memoryFacts: operation.memoryFacts,
     })),
-    memoryFacts: compactPlan.memoryFacts || [],
     preserveMessages,
     removePreservedMessages,
     replacedItemCount: operations.reduce((sum, operation) => sum + (operation.frontierEndIndex - operation.frontierStartIndex + 1), 0) + removePreservedMessages.length,
@@ -1183,7 +1211,10 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     rewrittenOlderFrontier.push(...await filterDisplayOnlyAndRemovedPreservedMessageFrontierItems(sessionId, olderFrontier.slice(cursor), removePreservedSeqs));
   }
 
-  const newFrontier = [...rewrittenOlderFrontier, ...currentFrontier.slice(result.consumedFrontierCount)];
+  const newFrontier = await removeOldCompactCompletionFrontierItems(
+    sessionId,
+    [...rewrittenOlderFrontier, ...currentFrontier.slice(result.consumedFrontierCount)],
+  );
 
   // Scan compacted messages for load_skill calls to remind agent after compaction
   const compactedSkillNames = extractCompactedSkillNames(session.history, result.consumedFrontierCount);
@@ -1200,19 +1231,19 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     compactedSkillNames,
   );
 
-  if (result.memoryFacts.length > 0 && createdRecords.length > 0) {
-    const sourceStartSeq = Math.min(...createdRecords.map(record => record.rawStartSeq));
-    const sourceEndSeq = Math.max(...createdRecords.map(record => record.rawEndSeq));
+  for (const record of createdRecords) {
+    if (!record.memoryFacts?.length) continue;
     void vector.indexMemoryFactsFromCompaction({
       sessionId,
       agent: session.agent || 'main',
-      facts: result.memoryFacts,
-      sourceKind: 'compact',
-      sourceStartSeq,
-      sourceEndSeq,
-      createdAt: Date.now(),
+      facts: record.memoryFacts,
+      sourceStartSeq: record.rawStartSeq,
+      sourceEndSeq: record.rawEndSeq,
+      blockId: record.id,
+      blockLevel: record.level,
+      createdAt: record.createdAt,
     }).catch((err) => {
-      logger.warn({ err, sessionId, factCount: result.memoryFacts.length }, 'Failed to index compact memory facts');
+      logger.warn({ err, sessionId, blockId: record.id, factCount: record.memoryFacts?.length || 0 }, 'Failed to index compact memory facts');
     });
   }
   return true;

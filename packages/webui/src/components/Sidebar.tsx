@@ -1,6 +1,7 @@
 import { PanelLeftClose, PanelLeftOpen, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { Session } from './SessionListCore'
+import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
 import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
@@ -42,6 +43,8 @@ interface SidebarProps {
   onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
   onToggleCollapsed: () => void
   isPeek?: boolean
+  idleNotificationModes: Record<string, SessionIdleNotificationMode>
+  onToggleIdleNotificationMode: (sessionId: string, mode: SessionIdleNotificationMode) => void
 }
 
 export default function Sidebar({
@@ -79,6 +82,8 @@ export default function Sidebar({
   onCreateSession,
   onToggleCollapsed,
   isPeek = false,
+  idleNotificationModes,
+  onToggleIdleNotificationMode,
 }: SidebarProps) {
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
@@ -162,6 +167,8 @@ export default function Sidebar({
           currentSession={currentSession}
           onSelectSession={onSelectSession}
           onKeepSession={onKeepSession}
+          idleNotificationModes={idleNotificationModes}
+          onToggleIdleNotificationMode={onToggleIdleNotificationMode}
           toolbarContainerClassName="p-2 pb-1"
           listContainerClassName="p-2 pt-1"
         />

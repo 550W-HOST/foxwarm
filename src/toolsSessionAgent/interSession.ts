@@ -19,23 +19,23 @@ import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  const { suffix, fork = false, message, node, noFurtherAssistantReply, waitForReply } = args;
+  const { suffix, fork = false, message, node, noFurtherAssistantReply, waitAfterHandoff } = args;
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
   }
-  if (waitForReply !== undefined && typeof waitForReply !== 'boolean') {
-    throw new Error('waitForReply must be a boolean when provided.');
+  if (waitAfterHandoff !== undefined && typeof waitAfterHandoff !== 'boolean') {
+    throw new Error('waitAfterHandoff must be a boolean when provided.');
   }
-  if (waitForReply === true && (typeof message !== 'string' || !message.trim())) {
-    throw new Error('create_child_session with waitForReply=true requires a non-empty initial message.');
+  if (waitAfterHandoff === true && (typeof message !== 'string' || !message.trim())) {
+    throw new Error('create_child_session with waitAfterHandoff=true requires a non-empty initial message.');
   }
 
   const currentSessionId = ctx.sessionId;
   const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork, { node });
 
   if (message) {
-    if (waitForReply === true) {
+    if (waitAfterHandoff === true) {
       await sessionManager.sendToSession(childSessionId, message, currentSessionId);
     } else {
       sessionManager.sendToSession(childSessionId, message, currentSessionId).catch(err => {
@@ -43,7 +43,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
       });
     }
     const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Initial message sent.`;
-    if (waitForReply === true) {
+    if (waitAfterHandoff === true) {
       return { output, __toolPostAction: { waitForReply: true } };
     }
     return noFurtherAssistantReply
@@ -58,21 +58,21 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 }
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
-  const { sessionId, message, noFurtherAssistantReply, waitForReply } = args;
+  const { sessionId, message, noFurtherAssistantReply, waitAfterHandoff } = args;
   const fromSessionId = ctx?.sessionId;
 
   if (!sessionId || typeof sessionId !== 'string') {
     throw new Error('sessionId is required');
   }
-  if (waitForReply !== undefined && typeof waitForReply !== 'boolean') {
-    throw new Error('waitForReply must be a boolean when provided.');
+  if (waitAfterHandoff !== undefined && typeof waitAfterHandoff !== 'boolean') {
+    throw new Error('waitAfterHandoff must be a boolean when provided.');
   }
 
   const result = await sessionManager.sendToSession(sessionId, message, fromSessionId);
   const output = result.resolvedSessionId !== result.requestedSessionId
     ? `Message sent to session \`${result.resolvedSessionId}\` (requested \`${result.requestedSessionId}\`)`
     : `Message sent to session \`${result.resolvedSessionId}\``;
-  if (waitForReply === true) {
+  if (waitAfterHandoff === true) {
     return { output, __toolPostAction: { waitForReply: true } };
   }
   return noFurtherAssistantReply
