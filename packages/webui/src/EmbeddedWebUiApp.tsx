@@ -10,6 +10,7 @@ import { API_BASE_PATH } from './config'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
 import { applyLatestSessionListRequest, createLatestSessionListRequestGate } from './sessionListRefresh'
+import { useSessionIdleNotifications } from './sessionIdleNotifications'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const SetupView = lazy(() => import('./components/SetupView'))
@@ -183,6 +184,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
   }, [])
 
   const { sessions, fetchSessions, loadError } = useEmbeddedSessions(fetchAgents)
+  const { idleNotificationModes, toggleIdleNotificationMode } = useSessionIdleNotifications(sessions)
 
   useEffect(() => {
     void fetchSettings()
@@ -293,7 +295,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
           </div>
         </div>
         <div className="min-h-0 flex-1 border-t border-gray-200 dark:border-gray-700">
-          <SessionListCore sessions={sessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} />
+          <SessionListCore sessions={sessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} onToggleIdleNotificationMode={toggleIdleNotificationMode} />
         </div>
       </div>
     </DndContext>

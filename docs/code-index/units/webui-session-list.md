@@ -1,7 +1,7 @@
 # Unit: webui-session-list
 
-Files: packages/webui/src/components/SessionListCore.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/sessionListPresentation.ts, packages/webui/src/sessionListDrag.ts, packages/webui/src/sessionRuntimeState.ts, packages/webui/test/sessionListDrag.test.mjs, packages/webui/test/sessionListDrag.e2e.mjs
-Secondary files: packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/scrollState.e2e.mjs
+Files: packages/webui/src/components/SessionListCore.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/sessionListPresentation.ts, packages/webui/src/sessionListDrag.ts, packages/webui/src/sessionRuntimeState.ts, packages/webui/test/sessionListDrag.test.mjs, packages/webui/test/sessionListDrag.e2e.mjs, packages/webui/test/sessionIdleNotifications.test.mjs
+Secondary files: packages/webui/src/components/ContextMenu.tsx, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/scrollState.e2e.mjs
 
 ## Purpose
 
@@ -21,6 +21,8 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 | `sessionMatchesFilter(session, normalizedQuery)` | ~70 | Case-insensitive predicate for session-list search |
 | `getRuntimeStateSummary(runtimeState)` (sessionRuntimeState.ts) | helper | Formats runtime-state badges such as `requesting model`, `tool: exec`, `waiting: sessions`, or `idle`. |
 | `isSessionRuntimeActive(session)` (sessionRuntimeState.ts) | helper | Treats `requesting-model` and `running-tool` as active, falling back to legacy `busy`. |
+| `useSessionIdleNotifications(sessions)` (sessionIdleNotifications.ts) | hook | Owns browser-local idle-notification modes and observes accepted global session-list snapshots once per list-data root. |
+| `SessionIdleNotificationTracker` (sessionIdleNotifications.ts) | helper | Tracks a session's observed busy cycle until its later canonical idle state. |
 | `getStoredAuthToken()` | ~55–70 | Retrieves auth token from localStorage with legacy migration |
 | `formatPromoteApiError(response)` | ~70–105 | Formats structured/non-JSON promote API errors for user-facing alerts |
 | `formatPromoteNetworkError(err, session?)` | ~107–120 | Formats fetch/network failures, including a busy-is-not-blocker note when relevant |
@@ -72,6 +74,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 - Session cwd remains part of `getSessionFilterFields`, so users can search by path, but cwd is not rendered in any row (desktop, mobile, or Code embedded sidebar). The selected session's cwd is presented in the Chat header instead.
 - Automatically expands ancestors for the current session as parent/tree metadata changes, but arms active-row scrolling only when the canonical `currentSession` selection actually changes. Unrelated `sessions-updated` refreshes must not pull a user-scrolled sidebar back to the active row.
 - Context menu provides archive/unarchive, rename, fork, and delete actions via REST API calls (using stored auth token)
+- Context menu presents `Notify on idle` as an ordinary menu-item row. Its main action controls `once`, while a separate trailing `always` checkbox stops event propagation before selecting/toggling that mode. A persistent Bell icon is outlined while disabled and active for either enabled mode; enablement stays browser-local and asks for browser notification permission without a backend request.
 - Context menu provides pin/unpin without adding a permanent row button; pinned rows carry a small pin indicator with accessible text.
 - Context menu provides move-up/promote-to-root actions for child sessions; frontend error handling preserves backend code/reason details and distinguishes API vs network failures.
 - Supports drag-and-drop via `@dnd-kit/core` for session reparenting/reordering and for opening sessions in workbench panes. The whole session row is draggable (no separate visible handle) while nested controls stop pointer propagation as needed. Sidebar sibling reorder drops are registered only in `Default` mode; parent/detach drops remain in `Time` mode and are disabled in `Flat` mode. This is dnd-kit's pointer sensor, not native HTML `draggable`.
@@ -93,6 +96,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 - Communicates with the backend via `fetch` to `API_BASE_PATH` endpoints (`/sessions/:id`, `/sessions/:id/fork`, `/sessions/:id/promote`)
 - Drag data (`type: 'session'`) integrates with a `@dnd-kit` `DndContext` higher in the component tree for session reparenting
 - `onSelectSession` and `onKeepSession` callbacks connect to the app's routing/tab management
+- Normal App and embedded sidebar list-data roots each provide the idle-notification hook once, then pass its settings/actions through list wrappers to `SessionListCore`; list presentation mounts never own notification baselines.
 - `onCreateTerminalTab` / `onCreateSession` connect to the app's tab system
 - `data-session-list-scroll-container` attribute is on the internal scrollable list area and is used by `findScrollableParent` to locate the scroll container for auto-scroll behavior
 - `packages/webui/src/sessionRuntimeState.ts` is shared by `SessionListCore`, collapsed sidebar, `ArchitectureView`, `Chat`, and `App` so all WebUI active-count/status behavior uses the same fallback rules.
@@ -102,3 +106,4 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 - [2026-07-14] Sidebar active-session positioning is selection-driven, not session-list-refresh-driven. Parent-map refreshes may expand the current session's ancestors, but only a canonical current-session ID change may arm `scrollIntoView`; ordinary runtime/history metadata broadcasts preserve the user's manual sidebar scroll.
 - [2026-07-20] Vertical touch scrolling in the mobile session list must never enter drag visuals/state. Disable row drag for the mobile/coarse-pointer UI and reject touch/pen drag activation while preserving desktop mouse drag/reorder; do not invent a long-press mobile reorder interaction.
 - [2026-07-20] Session-list rows do not display cwd, including desktop/mobile/Code-embedded reuse paths, but cwd remains searchable filter metadata. Present it in the selected Chat header subtitle instead.
+- [2026-07-24] `Notify on idle` is browser-local and is armed only after Notification API permission is granted. It fires only after an observed active busy phase (`requesting-model` or `running-tool`, with legacy `busy` fallback) returns to canonical/display `idle`; an active-to-`waiting` change does not fire and remains armed until idle. Enabling while idle waits for a later busy cycle, while enabling during an active phase arms that current cycle. `once` removes itself after delivery and `always` rearms for later cycles. Its ordinary menu-item main action selects or toggles off `once`; a separate trailing `always` checkbox stops propagation and selects or toggles off `always`, preserving mutual exclusion. A persistent Bell icon is outlined while disabled and active for either enabled mode. Baselines belong to the global list-data root rather than any `SessionListCore` presentation, avoiding duplicate notifications from component reuse without adding cross-tab coordination.

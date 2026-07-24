@@ -1,7 +1,7 @@
 # Unit: WebUI app
 
 Files: packages/webui/src/App.tsx, packages/webui/src/main.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/commitMarker.test.mjs
-Secondary files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/ChatTimeline.tsx
+Secondary files: packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ChatTimeline.tsx
 
 ## Purpose
 
@@ -29,10 +29,11 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Workbench supports split panes and drag/reorder for chat, terminal, Agents, Setup, and Code. Closing an active tab advances the hash to the store-selected fallback before hydration can recreate it.
 - `GET /setup/status` controls forced OOBE. Missing models route to `system:setup`; close requests are ignored until status no longer reports OOBE.
 - App owns model-settings navigation from Chat: it activates or creates the singleton `system:setup` tab through the workbench API and increments a transient Models-editor focus request.
-- Initial/global `GET /sessions` plus global `sessions-updated` stream serve Sidebar, Architecture, metadata, terminal list concerns, and title counts. A request gate prevents an older response overwriting a newer list.
+- Initial/global `GET /sessions` plus global `sessions-updated` stream serve Sidebar, Architecture, metadata, terminal list concerns, title counts, and the one root-owned browser idle-notification observer. A request gate prevents an older response overwriting a newer list.
 - Chat per-session runtime/history remains inside Chat.
 - Desktop expanded/collapsed sidebar and mobile shell share the same current tab records.
 - Browser-only theme, UI style, sidebar, send-key, last-tab/session, and Code preferences use local storage. Instance branding comes from server settings.
+- Idle-notification settings are browser-local too. App and the embedded sidebar each observe their accepted list snapshots once; the notification transition contract belongs to [webui-session-list](./webui-session-list.md#design-decisions).
 
 ## Embedded leaf roots
 
