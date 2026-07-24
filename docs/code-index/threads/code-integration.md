@@ -28,7 +28,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 - `API_BASE_PATH` is converted to the deployment-relative `/vscode-web/` path; launch URLs preserve reverse-proxy prefixes.
 - Embedded mode owns one persistent top-level iframe portal. Inactive workbench tabs hide/reposition it rather than unmounting it.
 - Parent/workbench communication is versioned, exact-origin/source checked, and allowlisted to add-folder, open-file, and open-commit request shapes with acknowledgements.
-- Direct `read`, `write`, `edit`, and `apply_patch` tool paths may become open-file actions after exact node/cwd/path resolution. Memory tools, nested descriptors, and ambiguous paths remain inert.
+- Direct `read`, `write`, `edit`, and actionable `apply_patch` tool paths remain plain text; after exact node/cwd/path resolution, an adjacent icon-only Code action may issue the open-file request. See [D-webui-tool-call-region](../units/webui-tool-timeline.md#d-webui-tool-call-region) for the interaction contract. Memory tools, nested descriptors, and ambiguous paths remain inert.
 - New-tab mode carries initial target parameters; it does not control an already-open tab.
 
 ## Files, services, and terminals

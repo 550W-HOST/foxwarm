@@ -1,6 +1,6 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
-import type { KeyboardEvent, ReactNode } from 'react'
-import { Eye, FileJson, Download } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { Code2, Eye, FileJson, Download } from 'lucide-react'
 import {
   IconToggleButton,
   MiniToggleButton,
@@ -153,25 +153,26 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
   const layoutClass = collapsed
     ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full truncate whitespace-nowrap'
     : 'min-w-0 max-w-full whitespace-normal break-words'
-  if (!onOpenCodeFile) return <span className={layoutClass}>{prefix}{filePath}</span>
+  const pathClass = collapsed
+    ? 'foxwarm-tool-code-path min-w-0 truncate whitespace-nowrap'
+    : 'foxwarm-tool-code-path whitespace-normal break-words'
+  if (!onOpenCodeFile) return <span className={`${layoutClass} ${pathClass}`}>{prefix}{filePath}</span>
   return (
-    <span
-      role="button"
-      tabIndex={0}
-      className={`foxwarm-tool-code-path ${layoutClass} text-left hover:underline cursor-pointer`}
-      title={`Open ${filePath} in Code`}
-      onClick={(event) => {
-        event.stopPropagation()
-        onOpenCodeFile(filePath, lines)
-      }}
-      onKeyDown={(event: KeyboardEvent<HTMLSpanElement>) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return
-        event.preventDefault()
-        event.stopPropagation()
-        onOpenCodeFile(filePath, lines)
-      }}
-    >
-      {prefix}{filePath}
+    <span className={`foxwarm-tool-code-path-wrap ${layoutClass} ${collapsed ? 'inline-flex items-baseline gap-1' : ''}`}>
+      {prefix}
+      <button
+        type="button"
+        className="foxwarm-tool-code-open inline-flex shrink-0 p-0 align-text-bottom leading-none text-current hover:opacity-70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1"
+        title={`Open ${filePath} in Code`}
+        aria-label={`Open ${filePath} in Code`}
+        onClick={(event) => {
+          event.stopPropagation()
+          onOpenCodeFile(filePath, lines)
+        }}
+      >
+        <Code2 size={13} aria-hidden="true" />
+      </button>
+      <span className={pathClass}>{filePath}</span>
     </span>
   )
 })

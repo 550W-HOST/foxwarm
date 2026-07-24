@@ -93,16 +93,18 @@ test('new-tab commit targets are encoded as typed startup URL parameters', () =>
   assert.equal(url.searchParams.get('openCommitId'), '85ad4d1b')
 })
 
-test('tool Code paths keep native text styling and only add link affordance', async () => {
+test('tool Code paths keep plain text and expose only an adjacent native icon action', async () => {
   const source = await readFile(path.join(webuiRoot, 'src/components/ToolTimelineItems.tsx'), 'utf8')
   const start = source.indexOf('const ToolCodePath')
   const end = source.indexOf('const isLegacyDiffToolName', start)
   const component = start >= 0 && end > start ? source.slice(start, end) : ''
-  assert.match(component, /hover:underline cursor-pointer/)
-  assert.match(component, /role="button"/)
-  assert.match(component, /tabIndex=\{0\}/)
-  assert.match(component, /event\.key !== 'Enter' && event\.key !== ' '/)
+  assert.match(component, /<button/)
+  assert.match(component, /type="button"/)
+  assert.match(component, /foxwarm-tool-code-open/)
+  assert.match(component, /aria-label=\{`Open \$\{filePath\} in Code`\}/)
+  assert.match(component, /<Code2 size=\{13\} aria-hidden="true"/)
   assert.match(component, /onOpenCodeFile\(filePath, lines\)/)
-  assert.doesNotMatch(component, /<button/)
-  assert.doesNotMatch(component, /Code2|text-blue|dark:text-blue|h-3|w-3/)
+  assert.match(component, /<span className=\{pathClass\}>\{filePath\}<\/span>/)
+  assert.doesNotMatch(component, /role="button"|tabIndex=/)
+  assert.doesNotMatch(component, /hover:underline cursor-pointer|text-blue|dark:text-blue/)
 })

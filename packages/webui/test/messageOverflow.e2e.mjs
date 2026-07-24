@@ -40,7 +40,7 @@ const fixtureMarkup = `
     </section>
     <section id="tool-card" class="foxwarm-tool-card min-w-0 max-w-full w-full text-xs font-mono">
       <div id="tool-line" class="flex min-w-0 max-w-full items-start">
-        <span id="tool-code-path" role="button" tabindex="0" class="foxwarm-tool-code-path min-w-0 max-w-full whitespace-normal break-words text-left">${longPath}</span>
+        <span id="tool-code-path" class="foxwarm-tool-code-path min-w-0 max-w-full whitespace-normal break-words text-left">${longPath}</span>
       </div>
     </section>
   </main>

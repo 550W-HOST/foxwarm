@@ -1,6 +1,6 @@
 # Unit: WebUI app
 
-Files: packages/webui/src/App.tsx, packages/webui/src/main.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/commitMarker.test.mjs
+Files: packages/webui/src/App.tsx, packages/webui/src/main.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/commitMarker.test.mjs, packages/webui/test/codeFrame550aOverlay.e2e.mjs
 Secondary files: packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ChatTimeline.tsx
 
 ## Purpose
@@ -50,7 +50,7 @@ These are independent roots, not CSS-hidden full App instances. Active-target me
 
 ## Code and commit behavior
 
-- Embedded launch creates one singleton Code tab while the iframe lives in a top-level persistent portal. Tab changes hide/reposition it rather than remounting.
+- Embedded launch creates one singleton Code tab while the iframe lives in a top-level persistent portal. Tab changes hide/reposition it rather than remounting. In the 550A style, the full-screen scanline overlay remains above normal WebUI content but below this persistent iframe so the Code workbench stays visually unobscured and interactive.
 - File-tool paths become typed open-file requests only after node/path/cwd normalization; `read` ranges become selections.
 - Strict standalone model-authored commit markers outside code fences render inert cards. Click dispatches typed `openCommit`; malformed/user markers remain text.
 - New-tab URLs carry one-shot targets. Running iframe transfer/pop-out is not implemented.
