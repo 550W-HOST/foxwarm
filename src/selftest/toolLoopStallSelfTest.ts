@@ -448,8 +448,7 @@ async function main(): Promise<void> {
         }
 
         if (llmCallCount === 5) {
-          assert(Array.isArray(parts));
-          assert(parts.some(part => part.text === 'compact this session now'));
+          assert.strictEqual(parts, null);
           assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
           await appendStubModelMessage(activeSession, [{ text: 'continued after compact' }]);
           return { text: 'continued after compact' };

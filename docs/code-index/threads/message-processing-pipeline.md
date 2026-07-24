@@ -79,6 +79,10 @@ Retries are observable but not model-visible. One updatable display-only notice 
 
 `/retry` retries a failed/pending LLM turn from current history. `/stop` preserves queued work; `/dequeue` proceeds with it.
 
+### D-pipeline-dispatched-parts-ownership
+
+`runSessionTurn` retains `parts` only until a successful `llm.chat(parts, ...)` returns, because that call has appended non-null parts to canonical history. The router clears dispatched parts immediately after that return. A compaction boundary before a provider call therefore keeps unsent input for the subsequent call, while a compact commit between tool iterations cannot replay already-persisted input or merge it into later queued input.
+
 ### D-pipeline-handoff-wait
 
 `send_to_session` and `create_child_session` accept an exact optional `waitAfterHandoff` boolean; the former `waitForReply` name is not read as an alias. After a successful delivery (and, for child creation, a required non-empty initial message whose send is awaited), the handler emits only a hidden post-batch request. The router first appends the complete tool-result message and finishes tool progress, then reuses the existing persisted generic `startSessionWait` state once and stops LLM recursion. Replies are delivered normally whether the option is true or false; the option only controls whether the successful handoff ends the current turn in a generic any-event wait. The wait is not target-filtered and is not a completion promise. Fast replies already queued before arming are consumed immediately after the handoff turn stops. Multiple successful requests coalesce; a failed handoff requests no wait; a successful flagged handoff still waits when a sibling tool fails. The older explicit `wait` pattern remains supported. If an ordinary explicit wait loses its stop signal because a sibling tool failed, it clears only the wait token it created so no stale wait remains.

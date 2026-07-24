@@ -3,7 +3,51 @@ import assert from 'node:assert/strict';
 import { MessageRouter, shouldBroadcastChannelText } from './messageRouter';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
-import type { Message, Session } from './types';
+import type { Message, MessagePart, Session } from './types';
+
+function makeRouterQueueTestId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function createRouterQueueTestSession(prefix: string): Promise<Session> {
+  await sessionManager.loadSessions();
+  const session = await sessionManager.getSession(makeRouterQueueTestId(prefix)) as Session;
+  session.history = [];
+  session.contextFrontier = [];
+  session.nextMessageSeq = 1;
+  session.nextBlockId = 1;
+  session.persistentMemorySnapshot = 'system prompt';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = false;
+  session.queue = [];
+  session.meta = { lastMessageTime: Date.now() };
+  await sessionManager.saveSession(session.id);
+  return session;
+}
+
+async function appendMockChatMessages(
+  session: Session,
+  parts: MessagePart[] | null,
+  modelParts: MessagePart[],
+): Promise<void> {
+  if (parts) {
+    await sessionManager.appendSessionMessage(session, { role: 'user', parts });
+  }
+  if (modelParts.length > 0) {
+    await sessionManager.appendSessionMessage(session, { role: 'model', parts: modelParts });
+  }
+}
+
+function userTextOccurrences(session: Session, text: string): number {
+  return session.history
+    .filter(message => message.role === 'user')
+    .filter(message => message.parts.some(part => part.text === text))
+    .length;
+}
+
+function hasPartText(parts: MessagePart[] | null, text: string): boolean {
+  return !!parts?.some(part => part.text === text);
+}
 
 test('shouldBroadcastChannelText rejects empty or whitespace-only text', () => {
   assert.equal(shouldBroadcastChannelText(''), false);
@@ -478,7 +522,7 @@ test('stop signal preserves queued work until a later trigger', async () => {
   }
 });
 
-test('dequeue signal stops the current turn and immediately continues queued work', async () => {
+test('dequeue signal drains queued work once after a compact-commit boundary', async () => {
   const router = new MessageRouter() as any;
   const sessionId = `dequeue_continue_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const session = await sessionManager.getSession(sessionId) as Session;
@@ -502,6 +546,7 @@ test('dequeue signal stops the current turn and immediately continues queued wor
     return { text: 'queued response', allParts: [{ text: 'queued response' }] };
   };
   (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(sessionId, { type: 'compact-commit' });
     await sessionManager.enqueueSessionItem(sessionId, { type: 'user', parts: [{ text: 'queued for dequeue' }] });
     await sessionManager.requestSessionDequeue(sessionId);
     return { parts: [{ functionResponse: { tool_use_id: 'dequeue-tool', name: 'read', response: { output: 'dequeued' } } }] };
@@ -512,11 +557,187 @@ test('dequeue signal stops the current turn and immediately continues queued wor
 
     assert.equal(seenParts.length, 2);
     assert.equal(seenParts[1].some((part: any) => part.text === 'queued for dequeue'), true);
+    assert.equal(seenParts[1].some((part: any) => part.text === 'start current turn'), false);
     assert.equal(session.queue.length, 0);
     assert.equal(session.busy, false);
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter does not replay dispatched parts after an async compact commit during tools', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('async_compact_commit_no_replay');
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const seenParts: Array<MessagePart[] | null> = [];
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    seenParts.push(parts);
+    if (seenParts.length === 1) {
+      const toolCall = { id: 'compact-race-tool', name: 'read', args: { filePath: 'README.md' } };
+      await appendMockChatMessages(activeSession, parts, [{ functionCall: toolCall }]);
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    await appendMockChatMessages(activeSession, parts, [{ text: 'continued after compact commit' }]);
+    return { text: 'continued after compact commit', allParts: [{ text: 'continued after compact commit' }] };
+  };
+  (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(session.id, { type: 'compact-commit' });
+    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'compact-race-tool', name: 'read', response: { output: 'ok' } } }] };
+  };
+  (sessionManager as any).applyCompletedCompactJob = async () => {
+    await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: 'compact commit applied' }] });
+    return true;
+  };
+
+  try {
+    await router.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+
+    assert.equal(hasPartText(seenParts[0], 'A'), true);
+    assert.equal(seenParts[1], null);
+    assert.equal(userTextOccurrences(session, 'A'), 1);
+    assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter keeps a queued user item behind compact commit separate from dispatched parts', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('async_compact_commit_queued_input');
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const seenParts: Array<MessagePart[] | null> = [];
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    seenParts.push(parts);
+    if (seenParts.length === 1) {
+      const toolCall = { id: 'compact-barrier-tool', name: 'read', args: { filePath: 'README.md' } };
+      await appendMockChatMessages(activeSession, parts, [{ functionCall: toolCall }]);
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    await appendMockChatMessages(activeSession, parts, [{ text: 'Q handled' }]);
+    return { text: 'Q handled', allParts: [{ text: 'Q handled' }] };
+  };
+  (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(session.id, { type: 'compact-commit' });
+    await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'Q' }] });
+    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'compact-barrier-tool', name: 'read', response: { output: 'ok' } } }] };
+  };
+  (sessionManager as any).applyCompletedCompactJob = async () => {
+    await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: 'compact commit applied' }] });
+    return true;
+  };
+
+  try {
+    await router.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+
+    assert.equal(hasPartText(seenParts[0], 'A'), true);
+    assert.equal(hasPartText(seenParts[1], 'Q'), true);
+    assert.equal(hasPartText(seenParts[1], 'A'), false);
+    assert.equal(userTextOccurrences(session, 'A'), 1);
+    assert.equal(userTextOccurrences(session, 'Q'), 1);
+    assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter preserves an already-consumed follow-up once when compact commit arrives in its tool loop', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('async_compact_commit_suffix');
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const seenParts: Array<MessagePart[] | null> = [];
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    seenParts.push(parts);
+    if (seenParts.length < 3) {
+      const toolCall = { id: `suffix-tool-${seenParts.length}`, name: 'read', args: { filePath: 'README.md' } };
+      await appendMockChatMessages(activeSession, parts, [{ functionCall: toolCall }]);
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    await appendMockChatMessages(activeSession, parts, [{ text: 'suffix preserved' }]);
+    return { text: 'suffix preserved', allParts: [{ text: 'suffix preserved' }] };
+  };
+  let toolRuns = 0;
+  (llm as any).executeTools = async () => {
+    toolRuns += 1;
+    if (toolRuns === 1) {
+      await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'Q' }] });
+    } else {
+      await sessionManager.enqueueSessionItem(session.id, { type: 'compact-commit' });
+    }
+    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: `suffix-tool-${toolRuns}`, name: 'read', response: { output: 'ok' } } }] };
+  };
+  (sessionManager as any).applyCompletedCompactJob = async () => {
+    await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: 'compact commit applied' }] });
+    return true;
+  };
+
+  try {
+    await router.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+
+    assert.equal(hasPartText(seenParts[0], 'A'), true);
+    assert.equal(hasPartText(seenParts[1], 'Q'), true);
+    assert.equal(seenParts[2], null);
+    assert.equal(userTextOccurrences(session, 'A'), 1);
+    assert.equal(userTextOccurrences(session, 'Q'), 1);
+    assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter retains unsent parts across a pre-LLM compact boundary', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('pre_llm_compact_keeps_parts');
+  const originalChat = llm.chat;
+  const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const seenParts: Array<MessagePart[] | null> = [];
+  session.queue.push({ type: 'compact-commit' });
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    seenParts.push(parts);
+    await appendMockChatMessages(activeSession, parts, [{ text: 'A handled after compact' }]);
+    return { text: 'A handled after compact', allParts: [{ text: 'A handled after compact' }] };
+  };
+  (sessionManager as any).applyCompletedCompactJob = async () => {
+    await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: 'compact commit applied' }] });
+    return true;
+  };
+
+  try {
+    await router.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+
+    assert.equal(hasPartText(seenParts[0], 'A'), true);
+    assert.equal(userTextOccurrences(session, 'A'), 1);
+    assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
+  } finally {
+    (llm as any).chat = originalChat;
+    (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
