@@ -48,6 +48,7 @@ The helper script:
 - uses `tools: [{ type: "web_search" }]` by default, with `tool_choice: "required"`
 - supports custom OpenAI-compatible base URLs
 - falls back to Gemini with `google_search` when OpenAI is not configured and Gemini is configured
+- uses a shared 240-second request timeout for both OpenAI and Gemini searches
 - can read existing Foxwarm model configuration to list GPT candidates or copy a selected GPT entry into local web-search secret files without exposing the API key
 - defaults to OpenAI model `gpt-5.5` and Gemini model `gemini-2.5-flash`
 - prints only the answer/reference content on success

@@ -38,7 +38,7 @@ const DEFAULT_OPENAI_WEB_SEARCH_TOOL = 'web_search';
 const DEFAULT_OPENAI_TOOL_CHOICE = 'required';
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 const DEFAULT_PROVIDER = 'auto';
-const DEFAULT_TIMEOUT_MS = 120000;
+const WEB_SEARCH_REQUEST_TIMEOUT_MS = 240000;
 const BASE_DIR = path.resolve(__dirname, '../..');
 
 const DEFAULT_SYSTEM_INSTRUCTION = [
@@ -811,7 +811,7 @@ async function callOpenAI(config, question) {
         Authorization: `Bearer ${config.apiKey}`,
         'Content-Type': 'application/json',
       },
-      timeout: DEFAULT_TIMEOUT_MS,
+      timeout: WEB_SEARCH_REQUEST_TIMEOUT_MS,
     },
   );
 
@@ -858,7 +858,7 @@ async function callGemini(config, question) {
         'x-goog-api-key': config.apiKey,
         'Content-Type': 'application/json',
       },
-      timeout: DEFAULT_TIMEOUT_MS,
+      timeout: WEB_SEARCH_REQUEST_TIMEOUT_MS,
     },
   );
 
@@ -1002,4 +1002,5 @@ if (require.main === module) {
 module.exports = {
   findGptModelCandidates,
   chooseGptCandidate,
+  WEB_SEARCH_REQUEST_TIMEOUT_MS,
 };

@@ -24,15 +24,20 @@ async function buildFixtureBundle() {
     const calls = {
       exec: { id: 'exec-call', name: 'exec', args: { command: 'printf ' + 'very-long-command-argument '.repeat(40) } },
       wait: { id: 'wait-call', name: 'wait', args: { reason: 'very-long-wait-reason '.repeat(50), timeoutSeconds: 0, waitAllSessions: [], waitExecIds: [] } },
+      read: { id: 'read-call', name: 'read', args: { filePath: longPath, startLine: 7, endLine: 13 } },
+      write: { id: 'write-call', name: 'write', args: { filePath: longPath, content: 'updated content' } },
       edit: { id: 'edit-call', name: 'edit', args: { filePath: longPath, oldText: 'before', newText: 'after' } },
+      apply: { id: 'apply-call', name: 'apply_patch', args: { input: ['*** Begin Patch', '*** Update File: ' + longPath, '@@', '-before', '+after', '*** End Patch'].join('\\n') } },
     }
 
     window.openedCodePaths = []
     const onOpenCodeFile = (filePath, lines) => window.openedCodePaths.push({ filePath, lines })
-    for (const name of ['exec', 'wait', 'edit']) {
+    for (const name of ['exec', 'wait', 'read', 'write', 'edit', 'apply']) {
       const msg = { role: 'model', parts: [{ functionCall: calls[name] }], __meta: { timestamp: Date.now() } }
       createRoot(document.getElementById(name)).render(React.createElement(ToolCallsBlock, { msg, onOpenCodeFile }))
     }
+    const noCodeMsg = { role: 'model', parts: [{ functionCall: calls.write }], __meta: { timestamp: Date.now() } }
+    createRoot(document.getElementById('write-no-code')).render(React.createElement(ToolCallsBlock, { msg: noCodeMsg }))
   `
   const result = await build({
     stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'tool-collapsed-overflow-fixture.tsx' },
@@ -55,7 +60,7 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
     if (style === '550a') document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
     else document.documentElement.removeAttribute('data-foxwarm-ui-style')
   }, { style, dark })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 3)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 7)
 }
 
 async function readCollapsedLayout(name) {
@@ -115,7 +120,7 @@ before(async () => {
 
   server = createServer((request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main><div id="exec" class="fixture"></div><div id="wait" class="fixture"></div><div id="edit" class="fixture"></div></main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['exec', 'wait', 'read', 'write', 'edit', 'apply', 'write-no-code'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
@@ -134,15 +139,47 @@ after(async () => {
   await new Promise((resolve) => server?.close(resolve))
 })
 
-test('desktop collapsed exec/wait/edit summaries stay one-line ellipsized and Code opens', async () => {
+test('desktop collapsed exec/wait/edit summaries stay one-line ellipsized and direct file paths use icon-only Code actions', async () => {
   await mountFixture({ width: 900, height: 700 })
   await assertCollapsedTools()
 
-  await page.click('#edit .foxwarm-tool-code-path')
-  assert.equal((await page.evaluate(() => window.openedCodePaths.length)), 1, 'collapsed visible Code path keeps its bridge action')
-  assert.equal(await page.$eval('#edit .foxwarm-tool-card', (card) => card.querySelectorAll('.foxwarm-diff-preview').length), 0, 'Code click must not expand the card')
+  const collapsedAlignment = await page.$eval('#edit .foxwarm-tool-code-path-wrap', (wrap) => {
+    const button = wrap.querySelector('.foxwarm-tool-code-open')
+    const path = wrap.querySelector('.foxwarm-tool-code-path')
+    const buttonRect = button.getBoundingClientRect()
+    const pathRect = path.getBoundingClientRect()
+    return Math.abs((buttonRect.top + buttonRect.height / 2) - (pathRect.top + pathRect.height / 2))
+  })
+  assert.ok(collapsedAlignment <= 1, 'collapsed Code icon and path share a centered cross axis')
 
-  await page.click('#edit .foxwarm-tool-tag')
+  for (const id of ['read', 'write', 'edit', 'apply']) {
+    const pathAction = await page.$eval(`#${id} .foxwarm-tool-code-open`, (button) => ({
+      tagName: button.tagName,
+      tabIndex: button.tabIndex,
+      pathTagName: button.nextElementSibling?.tagName,
+      pathRole: button.nextElementSibling?.getAttribute('role'),
+      pathTabIndex: button.nextElementSibling?.getAttribute('tabindex'),
+    }))
+    assert.deepEqual(pathAction, { tagName: 'BUTTON', tabIndex: 0, pathTagName: 'SPAN', pathRole: null, pathTabIndex: null })
+    await page.click(`#${id} .foxwarm-tool-code-open`)
+  }
+  assert.deepEqual(await page.evaluate(() => window.openedCodePaths), [
+    { filePath: '/workspace/' + 'deep-directory-segment/'.repeat(20) + 'target-file.tsx', lines: { startLine: 7, endLine: 13 } },
+    { filePath: '/workspace/' + 'deep-directory-segment/'.repeat(20) + 'target-file.tsx' },
+    { filePath: '/workspace/' + 'deep-directory-segment/'.repeat(20) + 'target-file.tsx' },
+    { filePath: '/workspace/' + 'deep-directory-segment/'.repeat(20) + 'target-file.tsx' },
+  ], 'icon actions retain direct-path and read-range bridge requests')
+  assert.equal(await page.$eval('#edit .foxwarm-tool-card', (card) => card.querySelectorAll('.foxwarm-diff-preview').length), 0, 'Code click must not expand the card')
+  assert.equal(await page.$('#write-no-code .foxwarm-tool-code-open'), null, 'paths without the current Code handler have no action icon')
+
+  await page.focus('#write .foxwarm-tool-code-open')
+  await page.keyboard.press('Enter')
+  assert.equal((await page.evaluate(() => window.openedCodePaths.length)), 5, 'the icon keeps native keyboard activation')
+
+  await page.click('#edit .foxwarm-tool-code-path')
+  await page.waitForSelector('#edit .foxwarm-tool-call-args')
+  assert.equal((await page.evaluate(() => window.openedCodePaths.length)), 5, 'plain path text follows the header collapse action instead of opening Code')
+
   await page.waitForSelector('#edit .foxwarm-diff-preview')
   const expandedPath = await page.$eval('#edit .foxwarm-tool-code-path', (path) => {
     const style = getComputedStyle(path)
@@ -158,6 +195,12 @@ test('desktop collapsed exec/wait/edit summaries stay one-line ellipsized and Co
   assert.ok(['anywhere', 'break-word'].includes(expandedPath.overflowWrap))
   assert.ok(expandedPath.height > expandedPath.lineHeight * 1.5, 'expanded long path wraps onto multiple lines')
   assert.ok(expandedPath.rootOverflow <= 1)
+  const expandedAlignment = await page.$eval('#edit .foxwarm-tool-call-args .foxwarm-tool-code-path-wrap', (wrap) => {
+    const button = wrap.querySelector('.foxwarm-tool-code-open')
+    const path = wrap.querySelector('.foxwarm-tool-code-path')
+    return Math.abs(button.getBoundingClientRect().top - path.getBoundingClientRect().top)
+  })
+  assert.ok(expandedAlignment <= 1, 'expanded Code icon aligns with the first path text line')
 
   await page.click('#exec .foxwarm-tool-tag')
   const expandedExec = await page.$eval('#exec .foxwarm-tool-call-args .whitespace-pre-wrap', (content) => {

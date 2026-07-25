@@ -225,7 +225,7 @@ test('default desktop keeps call args in the dark header and results on the ligh
   await mountFixture({ width: 900, height: 800 })
   for (const id of ['exec', 'edit', 'error']) assertCollapsed(await readVisualState(id))
 
-  await page.click('#edit .foxwarm-tool-code-path')
+  await page.click('#edit .foxwarm-tool-code-open')
   assert.equal(await page.evaluate(() => window.openedCodePaths.length), 1)
   assert.equal(await page.$eval('#edit', root => !!root.querySelector('.foxwarm-tool-call-args')), false, 'Code click does not expand')
 
@@ -233,7 +233,7 @@ test('default desktop keeps call args in the dark header and results on the ligh
     await page.click(`#${id} .foxwarm-tool-tag`)
     assertExpanded(await readVisualState(id), { hasResult: id !== 'noResult' })
   }
-  await page.click('#edit .foxwarm-tool-call-args .foxwarm-tool-code-path')
+  await page.click('#edit .foxwarm-tool-call-args .foxwarm-tool-code-open')
   assert.equal(await page.evaluate(() => window.openedCodePaths.length), 2)
   assert.equal(await page.$eval('#edit', root => !!root.querySelector('.foxwarm-tool-call-args')), true, 'expanded Code click does not collapse')
   const exec = await readVisualState('exec')
