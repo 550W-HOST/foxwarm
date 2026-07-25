@@ -11,7 +11,7 @@ import { buildChildReminder, isModelNoActionSignal } from './session/childSessio
 import { getManagedSessionState, isManagedSessionActive, setManagedSessionState } from './session/managedState';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
-import { maybeBuildGoalEndTurnReminderMessage } from './session/goal';
+import { maybeBuildGoalEndTurnReminderMessage, maybeBuildGoalReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
@@ -751,6 +751,18 @@ export class MessageRouter {
     await sessionManager.appendSessionMessage(session, reminder);
   }
 
+  private async maybeAppendGoalIntervalReminder(session: Session): Promise<void> {
+    const reminder = maybeBuildGoalReminderMessage(session);
+    if (!reminder) {
+      return;
+    }
+
+    // Interval reminders are canonical history context for the request about to
+    // be sent. They are not session work: queueing one would defer visibility
+    // until after the current turn and create a synthetic reminder-only turn.
+    await sessionManager.appendSessionMessage(session, reminder);
+  }
+
   private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean, turnOptions?: Record<string, any>): Promise<boolean> {
     if (!alreadyBroadcasted && shouldBroadcastChannelText(response)) {
       await this.sendSessionReply(session, sourceCtx, response, this.mergeTurnOptions(turnOptions || {}, { excludePlatforms: ['webui'], turnFinal: true }));
@@ -1003,6 +1015,11 @@ export class MessageRouter {
             : '_[Execution stopped by user]_';
           break;
         }
+
+        // This is the safe boundary immediately before a provider call: queued
+        // inputs and the preceding tool result have already been persisted, so
+        // an interval reminder cannot split a function call from its result.
+        await this.maybeAppendGoalIntervalReminder(session);
 
         this.emitTurnProgress(broadcast, turnChannelOptions, { type: 'llm-start' });
         sessionManager.setActiveSessionRuntimeState(session.id, {

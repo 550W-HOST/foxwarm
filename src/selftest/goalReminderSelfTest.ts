@@ -43,10 +43,6 @@ async function cleanupSessions(sessionIds: string[]): Promise<void> {
   }
 }
 
-async function append(session: Session, message: Message): Promise<void> {
-  await sessionManager.appendSessionMessage(session, message);
-}
-
 async function appendStubUserMessage(session: Session, parts: Message['parts'] | null): Promise<void> {
   if (!parts?.length) {
     return;
@@ -83,6 +79,7 @@ async function main(): Promise<void> {
   await sessionManager.loadSessions();
 
   const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
   const router = new MessageRouter();
@@ -110,88 +107,68 @@ async function main(): Promise<void> {
       assert.strictEqual(session.goalState, undefined);
     });
 
-    await test('goal reminder counts exact later non-reminder messages and repeats within the same busy tool loop', async () => {
-      const sessionId = makeSessionId('selftest_goal_loop');
+    await test('interval reminder is appended before the first provider call, not queued, and suppresses its end-turn companion', async () => {
+      const sessionId = makeSessionId('selftest_goal_pre_provider');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
 
+      await tool_set_goal({ goal: '- [ ] preserve the active work', remindEvery: 1 }, { sessionId, session });
+      session.queue.push({
+        type: 'intersession',
+        message: {
+          role: 'user',
+          parts: [{ system: '<foxwarm-message type="inter-agent">continue the active work</foxwarm-message>' }],
+        },
+      });
+
+      let chatCalls = 0;
       (llm as any).chat = async (parts: Message['parts'] | null, activeSession: Session) => {
         assert.strictEqual(activeSession.id, sessionId);
-        await appendStubUserMessage(activeSession, parts);
-        await appendStubModelMessage(activeSession, '[NO_ACTION]');
-        return { text: '[NO_ACTION]' };
+        chatCalls += 1;
+        assert.strictEqual(parts, null);
+        assert.strictEqual(countGoalReminders(activeSession), 1);
+        assert.strictEqual(activeSession.queue.length, 0);
+
+        const waitCall = { id: 'wait-1', name: 'wait', args: { timeoutSeconds: 0 } };
+        await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ functionCall: waitCall }] });
+        return { text: '', toolCalls: [waitCall] };
+      };
+      (llm as any).executeTools = async () => {
+        const toolResult = {
+          role: 'tool' as const,
+          parts: [{ functionResponse: { tool_use_id: 'wait-1', name: 'wait', response: { output: 'ok' } } }],
+        } as any;
+        toolResult.__toolPostAction = { waitForReply: true };
+        return toolResult;
       };
 
-      await append(session, {
-        role: 'model',
-        parts: [{ functionCall: { id: 'set-goal-1', name: 'set_goal', args: { goal: '- [ ] ship feature', remindEvery: 2 } } }],
+      await (router as any).runSessionTurn(sessionId, {
+        parts: null,
+        queuedItems: [session.queue.shift()],
+        session,
+        preclaimed: true,
       });
 
-      session.busy = true;
-      await tool_set_goal({ goal: '- [ ] ship feature', remindEvery: 2 }, { sessionId, session });
-      assert.strictEqual(session.goalState?.anchorSeq, 1);
+      assert.strictEqual(chatCalls, 1);
+      assert.strictEqual(session.queue.length, 0);
+      const reminders = session.history.filter(message => message.__meta?.goalReminder === true);
+      assert.strictEqual(reminders.length, 1);
+      assert.strictEqual(reminders[0].__meta?.goalReminderKind, 'interval');
+      const reminderIndex = session.history.indexOf(reminders[0]);
+      const functionCallIndex = session.history.findIndex(message => message.parts.some(part => part.functionCall?.id === 'wait-1'));
+      const toolResultIndex = session.history.findIndex(message => message.parts.some(part => part.functionResponse?.tool_use_id === 'wait-1'));
+      assert.ok(reminderIndex < functionCallIndex);
+      assert.ok(functionCallIndex < toolResultIndex);
 
-      await append(session, {
-        role: 'tool',
-        parts: [{ functionResponse: { tool_use_id: 'set-goal-1', name: 'set_goal', response: { output: 'ok' } } }],
-      });
-      assert.strictEqual(countGoalReminders(session), 0);
+      const historyPayload = await fs.readJson(getSessionHistoryFilePath(sessionId));
+      assert.strictEqual(historyPayload.goalState?.anchorSeq, reminders[0].__meta?.goalAnchorSeq);
+      assert.strictEqual(historyPayload.queue?.some((item: any) => item.message?.__meta?.goalReminder === true), false);
 
-      await append(session, {
-        role: 'model',
-        parts: [{ text: 'Working on it.' }],
-      });
-      assert.strictEqual(countGoalReminders(session), 0);
-      assert.strictEqual(session.queue.length, 1);
-      assert.strictEqual(session.goalState?.anchorSeq, 3);
-
-      await append(session, {
-        role: 'tool',
-        parts: [{ functionResponse: { tool_use_id: 'other-1', name: 'read', response: { output: 'done' } } }],
-      });
-      assert.strictEqual(countGoalReminders(session), 0);
-
-      await append(session, {
-        role: 'model',
-        parts: [{ functionCall: { id: 'other-2', name: 'exec', args: { command: 'echo hi' } } }],
-      });
-      assert.strictEqual(countGoalReminders(session), 0);
-      assert.strictEqual(session.queue.length, 2);
-      assert.strictEqual(session.goalState?.anchorSeq, 5);
-
-      await append(session, {
-        role: 'tool',
-        parts: [{ functionResponse: { tool_use_id: 'other-2', name: 'exec', response: { output: 'hi' } } }],
-      });
-      assert.strictEqual(countGoalReminders(session), 0);
-
-      session.busy = false;
-      await sessionManager.saveSession(sessionId);
-
-      await router.processSessionQueue(sessionId);
-      if (session.queue.length > 0) {
-        await router.processSessionQueue(sessionId);
-      }
-
-      assert.strictEqual(countGoalReminders(session), 2);
-      const firstReminder = session.history.find(message => message.__meta?.goalReminder === true)!;
-      assert.strictEqual(firstReminder.__meta?.goalReminder, true);
-      assert.match(firstReminder.parts[0].system || '', /^<foxwarm-system kind="goal-reminder">/);
-      assert.match(firstReminder.parts[0].system || '', /- \[ \] ship feature/);
-      const reminderSeqs = session.history
-        .filter(message => message.__meta?.goalReminder === true)
-        .map(message => message.__meta?.goalAnchorSeq);
-      assert.deepStrictEqual(reminderSeqs, [3, 5]);
-
-      await append(session, {
-        role: 'user',
-        parts: [{ text: 'next turn message' }],
-      });
-      assert.strictEqual(countGoalReminders(session), 2);
-      assert.strictEqual(session.queue.length, 1);
-
-      await router.processSessionQueue(sessionId);
-      assert.strictEqual(countGoalReminders(session), 3);
+      session.history = [];
+      session.contextFrontier = undefined;
+      const reloaded = await sessionManager.getSession(sessionId);
+      assert.strictEqual(countGoalReminders(reloaded), 1);
+      assert.strictEqual(reloaded.queue.some(item => item.message?.__meta?.goalReminder === true), false);
     });
 
     await test('set_goal accepts plain long-term goal text', async () => {
@@ -345,51 +322,59 @@ async function main(): Promise<void> {
       assert.strictEqual(reminderMessages.length, 0);
     });
 
-    await test('interval goal reminder independently triggers a queued follow-up turn', async () => {
-      const sessionId = makeSessionId('selftest_goal_queue_turn');
+    await test('interval reminder is appended after a complete tool result before the next provider call', async () => {
+      const sessionId = makeSessionId('selftest_goal_between_tools');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
 
-      await tool_set_goal({ goal: '- [ ] wake queued reminder turn', remindEvery: 1 }, { sessionId, session });
+      await tool_set_goal({ goal: '- [ ] keep the tool loop on task', remindEvery: 2 }, { sessionId, session });
+      session.queue.push({ type: 'user', parts: [{ text: 'start the tool loop' }] });
 
-      let reminderTurns = 0;
+      let chatCalls = 0;
       (llm as any).chat = async (parts: Message['parts'] | null, activeSession: Session) => {
-        assert.strictEqual(activeSession.id, sessionId);
-        await appendStubUserMessage(activeSession, parts);
-
-        const latestUser = activeSession.history.slice().reverse().find(message => message.role === 'user');
-        const latestSystem = latestUser?.parts.find(part => typeof part.system === 'string')?.system || '';
-        if (latestSystem.includes('kind="goal-reminder"')) {
-          reminderTurns += 1;
-          await appendStubModelMessage(activeSession, 'Reminder processed');
-          return { text: 'Reminder processed' };
+        chatCalls += 1;
+        if (chatCalls === 1) {
+          assert.strictEqual(parts, null);
+          assert.strictEqual(countGoalReminders(activeSession), 0);
+          const readCall = { id: 'read-1', name: 'read', args: { filePath: 'README.md' } };
+          await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ functionCall: readCall }] });
+          return { text: '', toolCalls: [readCall] };
         }
 
-        await appendStubModelMessage(activeSession, 'Normal reply');
-        return { text: 'Normal reply' };
+        assert.strictEqual(parts, null);
+        const reminder = activeSession.history.find(message => message.__meta?.goalReminder === true);
+        assert.ok(reminder);
+        const reminderIndex = activeSession.history.indexOf(reminder);
+        const functionCallIndex = activeSession.history.findIndex(message => message.parts.some(part => part.functionCall?.id === 'read-1'));
+        const toolResultIndex = activeSession.history.findIndex(message => message.parts.some(part => part.functionResponse?.tool_use_id === 'read-1'));
+        assert.ok(functionCallIndex < toolResultIndex);
+        assert.ok(toolResultIndex < reminderIndex);
+        await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'tool loop completed' }] });
+        return { text: 'tool loop completed' };
       };
-
-      await append(session, {
-        role: 'model',
-        parts: [{ text: 'Progress update' }],
+      (llm as any).executeTools = async () => ({
+        role: 'tool',
+        parts: [{ functionResponse: { tool_use_id: 'read-1', name: 'read', response: { output: 'ok' } } }],
       });
 
-      assert.strictEqual(session.queue.length, 1);
-      assert.strictEqual(countGoalReminders(session), 0);
+      await (router as any).runSessionTurn(sessionId, {
+        parts: null,
+        queuedItems: [session.queue.shift()],
+        session,
+        preclaimed: true,
+      });
 
-      await router.processSessionQueue(sessionId);
-
-      const refreshedSession = await sessionManager.getSession(sessionId);
-      assert.strictEqual(reminderTurns, 1);
-      assert.strictEqual(refreshedSession.queue.length, 0);
-      assert.strictEqual(countGoalReminders(refreshedSession), 1);
-      const latestModel = refreshedSession.history.slice().reverse().find(message => message.role === 'model');
-      assert.match(latestModel?.parts.find(part => typeof part.text === 'string')?.text || '', /Reminder processed/);
+      assert.strictEqual(chatCalls, 2);
+      assert.strictEqual(session.queue.length, 0);
+      const reminders = session.history.filter(message => message.__meta?.goalReminder === true);
+      assert.strictEqual(reminders.length, 1);
+      assert.strictEqual(reminders[0].__meta?.goalReminderKind, 'interval');
     });
 
     console.log('goal reminder selftest passed');
   } finally {
     (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     await cleanupSessions(createdSessionIds);
   }

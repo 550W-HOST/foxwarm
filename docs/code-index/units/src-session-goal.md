@@ -4,7 +4,7 @@ Files: src/session/goal.ts, src/session/goal.test.ts, src/selftest/goalReminderS
 
 ## Purpose
 
-Manages session-level goal tracking, including setting/clearing goals, and periodically injecting goal reminder messages into the session history at configurable intervals or at end-of-turn boundaries.
+Manages session-level goal tracking, including setting/clearing goals and building reminder messages for router-owned pre-provider or end-of-turn history boundaries.
 
 ## Key Exports
 
@@ -58,11 +58,10 @@ Self-test file (`goalReminderSelfTest.ts`):
 | `createBaseSession(id, parentSessionId)` | ~18–29 | Creates a minimal Session object |
 | `ensureSession(id, parentSessionId)` | ~31–36 | Gets or resets a session via sessionManager |
 | `cleanupSessions(sessionIds)` | ~38–46 | Deletes test sessions, ignoring errors |
-| `append(session, message)` | ~48–50 | Appends a message via sessionManager |
-| `appendStubUserMessage(session, parts)` | ~52–58 | Appends a stub user message if parts exist |
-| `appendStubModelMessage(session, text)` | ~60–65 | Appends a stub model message with text |
-| `countGoalReminders(session)` | ~67–69 | Counts goal reminder messages in history |
-| `test(name, fn)` | ~71–79 | Simple test runner with pass/fail logging |
+| `appendStubUserMessage(session, parts)` | ~48–54 | Appends a stub user message if parts exist |
+| `appendStubModelMessage(session, text)` | ~56–61 | Appends a stub model message with text |
+| `countGoalReminders(session)` | ~63–65 | Counts goal reminder messages in history |
+| `test(name, fn)` | ~67–75 | Simple test runner with pass/fail logging |
 | `main()` | ~81–end | Orchestrates all self-test scenarios |
 
 ## Dependencies
@@ -80,7 +79,7 @@ Self-test file (`goalReminderSelfTest.ts`):
 ## Behavior
 
 - Goal state is stored on `session.goalState` with goal text, interval, anchor seq, and timestamps.
-- `maybeBuildGoalReminderMessage` fires an interval reminder when the count of non-reminder messages since the last anchor reaches `remindEvery`. It advances the anchor to prevent duplicates.
+- `maybeBuildGoalReminderMessage` fires an interval reminder when the count of non-reminder messages since the last anchor reaches `remindEvery`. The router evaluates and appends it immediately before a real provider request, after queued input or a preceding tool result is canonical history.
 - `maybeBuildGoalEndTurnReminderMessage` fires at end-of-turn unless disabled, suppressed by no-action signal, or already covered by a recent compact-completion reminder.
 - Both functions mutate `state.anchorSeq` as a side effect to track the last reminder point.
 - Reminders are suppressed when the latest model message contains a no-action signal or when the latest user message is itself a reminder.
@@ -88,7 +87,8 @@ Self-test file (`goalReminderSelfTest.ts`):
 
 ## Integration
 
-- Called by the message router / session turn loop to inject periodic goal reminders into the conversation history before sending to the LLM.
+- `MessageRouter` owns interval evaluation at its pre-provider safe point and direct history append; `sessionManager` history append does not queue or synthesize goal work.
+- The router appends end-turn reminders directly after a completed turn. Compact completion writes its separately tagged reminder through the history subsystem.
 - `setSessionGoal` / `clearSessionGoal` are invoked by the `set_goal` tool in `toolsSessionAgent`.
 - Interacts with session persistence via `sessionManager` (saving goalState alongside history).
 - Relies on `childSessionReminder`'s no-action signal detection to suppress reminders when the model signals inactivity.
@@ -97,3 +97,7 @@ Self-test file (`goalReminderSelfTest.ts`):
 ## Design Decisions
 
 - [2026-07-06] Goal reminders should use the same Foxwarm metadata tag style as other system metadata: `<foxwarm-system kind="goal-reminder">raw reminder content</foxwarm-system>`, instead of the legacy `Session goal reminder:` text header or split `systemPayload`. Compact-completion goal reminders should be stored as separate parts so the goal-reminder tag remains recognizable.
+
+### D-goal-direct-safe-boundary
+
+[2026-07-25] Interval goal reminders are canonical history context evaluated and appended at the router's pre-provider safe boundary, never session `QueueItem`s or synthetic standalone LLM turns. The boundary follows persisted queued input or a complete tool result, so a reminder cannot split a model function-call message from its tool result. End-turn and compact-completion suppression continue to prevent a companion reminder for the same turn.

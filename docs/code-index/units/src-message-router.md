@@ -39,6 +39,7 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 | `MessageRouter.executeLlmTurn(session, sessionId, parts)` | ~280 | Sends prepared parts to LLM, processes response and tool calls |
 | `MessageRouter.handleToolCalls(session, sessionId, toolCalls)` | ~330 | Dispatches tool calls, collects results, appends tool response messages |
 | `MessageRouter.handleChildSessionResult(session, result)` | ~380 | Processes child session completion, builds reminder, updates managed state |
+| `MessageRouter.maybeAppendGoalIntervalReminder(session)` | ~mid | Appends a due interval reminder before a real provider request |
 | `MessageRouter.maybeCreateGuestSessionForUnauthorizedMessage(ctx)` | ~420 | Provisions a guest session if channel config allows |
 | `MessageRouter.resolveSessionForIncomingMessage(ctx)` | ~460 | Finds or creates the session mapped to a channel context |
 | `MessageRouter.isAuthorized(channelId, channelType, conversationId, senderId)` | ~490 | Checks authorization via map and channel auth inspection |
@@ -57,7 +58,7 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 - `./session/childSessionReminder` — `buildChildReminder`, `isModelNoActionSignal`
 - `./session/managedState` — `getManagedSessionState`, `isManagedSessionActive`, `setManagedSessionState`
 - `./session/snapshotRefresh` — `maybeRefreshStaleSessionSnapshot`
-- `./session/goal` — `maybeBuildGoalEndTurnReminderMessage`
+- `./session/goal` — `maybeBuildGoalReminderMessage`, `maybeBuildGoalEndTurnReminderMessage`
 - `./sessionManager` — session CRUD, queue operations, message appending, channel config
 - `./llm` — LLM inference calls
 - `./types` — `ChannelTurnProgress`, `Message`, `MessagePart`, `QueueItem`, `QueueSource`, `Session`
@@ -70,6 +71,7 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 - The main loop (`continueWithQueuedWork`) repeatedly drains queued items, runs LLM turns, handles internal retry controls, handles tool calls, manages child/guest session lifecycle, and processes compaction events until the queue is empty. A stopped turn skips auto-draining unless the session was marked by `/dequeue` to run queued work after the stop.
 - Final response/error broadcasts include `turnFinal: true`; this is a generic channel option currently used by WeWork stream aggregation to finish the platform stream card, and ignored by channels that do not need it.
 - During each LLM/tool loop, stream-bound WeWork turns emit structured `channelTurnProgress` options: `llm-start`, `tool-calls-start`, and batched `tool-calls-finish` after `executeTools` returns. These are transient channel display events and are not appended to session history. When an LLM response contains both text and tool calls, the router sends that text inside the WeWork `tool-calls-start` progress payload so the card can update atomically to `model text + ⌛️ tools`; the separate text broadcast excludes the current WeWork stream channel to avoid duplicate sections.
+- Before each real provider request, the router may append a due interval goal reminder directly to canonical history after queued inputs or the prior tool result have been persisted. It never puts a goal reminder in the session queue; the canonical contract is [D-goal-direct-safe-boundary](src-session-goal.md#d-goal-direct-safe-boundary).
 - Independently of channel progress, `runSessionTurn` sets canonical transient runtime state for session list/status: `requesting-model` immediately before `llm.chat`, batch-level `running-tool` before tool dispatch, and deterministic model-order per-tool `running-tool` details via the tool executor's `onToolStart` callback. Parallel direct-exec completion does not create a new runtime-state protocol. All active runtime state is cleared when session processing finishes or when queued compaction exits.
 - LLM retry progress (automatic provider-request retries within one turn) is appended as a display-only model message (`modelVisible:false`, `noticeType:'llm-retry'`) so WebUI/history can show why the turn is waiting without feeding retry text back to the model. Subsequent retry attempts, including the final failed attempt, mutate and re-notify the same message (`__meta.updateExisting:true`) instead of creating many history messages. The visible text starts with `⚠️ [LLM retry]` and puts each `Attempt N/M failed: ...` on its own line; final events end with `No more retries.` Non-WebUI channel broadcasts receive concise multi-line retry snippets; WebUI relies on history SSE update/replacement.
 - When `llm.chat()` throws `LlmRequestError`, the router does not append a model-visible `Error:` history message. If a retry notice exists, that display-only notice is the visible history record; otherwise the error is surfaced through the channel boundary only.
