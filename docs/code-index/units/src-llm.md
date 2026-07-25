@@ -46,6 +46,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 
 - Provider payloads are sanitized for lone surrogates and may be gzip/brotli compressed per model config.
 - OpenAI and Anthropic payloads receive current tool schemas and current Foxwarm system/source wrappers.
+- Canonical history keeps logical queued messages separate. The Anthropic serializer coalesces adjacent same-role entries only in its outbound payload, while OpenAI serializers retain separate message entries. Queue-boundary ownership is [D-pipeline-canonical-queue-item-boundaries](../threads/message-processing-pipeline.md#d-pipeline-canonical-queue-item-boundaries).
 - Streaming progress emits throttled reasoning/text/tool-call snapshots.
 - Retry waits are abortable. Terminal failures move bounded diagnostics to error logs, emit a final retry event, and throw `LlmRequestError`; they do not create fake assistant `Error:` messages. Canonical boundary: [D-llm-request-errors](../modules/llm.md#d-llm-request-errors).
 - The historical `maxRetries` option/event field means total attempts; the default is six. Virtual attempts rebuild the complete selected concrete request, and unusable empty/reasoning-only responses retry. Canonical semantics: [model routing](../threads/model-routing.md).

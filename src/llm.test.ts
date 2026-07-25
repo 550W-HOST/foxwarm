@@ -121,6 +121,47 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
   }
 });
 
+test('Anthropic request serialization normalizes consecutive internal user messages without changing history boundaries', async () => {
+  const originalPost = axios.post;
+  let capturedBody: any = null;
+
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBody = data;
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { content: [{ type: 'text', text: 'ok' }] },
+    };
+  };
+
+  try {
+    const contents: Message[] = [
+      { role: 'user', parts: [{ text: 'queued channel user' }] },
+      { role: 'user', parts: [{ system: 'queued intersession notice' }] },
+    ];
+    await requestLlmOnce({
+      contents,
+      systemPrompt: '',
+      model: 'anthropic/claude-sonnet-4-5',
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.equal(contents.length, 2);
+    assert.equal(capturedBody.messages.length, 1);
+    assert.equal(capturedBody.messages[0].role, 'user');
+    const serializedText = capturedBody.messages[0].content.map((part: any) => part.text).join('\n');
+    assert.match(serializedText, /queued channel user/);
+    assert.match(serializedText, /queued intersession notice/);
+    assert.equal((serializedText.match(/queued channel user/g) || []).length, 1);
+    assert.equal((serializedText.match(/queued intersession notice/g) || []).length, 1);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('OpenAI chat completions requests omit empty system messages and preserve non-empty prompts', async () => {
   const originalPost = axios.post;
   const capturedUrls: string[] = [];

@@ -250,6 +250,25 @@ test('OpenAI serializers preserve raw tool argument text exactly', () => {
   assert.equal(functionCallItem.arguments, rawArgsText);
 });
 
+test('OpenAI serializers keep consecutive canonical user messages distinct', () => {
+  const history = [
+    { role: 'user' as const, parts: [{ text: 'queued channel user' }] },
+    { role: 'user' as const, parts: [{ system: 'queued intersession notice' }] },
+  ];
+
+  const chatMessages = convertToOpenAIFormat(history);
+  assert.equal(chatMessages.length, 2);
+  assert.deepEqual(chatMessages.map(message => message.role), ['user', 'user']);
+  assert.equal(chatMessages[0].content, 'queued channel user');
+  assert.match(chatMessages[1].content, /queued intersession notice/);
+
+  const responsesItems = convertToOpenAIResponsesFormat(history);
+  assert.equal(responsesItems.length, 2);
+  assert.deepEqual(responsesItems.map(item => item.role), ['user', 'user']);
+  assert.equal(responsesItems[0].content[0].text, 'queued channel user');
+  assert.match(responsesItems[1].content[0].text, /queued intersession notice/);
+});
+
 test('OpenAI serializers preserve single foxwarm system wrappers with payload text', () => {
   const history = [{
     role: 'user' as const,

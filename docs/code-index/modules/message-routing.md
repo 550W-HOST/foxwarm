@@ -26,6 +26,7 @@ Message routing owns inbound channel-to-session routing, command dispatch, side 
 - One processing loop owns a session at a time.
 - Authorization is checked before command or session routing.
 - Queue items are consumed in insertion order, subject to explicit internal turn boundaries.
+- Each consumed queue item remains a separate canonical history message; only provider-facing serialization may normalize adjacent roles.
 - Direct user input, inter-session messages, timers, triggers, and internal events enter the same queue gate.
 - Platform stream/card identifiers remain turn metadata and prevent incompatible queued items from being merged.
 - Side requests do not mutate real model-visible history or execute returned tool calls.
@@ -61,7 +62,8 @@ Final replies carry a generic `turnFinal` signal. Channels may use it to close a
 
 ## Canonical cross-module ownership
 
-- Queue merge and platform source boundaries: [D-pipeline-source-boundary](../threads/message-processing-pipeline.md#d-pipeline-source-boundary).
+- Canonical queue-item history boundaries: [D-pipeline-canonical-queue-item-boundaries](../threads/message-processing-pipeline.md#d-pipeline-canonical-queue-item-boundaries).
+- Platform source/turn boundaries: [D-pipeline-source-boundary](../threads/message-processing-pipeline.md#d-pipeline-source-boundary).
 - Busy-time queue presentation: [D-pipeline-busy-queue-silence](../threads/message-processing-pipeline.md#d-pipeline-busy-queue-silence).
 - Manual retry/stop/dequeue semantics: [D-pipeline-control-commands](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 - Provider request failure boundary: [D-llm-request-errors](./llm.md#d-llm-request-errors).
