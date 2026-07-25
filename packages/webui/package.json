@@ -14,6 +14,7 @@
     "test:theme-e2e": "node --test test/themeMarkdownStyles.e2e.mjs",
     "test:message-overflow-e2e": "node --test test/messageOverflow.e2e.mjs",
     "test:message-width-e2e": "node --test test/messageWidth.e2e.mjs",
+    "test:system-message-cards-e2e": "node --test test/systemMessageCards.e2e.mjs",
     "test:tool-collapsed-overflow-e2e": "node --test test/toolCollapsedOverflow.e2e.mjs",
     "test:tool-args-header-e2e": "node --test test/toolArgsHeader.e2e.mjs",
     "test:code-frame-overlay-e2e": "node --test test/codeFrame550aOverlay.e2e.mjs",

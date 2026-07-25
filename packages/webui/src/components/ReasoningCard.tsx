@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react'
-import { getCollapsedReasoningPreview, handleMarkdownLinkClick, renderMarkdown, ToolTag } from './chatShared'
+import { getCollapsedReasoningPreview, handleMarkdownLinkClick, renderMarkdown, THREAD_CARD_HEADER_PREVIEW_CLASS, THREAD_CARD_HEADER_ROW_CLASS, ToolTag } from './chatShared'
 import ThreadLineButton from './ThreadLineButton'
 
 type ReasoningTone = 'message' | 'processing'
@@ -105,12 +105,12 @@ const ReasoningCard = memo(function ReasoningCard({
         className={`foxwarm-reasoning-thread-line ${reasoningLineToneClasses[tone]}`}
       />
       <div
-        className={`foxwarm-reasoning-header ${expanded ? 'mb-1' : ''} flex min-w-0 items-center gap-2 ${reasoningHeaderClasses[tone]} ${expanded ? `cursor-pointer ${reasoningHeaderHoverClasses[tone]}` : ''}`}
+        className={`foxwarm-reasoning-header ${expanded ? 'mb-1' : ''} ${THREAD_CARD_HEADER_ROW_CLASS} ${reasoningHeaderClasses[tone]} ${expanded ? `cursor-pointer ${reasoningHeaderHoverClasses[tone]}` : ''}`}
         onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
       >
         <ToolTag name="reasoning" label="Reasoning" tone="neutral" className="foxwarm-reasoning-tag" />
         {!expanded && (
-          <span className={`foxwarm-reasoning-preview min-w-0 flex-1 truncate text-[13px] leading-[18px] ${collapsedPreview.isOpenAISummary ? 'font-semibold' : 'font-normal'}`} title={collapsedPreview.text}>
+          <span className={`foxwarm-reasoning-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS} ${collapsedPreview.isOpenAISummary ? 'font-semibold' : 'font-normal'}`} title={collapsedPreview.text}>
             {collapsedPreview.text}
           </span>
         )}

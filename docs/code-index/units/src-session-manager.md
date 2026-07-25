@@ -64,7 +64,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 ## Dependencies
 
-- `src/session/agentOps.ts`, `agentMetadata.ts`, `relations.ts`, `channels.ts`, `history.ts`, `metadataStore.ts`, `archive.ts`, `archiveStore.ts`, `layeredContext.ts`, `goal.ts`, and `managedState.ts` own their respective domains.
+- `src/session/agentOps.ts`, `agentMetadata.ts`, `relations.ts`, `channels.ts`, `history.ts`, `metadataStore.ts`, `archive.ts`, `archiveStore.ts`, `layeredContext.ts`, and `managedState.ts` own their respective domains.
 - `src/sessionRuntimeState.ts` owns the canonical runtime-state model.
 - `src/migrations/` runs before normal lazy hydration.
 - `src/vector.ts` is used for archive-index lifecycle operations, not agent-memory-file CRUD.
@@ -75,6 +75,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - One `MessageRouter.processSessionQueue()` invocation may claim a session at a time; this façade persists and exposes the `busy` compatibility/concurrency flag.
 - Session history files are authoritative for conversation content and the embedded `contextFrontier`; the shared metadata file is an index and presentation-metadata store.
 - Queue insertion passes through wait-state and managed-inbox transitions before work is persisted or triggered.
+- Generic history append persists and notifies only its supplied messages; router-owned goal evaluation is intentionally outside this low-level persistence path.
 - Active `requesting-model` and `running-tool` phases are transient; persisted waits can survive restart.
 - Forks share parent prompt/cache/archive prefix lineage; non-fork children start a fresh prefix.
 - Session deletion clears runtime/pending compact state, the live map, attachments, session/legacy-frontier files, and shared metadata. Session history clear also removes any armed wait. Deletion currently leaves archive store/log and vector data intact; canonical scope is documented in [session lifecycle](../threads/session-lifecycle.md#archive-and-deletion).

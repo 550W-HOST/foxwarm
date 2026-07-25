@@ -4,6 +4,7 @@ import {
   clampContentStyle,
   handleMarkdownLinkClick,
   renderMarkdown,
+  THREAD_CARD_HEADER_ROW_CLASS,
   ToolTag,
   type ContextBlockMessageMeta,
   type Message,
@@ -222,11 +223,11 @@ const ContextBlockCard = memo(function ContextBlockCard({
         className={contextBlockLineToneClasses}
       />
       <div
-        className={`${expanded ? 'mb-1' : ''} flex min-w-0 items-center gap-2 ${contextBlockHeaderClasses} ${expanded ? `cursor-pointer ${contextBlockHeaderHoverClasses}` : ''}`}
+        className={`foxwarm-context-block-header ${expanded ? 'mb-1' : ''} ${THREAD_CARD_HEADER_ROW_CLASS} ${contextBlockHeaderClasses} ${expanded ? `cursor-pointer ${contextBlockHeaderHoverClasses}` : ''}`}
         onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
       >
-        <ToolTag name="ctx-block" label="CTX-BLOCK" tone="neutral" />
-        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-slate-500 dark:text-slate-400" title={blockMetaLabel}>{blockMetaLabel}</span>
+        <ToolTag name="ctx-block" label="CTX-BLOCK" tone="neutral" className="foxwarm-context-block-tag" />
+        <span className="foxwarm-context-block-preview min-w-0 flex-1 truncate text-[11px] font-medium leading-[18px] text-slate-500 dark:text-slate-400" title={blockMetaLabel}>{blockMetaLabel}</span>
       </div>
 
       <div className="min-w-0 space-y-2">

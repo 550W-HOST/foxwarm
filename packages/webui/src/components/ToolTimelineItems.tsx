@@ -6,6 +6,8 @@ import {
   MiniToggleButton,
   ToolTag,
   ToolTagList,
+  THREAD_CARD_HEADER_PREVIEW_CLASS,
+  THREAD_CARD_HEADER_ROW_CLASS,
   SessionHashLink,
   buildPatchHunkSnippets,
   clampContentStyle,
@@ -151,7 +153,7 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
   collapsed?: boolean
 }) {
   const layoutClass = collapsed
-    ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full truncate whitespace-nowrap'
+    ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full flex-1 truncate whitespace-nowrap'
     : 'min-w-0 max-w-full whitespace-normal break-words'
   const pathClass = collapsed
     ? 'foxwarm-tool-code-path min-w-0 truncate whitespace-nowrap'
@@ -162,7 +164,7 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
       {prefix}
       <button
         type="button"
-        className="foxwarm-tool-code-open inline-flex shrink-0 p-0 align-text-top leading-none text-current hover:opacity-70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1"
+        className={`foxwarm-tool-code-open inline-flex shrink-0 p-0 ${collapsed ? 'self-center' : 'align-text-top'} leading-none text-current hover:opacity-70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1`}
         title={`Open ${filePath} in Code`}
         aria-label={`Open ${filePath} in Code`}
         onClick={(event) => {
@@ -196,7 +198,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     const extra = (call.args.startLine || call.args.endLine)
       ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
       : ''
-    return <span title={`${call.args.filePath}${extra}`} className="flex min-w-0 max-w-full items-baseline gap-x-1 overflow-hidden whitespace-nowrap"><ToolCodePath collapsed filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} onOpenCodeFile={options.onOpenCodeFile} />{extra && <span className="shrink-0">{extra}</span>}</span>
+    return <span title={`${call.args.filePath}${extra}`} className="flex min-w-0 max-w-full flex-1 items-center gap-x-1 overflow-hidden whitespace-nowrap leading-[18px]"><ToolCodePath collapsed filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} onOpenCodeFile={options.onOpenCodeFile} />{extra && <span className="foxwarm-tool-read-range shrink-0">{extra}</span>}</span>
   }
 
   if (call.name === 'write') {
@@ -249,7 +251,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     const preview = message.length > 160 ? `${message.slice(0, 160)}...` : message
     return (
       <span className="flex items-center gap-1 min-w-0" title={`${targetSessionId}: ${message}`}>
-        <span className="shrink-0 text-gray-500 dark:text-gray-400">To</span>
+        <span className="foxwarm-tool-session-prefix shrink-0">To</span>
         <span className="shrink-0">{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}</span>
         <span className="truncate">: {preview}</span>
       </span>
@@ -375,7 +377,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
     return (
       <div className="space-y-1">
-        <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">To</span>{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}<span>:</span></div>
+        <div className="whitespace-pre-wrap break-all"><span className="foxwarm-tool-session-prefix mr-1">To</span>{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}<span>:</span></div>
         <div className="whitespace-pre-wrap break-all">{message}</div>
       </div>
     )
@@ -632,14 +634,14 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const header = (includeCallPreview = false, includeExpandedCall = false) => (
     <div className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]}`}>
       <div
-        className="foxwarm-tool-header-toggle flex min-w-0 cursor-pointer items-center gap-2"
+        className={`foxwarm-tool-header-toggle cursor-pointer ${THREAD_CARD_HEADER_ROW_CLASS}`}
         onClick={(e) => {
           e.stopPropagation()
           setExpanded(current => !current)
         }}
       >
         <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
-        {includeCallPreview && call && <div className="foxwarm-tool-call-summary min-w-0 max-w-full flex-1 truncate whitespace-nowrap">{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
+        {includeCallPreview && call && <div className={`foxwarm-tool-call-summary min-w-0 max-w-full flex-1 ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
       </div>
       {includeExpandedCall && expandedCallContent && (
         <div className="foxwarm-tool-call-args min-w-0 max-w-full pt-1 pr-2" onClick={(e) => e.stopPropagation()}>

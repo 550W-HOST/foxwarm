@@ -49,6 +49,14 @@ function hasPartText(parts: MessagePart[] | null, text: string): boolean {
   return !!parts?.some(part => part.text === text);
 }
 
+function countHistoryPartText(messages: Message[], text: string): number {
+  return messages.reduce((count, message) => count + message.parts.filter(part => part.text === text).length, 0);
+}
+
+function countHistoryPartSystem(messages: Message[], system: string): number {
+  return messages.reduce((count, message) => count + message.parts.filter(part => part.system === system).length, 0);
+}
+
 test('shouldBroadcastChannelText rejects empty or whitespace-only text', () => {
   assert.equal(shouldBroadcastChannelText(''), false);
   assert.equal(shouldBroadcastChannelText('   '), false);
@@ -61,6 +69,105 @@ test('shouldBroadcastChannelText accepts non-empty trimmed text', () => {
   assert.equal(shouldBroadcastChannelText('hello'), true);
   assert.equal(shouldBroadcastChannelText('  hello  '), true);
   assert.equal(shouldBroadcastChannelText('\nhello\n'), true);
+});
+
+test('MessageRouter top-level queue drain persists user and intersession inputs separately before one model request', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('top_level_queue_message_boundaries');
+  const originalChat = llm.chat;
+  const seenRequests: Message[][] = [];
+  session.queue.push(
+    { type: 'user', parts: [{ text: 'queued channel user' }] },
+    { type: 'intersession', message: { role: 'user', parts: [{ system: 'queued intersession notice' }] } },
+  );
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    assert.equal(parts, null);
+    seenRequests.push(structuredClone(activeSession.history));
+    await appendMockChatMessages(activeSession, parts, [{ text: 'handled both queued inputs' }]);
+    return { text: 'handled both queued inputs', allParts: [{ text: 'handled both queued inputs' }] };
+  };
+
+  try {
+    await router.continueWithQueuedWork(session);
+
+    assert.equal(seenRequests.length, 1);
+    assert.equal(countHistoryPartText(seenRequests[0], 'queued channel user'), 1);
+    assert.equal(countHistoryPartSystem(seenRequests[0], 'queued intersession notice'), 1);
+    const queuedInputMessages = seenRequests[0].filter(message => message.role === 'user'
+      && message.parts.some(part => part.text === 'queued channel user' || part.system === 'queued intersession notice'));
+    assert.equal(queuedInputMessages.length, 2);
+    assert.notEqual(queuedInputMessages[0], queuedInputMessages[1]);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter keeps a drained queued batch unsent across a pre-LLM compact commit', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('top_level_queue_compact_boundary');
+  const originalChat = llm.chat;
+  const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  let compactApplied = false;
+  session.queue.push(
+    { type: 'user', parts: [{ text: 'queued before compact commit' }] },
+    { type: 'compact-commit' },
+  );
+
+  (sessionManager as any).applyCompletedCompactJob = async () => {
+    compactApplied = true;
+    assert.equal(userTextOccurrences(session, 'queued before compact commit'), 0);
+    await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: 'compact commit applied' }] });
+    return true;
+  };
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    assert.equal(compactApplied, true);
+    assert.equal(parts, null);
+    assert.equal(userTextOccurrences(activeSession, 'queued before compact commit'), 1);
+    await appendMockChatMessages(activeSession, parts, [{ text: 'handled after compact commit' }]);
+    return { text: 'handled after compact commit', allParts: [{ text: 'handled after compact commit' }] };
+  };
+
+  try {
+    await router.continueWithQueuedWork(session);
+
+    assert.equal(userTextOccurrences(session, 'queued before compact commit'), 1);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter keeps the first queued item as the turn source when later compatible input has a source', async () => {
+  const router = new MessageRouter() as any;
+  const captured: any[] = [];
+  const session = await createRouterQueueTestSession('queue_first_item_source');
+  session.queue.push(
+    { type: 'intersession', message: { role: 'user', parts: [{ system: 'first intersession event' }] } },
+    {
+      type: 'user',
+      source: { platform: 'webui', channelId: 'webui', conversationId: 'browser', channelUserId: 'browser' },
+      parts: [{ text: 'later web input' }],
+    },
+  );
+  router.runSessionTurn = async (_sessionId: string, options: any) => captured.push(options);
+
+  try {
+    await router.continueWithQueuedWork(session);
+
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].source, undefined);
+    assert.equal(captured[0].queuedItems.length, 2);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
 });
 
 test('MessageRouter concurrent unbound-channel resolution returns one attached lifetime', async () => {
@@ -110,15 +217,17 @@ test('MessageRouter queued turn start keeps WeWork stream-bound and unbound inpu
     ],
   };
 
-  const drained = router.drainLeadingQueuedMessageParts(session);
-  assert.equal(drained.parts.some((part: any) => part.text === 'stream input'), true);
-  assert.equal(drained.parts.some((part: any) => part.text === 'web input'), false);
+  const drained = router.drainLeadingQueuedTurnInputs(session);
+  assert.equal(drained.items[0].parts?.some((part: any) => part.text === 'stream input'), true);
+  assert.equal(drained.items.some((item: any) => item.parts?.some((part: any) => part.text === 'web input')), false);
   assert.equal(session.queue.length, 1);
 });
 
 test('MessageRouter in-turn queue consumption drains same-stream WeWork inputs before next LLM call', async () => {
   const router = new MessageRouter() as any;
   const session: any = {
+    id: 'queue-consumption-same-stream',
+    history: [],
     queue: [
       {
         type: 'user',
@@ -133,15 +242,25 @@ test('MessageRouter in-turn queue consumption drains same-stream WeWork inputs b
     ],
   };
 
-  const consumed = await router.consumeLeadingQueuedTurnInputs(
-    session,
-    [{ text: 'pending' }],
-    'wework-a:chat-a:stream-a',
-  );
+  const originalAppend = sessionManager.appendSessionMessage;
+  (sessionManager as any).appendSessionMessage = async (target: any, message: Message) => target.history.push(message);
+  try {
+    const consumed = await router.consumeLeadingQueuedTurnInputs(
+      session,
+      [{ text: 'pending' }],
+      'wework-a:chat-a:stream-a',
+    );
 
-  assert.equal(consumed.parts.some((part: any) => part.text === 'next stream input'), true);
-  assert.equal(consumed.parts.some((part: any) => part.text === 'web input'), true);
-  assert.equal(session.queue.length, 0);
+    assert.equal(consumed.parts, null);
+    assert.deepEqual(session.history.map((message: Message) => message.parts), [
+      [{ text: 'pending' }],
+      [{ text: 'next stream input' }],
+      [{ text: 'web input' }],
+    ]);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (sessionManager as any).appendSessionMessage = originalAppend;
+  }
 });
 
 test('MessageRouter in-turn queue consumption leaves different WeWork stream cards for their own turn', async () => {
@@ -191,8 +310,8 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
     queue: [queueItem],
   };
 
-  const drained = router.drainLeadingQueuedMessageParts(session);
-  const parts = router.prepareTurnParts(session, 'session-1', drained.parts);
+  const drained = router.drainLeadingQueuedTurnInputs(session);
+  const parts = router.prepareTurnParts(session, 'session-1', drained.items[0].parts);
 
   const sourcePrefixCount = parts.filter((part: any) => typeof part.system === 'string'
     && part.system.startsWith('<foxwarm-message ')
@@ -238,9 +357,9 @@ test('MessageRouter queue draining keeps different WeWork stream ids separate', 
     ],
   };
 
-  const drained = router.drainLeadingQueuedMessageParts(session);
-  assert.equal(drained.parts.some((part: any) => part.text === 'first stream'), true);
-  assert.equal(drained.parts.some((part: any) => part.text === 'second stream'), false);
+  const drained = router.drainLeadingQueuedTurnInputs(session);
+  assert.equal(drained.items[0].parts?.some((part: any) => part.text === 'first stream'), true);
+  assert.equal(drained.items.some((item: any) => item.parts?.some((part: any) => part.text === 'second stream')), false);
   assert.equal(session.queue.length, 1);
 });
 
@@ -254,8 +373,8 @@ test('MessageRouter queue draining stops before retry control items', async () =
     ],
   };
 
-  const drained = router.drainLeadingQueuedMessageParts(session);
-  assert.deepEqual(drained.parts, [{ text: 'first input' }]);
+  const drained = router.drainLeadingQueuedTurnInputs(session);
+  assert.deepEqual(drained.items.map((item: any) => item.parts), [[{ text: 'first input' }]]);
   assert.deepEqual(session.queue.map((item: any) => item.type), ['retry', 'user']);
 
   const consumed = await router.consumeLeadingQueuedTurnInputs(session, [{ text: 'pending' }]);
@@ -460,11 +579,11 @@ test('retrySession enqueues an internal retry item that reruns LLM without appen
 
     assert.equal(chatCallCount, 2);
     assert.equal(seenParts[0], null);
-    assert.equal(seenParts[1].some((part: any) => part.text === 'queued after retry'), true);
+    assert.equal(seenParts[1], null);
+    assert.equal(userTextOccurrences(session, 'queued after retry'), 1);
     assert.equal(session.queue.length, 0);
     assert.equal(session.busy, false);
     assert.equal(session.history.some(message => message.parts.some(part => /retrying last request|retrying-last-request/.test(String(part.text || part.system || '')))), false);
-    assert.equal(session.history.some(message => message.role === 'user' && message.parts.some(part => /retry/i.test(String(part.text || part.system || '')))), false);
     assert.equal(session.history.some(message => message.role === 'model' && message.parts.some(part => part.text === 'retried response')), true);
   } finally {
     (llm as any).chat = originalChat;
@@ -512,7 +631,8 @@ test('stop signal preserves queued work until a later trigger', async () => {
 
     await router.processSessionQueue(sessionId);
     assert.equal(seenParts.length, 2);
-    assert.equal(seenParts[1].some((part: any) => part.text === 'queued after stop'), true);
+    assert.equal(seenParts[1], null);
+    assert.equal(userTextOccurrences(session, 'queued after stop'), 1);
     assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
@@ -556,8 +676,8 @@ test('dequeue signal drains queued work once after a compact-commit boundary', a
     await router.runSessionTurn(sessionId, { parts: [{ text: 'start current turn' }], session });
 
     assert.equal(seenParts.length, 2);
-    assert.equal(seenParts[1].some((part: any) => part.text === 'queued for dequeue'), true);
-    assert.equal(seenParts[1].some((part: any) => part.text === 'start current turn'), false);
+    assert.equal(seenParts[1], null);
+    assert.equal(userTextOccurrences(session, 'queued for dequeue'), 1);
     assert.equal(session.queue.length, 0);
     assert.equal(session.busy, false);
   } finally {
@@ -644,8 +764,7 @@ test('MessageRouter keeps a queued user item behind compact commit separate from
     await router.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
 
     assert.equal(hasPartText(seenParts[0], 'A'), true);
-    assert.equal(hasPartText(seenParts[1], 'Q'), true);
-    assert.equal(hasPartText(seenParts[1], 'A'), false);
+    assert.equal(seenParts[1], null);
     assert.equal(userTextOccurrences(session, 'A'), 1);
     assert.equal(userTextOccurrences(session, 'Q'), 1);
     assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
@@ -654,6 +773,53 @@ test('MessageRouter keeps a queued user item behind compact commit separate from
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter in-tool queue consumption preserves each queued input as separate history before the next model request', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('in_tool_queue_message_boundaries');
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  const seenRequests: Message[][] = [];
+  let chatCount = 0;
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    chatCount += 1;
+    seenRequests.push(structuredClone(activeSession.history));
+    if (chatCount === 1) {
+      const toolCall = { id: 'queue-boundary-tool', name: 'read', args: { filePath: 'README.md' } };
+      await appendMockChatMessages(activeSession, parts, [{ functionCall: toolCall }]);
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    assert.equal(parts, null);
+    await appendMockChatMessages(activeSession, parts, [{ text: 'handled queued follow-ups' }]);
+    return { text: 'handled queued follow-ups', allParts: [{ text: 'handled queued follow-ups' }] };
+  };
+  (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'queued user follow-up' }] });
+    await sessionManager.enqueueSessionItem(session.id, {
+      type: 'intersession',
+      message: { role: 'user', parts: [{ system: 'queued intersession follow-up' }] },
+    });
+    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'queue-boundary-tool', name: 'read', response: { output: 'ok' } } }] };
+  };
+
+  try {
+    await router.runSessionTurn(session.id, { parts: [{ text: 'initial request' }], session });
+
+    assert.equal(seenRequests.length, 2);
+    assert.equal(countHistoryPartText(seenRequests[1], 'queued user follow-up'), 1);
+    assert.equal(countHistoryPartSystem(seenRequests[1], 'queued intersession follow-up'), 1);
+    const queuedInputMessages = seenRequests[1].filter(message => message.role === 'user'
+      && message.parts.some(part => part.text === 'queued user follow-up' || part.system === 'queued intersession follow-up'));
+    assert.equal(queuedInputMessages.length, 2);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -696,7 +862,7 @@ test('MessageRouter preserves an already-consumed follow-up once when compact co
     await router.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
 
     assert.equal(hasPartText(seenParts[0], 'A'), true);
-    assert.equal(hasPartText(seenParts[1], 'Q'), true);
+    assert.equal(seenParts[1], null);
     assert.equal(seenParts[2], null);
     assert.equal(userTextOccurrences(session, 'A'), 1);
     assert.equal(userTextOccurrences(session, 'Q'), 1);

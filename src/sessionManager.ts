@@ -24,7 +24,6 @@ import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
-import { maybeBuildGoalReminderMessage } from './session/goal';
 import { buildSystemMessageParts } from './utils/systemMessageParts';
 import { formatFoxwarmMessage, formatFoxwarmSystem, formatFoxwarmSystemClose, formatFoxwarmSystemOpen, formatSystemPartForModel } from './utils/promptWrappers';
 import { runStartupMigrations } from './migrations';
@@ -1361,7 +1360,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
       forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
       forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
     });
-    await appendSessionMessages(forkedSession, appendedForkMessages, { strictPersistence: true, suppressGoalReminder: true });
+    await appendSessionMessages(forkedSession, appendedForkMessages, { strictPersistence: true });
   } catch (error) {
     await rollbackFailedSessionCreation(newSessionId, forkedSession);
     throw error;
@@ -1458,7 +1457,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
 
     sessions.set(childSessionId, newSession);
     try {
-      await appendSessionMessages(newSession, [initialMessage], { strictPersistence: true, suppressGoalReminder: true });
+      await appendSessionMessages(newSession, [initialMessage], { strictPersistence: true });
     } catch (error) {
       await rollbackFailedSessionCreation(childSessionId, newSession);
       throw error;
@@ -2022,7 +2021,7 @@ export function notifySessionEvent(sessionId: string, event: SessionStreamEvent)
   }
 }
 
-export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[], options: { suppressGoalReminder?: boolean; strictPersistence?: boolean } = {}): Promise<void> {
+export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[], options: { strictPersistence?: boolean } = {}): Promise<void> {
   const session = typeof sessionOrId === 'string'
     ? await getSession(sessionOrId)
     : sessionOrId;
@@ -2039,17 +2038,12 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
   appendMessagesToContextFrontier(session, messages);
 
   const messagesToNotify = [...messages];
-  const goalReminderMessage = options.suppressGoalReminder ? undefined : maybeBuildGoalReminderMessage(session);
 
   if (options.strictPersistence) await saveSessionCritical(session.id);
   else await saveSession(session.id);
 
   for (const message of messagesToNotify) {
     notifyHistoryUpdate(session.id, message);
-  }
-
-  if (goalReminderMessage) {
-    await queueSessionMessageEvent(session.id, goalReminderMessage, 'background');
   }
 }
 
@@ -2084,7 +2078,7 @@ export async function notifyManualForkCreated(parentSessionId: string, childSess
     return 'queued';
   }
 
-  await appendSessionMessages(parent, [notification], { suppressGoalReminder: true });
+  await appendSessionMessages(parent, [notification]);
   return 'appended';
 }
 

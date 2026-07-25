@@ -18,6 +18,31 @@ test('parseSessionLinkText linkifies create_child_session output and existing se
   ])
 })
 
+test('parseSessionLinkText links only the sourceSessionId value in inter-agent opening tags', () => {
+  const canonical = parseSessionLinkText('<foxwarm-message type="inter-agent" sourceSessionId="agent/child" source="parent">\nbody')
+  assert.deepEqual(canonical, [
+    { type: 'session-link', text: '<foxwarm-message type="inter-agent" sourceSessionId="', sessionId: 'agent/child', kind: 'inter-agent-source' },
+    { type: 'text', text: '" source="parent">\nbody' },
+  ])
+
+  const reordered = parseSessionLinkText('before <foxwarm-message sourceSessionId="agent/child" type="inter-agent"> after')
+  assert.deepEqual(reordered, [
+    { type: 'text', text: 'before ' },
+    { type: 'session-link', text: '<foxwarm-message sourceSessionId="', sessionId: 'agent/child', kind: 'inter-agent-source' },
+    { type: 'text', text: '" type="inter-agent"> after' },
+  ])
+
+  assert.deepEqual(parseSessionLinkText('<foxwarm-message type="channel" sourceSessionId="agent/child">'), [
+    { type: 'text', text: '<foxwarm-message type="channel" sourceSessionId="agent/child">' },
+  ])
+  assert.deepEqual(parseSessionLinkText('<other sourceSessionId="agent/child">'), [
+    { type: 'text', text: '<other sourceSessionId="agent/child">' },
+  ])
+  assert.deepEqual(parseSessionLinkText('sessionId: `legacy`'), [
+    { type: 'session-link', text: 'sessionId: ', sessionId: 'legacy', kind: 'sessionId' },
+  ])
+})
+
 test('shouldUseStreamingToolPlaceholder detects streaming partial tool calls only before responses', () => {
   assert.equal(shouldUseStreamingToolPlaceholder({
     modelMessageMeta: { synthetic: 'streamingAssistantDraft', streaming: true },

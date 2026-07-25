@@ -36,6 +36,14 @@ async function buildFixtureBundle() {
         call: { id: 'error-call', name: 'exec', args: { command: longCommand } },
         response: { tool_use_id: 'error-call', name: 'exec', response: { error: longResult } },
       },
+      send: {
+        call: { id: 'send-call', name: 'send_to_session', args: { sessionId: 'agent/child', message: 'handoff body' } },
+        response: { tool_use_id: 'send-call', name: 'send_to_session', response: { output: 'sent' } },
+      },
+      sendAlias: {
+        call: { id: 'send-alias-call', name: 'send_to_session', args: { sessionId: '<main>', message: 'alias body' } },
+        response: { tool_use_id: 'send-alias-call', name: 'send_to_session', response: { output: 'sent' } },
+      },
     }
     window.openedCodePaths = []
     const onOpenCodeFile = (filePath, lines) => window.openedCodePaths.push({ filePath, lines })
@@ -68,7 +76,7 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
     if (style === '550a') document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
     else document.documentElement.removeAttribute('data-foxwarm-ui-style')
   }, { style, dark })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 4)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 6)
 }
 
 async function readVisualState(id) {
@@ -208,7 +216,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['exec', 'edit', 'error', 'noResult'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['exec', 'edit', 'error', 'send', 'sendAlias', 'noResult'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -252,6 +260,47 @@ test('dark and mobile 550A retain header continuity and bounded call/result cont
     assertCollapsed(await readVisualState('exec'))
     await page.click('#exec .foxwarm-tool-tag')
     assertExpanded(await readVisualState('exec'))
+  }
+})
+
+test('send_to_session To prefixes inherit ordinary call text in collapsed and expanded cards', async () => {
+  const readTo = (id, expanded) => page.$eval(`#${id}`, (root, expanded) => {
+    const prefix = root.querySelector('.foxwarm-tool-session-prefix')
+    const container = expanded
+      ? root.querySelector('.foxwarm-tool-call-args')
+      : root.querySelector('.foxwarm-tool-call-summary')
+    const prefixRow = prefix.parentElement
+    const link = prefixRow.querySelector('a')
+    const alias = prefixRow.querySelector('span.font-mono')
+    return {
+      prefixColor: getComputedStyle(prefix).color,
+      containerColor: getComputedStyle(container).color,
+      linkHref: link?.getAttribute('href') || null,
+      aliasText: alias?.textContent || null,
+      text: prefixRow.textContent,
+    }
+  }, expanded)
+
+  for (const fixture of [
+    { width: 900, height: 800 },
+    { width: 900, height: 800, style: '550a', dark: false },
+    { width: 390, height: 760, style: '550a', dark: true },
+  ]) {
+    await mountFixture(fixture)
+    for (const [id, expected] of [['send', { href: '#session/agent%2Fchild', alias: null }], ['sendAlias', { href: null, alias: '<main>' }]]) {
+      const collapsed = await readTo(id, false)
+      assert.equal(collapsed.prefixColor, collapsed.containerColor, `${id} collapsed To inherits foreground`)
+      assert.equal(collapsed.linkHref, expected.href)
+      assert.equal(collapsed.aliasText, expected.alias)
+      assert.match(collapsed.text, /^To/)
+
+      await page.click(`#${id} .foxwarm-tool-header-toggle`)
+      const expanded = await readTo(id, true)
+      assert.equal(expanded.prefixColor, expanded.containerColor, `${id} expanded To inherits foreground`)
+      assert.equal(expanded.linkHref, expected.href)
+      assert.equal(expanded.aliasText, expected.alias)
+      assert.match(expanded.text, /^To/)
+    }
   }
 })
 

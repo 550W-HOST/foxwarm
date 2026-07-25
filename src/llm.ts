@@ -1013,7 +1013,14 @@ export function fixToolCalls(contents: Message[]): Message[] {
  * Anthropic format: { role: 'user'|'assistant'|'user', content: string | array }
  */
 function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry): AnthropicMessage[] {
-    const anthropicMessages = [];
+    const anthropicMessages: AnthropicMessage[] = [];
+
+    const asContentBlocks = (value: any): AnthropicContentBlock[] => {
+        if (Array.isArray(value)) {
+            return value;
+        }
+        return [{ type: 'text', text: String(value ?? '') }];
+    };
     
     for (const msg of contents) {
         let role = msg.role as AnthropicMessage['role'] | Message['role'];
@@ -1102,7 +1109,14 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
             content = (msg as any).content || ' ';
         }
         
-        anthropicMessages.push({ role, content });
+        const previous: AnthropicMessage | undefined = anthropicMessages[anthropicMessages.length - 1];
+        if (previous?.role === role) {
+            // Anthropic requires alternating roles. Keep canonical session
+            // messages separate, and normalize only this outbound payload.
+            previous.content = [...asContentBlocks(previous.content), ...asContentBlocks(content)];
+        } else {
+            anthropicMessages.push({ role, content });
+        }
     }
     
     return anthropicMessages;

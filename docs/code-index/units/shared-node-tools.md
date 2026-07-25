@@ -70,7 +70,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `formatStructuredValue(value)` | ~20 | Formats a value as YAML or string |
 | `formatToolResponsePayload(response)` | ~32 | Formats tool response, unwrapping single `output` key |
 | `formatCompactObjectPreview(response)` | ~42 | Formats compact preview of single-key objects |
-| `parseSessionLinkText(text)` | (webuiToolRendering.ts) | Parses recognized session-id text patterns into link/text segments |
+| `parseSessionLinkText(text)` | (webuiToolRendering.ts) | Parses legacy session references plus inter-agent XML source attributes into link/text segments |
 | `shouldUseStreamingToolPlaceholder(options)` | (webuiToolRendering.ts) | Detects synthetic streaming tool calls whose args should not be parsed yet |
 
 ## Dependencies
@@ -96,6 +96,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - Exec cwd validation produces detailed error messages distinguishing cwd issues from missing shell errors
 - Output exceeding `INLINE_OUTPUT_LIMIT` (10K chars) is truncated with a pointer to the log file
 - Node `apply_patch` success and partial-failure summaries use the shared per-operation formatter, including per-file add/update counts; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).
+- `parseSessionLinkText` preserves all surrounding text while linking legacy session references and only the `sourceSessionId` value inside an opening `<foxwarm-message type="inter-agent" ...>` tag. It does not link arbitrary XML attributes or direct channel wrappers.
 
 ## Integration
 

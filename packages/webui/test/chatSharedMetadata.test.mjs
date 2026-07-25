@@ -30,6 +30,8 @@ const {
   isLightweightStructuredSystem,
   isSystemLikeText,
   isLightweightSystemTextLine,
+  getSystemMessageKind,
+  getSystemMessagePreviewDescriptor,
   parseFoxwarmMetadataLine,
 } = await import(pathToFileURL(bundledPath).href)
 
@@ -116,4 +118,54 @@ test('legacy system prefixes remain supported', () => {
 test('ordinary xml-looking text is not treated as foxwarm metadata', () => {
   assert.equal(isFoxwarmMetadataLine('<not-foxwarm-message>'), false)
   assert.equal(isSystemLikeText('<not-foxwarm-message>'), false)
+})
+
+test('system message tags prefer a heavy system kind over direct wrapper history', () => {
+  const mixed = {
+    role: 'user',
+    parts: [{ text: '<foxwarm-message type="channel">\nold wrapper\n</foxwarm-message>\n<foxwarm-system kind="event" type="wait-timeout">\nwait timeout reached\n</foxwarm-system>' }],
+  }
+  assert.deepEqual(getSystemMessageKind(mixed), { kind: 'event', source: 'foxwarm-system' })
+
+  assert.deepEqual(getSystemMessageKind({
+    role: 'user',
+    parts: [{ text: '<foxwarm-message type="inter-agent">\nchild report\n</foxwarm-message>' }],
+  }), { kind: 'inter-agent', source: 'foxwarm-message' })
+})
+
+test('system message tags have stable legacy and malformed fallbacks', () => {
+  assert.deepEqual(getSystemMessageKind({
+    role: 'user',
+    parts: [{ system: 'legacy system notification' }],
+  }), { kind: 'system', source: 'legacy' })
+
+  assert.deepEqual(getSystemMessageKind({
+    role: 'user',
+    parts: [{ text: '<foxwarm-system kind="   ">\nmalformed history\n</foxwarm-system>' }],
+  }), { kind: 'system', source: 'legacy' })
+})
+
+test('system preview descriptors use only supported non-empty wrapper metadata', () => {
+  const descriptor = (text) => getSystemMessagePreviewDescriptor({ role: 'user', parts: [{ text }] })
+
+  assert.deepEqual(descriptor('<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\nreport\n</foxwarm-message>'), {
+    kind: 'inter-agent', source: 'foxwarm-message', previewPrefix: 'From parent/child: ', previewSessionId: 'parent/child',
+  })
+  assert.deepEqual(descriptor('<foxwarm-system kind="session-boundary" event="new-child">\nboundary\n</foxwarm-system>'), {
+    kind: 'session-boundary', source: 'foxwarm-system', previewPrefix: 'new-child: ',
+  })
+  assert.deepEqual(descriptor('<foxwarm-system kind="event" type="wait-timeout">\ntimeout\n</foxwarm-system>'), {
+    kind: 'event', source: 'foxwarm-system', previewPrefix: 'wait-timeout: ',
+  })
+  const blankInterAgent = descriptor('<foxwarm-message type="inter-agent" sourceSessionId="  ">\nreport\n</foxwarm-message>')
+  assert.equal(blankInterAgent.previewPrefix, '')
+  assert.equal(blankInterAgent.previewSessionId, undefined)
+  assert.equal(descriptor('<foxwarm-system kind="session-boundary" event="">\nboundary\n</foxwarm-system>').previewPrefix, '')
+  assert.equal(descriptor('<foxwarm-system kind="event">\ntimeout\n</foxwarm-system>').previewPrefix, '')
+  assert.deepEqual(descriptor('<foxwarm-message type="channel">\nold wrapper\n</foxwarm-message>\n<foxwarm-system kind="event" type="wait-timeout">\ntimeout\n</foxwarm-system>'), {
+    kind: 'event', source: 'foxwarm-system', previewPrefix: 'wait-timeout: ',
+  })
+  assert.deepEqual(descriptor('<foxwarm-message type="channel">\nold wrapper\n</foxwarm-message>\n<foxwarm-system kind="time" />\n<foxwarm-system kind="session" />\n<foxwarm-system kind="event" type="wait-timeout">\ntimeout\n</foxwarm-system>'), {
+    kind: 'event', source: 'foxwarm-system', previewPrefix: 'wait-timeout: ',
+  })
 })

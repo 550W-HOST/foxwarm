@@ -11,7 +11,7 @@ import { buildChildReminder, isModelNoActionSignal } from './session/childSessio
 import { getManagedSessionState, isManagedSessionActive, setManagedSessionState } from './session/managedState';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
-import { maybeBuildGoalEndTurnReminderMessage } from './session/goal';
+import { maybeBuildGoalEndTurnReminderMessage, maybeBuildGoalReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
@@ -398,32 +398,32 @@ export class MessageRouter {
     return finalParts;
   }
 
-  private drainLeadingQueuedMessageParts(session: Session): { parts: MessagePart[]; broadcastSource?: QueueSource } {
-    const queuedParts: MessagePart[] = [];
+  private drainLeadingQueuedTurnInputs(session: Session): { items: QueueItem[]; broadcastSource?: QueueSource } {
+    const items: QueueItem[] = [];
     let broadcastSource: QueueSource | undefined;
     let streamKey: string | undefined;
 
     while (session.queue[0]
       && session.queue[0].type !== 'compact'
       && session.queue[0].type !== 'compact-commit'
-      && session.queue[0].type !== 'retry'
-      && !session.queue[0].message) {
+      && session.queue[0].type !== 'retry') {
       const nextStreamKey = this.getSourceStreamKey(session.queue[0].source);
-      if (queuedParts.length > 0 && streamKey !== nextStreamKey) {
+      if (items.length > 0 && streamKey !== nextStreamKey) {
         break;
       }
       const item = session.queue.shift();
-      if (!item?.parts) continue;
+      if (!item) continue;
+      if (!item.message && !item.parts?.length) continue;
 
-      if (!broadcastSource && item.source) {
+      if (items.length === 0) {
         broadcastSource = item.source;
         streamKey = nextStreamKey;
       }
 
-      queuedParts.push(...item.parts);
+      items.push(item);
     }
 
-    return { parts: queuedParts, broadcastSource };
+    return { items, broadcastSource };
   }
 
   private async consumeLeadingQueuedTurnInputs(
@@ -431,7 +431,7 @@ export class MessageRouter {
     pendingParts: MessagePart[] | null,
     turnStreamKey?: string,
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
-    let mergedParts = pendingParts;
+    let parts = pendingParts;
     let consumedInput = false;
 
     while (session.queue[0]
@@ -451,13 +451,17 @@ export class MessageRouter {
         continue;
       }
 
+      // Queue entries are canonical history boundaries. Flush the current
+      // unsent turn before recording a follow-up, rather than concatenating
+      // their parts into one user message. Provider serializers are the only
+      // layer that may normalize adjacent same-role messages for a protocol.
+      if (!consumedInput && parts?.length) {
+        await this.appendUserMessage(session, parts);
+        parts = null;
+      }
+
       if (item.message) {
         consumedInput = true;
-        if (mergedParts?.length) {
-          await this.appendUserMessage(session, mergedParts);
-          mergedParts = null;
-        }
-
         await sessionManager.appendSessionMessage(session, item.message);
         continue;
       }
@@ -467,15 +471,35 @@ export class MessageRouter {
       }
 
       consumedInput = true;
-      mergedParts = mergedParts?.length
-        ? [...mergedParts, ...item.parts]
-        : [...item.parts];
+      await this.appendUserMessage(session, item.parts);
     }
 
     return {
-      parts: mergedParts,
+      parts,
       consumedInput,
     };
+  }
+
+  private async appendQueuedTurnInputs(session: Session, sessionId: string, items: QueueItem[]): Promise<void> {
+    let firstInputItem = true;
+    for (const item of items) {
+      if (item.message) {
+        await sessionManager.appendSessionMessage(session, item.message);
+        firstInputItem = false;
+        continue;
+      }
+      if (!item.parts?.length) {
+        continue;
+      }
+
+      // Only the first input item starts this turn, so it receives turn metadata.
+      // Every queued item is still persisted as its own canonical message.
+      const parts = firstInputItem
+        ? this.prepareTurnParts(session, sessionId, item.parts)
+        : item.parts;
+      await this.appendUserMessage(session, parts);
+      firstInputItem = false;
+    }
   }
 
   private tryClaimSession(session: Session): boolean {
@@ -485,16 +509,6 @@ export class MessageRouter {
 
     void sessionManager.updateSessionBusyState(session, true);
     return true;
-  }
-
-  private getQueuedTurnOptions(session: Session, item: { type: string; parts?: MessagePart[]; source?: QueueSource; message?: Message }) {
-    return {
-      parts: item.parts || null,
-      message: item.message,
-      source: item.type === 'user' ? item.source : undefined,
-      session,
-      preclaimed: true,
-    };
   }
 
   private async continueWithQueuedWork(session: Session): Promise<boolean> {
@@ -524,23 +538,14 @@ export class MessageRouter {
       return true;
     }
 
-    if (session.queue[0]?.message) {
-      const nextItem = session.queue.shift();
-      if (!nextItem) {
-        return false;
-      }
-
-      await this.processQueuedItem(session.id, session, nextItem);
-      return true;
-    }
-
-    const queuedTurn = this.drainLeadingQueuedMessageParts(session);
-    if (queuedTurn.parts.length === 0) {
+    const queuedTurn = this.drainLeadingQueuedTurnInputs(session);
+    if (queuedTurn.items.length === 0) {
       return false;
     }
 
     await this.runSessionTurn(session.id, {
-      parts: queuedTurn.parts,
+      parts: null,
+      queuedItems: queuedTurn.items,
       session,
       preclaimed: true,
       source: queuedTurn.broadcastSource,
@@ -626,7 +631,13 @@ export class MessageRouter {
       return;
     }
 
-    await this.runSessionTurn(sessionId, this.getQueuedTurnOptions(session, item));
+    await this.runSessionTurn(sessionId, {
+      parts: null,
+      queuedItems: [item],
+      source: item.type === 'user' ? item.source : undefined,
+      session,
+      preclaimed: true,
+    });
   }
 
   private async appendUserMessage(session: Session, parts: MessagePart[]): Promise<void> {
@@ -737,6 +748,18 @@ export class MessageRouter {
     // End-turn reminders should become visible in history immediately without
     // spawning another follow-up reminder turn. Interval reminders are the ones
     // that independently re-trigger the agent loop.
+    await sessionManager.appendSessionMessage(session, reminder);
+  }
+
+  private async maybeAppendGoalIntervalReminder(session: Session): Promise<void> {
+    const reminder = maybeBuildGoalReminderMessage(session);
+    if (!reminder) {
+      return;
+    }
+
+    // Interval reminders are canonical history context for the request about to
+    // be sent. They are not session work: queueing one would defer visibility
+    // until after the current turn and create a synthetic reminder-only turn.
     await sessionManager.appendSessionMessage(session, reminder);
   }
 
@@ -904,6 +927,7 @@ export class MessageRouter {
     options: {
       parts: MessagePart[] | null;
       message?: Message;
+      queuedItems?: QueueItem[];
       sourceCtx?: ChannelContext;
       source?: QueueSource;
       sendTyping?: boolean;
@@ -913,8 +937,8 @@ export class MessageRouter {
     }
   ): Promise<void> {
     const session = options.session ?? await sessionManager.getSession(sessionId);
-    if (options.parts?.length || options.message) {
-      sessionManager.clearSessionWaitForDirectTurn(session, options.message ? 'direct-message-turn' : 'direct-parts-turn');
+    if (options.parts?.length || options.message || options.queuedItems?.length) {
+      sessionManager.clearSessionWaitForDirectTurn(session, options.message || options.queuedItems?.some(item => item.message) ? 'direct-message-turn' : 'direct-parts-turn');
     }
     if (!options.preclaimed) {
       await sessionManager.updateSessionBusyState(session, true);
@@ -928,7 +952,11 @@ export class MessageRouter {
       ? (text: string, broadcastOptions?: any) => session.broadcast!(text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
       : undefined;
 
-    logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.message?.parts?.length ?? options.parts?.length ?? 0 }, 'Session turn processing');
+    const queuedItemPartCount = options.queuedItems?.reduce(
+      (count, item) => count + (item.message?.parts?.length ?? item.parts?.length ?? 0),
+      0,
+    );
+    logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.message?.parts?.length ?? options.parts?.length ?? queuedItemPartCount ?? 0 }, 'Session turn processing');
 
     let stoppedByUser = false;
     try {
@@ -948,6 +976,7 @@ export class MessageRouter {
       if (options.message) {
         await sessionManager.appendSessionMessage(session, options.message);
       }
+      let queuedItems = options.queuedItems;
       let iteration = 0;
       let finalResponse = '';
       let finalUsage = null;
@@ -959,6 +988,15 @@ export class MessageRouter {
         }
         if (pendingCompaction === 'continued') {
           continue;
+        }
+
+        if (queuedItems?.length) {
+          // Keep a drained batch unsent across the pre-LLM compaction safe
+          // point. Once that boundary is clear, persist its individual queue
+          // records before consuming any additional compatible follow-ups.
+          await this.appendQueuedTurnInputs(session, sessionId, queuedItems);
+          queuedItems = undefined;
+          parts = null;
         }
 
         if (!options.deferQueuedInputs) {
@@ -977,6 +1015,11 @@ export class MessageRouter {
             : '_[Execution stopped by user]_';
           break;
         }
+
+        // This is the safe boundary immediately before a provider call: queued
+        // inputs and the preceding tool result have already been persisted, so
+        // an interval reminder cannot split a function call from its result.
+        await this.maybeAppendGoalIntervalReminder(session);
 
         this.emitTurnProgress(broadcast, turnChannelOptions, { type: 'llm-start' });
         sessionManager.setActiveSessionRuntimeState(session.id, {

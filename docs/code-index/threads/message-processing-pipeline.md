@@ -67,6 +67,10 @@ Persist the canonical provider-qualified model key on model messages so mixed-mo
 
 Queued follow-up merge and progress/final delivery respect explicit platform turn/source identifiers. Different or unbound sources remain separate turns.
 
+### D-pipeline-canonical-queue-item-boundaries
+
+Each logical queued input or event is appended as its own canonical `Message` in queue order, including `parts` items and structured `message` items. A compatible batch may still be consumed before one provider request so tool-loop follow-ups affect that request, but router storage never concatenates queue-item parts. Compaction/retry controls and platform stream/source boundaries remain queue boundaries. Provider-specific serializers, not persisted history, normalize adjacent same-role messages when a protocol requires it.
+
 ### D-pipeline-busy-queue-silence
 
 Busy-time input queues silently; UI/channel queue state is presented by current surfaces rather than an automatic acknowledgement message.
