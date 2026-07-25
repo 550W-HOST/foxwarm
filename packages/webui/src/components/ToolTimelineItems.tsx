@@ -251,7 +251,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     const preview = message.length > 160 ? `${message.slice(0, 160)}...` : message
     return (
       <span className="flex items-center gap-1 min-w-0" title={`${targetSessionId}: ${message}`}>
-        <span className="shrink-0 text-gray-500 dark:text-gray-400">To</span>
+        <span className="foxwarm-tool-session-prefix shrink-0">To</span>
         <span className="shrink-0">{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}</span>
         <span className="truncate">: {preview}</span>
       </span>
@@ -377,7 +377,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
     return (
       <div className="space-y-1">
-        <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-gray-500 dark:text-gray-400">To</span>{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}<span>:</span></div>
+        <div className="whitespace-pre-wrap break-all"><span className="foxwarm-tool-session-prefix mr-1">To</span>{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}<span>:</span></div>
         <div className="whitespace-pre-wrap break-all">{message}</div>
       </div>
     )
