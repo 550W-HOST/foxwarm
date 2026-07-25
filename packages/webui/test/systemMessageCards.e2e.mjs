@@ -19,6 +19,7 @@ async function buildFixtureBundle() {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
+    import { ToolTag } from './src/components/chatShared'
 
     const image = { data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', mimeType: 'image/png' }
     const longBody = 'overflow-safe-body-' + 'x'.repeat(360)
@@ -26,6 +27,9 @@ async function buildFixtureBundle() {
       event: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nwait timeout reached for sessionId: \`child/session\`\\n</foxwarm-system>' }, { inlineData: image }], __meta: { seq: 1 } }] },
       interAgent: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\\nchild report body\\n</foxwarm-message>' }], __meta: { seq: 2 } }] },
       sessionBoundary: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="session-boundary" event="new-child">\\nboundary body\\n</foxwarm-system>' }], __meta: { seq: 21 } }] },
+      goalReminder: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="goal-reminder">\\nremember this goal\\n</foxwarm-system>' }], __meta: { seq: 22 } }] },
+      systemPrompt: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="system-prompt">\\nprompt body\\n</foxwarm-system>' }], __meta: { seq: 23 } }] },
+      unknown: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="future-system-kind">\\nunknown body\\n</foxwarm-system>' }], __meta: { seq: 24 } }] },
       legacy: { messages: [{ role: 'user', parts: [{ system: 'legacy system notification' }], __meta: { seq: 3 } }] },
       direct: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="channel">\\ndirect user body\\n</foxwarm-message>' }], __meta: { seq: 4 } }] },
       mixed: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="channel">\\nold wrapper\\n</foxwarm-message>\\n<foxwarm-system kind="event">\\n' + longBody + '\\n</foxwarm-system>' }], __meta: { seq: 5 } }] },
@@ -50,6 +54,7 @@ async function buildFixtureBundle() {
         nestedDepth: fixture.nestedDepth || 0,
       }))
     }
+    createRoot(document.getElementById('unknownTool')).render(React.createElement(ToolTag, { name: 'future-tool', className: 'foxwarm-unknown-tool-tag' }))
   `
   const result = await build({
     stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'system-message-cards-fixture.tsx' },
@@ -68,7 +73,7 @@ async function mountFixture(width = 900, dark = false) {
   await page.setViewport({ width, height: 700, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.evaluate((dark) => document.documentElement.classList.toggle('dark', dark), dark)
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 8)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 11)
 }
 
 before(async () => {
@@ -80,7 +85,7 @@ before(async () => {
 
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:20px}</style></head><body><main>${['event', 'interAgent', 'sessionBoundary', 'legacy', 'direct', 'mixed', 'nested', 'spacing'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:20px}</style></head><body><main>${['event', 'interAgent', 'sessionBoundary', 'goalReminder', 'systemPrompt', 'unknown', 'legacy', 'direct', 'mixed', 'nested', 'spacing', 'unknownTool'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -95,7 +100,7 @@ after(async () => {
 
 test('heavy system and non-channel messages use kind-tagged thread cards while direct users stay bubbles', async () => {
   await mountFixture()
-  for (const [id, kind] of [['event', 'event'], ['interAgent', 'inter-agent'], ['sessionBoundary', 'session-boundary'], ['legacy', 'system'], ['mixed', 'event'], ['nested', 'snapshot']]) {
+  for (const [id, kind] of [['event', 'event'], ['interAgent', 'inter-agent'], ['sessionBoundary', 'session-boundary'], ['goalReminder', 'goal-reminder'], ['systemPrompt', 'system-prompt'], ['unknown', 'future-system-kind'], ['legacy', 'system'], ['mixed', 'event'], ['nested', 'snapshot']]) {
     const card = await page.$eval(`#${id} [data-system-message-card]`, element => ({
       kind: element.getAttribute('data-system-message-kind'),
       expanded: element.querySelector('button')?.getAttribute('aria-expanded'),
@@ -113,7 +118,12 @@ test('heavy system and non-channel messages use kind-tagged thread cards while d
   }
   assert.match((await page.$eval('#event [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-bell/)
   assert.match((await page.$eval('#interAgent [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-messages-square/)
+  assert.match((await page.$eval('#sessionBoundary [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-separator-horizontal/)
+  assert.match((await page.$eval('#goalReminder [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-target/)
+  assert.match((await page.$eval('#systemPrompt [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-scroll-text/)
+  assert.match((await page.$eval('#unknown [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-bell/)
   assert.match((await page.$eval('#legacy [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-info/)
+  assert.match((await page.$eval('#unknownTool .foxwarm-unknown-tool-tag svg', element => element.getAttribute('class') || '')).toString(), /lucide-wrench/)
 
   assert.equal(await page.$$('#direct [data-system-message-card]').then(nodes => nodes.length), 0)
   assert.equal(await page.$$('#direct .foxwarm-user-message-bubble').then(nodes => nodes.length), 1)

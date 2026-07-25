@@ -3,13 +3,21 @@ import {
   Brain,
   BookOpen,
   Bell,
+  BellRing,
   Bot,
   Camera,
+  GitFork,
   Info,
+  Inbox,
   MessagesSquare,
   Pencil,
+  Power,
+  SeparatorHorizontal,
+  ScrollText,
+  Target,
   Timer,
   Wrench,
+  Workflow,
   Terminal,
   Zap,
 } from 'lucide-react'
@@ -675,11 +683,20 @@ const toolIcons: Record<string, LucideIcon> = {
   'system-timer': Timer,
   'system-trigger': Zap,
   'system-background': Bot,
+  'system-onboot': Power,
   'system-snapshot': Camera,
+  'system-session-boundary': SeparatorHorizontal,
+  'system-goal-reminder': Target,
+  'system-child-reminder': BellRing,
+  'system-system-prompt': ScrollText,
+  'system-managed-session': Workflow,
+  'system-session-event': GitFork,
+  'system-btw': MessagesSquare,
+  'system-system-delivered': Inbox,
   'system-system': Info,
 }
 
-const getToolIcon = (name: string) => toolIcons[name] || Wrench
+const getToolIcon = (name: string, fallback: LucideIcon = Wrench) => toolIcons[name] || fallback
 
 export type ToolTagTone = 'neutral' | 'success' | 'error' | 'system'
 
@@ -697,7 +714,8 @@ const toolTagToneClasses: Record<ToolTagTone, string> = {
 }
 
 export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', iconName }: { name: string; label?: string; tone?: ToolTagTone; className?: string; iconName?: string }) => {
-  const Icon = getToolIcon(iconName || name)
+  const resolvedIconName = iconName || name
+  const Icon = getToolIcon(resolvedIconName, iconName?.startsWith('system-') ? Bell : Wrench)
 
   return (
     <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
