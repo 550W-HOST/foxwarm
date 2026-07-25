@@ -422,7 +422,7 @@ export const getSystemMessagePreviewDescriptor = (message: Message): SystemMessa
     return {
       kind: messageType.kind,
       source: 'foxwarm-message',
-      previewPrefix: previewValue ? `${previewValue}: ` : '',
+      previewPrefix: previewValue ? `From ${previewValue}: ` : '',
       ...(previewValue ? { previewSessionId: previewValue } : {}),
     }
   }
@@ -710,7 +710,7 @@ const toolTagToneClasses: Record<ToolTagTone, string> = {
   neutral: 'border-slate-300 bg-slate-100 text-slate-700 dark:border-gray-600 dark:bg-gray-900/60 dark:text-gray-300',
   success: 'border-green-300 bg-green-100 text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300',
   error: 'border-red-300 bg-red-100 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300',
-  system: 'border-yellow-300 bg-yellow-100 text-yellow-800 dark:border-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-300',
+  system: 'border-blue-300 bg-blue-100 text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300',
 }
 
 export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', iconName }: { name: string; label?: string; tone?: ToolTagTone; className?: string; iconName?: string }) => {
@@ -738,7 +738,7 @@ export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
 export const SessionHashLink = ({ sessionId, className = '' }: { sessionId: string; className?: string }) => (
   <a
     href={`#session/${encodeURIComponent(sessionId)}`}
-    className={`font-mono underline decoration-dotted underline-offset-2 hover:text-blue-600 dark:hover:text-blue-300 ${className}`.trim()}
+    className={`foxwarm-session-hash-link font-mono underline decoration-dotted underline-offset-2 hover:text-blue-600 dark:hover:text-blue-300 ${className}`.trim()}
     title={`Open session ${sessionId}`}
   >
     {sessionId}

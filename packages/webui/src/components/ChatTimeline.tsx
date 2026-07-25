@@ -381,10 +381,10 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
     const body = bodyLine?.trim() || renderedText.trim() || messageKind.kind
     return `${messageKind.previewPrefix}${body}`
   }, [allLines, messageKind.kind, messageKind.previewPrefix, renderedText])
-  const surfaceClass = 'bg-yellow-50/55 dark:bg-yellow-900/10 text-slate-700 dark:text-slate-300'
-  const threadLineClass = 'text-yellow-300 hover:text-yellow-500 focus-visible:text-yellow-500 dark:text-yellow-700 dark:hover:text-yellow-400 dark:focus-visible:text-yellow-400'
-  const headerClass = 'bg-yellow-100/80 dark:bg-yellow-800/20'
-  const headerHoverClass = 'hover:text-yellow-950 dark:hover:text-white'
+  const surfaceClass = 'bg-blue-50/55 dark:bg-blue-900/10 text-slate-700 dark:text-slate-300'
+  const threadLineClass = 'text-blue-300 hover:text-blue-500 focus-visible:text-blue-500 dark:text-blue-700 dark:hover:text-blue-400 dark:focus-visible:text-blue-400'
+  const headerClass = 'bg-blue-100/80 dark:bg-blue-800/20'
+  const headerHoverClass = 'hover:text-blue-950 dark:hover:text-white'
 
   return (
     <div className="w-full min-w-0 overflow-x-hidden">
@@ -409,7 +409,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           {!expanded && (
             <span className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={preview}>
               {messageKind.previewSessionId ? (
-                <><span onClick={(event) => event.stopPropagation()}><SessionHashLink sessionId={messageKind.previewSessionId} /></span>: {preview.slice(messageKind.previewPrefix.length)}</>
+                <>From <span onClick={(event) => event.stopPropagation()}><SessionHashLink sessionId={messageKind.previewSessionId} /></span>: {preview.slice(messageKind.previewPrefix.length)}</>
               ) : preview}
             </span>
           )}

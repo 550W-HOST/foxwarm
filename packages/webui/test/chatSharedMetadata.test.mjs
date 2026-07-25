@@ -149,7 +149,7 @@ test('system preview descriptors use only supported non-empty wrapper metadata',
   const descriptor = (text) => getSystemMessagePreviewDescriptor({ role: 'user', parts: [{ text }] })
 
   assert.deepEqual(descriptor('<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\nreport\n</foxwarm-message>'), {
-    kind: 'inter-agent', source: 'foxwarm-message', previewPrefix: 'parent/child: ', previewSessionId: 'parent/child',
+    kind: 'inter-agent', source: 'foxwarm-message', previewPrefix: 'From parent/child: ', previewSessionId: 'parent/child',
   })
   assert.deepEqual(descriptor('<foxwarm-system kind="session-boundary" event="new-child">\nboundary\n</foxwarm-system>'), {
     kind: 'session-boundary', source: 'foxwarm-system', previewPrefix: 'new-child: ',
@@ -157,7 +157,9 @@ test('system preview descriptors use only supported non-empty wrapper metadata',
   assert.deepEqual(descriptor('<foxwarm-system kind="event" type="wait-timeout">\ntimeout\n</foxwarm-system>'), {
     kind: 'event', source: 'foxwarm-system', previewPrefix: 'wait-timeout: ',
   })
-  assert.equal(descriptor('<foxwarm-message type="inter-agent" sourceSessionId="  ">\nreport\n</foxwarm-message>').previewPrefix, '')
+  const blankInterAgent = descriptor('<foxwarm-message type="inter-agent" sourceSessionId="  ">\nreport\n</foxwarm-message>')
+  assert.equal(blankInterAgent.previewPrefix, '')
+  assert.equal(blankInterAgent.previewSessionId, undefined)
   assert.equal(descriptor('<foxwarm-system kind="session-boundary" event="">\nboundary\n</foxwarm-system>').previewPrefix, '')
   assert.equal(descriptor('<foxwarm-system kind="event">\ntimeout\n</foxwarm-system>').previewPrefix, '')
   assert.deepEqual(descriptor('<foxwarm-message type="channel">\nold wrapper\n</foxwarm-message>\n<foxwarm-system kind="event" type="wait-timeout">\ntimeout\n</foxwarm-system>'), {
