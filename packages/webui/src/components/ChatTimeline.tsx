@@ -5,6 +5,7 @@ import {
   copyTextToClipboard,
   formatToolLabel,
   formatStructuredSystemText,
+  getSystemMessagePreviewDescriptor,
   isCollapsibleSystemText,
   isHeavySystemTextLine,
   isLightweightStructuredSystem,
@@ -12,6 +13,8 @@ import {
   renderMarkdown,
   handleMarkdownLinkClick,
   renderSystemTextWithSessionLinks,
+  SessionHashLink,
+  ToolTag,
   type Message,
   type ToolTagItem,
   type ViewMode,
@@ -30,6 +33,7 @@ import {
   type OpenCodeFileHandler,
 } from './ToolTimelineItems'
 import { getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
+import ThreadLineButton from './ThreadLineButton'
 
 interface ChatTimelineProps {
   sessionId: string
@@ -287,6 +291,14 @@ const isFinalLlmRetryNotice = (message: Message): boolean => (
   message.__meta?.noticeType === 'llm-retry' && message.__meta?.retry?.final === true
 )
 
+const isHeavySystemLikeMessage = (message: Message): boolean => {
+  if (message.role === 'model') return false
+  return (
+    message.parts.some(part => !!part.system && !isLightweightStructuredSystem(part.system)) ||
+    message.parts.some(part => !!part.text && part.text.split('\n').some(isHeavySystemTextLine))
+  )
+}
+
 const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { systemText: string; isUser: boolean }) {
   return (
     <pre
@@ -361,13 +373,47 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   }), [msg.parts])
 
   const renderedText = allLines.join('\n')
-  const shouldCollapse = !expanded
+  const messageKind = useMemo(() => getSystemMessagePreviewDescriptor(msg), [msg])
+  const preview = useMemo(() => {
+    const bodyLine = allLines.find((line) => line.trim() && !isSystemLikeText(line))
+    const body = bodyLine?.trim() || renderedText.trim() || messageKind.kind
+    return `${messageKind.previewPrefix}${body}`
+  }, [allLines, messageKind.kind, messageKind.previewPrefix, renderedText])
+  const surfaceClass = 'bg-yellow-50/55 dark:bg-yellow-900/10 text-slate-700 dark:text-slate-300'
+  const threadLineClass = 'text-yellow-300 hover:text-yellow-500 focus-visible:text-yellow-500 dark:text-yellow-700 dark:hover:text-yellow-400 dark:focus-visible:text-yellow-400'
+  const headerClass = 'bg-yellow-100/80 dark:bg-yellow-800/20'
+  const headerHoverClass = 'hover:text-yellow-950 dark:hover:text-white'
 
   return (
-    <div className="w-full overflow-x-hidden">
-      <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-3 text-slate-700 dark:text-slate-300">
-        <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : undefined}>
-          <pre className="max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
+    <div className="w-full min-w-0 overflow-x-hidden">
+      <div
+        data-system-message-card
+        data-system-message-kind={messageKind.kind}
+        data-system-message-tone="system"
+        className={`foxwarm-system-message-card relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${surfaceClass} ${expanded ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''} my-0.5`}
+        onClick={!expanded ? () => setExpanded(true) : undefined}
+      >
+        <ThreadLineButton
+          expanded={expanded}
+          onToggle={() => setExpanded(current => !current)}
+          label={expanded ? `Collapse ${messageKind.kind} message` : `Expand ${messageKind.kind} message`}
+          className={`foxwarm-system-message-thread-line ${threadLineClass}`}
+        />
+        <div
+          className={`foxwarm-system-message-header -ml-2 -mr-2 flex min-w-0 items-center gap-2 px-2 py-1 ${headerClass} ${expanded ? `mb-1 cursor-pointer ${headerHoverClass}` : ''}`}
+          onClick={expanded ? (event) => { event.stopPropagation(); setExpanded(false) } : undefined}
+        >
+          <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={messageKind.kind} tone="system" className="foxwarm-system-message-tag" />
+          {!expanded && (
+            <span className="foxwarm-system-message-preview min-w-0 flex-1 truncate text-[13px] leading-[18px]" title={preview}>
+              {messageKind.previewSessionId ? (
+                <><span onClick={(event) => event.stopPropagation()}><SessionHashLink sessionId={messageKind.previewSessionId} /></span>: {preview.slice(messageKind.previewPrefix.length)}</>
+              ) : preview}
+            </span>
+          )}
+        </div>
+        {expanded && (
+          <pre className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
             {renderedText.split('\n').map((line, lineIdx) => {
               const isPrefix = isSystemLikeText(line)
               return (
@@ -383,14 +429,6 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
               )
             })}
           </pre>
-        </div>
-        {allLines.length > 4 && (
-          <button
-            onClick={() => setExpanded(current => !current)}
-            className="text-xs mt-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 text-left"
-          >
-            {expanded ? '▲ Show less' : '▼ Show more'}
-          </button>
         )}
       </div>
       <ImageParts imageParts={msg.parts.filter(p => p.inlineData)} keyPrefix={messageKey} />
@@ -541,14 +579,10 @@ const MessageRow = memo(function MessageRow({
   const isInToolGroup = summaryTagItems.length > 0
   const hasToolParts = useMemo(() => msg.parts.some(p => p.functionCall || p.functionResponse || p.thinking), [msg.parts])
   const hasVisibleTextContent = useMemo(() => msg.parts.some(p => (p.text && p.text.trim()) || (p.system && String(p.system).trim())), [msg.parts])
-  const systemLikeMessage = useMemo(() => {
-    if (msg.role === 'model') return false
-    return (
-      msg.parts.some(part => !!part.system && !isLightweightStructuredSystem(part.system)) ||
-      msg.parts.some(part => !!part.text && part.text.split('\n').some(isHeavySystemTextLine))
-    )
-  }, [msg])
-  const shouldSkipMargin = !systemLikeMessage && (msg.role === 'model' || msg.role === 'tool') && (prevMsg?.role === 'model' || prevMsg?.role === 'tool')
+  const systemLikeMessage = useMemo(() => isHeavySystemLikeMessage(msg), [msg])
+  const isThreadLikeMessage = systemLikeMessage || msg.role === 'model' || msg.role === 'tool'
+  const previousIsThreadLike = !!prevMsg && (isHeavySystemLikeMessage(prevMsg) || prevMsg.role === 'model' || prevMsg.role === 'tool')
+  const shouldSkipMargin = isThreadLikeMessage && previousIsThreadLike
   const isCollapsedToolGroup = groupTools && isInToolGroup && !groupExpanded && !keepToolGroupExpanded
   const hasInterleavedToolGroup = !!(nextMsg && nextMsg.role === 'tool' && nextMsg.parts.some(p => p.functionResponse) && msg.parts.some(p => p.functionCall))
   const displayUsage = showUsageBadge

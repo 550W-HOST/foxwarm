@@ -2,9 +2,16 @@ import * as Diff from 'diff'
 import {
   Brain,
   BookOpen,
+  Bell,
+  Bot,
+  Camera,
+  Info,
+  MessagesSquare,
   Pencil,
+  Timer,
   Wrench,
   Terminal,
+  Zap,
 } from 'lucide-react'
 import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
@@ -207,6 +214,19 @@ export interface Message {
   }
 }
 
+export interface SystemMessageKind {
+  /** Stable lower-case metadata value used as the visual thread-card tag. */
+  kind: string
+  source: 'foxwarm-system' | 'foxwarm-message' | 'legacy'
+}
+
+export interface SystemMessagePreviewDescriptor extends SystemMessageKind {
+  /** Optional metadata prefix for the collapsed card preview only. */
+  previewPrefix: string
+  /** Session identity represented by the inter-agent collapsed-preview prefix. */
+  previewSessionId?: string
+}
+
 /** Click handler for markdown containers: intercepts link clicks with a confirmation dialog */
 export const handleMarkdownLinkClick = (e: MouseEvent<HTMLDivElement>) => {
   const target = e.target as HTMLElement
@@ -342,6 +362,69 @@ export const isHeavySystemTextLine = (text: string): boolean => (
 export const isCollapsibleSystemText = (text: string): boolean => (
   (text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(text)) && !isLightweightSystemTextLine(text)
 )
+
+const normalizeSystemMessageKind = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase()
+  return normalized && normalized.length <= 80 ? normalized : null
+}
+
+const getSystemMessagePreviewAttribute = (value: unknown): string => (
+  typeof value === 'string' ? value.trim() : ''
+)
+
+/**
+ * Finds a heavy system card's stable kind plus its collapsed-preview metadata.
+ * A real foxwarm-system kind wins over a direct channel wrapper or a
+ * non-channel foxwarm-message type, keeping corrupted mixed history readable
+ * as the actual event it contains.
+ */
+export const getSystemMessagePreviewDescriptor = (message: Message): SystemMessagePreviewDescriptor => {
+  let messageType: { kind: string; attrs: Record<string, string> } | null = null
+
+  for (const part of message.parts) {
+    const text = part.system || part.text || ''
+    for (const line of text.split('\n')) {
+      const tag = parseFoxwarmMetadataLine(line)
+      if (!tag || tag.closing) continue
+
+      if (tag.tagName === 'foxwarm-system' && !isLightweightFoxwarmMetadataLine(line)) {
+        const kind = normalizeSystemMessageKind(tag.attrs.kind)
+        if (kind) {
+          const previewValue = kind === 'session-boundary'
+            ? getSystemMessagePreviewAttribute(tag.attrs.event)
+            : kind === 'event'
+              ? getSystemMessagePreviewAttribute(tag.attrs.type)
+              : ''
+          return { kind, source: 'foxwarm-system', previewPrefix: previewValue ? `${previewValue}: ` : '' }
+        }
+      }
+
+      if (tag.tagName === 'foxwarm-message' && tag.attrs.type !== 'channel') {
+        const kind = normalizeSystemMessageKind(tag.attrs.type)
+        if (kind && !messageType) messageType = { kind, attrs: tag.attrs }
+      }
+    }
+  }
+
+  if (messageType) {
+    const previewValue = messageType.kind === 'inter-agent'
+      ? getSystemMessagePreviewAttribute(messageType.attrs.sourceSessionId)
+      : ''
+    return {
+      kind: messageType.kind,
+      source: 'foxwarm-message',
+      previewPrefix: previewValue ? `${previewValue}: ` : '',
+      ...(previewValue ? { previewSessionId: previewValue } : {}),
+    }
+  }
+  return { kind: 'system', source: 'legacy', previewPrefix: '' }
+}
+
+export const getSystemMessageKind = (message: Message): SystemMessageKind => {
+  const { kind, source } = getSystemMessagePreviewDescriptor(message)
+  return { kind, source }
+}
 
 export const clampContentStyle = (lines: number, extraHeightRem = 0): CSSProperties => ({
   lineHeight: '1.3em',
@@ -583,11 +666,18 @@ const toolIcons: Record<string, LucideIcon> = {
   apply_patch: Wrench,
   apply_patch_memory: Wrench,
   exec: Terminal,
+  'system-event': Bell,
+  'system-inter-agent': MessagesSquare,
+  'system-timer': Timer,
+  'system-trigger': Zap,
+  'system-background': Bot,
+  'system-snapshot': Camera,
+  'system-system': Info,
 }
 
 const getToolIcon = (name: string) => toolIcons[name] || Wrench
 
-export type ToolTagTone = 'neutral' | 'success' | 'error'
+export type ToolTagTone = 'neutral' | 'success' | 'error' | 'system'
 
 export interface ToolTagItem {
   name: string
@@ -599,10 +689,11 @@ const toolTagToneClasses: Record<ToolTagTone, string> = {
   neutral: 'border-slate-300 bg-slate-100 text-slate-700 dark:border-gray-600 dark:bg-gray-900/60 dark:text-gray-300',
   success: 'border-green-300 bg-green-100 text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300',
   error: 'border-red-300 bg-red-100 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300',
+  system: 'border-yellow-300 bg-yellow-100 text-yellow-800 dark:border-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-300',
 }
 
-export const ToolTag = ({ name, label = name, tone = 'neutral', className = '' }: { name: string; label?: string; tone?: ToolTagTone; className?: string }) => {
-  const Icon = getToolIcon(name)
+export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', iconName }: { name: string; label?: string; tone?: ToolTagTone; className?: string; iconName?: string }) => {
+  const Icon = getToolIcon(iconName || name)
 
   return (
     <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
