@@ -434,6 +434,10 @@ export const clampContentStyle = (lines: number, extraHeightRem = 0): CSSPropert
   overflow: 'hidden',
 })
 
+/** Shared collapsed-header geometry for tool-like cards in the chat timeline. */
+export const THREAD_CARD_HEADER_ROW_CLASS = 'flex min-w-0 items-center gap-2 leading-[18px]'
+export const THREAD_CARD_HEADER_PREVIEW_CLASS = 'min-w-0 flex-1 truncate text-[13px] leading-[18px]'
+
 const isSlashCommandValue = (value: string): boolean => {
   if (!value || value.includes('\n') || /^\s/.test(value)) {
     return false

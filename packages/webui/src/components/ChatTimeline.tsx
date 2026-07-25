@@ -14,6 +14,8 @@ import {
   handleMarkdownLinkClick,
   renderSystemTextWithSessionLinks,
   SessionHashLink,
+  THREAD_CARD_HEADER_PREVIEW_CLASS,
+  THREAD_CARD_HEADER_ROW_CLASS,
   ToolTag,
   type Message,
   type ToolTagItem,
@@ -400,12 +402,12 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           className={`foxwarm-system-message-thread-line ${threadLineClass}`}
         />
         <div
-          className={`foxwarm-system-message-header -ml-2 -mr-2 flex min-w-0 items-center gap-2 px-2 py-1 ${headerClass} ${expanded ? `mb-1 cursor-pointer ${headerHoverClass}` : ''}`}
+          className={`foxwarm-system-message-header -ml-2 -mr-2 ${THREAD_CARD_HEADER_ROW_CLASS} px-2 py-1 ${headerClass} ${expanded ? `mb-1 cursor-pointer ${headerHoverClass}` : ''}`}
           onClick={expanded ? (event) => { event.stopPropagation(); setExpanded(false) } : undefined}
         >
           <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={messageKind.kind} tone="system" className="foxwarm-system-message-tag" />
           {!expanded && (
-            <span className="foxwarm-system-message-preview min-w-0 flex-1 truncate text-[13px] leading-[18px]" title={preview}>
+            <span className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={preview}>
               {messageKind.previewSessionId ? (
                 <><span onClick={(event) => event.stopPropagation()}><SessionHashLink sessionId={messageKind.previewSessionId} /></span>: {preview.slice(messageKind.previewPrefix.length)}</>
               ) : preview}
