@@ -465,7 +465,7 @@ Example:
                 type: 'object',
                 properties: {
                     goal: { type: 'string', description: 'Goal text. Use empty string to clear.' },
-                    remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current goal setting or default to 10.' },
+                    remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current goal setting or default to 20.' },
                     clear: { type: 'boolean', description: 'If true, clear the current session goal reminder.' }
                 }
             }

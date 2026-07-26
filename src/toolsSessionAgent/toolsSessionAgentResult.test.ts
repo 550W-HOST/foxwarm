@@ -140,11 +140,11 @@ test('set_goal accepts omitted remindEvery', async () => {
   try {
     const updated = await tool_set_goal({ goal: 'Ship feature safely' }, { sessionId, session });
     assert.equal(updated, 'ok');
-    assert.equal(session.goalState?.remindEvery, 10);
+    assert.equal(session.goalState?.remindEvery, 20);
 
     const second = await tool_set_goal({ goal: 'Ship feature later' }, { sessionId, session });
     assert.equal(second, 'ok');
-    assert.equal(session.goalState?.remindEvery, 10);
+    assert.equal(session.goalState?.remindEvery, 20);
   } finally {
     try {
       await sessionManager.deleteSession(sessionId);

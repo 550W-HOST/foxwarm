@@ -39,7 +39,7 @@ test('setSessionGoal stores interval-only configuration', () => {
   });
 });
 
-test('goal remindEvery defaults to current value or 10 when omitted', () => {
+test('goal remindEvery defaults to current value or 20 when omitted', () => {
   const withExisting = {
     history: [],
     goalState: {

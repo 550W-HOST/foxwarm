@@ -161,13 +161,13 @@ async function main(): Promise<void> {
       assert.strictEqual(session.goalState?.goal, 'Ship the feature safely');
     });
 
-    await test('set_goal defaults remindEvery to current value or 10 when omitted', async () => {
+    await test('set_goal defaults remindEvery to current value or 20 when omitted', async () => {
       const sessionId = makeSessionId('selftest_goal_default_remind_every');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
 
       await tool_set_goal({ goal: '- [ ] first item' }, { sessionId, session });
-      assert.strictEqual(session.goalState?.remindEvery, 10);
+      assert.strictEqual(session.goalState?.remindEvery, 20);
 
       await tool_set_goal({ goal: '- [ ] second item', remindEvery: 4 }, { sessionId, session });
       assert.strictEqual(session.goalState?.remindEvery, 4);

@@ -8,7 +8,7 @@ Manages session-level goal tracking, including setting/clearing goals and buildi
 
 ## Key Exports
 
-- `DEFAULT_GOAL_REMIND_EVERY` — default interval (10) for goal reminders
+- `DEFAULT_GOAL_REMIND_EVERY` — default interval (20) for goal reminders
 - `normalizeRemindEvery(value)` — validates and normalizes the reminder interval
 - `normalizeGoalText(value)` — validates and trims goal text
 - `getLatestSessionMessageSeq(session)` — returns the highest message sequence number
@@ -89,4 +89,4 @@ Self-test file (`goalReminderSelfTest.ts`):
 
 ### D-goal-direct-safe-boundary
 
-[2026-07-26] Goals are interval-only. `set_goal` exposes `remindEvery`, not an end-turn control, and the router never creates end-of-turn goal reminders. A due interval reminder is canonical history context evaluated and appended at the pre-provider safe boundary, never a session `QueueItem` or synthetic standalone LLM turn. The boundary follows persisted queued input or a complete tool result, so a reminder cannot split a model function-call message from its tool result. Compact completion keeps its separate goal context. Legacy persisted end-turn flags remain readable but are omitted by current writers.
+[2026-07-26] Goals are interval-only. `set_goal` exposes `remindEvery`, not an end-turn control, and the router never creates end-of-turn goal reminders. The fallback interval is 20 messages; existing persisted or explicitly provided intervals remain unchanged. A due interval reminder is canonical history context evaluated and appended at the pre-provider safe boundary, never a session `QueueItem` or synthetic standalone LLM turn. The boundary follows persisted queued input or a complete tool result, so a reminder cannot split a model function-call message from its tool result. Compact completion keeps its separate goal context. Legacy persisted end-turn flags remain readable but are omitted by current writers.

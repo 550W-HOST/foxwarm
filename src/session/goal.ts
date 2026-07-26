@@ -6,7 +6,7 @@ import { formatFoxwarmSystem } from '../utils/promptWrappers';
 const GOAL_REMINDER_META_KEY = 'goalReminder';
 const GOAL_REMINDER_SYSTEM_KIND = 'goal-reminder';
 const GOAL_REMINDER_GUIDANCE = 'Keep this long-term goal in mind when deciding what to do next.';
-export const DEFAULT_GOAL_REMIND_EVERY = 10;
+export const DEFAULT_GOAL_REMIND_EVERY = 20;
 
 export function normalizeRemindEvery(value: unknown): number {
   const num = typeof value === 'string' ? Number(value) : value;
