@@ -153,7 +153,7 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
   collapsed?: boolean
 }) {
   const layoutClass = collapsed
-    ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full flex-1 truncate whitespace-nowrap'
+    ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full truncate whitespace-nowrap'
     : 'min-w-0 max-w-full whitespace-normal break-words'
   const pathClass = collapsed
     ? 'foxwarm-tool-code-path min-w-0 truncate whitespace-nowrap'
