@@ -8,7 +8,7 @@ export const CLI_NODE_CAPABILITIES = {
   tools: [
     {
       name: 'read',
-      description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers; passing 0 for startLine/endLine is treated as omitted. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
+      description: 'Read a file or list a directory. Large non-image file reads use built-in bounded display with file-size metadata; use startLine/endLine for targeted content rather than shell head solely to limit context. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers; passing 0 for startLine/endLine is treated as omitted. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
       parameters: {
         type: 'object',
         properties: {

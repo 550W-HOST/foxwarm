@@ -6,6 +6,14 @@ import { promises as fsp } from 'fs';
 import { resolveValidatedExecCwd, type ExecCwdSource } from './execCwd';
 import { truncateOutputForDisplay, type OutputTruncationResult } from './outputTruncation';
 import { estimateTokenCount } from './tokenCount';
+import {
+  BOUNDED_TEXT_SAMPLE_BYTES,
+  MAX_FULL_TEXT_READ_BYTES,
+  buildBoundedTextExcerpt,
+  formatBoundedBinaryHexPreview,
+  formatDisplayByteConversionDisclaimer,
+  readBoundedFileSamples,
+} from './boundedTextExcerpt';
 
 export const DEFAULT_EXEC_TIMEOUT_SECONDS = 15;
 export const MIN_EXEC_TIMEOUT_SECONDS = 1;
@@ -46,11 +54,10 @@ const MISSING_STATUS_GRACE_MS = 3000;
 const PARTIAL_LOG_BYTES = 4000;
 const INLINE_LOG_LIMIT_BYTES = 20000;
 const INLINE_EXCERPT_HALF_BYTES = 5000;
-// Above this size, only bounded byte samples are read. Persistent-exec logs can
-// contain arbitrary command output, including raw binary files.
-export const MAX_FULL_LOG_READ_BYTES = 1024 * 1024;
-export const OVERSIZED_LOG_SAMPLE_BYTES = 5000;
-const BINARY_LOG_HEX_PREVIEW_BYTES = 64;
+// Compatibility exports for persistent-exec callers/tests; canonical bounded-read
+// semantics are owned by boundedTextExcerpt.
+export const MAX_FULL_LOG_READ_BYTES = MAX_FULL_TEXT_READ_BYTES;
+export const OVERSIZED_LOG_SAMPLE_BYTES = BOUNDED_TEXT_SAMPLE_BYTES;
 const EXEC_PATHS_WAIT_TIMEOUT_MS = 1000;
 const EXEC_PATHS_POLL_INTERVAL_MS = 25;
 const BACKGROUND_COMMAND_PREVIEW_LIMIT = 100;
@@ -101,11 +108,6 @@ interface LogExcerpt {
   oversized?: boolean;
   originalByteLength?: number;
   hasDisplayByteConversions?: boolean;
-}
-
-interface TextLogSampleAnalysis {
-  suspiciousByteCount: number;
-  escapedByteIndexes: Set<number>;
 }
 
 export type ExecCompletionDispatcher = (entry: RunningExecEntry, status: ExecStatus, message: string) => Promise<void>;
@@ -559,150 +561,32 @@ export class PersistentExecManager {
     }
   }
 
-  private async readOversizedLogSamples(filePath: string, originalByteLength: number): Promise<{ head: Buffer; tail: Buffer }> {
-    const sampleLength = Math.min(OVERSIZED_LOG_SAMPLE_BYTES, originalByteLength);
-    const file = await fsp.open(filePath, 'r');
-    try {
-      const readAt = async (position: number): Promise<Buffer> => {
-        const buffer = Buffer.alloc(sampleLength);
-        const { bytesRead } = await file.read(buffer, 0, buffer.length, position);
-        return buffer.subarray(0, bytesRead);
-      };
-      const head = await readAt(0);
-      const tail = await readAt(Math.max(0, originalByteLength - sampleLength));
-      return { head, tail };
-    } finally {
-      await file.close();
-    }
-  }
-
-  private analyzeTextLogSample(sample: Buffer, options: { allowLeadingBoundaryContinuation: boolean; allowTrailingBoundarySequence: boolean }): TextLogSampleAnalysis {
-    const escapedByteIndexes = new Set<number>();
-    let suspiciousByteCount = 0;
-    const mark = (start: number, count: number, suspicious: boolean, escapeForDisplay: boolean): void => {
-      if (escapeForDisplay) {
-        for (let index = start; index < start + count; index += 1) escapedByteIndexes.add(index);
-      }
-      if (suspicious) suspiciousByteCount += count;
-    };
-    const isContinuation = (byte: number): boolean => byte >= 0x80 && byte <= 0xbf;
-    let index = 0;
-
-    // A tail sample can begin partway through a UTF-8 sequence. Preserve and
-    // visibly escape at most three such bytes without counting them as binary.
-    while (options.allowLeadingBoundaryContinuation && index < Math.min(3, sample.length) && isContinuation(sample[index])) {
-      mark(index, 1, false, true);
-      index += 1;
-    }
-
-    while (index < sample.length) {
-      const byte = sample[index];
-      if (byte <= 0x7f) {
-        // Valid UTF-8 controls remain raw in model-facing text, but still contribute
-        // to the binary-vs-text decision.
-        if ((byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) || byte === 0x7f) mark(index, 1, true, false);
-        index += 1;
-        continue;
-      }
-
-      const width = byte >= 0xc2 && byte <= 0xdf ? 2
-        : byte >= 0xe0 && byte <= 0xef ? 3
-          : byte >= 0xf0 && byte <= 0xf4 ? 4
-            : 0;
-      if (width === 0) {
-        mark(index, 1, true, true);
-        index += 1;
-        continue;
-      }
-      if (index + width > sample.length) {
-        // Only a bounded head sample can end partway through a valid UTF-8 sequence.
-        mark(index, sample.length - index, !options.allowTrailingBoundarySequence, true);
-        break;
-      }
-      let codePoint = byte & (width === 2 ? 0x1f : width === 3 ? 0x0f : 0x07);
-      let valid = true;
-      for (let offset = 1; offset < width; offset += 1) {
-        const continuation = sample[index + offset];
-        if (!isContinuation(continuation)) {
-          valid = false;
-          break;
-        }
-        codePoint = (codePoint << 6) | (continuation & 0x3f);
-      }
-      const minimum = width === 2 ? 0x80 : width === 3 ? 0x800 : 0x10000;
-      if (!valid || codePoint < minimum || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
-        mark(index, 1, true, true);
-        index += 1;
-        continue;
-      }
-      // U+0080–U+009F are C1 controls even when correctly UTF-8 encoded.
-      if (codePoint >= 0x80 && codePoint <= 0x9f) mark(index, width, true, false);
-      index += width;
-    }
-    return { suspiciousByteCount, escapedByteIndexes };
-  }
-
-  private renderTextLogSample(sample: Buffer, analysis: TextLogSampleAnalysis): { text: string; escapedByteCount: number } {
-    const parts: string[] = [];
-    let segmentStart = 0;
-    let escapedByteCount = 0;
-    for (let index = 0; index < sample.length; index += 1) {
-      if (!analysis.escapedByteIndexes.has(index)) continue;
-      const byte = sample[index];
-      if (segmentStart < index) parts.push(sample.subarray(segmentStart, index).toString('utf8'));
-      parts.push(`\\x${byte.toString(16).padStart(2, '0')}`);
-      segmentStart = index + 1;
-      escapedByteCount += 1;
-    }
-    if (segmentStart < sample.length) parts.push(sample.subarray(segmentStart).toString('utf8'));
-    return { text: parts.join(''), escapedByteCount };
-  }
-
-  private formatOversizedBinaryLogExcerpt(head: Buffer, tail: Buffer, originalByteLength: number): string {
-    const toHex = (sample: Buffer) => sample.subarray(0, BINARY_LOG_HEX_PREVIEW_BYTES).toString('hex');
-    return [
-      `[foxwarm: oversized binary log; showing hexadecimal previews from a ${originalByteLength}-byte file]`,
-      `Head (${Math.min(head.length, BINARY_LOG_HEX_PREVIEW_BYTES)} bytes): ${toHex(head)}`,
-      `Tail (${Math.min(tail.length, BINARY_LOG_HEX_PREVIEW_BYTES)} bytes): ${toHex(tail)}`,
-      '[foxwarm: raw binary output omitted; full log remains on disk]',
-    ].join('\n');
-  }
-
   private async readLogExcerpt(filePath: string, maxChars: number): Promise<LogExcerpt> {
     const stat = await fs.stat(filePath);
     if (stat.size <= 0) return { text: '', truncated: false };
 
     if (stat.size > MAX_FULL_LOG_READ_BYTES) {
-      const { head, tail } = await this.readOversizedLogSamples(filePath, stat.size);
-      const headAnalysis = this.analyzeTextLogSample(head, {
-        allowLeadingBoundaryContinuation: false,
-        allowTrailingBoundarySequence: true,
+      const { head, tail } = await readBoundedFileSamples(filePath, stat.size);
+      const excerpt = buildBoundedTextExcerpt(head, tail, {
+        headMayEndMidCodePoint: true,
+        tailMayStartMidCodePoint: true,
       });
-      const tailAnalysis = this.analyzeTextLogSample(tail, {
-        allowLeadingBoundaryContinuation: true,
-        allowTrailingBoundarySequence: false,
-      });
-      const sampledByteCount = head.length + tail.length;
-      const suspiciousByteCount = headAnalysis.suspiciousByteCount + tailAnalysis.suspiciousByteCount;
-      if (suspiciousByteCount > sampledByteCount * 0.1) {
+      if (excerpt.isBinary) {
         return {
-          text: this.formatOversizedBinaryLogExcerpt(head, tail, stat.size),
+          text: formatBoundedBinaryHexPreview(head, tail, stat.size, 'oversized binary log'),
           truncated: true,
           oversized: true,
           originalByteLength: stat.size,
         };
       }
 
-      const renderedHead = this.renderTextLogSample(head, headAnalysis);
-      const renderedTail = this.renderTextLogSample(tail, tailAnalysis);
-      const escapedByteCount = renderedHead.escapedByteCount + renderedTail.escapedByteCount;
-      const escapedByteNote = escapedByteCount > 0
-        ? `; escaped ${escapedByteCount} byte(s)`
+      const escapedByteNote = excerpt.escapedByteCount > 0
+        ? `; escaped ${excerpt.escapedByteCount} byte(s)`
         : '';
       const text = [
-        renderedHead.text,
+        excerpt.renderedHead!,
         `[foxwarm: oversized log middle omitted; showing bounded head and tail samples from a ${stat.size}-byte file${escapedByteNote}]`,
-        renderedTail.text,
+        excerpt.renderedTail!,
       ].join('\n');
       const truncation = truncateOutputForDisplay(text, {
         maxChars,
@@ -715,7 +599,7 @@ export class PersistentExecManager {
         truncation: truncation.truncated ? truncation : undefined,
         oversized: true,
         originalByteLength: stat.size,
-        hasDisplayByteConversions: escapedByteCount > 0,
+        hasDisplayByteConversions: excerpt.escapedByteCount > 0,
       };
     }
 
@@ -779,7 +663,7 @@ export class PersistentExecManager {
     } else if (output.truncation?.footerNotes?.length) {
       lines.push(...output.truncation.footerNotes);
     }
-    if (output.hasDisplayByteConversions) lines.push('Foxwarm \\xNN placeholders above are display conversions, not literal command output.');
+    if (output.hasDisplayByteConversions) lines.push(formatDisplayByteConversionDisclaimer('command output'));
     return lines.join('\n');
   }
 
@@ -845,7 +729,7 @@ export class PersistentExecManager {
       ? `\nOriginal log size: ${partialOutput.originalByteLength} bytes.`
       : '';
     const conversionNote = partialOutput.hasDisplayByteConversions
-      ? '\nFoxwarm \\xNN placeholders above are display conversions, not literal command output.'
+      ? `\n${formatDisplayByteConversionDisclaimer('command output')}`
       : '';
     return `${shortNotice}\n\nPartial Output:\n${partialOutput.text}\n\n${fullNotice}\n${warningLine}${nodeLine}PID: ${entry.pid}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
   }

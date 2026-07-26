@@ -1,6 +1,14 @@
 import fs from 'fs-extra';
 import path from 'path';
 import type { Stats } from 'fs';
+import { open } from 'fs/promises';
+import {
+  MAX_FULL_TEXT_READ_BYTES,
+  buildBoundedTextExcerpt,
+  formatBoundedBinaryHexPreview,
+  formatDisplayByteConversionDisclaimer,
+  readBoundedFileSamples,
+} from './boundedTextExcerpt';
 
 export type FileToolInlineImageResult = {
   output: string;
@@ -128,6 +136,102 @@ export function getInlineImageMimeType(filePath: string): string | undefined {
   return INLINE_IMAGE_MIME[path.extname(filePath).toLowerCase()];
 }
 
+class RangeByteCollector {
+  totalBytes = 0;
+  private fullParts: Buffer[] | null = [];
+  private head = Buffer.alloc(0);
+  private tail = Buffer.alloc(0);
+
+  append(part: Buffer): void {
+    if (part.length === 0) return;
+    this.totalBytes += part.length;
+    if (this.fullParts) {
+      this.fullParts.push(part);
+      if (this.totalBytes > MAX_FULL_TEXT_READ_BYTES) this.fullParts = null;
+    }
+    if (this.head.length < 5000) this.head = Buffer.concat([this.head, part.subarray(0, 5000 - this.head.length)]);
+    this.tail = Buffer.concat([this.tail, part]).subarray(Math.max(0, this.tail.length + part.length - 5000));
+  }
+
+  trimTrailingLf(): void {
+    if (this.totalBytes === 0 || this.tail[this.tail.length - 1] !== 0x0a) return;
+    this.totalBytes -= 1;
+    this.tail = this.tail.subarray(0, -1);
+    if (this.totalBytes < 5000) this.head = this.head.subarray(0, -1);
+    if (this.fullParts?.length) {
+      const last = this.fullParts.length - 1;
+      this.fullParts[last] = this.fullParts[last].subarray(0, -1);
+    }
+  }
+
+  fullBuffer(): Buffer | null {
+    return this.fullParts ? Buffer.concat(this.fullParts) : null;
+  }
+
+  samples(): { head: Buffer; tail: Buffer } {
+    return { head: this.head, tail: this.tail };
+  }
+}
+
+async function readLineRangeBounded(fullPath: string, startLine: number, endLine?: number): Promise<{ selected: RangeByteCollector; endedAtRequestedLine: boolean }> {
+  const selected = new RangeByteCollector();
+  const file = await open(fullPath, 'r');
+  const buffer = Buffer.alloc(64 * 1024);
+  let line = 1;
+  let endedAtRequestedLine = false;
+  try {
+    outer: while (true) {
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      let segmentStart = -1;
+      for (let index = 0; index < bytesRead; index += 1) {
+        const include = line >= startLine && (endLine === undefined || line <= endLine);
+        if (include && segmentStart < 0) segmentStart = index;
+        if (buffer[index] !== 0x0a) continue;
+        if (include && segmentStart >= 0) {
+          selected.append(Buffer.from(buffer.subarray(segmentStart, index + 1)));
+          segmentStart = -1;
+        }
+        if (endLine !== undefined && line === endLine) {
+          endedAtRequestedLine = true;
+          break outer;
+        }
+        line += 1;
+      }
+      if (segmentStart >= 0) selected.append(Buffer.from(buffer.subarray(segmentStart, bytesRead)));
+    }
+  } finally {
+    await file.close();
+  }
+  if (endedAtRequestedLine) selected.trimTrailingLf();
+  return { selected, endedAtRequestedLine };
+}
+
+function formatBoundedFileRead(
+  displayPath: string,
+  originalFileSize: number,
+  head: Buffer,
+  tail: Buffer,
+  selectedByteCount: number,
+  label: string,
+): string {
+  const excerpt = buildBoundedTextExcerpt(head, tail, {
+    headMayEndMidCodePoint: true,
+    tailMayStartMidCodePoint: true,
+  });
+  const conversionNote = excerpt.escapedByteCount > 0
+    ? `\n${formatDisplayByteConversionDisclaimer('file content')}`
+    : '';
+  const footer = `\n---\nFile content was shortened for inline display.\nOriginal file size: ${originalFileSize} bytes.\nComplete content remains in source file: ${displayPath}.${conversionNote}`;
+  if (excerpt.isBinary) return `${formatBoundedBinaryHexPreview(head, tail, selectedByteCount, label, label === 'selected file range' ? 'selected range' : 'file')}${footer}`;
+  const escapedByteNote = excerpt.escapedByteCount > 0 ? `; escaped ${excerpt.escapedByteCount} byte(s)` : '';
+  return [
+    excerpt.renderedHead!,
+    `[foxwarm: ${label} middle omitted; showing bounded head and tail samples from ${selectedByteCount}-byte selected content${escapedByteNote}]`,
+    excerpt.renderedTail!,
+  ].join('\n') + footer;
+}
+
 export async function readFileToolPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number): Promise<FileToolReadResult> {
   const stats = await fs.stat(fullPath);
   if (stats.isDirectory()) {
@@ -145,9 +249,25 @@ export async function readFileToolPath(fullPath: string, displayPath: string, st
     };
   }
 
-  let content = await fs.readFile(fullPath, 'utf8');
   const normalizedStartLine = normalizeOptionalLineBound(startLine);
   const normalizedEndLine = normalizeOptionalLineBound(endLine);
+  if (stats.size > MAX_FULL_TEXT_READ_BYTES) {
+    if (normalizedStartLine !== undefined || normalizedEndLine !== undefined) {
+      const start = normalizedStartLine !== undefined ? Math.max(1, Math.floor(normalizedStartLine)) : 1;
+      const end = normalizedEndLine !== undefined ? Math.max(0, Math.floor(normalizedEndLine)) : undefined;
+      const { selected } = await readLineRangeBounded(fullPath, start, end);
+      const fullSelected = selected.fullBuffer();
+      if (fullSelected) {
+        return `${fullSelected.toString('utf8')}\n---\nOriginal file size: ${stats.size} bytes.\nComplete content remains in source file: ${displayPath}.`;
+      }
+      const { head, tail } = selected.samples();
+      return formatBoundedFileRead(displayPath, stats.size, head, tail, selected.totalBytes, 'selected file range');
+    }
+    const { head, tail } = await readBoundedFileSamples(fullPath, stats.size);
+    return formatBoundedFileRead(displayPath, stats.size, head, tail, stats.size, 'file content');
+  }
+
+  let content = await fs.readFile(fullPath, 'utf8');
   if (normalizedStartLine !== undefined || normalizedEndLine !== undefined) {
     const lines = content.split('\n');
     const start = normalizedStartLine !== undefined ? Math.max(0, normalizedStartLine - 1) : 0;

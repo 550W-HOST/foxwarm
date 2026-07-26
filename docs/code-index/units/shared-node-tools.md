@@ -82,12 +82,18 @@ Provides shared file system tools, shell execution, browser automation, and util
 
 ## Behavior
 
-- File operations resolve paths relative to session cwd or agent directory, with home path expansion; node wrappers then delegate read/write behavior to `fileToolCore`
+- File operations resolve paths relative to session cwd or agent directory, with home path expansion; node wrappers then delegate read/write behavior to `fileToolCore`. Large non-image reads use the shared bounded sampler and preserve `startLine`/`endLine` through bounded streaming; canonical details: [D-bounded-file-read-excerpts](#d-bounded-file-read-excerpts).
 - `exec` spawns shell commands via `PersistentExecManager`; commands exceeding timeout continue in background and fire a system event pointing to captured command/pipeline output in the log file. The node capability guidance tells models not to add `head`/`tail` merely for context control because pipeline filtering changes captured output; canonical details: [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
 - Node-side `exec` shares master-side timeout resolution: finite values above 60 seconds clamp to 60 and emit the requested/effective warning in the immediate foreground or background-switch result; invalid and below-minimum values still reject.
 - `edit` enforces single-occurrence matching to prevent ambiguous replacements
 - `write` refuses to overwrite unless explicitly told, and requires parent directories to already exist unless `createDirs=true` is passed. For the default path it first attempts `fs.writeFile` directly, so symlinked parent directories work naturally; friendly parent errors are generated only after write failure.
 - Shared cached-write retry formatting emits the executable `write({ ... })` call, explicitly prohibits including `content` alongside `contentRef`, and directs intentional replacements to omit `contentRef` and submit only the new content plus required path/flags; the canonical guidance contract is [D-tools-write-contentref-retry-guidance](./src-tools.md#d-tools-write-contentref-retry-guidance).
+
+## Design Decisions
+
+### D-bounded-file-read-excerpts
+
+Non-image file reads above 1 MiB must not full-read or decode their source before model output handling. `fileToolCore` and persistent exec logs use the same `boundedTextExcerpt` helper: 5,000-byte head/tail samples, UTF-8-aware suspicious-byte scoring with a strict greater-than-10% binary threshold, valid UTF-8 C0/C1 control preservation, visible `\xNN` conversion only for invalid UTF-8 or genuine sample-boundary fragments, and 64-byte binary hex previews. Real file/log boundaries remain invalid rather than tolerated; only the appropriate sample cut can be tolerated. Every read reports its stat-time source size; file reads retain the source file as complete durable content rather than creating a saved-output copy. If `\xNN` is emitted, foreground/read metadata identifies it as a Foxwarm display conversion rather than literal source content. Explicit line ranges stream and stop at a finite end; if the selected range exceeds the retained bound, it is sampled with an accurate selected-range omission marker.
 - `SharedBrowserManager` lazily launches a headless Puppeteer instance and manages tabs by UUID
 - Shared browser screenshots write current structured inline data. Old remote-node screenshot shapes are read only under [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - Directory reads are paginated (50 items default) with navigation hints
