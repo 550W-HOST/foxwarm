@@ -102,6 +102,11 @@ interface LogExcerpt {
   originalByteLength?: number;
 }
 
+interface TextLogSampleAnalysis {
+  suspiciousByteCount: number;
+  escapedByteIndexes: Set<number>;
+}
+
 export type ExecCompletionDispatcher = (entry: RunningExecEntry, status: ExecStatus, message: string) => Promise<void>;
 
 export interface PersistentExecManagerOptions {
@@ -570,13 +575,82 @@ export class PersistentExecManager {
     }
   }
 
-  private isLikelyTextLogSample(sample: Buffer): boolean {
-    if (sample.includes(0)) return false;
-    let controlBytes = 0;
-    for (const byte of sample) {
-      if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) controlBytes += 1;
+  private analyzeTextLogSample(sample: Buffer, options: { allowLeadingBoundaryContinuation: boolean; allowTrailingBoundarySequence: boolean }): TextLogSampleAnalysis {
+    const escapedByteIndexes = new Set<number>();
+    let suspiciousByteCount = 0;
+    const mark = (start: number, count: number, suspicious: boolean): void => {
+      for (let index = start; index < start + count; index += 1) escapedByteIndexes.add(index);
+      if (suspicious) suspiciousByteCount += count;
+    };
+    const isContinuation = (byte: number): boolean => byte >= 0x80 && byte <= 0xbf;
+    let index = 0;
+
+    // A tail sample can begin partway through a UTF-8 sequence. Preserve and
+    // visibly escape at most three such bytes without counting them as binary.
+    while (options.allowLeadingBoundaryContinuation && index < Math.min(3, sample.length) && isContinuation(sample[index])) {
+      mark(index, 1, false);
+      index += 1;
     }
-    return controlBytes <= sample.length * 0.1;
+
+    while (index < sample.length) {
+      const byte = sample[index];
+      if (byte <= 0x7f) {
+        if ((byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) || byte === 0x7f) mark(index, 1, true);
+        index += 1;
+        continue;
+      }
+
+      const width = byte >= 0xc2 && byte <= 0xdf ? 2
+        : byte >= 0xe0 && byte <= 0xef ? 3
+          : byte >= 0xf0 && byte <= 0xf4 ? 4
+            : 0;
+      if (width === 0) {
+        mark(index, 1, true);
+        index += 1;
+        continue;
+      }
+      if (index + width > sample.length) {
+        // Only a bounded head sample can end partway through a valid UTF-8 sequence.
+        mark(index, sample.length - index, !options.allowTrailingBoundarySequence);
+        break;
+      }
+      let codePoint = byte & (width === 2 ? 0x1f : width === 3 ? 0x0f : 0x07);
+      let valid = true;
+      for (let offset = 1; offset < width; offset += 1) {
+        const continuation = sample[index + offset];
+        if (!isContinuation(continuation)) {
+          valid = false;
+          break;
+        }
+        codePoint = (codePoint << 6) | (continuation & 0x3f);
+      }
+      const minimum = width === 2 ? 0x80 : width === 3 ? 0x800 : 0x10000;
+      if (!valid || codePoint < minimum || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+        mark(index, 1, true);
+        index += 1;
+        continue;
+      }
+      // U+0080–U+009F are C1 controls even when correctly UTF-8 encoded.
+      if (codePoint >= 0x80 && codePoint <= 0x9f) mark(index, width, true);
+      index += width;
+    }
+    return { suspiciousByteCount, escapedByteIndexes };
+  }
+
+  private renderTextLogSample(sample: Buffer, analysis: TextLogSampleAnalysis): { text: string; escapedByteCount: number } {
+    const parts: string[] = [];
+    let segmentStart = 0;
+    let escapedByteCount = 0;
+    for (let index = 0; index < sample.length; index += 1) {
+      if (!analysis.escapedByteIndexes.has(index)) continue;
+      const byte = sample[index];
+      if (segmentStart < index) parts.push(sample.subarray(segmentStart, index).toString('utf8'));
+      parts.push(`\\x${byte.toString(16).padStart(2, '0')}`);
+      segmentStart = index + 1;
+      escapedByteCount += 1;
+    }
+    if (segmentStart < sample.length) parts.push(sample.subarray(segmentStart).toString('utf8'));
+    return { text: parts.join(''), escapedByteCount };
   }
 
   private formatOversizedBinaryLogExcerpt(head: Buffer, tail: Buffer, originalByteLength: number): string {
@@ -595,8 +669,17 @@ export class PersistentExecManager {
 
     if (stat.size > MAX_FULL_LOG_READ_BYTES) {
       const { head, tail } = await this.readOversizedLogSamples(filePath, stat.size);
-      const sample = Buffer.concat([head, tail]);
-      if (!this.isLikelyTextLogSample(sample)) {
+      const headAnalysis = this.analyzeTextLogSample(head, {
+        allowLeadingBoundaryContinuation: false,
+        allowTrailingBoundarySequence: true,
+      });
+      const tailAnalysis = this.analyzeTextLogSample(tail, {
+        allowLeadingBoundaryContinuation: true,
+        allowTrailingBoundarySequence: false,
+      });
+      const sampledByteCount = head.length + tail.length;
+      const suspiciousByteCount = headAnalysis.suspiciousByteCount + tailAnalysis.suspiciousByteCount;
+      if (suspiciousByteCount > sampledByteCount * 0.1) {
         return {
           text: this.formatOversizedBinaryLogExcerpt(head, tail, stat.size),
           truncated: true,
@@ -605,10 +688,16 @@ export class PersistentExecManager {
         };
       }
 
+      const renderedHead = this.renderTextLogSample(head, headAnalysis);
+      const renderedTail = this.renderTextLogSample(tail, tailAnalysis);
+      const escapedByteCount = renderedHead.escapedByteCount + renderedTail.escapedByteCount;
+      const escapedByteNote = escapedByteCount > 0
+        ? `; escaped ${escapedByteCount} byte(s)`
+        : '';
       const text = [
-        head.toString('utf8'),
-        `[foxwarm: oversized log middle omitted; showing bounded head and tail samples from a ${stat.size}-byte file]`,
-        tail.toString('utf8'),
+        renderedHead.text,
+        `[foxwarm: oversized log middle omitted; showing bounded head and tail samples from a ${stat.size}-byte file${escapedByteNote}]`,
+        renderedTail.text,
       ].join('\n');
       const truncation = truncateOutputForDisplay(text, {
         maxChars,

@@ -103,9 +103,9 @@ test('persistent exec uses bounded head and tail samples for oversized text logs
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-large-text-'));
   const manager = await createManager(root);
   const logPath = path.join(root, 'command.log');
-  const head = 'TEXT_HEAD\n';
-  const tail = '\nTEXT_TAIL';
-  const text = `${head}${'m'.repeat(MAX_FULL_LOG_READ_BYTES + 128)}${tail}`;
+  const head = Buffer.concat([Buffer.from('TEXT_HEAD 中文😀'), Buffer.from([0x00, 0x01, 0xff]), Buffer.from('\n')]);
+  const tail = Buffer.from('\nTEXT_TAIL');
+  const text = Buffer.concat([head, Buffer.from('m'.repeat(MAX_FULL_LOG_READ_BYTES + 128)), tail]);
 
   try {
     await fs.writeFile(logPath, text);
@@ -120,18 +120,74 @@ test('persistent exec uses bounded head and tail samples for oversized text logs
       (fs as any).readFile = originalReadFile;
     }
 
-    assert.match(result!, /TEXT_HEAD/);
+    assert.match(result!, /TEXT_HEAD 中文😀\\x00\\x01\\xff/);
     assert.match(result!, /TEXT_TAIL/);
     assert.match(result!, /\[foxwarm: oversized log middle omitted; showing bounded head and tail samples/);
+    assert.match(result!, /escaped 3 byte\(s\)/);
     assert.match(result!, /Command output saved to:/);
-    assert.match(result!, new RegExp(`Original log size: ${Buffer.byteLength(text)} bytes\\.`));
+    assert.match(result!, new RegExp(`Original log size: ${text.length} bytes\\.`));
     assert.doesNotMatch(result!, /Original output: .*line\(s\)/);
   } finally {
     await fs.remove(root);
   }
 });
 
-test('persistent exec renders oversized binary logs as bounded hexadecimal and keeps timeout previews safe', async () => {
+test('persistent exec tolerates an incomplete UTF-8 sequence at a bounded sample edge', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-utf8-edge-'));
+  const manager = await createManager(root);
+  const logPath = path.join(root, 'command.log');
+  const head = Buffer.concat([Buffer.from('a'.repeat(4998)), Buffer.from([0xe4, 0xb8])]);
+  const text = Buffer.concat([head, Buffer.from([0xad]), Buffer.from('m'.repeat(MAX_FULL_LOG_READ_BYTES + 128)), Buffer.from('\n尾😀')]);
+
+  try {
+    await fs.writeFile(logPath, text);
+    const result = await manager.buildForegroundExecResult(buildExecEntry(logPath), { exitCode: 0, finishedAt: new Date().toISOString() });
+    assert.match(result, /\\xe4\\xb8/);
+    assert.match(result, /尾😀/);
+    assert.doesNotMatch(result, /oversized binary log/);
+    assert.doesNotMatch(result, /�/);
+  } finally {
+    await fs.remove(root);
+  }
+});
+
+test('persistent exec treats invalid UTF-8 at actual file boundaries as suspicious', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-invalid-file-edge-'));
+  const manager = await createManager(root);
+  const logPath = path.join(root, 'command.log');
+  const text = Buffer.concat([Buffer.from([0x80]), Buffer.from('m'.repeat(MAX_FULL_LOG_READ_BYTES + 128)), Buffer.from('TAIL'), Buffer.from([0xe4, 0xb8])]);
+
+  try {
+    await fs.writeFile(logPath, text);
+    const result = await manager.buildForegroundExecResult(buildExecEntry(logPath), { exitCode: 0, finishedAt: new Date().toISOString() });
+    assert.match(result, /^\\x80/);
+    assert.match(result, /TAIL\\xe4\\xb8/);
+    assert.match(result, /escaped 3 byte\(s\)/);
+    assert.doesNotMatch(result, /oversized binary log/);
+  } finally {
+    await fs.remove(root);
+  }
+});
+
+test('persistent exec keeps a representative colorized log text-like while visibly escaping ESC bytes', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-terminal-markup-'));
+  const manager = await createManager(root);
+  const logPath = path.join(root, 'command.log');
+  const head = Buffer.from('COLOR \x1b[31mred\x1b[0m visible\n');
+  const text = Buffer.concat([head, Buffer.from('m'.repeat(MAX_FULL_LOG_READ_BYTES + 128)), Buffer.from('\nTAIL')]);
+
+  try {
+    await fs.writeFile(logPath, text);
+    const result = await manager.buildForegroundExecResult(buildExecEntry(logPath), { exitCode: 0, finishedAt: new Date().toISOString() });
+    assert.match(result, /COLOR \\x1b\[31mred\\x1b\[0m visible/);
+    assert.match(result, /escaped 2 byte\(s\)/);
+    assert.doesNotMatch(result, /oversized binary log/);
+  } finally {
+    await fs.remove(root);
+  }
+});
+
+test('persistent exec renders control-heavy binary logs as bounded hexadecimal and keeps timeout previews safe', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-large-binary-'));
   const manager = await createManager(root);
   const logPath = path.join(root, 'command.log');
