@@ -36,14 +36,17 @@ test('isSystemPayloadTextPart still recognizes legacy split payload parts', () =
   assert.equal(isSystemPayloadTextPart({ text: 'ordinary' }), false);
 });
 
-test('timestamped input helpers freeze time at the source boundary', () => {
+test('timestamped input helpers add time to one outer source wrapper', () => {
   const timestamp = new Date('2026-07-27T05:00:00+08:00');
   assert.deepEqual(buildTimestampedSystemMessageParts('wake', timestamp), [
-    { system: '<foxwarm-system kind="time" time="2026-07-27 05:00:00 +0800" />' },
-    { system: '<foxwarm-system kind="system">\nwake\n</foxwarm-system>' },
+    { system: '<foxwarm-system kind="system" time="2026-07-27 05:00:00 +0800">\nwake\n</foxwarm-system>' },
   ]);
   assert.deepEqual(withInputTimePart([{ text: 'managed input' }], timestamp), [
-    { system: '<foxwarm-system kind="time" time="2026-07-27 05:00:00 +0800" />' },
+    { system: '<foxwarm-message type="event" time="2026-07-27 05:00:00 +0800" hint="structured session input">' },
     { text: 'managed input' },
+    { system: '</foxwarm-message>' },
+  ]);
+  assert.deepEqual(withInputTimePart([{ system: '<foxwarm-message type="timer" time="already">\nrun\n</foxwarm-message>' }], timestamp), [
+    { system: '<foxwarm-message type="timer" time="already">\nrun\n</foxwarm-message>' },
   ]);
 });
