@@ -100,6 +100,7 @@ interface LogExcerpt {
   truncation?: OutputTruncationResult;
   oversized?: boolean;
   originalByteLength?: number;
+  hasDisplayByteConversions?: boolean;
 }
 
 interface TextLogSampleAnalysis {
@@ -578,8 +579,10 @@ export class PersistentExecManager {
   private analyzeTextLogSample(sample: Buffer, options: { allowLeadingBoundaryContinuation: boolean; allowTrailingBoundarySequence: boolean }): TextLogSampleAnalysis {
     const escapedByteIndexes = new Set<number>();
     let suspiciousByteCount = 0;
-    const mark = (start: number, count: number, suspicious: boolean): void => {
-      for (let index = start; index < start + count; index += 1) escapedByteIndexes.add(index);
+    const mark = (start: number, count: number, suspicious: boolean, escapeForDisplay: boolean): void => {
+      if (escapeForDisplay) {
+        for (let index = start; index < start + count; index += 1) escapedByteIndexes.add(index);
+      }
       if (suspicious) suspiciousByteCount += count;
     };
     const isContinuation = (byte: number): boolean => byte >= 0x80 && byte <= 0xbf;
@@ -588,14 +591,16 @@ export class PersistentExecManager {
     // A tail sample can begin partway through a UTF-8 sequence. Preserve and
     // visibly escape at most three such bytes without counting them as binary.
     while (options.allowLeadingBoundaryContinuation && index < Math.min(3, sample.length) && isContinuation(sample[index])) {
-      mark(index, 1, false);
+      mark(index, 1, false, true);
       index += 1;
     }
 
     while (index < sample.length) {
       const byte = sample[index];
       if (byte <= 0x7f) {
-        if ((byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) || byte === 0x7f) mark(index, 1, true);
+        // Valid UTF-8 controls remain raw in model-facing text, but still contribute
+        // to the binary-vs-text decision.
+        if ((byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) || byte === 0x7f) mark(index, 1, true, false);
         index += 1;
         continue;
       }
@@ -605,13 +610,13 @@ export class PersistentExecManager {
           : byte >= 0xf0 && byte <= 0xf4 ? 4
             : 0;
       if (width === 0) {
-        mark(index, 1, true);
+        mark(index, 1, true, true);
         index += 1;
         continue;
       }
       if (index + width > sample.length) {
         // Only a bounded head sample can end partway through a valid UTF-8 sequence.
-        mark(index, sample.length - index, !options.allowTrailingBoundarySequence);
+        mark(index, sample.length - index, !options.allowTrailingBoundarySequence, true);
         break;
       }
       let codePoint = byte & (width === 2 ? 0x1f : width === 3 ? 0x0f : 0x07);
@@ -626,12 +631,12 @@ export class PersistentExecManager {
       }
       const minimum = width === 2 ? 0x80 : width === 3 ? 0x800 : 0x10000;
       if (!valid || codePoint < minimum || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
-        mark(index, 1, true);
+        mark(index, 1, true, true);
         index += 1;
         continue;
       }
       // U+0080–U+009F are C1 controls even when correctly UTF-8 encoded.
-      if (codePoint >= 0x80 && codePoint <= 0x9f) mark(index, width, true);
+      if (codePoint >= 0x80 && codePoint <= 0x9f) mark(index, width, true, false);
       index += width;
     }
     return { suspiciousByteCount, escapedByteIndexes };
@@ -710,6 +715,7 @@ export class PersistentExecManager {
         truncation: truncation.truncated ? truncation : undefined,
         oversized: true,
         originalByteLength: stat.size,
+        hasDisplayByteConversions: escapedByteCount > 0,
       };
     }
 
@@ -773,6 +779,7 @@ export class PersistentExecManager {
     } else if (output.truncation?.footerNotes?.length) {
       lines.push(...output.truncation.footerNotes);
     }
+    if (output.hasDisplayByteConversions) lines.push('Foxwarm \\xNN placeholders above are display conversions, not literal command output.');
     return lines.join('\n');
   }
 
@@ -837,7 +844,10 @@ export class PersistentExecManager {
     const sizeLine = partialOutput.oversized && partialOutput.originalByteLength !== undefined
       ? `\nOriginal log size: ${partialOutput.originalByteLength} bytes.`
       : '';
-    return `${shortNotice}\n\nPartial Output:\n${partialOutput.text}\n\n${fullNotice}\n${warningLine}${nodeLine}PID: ${entry.pid}\nLog file: ${entry.logPath}${sizeLine}`;
+    const conversionNote = partialOutput.hasDisplayByteConversions
+      ? '\nFoxwarm \\xNN placeholders above are display conversions, not literal command output.'
+      : '';
+    return `${shortNotice}\n\nPartial Output:\n${partialOutput.text}\n\n${fullNotice}\n${warningLine}${nodeLine}PID: ${entry.pid}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
   }
 
   buildCompletionMessage(entry: RunningExecEntry, status: ExecStatus): string {

@@ -103,7 +103,7 @@ test('persistent exec uses bounded head and tail samples for oversized text logs
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-large-text-'));
   const manager = await createManager(root);
   const logPath = path.join(root, 'command.log');
-  const head = Buffer.concat([Buffer.from('TEXT_HEAD 中文😀'), Buffer.from([0x00, 0x01, 0xff]), Buffer.from('\n')]);
+  const head = Buffer.concat([Buffer.from('TEXT_HEAD 中文😀'), Buffer.from([0x00, 0x01, 0xc2, 0x81, 0xff]), Buffer.from('\n')]);
   const tail = Buffer.from('\nTEXT_TAIL');
   const text = Buffer.concat([head, Buffer.from('m'.repeat(MAX_FULL_LOG_READ_BYTES + 128)), tail]);
 
@@ -120,12 +120,13 @@ test('persistent exec uses bounded head and tail samples for oversized text logs
       (fs as any).readFile = originalReadFile;
     }
 
-    assert.match(result!, /TEXT_HEAD 中文😀\\x00\\x01\\xff/);
+    assert.ok(result!.includes('TEXT_HEAD 中文😀\x00\x01\u0081\\xff'));
     assert.match(result!, /TEXT_TAIL/);
     assert.match(result!, /\[foxwarm: oversized log middle omitted; showing bounded head and tail samples/);
-    assert.match(result!, /escaped 3 byte\(s\)/);
+    assert.match(result!, /escaped 1 byte\(s\)/);
     assert.match(result!, /Command output saved to:/);
     assert.match(result!, new RegExp(`Original log size: ${text.length} bytes\\.`));
+    assert.match(result!, /Foxwarm \\xNN placeholders above are display conversions, not literal command output\./);
     assert.doesNotMatch(result!, /Original output: .*line\(s\)/);
   } finally {
     await fs.remove(root);
@@ -163,13 +164,17 @@ test('persistent exec treats invalid UTF-8 at actual file boundaries as suspicio
     assert.match(result, /^\\x80/);
     assert.match(result, /TAIL\\xe4\\xb8/);
     assert.match(result, /escaped 3 byte\(s\)/);
+    assert.match(result, /Foxwarm \\xNN placeholders above are display conversions, not literal command output\./);
     assert.doesNotMatch(result, /oversized binary log/);
+
+    const timeout = await manager.buildBackgroundTimeoutResult(buildExecEntry(logPath), 7);
+    assert.match(timeout, /Foxwarm \\xNN placeholders above are display conversions, not literal command output\./);
   } finally {
     await fs.remove(root);
   }
 });
 
-test('persistent exec keeps a representative colorized log text-like while visibly escaping ESC bytes', async () => {
+test('persistent exec keeps a representative colorized log text-like without display conversion', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-terminal-markup-'));
   const manager = await createManager(root);
   const logPath = path.join(root, 'command.log');
@@ -179,8 +184,9 @@ test('persistent exec keeps a representative colorized log text-like while visib
   try {
     await fs.writeFile(logPath, text);
     const result = await manager.buildForegroundExecResult(buildExecEntry(logPath), { exitCode: 0, finishedAt: new Date().toISOString() });
-    assert.match(result, /COLOR \\x1b\[31mred\\x1b\[0m visible/);
-    assert.match(result, /escaped 2 byte\(s\)/);
+    assert.ok(result.includes('COLOR \x1b[31mred\x1b[0m visible'));
+    assert.doesNotMatch(result, /escaped \d+ byte\(s\)/);
+    assert.doesNotMatch(result, /Foxwarm \\xNN placeholders above are display conversions/);
     assert.doesNotMatch(result, /oversized binary log/);
   } finally {
     await fs.remove(root);
@@ -203,12 +209,14 @@ test('persistent exec renders control-heavy binary logs as bounded hexadecimal a
     assert.doesNotMatch(foreground, /BINARY_HEAD/);
     assert.match(foreground, new RegExp(`Original log size: ${bytes.length} bytes\\.`));
     assert.doesNotMatch(foreground, /Original output: .*line\(s\)/);
+    assert.doesNotMatch(foreground, /Foxwarm \\xNN placeholders above are display conversions/);
 
     const timeout = await manager.buildBackgroundTimeoutResult(buildExecEntry(logPath), 7);
     assert.match(timeout, /Partial Output:[\s\S]*oversized binary log/);
     assert.match(timeout, /42494e4152595f48454144/);
     assert.doesNotMatch(timeout, /BINARY_HEAD/);
     assert.match(timeout, new RegExp(`Original log size: ${bytes.length} bytes\\.`));
+    assert.doesNotMatch(timeout, /Foxwarm \\xNN placeholders above are display conversions/);
   } finally {
     await fs.remove(root);
   }
