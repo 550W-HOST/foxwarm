@@ -26,7 +26,7 @@ import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
 import { buildTimestampedSystemMessageParts, withInputTimePart } from './utils/systemMessageParts';
 import { formatLocalTimestamp } from './utils/localTime';
-import { formatFoxwarmMessage, formatFoxwarmSystem, formatFoxwarmSystemClose, formatFoxwarmSystemOpen, formatSystemPartForModel } from './utils/promptWrappers';
+import { formatFoxwarmMessage, formatFoxwarmSystem, formatFoxwarmSystemClose, formatFoxwarmSystemOpen, formatFoxwarmSystemTag, parseFoxwarmOpeningTag, parseFoxwarmTagLine, formatSystemPartForModel } from './utils/promptWrappers';
 import { runStartupMigrations } from './migrations';
 import {
   buildSessionRuntimeState,
@@ -1719,29 +1719,31 @@ export async function triggerSessionProcessing(sessionId: string): Promise<void>
   await Promise.resolve(onSessionTriggered?.(sessionId));
 }
 
-function isQueuedSystemEventItem(
-  item: QueueItem | undefined,
-  message: string,
-  type: 'background' | 'trigger' | 'onboot',
-): boolean {
+function getTrailingQueuedSystemWrapper(item: QueueItem | undefined, type: 'background' | 'trigger' | 'onboot'): string | undefined {
   if (!item || item.type !== type || item.source || item.message || !item.parts || item.parts.length !== 1) {
-    return false;
+    return undefined;
   }
-
   const [part] = item.parts;
-  return typeof part?.system === 'string' && part.system === formatSystemPartForModel(message);
+  return typeof part?.system === 'string' ? part.system : undefined;
 }
 
-export function hasTrailingQueuedSystemEvent(
-  queue: QueueItem[] | undefined,
-  message: string,
-  type: 'background' | 'trigger' | 'onboot',
-): boolean {
-  if (!queue?.length) {
-    return false;
-  }
+export function hasTrailingQueuedResumeEvent(queue: QueueItem[] | undefined): boolean {
+  const wrapper = queue?.length ? getTrailingQueuedSystemWrapper(queue[queue.length - 1], 'background') : undefined;
+  const tag = parseFoxwarmTagLine(wrapper);
+  return tag?.tagName === 'foxwarm-system'
+    && !tag.closing
+    && tag.attrs.kind === 'event'
+    && tag.attrs.type === 'session-resumed';
+}
 
-  return isQueuedSystemEventItem(queue[queue.length - 1], message, type);
+export function hasTrailingQueuedManagedInboxWakeup(queue: QueueItem[] | undefined, managedSessionId: string, pendingCount: number): boolean {
+  const wrapper = queue?.length ? getTrailingQueuedSystemWrapper(queue[queue.length - 1], 'background') : undefined;
+  const tag = parseFoxwarmOpeningTag(wrapper);
+  return tag?.tagName === 'foxwarm-system'
+    && tag.attrs.kind === 'managed-session'
+    && tag.attrs.event === 'pending-inbox'
+    && tag.attrs.managedSessionId === managedSessionId
+    && tag.attrs.pendingCount === String(pendingCount);
 }
 
 function buildManagedInboxWakeupMessage(managedSessionId: string, pendingCount: number): string {
@@ -1784,8 +1786,9 @@ async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSe
     return;
   }
 
-  const wakeupMessage = buildManagedInboxWakeupMessage(session.id, managed.pendingInbox.length);
-  if (hasTrailingQueuedSystemEvent(ownerSession.queue, wakeupMessage, 'background')) {
+  const pendingCount = managed.pendingInbox.length;
+  const wakeupMessage = buildManagedInboxWakeupMessage(session.id, pendingCount);
+  if (hasTrailingQueuedManagedInboxWakeup(ownerSession.queue, session.id, pendingCount)) {
     managed.lastOwnerWakeupAt = now;
     managed.leaseTouchedAt = now;
     setManagedSessionState(session, managed);
@@ -2378,8 +2381,12 @@ export async function resumeBusySessions(): Promise<void> {
       // Reset busy flag and trigger
       session.busy = false;
       session.busyStartedAt = undefined;
-      const resumeMessage = 'session resumed after process restart';
-      if (hasTrailingQueuedSystemEvent(session.queue, resumeMessage, 'background')) {
+      const resumeMessage = formatFoxwarmSystemTag({
+        kind: 'event',
+        type: 'session-resumed',
+        hint: 'The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing.',
+      });
+      if (hasTrailingQueuedResumeEvent(session.queue)) {
         await saveSession(sessionId);
         onSessionTriggered?.(sessionId);
       } else {

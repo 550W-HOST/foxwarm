@@ -2,10 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
 import { Session } from '../types';
-import { formatSystemPartForModel } from '../utils/promptWrappers';
 
-const RESUME_MESSAGE = 'session resumed after process restart';
-const RESUME_SYSTEM = formatSystemPartForModel(RESUME_MESSAGE);
+const RESUME_SYSTEM = '<foxwarm-system hint="The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing." time="2026-07-27 05:00:00 +0800" type="session-resumed" kind="event" />';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -25,20 +23,22 @@ function createBaseSession(id: string): Session {
   };
 }
 
-test('hasTrailingQueuedSystemEvent matches only exact trailing system event item', () => {
-  assert.equal(sessionManager.hasTrailingQueuedSystemEvent([], RESUME_MESSAGE, 'background'), false);
-  assert.equal(sessionManager.hasTrailingQueuedSystemEvent([
+test('restart and managed wakeup dedup inspect current wrapper attributes', () => {
+  assert.equal(sessionManager.hasTrailingQueuedResumeEvent([]), false);
+  assert.equal(sessionManager.hasTrailingQueuedResumeEvent([
     { type: 'background', parts: [{ system: RESUME_SYSTEM }] },
-  ], RESUME_MESSAGE, 'background'), true);
-  assert.equal(sessionManager.hasTrailingQueuedSystemEvent([
-    { type: 'background', parts: [{ text: RESUME_MESSAGE }] },
-  ], RESUME_MESSAGE, 'background'), false);
-  assert.equal(sessionManager.hasTrailingQueuedSystemEvent([
-    { type: 'background', parts: [{ system: RESUME_MESSAGE }, { system: 'extra' }] },
-  ], RESUME_MESSAGE, 'background'), false);
-  assert.equal(sessionManager.hasTrailingQueuedSystemEvent([
-    { type: 'background', parts: [{ system: 'other message' }] },
-  ], RESUME_MESSAGE, 'background'), false);
+  ]), true);
+  assert.equal(sessionManager.hasTrailingQueuedResumeEvent([
+    { type: 'background', parts: [{ system: 'session resumed after process restart' }] },
+  ]), false);
+
+  const managedWrapper = '<foxwarm-system time="2026-07-27 05:00:00 +0800" pendingCount="2" managedSessionId="child-1" event="pending-inbox" kind="managed-session">\nbody may vary\n</foxwarm-system>';
+  assert.equal(sessionManager.hasTrailingQueuedManagedInboxWakeup([
+    { type: 'background', parts: [{ system: managedWrapper }] },
+  ], 'child-1', 2), true);
+  assert.equal(sessionManager.hasTrailingQueuedManagedInboxWakeup([
+    { type: 'background', parts: [{ system: managedWrapper }] },
+  ], 'child-1', 3), false);
 });
 
 test('resumeBusySessions does not append duplicate trailing restart-resume events', async () => {
