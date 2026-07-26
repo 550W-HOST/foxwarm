@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
 import { Session } from '../types';
+import { parseFoxwarmTagLine } from '../utils/promptWrappers';
 
 const RESUME_SYSTEM = '<foxwarm-system hint="The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing." time="2026-07-27 05:00:00 +0800" type="session-resumed" kind="event" />';
 
@@ -52,17 +53,27 @@ test('resumeBusySessions does not append duplicate trailing restart-resume event
 
   try {
     const session = await sessionManager.getSession(sessionId);
-    Object.assign(session, createBaseSession(sessionId), {
-      busy: true,
-      queue: [{ type: 'background', parts: [{ system: RESUME_SYSTEM }] }],
-    });
+    Object.assign(session, createBaseSession(sessionId), { busy: true });
     await sessionManager.saveSession(sessionId);
 
     await sessionManager.resumeBusySessions();
     let updated = await sessionManager.getSession(sessionId);
     assert.equal(updated.busy, false);
     assert.equal(updated.queue.length, 1);
-    assert.deepEqual(updated.queue[0], { type: 'background', parts: [{ system: RESUME_SYSTEM }] });
+    assert.equal(updated.queue[0].type, 'background');
+    assert.equal(updated.queue[0].parts?.length, 1);
+    const generatedResumeWrapper = updated.queue[0].parts?.[0].system || '';
+    assert.match(generatedResumeWrapper, /\/>$/);
+    const generatedTag = parseFoxwarmTagLine(generatedResumeWrapper);
+    assert.equal(generatedTag?.tagName, 'foxwarm-system');
+    assert.equal(generatedTag?.closing, false);
+    assert.deepEqual(generatedTag?.attrs, {
+      kind: 'event',
+      type: 'session-resumed',
+      hint: 'The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing.',
+      time: generatedTag?.attrs.time,
+    });
+    assert.match(generatedTag?.attrs.time || '', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}$/);
     assert.equal(triggerCount, 1);
 
     updated.busy = true;
@@ -72,7 +83,7 @@ test('resumeBusySessions does not append duplicate trailing restart-resume event
     updated = await sessionManager.getSession(sessionId);
     assert.equal(updated.busy, false);
     assert.equal(updated.queue.length, 1);
-    assert.deepEqual(updated.queue[0], { type: 'background', parts: [{ system: RESUME_SYSTEM }] });
+    assert.equal(updated.queue[0].parts?.[0].system, generatedResumeWrapper);
     assert.equal(triggerCount, 2);
   } finally {
     sessionManager.setSessionTriggerCallback(() => {});

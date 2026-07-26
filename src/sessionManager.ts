@@ -2381,16 +2381,17 @@ export async function resumeBusySessions(): Promise<void> {
       // Reset busy flag and trigger
       session.busy = false;
       session.busyStartedAt = undefined;
+      // Persist before queue insertion: a lazily hydrated empty-history
+      // session may otherwise reload its stale busy flag in enqueueSessionItem.
+      await saveSession(sessionId);
       const resumeMessage = formatFoxwarmSystemTag({
         kind: 'event',
         type: 'session-resumed',
         hint: 'The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing.',
       });
       if (hasTrailingQueuedResumeEvent(session.queue)) {
-        await saveSession(sessionId);
         onSessionTriggered?.(sessionId);
       } else {
-        // Will save session inside, no need to call saveSession() here.
         await queueSessionSystemEvent(sessionId, resumeMessage, 'background');
       }
       logger.info({ sessionId }, 'Busy session resumed');
