@@ -1833,8 +1833,8 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
   }
 }
 
-export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
-  const session = await getSession(sessionId);
+async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem): Promise<void> {
+  const sessionId = session.id;
   await reclaimManagedSessionIfStale(session);
   const managedBeforeEnqueue = !!getManagedSessionState(session);
 
@@ -1889,6 +1889,11 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
       void onSessionTriggered?.(sessionId);
     }
   }
+}
+
+export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
+  const session = await getSession(sessionId);
+  await enqueueSessionItemForLoadedSession(session, item);
 }
 
 export async function requestSessionCompaction(
@@ -2014,6 +2019,13 @@ export async function queueSessionMessageEvent(sessionId: string, message: Messa
 
 export async function queueSessionSystemEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
   await enqueueSessionItem(sessionId, {
+    type,
+    parts: buildTimestampedSystemMessageParts(message),
+  });
+}
+
+async function queueSessionSystemEventForLoadedSession(session: Session, message: string, type: 'background' | 'trigger' | 'onboot'): Promise<void> {
+  await enqueueSessionItemForLoadedSession(session, {
     type,
     parts: buildTimestampedSystemMessageParts(message),
   });
@@ -2381,18 +2393,16 @@ export async function resumeBusySessions(): Promise<void> {
       // Reset busy flag and trigger
       session.busy = false;
       session.busyStartedAt = undefined;
-      // Persist before queue insertion: a lazily hydrated empty-history
-      // session may otherwise reload its stale busy flag in enqueueSessionItem.
-      await saveSession(sessionId);
       const resumeMessage = formatFoxwarmSystemTag({
         kind: 'event',
         type: 'session-resumed',
         hint: 'The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing.',
       });
       if (hasTrailingQueuedResumeEvent(session.queue)) {
+        await saveSession(sessionId);
         onSessionTriggered?.(sessionId);
       } else {
-        await queueSessionSystemEvent(sessionId, resumeMessage, 'background');
+        await queueSessionSystemEventForLoadedSession(session, resumeMessage, 'background');
       }
       logger.info({ sessionId }, 'Busy session resumed');
     } catch (e) {
