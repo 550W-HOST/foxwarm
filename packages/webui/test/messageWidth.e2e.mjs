@@ -30,6 +30,8 @@ async function buildFixtureBundle() {
       longUser: { messages: [{ role: 'user', parts: [{ text: repeatedText }], __meta: { seq: 6 } }] },
       nestedModel: { nestedDepth: 1, messages: [{ role: 'model', parts: [{ text: 'Nested model.' }], __meta: { seq: 7 } }] },
       nestedUser: { nestedDepth: 1, messages: [{ role: 'user', parts: [{ text: repeatedText }], __meta: { seq: 8 } }] },
+      systemMessage: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="inter-agent">\\nSystem-like message.\\n</foxwarm-message>' }], __meta: { seq: 9 } }] },
+      nestedSystemMessage: { nestedDepth: 1, messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event">\\nNested system-like message.\\n</foxwarm-system>' }], __meta: { seq: 10 } }] },
     }
 
     for (const [id, fixture] of Object.entries(cases)) {
@@ -63,7 +65,7 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
     document.documentElement.classList.toggle('dark', dark)
     if (style === '550a') document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
   }, { style, dark })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 8)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 10)
 }
 
 async function readWidths() {
@@ -93,6 +95,8 @@ async function readWidths() {
       longUser: read('longUser', '.foxwarm-user-message-bubble'),
       nestedModel: read('nestedModel', '.foxwarm-assistant-message-card'),
       nestedUser: read('nestedUser', '.foxwarm-user-message-bubble'),
+      systemMessage: read('systemMessage', '[data-system-message-card]'),
+      nestedSystemMessage: read('nestedSystemMessage', '[data-system-message-card]'),
       documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     }
   })
@@ -112,7 +116,7 @@ before(async () => {
 
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0}</style></head><body><main>${['shortModel', 'longModel', 'shortTool', 'longTool', 'shortUser', 'longUser', 'nestedModel', 'nestedUser'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0}</style></head><body><main>${['shortModel', 'longModel', 'shortTool', 'longTool', 'shortUser', 'longUser', 'nestedModel', 'nestedUser', 'systemMessage', 'nestedSystemMessage'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -125,11 +129,11 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-test('desktop preserves the longstanding 80% model/tool and capped user message contract', async () => {
+test('desktop preserves the longstanding 80% model/tool/system and capped user message contract', async () => {
   await mountFixture({ width: 1200, height: 900 })
   const widths = await readWidths()
 
-  for (const key of ['shortModel', 'longModel', 'shortTool', 'longTool']) {
+  for (const key of ['shortModel', 'longModel', 'shortTool', 'longTool', 'systemMessage']) {
     assertRatio(widths[key], 0.8, key)
     assert.equal(widths[key].maxWidth, '80%')
   }
@@ -139,6 +143,7 @@ test('desktop preserves the longstanding 80% model/tool and capped user message 
   assert.equal(widths.longUser.maxWidth, '80%')
   assertRatio(widths.nestedModel, 1, 'nestedModel')
   assertRatio(widths.nestedUser, 0.85, 'nestedUser')
+  assertRatio(widths.nestedSystemMessage, 1, 'nestedSystemMessage')
 
   for (const sample of Object.values(widths).filter(value => typeof value === 'object')) {
     assert.ok(sample.overflow <= 1)
@@ -147,10 +152,10 @@ test('desktop preserves the longstanding 80% model/tool and capped user message 
   assert.ok(widths.documentOverflow <= 1)
 })
 
-test('mobile model/tool messages remain full-width without horizontal document overflow', async () => {
+test('mobile model/tool/system messages remain full-width without horizontal document overflow', async () => {
   await mountFixture({ width: 390, height: 760, style: '550a', dark: true })
   const widths = await readWidths()
-  for (const key of ['shortModel', 'longModel', 'shortTool', 'longTool']) assertRatio(widths[key], 1, key)
+  for (const key of ['shortModel', 'longModel', 'shortTool', 'longTool', 'systemMessage', 'nestedSystemMessage']) assertRatio(widths[key], 1, key)
   for (const sample of Object.values(widths).filter(value => typeof value === 'object')) {
     assert.ok(sample.overflow <= 1)
     assert.equal(sample.timelineOverflowX, 'hidden')
