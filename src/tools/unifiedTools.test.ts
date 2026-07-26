@@ -629,6 +629,7 @@ test('set_goal schema keeps goal optional so clear can omit it', () => {
   const definition = definitions.find(def => def.name === 'set_goal');
   assert.ok(definition);
   assert.equal((definition.parameters?.properties as any)?.goal?.type, 'string');
+  assert.equal(Object.prototype.hasOwnProperty.call(definition.parameters?.properties || {}, 'remindOnTurnEnd'), false);
   assert.deepEqual(definition.parameters?.required, undefined);
 });
 

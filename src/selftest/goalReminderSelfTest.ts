@@ -43,24 +43,6 @@ async function cleanupSessions(sessionIds: string[]): Promise<void> {
   }
 }
 
-async function appendStubUserMessage(session: Session, parts: Message['parts'] | null): Promise<void> {
-  if (!parts?.length) {
-    return;
-  }
-
-  await sessionManager.appendSessionMessage(session, {
-    role: 'user',
-    parts,
-  });
-}
-
-async function appendStubModelMessage(session: Session, text: string): Promise<void> {
-  await sessionManager.appendSessionMessage(session, {
-    role: 'model',
-    parts: [{ text }],
-  });
-}
-
 function countGoalReminders(session: Session): number {
   return session.history.filter(message => message.__meta?.goalReminder === true).length;
 }
@@ -95,19 +77,17 @@ async function main(): Promise<void> {
       assert.strictEqual(String(result), 'ok');
       assert.strictEqual(session.goalState?.goal, '- [ ] write docs');
       assert.strictEqual(session.goalState?.remindEvery, 3);
-      assert.strictEqual(session.goalState?.remindOnTurnEnd, true);
 
       const historyPayload = await fs.readJson(getSessionHistoryFilePath(sessionId));
       assert.strictEqual(historyPayload.goalState?.goal, '- [ ] write docs');
       assert.strictEqual(historyPayload.goalState?.remindEvery, 3);
-      assert.strictEqual(historyPayload.goalState?.remindOnTurnEnd, true);
 
       const cleared = await tool_set_goal({ clear: true }, { sessionId, session });
       assert.strictEqual(String(cleared), 'ok');
       assert.strictEqual(session.goalState, undefined);
     });
 
-    await test('interval reminder is appended before the first provider call, not queued, and suppresses its end-turn companion', async () => {
+    await test('interval reminder is appended before the first provider call, not queued', async () => {
       const sessionId = makeSessionId('selftest_goal_pre_provider');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
@@ -188,127 +168,22 @@ async function main(): Promise<void> {
 
       await tool_set_goal({ goal: '- [ ] first item' }, { sessionId, session });
       assert.strictEqual(session.goalState?.remindEvery, 10);
-      assert.strictEqual(session.goalState?.remindOnTurnEnd, true);
 
-      await tool_set_goal({ goal: '- [ ] second item', remindEvery: 4, remindOnTurnEnd: false }, { sessionId, session });
+      await tool_set_goal({ goal: '- [ ] second item', remindEvery: 4 }, { sessionId, session });
       assert.strictEqual(session.goalState?.remindEvery, 4);
-      assert.strictEqual(session.goalState?.remindOnTurnEnd, false);
-
-      await tool_set_goal({ goal: '- [ ] third item' }, { sessionId, session });
-      assert.strictEqual(session.goalState?.remindEvery, 4);
-      assert.strictEqual(session.goalState?.remindOnTurnEnd, false);
     });
 
-    await test('turn-end reminder appears once unless final response ends with [NO_ACTION] or goal is cleared', async () => {
-      const sessionId = makeSessionId('selftest_goal_endturn');
+    await test('completed turns do not append end-turn goal reminders', async () => {
+      const sessionId = makeSessionId('selftest_goal_no_endturn');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
 
-      await tool_set_goal({ goal: '- [ ] verify end-turn reminder', remindEvery: 99 }, { sessionId, session });
-
-      let callIndex = 0;
+      await tool_set_goal({ goal: '- [ ] keep the goal at pre-provider boundaries', remindEvery: 99 }, { sessionId, session });
       (llm as any).chat = async (parts: Message['parts'] | null, activeSession: Session) => {
-        assert.strictEqual(activeSession.id, sessionId);
-        await appendStubUserMessage(activeSession, parts);
-        callIndex += 1;
-
-        if (callIndex === 1) {
-          await appendStubModelMessage(activeSession, 'First normal reply');
-          return { text: 'First normal reply' };
+        if (parts?.length) {
+          await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
         }
-
-        if (callIndex === 2) {
-          await appendStubModelMessage(activeSession, 'Second quiet reply [NO_ACTION]');
-          return { text: 'Second quiet reply [NO_ACTION]' };
-        }
-
-        await appendStubModelMessage(activeSession, 'Third reply after clear');
-        return { text: 'Third reply after clear' };
-      };
-
-      await (router as any).runSessionTurn(sessionId, {
-        parts: [{ text: 'normal turn' }],
-        session,
-        preclaimed: true,
-      });
-
-      let reminderMessages = session.history.filter(message => message.__meta?.goalReminder === true);
-      assert.strictEqual(reminderMessages.length, 1);
-      assert.strictEqual(reminderMessages[0].__meta?.goalReminderKind, 'end-turn');
-
-      await (router as any).runSessionTurn(sessionId, {
-        parts: [{ text: 'quiet turn' }],
-        session,
-        preclaimed: true,
-      });
-
-      reminderMessages = session.history.filter(message => message.__meta?.goalReminder === true);
-      assert.strictEqual(reminderMessages.length, 1);
-
-      await tool_set_goal({ clear: true }, { sessionId, session });
-
-      await (router as any).runSessionTurn(sessionId, {
-        parts: [{ text: 'after clear' }],
-        session,
-        preclaimed: true,
-      });
-
-      reminderMessages = session.history.filter(message => message.__meta?.goalReminder === true);
-      assert.strictEqual(reminderMessages.length, 1);
-    });
-
-    await test('turn-end reminder still appears when child reminder queues a background follow-up', async () => {
-      const sessionId = makeSessionId('selftest_goal_child_endturn');
-      const parentSessionId = makeSessionId('selftest_goal_child_parent');
-      createdSessionIds.push(parentSessionId, sessionId);
-      await ensureSession(parentSessionId);
-      const session = await ensureSession(sessionId, parentSessionId);
-
-      await tool_set_goal({ goal: '- [ ] child end-turn reminder', remindEvery: 99 }, { sessionId, session });
-
-      (llm as any).chat = async (parts: Message['parts'] | null, activeSession: Session) => {
-        assert.strictEqual(activeSession.id, sessionId);
-        await appendStubUserMessage(activeSession, parts);
-
-        const lastUserPartsText = activeSession.history
-          .slice()
-          .reverse()
-          .find(message => message.role === 'user')
-          ?.parts.map(part => part.system || part.text || '') || [];
-
-        if (lastUserPartsText.some(partText => partText.includes('message ended without send_to_session call'))) {
-          await appendStubModelMessage(activeSession, '[NO_ACTION]');
-          return { text: '[NO_ACTION]' };
-        }
-
-        await appendStubModelMessage(activeSession, 'Child finished local work');
-        return { text: 'Child finished local work' };
-      };
-
-      await (router as any).runSessionTurn(sessionId, {
-        parts: [{ text: 'child timer-like turn' }],
-        session,
-        preclaimed: true,
-      });
-
-      const refreshedSession = await sessionManager.getSession(sessionId);
-      const reminderMessages = refreshedSession.history.filter(message => message.__meta?.goalReminder === true);
-      assert.strictEqual(reminderMessages.length, 1);
-      assert.strictEqual(reminderMessages[0].__meta?.goalReminderKind, 'end-turn');
-      assert.strictEqual(refreshedSession.queue.length, 0);
-    });
-
-    await test('turn-end goal reminder can be disabled via set_goal', async () => {
-      const sessionId = makeSessionId('selftest_goal_disable_endturn');
-      createdSessionIds.push(sessionId);
-      const session = await ensureSession(sessionId);
-
-      await tool_set_goal({ goal: '- [ ] disable end turn', remindEvery: 99, remindOnTurnEnd: false }, { sessionId, session });
-
-      (llm as any).chat = async (parts: Message['parts'] | null, activeSession: Session) => {
-        assert.strictEqual(activeSession.id, sessionId);
-        await appendStubUserMessage(activeSession, parts);
-        await appendStubModelMessage(activeSession, 'Normal reply');
+        await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'Normal reply' }] });
         return { text: 'Normal reply' };
       };
 
@@ -318,8 +193,7 @@ async function main(): Promise<void> {
         preclaimed: true,
       });
 
-      const reminderMessages = session.history.filter(message => message.__meta?.goalReminder === true);
-      assert.strictEqual(reminderMessages.length, 0);
+      assert.strictEqual(countGoalReminders(session), 0);
     });
 
     await test('interval reminder is appended after a complete tool result before the next provider call', async () => {

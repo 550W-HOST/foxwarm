@@ -66,6 +66,7 @@ Manages persistence of session metadata and history as separate JSON files on di
 - Uses an in-memory `Map` cache for history store instances to avoid recreating them.
 - Normalization hooks handle legacy formats (e.g., metadata stored without a `sessions` wrapper, missing `history` arrays).
 - Per-session history normalization accepts embedded `contextFrontier` only when it is an array; invalid frontier payloads are ignored rather than corrupting session state.
+- Legacy goal-state end-turn flags remain readable, but history and metadata serializers omit them from current writes. The canonical goal contract is [D-goal-direct-safe-boundary](src-session-goal.md#d-goal-direct-safe-boundary).
 - Recovery path: if the metadata index and all backups are unreadable, rebuilds from individual history files by scanning `SESSIONS_DIR` recursively.
 - Metadata recovery deliberately ignores legacy `*.frontier.json` files so they are not mistaken for sessions named `*.frontier`.
 - `applySessionHistoryState` sets defaults for `currentNode` (`'master'`) and `queue` (`[]`) when missing.

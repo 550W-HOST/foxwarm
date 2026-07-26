@@ -58,7 +58,7 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 - `./session/childSessionReminder` — `buildChildReminder`, `isModelNoActionSignal`
 - `./session/managedState` — `getManagedSessionState`, `isManagedSessionActive`, `setManagedSessionState`
 - `./session/snapshotRefresh` — `maybeRefreshStaleSessionSnapshot`
-- `./session/goal` — `maybeBuildGoalReminderMessage`, `maybeBuildGoalEndTurnReminderMessage`
+- `./session/goal` — `maybeBuildGoalReminderMessage`
 - `./sessionManager` — session CRUD, queue operations, message appending, channel config
 - `./llm` — LLM inference calls
 - `./types` — `ChannelTurnProgress`, `Message`, `MessagePart`, `QueueItem`, `QueueSource`, `Session`

@@ -133,20 +133,18 @@ test('set_goal returns concise output without echoing goal content or remindEver
   }
 });
 
-test('set_goal accepts omitted remindEvery and configurable remindOnTurnEnd', async () => {
+test('set_goal accepts omitted remindEvery', async () => {
   await sessionManager.loadSessions();
   const sessionId = makeSessionId('tool_result_goal_optional');
   const session = await ensureSession(sessionId);
   try {
-    const updated = await tool_set_goal({ goal: 'Ship feature safely', remindOnTurnEnd: false }, { sessionId, session });
+    const updated = await tool_set_goal({ goal: 'Ship feature safely' }, { sessionId, session });
     assert.equal(updated, 'ok');
     assert.equal(session.goalState?.remindEvery, 10);
-    assert.equal(session.goalState?.remindOnTurnEnd, false);
 
     const second = await tool_set_goal({ goal: 'Ship feature later' }, { sessionId, session });
     assert.equal(second, 'ok');
     assert.equal(session.goalState?.remindEvery, 10);
-    assert.equal(session.goalState?.remindOnTurnEnd, false);
   } finally {
     try {
       await sessionManager.deleteSession(sessionId);

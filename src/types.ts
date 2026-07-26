@@ -148,7 +148,6 @@ export interface SessionStreamEvent {
 export interface SessionGoalState {
   goal: string;
   remindEvery: number;
-  remindOnTurnEnd?: boolean;
   anchorSeq: number;
   updatedAt: number;
 }

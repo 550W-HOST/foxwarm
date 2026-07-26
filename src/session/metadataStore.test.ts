@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { applySessionHistoryState, collectSessionHistoryFiles, createSessionHistoryStore, createSessionsMetadataStore, serializeSessionHistoryPayload } from './metadataStore';
+import { applySessionHistoryState, collectSessionHistoryFiles, createSessionHistoryStore, createSessionsMetadataStore, serializeSessionHistoryPayload, stripSessionMetadataForSave } from './metadataStore';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-session-metadata-store-'));
@@ -132,4 +132,22 @@ test('session history payload embeds context frontier and recovery ignores legac
     applySessionHistoryState(target, payload);
     assert.deepEqual(target.contextFrontier, [{ kind: 'message', seq: 1 }]);
   });
+});
+
+test('legacy goal end-turn setting loads but is omitted from current writes', () => {
+  const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
+  applySessionHistoryState(target, {
+    goalState: {
+      goal: 'Preserve the long-running task',
+      remindEvery: 5,
+      remindOnTurnEnd: false,
+      anchorSeq: 3,
+      updatedAt: 1,
+    },
+  });
+
+  assert.equal(target.goalState.goal, 'Preserve the long-running task');
+  assert.equal(target.goalState.remindOnTurnEnd, false);
+  assert.equal((serializeSessionHistoryPayload(target).goalState as any).remindOnTurnEnd, undefined);
+  assert.equal((stripSessionMetadataForSave(target).goalState as any).remindOnTurnEnd, undefined);
 });

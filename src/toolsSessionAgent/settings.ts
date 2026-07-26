@@ -1,6 +1,6 @@
 import * as sessionManager from '../sessionManager';
 import { resolveModelConfig } from '../config';
-import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, resolveSessionGoalRemindOnTurnEnd, setSessionGoal } from '../session/goal';
+import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, setSessionGoal } from '../session/goal';
 import { ToolArgs, ToolContext, normalizeToolModelKey } from './helpers';
 
 export async function tool_set_goal(args: ToolArgs, ctx: ToolContext) {
@@ -26,8 +26,7 @@ export async function tool_set_goal(args: ToolArgs, ctx: ToolContext) {
   }
 
   const remindEvery = resolveSessionGoalRemindEvery(session, args.remindEvery);
-  const remindOnTurnEnd = resolveSessionGoalRemindOnTurnEnd(session, args.remindOnTurnEnd);
-  setSessionGoal(session, goal, remindEvery, remindOnTurnEnd);
+  setSessionGoal(session, goal, remindEvery);
   await sessionManager.saveSession(session.id);
 
   return 'ok';

@@ -11,7 +11,7 @@ import { buildChildReminder, isModelNoActionSignal } from './session/childSessio
 import { getManagedSessionState, isManagedSessionActive, setManagedSessionState } from './session/managedState';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
-import { maybeBuildGoalEndTurnReminderMessage, maybeBuildGoalReminderMessage } from './session/goal';
+import { maybeBuildGoalReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
@@ -735,22 +735,6 @@ export class MessageRouter {
     }
   }
 
-  private async maybeAppendGoalEndTurnReminder(session: Session): Promise<void> {
-    if (session.queue.some(item => item.type !== 'background')) {
-      return;
-    }
-
-    const reminder = maybeBuildGoalEndTurnReminderMessage(session);
-    if (!reminder) {
-      return;
-    }
-
-    // End-turn reminders should become visible in history immediately without
-    // spawning another follow-up reminder turn. Interval reminders are the ones
-    // that independently re-trigger the agent loop.
-    await sessionManager.appendSessionMessage(session, reminder);
-  }
-
   private async maybeAppendGoalIntervalReminder(session: Session): Promise<void> {
     const reminder = maybeBuildGoalReminderMessage(session);
     if (!reminder) {
@@ -1230,7 +1214,6 @@ export class MessageRouter {
       if (!finalSent) {
         this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
       }
-      await this.maybeAppendGoalEndTurnReminder(session);
       if (!stoppedByUser) {
         await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
       }
@@ -1251,7 +1234,6 @@ export class MessageRouter {
         await this.maybeQueueChildReminder(session);
         await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions);
       }
-      await this.maybeAppendGoalEndTurnReminder(session);
     } finally {
       const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;
       if (session.meta?.runQueuedAfterStop) {

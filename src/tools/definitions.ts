@@ -466,7 +466,6 @@ Example:
                 properties: {
                     goal: { type: 'string', description: 'Goal text. Use empty string to clear.' },
                     remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current goal setting or default to 10.' },
-                    remindOnTurnEnd: { type: 'boolean', description: 'Optional. Whether to inject goal reminders at the end of a turn when newer work happened. If omitted, reuse the current setting or default to true.' },
                     clear: { type: 'boolean', description: 'If true, clear the current session goal reminder.' }
                 }
             }
