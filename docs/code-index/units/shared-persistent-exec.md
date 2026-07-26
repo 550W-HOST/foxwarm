@@ -15,6 +15,7 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 - `ExecCompletionDispatcher` — Callback type for delivering completion notifications
 - `PersistentExecManagerOptions` — Configuration for the manager
 - `DEFAULT_EXEC_TIMEOUT_SECONDS`, `MIN_EXEC_TIMEOUT_SECONDS`, `MAX_EXEC_TIMEOUT_SECONDS` — Timeout constants
+- `MAX_FULL_LOG_READ_BYTES` / `OVERSIZED_LOG_SAMPLE_BYTES` — 1 MiB full-read ceiling and 5,000-byte head/tail sampling budget for oversized logs
 - `resolveExecTimeoutSeconds(timeoutValue)` / `ResolvedExecTimeout` — validates timeout input, clamps finite values above 60 seconds, and returns requested/effective values with an optional warning
 
 ## Function Index
@@ -44,6 +45,8 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 | `PersistentExecManager.reconcileRunningExecs()` | ~422 | Checks background processes for completion and dispatches notifications |
 | `PersistentExecManager.readPartialLog(logPath)` | ~355 | Reads last N bytes of a log file for preview |
 | `PersistentExecManager.readDisplayOutput(logPath)` | ~510 | Reads log output for inline display and delegates over-budget excerpts to shared line-aware truncation |
+| `PersistentExecManager.readOversizedLogSamples(filePath, originalByteLength)` | ~548 | Reads bounded head/tail byte samples without decoding the full oversized log |
+| `PersistentExecManager.isLikelyTextLogSample(sample)` | ~568 | Uses a NUL/control-byte heuristic to select text excerpts or binary hex previews |
 | `PersistentExecManager.readExecStatus(statusPath)` | ~325 | Parses the JSON status file |
 | `PersistentExecManager.ensureFallbackStatus(entry)` | ~330 | Returns status or synthesizes one if process died without writing status |
 | `PersistentExecManager.readExecCwd(cwdPath)` | ~345 | Reads the cwd text file |
@@ -70,7 +73,8 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 - A periodic reconcile loop polls status files of background processes and dispatches completion notifications via the configured `completionDispatcher`.
 - Uses `isPidRunning` as a fallback to detect processes that died without writing a status file, synthesizing an error status in that case.
 - Output formatting handles truncation with shared line-aware per-line and whole-line omission placeholders, plus token estimation for inline display decisions.
-- Foreground exec completions always append a footer beginning with `---` and `Exit code: ...`; truncated outputs add the full log path plus Foxwarm placeholder/original size notes. An oversized-timeout warning is passed separately into foreground/background-switch formatting, so it remains in final metadata even when command output is truncated. Later background completion notifications do not repeat the already-delivered warning.
+- Logs at or below 1 MiB retain the existing full-read, line-aware behavior. Oversized logs use only 5,000-byte head/tail reads from a stat-size snapshot, so growth or shrink races remain bounded. A sample with a NUL byte or more than 10% non-tab/newline/carriage-return C0 controls is treated as binary and shown as 64-byte head/tail hexadecimal previews; otherwise the text samples are joined by an explicit Foxwarm middle-omission marker and passed through the normal text formatter.
+- Foreground exec completions always append a footer beginning with `---` and `Exit code: ...`; shortened outputs say `Command output saved to:` and background completion events say `Command output in`, accurately describing output captured from the shell command or pipeline as executed. Oversized-log footers report the sampled snapshot's exact original byte length and deliberately do not claim an original line count. An oversized-timeout warning is passed separately into foreground/background-switch formatting, so it remains in final metadata even when command output is truncated. Later background completion notifications do not repeat the already-delivered warning.
 
 ## Integration
 
@@ -78,3 +82,9 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 - Relies on `resolveValidatedExecCwd` to safely resolve and validate working directories from multiple sources (session, agent default).
 - The `completionDispatcher` callback connects to the agent messaging layer to notify users/agents when background commands finish.
 - Registry persistence allows the system to recover awareness of still-running processes after a server restart.
+
+## Design Decisions
+
+### D-persistent-exec-bounded-log-excerpts
+
+Persistent exec logs contain the output captured from the shell command or pipeline as executed; they do not reconstruct output before agent-added filtering. Completion command previews retain bounded head and tail text with a middle-omission marker. Logs may contain raw binary output and must not be fully read or decoded once they exceed 1 MiB. Read bounded head/tail byte samples only, use the NUL/control-byte heuristic to distinguish a text excerpt from a small hexadecimal binary preview, and retain the captured log on disk. Text samples reuse the normal output formatter after an explicit middle-omission marker. Because line counting would require a full scan, oversized foreground footers report only the exact stat-time byte length, not a line count.

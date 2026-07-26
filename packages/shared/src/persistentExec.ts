@@ -46,6 +46,11 @@ const MISSING_STATUS_GRACE_MS = 3000;
 const PARTIAL_LOG_BYTES = 4000;
 const INLINE_LOG_LIMIT_BYTES = 20000;
 const INLINE_EXCERPT_HALF_BYTES = 5000;
+// Above this size, only bounded byte samples are read. Persistent-exec logs can
+// contain arbitrary command output, including raw binary files.
+export const MAX_FULL_LOG_READ_BYTES = 1024 * 1024;
+export const OVERSIZED_LOG_SAMPLE_BYTES = 5000;
+const BINARY_LOG_HEX_PREVIEW_BYTES = 64;
 const EXEC_PATHS_WAIT_TIMEOUT_MS = 1000;
 const EXEC_PATHS_POLL_INTERVAL_MS = 25;
 const BACKGROUND_COMMAND_PREVIEW_LIMIT = 100;
@@ -89,6 +94,14 @@ interface ResolvedExecPaths {
   cwdPath: string;
 }
 
+interface LogExcerpt {
+  text: string;
+  truncated: boolean;
+  truncation?: OutputTruncationResult;
+  oversized?: boolean;
+  originalByteLength?: number;
+}
+
 export type ExecCompletionDispatcher = (entry: RunningExecEntry, status: ExecStatus, message: string) => Promise<void>;
 
 export interface PersistentExecManagerOptions {
@@ -115,7 +128,12 @@ function escapeInlineCode(text: string): string {
 function summarizeCommandForNotification(text: string, maxLength: number = BACKGROUND_COMMAND_PREVIEW_LIMIT): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   if (compact.length <= maxLength) return compact;
-  return `${compact.slice(0, maxLength)}...`;
+  const marker = '...[foxwarm: command middle omitted]...';
+  if (maxLength <= marker.length) return compact.slice(0, maxLength);
+  const remaining = maxLength - marker.length;
+  const headLength = Math.ceil(remaining * 0.6);
+  const tailLength = remaining - headLength;
+  return `${compact.slice(0, headLength)}${marker}${compact.slice(-tailLength)}`;
 }
 
 function formatExecTimeoutSeconds(seconds: number): string {
@@ -535,9 +553,77 @@ export class PersistentExecManager {
     }
   }
 
-  private async readLogExcerpt(filePath: string, maxChars: number): Promise<{ text: string; truncated: boolean; truncation?: OutputTruncationResult }> {
+  private async readOversizedLogSamples(filePath: string, originalByteLength: number): Promise<{ head: Buffer; tail: Buffer }> {
+    const sampleLength = Math.min(OVERSIZED_LOG_SAMPLE_BYTES, originalByteLength);
+    const file = await fsp.open(filePath, 'r');
+    try {
+      const readAt = async (position: number): Promise<Buffer> => {
+        const buffer = Buffer.alloc(sampleLength);
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, position);
+        return buffer.subarray(0, bytesRead);
+      };
+      const head = await readAt(0);
+      const tail = await readAt(Math.max(0, originalByteLength - sampleLength));
+      return { head, tail };
+    } finally {
+      await file.close();
+    }
+  }
+
+  private isLikelyTextLogSample(sample: Buffer): boolean {
+    if (sample.includes(0)) return false;
+    let controlBytes = 0;
+    for (const byte of sample) {
+      if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) controlBytes += 1;
+    }
+    return controlBytes <= sample.length * 0.1;
+  }
+
+  private formatOversizedBinaryLogExcerpt(head: Buffer, tail: Buffer, originalByteLength: number): string {
+    const toHex = (sample: Buffer) => sample.subarray(0, BINARY_LOG_HEX_PREVIEW_BYTES).toString('hex');
+    return [
+      `[foxwarm: oversized binary log; showing hexadecimal previews from a ${originalByteLength}-byte file]`,
+      `Head (${Math.min(head.length, BINARY_LOG_HEX_PREVIEW_BYTES)} bytes): ${toHex(head)}`,
+      `Tail (${Math.min(tail.length, BINARY_LOG_HEX_PREVIEW_BYTES)} bytes): ${toHex(tail)}`,
+      '[foxwarm: raw binary output omitted; full log remains on disk]',
+    ].join('\n');
+  }
+
+  private async readLogExcerpt(filePath: string, maxChars: number): Promise<LogExcerpt> {
     const stat = await fs.stat(filePath);
     if (stat.size <= 0) return { text: '', truncated: false };
+
+    if (stat.size > MAX_FULL_LOG_READ_BYTES) {
+      const { head, tail } = await this.readOversizedLogSamples(filePath, stat.size);
+      const sample = Buffer.concat([head, tail]);
+      if (!this.isLikelyTextLogSample(sample)) {
+        return {
+          text: this.formatOversizedBinaryLogExcerpt(head, tail, stat.size),
+          truncated: true,
+          oversized: true,
+          originalByteLength: stat.size,
+        };
+      }
+
+      const text = [
+        head.toString('utf8'),
+        `[foxwarm: oversized log middle omitted; showing bounded head and tail samples from a ${stat.size}-byte file]`,
+        tail.toString('utf8'),
+      ].join('\n');
+      const truncation = truncateOutputForDisplay(text, {
+        maxChars,
+        force: text.length > maxChars,
+        lineOmissionReason: 'this oversized log sample is too long',
+      });
+      return {
+        text: truncation.text,
+        truncated: true,
+        truncation: truncation.truncated ? truncation : undefined,
+        oversized: true,
+        originalByteLength: stat.size,
+      };
+    }
+
     const text = await fs.readFile(filePath, 'utf8');
     const truncation = truncateOutputForDisplay(text, {
       maxChars,
@@ -551,19 +637,19 @@ export class PersistentExecManager {
     };
   }
 
-  private async readPartialLog(logPath: string): Promise<string> {
+  private async readPartialLog(logPath: string): Promise<LogExcerpt> {
     try {
       const excerpt = await this.readLogExcerpt(logPath, PARTIAL_LOG_BYTES);
       const text = excerpt.text.trim();
-      if (!text) return '(Command started, no output yet)';
-      return excerpt.truncated ? `${text}\n...(truncated)` : text;
+      if (!text) return { text: '(Command started, no output yet)', truncated: false };
+      return { ...excerpt, text: excerpt.truncated ? `${text}\n...(truncated)` : text };
     } catch (err: any) {
-      if (err?.code === 'ENOENT') return '(Command started, no output yet)';
+      if (err?.code === 'ENOENT') return { text: '(Command started, no output yet)', truncated: false };
       throw err;
     }
   }
 
-  private async readDisplayOutput(logPath: string): Promise<{ text: string; truncated: boolean; truncation?: OutputTruncationResult }> {
+  private async readDisplayOutput(logPath: string): Promise<LogExcerpt> {
     try {
       const excerpt = await this.readLogExcerpt(logPath, INLINE_LOG_LIMIT_BYTES);
       if (!excerpt.text.trim()) return { text: '(No output)', truncated: false };
@@ -585,15 +671,19 @@ export class PersistentExecManager {
     }
   }
 
-  private buildForegroundFooter(entry: RunningExecEntry, status: ExecStatus, output: { truncated: boolean; truncation?: OutputTruncationResult }, warning?: string): string {
+  private buildForegroundFooter(entry: RunningExecEntry, status: ExecStatus, output: LogExcerpt, warning?: string): string {
     const lines = ['---', `Exit code: ${status.exitCode === null ? 'unknown' : status.exitCode}`];
     if (status.error) lines.push(`Error: ${status.error}`);
     if (warning) lines.push(warning);
     if (output.truncated) {
-      lines.push(`Full output saved to: ${entry.logPath}`);
+      lines.push(`Command output saved to: ${entry.logPath}`);
       lines.push('Output was shortened for inline display.');
     }
-    if (output.truncation?.footerNotes?.length) lines.push(...output.truncation.footerNotes);
+    if (output.oversized && output.originalByteLength !== undefined) {
+      lines.push(`Original log size: ${output.originalByteLength} bytes.`);
+    } else if (output.truncation?.footerNotes?.length) {
+      lines.push(...output.truncation.footerNotes);
+    }
     return lines.join('\n');
   }
 
@@ -655,14 +745,17 @@ export class PersistentExecManager {
     const fullNotice = buildBackgroundTimeoutFullNotice(timeoutSeconds);
     const nodeLine = entry.nodeId && entry.nodeId !== 'master' ? `Node: \`${entry.nodeId}\`\n` : '';
     const warningLine = warning ? `${warning}\n` : '';
-    return `${shortNotice}\n\nPartial Output:\n${partialOutput}\n\n${fullNotice}\n${warningLine}${nodeLine}PID: ${entry.pid}\nLog file: ${entry.logPath}`;
+    const sizeLine = partialOutput.oversized && partialOutput.originalByteLength !== undefined
+      ? `\nOriginal log size: ${partialOutput.originalByteLength} bytes.`
+      : '';
+    return `${shortNotice}\n\nPartial Output:\n${partialOutput.text}\n\n${fullNotice}\n${warningLine}${nodeLine}PID: ${entry.pid}\nLog file: ${entry.logPath}${sizeLine}`;
   }
 
   buildCompletionMessage(entry: RunningExecEntry, status: ExecStatus): string {
     const exitText = status.exitCode === null ? 'unknown' : String(status.exitCode);
     const nodeLine = entry.nodeId && entry.nodeId !== 'master' ? `\nNode: \`${entry.nodeId}\`` : '';
     const errorLine = status.error ? `\nError: ${status.error}` : '';
-    return `Background Process Finished\ncommand: \`${escapeInlineCode(summarizeCommandForNotification(entry.command))}\`${nodeLine}\nExit code: ${exitText}${errorLine}\nFull output in ${entry.logPath}`;
+    return `Background Process Finished\ncommand: \`${escapeInlineCode(summarizeCommandForNotification(entry.command))}\`${nodeLine}\nExit code: ${exitText}${errorLine}\nCommand output in ${entry.logPath}`;
   }
 
   async readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {

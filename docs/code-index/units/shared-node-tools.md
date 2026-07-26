@@ -83,7 +83,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 ## Behavior
 
 - File operations resolve paths relative to session cwd or agent directory, with home path expansion; node wrappers then delegate read/write behavior to `fileToolCore`
-- `exec` spawns shell commands via `PersistentExecManager`; commands exceeding timeout continue in background and fire a system event on completion with log file path
+- `exec` spawns shell commands via `PersistentExecManager`; commands exceeding timeout continue in background and fire a system event pointing to captured command/pipeline output in the log file. The node capability guidance tells models not to add `head`/`tail` merely for context control because pipeline filtering changes captured output; canonical details: [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
 - Node-side `exec` shares master-side timeout resolution: finite values above 60 seconds clamp to 60 and emit the requested/effective warning in the immediate foreground or background-switch result; invalid and below-minimum values still reject.
 - `edit` enforces single-occurrence matching to prevent ambiguous replacements
 - `write` refuses to overwrite unless explicitly told, and requires parent directories to already exist unless `createDirs=true` is passed. For the default path it first attempts `fs.writeFile` directly, so symlinked parent directories work naturally; friendly parent errors are generated only after write failure.

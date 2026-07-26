@@ -36,6 +36,8 @@ test('exec schema documents timeout clamping without rejecting values above the 
   assert.equal(Object.prototype.hasOwnProperty.call(timeout, 'maximum'), false);
   assert.match(String(timeout.description), /default: 15/i);
   assert.match(String(timeout.description), /above the 60s maximum are clamped/i);
+  assert.match(String(def?.description), /do not add \| head or \| tail merely to limit context/i);
+  assert.match(String(def?.description), /filtering changes what the command log captures/i);
 });
 
 test('exec tool still rejects timeout values below the allowed range', async () => {
@@ -210,7 +212,7 @@ test('foreground exec truncated output keeps line-aware excerpt and footer metad
     assert.match(result, /\[foxwarm: line too long/);
     assert.match(result, /A{100}/);
     assert.match(result, /B{100}/);
-    assert.match(result, new RegExp(`---\nExit code: 0\nFull output saved to: ${logPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(result, new RegExp(`---\nExit code: 0\nCommand output saved to: ${logPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     assert.match(result, /Foxwarm placeholders above .* are not original output content/);
     assert.match(result, /Original output: 1 line\(s\), 24000 character\(s\)\./);
   } finally {
@@ -232,7 +234,7 @@ test('foreground exec warning remains in the footer when command output is trunc
     );
 
     assert.match(result, /---\nExit code: 1\nError: test failure\nWARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\./);
-    assert.match(result, /Full output saved to:/);
+    assert.match(result, /Command output saved to:/);
   } finally {
     await fs.remove(tempDir);
   }

@@ -50,6 +50,8 @@ test('node exec schema allows oversized timeout values and documents clamping', 
   assert.equal(timeout.minimum, 1);
   assert.equal(Object.prototype.hasOwnProperty.call(timeout, 'maximum'), false);
   assert.match(String(timeout.description), /above the 60s maximum are clamped/i);
+  assert.match(String(definition.description), /do not add \| head or \| tail merely to limit context/i);
+  assert.match(String(definition.description), /filtering changes what the log captures/i);
 });
 
 test('shared write contentRef retry hints are executable and JSON-escape actual arguments', () => {
@@ -243,7 +245,7 @@ test('node exec background timeout and completion point to a log path, not an op
     assert.equal(events.length, 1);
     assert.match(events[0], /Background Process Finished/);
     assert.match(events[0], /Node: `test-node`/);
-    assert.match(events[0], /Full output in /);
+    assert.match(events[0], /Command output in /);
     assert.doesNotMatch(events[0], new RegExp(outputToken));
   } finally {
     delete process.env.FOXWARM_TEST_REMOTE_DONE;
