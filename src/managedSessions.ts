@@ -1,6 +1,7 @@
 import { Message, MessagePart, QueueItem } from './types';
 import * as sessionManager from './sessionManager';
 import { resolvePermittedSessionTarget } from './session/relations';
+import { withInputTimePart } from './utils/systemMessageParts';
 import {
   buildManagedSessionLeaseId,
   cloneQueueItem,
@@ -66,16 +67,20 @@ function prependQueueItems(sessionQueue: QueueItem[], items: QueueItem[]): Queue
 
 function buildManagerQueueItems(args: { parts?: MessagePart[] | null; message?: Message | null }): QueueItem[] {
   if (args.message) {
+    const message = structuredClone(args.message);
+    if (message.role === 'user' && message.modelVisible !== false) {
+      message.parts = withInputTimePart(message.parts);
+    }
     return [{
       type: 'intersession',
-      message: structuredClone(args.message),
+      message,
     }];
   }
 
   if (args.parts?.length) {
     return [{
       type: 'intersession',
-      parts: args.parts.map(part => ({ ...part })),
+      parts: withInputTimePart(args.parts),
     }];
   }
 

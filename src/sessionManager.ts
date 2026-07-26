@@ -24,7 +24,8 @@ import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
-import { buildSystemMessageParts } from './utils/systemMessageParts';
+import { buildTimestampedSystemMessageParts, withInputTimePart } from './utils/systemMessageParts';
+import { formatLocalTimestamp } from './utils/localTime';
 import { formatFoxwarmMessage, formatFoxwarmSystem, formatFoxwarmSystemClose, formatFoxwarmSystemOpen, formatSystemPartForModel } from './utils/promptWrappers';
 import { runStartupMigrations } from './migrations';
 import {
@@ -162,7 +163,7 @@ function buildWaitAllPendingReminderItem(pendingSessions: string[]): QueueItem |
 
   return {
     type: 'background',
-    parts: buildSystemMessageParts(buildWaitAllPendingReminder(pendingSessions)),
+    parts: buildTimestampedSystemMessageParts(buildWaitAllPendingReminder(pendingSessions)),
   };
 }
 
@@ -326,7 +327,7 @@ export async function clearSessionWaitById(sessionId: string | undefined, waitId
 export async function queueSessionWaitTimeoutEvent(sessionId: string, waitId: string, message: string): Promise<void> {
   await enqueueSessionItem(sessionId, {
     type: 'background',
-    parts: buildSystemMessageParts(message),
+    parts: buildTimestampedSystemMessageParts(message),
     waitTimeoutId: waitId,
   });
 }
@@ -1330,7 +1331,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
   // Add separator message
   appendedForkMessages.push({
     role: 'user',
-    parts: [systemPart(formatSessionIdentityHint({ parentSessionId: realSourceSessionId, sessionId: newSessionId, variant: 'inherited' }))],
+    parts: [systemPart(formatSessionIdentityHint({ parentSessionId: realSourceSessionId, sessionId: newSessionId, variant: 'inherited', timestamp: Date.now() }))],
     __meta: { timestamp: Date.now() }
   });
 
@@ -1451,7 +1452,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
 
     const initialMessage: Message = {
       role: 'user',
-      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId: realParentSessionId, sessionId: childSessionId, variant: 'new-child' })}\nYou are a child session (new, empty context). ${buildChildCompletionInstruction(realParentSessionId)}`)],
+      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId: realParentSessionId, sessionId: childSessionId, variant: 'new-child', timestamp: Date.now() })}\nYou are a child session (new, empty context). ${buildChildCompletionInstruction(realParentSessionId)}`)],
       __meta: { timestamp: Date.now() }
     };
 
@@ -1976,12 +1977,14 @@ export async function applyCompletedCompactJob(sessionId: string): Promise<boole
  * @param type Event type (background, trigger, onboot, etc.)
  */
 export async function queueSessionEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+  const now = new Date();
   await enqueueSessionItem(sessionId, {
     type,
     parts: [{
       system: formatFoxwarmMessage({
         type,
         eventType: type,
+        time: formatLocalTimestamp(now),
         hint: `${type} session event`,
       }, message),
     }],
@@ -1991,19 +1994,26 @@ export async function queueSessionEvent(sessionId: string, message: string, type
 export async function queueSessionStructuredEvent(sessionId: string, parts: MessagePart[], type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
   await enqueueSessionItem(sessionId, {
     type,
-    parts: parts.map(part => ({ ...part }))
+    parts: withInputTimePart(parts)
   });
 }
 
 export async function queueSessionMessageEvent(sessionId: string, message: Message, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+  const queuedMessage = structuredClone(message);
+  if (queuedMessage.role === 'user' && queuedMessage.modelVisible !== false) {
+    queuedMessage.parts = withInputTimePart(queuedMessage.parts);
+  }
   await enqueueSessionItem(sessionId, {
     type,
-    message: structuredClone(message),
+    message: queuedMessage,
   });
 }
 
 export async function queueSessionSystemEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
-  await queueSessionStructuredEvent(sessionId, buildSystemMessageParts(message), type);
+  await enqueueSessionItem(sessionId, {
+    type,
+    parts: buildTimestampedSystemMessageParts(message),
+  });
 }
 
 /**
@@ -2053,12 +2063,14 @@ export async function appendSessionMessage(sessionOrId: Session | string, messag
 
 export async function notifyManualForkCreated(parentSessionId: string, childSessionId: string, initialMessage?: string): Promise<'appended' | 'queued'> {
   const parent = await getSession(parentSessionId);
+  const inputTime = formatLocalTimestamp(Date.now());
   const messageText = initialMessage === undefined
     ? formatFoxwarmSystem({
       kind: 'session-event',
       event: 'manual-fork-created',
       currentSessionId: parent.id,
       childSessionId,
+      time: inputTime,
       initialMessage: '(none)',
     }, `User manually created fork child session \`${childSessionId}\` from the current session \`${parent.id}\`.\nInitial message: (none)`)
     : `${formatFoxwarmSystemOpen({
@@ -2066,6 +2078,7 @@ export async function notifyManualForkCreated(parentSessionId: string, childSess
       event: 'manual-fork-created',
       currentSessionId: parent.id,
       childSessionId,
+      time: inputTime,
     })}\nUser manually created fork child session \`${childSessionId}\` from the current session \`${parent.id}\`.\nInitial message:\n${initialMessage}\n${formatFoxwarmSystemClose()}`;
   const notification: Message = {
     role: 'user',

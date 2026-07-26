@@ -162,6 +162,50 @@ test('Anthropic request serialization normalizes consecutive internal user messa
   }
 });
 
+test('Anthropic tool serialization keeps the persisted timing marker first in its tool result', async () => {
+  const originalPost = axios.post;
+  let capturedBody: any = null;
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBody = data;
+    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+  };
+
+  try {
+    await requestLlmOnce({
+      contents: [{
+        role: 'model',
+        parts: [{ functionCall: { id: 'call_1', name: 'image_tool', args: {} } }],
+      }, {
+        role: 'tool',
+        parts: [
+          { inlineData: { mimeType: 'image/png', data: 'aGVsbG8=' }, toolUseId: 'call_1' },
+          {
+            functionResponse: {
+              tool_use_id: 'call_1',
+              name: 'image_tool',
+              previousLlmRequest: { time: '2026-07-27 05:00:00 +0800', durationMs: 8200 },
+              response: { output: '' },
+            },
+          },
+        ],
+      }],
+      systemPrompt: '',
+      modelEntryOverride: {
+        providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'fixture', extraFields: {}, extraHeaders: {},
+      } as any,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    const result = capturedBody.messages.flatMap((message: any) => Array.isArray(message.content) ? message.content : []).find((part: any) => part.type === 'tool_result');
+    assert.ok(Array.isArray(result.content));
+    assert.match(result.content[0].text, /prevLLMReqTime="8.2s"/);
+    assert.equal(result.content.filter((part: any) => String(part.text || '').includes('prevLLMReqTime')).length, 1);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('OpenAI chat completions requests omit empty system messages and preserve non-empty prompts', async () => {
   const originalPost = axios.post;
   const capturedUrls: string[] = [];

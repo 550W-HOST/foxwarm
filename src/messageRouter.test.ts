@@ -319,9 +319,10 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
   assert.equal(sourcePrefixCount, 1);
   const sourcePart = parts.find((part: any) => typeof part.system === 'string' && part.system.includes('type="channel"'));
   assert.match(sourcePart?.system || '', /\n在吗\n<\/foxwarm-message>$/);
+  assert.match(sourcePart?.system || '', /time="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}"/);
 });
 
-test('MessageRouter turn metadata avoids redundant time and session hints', () => {
+test('MessageRouter turn metadata no longer injects an idle-gap time marker', () => {
   const router = new MessageRouter() as any;
   const session: any = {
     history: [],
@@ -331,12 +332,9 @@ test('MessageRouter turn metadata avoids redundant time and session hints', () =
 
   const parts = router.prepareTurnParts(session, 'session-xml-1', [{ text: 'hello' }]);
   const sessionPart = parts.find((part: any) => typeof part.system === 'string' && part.system.includes('kind="session"'));
-  const timePart = parts.find((part: any) => typeof part.system === 'string' && part.system.includes('kind="time"'));
 
   assert.equal(sessionPart?.system, '<foxwarm-system kind="session" currentSessionId="session-xml-1" />');
-  assert.ok(timePart?.system.includes('localTime="'));
-  assert.ok(!timePart?.system.includes(' hint='));
-  assert.ok(!timePart?.system.includes(' time='));
+  assert.equal(parts.some((part: any) => typeof part.system === 'string' && part.system.includes('kind="time"')), false);
   assert.ok(!sessionPart?.system.includes(' hint='));
 });
 

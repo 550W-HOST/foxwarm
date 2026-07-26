@@ -134,7 +134,7 @@ export function buildTimerTriggeredMessage(timer: SessionTimer, firedAt: Date = 
     timerId: timer.id,
     mode: getTimerMode(timer),
     firedAt: firedAt.toISOString(),
-    localTime: formatLocalTimestamp(firedAt),
+    time: formatLocalTimestamp(firedAt),
     hint: label,
   });
   return timer.message

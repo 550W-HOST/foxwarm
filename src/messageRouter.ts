@@ -148,10 +148,12 @@ export class MessageRouter {
     const channelType = source.channelType || source.platform;
     const conversationId = source.conversationId || source.channelUserId;
     const channelTargetId = `${channelInstanceId}:${conversationId}`;
+    const inputTime = formatCurrentTimeForPrompt(new Date());
     const sourceAttrs = channelType === 'webui'
       ? {
         type: 'channel',
         channelType: 'webui',
+        time: inputTime,
         hint: 'direct user message via channel',
       }
       : {
@@ -161,6 +163,7 @@ export class MessageRouter {
         conversationId,
         channelTargetId,
         sender: source.username,
+        time: inputTime,
         hint: 'direct user message via channel',
       };
 
@@ -172,6 +175,7 @@ export class MessageRouter {
         systemParts.unshift({
           system: formatFoxwarmSystemTag({
             kind: 'channel-mode',
+            time: inputTime,
             mode: 'send-only',
             channelTargetId,
             hint: `Channel is in send-only mode. If you need to reply, call send_to_channel({channelTargetId: "${channelTargetId}", message: "..."}).`,
@@ -373,18 +377,7 @@ export class MessageRouter {
   private prepareTurnParts(session: Session, sessionId: string, parts: MessagePart[]): MessagePart[] {
     const finalParts = [...parts];
 
-    const now = Date.now();
-    const timeSinceLastMessage = now - (session.meta.lastMessageTime || now);
-    if (timeSinceLastMessage > 10 * 60 * 1000) {
-      const currentTime = formatCurrentTimeForPrompt(new Date());
-      finalParts.unshift({
-        system: formatFoxwarmSystemTag({
-          kind: 'time',
-          localTime: currentTime,
-        }),
-      });
-    }
-    session.meta.lastMessageTime = now;
+    session.meta.lastMessageTime = Date.now();
 
     if (session.history.length === 0) {
       finalParts.unshift({
@@ -1089,6 +1082,7 @@ export class MessageRouter {
         const toolContext = {
           sessionId: session.id,
           session,
+          previousLlmRequest: result.previousLlmRequest,
           broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
           onToolStart: (tool: { id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
             sessionManager.setActiveSessionRuntimeState(session.id, {

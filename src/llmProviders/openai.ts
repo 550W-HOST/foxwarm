@@ -4,6 +4,7 @@ import { Message, MessagePart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 import { appendImageGuidanceText } from '../toolImages';
+import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatSystemPartForModel } from '../utils/promptWrappers';
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
@@ -81,6 +82,18 @@ function cleanSnapshotString(value: unknown): string | undefined {
     }
     const trimmed = value.trim();
     return trimmed ? trimmed : undefined;
+}
+
+function formatPreviousLlmRequestPrefix(part: MessagePart): string | undefined {
+    const timing = part.functionResponse?.previousLlmRequest;
+    if (!timing || typeof timing.time !== 'string' || !Number.isFinite(timing.durationMs)) {
+        return undefined;
+    }
+    return formatFoxwarmSystemTag({
+        kind: 'time',
+        time: timing.time,
+        prevLLMReqTime: `${(Math.max(0, timing.durationMs) / 1000).toFixed(1)}s`,
+    });
 }
 
 function mergeResponseContentPart(existing: any, incoming: any): any {
@@ -171,6 +184,10 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
                 ensureGroup(toolId);
                 groupedByToolId.get(toolId)!.push(part);
             };
+            const prependGroupPart = (toolId: string, part: any) => {
+                ensureGroup(toolId);
+                groupedByToolId.get(toolId)!.unshift(part);
+            };
 
             for (const part of msg.parts || []) {
                 if (part.inlineData) {
@@ -202,6 +219,11 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
                     }
 
                     ensureGroup(toolId);
+
+                    const timingPrefix = formatPreviousLlmRequestPrefix(part);
+                    if (timingPrefix) {
+                        prependGroupPart(toolId, { type: 'text', text: timingPrefix });
+                    }
 
                     if (pendingInlineWithoutId.length > 0) {
                         for (const imagePart of pendingInlineWithoutId) {
@@ -355,6 +377,10 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                 ensureGroup(toolId);
                 groupedByToolId.get(toolId)!.push(part);
             };
+            const prependGroupPart = (toolId: string, part: any) => {
+                ensureGroup(toolId);
+                groupedByToolId.get(toolId)!.unshift(part);
+            };
 
             for (const part of msg.parts || []) {
                 if (part.inlineData) {
@@ -385,6 +411,11 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                     }
 
                     ensureGroup(toolId);
+
+                    const timingPrefix = formatPreviousLlmRequestPrefix(part);
+                    if (timingPrefix) {
+                        prependGroupPart(toolId, { type: 'input_text', text: timingPrefix });
+                    }
 
                     if (pendingInlineWithoutId.length > 0) {
                         for (const imagePart of pendingInlineWithoutId) {

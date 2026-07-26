@@ -24,7 +24,8 @@ import {
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
-import { formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
+import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
+import { formatLocalTimestamp } from './utils/localTime';
 import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
 import { guardToolOutputForModel } from './toolOutputGuard';
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
@@ -1021,6 +1022,15 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
         }
         return [{ type: 'text', text: String(value ?? '') }];
     };
+    const formatPreviousLlmRequestPrefix = (part: MessagePart): string | undefined => {
+        const timing = part.functionResponse?.previousLlmRequest;
+        if (!timing || typeof timing.time !== 'string' || !Number.isFinite(timing.durationMs)) return undefined;
+        return formatFoxwarmSystemTag({
+            kind: 'time',
+            time: timing.time,
+            prevLLMReqTime: `${(Math.max(0, timing.durationMs) / 1000).toFixed(1)}s`,
+        });
+    };
     
     for (const msg of contents) {
         let role = msg.role as AnthropicMessage['role'] | Message['role'];
@@ -1072,11 +1082,28 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
             if (part.functionResponse) {
                 const resp = part.functionResponse.response || {};
                 const toolUseId = part.functionResponse.tool_use_id || part.toolUseId || 'unknown';
-                const toolResult = {
+                const outputText = appendImageGuidanceText(imagePartsByToolUseId.get(toolUseId) || [], formatToolResponsePayload(resp));
+                const timingPrefix = formatPreviousLlmRequestPrefix(part);
+                const images = imagePartsByToolUseId.get(toolUseId) || [];
+                const toolResult: any = {
                     type: 'tool_result',
                     tool_use_id: toolUseId,
-                    content: appendImageGuidanceText(imagePartsByToolUseId.get(toolUseId) || [], formatToolResponsePayload(resp))
+                    content: timingPrefix ? `${timingPrefix}${outputText ? `\n${outputText}` : ''}` : outputText,
                 };
+                if (images.length > 0) {
+                    toolResult.content = [
+                        ...(timingPrefix ? [{ type: 'text', text: timingPrefix }] : []),
+                        ...(outputText ? [{ type: 'text', text: outputText }] : []),
+                        ...images.map(image => ({
+                            type: 'image',
+                            source: {
+                                type: 'base64',
+                                media_type: image.inlineData!.mimeType || image.inlineData!.mime_type || 'image/jpeg',
+                                data: image.inlineData!.data,
+                            },
+                        })),
+                    ];
+                }
                 if (config.baseUrl?.startsWith('https://api.kimi.com/')) {
                     if (!content.find(x => x.type === 'thinking')) {
                         (toolResult as any).reasoning_content = '';
@@ -1087,6 +1114,11 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 
             // Handle image data - convert internal format to Anthropic format
             if (part.inlineData) {
+                if (msg.role === 'tool' && part.toolUseId) {
+                    // Tool-result images are emitted with their matching result
+                    // above, so an annotated prefix remains first-visible.
+                    continue;
+                }
                 content.push({
                     type: 'image',
                     source: {
@@ -1467,6 +1499,12 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
             functionResponse: {
                 tool_use_id: execution.toolId,
                 name: execution.call.name,
+                ...(execution.index === 0 && toolContext.previousLlmRequest ? {
+                    previousLlmRequest: {
+                        time: formatLocalTimestamp(toolContext.previousLlmRequest.completedAt),
+                        durationMs: toolContext.previousLlmRequest.durationMs,
+                    },
+                } : {}),
                 response: result,
             },
         });
@@ -2053,6 +2091,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     });
     let logFiles: LlmInteractionLogFiles | null = null;
     const virtualRequestSelections: Array<{ attempt: number; modelId: string }> = [];
+    let requestStartedAt: number | undefined;
 
     const notifyRetry = async (event: LlmRetryEvent): Promise<void> => {
         if (!options.onRetry) return;
@@ -2124,6 +2163,9 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             let resp: any;
             let response: AxiosResponse | undefined;
             try {
+                if (requestStartedAt === undefined) {
+                    requestStartedAt = performance.now();
+                }
                 response = await axios.post(plan.url, plan.requestBody, {
                     headers: { ...plan.headers, ...plan.compressionHeaders },
                     timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
@@ -2163,6 +2205,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 }
 
                 const result = parseConcreteProviderResponse(plan, resp);
+                const completedAt = Date.now();
+                const durationMs = Math.max(0, performance.now() - requestStartedAt);
                 if (virtualRoutingRequest && selection) {
                     recordVirtualTargetSuccess(virtualRoutingRequest, selection.targetKey);
                 }
@@ -2174,8 +2218,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                     ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),
                 }, logFiles);
                 return virtualRoutingRequest
-                    ? { ...result, virtualModelKey: routeKey }
-                    : result;
+                    ? { ...result, virtualModelKey: routeKey, previousLlmRequest: { completedAt, durationMs } }
+                    : { ...result, previousLlmRequest: { completedAt, durationMs } };
             } catch (error: any) {
                 if (isAbortError(error)) {
                     responseAttempts.push({

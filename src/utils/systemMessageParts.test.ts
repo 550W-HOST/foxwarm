@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSystemMessageParts, isSystemPayloadTextPart } from './systemMessageParts';
+import { buildSystemMessageParts, buildTimestampedSystemMessageParts, isSystemPayloadTextPart, withInputTimePart } from './systemMessageParts';
 
 test('buildSystemMessageParts wraps legacy timer-style system text into one system part', () => {
   const parts = buildSystemMessageParts('Scheduled timer fired (id: timer-1)\nrun nightly sync');
@@ -34,4 +34,16 @@ test('buildSystemMessageParts keeps generated foxwarm-message body inside one sy
 test('isSystemPayloadTextPart still recognizes legacy split payload parts', () => {
   assert.equal(isSystemPayloadTextPart({ text: 'payload', systemPayload: true }), true);
   assert.equal(isSystemPayloadTextPart({ text: 'ordinary' }), false);
+});
+
+test('timestamped input helpers freeze time at the source boundary', () => {
+  const timestamp = new Date('2026-07-27T05:00:00+08:00');
+  assert.deepEqual(buildTimestampedSystemMessageParts('wake', timestamp), [
+    { system: '<foxwarm-system kind="time" time="2026-07-27 05:00:00 +0800" />' },
+    { system: '<foxwarm-system kind="system">\nwake\n</foxwarm-system>' },
+  ]);
+  assert.deepEqual(withInputTimePart([{ text: 'managed input' }], timestamp), [
+    { system: '<foxwarm-system kind="time" time="2026-07-27 05:00:00 +0800" />' },
+    { text: 'managed input' },
+  ]);
 });
