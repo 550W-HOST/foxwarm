@@ -464,9 +464,9 @@ export class PersistentExecManager {
     await fs.ensureDir(dateDir);
 
     const execId = `exec_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const scriptPath = `${path.join(tempDir, execId)}.command${process.platform === 'win32' ? '.ps1' : '.sh'}`;
-    const commandScriptPath = process.platform === 'win32' ? `${path.join(tempDir, execId)}.user.ps1` : undefined;
-    const pathsPath = path.join(tempDir, `${execId}.paths.json`);
+    const scriptPath = `${path.join(dateDir, execId)}.command${process.platform === 'win32' ? '.ps1' : '.sh'}`;
+    const commandScriptPath = process.platform === 'win32' ? `${path.join(dateDir, execId)}.user.ps1` : undefined;
+    const pathsPath = path.join(dateDir, `${execId}.paths.json`);
 
     if (commandScriptPath) {
       await fs.writeFile(commandScriptPath, `${command}${command.endsWith('\n') ? '' : '\n'}`);

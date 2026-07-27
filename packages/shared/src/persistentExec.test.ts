@@ -31,6 +31,36 @@ async function createManager(root: string): Promise<PersistentExecManager> {
   });
 }
 
+test('persistent exec co-locates retained scripts and coordination metadata with dated log artifacts', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-artifacts-'));
+  const manager = await createManager(root);
+  const execRoot = path.join(root, 'exec');
+  const command = process.platform === 'win32' ? 'Write-Output "artifact placement"' : 'printf "artifact placement\\n"';
+
+  try {
+    const entry = await manager.startPersistentExec({ command, agentName: 'main', nodeId: 'master' });
+    const status = await manager.waitForExecCompletion(entry.id, 10_000);
+    assert.ok(status, 'short persistent exec should finish');
+
+    const datedDir = path.dirname(entry.logPath);
+    const commandSuffix = process.platform === 'win32' ? '.command.ps1' : '.command.sh';
+    assert.match(path.basename(datedDir), /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal(datedDir, path.dirname(entry.statusPath));
+    assert.equal(datedDir, path.dirname(entry.cwdPath));
+    assert.equal(await fs.pathExists(path.join(datedDir, `${entry.id}${commandSuffix}`)), true);
+    if (process.platform === 'win32') {
+      assert.equal(await fs.pathExists(path.join(datedDir, `${entry.id}.user.ps1`)), true);
+    }
+
+    assert.equal(await fs.pathExists(path.join(execRoot, `${entry.id}${commandSuffix}`)), false);
+    assert.equal(await fs.pathExists(path.join(execRoot, `${entry.id}.paths.json`)), false);
+    assert.equal(await fs.pathExists(path.join(datedDir, `${entry.id}.paths.json`)), false);
+    await manager.finalizeForegroundExec(entry.id);
+  } finally {
+    await fs.remove(root);
+  }
+});
+
 test('PersistentExecManager serializes concurrent registry mutations', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-'));
   const registryPath = path.join(root, 'running-exec.json');
