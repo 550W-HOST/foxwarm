@@ -128,6 +128,37 @@ test('legacy undated exec migration leaves sources and its version entry absent 
   });
 });
 
+test('legacy undated exec migration treats an unreadable exec root as unfinished and retries after access recovers', async () => {
+  await withTempDir(async (root) => {
+    const { agentsDir, migrationVersionFile } = paths(root);
+    const artifactPath = await writeArtifact(agentsDir, 'alpha', 'exec_1750000000000_deadbeef.command.sh');
+    const execDir = path.dirname(artifactPath);
+    const unreadable = await runLegacyUndatedExecArtifactMigration({
+      agentsDir,
+      migrationVersionFile,
+      now: NOW,
+      readDirectory: async (dirPath) => {
+        if (dirPath === execDir) {
+          throw Object.assign(new Error('simulated exec root access failure'), { code: 'EACCES' });
+        }
+        return await fs.readdir(dirPath, { withFileTypes: true });
+      },
+    });
+
+    assert.equal(unreadable.scannedFiles, 0);
+    assert.equal(unreadable.remainingFiles, 0);
+    assert.ok(unreadable.failedFiles >= 2, 'both scan passes must report the unreadable root');
+    assert.equal(await fs.pathExists(artifactPath), true);
+    assert.equal(await fs.pathExists(migrationVersionFile), false);
+
+    const retried = await runLegacyUndatedExecArtifactMigration({ agentsDir, migrationVersionFile, now: NOW });
+    assert.equal(retried.migratedFiles, 1);
+    assert.equal(retried.remainingFiles, 0);
+    assert.equal(await fs.pathExists(artifactPath), false);
+    assert.equal((await fs.readJson(migrationVersionFile)).migrations[LEGACY_UNDATED_EXEC_ARTIFACT_MIGRATION_ID].status, 'completed');
+  });
+});
+
 test('legacy undated exec migration only selects strict known top-level artifact names', async () => {
   await withTempDir(async (root) => {
     const { agentsDir, migrationVersionFile } = paths(root);

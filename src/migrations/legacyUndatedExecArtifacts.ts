@@ -42,6 +42,7 @@ export type LegacyUndatedExecArtifactMigrationOptions = {
   migrationVersionFile?: string;
   migrationId?: string;
   now?: Date;
+  readDirectory?: (dirPath: string) => Promise<fs.Dirent[]>;
   archiveFiles?: (execDir: string, archivePath: string, fileNames: string[]) => Promise<void>;
   unlinkFile?: (filePath: string) => Promise<void>;
 };
@@ -69,24 +70,34 @@ function formatArchiveTime(now: Date): string {
   return `${year}-${month}-${day}-${hours}${minutes}${seconds}${milliseconds}`;
 }
 
-async function collectLegacyUndatedExecArtifacts(agentsDir: string): Promise<ArtifactCollection> {
+function isNotFoundError(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
+}
+
+async function readDirectory(dirPath: string): Promise<fs.Dirent[]> {
+  return await fs.readdir(dirPath, { withFileTypes: true });
+}
+
+async function collectLegacyUndatedExecArtifacts(
+  agentsDir: string,
+  readDir: (dirPath: string) => Promise<fs.Dirent[]>,
+): Promise<ArtifactCollection> {
   const artifacts: LegacyExecArtifact[] = [];
   const failures: ArtifactFailure[] = [];
-  if (!await fs.pathExists(agentsDir)) return { artifacts, failures };
 
   let agents: fs.Dirent[];
   try {
-    agents = await fs.readdir(agentsDir, { withFileTypes: true });
+    agents = await readDir(agentsDir);
   } catch (err: any) {
+    if (isNotFoundError(err)) return { artifacts, failures };
     return { artifacts, failures: [{ filePath: agentsDir, reason: err?.message || String(err) }] };
   }
 
   for (const agent of agents.sort((a, b) => a.name.localeCompare(b.name))) {
     if (!agent.isDirectory()) continue;
     const execDir = path.join(agentsDir, agent.name, '.temp', 'exec');
-    if (!await fs.pathExists(execDir)) continue;
     try {
-      const entries = await fs.readdir(execDir, { withFileTypes: true });
+      const entries = await readDir(execDir);
       for (const entry of entries) {
         if (!entry.isFile() || !LEGACY_UNDATED_EXEC_ARTIFACT_NAME.test(entry.name)) continue;
         artifacts.push({
@@ -96,6 +107,7 @@ async function collectLegacyUndatedExecArtifacts(agentsDir: string): Promise<Art
         });
       }
     } catch (err: any) {
+      if (isNotFoundError(err)) continue;
       failures.push({ filePath: execDir, reason: err?.message || String(err) });
     }
   }
@@ -142,6 +154,7 @@ export async function runLegacyUndatedExecArtifactMigration(
   const migrationVersionFile = options.migrationVersionFile || MIGRATION_VERSION_FILE;
   const migrationId = options.migrationId || LEGACY_UNDATED_EXEC_ARTIFACT_MIGRATION_ID;
   const now = options.now || new Date();
+  const readDir = options.readDirectory || readDirectory;
   const versionStore = createMigrationVersionStore(migrationVersionFile);
   const versionState = await readMigrationVersionState(versionStore);
   const existing = versionState.migrations[migrationId];
@@ -161,7 +174,7 @@ export async function runLegacyUndatedExecArtifactMigration(
   }
 
   const cutoff = startOfLocalYesterday(now).getTime();
-  const initial = await collectLegacyUndatedExecArtifacts(agentsDir);
+  const initial = await collectLegacyUndatedExecArtifacts(agentsDir, readDir);
   const eligibleByExecDir = new Map<string, LegacyExecArtifact[]>();
   const failures = [...initial.failures];
   let deferredFiles = 0;
@@ -207,7 +220,7 @@ export async function runLegacyUndatedExecArtifactMigration(
     }
   }
 
-  const remaining = await collectLegacyUndatedExecArtifacts(agentsDir);
+  const remaining = await collectLegacyUndatedExecArtifacts(agentsDir, readDir);
   failures.push(...remaining.failures);
   logFailures(failures);
   const result: LegacyUndatedExecArtifactMigrationResult = {
