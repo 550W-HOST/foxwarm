@@ -184,7 +184,7 @@ test('system cards expand/collapse, preserve session links, and retain width con
 
   await page.click('#interAgent [data-system-message-card] button')
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body a', link => link.getAttribute('href')), '#session/parent%2Fchild')
-  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body', body => body.textContent), '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\nfirst inter-agent preview line\nsecond inter-agent preview line\nthird inter-agent preview line\nfourth inter-agent preview line\n</foxwarm-message>')
+  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body', body => body.textContent), '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">first inter-agent preview line\nsecond inter-agent preview line\nthird inter-agent preview line\nfourth inter-agent preview line</foxwarm-message>')
   const interAgentLineMetrics = await page.$eval('#interAgent .foxwarm-system-message-body', body => {
     const [metadataLine, bodyLine] = body.children
     const nextBodyLine = body.children[2]
@@ -192,21 +192,21 @@ test('system cards expand/collapse, preserve session links, and retain width con
     const bodyRect = bodyLine.getBoundingClientRect()
     const nextBodyRect = nextBodyLine.getBoundingClientRect()
     return {
-      bodyParentLineHeight: getComputedStyle(body).lineHeight,
+      bodyParentLineHeight: body.style.lineHeight,
       metadataDisplay: getComputedStyle(metadataLine).display,
       bodyDisplay: getComputedStyle(bodyLine).display,
       metadataLineHeight: Number.parseFloat(getComputedStyle(metadataLine).lineHeight),
       bodyLineHeight: Number.parseFloat(getComputedStyle(bodyLine).lineHeight),
       metadataToBodyGap: bodyRect.top - metadataRect.bottom,
-      bodyToBodyGap: nextBodyRect.top - bodyRect.bottom,
+      bodyToBodyStep: nextBodyRect.top - bodyRect.top,
     }
   })
-  assert.equal(interAgentLineMetrics.bodyParentLineHeight, '0px', 'the parent pre does not impose a tall line-box strut on metadata wrappers')
+  assert.equal(interAgentLineMetrics.bodyParentLineHeight, '1.5em', 'ordinary body text retains the normal pre line-height')
   assert.equal(interAgentLineMetrics.metadataDisplay, 'block', 'metadata wrappers control their own visual line box')
-  assert.equal(interAgentLineMetrics.bodyDisplay, 'block', 'normal body lines control their own visual line box')
+  assert.equal(interAgentLineMetrics.bodyDisplay, 'inline', 'ordinary body lines remain in the normal pre flow')
   assert.ok(interAgentLineMetrics.metadataLineHeight < interAgentLineMetrics.bodyLineHeight, 'metadata wrappers use a more compact line-height than normal body lines')
-  assert.ok(Math.abs(interAgentLineMetrics.metadataToBodyGap) <= 0.5, 'real newline text outside block lines does not add a blank metadata/body row')
-  assert.ok(Math.abs(interAgentLineMetrics.bodyToBodyGap) <= 0.5, 'real newline text outside block lines does not add blank body rows')
+  assert.ok(interAgentLineMetrics.metadataToBodyGap < interAgentLineMetrics.bodyLineHeight, 'metadata blocks do not create a giant blank row before body text')
+  assert.ok(interAgentLineMetrics.bodyToBodyStep <= interAgentLineMetrics.bodyLineHeight + 0.5, 'body-to-body newlines advance by one normal visual row')
 
   const overflow = await page.$eval('#mixed', fixture => ({
     fixture: fixture.scrollWidth - fixture.clientWidth,

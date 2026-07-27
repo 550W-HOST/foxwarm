@@ -1,4 +1,4 @@
-import { Fragment, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Eye, Code, FileJson, Copy, Check } from 'lucide-react'
 import {
   IconToggleButton,
@@ -426,21 +426,20 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           </div>
         )}
         {expanded && (
-          <pre className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: 0 }}>
+          <pre className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
             {renderedText.split('\n').map((line, lineIdx, lines) => {
               const isPrefix = isSystemLikeText(line)
+              const nextIsPrefix = lineIdx < lines.length - 1 && isSystemLikeText(lines[lineIdx + 1])
               return (
-                <Fragment key={`${messageKey}-${lineIdx}`}>
-                  <span
-                    style={isPrefix
-                      ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
-                      : { display: 'block', lineHeight: '1.5em', opacity: 0.92 }
-                    }
-                  >
-                    {renderSystemTextWithSessionLinks(line)}
-                  </span>
-                  {lineIdx < lines.length - 1 ? '\n' : null}
-                </Fragment>
+                <span
+                  key={`${messageKey}-${lineIdx}`}
+                  style={isPrefix
+                    ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+                    : { opacity: 0.92 }
+                  }
+                >
+                  {renderSystemTextWithSessionLinks(line)}{!isPrefix && !nextIsPrefix ? '\n' : null}
+                </span>
               )
             })}
           </pre>
