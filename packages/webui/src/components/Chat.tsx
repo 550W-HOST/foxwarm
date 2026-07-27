@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Check, Code2, Copy, ExternalLink, Menu, MessageSquareText, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
@@ -236,6 +236,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [showFullTimeline, setShowFullTimeline] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
+  const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
 
   const viewportSessionId = canonicalSessionId || sessionId
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -281,6 +282,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     sessionQueueLengthRef.current = 0
     queuedMessagesRef.current = []
     sessionStateInitializedRef.current = false
+    pendingContextScrollbarNavigationRef.current = null
   }, [sessionId])
 
   useEffect(() => {
@@ -1542,7 +1544,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       )}
 
       <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
-        <div id="foxwarm-chat-messages" ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-x-hidden overflow-y-auto p-4">
+        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-x-hidden overflow-y-auto p-4">
           <div ref={messagesContentRef} className="min-w-0 max-w-full overflow-x-hidden">
             {hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
@@ -1570,13 +1572,16 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
           </div>
         </div>
-        <ContextScrollbar
-          messages={messages}
-          contextLimit={contextLimit}
-          containerRef={messagesContainerRef}
-          timelineRef={committedTimelineRef}
-          onNavigate={handleContextScrollbarNavigate}
-        />
+        {!isMobile && (
+          <ContextScrollbar
+            messages={messages}
+            contextLimit={contextLimit}
+            containerId={chatMessageContainerId}
+            containerRef={messagesContainerRef}
+            timelineRef={committedTimelineRef}
+            onNavigate={handleContextScrollbarNavigate}
+          />
+        )}
 
         {showScrollTopButton && (
           <button

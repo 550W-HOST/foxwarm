@@ -18,7 +18,7 @@ async function buildFixtureBundle() {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import Chat from ${JSON.stringify(chatEntry)}
-    const messages = Array.from({ length: 130 }, (_, index) => ({
+    const messages = Array.from({ length: 1200 }, (_, index) => ({
       role: index % 4 === 0 ? 'user' : index % 4 === 1 ? 'model' : 'tool',
       parts: index % 4 === 1 ? [{ functionCall: { id: 'call-' + index, name: 'read', args: { filePath: '/tmp/' + index } } }] : index % 4 === 2 ? [{ functionResponse: { tool_use_id: 'call-' + (index - 1), name: 'read', response: { output: 'ok ' + index } } }] : [{ text: 'committed message ' + index + ' content '.repeat(8) }],
       __meta: { seq: index + 1, timestamp: 1000 + index, ...(index % 4 === 1 ? { usage: { inputTokens: 700, cachedTokens: 100, outputTokens: 20 } } : {}) },
@@ -43,7 +43,9 @@ async function mount(width = 1000) {
   await page.setViewport({ width, height: 720, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.waitForSelector('.foxwarm-chat-messages')
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-context-scrollbar-segment').length > 100)
+  if (width >= 768) {
+    await page.waitForFunction(() => document.querySelectorAll('.foxwarm-context-scrollbar-segment').length > 800)
+  }
 }
 
 before(async () => {
@@ -69,14 +71,15 @@ test('desktop reserves a 48px native-scroll gutter with full-history semantic ba
     const container = document.querySelector('.foxwarm-chat-messages')
     const segments = [...document.querySelectorAll('.foxwarm-context-scrollbar-segment')]
     const used = document.querySelector('.foxwarm-context-scrollbar-used')
-    return { shellWidth: getComputedStyle(shell).width, scrollbarWidth: getComputedStyle(container).scrollbarWidth, segments: segments.length, tones: segments.map(x => x.className), usedHeight: Number.parseFloat(used.style.height) }
+    return { shellWidth: getComputedStyle(shell).width, scrollbarWidth: getComputedStyle(container).scrollbarWidth, segments: segments.length, tones: segments.map(x => x.className), usedHeight: Number.parseFloat(used.style.height), usedOverflow: used.scrollHeight - used.clientHeight }
   })
   assert.equal(state.shellWidth, '48px')
   assert.equal(state.scrollbarWidth, 'none')
-  assert.ok(state.segments >= 120, 'full history should be represented before all rows mount')
+  assert.ok(state.segments > 800, 'full history should be represented before all rows mount')
   assert.ok(state.tones.some(tone => tone.includes('tool-success')))
   assert.ok(state.tones.some(tone => tone.includes('user')))
   assert.ok(state.usedHeight > 0 && state.usedHeight <= 100)
+  assert.ok(state.usedOverflow <= 1, 'subpixel segments must not accumulate into a taller overflowed stack')
 })
 
 test('click and drag drive native scroll and detach streaming follow without a second scroller', async () => {
@@ -87,8 +90,13 @@ test('click and drag drive native scroll and detach streaming follow without a s
   await new Promise(resolve => setTimeout(resolve, 80))
   const afterClick = await page.$eval('.foxwarm-chat-messages', element => ({ top: element.scrollTop, height: element.scrollHeight, client: element.clientHeight }))
   assert.ok(afterClick.top > 0)
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.2)
+  const thumb = await page.$('.foxwarm-context-scrollbar-viewport')
+  const thumbBox = await thumb.boundingBox()
+  assert.ok(thumbBox.height > 1, 'fixture viewport marker should be directly draggable')
+  await page.mouse.move(thumbBox.x + thumbBox.width / 2, thumbBox.y + thumbBox.height / 2)
   await page.mouse.down()
+  const afterThumbDown = await page.$eval('.foxwarm-chat-messages', element => element.scrollTop)
+  assert.ok(Math.abs(afterThumbDown - afterClick.top) < 1, 'grabbing the existing viewport marker must not jump')
   await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.65, { steps: 4 })
   await page.mouse.up()
   const afterDrag = await page.$eval('.foxwarm-chat-messages', element => element.scrollTop)
@@ -101,6 +109,6 @@ test('click and drag drive native scroll and detach streaming follow without a s
 
 test('mobile leaves the native chat layout and hides the custom gutter', async () => {
   await mount(390)
-  assert.equal(await page.$eval('.foxwarm-context-scrollbar-shell', element => getComputedStyle(element).display), 'none')
+  assert.equal(await page.$('.foxwarm-context-scrollbar-shell'), null)
   assert.equal(await page.$eval('.foxwarm-chat-message-region', element => getComputedStyle(element).display), 'block')
 })

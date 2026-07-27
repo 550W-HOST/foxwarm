@@ -42,7 +42,7 @@ test('full committed history gets segments while temporary and synthetic message
   assert.ok(segments.every(segment => segment.endTokens > segment.startTokens))
 })
 
-test('tool response reuses its preceding rendered model row and preserves success/error tones', () => {
+test('an immediate tool response folds into its preceding model-call overview segment with final tone', () => {
   const segments = buildContextScrollbarSegments([
     {
       role: 'model',
@@ -61,11 +61,19 @@ test('tool response reuses its preceding rendered model row and preserves succes
     },
   ])
 
+  assert.equal(segments.length, 2)
   assert.equal(segments[0].anchorKey, 'seq-local-1')
-  assert.equal(segments[1].anchorKey, 'seq-local-1')
-  assert.equal(segments[1].tone, 'tool-success')
-  assert.equal(segments[2].tone, 'tool-error')
-  assert.equal(interpolateContextScrollbarBoundary(segments, 'seq-local-1', 0.5), (segments[0].startTokens + segments[1].endTokens) / 2)
+  assert.equal(segments[0].tone, 'tool-success')
+  assert.equal(segments[1].tone, 'tool-error')
+  assert.equal(interpolateContextScrollbarBoundary(segments, 'seq-local-1', 0.5), (segments[0].startTokens + segments[0].endTokens) / 2)
+})
+
+test('a history longer than a scrollbar keeps proportional segment height without a minimum-pixel budget', () => {
+  const segments = buildContextScrollbarSegments(Array.from({ length: 1200 }, (_, index) => message('user', 'x', index + 1)))
+  const total = segments.at(-1).endTokens
+  const proportionalTotal = segments.reduce((sum, segment) => sum + segment.estimatedTokens / total, 0)
+  assert.equal(segments.length, 1200)
+  assert.ok(Math.abs(proportionalTotal - 1) < 1e-10)
 })
 
 test('real prompt usage anchors free context and estimates only later committed tail', () => {
@@ -81,4 +89,8 @@ test('real prompt usage anchors free context and estimates only later committed 
   assert.ok(usage.usedTokens > 500)
   assert.ok(usage.usedTokens < 1000)
   assert.equal(usage.freeTokens, 1000 - usage.usedTokens)
+})
+
+test('missing persisted provider usage has no synthetic free-context measurement', () => {
+  assert.equal(getContextScrollbarContextUsage([message('user', 'not yet sent', 1)], 1000), null)
 })

@@ -101,21 +101,31 @@ const getPairedAnchorKey = (messages: Message[], index: number): string | null =
 
 export const buildContextScrollbarSegments = (messages: Message[]): ContextScrollbarSegment[] => {
   let cursor = 0
-  return messages
-    .filter(message => !message.__meta?.temporary && !message.__meta?.synthetic)
-    .map((message, index, committed) => {
-      const estimatedTokens = estimateTokenCount(formatMessageForContextEstimate(message))
-      const startTokens = cursor
-      cursor += estimatedTokens
-      return {
-        key: getMessageStableKey(message, index),
-        anchorKey: getPairedAnchorKey(committed, index),
-        startTokens,
-        endTokens: cursor,
-        estimatedTokens,
-        tone: getContextScrollbarMessageTone(message),
-      }
+  const committed = messages.filter(message => !message.__meta?.temporary && !message.__meta?.synthetic)
+  const segments: ContextScrollbarSegment[] = []
+  for (let index = 0; index < committed.length; index += 1) {
+    const message = committed[index]
+    const next = committed[index + 1]
+    const hasToolCalls = message.role === 'model' && message.parts.some(part => !!part.functionCall)
+    const immediateToolResponse = hasToolCalls && next?.role === 'tool' && next.parts.some(part => !!part.functionResponse)
+    const estimatedTokens = estimateTokenCount(formatMessageForContextEstimate(message)) + (immediateToolResponse ? estimateTokenCount(formatMessageForContextEstimate(next)) : 0)
+    const startTokens = cursor
+    cursor += estimatedTokens
+    const responses = immediateToolResponse ? next.parts.flatMap(part => part.functionResponse ? [part.functionResponse] : []) : []
+    const tone: ContextScrollbarTone = immediateToolResponse
+      ? (responses.some(response => getToolResponseStatus(response) === 'error') ? 'tool-error' : 'tool-success')
+      : getContextScrollbarMessageTone(message)
+    segments.push({
+      key: getMessageStableKey(message, index),
+      anchorKey: getPairedAnchorKey(committed, index),
+      startTokens,
+      endTokens: cursor,
+      estimatedTokens,
+      tone,
     })
+    if (immediateToolResponse) index += 1
+  }
+  return segments
 }
 
 const getMeasuredContextTokens = (message: Message): number | null => {
@@ -141,9 +151,9 @@ export const getContextScrollbarContextUsage = (messages: Message[], capacityTok
       break
     }
   }
+  if (usageIndex < 0 || promptTokens === null) return null
   const estimatedTail = committed.slice(usageIndex + 1).reduce((total, message) => total + estimateTokenCount(formatMessageForContextEstimate(message)), 0)
-  const fallback = committed.reduce((total, message) => total + estimateTokenCount(formatMessageForContextEstimate(message)), 0)
-  const usedTokens = Math.min(capacityTokens, Math.max(0, (promptTokens ?? 0) + (usageIndex >= 0 ? estimatedTail : fallback)))
+  const usedTokens = Math.min(capacityTokens, Math.max(0, promptTokens + estimatedTail))
   return {
     usedTokens,
     freeTokens: Math.max(0, capacityTokens - usedTokens),
