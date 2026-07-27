@@ -230,6 +230,8 @@ export interface QueueItem {
   type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'retry' | 'compact' | 'compact-commit';
   source?: QueueSource;
   sourceSessionId?: string;
+  /** Browser-generated identity propagated to the persisted user message. */
+  clientMessageId?: string;
   parts?: MessagePart[];
   message?: Message;
   waitTimeoutId?: string;

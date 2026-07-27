@@ -370,6 +370,7 @@ export class MessageRouter {
     return {
       type: 'user',
       source,
+      ...(message.clientMessageId ? { clientMessageId: message.clientMessageId } : {}),
       parts: this.prepareUserParts(message.parts, source),
     };
   }
@@ -464,7 +465,7 @@ export class MessageRouter {
       }
 
       consumedInput = true;
-      await this.appendUserMessage(session, item.parts);
+      await this.appendUserMessage(session, item.parts, item.clientMessageId);
     }
 
     return {
@@ -490,7 +491,7 @@ export class MessageRouter {
       const parts = firstInputItem
         ? this.prepareTurnParts(session, sessionId, item.parts)
         : item.parts;
-      await this.appendUserMessage(session, parts);
+      await this.appendUserMessage(session, parts, item.clientMessageId);
       firstInputItem = false;
     }
   }
@@ -633,10 +634,11 @@ export class MessageRouter {
     });
   }
 
-  private async appendUserMessage(session: Session, parts: MessagePart[]): Promise<void> {
+  private async appendUserMessage(session: Session, parts: MessagePart[], clientMessageId?: string): Promise<void> {
     await sessionManager.appendSessionMessage(session, {
       role: 'user',
       parts,
+      ...(clientMessageId ? { __meta: { clientMessageId } } : {}),
     });
   }
 

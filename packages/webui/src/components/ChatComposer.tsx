@@ -420,6 +420,7 @@ const ChatComposer = memo(function ChatComposer({
     cancel: () => void
   } | null>(null)
   const lastReportedHeightRef = useRef<number | null>(null)
+  const submitInFlightRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -468,6 +469,7 @@ const ChatComposer = memo(function ChatComposer({
     setLiveTranscriptionPreview('')
     setWaveformBars(Array.from({ length: 5 }, () => 0.22))
     setDismissedSlashQuery(null)
+    submitInFlightRef.current = false
 
     setTimeout(() => {
       resizeTextarea(textareaRef.current)
@@ -607,9 +609,15 @@ const ChatComposer = memo(function ChatComposer({
 
   const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
-    if (sessionMissing || (!input.trim() && attachments.length === 0) || loading) return
+    if (sessionMissing || (!input.trim() && attachments.length === 0) || loading || submitInFlightRef.current) return
 
-    const accepted = await onSend({ text: input.trim(), attachments })
+    submitInFlightRef.current = true
+    let accepted = false
+    try {
+      accepted = await onSend({ text: input.trim(), attachments })
+    } finally {
+      submitInFlightRef.current = false
+    }
     if (!accepted) return
 
     setInput('')

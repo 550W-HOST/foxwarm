@@ -43,7 +43,9 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 ## Behavior
 
 - `GET /api/sessions` returns canonical `runtimeState` while retaining documented legacy busy fields for compatibility.
-- `GET /api/sessions/:id/history` returns committed messages, a separate bounded `queuedMessages` preview, queue length, and a canonical session snapshot. Queue previews never become committed history.
+- `GET /api/sessions/:id/history` returns committed messages, the lightweight `persistentMemorySnapshot`, a separate bounded `queuedMessages` preview, queue length, and a canonical session snapshot. Queue previews never become committed history; normal Chat bootstrap does not need the full debug-file route.
+- `GET /api/sessions/:id/state` returns only `{ session: buildWebUiSessionState(session) }` (or 404). Chat uses this lightweight authenticated probe only when EventSource fails before opening, so reconnect existence checks never download history.
+- `POST /api/sessions/:id/message` accepts a bounded optional browser `clientMessageId` and forwards it as routing metadata without adding it to model-visible parts.
 - Each per-session SSE connection sends an immediate state snapshot, then message, stream, runtime, queue, and deletion updates for that session.
 - The global SSE stream is reserved for Sidebar, Architecture, and other list-wide consumers.
 - Session ordering and pinning update the shared session metadata index rather than rewriting history snapshots.
@@ -73,4 +75,4 @@ Removed browser workspace routes stay removed. File downloads support explicit t
 
 ## Canonical ownership
 
-Per-session versus global stream ownership is canonical in [D-webui-session-stream-ownership](../modules/webui.md#d-webui-session-stream-ownership). Cross-module delivery flow: [streaming pipeline](../threads/streaming-pipeline.md).
+Per-session versus global stream ownership is canonical in [D-webui-session-stream-ownership](../modules/webui.md#d-webui-session-stream-ownership). History/debug bootstrap is canonical in [D-webui-history-bootstrap](../modules/webui.md#d-webui-history-bootstrap). Optimistic identity delivery is canonical in [D-streaming-optimistic-message-identity](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity). Cross-module delivery flow: [streaming pipeline](../threads/streaming-pipeline.md).

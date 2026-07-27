@@ -73,6 +73,14 @@ Chat, terminal, Agents, Setup, and Code use one tab/pane workbench. Agents and S
 
 Mounted Chat owns per-session state/stream. Global list streaming remains for list-wide UI and never substitutes for Chat runtime state.
 
+### D-webui-history-bootstrap
+
+[2026-07-28] The normal Chat bootstrap uses only the authenticated history response plus the per-session stream. History returns the lightweight persistent system snapshot explicitly alongside committed history, queue preview, and canonical session state; Chat uses that snapshot for the visible snapshot card and context overview. The full debug-file payload is diagnostic data and must be fetched only after the user explicitly opens Debug, never as a mount or ordinary refresh dependency.
+
+### D-webui-history-image-boundary
+
+[2026-07-28, planned migration] History transport must not retain inline image base64 as its long-term browser contract. Images should be canonical blob references exposed through authenticated deployment-relative URLs, with server-side hydration only where a model provider requires bytes/base64. Legacy persisted inline data needs a tolerant migration/read path; this focused history-ordering change does not implement that migration or network pagination.
+
 ### D-webui-model-settings-navigation
 
 The Chat model popup refreshes `/api/models` whenever it opens. Its settings action activates the existing singleton Setup surface and requests focus for the Models YAML editor without creating a second instance: normal App uses the workbench callback, while Code-embedded Chat uses the nonce-bound fixed bridge to activate the Setup custom editor and deliver a one-shot focus signal. Neither path mutates the hash directly. This preserves workbench ownership, split-pane behavior, Code editor identity, and deployment subpaths.
@@ -83,4 +91,4 @@ The former custom workspace/file browser remains removed. Persisted records are 
 
 ## Canonical ownership
 
-Commit marker ownership: [D-code-model-commit-marker](../threads/code-integration.md#d-code-model-commit-marker). Chat follow ownership: [D-chat-user-follow-intent](../units/webui-chat.md#d-chat-user-follow-intent). YAML assistance ownership: [D-editor-local-yaml-assistance](../units/webui-editor.md#d-editor-local-yaml-assistance).
+Commit marker ownership: [D-code-model-commit-marker](../threads/code-integration.md#d-code-model-commit-marker). Chat follow ownership: [D-chat-user-follow-intent](../units/webui-chat.md#d-chat-user-follow-intent). Optimistic/history ordering ownership: [D-streaming-optimistic-message-identity](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity). YAML assistance ownership: [D-editor-local-yaml-assistance](../units/webui-editor.md#d-editor-local-yaml-assistance).

@@ -310,7 +310,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
           {segments.map(segment => {
             if (segment.estimatedTokens <= 0) return null
             const height = totalEstimatedTokens > 0 ? (segment.estimatedTokens / totalEstimatedTokens) * 100 : 0
-            return <div key={segment.key} className={`foxwarm-context-scrollbar-segment foxwarm-context-scrollbar-tone-${segment.tone}${segment.category === 'model' ? ' foxwarm-context-scrollbar-segment-model-content' : ''}`} style={{ height: `${height}%` }} />
+            return <div key={segment.key} data-context-category={segment.category} className={`foxwarm-context-scrollbar-segment foxwarm-context-scrollbar-tone-${segment.tone}${segment.category === 'model' ? ' foxwarm-context-scrollbar-segment-model-content' : ''}`} style={{ height: `${height}%` }} />
           })}
         </div>
         {effectiveContextUsage && <div className="foxwarm-context-scrollbar-free" style={{ top: `${usedFraction * 100}%` }} />}

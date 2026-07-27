@@ -59,6 +59,7 @@ export function getMessageStableKey(message: Message, fallbackIndex: number): st
   const meta = message.__meta || {}
   const contextBlockId = meta.contextBlock?.id
   if (hasStableMetaValue(meta.synthetic)) return `synthetic-${String(meta.synthetic)}`
+  if (hasStableMetaValue(meta.clientMessageId)) return `client-${String(meta.clientMessageId)}`
   if (hasStableMetaValue(contextBlockId)) {
     return `ctx-block-${String(meta.contextBlock?.sourceSessionId || 'local')}-${String(contextBlockId)}`
   }
