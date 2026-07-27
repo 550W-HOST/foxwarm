@@ -194,6 +194,12 @@ export interface SessionTokenTotals {
 export interface TokenUsage {
   cachedTokens: number;
   inputTokens: number;
+  /**
+   * Provider-reported reasoning tokens within `outputTokens`, when that
+   * provider protocol exposes the component separately. This is not an
+   * additional total.
+   */
+  reasoningTokens?: number;
   outputTokens: number;
 }
 

@@ -1599,7 +1599,7 @@ export async function chat(
     });
 
     if (result.usage) {
-        logger.info(`Token Usage: Cached: ${result.usage.cachedTokens || 0} | Input: ${result.usage.inputTokens} | Output: ${result.usage.outputTokens} | Calls: ${(result.toolCalls || []).length}`);
+        logger.info(`Token Usage: Cached: ${result.usage.cachedTokens || 0} | Input: ${result.usage.inputTokens} | Output: ${result.usage.outputTokens} | Reasoning: ${result.usage.reasoningTokens ?? 'n/a'} | Calls: ${(result.toolCalls || []).length}`);
 
         // Update session accumulated usage stats
         session.stats.totalInputTokens += result.usage.inputTokens || 0;
@@ -2007,20 +2007,33 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
         });
     }
 
+    const getReportedReasoningTokens = (value: unknown): number | undefined =>
+        typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
     let usage: TokenUsage = null;
     if (plan.useOpenAIResponsesApi) {
         const cached = resp?.usage?.input_tokens_details?.cached_tokens || 0;
+        // OpenAI Responses exposes this output component as
+        // usage.output_tokens_details.reasoning_tokens. output_tokens remains
+        // the complete output count, including reasoning.
+        const reasoningTokens = getReportedReasoningTokens(resp?.usage?.output_tokens_details?.reasoning_tokens);
         usage = resp?.usage ? {
             inputTokens: resp.usage.input_tokens - cached,
             outputTokens: resp.usage.output_tokens,
             cachedTokens: cached,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
         } : null;
     } else if (plan.useOpenAIChatCompletionsApi) {
         const cached = resp?.usage.prompt_tokens_details?.cached_tokens || 0;
+        // OpenAI Chat Completions exposes this output component as
+        // usage.completion_tokens_details.reasoning_tokens. completion_tokens
+        // remains the complete output count, including reasoning.
+        const reasoningTokens = getReportedReasoningTokens(resp?.usage?.completion_tokens_details?.reasoning_tokens);
         usage = resp?.usage ? {
             inputTokens: resp.usage.prompt_tokens - cached,
             outputTokens: resp.usage.completion_tokens,
             cachedTokens: cached,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
         } : null;
     } else {
         usage = resp?.usage ? {

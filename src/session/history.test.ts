@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCreatedBlockFrontierItemsWithPreservedMessages, isSingleBlockCompactionStrandedBetweenHigherLevelBlocks, removePreservedMessageFrontierItems, resolveCompactionSplitIndex } from './history';
+import { buildCreatedBlockFrontierItemsWithPreservedMessages, getUsageTotalTokens, isSingleBlockCompactionStrandedBetweenHigherLevelBlocks, removePreservedMessageFrontierItems, resolveCompactionSplitIndex } from './history';
 import { ContextFrontierItem, Message } from '../types';
 
 function msg(role: Message['role'], parts: Message['parts']): Message {
@@ -10,6 +10,15 @@ function msg(role: Message['role'], parts: Message['parts']): Message {
 function block(id: number, level: number): ContextFrontierItem {
   return { kind: 'block', id, level, rawStartSeq: id * 10, rawEndSeq: id * 10 + 9 };
 }
+
+test('getUsageTotalTokens does not add reasoning tokens on top of complete output usage', () => {
+  assert.equal(getUsageTotalTokens({
+    cachedTokens: 5,
+    inputTokens: 12,
+    outputTokens: 13,
+    reasoningTokens: 8,
+  }), 30);
+});
 
 test('resolveCompactionSplitIndex moves split back to include paired tool call when boundary lands on tool response', () => {
   const history: Message[] = [

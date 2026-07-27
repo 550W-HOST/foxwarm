@@ -79,6 +79,10 @@ Busy-time input queues silently; UI/channel queue state is presented by current 
 
 Retries are observable but not model-visible. One updatable display-only notice plus channel snippets is the preferred presentation.
 
+### D-pipeline-provider-usage-components
+
+[2026-07-28] Persist provider usage on each generated model message as `__meta.usage`. `outputTokens` always remains the provider's complete output/completion count. A separately exposed `reasoningTokens` value is optional and is a component of that output, never an additive total; aggregate/context accounting remains `cached + input + output`. Map a reasoning component only from the selected provider protocol's documented response field, and leave it absent for protocols that do not expose one. `/status` and `session({ action: "status" })` must use their shared `src/sessionStatus` formatter to display the component without changing the total.
+
 ### D-pipeline-control-commands
 
 `/retry` retries a failed/pending LLM turn from current history. `/stop` preserves queued work; `/dequeue` proceeds with it.
