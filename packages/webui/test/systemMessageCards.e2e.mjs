@@ -185,6 +185,16 @@ test('system cards expand/collapse, preserve session links, and retain width con
   await page.click('#interAgent [data-system-message-card] button')
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body a', link => link.getAttribute('href')), '#session/parent%2Fchild')
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body', body => body.textContent), '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\nfirst inter-agent preview line\nsecond inter-agent preview line\nthird inter-agent preview line\nfourth inter-agent preview line\n</foxwarm-message>')
+  const interAgentLineMetrics = await page.$eval('#interAgent .foxwarm-system-message-body', body => {
+    const [metadataLine, bodyLine] = body.children
+    return {
+      bodyParentLineHeight: getComputedStyle(body).lineHeight,
+      metadataLineHeight: Number.parseFloat(getComputedStyle(metadataLine).lineHeight),
+      bodyLineHeight: Number.parseFloat(getComputedStyle(bodyLine).lineHeight),
+    }
+  })
+  assert.equal(interAgentLineMetrics.bodyParentLineHeight, '0px', 'the parent pre does not impose a tall line-box strut on metadata wrappers')
+  assert.ok(interAgentLineMetrics.metadataLineHeight < interAgentLineMetrics.bodyLineHeight, 'metadata wrappers use a more compact line-height than normal body lines')
 
   const overflow = await page.$eval('#mixed', fixture => ({
     fixture: fixture.scrollWidth - fixture.clientWidth,
