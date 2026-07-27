@@ -55,6 +55,24 @@ test('executeTools turns malformed tool arguments into a structured tool error',
   });
 });
 
+test('executeTools persists previous LLM timing only on the first tool response', async () => {
+  const toolMessage = await executeTools(
+    [
+      { id: 'call_first', name: 'read', args: {}, rawArgsText: '{', argsParseError: 'bad args' },
+      { id: 'call_second', name: 'read', args: {}, rawArgsText: '{', argsParseError: 'bad args' },
+    ],
+    {
+      sessionId: 'tool-timing-test/main',
+      session: { agent: 'main' },
+      previousLlmRequest: { completedAt: new Date('2026-07-27T05:00:00+08:00').getTime(), durationMs: 8200 },
+    },
+    { agent: 'main', verbose: false },
+  );
+  const responses = toolMessage.parts.map(part => part.functionResponse);
+  assert.deepEqual(responses[0]?.previousLlmRequest, { time: '2026-07-27 05:00:00 +0800', durationMs: 8200 });
+  assert.equal(responses[1]?.previousLlmRequest, undefined);
+});
+
 test('executeTools suppresses wait when a later tool in the batch returns an error', async () => {
   const sessionId = makeSessionId('tool_wait_after_error_late');
   const toolMessage = await executeTools(

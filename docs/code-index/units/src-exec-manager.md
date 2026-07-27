@@ -50,7 +50,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 - Instantiates a singleton `PersistentExecManager` configured with project-specific paths (agent directories, temp dirs, registry file at `STATE_DIR/running-exec.json`).
 - The default completion dispatcher sends a system event to the session associated with the exec entry; this can be overridden at initialization.
 - All public functions are thin async delegates to the underlying manager instance, adding only the default `nodeId: 'master'`.
-- The exec handler uses shared timeout resolution: finite requests above 60 seconds wait for only 60 seconds, while forwarding the requested/effective warning into either foreground or background-switch result formatting.
+- The exec handler uses shared timeout resolution: finite requests above 60 seconds wait for only 60 seconds, while forwarding the requested/effective warning into either foreground or background-switch result formatting. Oversized persistent logs use the shared bounded excerpt contract rather than full reads; see [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
 - The registry file persists running exec state to disk for crash recovery.
 - Parallel direct-exec batches still use the same persistent manager. Segment-level cwd synchronization is deferred by the tool wrapper and replayed in model order before later tool barriers; process lifecycle tracking remains per exec ID.
 

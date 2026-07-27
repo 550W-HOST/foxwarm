@@ -6,9 +6,7 @@ import { formatFoxwarmSystem } from '../utils/promptWrappers';
 const GOAL_REMINDER_META_KEY = 'goalReminder';
 const GOAL_REMINDER_SYSTEM_KIND = 'goal-reminder';
 const GOAL_REMINDER_GUIDANCE = 'Keep this long-term goal in mind when deciding what to do next.';
-export const DEFAULT_GOAL_REMIND_EVERY = 10;
-
-type GoalReminderKind = 'interval' | 'end-turn';
+export const DEFAULT_GOAL_REMIND_EVERY = 20;
 
 export function normalizeRemindEvery(value: unknown): number {
   const num = typeof value === 'string' ? Number(value) : value;
@@ -22,14 +20,6 @@ export function normalizeRemindEvery(value: unknown): number {
   }
 
   return normalized;
-}
-
-export function normalizeRemindOnTurnEnd(value: unknown): boolean {
-  if (typeof value !== 'boolean') {
-    throw new Error('remindOnTurnEnd must be a boolean.');
-  }
-
-  return value;
 }
 
 export function normalizeGoalText(value: unknown): string {
@@ -119,36 +109,7 @@ function hasGoalReminderForAnchorSeq(session: Session, anchorSeq: number): boole
   return false;
 }
 
-function getLatestGoalReminderMessage(session: Session): Message | null {
-  for (let i = session.history.length - 1; i >= 0; i--) {
-    const message = session.history[i];
-    if (isGoalReminderMessage(message)) {
-      return message;
-    }
-  }
-
-  return null;
-}
-
-function shouldSuppressEndTurnReminderAfterCompactCompletion(session: Session, state: SessionGoalState): boolean {
-  const latestReminder = getLatestGoalReminderMessage(session);
-  const reminderSeq = latestReminder?.__meta?.seq;
-  if (
-    latestReminder?.__meta?.goalReminderKind !== 'compact-completion'
-    || typeof reminderSeq !== 'number'
-    || reminderSeq < state.anchorSeq
-  ) {
-    return false;
-  }
-
-  // A compact_session tool call can complete compaction, inject the goal into
-  // the compact-completion marker, then resume the same user turn and produce a
-  // final model reply. Do not immediately append a second end-turn goal reminder
-  // for that same compact-resume turn.
-  return countNonReminderMessagesAfterSeq(session, reminderSeq) <= 2;
-}
-
-function buildGoalReminderMessage(state: SessionGoalState, anchorSeq: number, kind: GoalReminderKind): Message {
+function buildGoalReminderMessage(state: SessionGoalState, anchorSeq: number): Message {
   return {
     role: 'user',
     parts: buildSystemMessageParts(formatSessionGoalReminderText(state.goal)),
@@ -156,7 +117,7 @@ function buildGoalReminderMessage(state: SessionGoalState, anchorSeq: number, ki
       timestamp: Date.now(),
       [GOAL_REMINDER_META_KEY]: true,
       goalAnchorSeq: anchorSeq,
-      goalReminderKind: kind,
+      goalReminderKind: 'interval',
     },
   };
 }
@@ -196,23 +157,13 @@ export function resolveSessionGoalRemindEvery(session: Session, value: unknown):
   return DEFAULT_GOAL_REMIND_EVERY;
 }
 
-export function resolveSessionGoalRemindOnTurnEnd(session: Session, value: unknown): boolean {
-  if (value !== undefined) {
-    return normalizeRemindOnTurnEnd(value);
-  }
-
-  return session.goalState?.remindOnTurnEnd !== false;
-}
-
-export function setSessionGoal(session: Session, goal: string, remindEvery: number, remindOnTurnEnd: boolean = true): SessionGoalState {
+export function setSessionGoal(session: Session, goal: string, remindEvery: number): SessionGoalState {
   const normalizedGoal = normalizeGoalText(goal);
   const normalizedRemindEvery = normalizeRemindEvery(remindEvery);
-  const normalizedRemindOnTurnEnd = normalizeRemindOnTurnEnd(remindOnTurnEnd);
 
   const state: SessionGoalState = {
     goal: normalizedGoal,
     remindEvery: normalizedRemindEvery,
-    remindOnTurnEnd: normalizedRemindOnTurnEnd,
     anchorSeq: getLatestSessionMessageSeq(session),
     updatedAt: Date.now(),
   };
@@ -257,41 +208,5 @@ export function maybeBuildGoalReminderMessage(session: Session): Message | null 
 
   state.anchorSeq = currentSeq;
 
-  return buildGoalReminderMessage(state, currentSeq, 'interval');
-}
-
-export function maybeBuildGoalEndTurnReminderMessage(session: Session): Message | null {
-  const state = session.goalState;
-  if (!state) {
-    return null;
-  }
-
-  if (state.remindOnTurnEnd === false) {
-    return null;
-  }
-
-  if (latestMessageSuppressesGoalReminder(session)) {
-    return null;
-  }
-
-  const latestUserMessage = getLatestUserMessage(session);
-  if (latestUserMessage && isGoalReminderMessage(latestUserMessage)) {
-    return null;
-  }
-
-  const currentSeq = getLatestCountedMessageSeq(session);
-  if (currentSeq <= state.anchorSeq) {
-    return null;
-  }
-
-  if (shouldSuppressEndTurnReminderAfterCompactCompletion(session, state)) {
-    return null;
-  }
-
-  if (hasGoalReminderForAnchorSeq(session, currentSeq)) {
-    return null;
-  }
-
-  state.anchorSeq = currentSeq;
-  return buildGoalReminderMessage(state, currentSeq, 'end-turn');
+  return buildGoalReminderMessage(state, currentSeq);
 }

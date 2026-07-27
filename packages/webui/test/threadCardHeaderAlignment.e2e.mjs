@@ -28,7 +28,9 @@ async function buildFixtureBundle() {
 
     const longPath = '/workspace/' + 'aligned-segment/'.repeat(18) + 'read-target.tsx'
     const read = { role: 'model', parts: [{ functionCall: { id: 'read-align', name: 'read', args: { filePath: longPath, startLine: 7, endLine: 19 } } }] }
+    const shortRead = { role: 'model', parts: [{ functionCall: { id: 'read-short', name: 'read', args: { filePath: '/workspace/read-target.tsx', startLine: 7, endLine: 19 } } }] }
     createRoot(document.getElementById('read')).render(React.createElement(ToolCallsBlock, { msg: read, onOpenCodeFile: () => {} }))
+    createRoot(document.getElementById('read-short')).render(React.createElement(ToolCallsBlock, { msg: shortRead, onOpenCodeFile: () => {} }))
     createRoot(document.getElementById('reasoning')).render(React.createElement(ReasoningCard, { thinking: 'reasoning preview', tone: 'message', defaultExpanded: false }))
     createRoot(document.getElementById('event')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nevent preview\\n</foxwarm-system>' }] }], isMobile: window.innerWidth < 768, groupTools: false, showUsageBadge: false }))
     createRoot(document.getElementById('context')).render(React.createElement(ContextBlockCard, { sessionId: 'fixture/main', messageKey: 'context', block: { id: 1, level: 1, rawStartSeq: 1, rawEndSeq: 2 }, text: 'context summary', nestedDepth: 0, renderNestedMessages: () => null }))
@@ -66,6 +68,8 @@ async function readAlignment() {
     const readCode = rect('#read .foxwarm-tool-code-open')
     const readPath = rect('#read .foxwarm-tool-code-path')
     const readRange = rect('#read .foxwarm-tool-read-range')
+    const shortReadPath = rect('#read-short .foxwarm-tool-code-path')
+    const shortReadRange = rect('#read-short .foxwarm-tool-read-range')
     const eventTag = rect('#event .foxwarm-system-message-tag')
     const eventPreview = rect('#event .foxwarm-system-message-preview')
     const reasoningTag = rect('#reasoning .foxwarm-reasoning-tag')
@@ -90,6 +94,7 @@ async function readAlignment() {
         summaryRight: readSummary.right,
         pathRight: readPath.right,
         rangeRight: readRange.right,
+        shortRangePathGap: shortReadRange.left - shortReadPath.right,
         rangeVisible: readRange.right <= readSummary.right + 0.5,
         pathOverflow: readPathElement.scrollWidth > readPathElement.clientWidth,
         summaryOverflow: readSummaryElement.scrollWidth > readSummaryElement.clientWidth,
@@ -108,7 +113,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:12px}</style></head><body><main>${['read', 'reasoning', 'event', 'context'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:12px}</style></head><body><main>${['read', 'read-short', 'reasoning', 'event', 'context'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -128,6 +133,7 @@ test('collapsed thread-card headers share an aligned tag and one-line preview rh
     for (const delta of Object.values(layout.deltas)) assert.ok(delta <= 0.5, `${JSON.stringify(fixture)} header centers align`)
     assert.equal(layout.read.summaryHeight, 18)
     assert.equal(layout.read.rangeVisible, true)
+    assert.ok(layout.read.shortRangePathGap <= 5, 'a direct read range stays next to its path instead of filling the shared header')
     assert.equal(layout.read.pathOverflow, true, 'the long path truncates before the fixed line range')
     assert.equal(layout.read.summaryOverflow, false)
     assert.equal(layout.read.rangeWhiteSpace, 'nowrap')

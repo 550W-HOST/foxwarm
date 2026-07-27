@@ -94,6 +94,10 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 All queue insertion uses one wait-state transition path. Compact maintenance is wait-neutral; stale timeout tokens are ignored; listed `waitAllSessions` messages are released together only after every requested source reports.
 
+### D-session-restart-recovery
+
+Busy-session restart recovery queues a self-closing current `kind="event" type="session-resumed"` wrapper with the restart-resume hint and source-boundary time. Dedup recognizes only that parsed current wrapper identity, not legacy raw text. Managed-owner wakeup dedup likewise parses its current wrapper and matches managed session ID plus pending count while ignoring time, body, and attribute order; a changed count is a new wakeup.
+
 ## Canonical ownership
 
 - Façade versus domain/router boundary: [D-session-core-facade](../modules/session-core.md#d-session-core-facade).

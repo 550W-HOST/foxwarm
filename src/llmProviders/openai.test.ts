@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
-import { collectOpenAIChatCompletionsStream, collectOpenAIResponsesStream } from './openai';
+import { collectOpenAIChatCompletionsStream, collectOpenAIResponsesStream, convertToOpenAIFormat, convertToOpenAIResponsesFormat } from './openai';
+import type { Message } from '../types';
 
 function makeStream(events: Array<any | '[DONE]'>): PassThrough {
   const stream = new PassThrough();
@@ -271,4 +272,41 @@ test('collectOpenAIResponsesStream rebuilds refusals when completed payload omit
   assert.equal(response.output.length, 1);
   assert.equal(response.output[0].content[0].type, 'refusal');
   assert.equal(response.output[0].content[0].refusal, 'No thanks');
+});
+
+test('OpenAI tool serializers prepend one persisted LLM timing marker before image and empty output', () => {
+  const history: Message[] = [{
+    role: 'tool',
+    parts: [
+      { inlineData: { mimeType: 'image/png', data: 'aGVsbG8=' }, toolUseId: 'first' },
+      {
+        functionResponse: {
+          tool_use_id: 'first',
+          name: 'image_tool',
+          previousLlmRequest: { time: '2026-07-27 05:00:00 +0800', durationMs: 8200 },
+          response: { output: '' },
+        },
+      },
+      {
+        functionResponse: {
+          tool_use_id: 'second',
+          name: 'plain_tool',
+          response: { output: 'second output' },
+        },
+      },
+    ],
+  }];
+
+  const chat = convertToOpenAIFormat(history);
+  const firstChat = chat.find(item => item.tool_call_id === 'first');
+  assert.ok(Array.isArray(firstChat.content));
+  assert.match(firstChat.content[0].text, /kind="time".*time="2026-07-27 05:00:00 \+0800".*prevLLMReqTime="8.2s"/);
+  assert.equal(firstChat.content.filter((part: any) => String(part.text || '').includes('prevLLMReqTime')).length, 1);
+  assert.equal(chat.some(item => item.tool_call_id === 'second' && String(item.content).includes('prevLLMReqTime')), false);
+
+  const responses = convertToOpenAIResponsesFormat(history);
+  const firstResponse = responses.find(item => item.call_id === 'first');
+  assert.ok(Array.isArray(firstResponse.output));
+  assert.match(firstResponse.output[0].text, /prevLLMReqTime="8.2s"/);
+  assert.equal(firstResponse.output.filter((part: any) => String(part.text || '').includes('prevLLMReqTime')).length, 1);
 });

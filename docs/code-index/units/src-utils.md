@@ -14,6 +14,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 - `getMessagePreview`, `formatMessagePreviewLine`, `formatSessionMessagesPreview` — message preview utilities
 - `formatLocalTimestamp`, `formatLocalTimeRange` — local time formatting with numeric UTC offset
 - `buildSystemMessageParts`, `isSystemPayloadTextPart` — split system messages into header + payload parts
+- `buildTimestampedSystemMessageParts`, `withInputTimePart` — freeze source-boundary timestamps on one model-visible input wrapper without standalone time parts
 - `escapeFoxwarmAttributeValue`, `formatFoxwarmSystemTag`, `formatFoxwarmMessageOpen`, `formatFoxwarmMessageClose`, `formatSystemPartForModel`, `parseFoxwarmTagLine` — build/parse Foxwarm XML-ish prompt wrapper tags with escaped attrs and raw message bodies
 - `replaceLoneSurrogates`, `containsLoneSurrogate`, `containsAnySurrogate` — surrogate detection/replacement
 - `takeUnicodeSafe`, `takeUnicodeSafeEnd`, `truncateUnicodeSafe`, `truncateUnicodeSafeWithEllipsis` — grapheme-aware truncation

@@ -29,6 +29,15 @@ export interface FunctionCall {
 export interface FunctionResponse {
   tool_use_id: string;
   name: string;
+  /**
+   * Internal timing for the model request which produced this tool batch.
+   * It is persisted with the first tool response so serializers never need to
+   * infer it from neighboring history.
+   */
+  previousLlmRequest?: {
+    time: string;
+    durationMs: number;
+  };
   response: {
     output?: any;
     content?: any;
@@ -148,7 +157,6 @@ export interface SessionStreamEvent {
 export interface SessionGoalState {
   goal: string;
   remindEvery: number;
-  remindOnTurnEnd?: boolean;
   anchorSeq: number;
   updatedAt: number;
 }
@@ -284,6 +292,11 @@ export interface ChatResult {
   usage?: TokenUsage;
   toolCalls?: Array<FunctionCall>;
   allParts?: MessagePart[];
+  /** Timing of the successful provider request which produced this result. */
+  previousLlmRequest?: {
+    completedAt: number;
+    durationMs: number;
+  };
 }
 
 export interface AnthropicMessage {

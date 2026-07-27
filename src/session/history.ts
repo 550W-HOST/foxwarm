@@ -37,6 +37,7 @@ import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
+import { formatLocalTimestamp } from '../utils/localTime';
 import { formatSessionGoalReminderText } from './goal';
 import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
@@ -935,7 +936,7 @@ async function finalizeCompaction(
   });
   session.history = await renderHistoryFromFrontier(session, newFrontier);
 
-  const completionText = formatCompactionCompletionMarker(sessionId, completionMarker, session.parentSessionId, compactedSkillNames);
+  const completionText = formatCompactionCompletionMarker(sessionId, completionMarker, session.parentSessionId, compactedSkillNames, Date.now());
   const hasCompletionGoalReminder = !!session.goalState?.goal?.trim();
   const completionParts: MessagePart[] = buildSystemMessageParts(completionText);
   if (hasCompletionGoalReminder) {
@@ -977,7 +978,7 @@ async function finalizeCompaction(
   }
 }
 
-export function formatCompactionCompletionMarker(sessionId: string, completionMarker: string, parentSessionId?: string, compactedSkillNames: string[] = []): string {
+export function formatCompactionCompletionMarker(sessionId: string, completionMarker: string, parentSessionId?: string, compactedSkillNames: string[] = [], timestamp?: Date | number): string {
   const legacySuffixRe = /^\s*\*\*COMPACTION COMPLETED\. PARENT SESSION `[^`]*`\. CURRENT SESSION ID IS `[^`]*`\.\*\*\s*/i;
   const markerWithoutSuffix = completionMarker.replace(legacySuffixRe, '');
   const extraMarkerText = markerWithoutSuffix
@@ -998,6 +999,7 @@ export function formatCompactionCompletionMarker(sessionId: string, completionMa
     event: 'compact-completed',
     parentSessionId: parentSessionId || '(none)',
     currentSessionId: sessionId,
+    time: timestamp === undefined ? undefined : formatLocalTimestamp(timestamp),
     hint: hintParts.length > 0 ? hintParts.join(' ') : undefined,
   });
 }

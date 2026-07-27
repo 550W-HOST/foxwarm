@@ -8,7 +8,7 @@ export const CLI_NODE_CAPABILITIES = {
   tools: [
     {
       name: 'read',
-      description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers; passing 0 for startLine/endLine is treated as omitted. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
+      description: 'Read a file or list a directory. Large non-image file reads use built-in bounded display with file-size metadata; use startLine/endLine for targeted content rather than shell head solely to limit context. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers; passing 0 for startLine/endLine is treated as omitted. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
       parameters: {
         type: 'object',
         properties: {
@@ -57,7 +57,7 @@ export const CLI_NODE_CAPABILITIES = {
     },
     {
       name: 'exec',
-      description: 'Execute a shell command. Uses explicit cwd when provided, otherwise the session cwd when supplied for this node, otherwise the node process cwd. Relative cwd values resolve from the session cwd when set, otherwise from the node process cwd. Commands running over the timeout continue in the background and send a completion message later. Timeout values above the 60s maximum are clamped to 60s with a warning.',
+      description: 'Execute a shell command. Uses explicit cwd when provided, otherwise the session cwd when supplied for this node, otherwise the node process cwd. Relative cwd values resolve from the session cwd when set, otherwise from the node process cwd. Inline display is bounded and captured command/pipeline output is saved in the command log, so do not add | head or | tail merely to limit context: filtering changes what the log captures. For both a complete capture and filtered view, create that capture explicitly with a separate step or a tee pipeline whose downstream filter continues consuming input. Commands running over the timeout continue in the background and send a completion message later. Timeout values above the 60s maximum are clamped to 60s with a warning.',
       parameters: {
         type: 'object',
         properties: {

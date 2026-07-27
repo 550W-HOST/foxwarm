@@ -1,4 +1,5 @@
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
+import { formatLocalTimestamp } from '../utils/localTime';
 
 export type SessionIdentityHintVariant = 'inherited' | 'compact' | 'new-child';
 
@@ -6,6 +7,7 @@ export function formatSessionIdentityHint(options: {
   parentSessionId?: string;
   sessionId: string;
   variant?: SessionIdentityHintVariant;
+  timestamp?: Date | number;
 }): string {
   const parentSessionId = typeof options.parentSessionId === 'string' && options.parentSessionId.trim()
     ? options.parentSessionId.trim()
@@ -24,5 +26,6 @@ export function formatSessionIdentityHint(options: {
     event,
     parentSessionId,
     currentSessionId: sessionId,
+    time: options.timestamp === undefined ? undefined : formatLocalTimestamp(options.timestamp),
   });
 }

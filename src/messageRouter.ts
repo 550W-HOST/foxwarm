@@ -11,7 +11,7 @@ import { buildChildReminder, isModelNoActionSignal } from './session/childSessio
 import { getManagedSessionState, isManagedSessionActive, setManagedSessionState } from './session/managedState';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
-import { maybeBuildGoalEndTurnReminderMessage, maybeBuildGoalReminderMessage } from './session/goal';
+import { maybeBuildGoalReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
@@ -148,10 +148,12 @@ export class MessageRouter {
     const channelType = source.channelType || source.platform;
     const conversationId = source.conversationId || source.channelUserId;
     const channelTargetId = `${channelInstanceId}:${conversationId}`;
+    const inputTime = formatCurrentTimeForPrompt(new Date());
     const sourceAttrs = channelType === 'webui'
       ? {
         type: 'channel',
         channelType: 'webui',
+        time: inputTime,
         hint: 'direct user message via channel',
       }
       : {
@@ -161,6 +163,7 @@ export class MessageRouter {
         conversationId,
         channelTargetId,
         sender: source.username,
+        time: inputTime,
         hint: 'direct user message via channel',
       };
 
@@ -172,6 +175,7 @@ export class MessageRouter {
         systemParts.unshift({
           system: formatFoxwarmSystemTag({
             kind: 'channel-mode',
+            time: inputTime,
             mode: 'send-only',
             channelTargetId,
             hint: `Channel is in send-only mode. If you need to reply, call send_to_channel({channelTargetId: "${channelTargetId}", message: "..."}).`,
@@ -373,18 +377,7 @@ export class MessageRouter {
   private prepareTurnParts(session: Session, sessionId: string, parts: MessagePart[]): MessagePart[] {
     const finalParts = [...parts];
 
-    const now = Date.now();
-    const timeSinceLastMessage = now - (session.meta.lastMessageTime || now);
-    if (timeSinceLastMessage > 10 * 60 * 1000) {
-      const currentTime = formatCurrentTimeForPrompt(new Date());
-      finalParts.unshift({
-        system: formatFoxwarmSystemTag({
-          kind: 'time',
-          localTime: currentTime,
-        }),
-      });
-    }
-    session.meta.lastMessageTime = now;
+    session.meta.lastMessageTime = Date.now();
 
     if (session.history.length === 0) {
       finalParts.unshift({
@@ -733,22 +726,6 @@ export class MessageRouter {
       const reminder = buildChildReminder(session.parentSessionId);
       await sessionManager.queueSessionSystemEvent(session.id, reminder, 'background');
     }
-  }
-
-  private async maybeAppendGoalEndTurnReminder(session: Session): Promise<void> {
-    if (session.queue.some(item => item.type !== 'background')) {
-      return;
-    }
-
-    const reminder = maybeBuildGoalEndTurnReminderMessage(session);
-    if (!reminder) {
-      return;
-    }
-
-    // End-turn reminders should become visible in history immediately without
-    // spawning another follow-up reminder turn. Interval reminders are the ones
-    // that independently re-trigger the agent loop.
-    await sessionManager.appendSessionMessage(session, reminder);
   }
 
   private async maybeAppendGoalIntervalReminder(session: Session): Promise<void> {
@@ -1105,6 +1082,7 @@ export class MessageRouter {
         const toolContext = {
           sessionId: session.id,
           session,
+          previousLlmRequest: result.previousLlmRequest,
           broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
           onToolStart: (tool: { id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
             sessionManager.setActiveSessionRuntimeState(session.id, {
@@ -1230,7 +1208,6 @@ export class MessageRouter {
       if (!finalSent) {
         this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
       }
-      await this.maybeAppendGoalEndTurnReminder(session);
       if (!stoppedByUser) {
         await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
       }
@@ -1251,7 +1228,6 @@ export class MessageRouter {
         await this.maybeQueueChildReminder(session);
         await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions);
       }
-      await this.maybeAppendGoalEndTurnReminder(session);
     } finally {
       const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;
       if (session.meta?.runQueuedAfterStop) {

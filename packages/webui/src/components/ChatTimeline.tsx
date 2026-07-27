@@ -597,7 +597,7 @@ const MessageRow = memo(function MessageRow({
   const firstTextPartIndex = useMemo(() => msg.parts.findIndex(p => typeof p.text === 'string' && p.text.trim()), [msg.parts])
   const marginClass = nestedDepth > 0 ? 'mt-2' : (shouldSkipMargin ? '' : 'mt-4')
   const widthClass = systemLikeMessage
-    ? (nestedDepth > 0 ? 'w-full max-w-full' : 'w-full max-w-[80%]')
+    ? (isMobile || nestedDepth > 0 ? 'w-full' : 'w-full max-w-[80%]')
     : msg.role === 'user'
       ? (nestedDepth > 0 ? 'max-w-[85%]' : 'max-w-[80%]')
       : isMobile || nestedDepth > 0

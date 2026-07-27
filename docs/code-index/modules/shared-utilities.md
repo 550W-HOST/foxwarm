@@ -36,8 +36,8 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 - Master and node wrappers reuse shared file/cwd/timeout semantics rather than independently approximating them.
 - Exec cwd expands home, must exist, and must be a directory before spawn.
 - Finite exec timeouts above the runtime maximum clamp with a separate warning; invalid/below-minimum values reject.
-- Persistent exec owns atomic status/log/cwd metadata and can reconcile registry awareness after restart.
-- Large output uses Unicode-safe per-line shortening plus whole-line middle omission and a footer pointing to full output/log.
+- Persistent exec owns atomic status/log/cwd metadata, can reconcile registry awareness after restart, and uses bounded binary-safe excerpts for oversized logs; canonical details: [D-persistent-exec-bounded-log-excerpts](../units/shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
+- Large output uses Unicode-safe per-line shortening plus whole-line middle omission and a footer pointing to captured command output/log.
 - File transfer resolves paths with traversal restrictions by default.
 - Code services accept fixed operations and versions, not arbitrary model tools.
 - Terminal helper receives no WebUI/node credential and cannot choose trusted node/terminal identity.

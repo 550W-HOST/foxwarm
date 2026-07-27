@@ -71,11 +71,30 @@ function pickDefinedFields<T extends readonly string[]>(source: Record<string, a
   return result as Record<T[number], any>;
 }
 
+function serializeGoalState(goalState: Session['goalState']): Session['goalState'] {
+  if (!goalState || typeof goalState !== 'object') {
+    return goalState;
+  }
+
+  // Older session snapshots may retain this removed setting. Keep accepting
+  // them on load, but do not carry it forward into newly written snapshots.
+  const { remindOnTurnEnd: _removed, ...currentGoalState } = goalState as Session['goalState'] & { remindOnTurnEnd?: unknown };
+  return currentGoalState;
+}
+
+function serializeSessionStateFields(session: Session, fields: readonly string[]): Record<string, any> {
+  const state = pickDefinedFields(session as Record<string, any>, fields);
+  if (state.goalState !== undefined) {
+    state.goalState = serializeGoalState(state.goalState);
+  }
+  return state;
+}
+
 export function serializeSessionHistoryPayload(session: Session): Record<string, any> {
   return {
     history: session.history,
     persistentMemorySnapshot: session.persistentMemorySnapshot,
-    ...pickDefinedFields(session as Record<string, any>, SESSION_HISTORY_STATE_FIELDS),
+    ...serializeSessionStateFields(session, SESSION_HISTORY_STATE_FIELDS),
   };
 }
 
@@ -92,7 +111,7 @@ export function applySessionHistoryState(target: Session, historyData: Record<st
 }
 
 export function stripSessionMetadataForSave(session: Session): Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'> {
-  return pickDefinedFields(session as Record<string, any>, SESSION_METADATA_FIELDS) as Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'>;
+  return serializeSessionStateFields(session, SESSION_METADATA_FIELDS) as Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'>;
 }
 
 export function getSessionHistoryFilePath(sessionId: string): string {

@@ -6,7 +6,7 @@ export const definitions = [
         {
             name: 'read',
             defaultInject: true,
-            description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers; passing 0 for startLine/endLine is treated as omitted. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
+            description: 'Read a file or list a directory. Large non-image file reads use built-in bounded display with file-size metadata; use startLine/endLine for targeted content rather than shell head solely to limit context. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers; passing 0 for startLine/endLine is treated as omitted. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
             parameters: {
                 type: 'object',
                 properties: { 
@@ -212,7 +212,7 @@ Example:
         {
             name: 'exec',
             defaultInject: true,
-            description: 'Execute a shell command. The working directory is the explicit cwd when provided (relative cwd resolves from the session cwd when set, otherwise from the current node default), otherwise the session cwd when set, otherwise the current node default (master default is the agent folder). Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output is saved under the agent folder .temp/exec area. Commands running longer than the configured timeout (default 15s, maximum 60s; larger values are clamped with a warning) continue in the background and send a completion system message later.',
+            description: 'Execute a shell command. The working directory is the explicit cwd when provided (relative cwd resolves from the session cwd when set, otherwise from the current node default), otherwise the session cwd when set, otherwise the current node default (master default is the agent folder). Inline display is bounded and captured command/pipeline output is saved under the agent folder .temp/exec area, so do not add | head or | tail merely to limit context: filtering changes what the command log captures. For both a complete capture and filtered view, create that capture explicitly with a separate step or a tee pipeline whose downstream filter continues consuming input. Commands running longer than the configured timeout (default 15s, maximum 60s; larger values are clamped with a warning) continue in the background and send a completion system message later.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -465,8 +465,7 @@ Example:
                 type: 'object',
                 properties: {
                     goal: { type: 'string', description: 'Goal text. Use empty string to clear.' },
-                    remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current goal setting or default to 10.' },
-                    remindOnTurnEnd: { type: 'boolean', description: 'Optional. Whether to inject goal reminders at the end of a turn when newer work happened. If omitted, reuse the current setting or default to true.' },
+                    remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current goal setting or default to 20.' },
                     clear: { type: 'boolean', description: 'If true, clear the current session goal reminder.' }
                 }
             }

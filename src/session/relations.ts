@@ -3,6 +3,7 @@ import { getSessionHistoryFilePath, getSessionHistoryStore } from './metadataSto
 import { AgentMetadata } from './agentMetadata';
 import { MessagePart, QueueItem, Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
+import { formatLocalTimestamp } from '../utils/localTime';
 
 type SessionRelationsDeps = {
   getExistingSession: (sessionId: string) => Promise<Session | null>;
@@ -242,6 +243,7 @@ export async function sendToSession(
 
   const sourceSessionId = fromSession?.id || fromSessionId;
   const replyTarget = sourceSessionId || 'unknown-session';
+  const time = formatLocalTimestamp(Date.now());
   const parts: MessagePart[] = [{
     system: sourceSessionId
       ? formatFoxwarmMessage({
@@ -249,10 +251,12 @@ export async function sendToSession(
         sourceSessionId,
         replyTargetSessionId: replyTarget,
         replyVia: 'send_to_session',
+        time,
         hint: 'inter-agent message from another session, not direct end-user input',
       }, message || '')
       : formatFoxwarmMessage({
         type: 'system-delivered',
+        time,
         hint: 'system-delivered session content, not direct end-user input',
       }, message || ''),
   }];
