@@ -3,6 +3,7 @@ import { Eye, Code, FileJson, Copy, Check } from 'lucide-react'
 import {
   IconToggleButton,
   copyTextToClipboard,
+  clampContentStyle,
   formatToolLabel,
   formatStructuredSystemText,
   getSystemMessagePreviewDescriptor,
@@ -376,6 +377,11 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
 
   const renderedText = allLines.join('\n')
   const messageKind = useMemo(() => getSystemMessagePreviewDescriptor(msg), [msg])
+  const interAgentPreview = useMemo(() => (
+    messageKind.kind === 'inter-agent' && messageKind.previewSessionId
+      ? allLines.filter((line) => !isSystemLikeText(line)).join('\n').trim()
+      : ''
+  ), [allLines, messageKind.kind, messageKind.previewSessionId])
   const preview = useMemo(() => {
     const bodyLine = allLines.find((line) => line.trim() && !isSystemLikeText(line))
     const body = bodyLine?.trim() || renderedText.trim() || messageKind.kind
@@ -407,13 +413,18 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
         >
           <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={messageKind.kind} tone="system" className="foxwarm-system-message-tag" />
           {!expanded && (
-            <span className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={preview}>
+            <span className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={messageKind.kind === 'inter-agent' && messageKind.previewSessionId ? `From ${messageKind.previewSessionId}:` : preview}>
               {messageKind.previewSessionId ? (
-                <>From <span onClick={(event) => event.stopPropagation()}><SessionHashLink sessionId={messageKind.previewSessionId} /></span>: {preview.slice(messageKind.previewPrefix.length)}</>
+                <>From <span onClick={(event) => event.stopPropagation()}><SessionHashLink sessionId={messageKind.previewSessionId} /></span>:{messageKind.kind !== 'inter-agent' ? ` ${preview.slice(messageKind.previewPrefix.length)}` : null}</>
               ) : preview}
             </span>
           )}
         </div>
+        {!expanded && interAgentPreview && (
+          <div className="foxwarm-system-message-result-preview pr-2 text-slate-700 dark:text-slate-300" style={clampContentStyle(3)}>
+            {interAgentPreview}
+          </div>
+        )}
         {expanded && (
           <pre className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
             {renderedText.split('\n').map((line, lineIdx) => {

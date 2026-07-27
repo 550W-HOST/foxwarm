@@ -24,9 +24,10 @@ async function buildFixtureBundle() {
 
     const image = { data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', mimeType: 'image/png' }
     const longBody = 'overflow-safe-body-' + 'x'.repeat(360)
+    const interAgentBody = ['first inter-agent preview line', 'second inter-agent preview line', 'third inter-agent preview line', 'fourth inter-agent preview line'].join('\\n')
     const cases = {
       event: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nwait timeout reached for sessionId: \`child/session\`\\n</foxwarm-system>' }, { inlineData: image }], __meta: { seq: 1 } }] },
-      interAgent: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\\nchild report body\\n</foxwarm-message>' }], __meta: { seq: 2 } }] },
+      interAgent: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\\n' + interAgentBody + '\\n</foxwarm-message>' }], __meta: { seq: 2 } }] },
       sessionBoundary: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="session-boundary" event="new-child">\\nboundary body\\n</foxwarm-system>' }], __meta: { seq: 21 } }] },
       goalReminder: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="goal-reminder">\\nremember this goal\\n</foxwarm-system>' }], __meta: { seq: 22 } }] },
       systemPrompt: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="system-prompt">\\nprompt body\\n</foxwarm-system>' }], __meta: { seq: 23 } }] },
@@ -56,6 +57,7 @@ async function buildFixtureBundle() {
       }))
     }
     createRoot(document.getElementById('unknownTool')).render(React.createElement(ToolTag, { name: 'future-tool', className: 'foxwarm-unknown-tool-tag' }))
+    createRoot(document.getElementById('sendToSessionTool')).render(React.createElement(ToolTag, { name: 'send_to_session', className: 'foxwarm-send-to-session-tool-tag' }))
     createRoot(document.getElementById('reasoningMessage')).render(React.createElement(ReasoningCard, { thinking: 'message **strong** <code>code</code>', tone: 'message', defaultExpanded: true }))
     createRoot(document.getElementById('reasoningProcessing')).render(React.createElement(ReasoningCard, { thinking: 'processing **strong** <code>code</code>', tone: 'processing', defaultExpanded: true }))
   `
@@ -92,7 +94,7 @@ before(async () => {
 
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:20px}</style></head><body><main>${['event', 'interAgent', 'sessionBoundary', 'goalReminder', 'systemPrompt', 'unknown', 'legacy', 'direct', 'mixed', 'nested', 'spacing', 'unknownTool', 'reasoningMessage', 'reasoningProcessing'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:20px}</style></head><body><main>${['event', 'interAgent', 'sessionBoundary', 'goalReminder', 'systemPrompt', 'unknown', 'legacy', 'direct', 'mixed', 'nested', 'spacing', 'unknownTool', 'sendToSessionTool', 'reasoningMessage', 'reasoningProcessing'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -140,13 +142,24 @@ test('heavy system and non-channel messages use kind-tagged thread cards while d
   assert.match((await page.$eval('#unknown [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-bell/)
   assert.match((await page.$eval('#legacy [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-info/)
   assert.match((await page.$eval('#unknownTool .foxwarm-unknown-tool-tag svg', element => element.getAttribute('class') || '')).toString(), /lucide-wrench/)
+  assert.match((await page.$eval('#sendToSessionTool .foxwarm-send-to-session-tool-tag svg', element => element.getAttribute('class') || '')).toString(), /lucide-messages-square/)
 
   assert.equal(await page.$$('#direct [data-system-message-card]').then(nodes => nodes.length), 0)
   assert.equal(await page.$$('#direct .foxwarm-user-message-bubble').then(nodes => nodes.length), 1)
   assert.equal(await page.$eval('#direct .foxwarm-chat-timeline > div', row => getComputedStyle(row).justifyContent), 'flex-end')
   assert.equal(await page.$eval('#event .foxwarm-chat-timeline > div', row => getComputedStyle(row).justifyContent), 'flex-start')
   assert.equal(await page.$eval('#event .foxwarm-system-message-preview', preview => preview.textContent), 'wait-timeout: wait timeout reached for sessionId: `child/session`')
-  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-preview', preview => preview.textContent), 'From parent/child: child report body')
+  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-preview', preview => preview.textContent), 'From parent/child:')
+  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-result-preview', preview => preview.textContent), 'first inter-agent preview line\nsecond inter-agent preview line\nthird inter-agent preview line\nfourth inter-agent preview line')
+  assert.deepEqual(await page.$eval('#interAgent .foxwarm-system-message-result-preview', preview => ({
+    lineHeight: preview.style.lineHeight,
+    maxHeight: preview.style.maxHeight,
+    overflow: preview.style.overflow,
+  })), {
+    lineHeight: '1.3em',
+    maxHeight: 'calc(3.9em)',
+    overflow: 'hidden',
+  }, 'inter-agent preview reuses the ordinary three-line result clamp')
   assert.equal(await page.$eval('#sessionBoundary .foxwarm-system-message-preview', preview => preview.textContent), 'new-child: boundary body')
   assert.equal(await page.$eval('#spacing [data-system-message-kind="inter-agent"] .foxwarm-system-message-preview', preview => preview.textContent), 'child row', 'missing sourceSessionId has no From prefix or dangling colon')
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-preview a', link => link.getAttribute('href')), '#session/parent%2Fchild')
@@ -168,7 +181,7 @@ test('system cards expand/collapse, preserve session links, and retain width con
 
   await page.click('#interAgent [data-system-message-card] button')
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body a', link => link.getAttribute('href')), '#session/parent%2Fchild')
-  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body', body => body.textContent), '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">child report body</foxwarm-message>')
+  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body', body => body.textContent), '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">first inter-agent preview linesecond inter-agent preview linethird inter-agent preview linefourth inter-agent preview line</foxwarm-message>')
 
   const overflow = await page.$eval('#mixed', fixture => ({
     fixture: fixture.scrollWidth - fixture.clientWidth,
