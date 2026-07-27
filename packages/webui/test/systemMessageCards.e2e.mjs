@@ -155,11 +155,14 @@ test('heavy system and non-channel messages use kind-tagged thread cards while d
     lineHeight: preview.style.lineHeight,
     maxHeight: preview.style.maxHeight,
     overflow: preview.style.overflow,
+    whiteSpace: getComputedStyle(preview).whiteSpace,
   })), {
     lineHeight: '1.3em',
     maxHeight: 'calc(3.9em)',
     overflow: 'hidden',
+    whiteSpace: 'pre-wrap',
   }, 'inter-agent preview reuses the ordinary three-line result clamp')
+  assert.equal(await page.$eval('#interAgent [data-system-message-card]', card => getComputedStyle(card).paddingBottom), '4px', 'inter-agent preview keeps ordinary result-area bottom padding')
   assert.equal(await page.$eval('#sessionBoundary .foxwarm-system-message-preview', preview => preview.textContent), 'new-child: boundary body')
   assert.equal(await page.$eval('#spacing [data-system-message-kind="inter-agent"] .foxwarm-system-message-preview', preview => preview.textContent), 'child row', 'missing sourceSessionId has no From prefix or dangling colon')
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-preview a', link => link.getAttribute('href')), '#session/parent%2Fchild')

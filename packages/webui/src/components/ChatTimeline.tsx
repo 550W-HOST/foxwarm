@@ -398,7 +398,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
         data-system-message-card
         data-system-message-kind={messageKind.kind}
         data-system-message-tone="system"
-        className={`foxwarm-system-message-card relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${surfaceClass} ${expanded ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''} my-0.5`}
+        className={`foxwarm-system-message-card relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${surfaceClass} ${expanded || interAgentPreview ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''} my-0.5`}
         onClick={!expanded ? () => setExpanded(true) : undefined}
       >
         <ThreadLineButton
@@ -421,7 +421,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           )}
         </div>
         {!expanded && interAgentPreview && (
-          <div className="foxwarm-system-message-result-preview pr-2 text-slate-700 dark:text-slate-300" style={clampContentStyle(3)}>
+          <div className="foxwarm-system-message-result-preview mt-1 whitespace-pre-wrap break-all pr-2 text-slate-700 dark:text-slate-300" style={clampContentStyle(3)}>
             {interAgentPreview}
           </div>
         )}
