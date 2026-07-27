@@ -312,6 +312,7 @@ test('every system kind uses the blue thread-card palette in default light and d
 test('550A reserves blue semantic chrome for system cards while both reasoning tones stay neutral', async () => {
   for (const dark of [false, true]) {
     await mountFixture(900, dark, '550a')
+    await page.click('#event [data-system-message-card]')
     await page.mouse.move(0, 0)
     const colors = await page.evaluate(() => {
       const style = (selector) => getComputedStyle(document.querySelector(selector))
@@ -327,7 +328,7 @@ test('550A reserves blue semantic chrome for system cards while both reasoning t
       const systemHeader = style('#event .foxwarm-system-message-header')
       const systemTag = style('#event .foxwarm-system-message-tag')
       const systemLine = style('#event .foxwarm-system-message-thread-line > span')
-      const systemPreview = style('#event .foxwarm-system-message-preview')
+      const systemBody = style('#event .foxwarm-system-message-body')
       const reasoning = (id) => {
         const card = style(`#${id} .foxwarm-reasoning-card`)
         const header = style(`#${id} .foxwarm-reasoning-header`)
@@ -354,17 +355,21 @@ test('550A reserves blue semantic chrome for system cards while both reasoning t
           bright: resolveVariable('--foxwarm-550a-text-bright'),
           dim: resolveVariable('--foxwarm-550a-text-dim'),
         },
-        system: { surface: systemCard.backgroundColor, header: systemHeader.backgroundColor, tag: systemTag.backgroundColor, tagBorder: systemTag.borderColor, line: systemLine.backgroundColor, preview: systemPreview.color },
+        system: { surface: systemCard.backgroundColor, shadow: systemCard.boxShadow, header: systemHeader.backgroundColor, tag: systemTag.backgroundColor, tagBorder: systemTag.borderColor, line: systemLine.backgroundColor, body: systemBody.color, bodySurface: systemBody.backgroundColor, bodyBorderWidth: systemBody.borderTopWidth, bodyShadow: systemBody.boxShadow },
         message: reasoning('reasoningMessage'),
         processing: reasoning('reasoningProcessing'),
       }
     })
     assert.equal(colors.system.surface, colors.blue.surface)
+    assert.match(colors.system.shadow, /119, 170, 187/, 'the blue System card retains its 550A outer ring')
     assert.equal(colors.system.header, colors.blue.strong)
     assert.equal(colors.system.tag, colors.blue.input)
     assert.equal(colors.system.tagBorder, colors.blue.border)
     assert.equal(colors.system.line, colors.blue.color)
-    assert.equal(colors.system.preview, colors.neutral.text)
+    assert.equal(colors.system.body, colors.neutral.text)
+    assert.equal(colors.system.bodySurface, 'rgba(0, 0, 0, 0)')
+    assert.equal(colors.system.bodyBorderWidth, '0px')
+    assert.equal(colors.system.bodyShadow, 'none')
 
     assert.equal(colors.message.surface, colors.neutral.panel)
     assert.equal(colors.processing.surface, colors.neutral.hover)

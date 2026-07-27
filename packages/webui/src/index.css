@@ -1030,6 +1030,12 @@ html[data-foxwarm-ui-style="550a"] pre {
   border-color: var(--foxwarm-550a-border-panel) !important;
 }
 
+html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card .foxwarm-system-message-body {
+  background-color: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
 html[data-foxwarm-ui-style="550a"] h1.text-xl,
 html[data-foxwarm-ui-style="550a"] h1.text-2xl {
   color: var(--foxwarm-550a-accent) !important;
