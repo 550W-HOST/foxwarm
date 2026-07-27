@@ -269,6 +269,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const capturedInteractionVersionRef = useRef(0)
   const resizeRestoreFrameRef = useRef<number | null>(null)
   const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
+  const pendingScrollToTrueTopRef = useRef(false)
   const modelRequestGateRef = useRef(createLatestRequestGate())
 
   useEffect(() => {
@@ -283,6 +284,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     queuedMessagesRef.current = []
     sessionStateInitializedRef.current = false
     pendingContextScrollbarNavigationRef.current = null
+    pendingScrollToTrueTopRef.current = false
   }, [sessionId])
 
   useEffect(() => {
@@ -497,9 +499,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       markUserViewportInteraction()
       shouldAutoScrollRef.current = false
       pendingUserLeaveBottomRef.current = false
+      if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+        pendingScrollToTrueTopRef.current = true
+        setShowFullTimeline(true)
+        return
+      }
       container.scrollTop = 0
     }
-  }, [markUserViewportInteraction])
+  }, [markUserViewportInteraction, messages.length, showFullTimeline])
 
   const scrollToContextScrollbarAnchor = useCallback((anchorKey: string, fraction: number): boolean => {
     const container = messagesContainerRef.current
@@ -1030,6 +1037,28 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     const baseMessages = snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
     return streamingAssistantMessage ? [...baseMessages, streamingAssistantMessage] : baseMessages
   }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages])
+
+  useLayoutEffect(() => {
+    if (!pendingScrollToTrueTopRef.current) return
+    const container = messagesContainerRef.current
+    if (!container || !showFullTimeline) return
+    container.scrollTop = 0
+    pendingScrollToTrueTopRef.current = false
+  }, [showFullTimeline, timelineMessages])
+
+  useEffect(() => {
+    if (showFullTimeline || !historyLoaded || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) return
+    const container = messagesContainerRef.current
+    const content = messagesContentRef.current
+    if (!container || !content) return
+    const expandIfNoUpwardScroll = () => {
+      if (container.scrollHeight <= container.clientHeight + 1) setShowFullTimeline(true)
+    }
+    expandIfNoUpwardScroll()
+    const observer = new ResizeObserver(expandIfNoUpwardScroll)
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [historyLoaded, messages.length, showFullTimeline, timelineMessages])
 
   useLayoutEffect(() => {
     const pending = pendingViewportRestoreRef.current

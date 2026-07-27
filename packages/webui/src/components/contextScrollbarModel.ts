@@ -13,6 +13,7 @@ import {
 
 export type ContextScrollbarTone = 'user' | 'assistant' | 'reasoning' | 'tool-neutral' | 'tool-success' | 'tool-error' | 'system' | 'context-block'
 export type ContextScrollbarCategory = 'snapshot' | 'system' | 'tools' | 'user' | 'reasoning' | 'model'
+export type ContextScrollbarVerticalScale = 'tokens' | 'tokens-logarithmic' | 'rendered-height'
 
 export const CONTEXT_SCROLLBAR_LEGEND_ORDER: ContextScrollbarCategory[] = ['snapshot', 'system', 'tools', 'user', 'reasoning', 'model']
 
@@ -22,6 +23,7 @@ export type ContextScrollbarSegment = {
   startTokens: number
   endTokens: number
   estimatedTokens: number
+  estimatedRenderedHeight: number
   tone: ContextScrollbarTone
   category: ContextScrollbarCategory
 }
@@ -45,6 +47,27 @@ const stringify = (value: unknown): string => {
   } catch {
     return '[unserializable]'
   }
+}
+
+const estimateRenderedMessageHeight = (message: Message, pairedResponse?: Message): number => {
+  const text = [message, pairedResponse].filter(Boolean).map(candidate => `${candidate!.parts.map(part => part.thinking || '').join('\n')}\n${formatMessageForContextEstimate(candidate!)}`).join('\n')
+  const visualLines = text.split('\n').reduce((total, line) => {
+    const visualUnits = Array.from(line).reduce((units, character) => units + (/[\u0000-\u00ff]/.test(character) ? 1 : 1.7), 0)
+    return total + Math.max(1, Math.ceil(visualUnits / 68))
+  }, 0)
+  const isThreadCard = message.__meta?.contextBlock || message.role === 'tool' || message.parts.some(part => !!part.functionCall || !!part.functionResponse || !!part.system) || !!pairedResponse
+  const imageCount = [message, pairedResponse].filter(Boolean).reduce((count, candidate) => count + candidate!.parts.filter(part => !!part.inlineData || !!part.inlineDataRef).length, 0)
+  // Collapsed thread cards preview at most three lines. Ordinary prose keeps
+  // its line/wrap estimate (with only a generous safety ceiling).
+  const representedLines = isThreadCard ? Math.min(3, visualLines) : Math.min(80, visualLines)
+  return Math.max(30, (isThreadCard ? 34 : 28) + representedLines * 20 + imageCount * 96)
+}
+
+const getPersistedReasoningTokens = (message: Message): number | null => {
+  if (message.role !== 'model') return null
+  const usage = message.__meta?.usage as { reasoningTokens?: unknown } | undefined
+  const value = usage?.reasoningTokens
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
 /**
@@ -129,6 +152,7 @@ export const buildContextScrollbarSegments = (messages: Message[], persistentMem
       startTokens: cursor,
       endTokens: cursor + estimatedTokens,
       estimatedTokens,
+      estimatedRenderedHeight: 36,
       tone: 'system',
       category: 'snapshot',
     })
@@ -142,14 +166,19 @@ export const buildContextScrollbarSegments = (messages: Message[], persistentMem
     const responses = immediateToolResponse ? next.parts.flatMap(part => part.functionResponse ? [part.functionResponse] : []) : []
     const key = getMessageStableKey(message, index)
     const anchorKey = getPairedAnchorKey(committed, index)
+    const rowStartIndex = segments.length
     const appendSegment = (suffix: string, estimatedTokens: number, tone: ContextScrollbarTone, category: ContextScrollbarCategory) => {
       if (estimatedTokens <= 0) return
-      segments.push({ key: `${key}-${suffix}`, anchorKey, startTokens: cursor, endTokens: cursor + estimatedTokens, estimatedTokens, tone, category })
+      segments.push({ key: `${key}-${suffix}`, anchorKey, startTokens: cursor, endTokens: cursor + estimatedTokens, estimatedTokens, estimatedRenderedHeight: 0, tone, category })
       cursor += estimatedTokens
     }
 
     if (message.role === 'model') {
-      const reasoningTokens = message.parts.reduce((sum, part) => sum + estimateTokenCount(part.thinking || ''), 0)
+      const estimatedReasoningTokens = message.parts.reduce((sum, part) => sum + estimateTokenCount(part.thinking || ''), 0)
+      // Persisted provider reasoning usage represents a component of output
+      // tokens. It replaces the often-abbreviated visible summary estimate;
+      // it must never be added to aggregate context usage separately.
+      const reasoningTokens = getPersistedReasoningTokens(message) ?? estimatedReasoningTokens
       appendSegment('reasoning', reasoningTokens, 'reasoning', 'reasoning')
       const contentOnly: Message = {
         ...message,
@@ -181,13 +210,50 @@ export const buildContextScrollbarSegments = (messages: Message[], persistentMem
         startTokens: cursor,
         endTokens: cursor,
         estimatedTokens: 0,
+        estimatedRenderedHeight: 0,
         tone: getContextScrollbarMessageTone(message),
         category: getContextScrollbarMessageCategory(message),
       })
     }
+    const rowSegments = segments.slice(rowStartIndex)
+    const totalWeight = rowSegments.reduce((sum, segment) => sum + segment.estimatedTokens, 0)
+    const renderedHeight = estimateRenderedMessageHeight(message, immediateToolResponse ? next : undefined)
+    for (const [rowIndex, segment] of rowSegments.entries()) {
+      segment.estimatedRenderedHeight = totalWeight > 0
+        ? renderedHeight * segment.estimatedTokens / totalWeight
+        : rowIndex === 0 ? renderedHeight : 0
+    }
     if (immediateToolResponse) index += 1
   }
   return segments
+}
+
+export const buildContextScrollbarScaleSegments = (
+  segments: ContextScrollbarSegment[],
+  scale: ContextScrollbarVerticalScale,
+  measuredAnchorHeights: Readonly<Record<string, number>> = {},
+): ContextScrollbarSegment[] => {
+  const groupEstimatedHeights = new Map<string, number>()
+  for (const segment of segments) {
+    if (segment.anchorKey && segment.category !== 'snapshot') groupEstimatedHeights.set(segment.anchorKey, (groupEstimatedHeights.get(segment.anchorKey) || 0) + segment.estimatedRenderedHeight)
+  }
+  let cursor = 0
+  return segments.map(segment => {
+    let weight = segment.estimatedTokens
+    if (scale === 'tokens-logarithmic') weight = segment.estimatedTokens > 0 ? Math.log1p(segment.estimatedTokens) : 0
+    if (scale === 'rendered-height') {
+      const measuredHeight = segment.anchorKey ? measuredAnchorHeights[segment.anchorKey] : undefined
+      const estimatedGroupHeight = segment.anchorKey ? groupEstimatedHeights.get(segment.anchorKey) || 0 : 0
+      weight = segment.category === 'snapshot'
+        ? segment.estimatedRenderedHeight
+        : measuredHeight !== undefined && estimatedGroupHeight > 0
+        ? measuredHeight * segment.estimatedRenderedHeight / estimatedGroupHeight
+        : segment.estimatedRenderedHeight
+    }
+    const next = { ...segment, startTokens: cursor, endTokens: cursor + weight, estimatedTokens: weight }
+    cursor += weight
+    return next
+  })
 }
 
 export const getContextScrollbarLegendStats = (segments: ContextScrollbarSegment[]): ContextScrollbarLegendStat[] => {

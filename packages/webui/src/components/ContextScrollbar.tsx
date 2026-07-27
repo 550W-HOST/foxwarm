@@ -1,12 +1,16 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { Check } from 'lucide-react'
 import { CHAT_MESSAGE_ANCHOR_SELECTOR } from '../chatViewportState'
+import ContextMenu, { type ContextMenuEntry } from './ContextMenu'
 import {
   buildContextScrollbarSegments,
+  buildContextScrollbarScaleSegments,
   findContextScrollbarSegmentAt,
   getContextScrollbarContextUsage,
   getContextScrollbarLegendStats,
   interpolateContextScrollbarBoundary,
   type ContextScrollbarSegment,
+  type ContextScrollbarVerticalScale,
 } from './contextScrollbarModel'
 import type { Message } from './chatShared'
 
@@ -33,6 +37,12 @@ const legendLabels = {
   reasoning: 'model reasoning',
   model: 'model contents',
 } as const
+const verticalScaleLabels: Record<ContextScrollbarVerticalScale, string> = {
+  tokens: 'Token count',
+  'tokens-logarithmic': 'Token count (logarithmic)',
+  'rendered-height': 'Rendered height',
+}
+const VERTICAL_SCALE_STORAGE_KEY = 'foxwarm.contextScrollbar.verticalScale'
 
 const getBoundaryToken = (segments: ContextScrollbarSegment[], timeline: HTMLElement, viewportY: number): number | null => {
   const anchors = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
@@ -52,14 +62,35 @@ const getBoundaryToken = (segments: ContextScrollbarSegment[], timeline: HTMLEle
  * and asks Chat to perform scrolling; it never becomes a scroll container.
  */
 const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMemorySnapshot, contextLimit, containerId, containerRef, timelineRef, onNavigate }: ContextScrollbarProps) {
-  const segments = useMemo(() => buildContextScrollbarSegments(messages, persistentMemorySnapshot), [messages, persistentMemorySnapshot])
-  const legendStats = useMemo(() => getContextScrollbarLegendStats(segments), [segments])
+  const rawSegments = useMemo(() => buildContextScrollbarSegments(messages, persistentMemorySnapshot), [messages, persistentMemorySnapshot])
+  const [verticalScale, setVerticalScale] = useState<ContextScrollbarVerticalScale>(() => {
+    const value = window.localStorage.getItem(VERTICAL_SCALE_STORAGE_KEY)
+    return value === 'tokens-logarithmic' || value === 'rendered-height' ? value : 'tokens'
+  })
+  const [measuredAnchorHeights, setMeasuredAnchorHeights] = useState<Record<string, number>>({})
+  const [scaleMenu, setScaleMenu] = useState<{ x: number; y: number } | null>(null)
+  const segments = useMemo(() => buildContextScrollbarScaleSegments(rawSegments, verticalScale, measuredAnchorHeights), [measuredAnchorHeights, rawSegments, verticalScale])
+  const legendStats = useMemo(() => getContextScrollbarLegendStats(rawSegments), [rawSegments])
   const contextUsage = useMemo(() => getContextScrollbarContextUsage(messages, contextLimit), [contextLimit, messages])
+  const effectiveContextUsage = verticalScale === 'rendered-height' ? null : contextUsage
   const totalEstimatedTokens = segments[segments.length - 1]?.endTokens || 0
   const [viewportRange, setViewportRange] = useState<ViewportRange>(null)
   const frameRef = useRef<number | null>(null)
   const draggingRef = useRef(false)
   const dragThumbFractionRef = useRef(0.5)
+
+  const selectVerticalScale = useCallback((next: ContextScrollbarVerticalScale) => {
+    window.localStorage.setItem(VERTICAL_SCALE_STORAGE_KEY, next)
+    setVerticalScale(next)
+    setScaleMenu(null)
+  }, [])
+  const scaleMenuEntries = useMemo<ContextMenuEntry[]>(() => (Object.keys(verticalScaleLabels) as ContextScrollbarVerticalScale[]).map(scale => ({
+    key: scale,
+    label: verticalScaleLabels[scale],
+    icon: verticalScale === scale ? <Check size={14} /> : null,
+    checked: verticalScale === scale,
+    onSelect: () => selectVerticalScale(scale),
+  })), [selectVerticalScale, verticalScale])
 
   const updateViewportRange = useCallback(() => {
     const container = containerRef.current
@@ -75,13 +106,23 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
       setViewportRange(null)
       return
     }
-    const usedFraction = contextUsage ? contextUsage.usedTokens / contextUsage.capacityTokens : 1
+    const usedFraction = effectiveContextUsage ? effectiveContextUsage.usedTokens / effectiveContextUsage.capacityTokens : 1
     const timelineAnchors = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+    const nextMeasuredHeights = timelineAnchors.reduce<Record<string, number>>((heights, anchor) => {
+      const key = anchor.getAttribute('data-chat-message-anchor-key')
+      const height = anchor.getBoundingClientRect().height
+      if (key && height > 0) heights[key] = height
+      return heights
+    }, {})
+    setMeasuredAnchorHeights(current => {
+      const keys = Object.keys(nextMeasuredHeights)
+      return keys.length === Object.keys(current).length && keys.every(key => Math.abs((current[key] || 0) - nextMeasuredHeights[key]) < 0.5) ? current : nextMeasuredHeights
+    })
     const lastAnchor = timelineAnchors[timelineAnchors.length - 1]
     const toCommittedPosition = (token: number) => clamp((token / totalEstimatedTokens) * usedFraction)
     let topPosition = toCommittedPosition(topToken)
     let bottomPosition = toCommittedPosition(bottomToken)
-    if (contextUsage && lastAnchor) {
+    if (effectiveContextUsage && lastAnchor) {
       const lastRect = lastAnchor.getBoundingClientRect()
       const lastStartToken = interpolateContextScrollbarBoundary(segments, lastAnchor.getAttribute('data-chat-message-anchor-key') || '', 0) ?? totalEstimatedTokens
       const finalRowDensity = Math.max(0, usedFraction - toCommittedPosition(lastStartToken)) / Math.max(1, lastRect.height)
@@ -103,7 +144,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
       top: topPosition,
       bottom: Math.max(topPosition, bottomPosition),
     })
-  }, [containerRef, contextUsage, segments, timelineRef, totalEstimatedTokens])
+  }, [containerRef, effectiveContextUsage, segments, timelineRef, totalEstimatedTokens])
 
   const scheduleViewportUpdate = useCallback(() => {
     if (frameRef.current !== null) return
@@ -136,7 +177,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     if (totalEstimatedTokens <= 0) return
     const rect = element.getBoundingClientRect()
     const fraction = clamp((clientY - rect.top) / Math.max(1, rect.height))
-    const usedFraction = contextUsage ? contextUsage.usedTokens / contextUsage.capacityTokens : 1
+    const usedFraction = effectiveContextUsage ? effectiveContextUsage.usedTokens / effectiveContextUsage.capacityTokens : 1
     const estimatedPosition = usedFraction <= 0
       ? totalEstimatedTokens
       : clamp(fraction / usedFraction) * totalEstimatedTokens
@@ -148,12 +189,12 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     const start = matching[0]?.startTokens ?? segment.startTokens
     const end = matching[matching.length - 1]?.endTokens ?? segment.endTokens
     onNavigate(anchorKey, segment.category === 'snapshot' ? 0 : (end > start ? (estimatedPosition - start) / (end - start) : 0))
-  }, [contextUsage, onNavigate, segments, totalEstimatedTokens])
+  }, [effectiveContextUsage, onNavigate, segments, totalEstimatedTokens])
 
   const navigateToViewportTarget = useCallback((fraction: number, thumbFraction: number, element: HTMLElement) => {
     const container = containerRef.current
     const timeline = timelineRef.current
-    const usedFraction = contextUsage ? contextUsage.usedTokens / contextUsage.capacityTokens : 1
+    const usedFraction = effectiveContextUsage ? effectiveContextUsage.usedTokens / effectiveContextUsage.capacityTokens : 1
     const targetToken = usedFraction <= 0 ? totalEstimatedTokens : clamp(fraction / usedFraction) * totalEstimatedTokens
     if (!container || !timeline || totalEstimatedTokens <= 0) {
       navigateAtClientY(element.getBoundingClientRect().top + clamp(fraction) * element.clientHeight, element)
@@ -205,9 +246,10 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     const targetAnchor = anchors.find(anchor => anchor.bottom > targetScrollTop) || anchors[anchors.length - 1]
     if (!targetAnchor) return
     onNavigate(targetAnchor.key, clamp((targetScrollTop - targetAnchor.top) / Math.max(1, targetAnchor.bottom - targetAnchor.top)))
-  }, [containerRef, contextUsage, navigateAtClientY, onNavigate, segments, timelineRef, totalEstimatedTokens, viewportRange])
+  }, [containerRef, effectiveContextUsage, navigateAtClientY, onNavigate, segments, timelineRef, totalEstimatedTokens, viewportRange])
 
   const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
     const rect = event.currentTarget.getBoundingClientRect()
     const position = clamp((event.clientY - rect.top) / Math.max(1, rect.height))
     const insideViewport = viewportRange !== null && position >= viewportRange.top && position <= viewportRange.bottom
@@ -233,12 +275,12 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     dragThumbFractionRef.current = 0.5
   }, [])
 
-  const usedFraction = contextUsage ? clamp(contextUsage.usedTokens / contextUsage.capacityTokens) : 1
+  const usedFraction = effectiveContextUsage ? clamp(effectiveContextUsage.usedTokens / effectiveContextUsage.capacityTokens) : 1
   const viewportTop = viewportRange?.top ?? 0
   const viewportBottom = viewportRange?.bottom ?? viewportTop
 
   return (
-    <div className="foxwarm-context-scrollbar-shell" aria-label="Context overview">
+    <div className="foxwarm-context-scrollbar-shell" aria-label="Context overview" onContextMenu={(event) => { event.preventDefault(); setScaleMenu({ x: event.clientX, y: event.clientY }) }}>
       <div
         className="foxwarm-context-scrollbar"
         draggable={false}
@@ -247,9 +289,10 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
         aria-label="Context overview scrollbar"
         aria-controls={containerId}
         aria-valuemin={0}
-        aria-valuemax={contextUsage?.capacityTokens ?? totalEstimatedTokens}
-        aria-valuenow={Math.min(contextUsage?.capacityTokens ?? totalEstimatedTokens, Math.round((viewportTop / Math.max(usedFraction, 0.0001)) * totalEstimatedTokens))}
+        aria-valuemax={effectiveContextUsage?.capacityTokens ?? totalEstimatedTokens}
+        aria-valuenow={Math.min(effectiveContextUsage?.capacityTokens ?? totalEstimatedTokens, Math.round((viewportTop / Math.max(usedFraction, 0.0001)) * totalEstimatedTokens))}
         onPointerDown={(event) => {
+          if (event.button !== 0) return
           event.preventDefault()
           event.currentTarget.focus({ preventScroll: true })
           handlePointerDown(event)
@@ -263,18 +306,19 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
           if (event.key === 'End') navigateAtClientY(event.currentTarget.getBoundingClientRect().bottom, event.currentTarget)
         }}
       >
-        <div className="foxwarm-context-scrollbar-used" data-context-usage={contextUsage ? 'measured' : 'unknown'} style={{ height: `${usedFraction * 100}%` }}>
+        <div className="foxwarm-context-scrollbar-used" data-context-usage={effectiveContextUsage ? 'measured' : 'unknown'} style={{ height: `${usedFraction * 100}%` }}>
           {segments.map(segment => {
             if (segment.estimatedTokens <= 0) return null
             const height = totalEstimatedTokens > 0 ? (segment.estimatedTokens / totalEstimatedTokens) * 100 : 0
             return <div key={segment.key} className={`foxwarm-context-scrollbar-segment foxwarm-context-scrollbar-tone-${segment.tone}${segment.category === 'model' ? ' foxwarm-context-scrollbar-segment-model-content' : ''}`} style={{ height: `${height}%` }} />
           })}
         </div>
-        {contextUsage && <div className="foxwarm-context-scrollbar-free" style={{ top: `${usedFraction * 100}%` }} />}
+        {effectiveContextUsage && <div className="foxwarm-context-scrollbar-free" style={{ top: `${usedFraction * 100}%` }} />}
         {viewportRange && (
           <div className="foxwarm-context-scrollbar-viewport" style={{ top: `${viewportTop * 100}%`, height: `${(viewportBottom - viewportTop) * 100}%` }} />
         )}
       </div>
+      <ContextMenu open={scaleMenu !== null} point={scaleMenu} entries={scaleMenuEntries} onClose={() => setScaleMenu(null)} />
       <div className="foxwarm-context-scrollbar-info">
         <button
           type="button"
