@@ -1068,7 +1068,7 @@ const ChatComposer = memo(function ChatComposer({
       )}
 
       <div
-        className="pointer-events-auto mx-auto max-w-5xl"
+        className="foxwarm-chat-composer-inner pointer-events-auto mx-auto max-w-5xl"
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}

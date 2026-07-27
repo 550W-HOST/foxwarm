@@ -11,7 +11,10 @@ import {
   type Message,
 } from './chatShared'
 
-export type ContextScrollbarTone = 'user' | 'assistant' | 'tool-neutral' | 'tool-success' | 'tool-error' | 'system' | 'context-block'
+export type ContextScrollbarTone = 'user' | 'assistant' | 'reasoning' | 'tool-neutral' | 'tool-success' | 'tool-error' | 'system' | 'context-block'
+export type ContextScrollbarCategory = 'snapshot' | 'system' | 'tools' | 'user' | 'reasoning' | 'model'
+
+export const CONTEXT_SCROLLBAR_LEGEND_ORDER: ContextScrollbarCategory[] = ['snapshot', 'system', 'tools', 'user', 'reasoning', 'model']
 
 export type ContextScrollbarSegment = {
   key: string
@@ -20,6 +23,13 @@ export type ContextScrollbarSegment = {
   endTokens: number
   estimatedTokens: number
   tone: ContextScrollbarTone
+  category: ContextScrollbarCategory
+}
+
+export type ContextScrollbarLegendStat = {
+  category: ContextScrollbarCategory
+  estimatedTokens: number
+  percentage: number
 }
 
 export type ContextScrollbarContextUsage = {
@@ -38,20 +48,19 @@ const stringify = (value: unknown): string => {
 }
 
 /**
- * Browser-safe approximation of the server's compaction-preview input.  It
- * deliberately uses the shared estimator rather than a second tokenizer and
- * omits reasoning/ephemeral display metadata, matching context compaction's
- * high-level treatment.
+ * Browser-safe approximation of model-visible context. It deliberately uses
+ * the shared estimator rather than a second tokenizer. Reasoning is split by
+ * the segment builder, while model-hidden rows remain out of the estimate.
  */
 export const formatMessageForContextEstimate = (message: Message): string => {
   if (message.modelVisible === false) return ''
 
   return message.parts.flatMap((part) => {
     const lines: string[] = []
-    if (typeof part.system === 'string' && !isLightweightStructuredSystem(part.system)) {
+    if (typeof part.system === 'string') {
       lines.push(`[system] ${part.system}`)
     }
-    if (typeof part.text === 'string' && !part.text.includes('--- RELEVANT MEMORY SNIPPETS (RAG) ---')) {
+    if (typeof part.text === 'string') {
       lines.push(part.text)
     }
     if (part.functionCall) {
@@ -88,6 +97,14 @@ export const getContextScrollbarMessageTone = (message: Message): ContextScrollb
   return 'assistant'
 }
 
+export const getContextScrollbarMessageCategory = (message: Message): ContextScrollbarCategory => {
+  const tone = getContextScrollbarMessageTone(message)
+  if (tone === 'system') return 'system'
+  if (tone.startsWith('tool-')) return 'tools'
+  if (tone === 'user') return 'user'
+  return 'model'
+}
+
 const getPairedAnchorKey = (messages: Message[], index: number): string | null => {
   const message = messages[index]
   if (message.role === 'tool' && index > 0) {
@@ -99,33 +116,86 @@ const getPairedAnchorKey = (messages: Message[], index: number): string | null =
   return getMessageViewportAnchorKey(message)
 }
 
-export const buildContextScrollbarSegments = (messages: Message[]): ContextScrollbarSegment[] => {
+export const buildContextScrollbarSegments = (messages: Message[], persistentMemorySnapshot?: Message | null): ContextScrollbarSegment[] => {
   let cursor = 0
   const committed = messages.filter(message => !message.__meta?.temporary && !message.__meta?.synthetic)
   const segments: ContextScrollbarSegment[] = []
+  const firstCommittedAnchorKey = committed.length > 0 ? getMessageViewportAnchorKey(committed[0]) : null
+  if (persistentMemorySnapshot) {
+    const estimatedTokens = estimateTokenCount(formatMessageForContextEstimate(persistentMemorySnapshot))
+    segments.push({
+      key: 'persistent-memory-snapshot',
+      anchorKey: firstCommittedAnchorKey,
+      startTokens: cursor,
+      endTokens: cursor + estimatedTokens,
+      estimatedTokens,
+      tone: 'system',
+      category: 'snapshot',
+    })
+    cursor += estimatedTokens
+  }
   for (let index = 0; index < committed.length; index += 1) {
     const message = committed[index]
     const next = committed[index + 1]
     const hasToolCalls = message.role === 'model' && message.parts.some(part => !!part.functionCall)
     const immediateToolResponse = hasToolCalls && next?.role === 'tool' && next.parts.some(part => !!part.functionResponse)
-    const estimatedTokens = estimateTokenCount(formatMessageForContextEstimate(message)) + (immediateToolResponse ? estimateTokenCount(formatMessageForContextEstimate(next)) : 0)
-    const startTokens = cursor
-    cursor += estimatedTokens
     const responses = immediateToolResponse ? next.parts.flatMap(part => part.functionResponse ? [part.functionResponse] : []) : []
-    const tone: ContextScrollbarTone = immediateToolResponse
-      ? (responses.some(response => getToolResponseStatus(response) === 'error') ? 'tool-error' : 'tool-success')
-      : getContextScrollbarMessageTone(message)
-    segments.push({
-      key: getMessageStableKey(message, index),
-      anchorKey: getPairedAnchorKey(committed, index),
-      startTokens,
-      endTokens: cursor,
-      estimatedTokens,
-      tone,
-    })
+    const key = getMessageStableKey(message, index)
+    const anchorKey = getPairedAnchorKey(committed, index)
+    const appendSegment = (suffix: string, estimatedTokens: number, tone: ContextScrollbarTone, category: ContextScrollbarCategory) => {
+      if (estimatedTokens <= 0) return
+      segments.push({ key: `${key}-${suffix}`, anchorKey, startTokens: cursor, endTokens: cursor + estimatedTokens, estimatedTokens, tone, category })
+      cursor += estimatedTokens
+    }
+
+    if (message.role === 'model') {
+      const reasoningTokens = message.parts.reduce((sum, part) => sum + estimateTokenCount(part.thinking || ''), 0)
+      appendSegment('reasoning', reasoningTokens, 'reasoning', 'reasoning')
+      const contentOnly: Message = {
+        ...message,
+        parts: message.parts.map(({ thinking: _thinking, functionCall: _functionCall, functionResponse: _functionResponse, ...part }) => part),
+      }
+      appendSegment('content', estimateTokenCount(formatMessageForContextEstimate(contentOnly)), getContextScrollbarMessageTone(contentOnly), 'model')
+      const callOnly: Message = {
+        ...message,
+        parts: message.parts.filter(part => !!part.functionCall).map(part => ({ functionCall: part.functionCall! })),
+      }
+      const responseOnly: Message = immediateToolResponse ? {
+        ...next,
+        parts: next.parts.filter(part => !!part.functionResponse).map(part => ({ functionResponse: part.functionResponse! })),
+      } : { role: 'tool', parts: [] }
+      const toolTokens = estimateTokenCount(formatMessageForContextEstimate(callOnly)) + estimateTokenCount(formatMessageForContextEstimate(responseOnly))
+      if (toolTokens > 0) {
+        appendSegment('tools', toolTokens, responses.some(response => getToolResponseStatus(response) === 'error') ? 'tool-error' : responses.length > 0 ? 'tool-success' : 'tool-neutral', 'tools')
+      }
+    } else {
+      appendSegment('message', estimateTokenCount(formatMessageForContextEstimate(message)), getContextScrollbarMessageTone(message), getContextScrollbarMessageCategory(message))
+    }
+    // A lightweight/display-only committed row can legitimately estimate to
+    // zero. Keep an anchor boundary for viewport interpolation, but no visual
+    // height or legend weight.
+    if (!segments.some(segment => segment.anchorKey === anchorKey)) {
+      segments.push({
+        key: `${key}-boundary`,
+        anchorKey,
+        startTokens: cursor,
+        endTokens: cursor,
+        estimatedTokens: 0,
+        tone: getContextScrollbarMessageTone(message),
+        category: getContextScrollbarMessageCategory(message),
+      })
+    }
     if (immediateToolResponse) index += 1
   }
   return segments
+}
+
+export const getContextScrollbarLegendStats = (segments: ContextScrollbarSegment[]): ContextScrollbarLegendStat[] => {
+  const total = segments.reduce((sum, segment) => sum + segment.estimatedTokens, 0)
+  return CONTEXT_SCROLLBAR_LEGEND_ORDER.map(category => {
+    const estimatedTokens = segments.reduce((sum, segment) => sum + (segment.category === category ? segment.estimatedTokens : 0), 0)
+    return { category, estimatedTokens, percentage: total > 0 ? estimatedTokens / total * 100 : 0 }
+  })
 }
 
 const getMeasuredContextTokens = (message: Message): number | null => {
