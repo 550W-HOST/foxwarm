@@ -187,14 +187,26 @@ test('system cards expand/collapse, preserve session links, and retain width con
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body', body => body.textContent), '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\nfirst inter-agent preview line\nsecond inter-agent preview line\nthird inter-agent preview line\nfourth inter-agent preview line\n</foxwarm-message>')
   const interAgentLineMetrics = await page.$eval('#interAgent .foxwarm-system-message-body', body => {
     const [metadataLine, bodyLine] = body.children
+    const nextBodyLine = body.children[2]
+    const metadataRect = metadataLine.getBoundingClientRect()
+    const bodyRect = bodyLine.getBoundingClientRect()
+    const nextBodyRect = nextBodyLine.getBoundingClientRect()
     return {
       bodyParentLineHeight: getComputedStyle(body).lineHeight,
+      metadataDisplay: getComputedStyle(metadataLine).display,
+      bodyDisplay: getComputedStyle(bodyLine).display,
       metadataLineHeight: Number.parseFloat(getComputedStyle(metadataLine).lineHeight),
       bodyLineHeight: Number.parseFloat(getComputedStyle(bodyLine).lineHeight),
+      metadataToBodyGap: bodyRect.top - metadataRect.bottom,
+      bodyToBodyGap: nextBodyRect.top - bodyRect.bottom,
     }
   })
   assert.equal(interAgentLineMetrics.bodyParentLineHeight, '0px', 'the parent pre does not impose a tall line-box strut on metadata wrappers')
+  assert.equal(interAgentLineMetrics.metadataDisplay, 'block', 'metadata wrappers control their own visual line box')
+  assert.equal(interAgentLineMetrics.bodyDisplay, 'block', 'normal body lines control their own visual line box')
   assert.ok(interAgentLineMetrics.metadataLineHeight < interAgentLineMetrics.bodyLineHeight, 'metadata wrappers use a more compact line-height than normal body lines')
+  assert.ok(Math.abs(interAgentLineMetrics.metadataToBodyGap) <= 0.5, 'real newline text outside block lines does not add a blank metadata/body row')
+  assert.ok(Math.abs(interAgentLineMetrics.bodyToBodyGap) <= 0.5, 'real newline text outside block lines does not add blank body rows')
 
   const overflow = await page.$eval('#mixed', fixture => ({
     fixture: fixture.scrollWidth - fixture.clientWidth,

@@ -1,4 +1,4 @@
-import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Eye, Code, FileJson, Copy, Check } from 'lucide-react'
 import {
   IconToggleButton,
@@ -430,15 +430,17 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
             {renderedText.split('\n').map((line, lineIdx, lines) => {
               const isPrefix = isSystemLikeText(line)
               return (
-                <span
-                  key={`${messageKey}-${lineIdx}`}
-                  style={isPrefix
-                    ? { fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
-                    : { lineHeight: '1.5em', opacity: 0.92 }
-                  }
-                >
-                  {renderSystemTextWithSessionLinks(line)}{lineIdx < lines.length - 1 ? '\n' : null}
-                </span>
+                <Fragment key={`${messageKey}-${lineIdx}`}>
+                  <span
+                    style={isPrefix
+                      ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+                      : { display: 'block', lineHeight: '1.5em', opacity: 0.92 }
+                    }
+                  >
+                    {renderSystemTextWithSessionLinks(line)}
+                  </span>
+                  {lineIdx < lines.length - 1 ? '\n' : null}
+                </Fragment>
               )
             })}
           </pre>
