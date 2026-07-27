@@ -90,6 +90,8 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 
 Every artifact created for one persistent exec is written into that exec's start-date directory: the log, status, recorded working directory, managed wrapper script, Windows user-command script, and transient paths coordination file. This makes the date directory the complete archive and retention ownership boundary for a run; the coordination file is normally removed after its parent consumes it.
 
+The one-time cleanup of pre-decision root-level wrapper/user/paths files is owned by [D-legacy-undated-exec-artifact-migration](./src-migrations.md#d-legacy-undated-exec-artifact-migration).
+
 ### D-persistent-exec-bounded-log-excerpts
 
 Persistent exec logs contain the output captured from the shell command or pipeline as executed; they do not reconstruct output before agent-added filtering. Completion command previews retain bounded head and tail text with a middle-omission marker. The shared sampling/classification contract is owned by [D-bounded-file-read-excerpts](./shared-node-tools.md#d-bounded-file-read-excerpts); this adapter retains the complete log on disk and uses command-output-specific footer wording. Because line counting would require a full scan, oversized foreground footers report only the exact stat-time byte length, not a line count.
