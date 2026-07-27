@@ -398,7 +398,6 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
         data-system-message-card
         data-system-message-kind={messageKind.kind}
         data-system-message-tone="system"
-        data-system-message-expanded={expanded ? 'true' : 'false'}
         className={`foxwarm-system-message-card relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${surfaceClass} ${expanded || interAgentPreview ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''} my-0.5`}
         onClick={!expanded ? () => setExpanded(true) : undefined}
       >

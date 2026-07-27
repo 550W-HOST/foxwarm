@@ -917,12 +917,6 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card.foxwarm-system-m
   box-shadow: inset 0 0 0 1px rgba(119, 170, 187, 0.03) !important;
 }
 
-.foxwarm-system-message-card[data-system-message-expanded="true"],
-html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card[data-system-message-expanded="true"] {
-  background-color: transparent !important;
-  box-shadow: none !important;
-}
-
 html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card .foxwarm-system-message-thread-line {
   color: var(--foxwarm-550a-blue) !important;
 }
@@ -1034,6 +1028,12 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-markdown :where(code):not(:where([cl
 html[data-foxwarm-ui-style="550a"] pre {
   background-color: var(--foxwarm-550a-input) !important;
   border-color: var(--foxwarm-550a-border-panel) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card .foxwarm-system-message-body {
+  background-color: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
 }
 
 html[data-foxwarm-ui-style="550a"] h1.text-xl,
