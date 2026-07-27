@@ -678,6 +678,7 @@ const toolIcons: Record<string, LucideIcon> = {
   apply_patch: Wrench,
   apply_patch_memory: Wrench,
   exec: Terminal,
+  send_to_session: MessagesSquare,
   'system-event': Bell,
   'system-inter-agent': MessagesSquare,
   'system-timer': Timer,
