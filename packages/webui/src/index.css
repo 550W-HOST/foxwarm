@@ -917,6 +917,12 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card.foxwarm-system-m
   box-shadow: inset 0 0 0 1px rgba(119, 170, 187, 0.03) !important;
 }
 
+.foxwarm-system-message-card[data-system-message-expanded="true"],
+html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card[data-system-message-expanded="true"] {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
 html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card .foxwarm-system-message-thread-line {
   color: var(--foxwarm-550a-blue) !important;
 }

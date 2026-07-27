@@ -257,7 +257,9 @@ test('every system kind uses the blue thread-card palette in default light and d
       const body = card.querySelector('.foxwarm-system-message-body')
       return {
         tone: card.getAttribute('data-system-message-tone'),
+        expanded: card.getAttribute('data-system-message-expanded'),
         surface: getComputedStyle(card).backgroundColor,
+        shadow: getComputedStyle(card).boxShadow,
         header: getComputedStyle(header).backgroundColor,
         tag: getComputedStyle(tag).backgroundColor,
         line: getComputedStyle(line).color,
@@ -269,7 +271,9 @@ test('every system kind uses the blue thread-card palette in default light and d
 
   assert.deepEqual(colors.event, {
     tone: 'system',
-    surface: 'rgba(239, 246, 255, 0.55)',
+    expanded: 'true',
+    surface: 'rgba(0, 0, 0, 0)',
+    shadow: 'none',
     header: 'rgba(219, 234, 254, 0.8)',
     tag: 'rgb(219, 234, 254)',
     line: 'rgb(147, 197, 253)',
@@ -288,7 +292,9 @@ test('every system kind uses the blue thread-card palette in default light and d
     const sample = (id) => {
       const card = document.querySelector(`#${id} [data-system-message-card]`)
       return {
+        expanded: card.getAttribute('data-system-message-expanded'),
         surface: getComputedStyle(card).backgroundColor,
+        shadow: getComputedStyle(card).boxShadow,
         header: getComputedStyle(card.querySelector('.foxwarm-system-message-header')).backgroundColor,
         tag: getComputedStyle(card.querySelector('.foxwarm-system-message-tag')).backgroundColor,
         line: getComputedStyle(card.querySelector('.foxwarm-system-message-thread-line')).color,
@@ -298,7 +304,9 @@ test('every system kind uses the blue thread-card palette in default light and d
     return { event: sample('event'), interAgent: sample('interAgent') }
   })
   const expectedDark = {
-    surface: 'rgba(30, 58, 138, 0.1)',
+    expanded: 'true',
+    surface: 'rgba(0, 0, 0, 0)',
+    shadow: 'none',
     header: 'rgba(30, 64, 175, 0.2)',
     tag: 'rgba(30, 58, 138, 0.2)',
     line: 'rgb(29, 78, 216)',
@@ -312,6 +320,7 @@ test('every system kind uses the blue thread-card palette in default light and d
 test('550A reserves blue semantic chrome for system cards while both reasoning tones stay neutral', async () => {
   for (const dark of [false, true]) {
     await mountFixture(900, dark, '550a')
+    await page.click('#event [data-system-message-card]')
     await page.mouse.move(0, 0)
     const colors = await page.evaluate(() => {
       const style = (selector) => getComputedStyle(document.querySelector(selector))
@@ -327,7 +336,7 @@ test('550A reserves blue semantic chrome for system cards while both reasoning t
       const systemHeader = style('#event .foxwarm-system-message-header')
       const systemTag = style('#event .foxwarm-system-message-tag')
       const systemLine = style('#event .foxwarm-system-message-thread-line > span')
-      const systemPreview = style('#event .foxwarm-system-message-preview')
+      const systemBody = style('#event .foxwarm-system-message-body')
       const reasoning = (id) => {
         const card = style(`#${id} .foxwarm-reasoning-card`)
         const header = style(`#${id} .foxwarm-reasoning-header`)
@@ -354,17 +363,18 @@ test('550A reserves blue semantic chrome for system cards while both reasoning t
           bright: resolveVariable('--foxwarm-550a-text-bright'),
           dim: resolveVariable('--foxwarm-550a-text-dim'),
         },
-        system: { surface: systemCard.backgroundColor, header: systemHeader.backgroundColor, tag: systemTag.backgroundColor, tagBorder: systemTag.borderColor, line: systemLine.backgroundColor, preview: systemPreview.color },
+        system: { surface: systemCard.backgroundColor, shadow: systemCard.boxShadow, header: systemHeader.backgroundColor, tag: systemTag.backgroundColor, tagBorder: systemTag.borderColor, line: systemLine.backgroundColor, body: systemBody.color },
         message: reasoning('reasoningMessage'),
         processing: reasoning('reasoningProcessing'),
       }
     })
-    assert.equal(colors.system.surface, colors.blue.surface)
+    assert.equal(colors.system.surface, 'rgba(0, 0, 0, 0)')
+    assert.equal(colors.system.shadow, 'none')
     assert.equal(colors.system.header, colors.blue.strong)
     assert.equal(colors.system.tag, colors.blue.input)
     assert.equal(colors.system.tagBorder, colors.blue.border)
     assert.equal(colors.system.line, colors.blue.color)
-    assert.equal(colors.system.preview, colors.neutral.text)
+    assert.equal(colors.system.body, colors.neutral.text)
 
     assert.equal(colors.message.surface, colors.neutral.panel)
     assert.equal(colors.processing.surface, colors.neutral.hover)
