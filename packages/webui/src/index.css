@@ -114,6 +114,111 @@ html.dark {
   background-color: var(--foxwarm-scrollbar-thumb-hover);
 }
 
+/* The chat context overview owns a dedicated desktop gutter while the native
+ * message element remains the actual scroll container. */
+.foxwarm-context-scrollbar-shell {
+  display: none;
+}
+
+@media (min-width: 769px) {
+  .foxwarm-chat-message-region {
+    display: flex;
+  }
+
+  .foxwarm-chat-messages {
+    min-width: 0;
+    flex: 1 1 auto;
+    scrollbar-width: none;
+  }
+
+  .foxwarm-chat-messages::-webkit-scrollbar {
+    display: none;
+  }
+
+  .foxwarm-context-scrollbar-shell {
+    display: block;
+    width: 48px;
+    flex: 0 0 48px;
+    padding: 8px 10px;
+    background: var(--foxwarm-scrollbar-track);
+  }
+
+  .foxwarm-context-scrollbar {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 24px;
+    overflow: hidden;
+    cursor: pointer;
+    outline: none;
+    background: color-mix(in srgb, var(--foxwarm-scrollbar-track) 72%, var(--foxwarm-scrollbar-thumb));
+  }
+
+  .foxwarm-context-scrollbar:focus-visible {
+    box-shadow: 0 0 0 2px rgb(59 130 246 / 0.72);
+  }
+
+  .foxwarm-context-scrollbar-used {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .foxwarm-context-scrollbar-segment {
+    width: 100%;
+    min-height: 1px;
+  }
+
+  .foxwarm-context-scrollbar-tone-user { background: rgb(59 130 246); }
+  .foxwarm-context-scrollbar-tone-assistant { background: rgb(203 213 225); }
+  .foxwarm-context-scrollbar-tone-tool-neutral { background: rgb(148 163 184); }
+  .foxwarm-context-scrollbar-tone-tool-success { background: rgb(52 211 153); }
+  .foxwarm-context-scrollbar-tone-tool-error { background: rgb(248 113 113); }
+  .foxwarm-context-scrollbar-tone-system { background: rgb(96 165 250); }
+  .foxwarm-context-scrollbar-tone-context-block { background: rgb(148 163 184); }
+
+  .dark .foxwarm-context-scrollbar-tone-assistant { background: rgb(75 85 99); }
+  .dark .foxwarm-context-scrollbar-tone-tool-neutral { background: rgb(100 116 139); }
+  .dark .foxwarm-context-scrollbar-tone-tool-success { background: rgb(16 185 129); }
+  .dark .foxwarm-context-scrollbar-tone-tool-error { background: rgb(239 68 68); }
+  .dark .foxwarm-context-scrollbar-tone-system { background: rgb(37 99 235); }
+  .dark .foxwarm-context-scrollbar-tone-context-block { background: rgb(100 116 139); }
+
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-user { background: #d83b2d; }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-assistant,
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-tool-neutral,
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-context-block { background: #777; }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-tool-success { background: #76b900; }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-tool-error { background: #e39a32; }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-system { background: #3182ce; }
+
+  .foxwarm-context-scrollbar-free {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    background: rgb(148 163 184 / 0.12);
+    pointer-events: none;
+  }
+
+  .foxwarm-context-scrollbar-viewport {
+    position: absolute;
+    right: 0;
+    left: 0;
+    min-height: 4px;
+    border: 1px solid rgb(30 41 59 / 0.82);
+    background: rgb(255 255 255 / 0.18);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.25);
+    pointer-events: none;
+  }
+
+  .foxwarm-chat-message-region > button[aria-label="Scroll to top"],
+  .foxwarm-chat-message-region > button[aria-label="Scroll to bottom"] {
+    right: calc(48px + 1rem) !important;
+  }
+}
+
 /* Mobile: fixed positioning to prevent Safari address bar issues */
 @media (max-width: 768px) {
   html, body {

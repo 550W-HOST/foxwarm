@@ -1,15 +1,16 @@
 # Unit: WebUI Chat
 
-Files: packages/webui/src/components/Chat.tsx, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs
+Files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/ContextScrollbar.tsx, packages/webui/src/components/contextScrollbarModel.ts, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/contextScrollbarModel.test.mjs, packages/webui/test/contextScrollbar.e2e.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs
 
 ## Purpose
 
-Owns one mounted session's committed history, queued preview, runtime/model snapshot, per-session SSE, message upload/send, stop/dequeue/final-failure retry commands, ASR, debug view, and scroll/viewport state.
+Owns one mounted session's committed history, queued preview, runtime/model snapshot, per-session SSE, message upload/send, stop/dequeue/final-failure retry commands, ASR, debug view, scroll/viewport state, and the desktop context overview scrollbar.
 
 ## Export
 
 - default memoized `Chat` component.
 - `chatViewportState.ts` and `sessionHeader.ts` export pure tested state/format helpers.
+- `contextScrollbarModel.ts` exports pure committed-segment, estimate, context-usage, and row-boundary interpolation helpers used by the desktop overview and focused tests.
 
 ## Current handlers
 
@@ -41,6 +42,8 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 - Remount state is in-memory by canonical session ID: either `bottom` or a stable committed-message anchor plus pixel offset.
 - Restoration can expand the full timeline, uses idempotent row-offset correction, retains native browser scroll anchoring, and is cancelled by new user scroll input.
 - A ResizeObserver reapplies active bottom/anchor state for late layout changes.
+- Desktop reserves a 48px context-overview gutter beside, not instead of, the native message scroller. The overview represents full committed history even while Chat initially mounts only the newest timeline rows. Its custom pointer interaction requests a native-container scroll and uses the existing explicit-user-intent latch; it never creates a second scroll owner or writes during passive geometry updates.
+- `contextScrollbarModel.ts` owns browser-safe message estimate text, stable logical segments, tool-response-to-preceding-call row association, and real-usage-plus-tail context accounting. It uses the shared lightweight estimator and the latest persisted model-message input/cache/output usage as its real anchor; later committed content is estimated. `ContextScrollbar` uses rendered committed-row anchors and interpolation only for the viewport marker.
 
 ## Other behavior
 
@@ -67,6 +70,10 @@ Token/layout growth cannot override explicit upward user intent. Rejoin occurs o
 ### D-chat-ephemeral-viewport
 
 Viewport state is ephemeral browser memory keyed by canonical session ID, not workbench/local-storage state.
+
+### D-chat-desktop-context-overview
+
+[2026-07-27] Desktop Chat hides only the native message scrollbar chrome and reserves a real 48px right-side context-overview gutter; the existing message element remains the sole browser scroll container and mobile remains unchanged. The overview stack immediately covers all committed non-temporary history, while its viewport marker progressively uses mounted stable rows. The occupied height is the latest provider input/cache/output measurement plus estimated later committed tail, divided among messages by shared-estimator weights; unused capacity is the remaining real-context fraction. Pointer clicks jump and viewport drags scroll the native container to the corresponding logical message/token location, detaching streaming follow through the same user-intent path as native interaction. Tool responses paired into a preceding model row share that row's geometry. Do not couple the overview to queued, nested, synthetic streaming, or collapse-state timelines.
 
 ## Canonical ownership
 

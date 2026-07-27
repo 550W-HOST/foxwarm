@@ -12,6 +12,7 @@ import {
   buildPatchHunkSnippets,
   clampContentStyle,
   formatToolLabel,
+  getToolResponseStatus,
   formatCompactObjectPreview,
   renderSystemTextWithSessionLinks,
   parseApplyPatchPreview,
@@ -118,15 +119,7 @@ export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, 
 
 const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
 
-export const getToolResponseStatus = (resp: FunctionResponse): 'success' | 'error' => {
-  if (resp.response?.error !== undefined && resp.response?.error !== null) {
-    return 'error'
-  }
-  if (resp.name === 'edit') {
-    return resp.response?.output === 'File edited successfully' ? 'success' : 'error'
-  }
-  return 'success'
-}
+export { getToolResponseStatus }
 
 const getToolPairStatus = (responses: FunctionResponse[], imageParts: MessagePart[] = []): 'success' | 'error' | 'neutral' => {
   if (responses.some((resp) => getToolResponseStatus(resp) === 'error')) {

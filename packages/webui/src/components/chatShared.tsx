@@ -142,6 +142,17 @@ export interface FunctionResponse {
   response: any
 }
 
+/** Shared semantic status for tool cards and non-card timeline summaries. */
+export const getToolResponseStatus = (resp: FunctionResponse): 'success' | 'error' => {
+  if (resp.response?.error !== undefined && resp.response?.error !== null) {
+    return 'error'
+  }
+  if (resp.name === 'edit') {
+    return resp.response?.output === 'File edited successfully' ? 'success' : 'error'
+  }
+  return 'success'
+}
+
 export interface MessagePart {
   text?: string
   system?: string
@@ -152,6 +163,10 @@ export interface MessagePart {
   inlineData?: {
     data: string
     mimeType: string
+  }
+  inlineDataRef?: {
+    mimeType?: string
+    imageId?: string
   }
 }
 
@@ -212,6 +227,7 @@ export type PatchPreviewOperation =
 
 export interface Message {
   role: 'user' | 'model' | 'tool'
+  modelVisible?: boolean
   parts: MessagePart[]
   __meta?: {
     timestamp?: number
