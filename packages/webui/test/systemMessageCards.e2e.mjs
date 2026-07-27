@@ -184,7 +184,7 @@ test('system cards expand/collapse, preserve session links, and retain width con
 
   await page.click('#interAgent [data-system-message-card] button')
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body a', link => link.getAttribute('href')), '#session/parent%2Fchild')
-  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body', body => body.textContent), '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">first inter-agent preview linesecond inter-agent preview linethird inter-agent preview linefourth inter-agent preview line</foxwarm-message>')
+  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body', body => body.textContent), '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\nfirst inter-agent preview line\nsecond inter-agent preview line\nthird inter-agent preview line\nfourth inter-agent preview line\n</foxwarm-message>')
 
   const overflow = await page.$eval('#mixed', fixture => ({
     fixture: fixture.scrollWidth - fixture.clientWidth,
@@ -195,6 +195,27 @@ test('system cards expand/collapse, preserve session links, and retain width con
   assert.ok(overflow.fixture <= 1)
   assert.ok(overflow.document <= 1)
   assert.ok(overflow.nestedWidth <= overflow.nestedTimelineWidth + 1)
+})
+
+test('inter-agent preview and expanded body preserve matching body text styling', async () => {
+  for (const style of ['default', '550a']) {
+    await mountFixture(900, false, style)
+    const collapsed = await page.$eval('#interAgent .foxwarm-system-message-result-preview', preview => ({
+      color: getComputedStyle(preview).color,
+      opacity: getComputedStyle(preview).opacity,
+    }))
+
+    await page.click('#interAgent [data-system-message-card]')
+    const expanded = await page.$eval('#interAgent .foxwarm-system-message-body', body => {
+      const firstBodyLine = [...body.querySelectorAll('span')].find(line => line.textContent?.includes('first inter-agent preview line'))
+      return {
+        color: firstBodyLine ? getComputedStyle(firstBodyLine).color : '',
+        opacity: firstBodyLine ? getComputedStyle(firstBodyLine).opacity : '',
+      }
+    })
+
+    assert.deepEqual(expanded, collapsed, `${style} inter-agent preview and expanded body use the same text color and opacity`)
+  }
 })
 
 test('every system kind uses the blue thread-card palette in default light and dark themes', async () => {

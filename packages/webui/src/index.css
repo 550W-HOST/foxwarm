@@ -943,7 +943,7 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card .foxwarm-system-
   box-shadow: 0 0 6px var(--foxwarm-550a-blue-glow) !important;
 }
 
-html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card :is(.foxwarm-system-message-preview, .foxwarm-system-message-body) {
+html[data-foxwarm-ui-style="550a"] .foxwarm-system-message-card :is(.foxwarm-system-message-preview, .foxwarm-system-message-result-preview, .foxwarm-system-message-body) {
   color: var(--foxwarm-550a-text) !important;
   text-shadow: none;
 }

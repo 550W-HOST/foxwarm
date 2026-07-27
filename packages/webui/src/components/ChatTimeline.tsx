@@ -421,23 +421,23 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           )}
         </div>
         {!expanded && interAgentPreview && (
-          <div className="foxwarm-system-message-result-preview mt-1 whitespace-pre-wrap break-all pr-2 text-slate-700 dark:text-slate-300" style={clampContentStyle(3)}>
+          <div className="foxwarm-system-message-result-preview mt-1 whitespace-pre-wrap break-all pr-2 text-slate-700 dark:text-slate-300" style={{ ...clampContentStyle(3), opacity: 0.92 }}>
             {interAgentPreview}
           </div>
         )}
         {expanded && (
           <pre className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
-            {renderedText.split('\n').map((line, lineIdx) => {
+            {renderedText.split('\n').map((line, lineIdx, lines) => {
               const isPrefix = isSystemLikeText(line)
               return (
                 <span
                   key={`${messageKey}-${lineIdx}`}
                   style={isPrefix
-                    ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
-                    : { display: 'block', opacity: 0.92 }
+                    ? { fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+                    : { opacity: 0.92 }
                   }
                 >
-                  {renderSystemTextWithSessionLinks(line)}
+                  {renderSystemTextWithSessionLinks(line)}{lineIdx < lines.length - 1 ? '\n' : null}
                 </span>
               )
             })}
