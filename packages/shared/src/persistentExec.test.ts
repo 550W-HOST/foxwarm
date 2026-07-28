@@ -110,6 +110,47 @@ test('PersistentExecManager serializes concurrent registry mutations', async () 
   }
 });
 
+test('persistent exec reconciles a dead stale entry after its dated artifact directory was removed', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-stale-status-'));
+  const registryPath = path.join(root, 'running-exec.json');
+  const statusPath = path.join(root, 'exec', '2026-07-27', 'stale.log.exit.json');
+  const entry = buildExecEntry(statusPath.slice(0, -'.exit.json'.length), {
+    id: 'stale-background-exec',
+    pid: 99_999_999,
+    startedAt: Date.now() - 10_000,
+    notifyOnCompletion: true,
+  });
+  const deliveries: Array<{ entry: RunningExecEntry; status: unknown }> = [];
+  const errors: unknown[] = [];
+  const manager = new PersistentExecManager({
+    registryPath,
+    nodeId: 'master',
+    getDefaultCwd: () => root,
+    getExecTempDir: () => path.join(root, 'exec'),
+    completionDispatcher: async (deliveredEntry, status) => {
+      deliveries.push({ entry: deliveredEntry, status });
+    },
+    logger: { error: payload => errors.push(payload) },
+  });
+
+  try {
+    await fs.writeJson(registryPath, { execs: [entry] });
+    assert.equal(await fs.pathExists(path.dirname(statusPath)), false);
+
+    await manager.initialize();
+
+    assert.equal(deliveries.length, 1);
+    assert.equal(deliveries[0].entry.id, entry.id);
+    assert.equal((deliveries[0].status as { error?: string }).error, 'Process exited but no status file was written.');
+    assert.equal(errors.length, 0);
+    assert.deepEqual(manager.listRunningExecs(), []);
+    assert.deepEqual((await fs.readJson(registryPath)).execs, []);
+    assert.equal((await fs.readJson(statusPath)).error, 'Process exited but no status file was written.');
+  } finally {
+    await fs.remove(root);
+  }
+});
+
 test('persistent exec keeps ordinary and truncated-small text behavior', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-output-'));
   const manager = await createManager(root);

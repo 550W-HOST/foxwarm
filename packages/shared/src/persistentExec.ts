@@ -687,6 +687,7 @@ export class PersistentExecManager {
     if (isPidRunning(entry.pid)) return null;
     if (Date.now() - entry.startedAt < MISSING_STATUS_GRACE_MS) return null;
     const fallback: ExecStatus = { exitCode: null, finishedAt: new Date().toISOString(), error: 'Process exited but no status file was written.' };
+    await fs.ensureDir(path.dirname(entry.statusPath));
     const tempPath = `${entry.statusPath}.tmp.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
     await fs.writeJson(tempPath, fallback);
     await fs.rename(tempPath, entry.statusPath);
