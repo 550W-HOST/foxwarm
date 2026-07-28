@@ -84,3 +84,37 @@ test('stable seq messages are not dropped merely because a legacy timestamp coll
   assert.strictEqual(reconcileHistoryMessage([first], duplicateLegacy)[0], first)
   assert.equal(reconcileHistoryMessage([first], duplicateLegacy).length, 1)
 })
+
+test('browser-local command responses survive refresh in their existing slot but not remount', () => {
+  const before = { role: 'user', parts: [{ text: 'before' }], __meta: { seq: 1, timestamp: 10 } }
+  const commandResponse = {
+    role: 'assistant',
+    parts: [{ text: 'temporary status' }],
+    __meta: { temporary: true, isCommandResponse: true, timestamp: 15 },
+  }
+  const after = { role: 'model', parts: [{ text: 'after' }], __meta: { seq: 2, timestamp: 20 } }
+
+  const refreshed = mergeHistorySnapshot({
+    snapshot: [before, after],
+    concurrentMessages: [],
+    currentMessages: [before, commandResponse, after],
+    pendingClientMessageIds: new Set(),
+  })
+  assert.deepEqual(refreshed.map(message => message.parts[0].text), ['before', 'temporary status', 'after'])
+
+  const delayedInitial = mergeHistorySnapshot({
+    snapshot: [before],
+    concurrentMessages: [commandResponse],
+    currentMessages: [commandResponse],
+    pendingClientMessageIds: new Set(),
+  })
+  assert.deepEqual(delayedInitial.map(message => message.parts[0].text), ['before', 'temporary status'])
+
+  const remounted = mergeHistorySnapshot({
+    snapshot: [before, after],
+    concurrentMessages: [],
+    currentMessages: [],
+    pendingClientMessageIds: new Set(),
+  })
+  assert.deepEqual(remounted.map(message => message.parts[0].text), ['before', 'after'])
+})

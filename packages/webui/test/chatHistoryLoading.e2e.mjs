@@ -292,6 +292,60 @@ test('manually typed slash commands are sent without an optimistic row or client
   await page.close()
 })
 
+test('temporary command responses survive history refreshes in place but clear on reload', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.emitFixtureMessage({
+    role: 'assistant',
+    parts: [{ text: 'temporary status result' }],
+    __meta: { temporary: true, isCommandResponse: true, timestamp: 15 },
+  }))
+  await page.waitForFunction(() => [...document.querySelectorAll('.justify-start')]
+    .some(row => row.textContent.trim() === 'temporary status result'))
+
+  await page.evaluate(() => window.resolveFixtureHistory())
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('old history row'))
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('.justify-start')]
+    .some(row => row.textContent.trim() === 'temporary status result')), true)
+
+  await page.evaluate(() => window.emitFixtureMessage({
+    role: 'model',
+    parts: [{ text: 'persisted after status' }],
+    __meta: { seq: 2, timestamp: 20 },
+  }))
+  await page.waitForSelector('[data-chat-message-anchor-key="seq-local-2"]')
+  await page.evaluate(() => window.emitFixtureEvent({
+    type: 'session-state',
+    session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 1, modelKey: 'fixture/model' },
+  }))
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+  await page.evaluate(() => window.resolveFixtureHistory(1, [
+    { role: 'user', parts: [{ text: 'old history row' }], __meta: { seq: 1, timestamp: 10 } },
+    { role: 'model', parts: [{ text: 'persisted after status' }], __meta: { seq: 2, timestamp: 20 } },
+  ]))
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.deepEqual(await page.evaluate(() => [...document.querySelector('.foxwarm-chat-timeline').children]
+    .map(row => row.textContent.trim())
+    .filter(text => ['old history row', 'temporary status result', 'persisted after status'].includes(text))), [
+    'old history row',
+    'temporary status result',
+    'persisted after status',
+  ])
+
+  await page.reload({ waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.resolveFixtureHistory(0, [
+    { role: 'user', parts: [{ text: 'old history row' }], __meta: { seq: 1, timestamp: 10 } },
+    { role: 'model', parts: [{ text: 'persisted after status' }], __meta: { seq: 2, timestamp: 20 } },
+  ]))
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('persisted after status'))
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('.justify-start')]
+    .some(row => row.textContent.trim() === 'temporary status result')), false)
+  await page.close()
+})
+
 test('post-request stream state wins over an older history session snapshot', async () => {
   page = await browser.newPage()
   await page.setViewport({ width: 1000, height: 720 })

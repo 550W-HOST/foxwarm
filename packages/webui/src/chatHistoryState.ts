@@ -32,6 +32,31 @@ function findStableMessageIndex(messages: Message[], incoming: Message): number 
   return -1
 }
 
+function findMessageIndex(messages: Message[], incoming: Message): number {
+  const stableIndex = findStableMessageIndex(messages, incoming)
+  if (stableIndex !== -1) return stableIndex
+  if (hasStableHistoryIdentity(incoming)) return -1
+  const timestamp = incoming.__meta?.timestamp
+  if (timestamp === undefined) return -1
+  return messages.findIndex(message => (
+    !hasStableHistoryIdentity(message)
+    && message.__meta?.timestamp === timestamp
+  ))
+}
+
+export function isRetainedBrowserLocalMessage(message: Message): boolean {
+  return message.__meta?.temporary === true && message.__meta?.isCommandResponse === true
+}
+
+function hasSameBrowserLocalIdentity(messages: Message[], incoming: Message): boolean {
+  if (!isRetainedBrowserLocalMessage(incoming)) return false
+  return messages.some(message => (
+    isRetainedBrowserLocalMessage(message)
+    && message.__meta?.timestamp === incoming.__meta?.timestamp
+    && message.parts.map(part => part.text || '').join('') === incoming.parts.map(part => part.text || '').join('')
+  ))
+}
+
 export function reconcileHistoryMessage(messages: Message[], incoming: Message): Message[] {
   const stableIndex = findStableMessageIndex(messages, incoming)
   if (stableIndex !== -1) {
@@ -62,15 +87,48 @@ export function mergeHistorySnapshot(options: {
     merged = reconcileHistoryMessage(merged, message)
   }
 
-  for (const message of options.currentMessages) {
+  const retainedMessages = options.currentMessages.filter(message => {
     const clientMessageId = getClientMessageId(message)
-    if (!message.__meta?.optimistic || !clientMessageId || !options.pendingClientMessageIds.has(clientMessageId)) {
+    const retainedPendingOptimistic = message.__meta?.optimistic
+      && clientMessageId
+      && options.pendingClientMessageIds.has(clientMessageId)
+    if (!retainedPendingOptimistic && !isRetainedBrowserLocalMessage(message)) return false
+    if (retainedPendingOptimistic) return findMessageIndex(merged, message) === -1
+    return !hasSameBrowserLocalIdentity(options.concurrentMessages, message)
+  })
+
+  const beforeGroups = new Map<number, Message[]>()
+  const afterGroups = new Map<number, Message[]>()
+  const trailing: Message[] = []
+  for (const message of retainedMessages) {
+    const currentIndex = options.currentMessages.indexOf(message)
+    let nextAnchor = -1
+    for (let index = currentIndex + 1; index < options.currentMessages.length; index += 1) {
+      nextAnchor = findMessageIndex(merged, options.currentMessages[index])
+      if (nextAnchor !== -1) break
+    }
+    if (nextAnchor !== -1) {
+      beforeGroups.set(nextAnchor, [...(beforeGroups.get(nextAnchor) || []), message])
       continue
     }
-    merged = reconcileHistoryMessage(merged, message)
+
+    let previousAnchor = -1
+    for (let index = currentIndex - 1; index >= 0; index -= 1) {
+      previousAnchor = findMessageIndex(merged, options.currentMessages[index])
+      if (previousAnchor !== -1) break
+    }
+    if (previousAnchor !== -1) {
+      afterGroups.set(previousAnchor, [...(afterGroups.get(previousAnchor) || []), message])
+    } else {
+      trailing.push(message)
+    }
   }
 
-  return merged
+  return merged.flatMap((message, index) => [
+    ...(beforeGroups.get(index) || []),
+    message,
+    ...(afterGroups.get(index) || []),
+  ]).concat(trailing)
 }
 
 export function buildOptimisticUserMessage(options: {
