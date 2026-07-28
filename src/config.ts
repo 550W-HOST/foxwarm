@@ -279,6 +279,7 @@ export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const DB_DIR = path.join(STATE_DIR, 'db');
 export const SESSIONS_DIR = path.join(STATE_DIR, 'sessions');
 export const SESSIONS_BLOB_DIR = path.join(STATE_DIR, 'sessions-blob');
+export const IMAGE_BLOBS_DIR = path.join(STATE_DIR, 'image-blobs');
 export const AGENTS_SYSTEM_PROMPT_PATH = path.join(AGENTS_DIR, '00_SYSTEM.md');
 export const AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH = path.join(BASE_DIR, 'templates', 'agents', '00_SYSTEM.md');
 export const MAIN_AGENT_DIR = path.join(AGENTS_DIR, 'main');

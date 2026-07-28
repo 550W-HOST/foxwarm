@@ -1,8 +1,8 @@
 import fs from 'fs-extra';
 import path from 'path';
-import { createHash } from 'crypto';
-import { Message, MessagePart, Session } from '../types';
-import { getSessionArchiveImagesDir, getSessionArchiveLogPath } from '../config';
+import { Message, Session } from '../types';
+import { getSessionArchiveLogPath } from '../config';
+import { externalizeMessageImages } from '../imageBlobs';
 import {
   ensureSessionBranch,
   refreshSessionArchiveImportState,
@@ -68,66 +68,10 @@ export function ensureMessageSeq(session: Session, message: Message): number {
   return seq;
 }
 
-function getInlineDataMimeType(part: MessagePart): string {
-  return part.inlineData?.mimeType || part.inlineData?.mime_type || 'application/octet-stream';
-}
-
-function getArchiveFileExtension(mimeType: string): string {
-  const lower = mimeType.toLowerCase();
-
-  if (lower === 'image/jpeg') return 'jpg';
-  if (lower === 'image/svg+xml') return 'svg';
-  if (lower.startsWith('image/')) return lower.slice('image/'.length) || 'bin';
-
-  const slashIndex = lower.indexOf('/');
-  if (slashIndex !== -1 && slashIndex + 1 < lower.length) {
-    return lower.slice(slashIndex + 1).replace(/[^a-z0-9]+/g, '-') || 'bin';
-  }
-
-  return 'bin';
-}
-
 export async function buildArchiveRecord(session: Session, message: Message): Promise<any> {
   const seq = ensureMessageSeq(session, message);
   const timestamp = getMessageTimestamp(message);
-  const archiveParts = [];
-
-  for (let partIndex = 0; partIndex < message.parts.length; partIndex++) {
-    const part = message.parts[partIndex];
-    const existingImageMeta = part.imageMeta;
-
-    if (!part.inlineData?.data) {
-      archiveParts.push(part);
-      continue;
-    }
-
-    const mimeType = getInlineDataMimeType(part);
-    const extension = getArchiveFileExtension(mimeType);
-    const imageId = existingImageMeta?.imageId || `msg${String(seq).padStart(8, '0')}_part${partIndex + 1}`;
-    const imageDir = getSessionArchiveImagesDir(session.id);
-    const fileName = `${imageId}.${extension}`;
-    const filePath = path.join(imageDir, fileName);
-    const binary = Buffer.from(part.inlineData.data, 'base64');
-    const sha256 = createHash('sha256').update(binary).digest('hex');
-
-    await fs.ensureDir(imageDir);
-    await fs.writeFile(filePath, binary);
-
-    const { inlineData, ...rest } = part;
-    archiveParts.push({
-      ...rest,
-      inlineDataRef: {
-        imageId,
-        format: extension,
-        path: path.relative(path.join(__dirname, '..'), filePath),
-        mimeType,
-        byteLength: binary.length,
-        sha256,
-        width: existingImageMeta?.width,
-        height: existingImageMeta?.height,
-      },
-    });
-  }
+  const canonical = (await externalizeMessageImages(message)).message;
 
   return {
     v: 1,
@@ -138,13 +82,13 @@ export async function buildArchiveRecord(session: Session, message: Message): Pr
     timestamp,
     role: message.role,
     message: {
-      ...message,
+      ...canonical,
       __meta: {
         ...(message.__meta || {}),
         timestamp,
         seq,
       },
-      parts: archiveParts,
+      parts: canonical.parts,
     },
   };
 }

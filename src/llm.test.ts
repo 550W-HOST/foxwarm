@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
 
-import { DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { LOGS_DIR } from './config';
 import { formatDate } from './logRotation';
 import type { Message, Session } from './types';
 import { containsLoneSurrogate } from './utils/unicode';
 import * as sessionManager from './sessionManager';
 import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from './session/metadataStore';
+import { putImageBlob, resolveImageBlobPath } from './imageBlobs';
+import fs from 'fs-extra';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -155,6 +157,64 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
     });
   } finally {
     (axios as any).post = originalPost;
+  }
+});
+
+test('all provider protocols hydrate canonical image refs only in outbound payloads and diagnostics redact them', async t => {
+  const originalPost = axios.post;
+  const imageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const ref = await putImageBlob({ buffer: Buffer.from(imageBase64, 'base64'), mimeType: 'image/png', imageId: 'provider_call#1' });
+  const canonical: Message[] = [
+    { role: 'user', parts: [{ text: 'capture an image' }] },
+    { role: 'model', parts: [{ functionCall: { id: 'provider_call', name: 'screenshot', args: {} } }] },
+    {
+      role: 'tool',
+      parts: [
+        { functionResponse: { tool_use_id: 'provider_call', name: 'screenshot', response: { output: 'captured' } } },
+        { toolUseId: 'provider_call', inlineDataRef: ref, imageMeta: { imageId: ref.imageId } },
+      ],
+    },
+  ];
+  const captured: any[] = [];
+  const models = {
+    responses: { providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example', apiKey: '', model: 'responses', extraFields: {}, extraHeaders: {} },
+    chat: { providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example', apiKey: '', model: 'chat', extraFields: {}, extraHeaders: {} },
+    anthropic: { providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude', extraFields: {}, extraHeaders: {} },
+  } as const;
+
+  try {
+    await t.test('OpenAI Responses', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.push(data);
+        return { status: 200, statusText: 'OK', headers: {}, data: makeResponsesStream() };
+      };
+      await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.responses as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+    await t.test('OpenAI Chat Completions', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.push(data);
+        return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream() };
+      };
+      await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.chat as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+    await t.test('Anthropic Messages', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.push(data);
+        return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } };
+      };
+      await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+
+    assert.equal(captured.length, 3);
+    for (const payload of captured) {
+      assert.equal(JSON.stringify(payload).includes(imageBase64), true);
+      assert.equal(JSON.stringify(payload).includes('provider_call'), true);
+      assert.equal(JSON.stringify(redactProviderImagesForLog(payload)).includes(imageBase64), false);
+    }
+    assert.equal(canonical[0].parts[0].inlineData, undefined, 'provider hydration must not mutate canonical messages');
+  } finally {
+    (axios as any).post = originalPost;
+    if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
   }
 });
 

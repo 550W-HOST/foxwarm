@@ -50,6 +50,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 - [streaming pipeline](../threads/streaming-pipeline.md)
 - [context compaction and recall](../threads/context-compaction-and-recall.md)
+- [image blob lifecycle](../threads/image-blob-lifecycle.md)
 - [Code integration](../threads/code-integration.md)
 - [node communication](../threads/node-communication.md)
 
@@ -79,7 +80,7 @@ Mounted Chat owns per-session state/stream. Global list streaming remains for li
 
 ### D-webui-history-image-boundary
 
-[2026-07-28, planned migration] History transport must not retain inline image base64 as its long-term browser contract. Images should be canonical blob references exposed through authenticated deployment-relative URLs, with server-side hydration only where a model provider requires bytes/base64. Legacy persisted inline data needs a tolerant migration/read path; this focused history-ordering change does not implement that migration or network pagination.
+History, message streams, CTX expansion, and Debug expose authenticated deployment-relative image blob references rather than base64 or legacy paths. The cross-module persistence/provider/retention contract is canonical in [D-image-blob-canonical-lifecycle](../threads/image-blob-lifecycle.md#d-image-blob-canonical-lifecycle).
 
 ### D-webui-model-settings-navigation
 

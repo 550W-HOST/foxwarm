@@ -445,7 +445,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           </pre>
         )}
       </div>
-      <ImageParts imageParts={msg.parts.filter(p => p.inlineData)} keyPrefix={messageKey} />
+      <ImageParts imageParts={msg.parts.filter(p => p.inlineData || p.inlineDataRef || p.inlineDataUnavailable)} keyPrefix={messageKey} />
     </div>
   )
 })
@@ -588,7 +588,7 @@ const MessageRow = memo(function MessageRow({
   renderNestedMessages,
 }: MessageRowProps) {
   const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
-  const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData), [msg.parts])
+  const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData || p.inlineDataRef || p.inlineDataUnavailable), [msg.parts])
   const usage = useMemo(() => getModelMessageUsage(msg), [msg])
   const isInToolGroup = summaryTagItems.length > 0
   const hasToolParts = useMemo(() => msg.parts.some(p => p.functionCall || p.functionResponse || p.thinking), [msg.parts])

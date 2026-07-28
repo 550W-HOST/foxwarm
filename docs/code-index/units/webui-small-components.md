@@ -1,6 +1,6 @@
 # Unit: webui-small-components
 
-Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts
+Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/imageParts.e2e.mjs
 Secondary files: packages/webui/src/components/CollapsedSidebar.tsx
 
 ## Purpose
@@ -16,7 +16,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `agentCreation` helpers — Client validation and request-body helpers that omit an empty session ID so the backend generates the existing random name
 - `CreateTabButton` — Split button for creating terminal tabs with custom node/path options
 - `CodeLaunchButton` — Sidebar split button for opening Code at a remembered master path and controlling the global new-browser-tab default
-- `ImageParts` — Renders inline base64 image attachments from message parts
+- `ImageParts` — Renders safe image attachments from legacy inline data or current authenticated blob URLs
 - `ProcessingStatus` — Animated status indicators for busy/queued/loading states
 - `ReasoningCard` — Collapsible card displaying AI reasoning/thinking content with markdown rendering
 - `ReloadAppButton` — Button that clears service workers and caches before hard-reloading
@@ -38,7 +38,8 @@ A collection of small, reusable React UI components and utility functions for th
 | `AgentCreationMenu({ ... })` | (AgentCreationMenu.tsx) | Renders the creation dropdown plus agent/session modal flows shared by desktop and mobile expanded sidebars |
 | `buildSessionCreationBody(agentId, sessionId)` | (agentCreation.ts) | Omits blank session IDs so random backend naming remains authoritative |
 | `CreateTabButton({ ... })` | ~50–110 | Split button with dropdown form for custom terminal tab creation |
-| `ImageParts({ ... })` | ~5–20 | Renders a grid of clickable base64 image thumbnails |
+| `ImageItem({ part, label })` | `ImageParts.tsx` | Resolves deployment-relative blob URLs, enforces safe-raster inline policy, and reports load failure |
+| `ImageParts({ ... })` | `ImageParts.tsx` | Renders a grid of image thumbnails or download-only attachment links |
 | `ProcessingStatus({ ... })` | ~10–50 | Shows animated bounce dots and status text for session processing states |
 | `extractOpenAIReasoningSummaryTitles(text)` | ~55–68 | Extracts bold-formatted summary titles from reasoning text |
 | `getReasoningPreview(text)` | ~70–75 | Returns collapsed preview text for reasoning card header |
@@ -63,6 +64,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `./GlobalUiSettingsMenu` — Settings menu component used in Sidebar
 - `./AgentCreationMenu` / `../agentCreation` — Shared creation menu/modals and request validation helpers
 - `../utils/languages` — `inferSimpleLanguage`, `SimpleLanguage` type
+- `../config` — deployment-relative `makeApiUrl` for authenticated blob delivery
 
 ## Behavior
 
@@ -70,6 +72,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `CollapsedSidebar` filters to unarchived root sessions, shows at most 20 avatars, highlights the active session, and displays a busy dot for busy sessions.
 - `ReasoningCard` debounces content updates, detects OpenAI-style bold summary titles for collapsed preview, and renders full markdown when expanded.
 - `ReasoningCard` exposes semantic CSS hooks (`foxwarm-reasoning-card`, `foxwarm-reasoning-card-*`, `foxwarm-reasoning-thread-line`, `foxwarm-reasoning-header`, `foxwarm-reasoning-tag`, `foxwarm-reasoning-preview`, `foxwarm-reasoning-body`) so optional UI style layers can retheme reasoning surfaces without duplicating reasoning rendering logic.
+- `ImageParts` renders PNG/JPEG/GIF/WebP through direct same-origin authenticated URLs with lazy loading, exposes active/unsafe formats as download links, and shows an explicit unavailable state for transport-marked legacy failures or load errors. Canonical persistence and transport behavior: [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - In 550A, both finished and processing Reasoning cards use the neutral panel/input/hover/border/text grammar; processing may use the stronger neutral hover surface but does not claim the blue semantic allocation reserved for System cards. The canonical color allocation is [D-webui-thread-card-color-allocation](./webui-chat-timeline.md#d-webui-thread-card-color-allocation).
 - `hardReloadApp` performs a destructive cache/service-worker purge before triggering `window.location.reload()`.
 - `SyntaxHighlightedText` performs client-side regex tokenization without external highlighting libraries; classification is heuristic-based per language.

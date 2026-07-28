@@ -8,6 +8,8 @@ The live LLM/tool turn loop belongs to `MessageRouter.processSessionQueue()`. Se
 
 Cross-module creation, hydration, fork/cache lineage, restart, archive, and deletion: [session lifecycle](../threads/session-lifecycle.md).
 
+Canonical image references in live history, queues, archives, and forks are owned by [image blob lifecycle](../threads/image-blob-lifecycle.md).
+
 ## Units
 
 - [src-session-manager](../units/src-session-manager.md) — façade, in-memory map, lazy hydration, queue/wait coordination, callbacks, and restart recovery.

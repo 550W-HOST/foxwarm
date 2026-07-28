@@ -72,6 +72,7 @@ Remote Nodes and CLI Node runtime
 |---|---|
 | [Code integration](./threads/code-integration.md) | Optional official workbench, WebUI bridge, remote services, terminals, and read-only SCM |
 | [context compaction and recall](./threads/context-compaction-and-recall.md) | Context budgeting, summarization, archival, and retrieval |
+| [image blob lifecycle](./threads/image-blob-lifecycle.md) | Canonical image persistence, provider hydration, tools, and authenticated browser URLs |
 | [message processing pipeline](./threads/message-processing-pipeline.md) | Inbound message through LLM/tool loop to final broadcast |
 | [model routing](./threads/model-routing.md) | Concrete/virtual selection, prefix hashing, failover health, attempts, and attribution |
 | [node communication](./threads/node-communication.md) | Pairing, authentication, remote execution, services, and transfer |

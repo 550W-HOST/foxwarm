@@ -29,11 +29,11 @@ import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall'
 import type { Message, MessagePart, QueueItem } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
+import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
 const MAX_QUEUED_PREVIEW_TEXT_CHARS = 4000;
-const MAX_QUEUED_PREVIEW_INLINE_DATA_CHARS = 200_000;
 
 function isPlaceholderSecret(value: unknown): boolean {
   return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
@@ -78,14 +78,101 @@ function sanitizeQueuedPreviewPart(part: MessagePart): MessagePart | null {
     sanitized.thinking = truncateQueuedPreviewText(sanitized.thinking);
   }
 
-  if (sanitized.inlineData?.data && sanitized.inlineData.data.length > MAX_QUEUED_PREVIEW_INLINE_DATA_CHARS) {
-    const mimeType = sanitized.inlineData.mimeType || sanitized.inlineData.mime_type || 'attachment';
+  if (sanitized.inlineData || sanitized.inlineDataRef) {
+    const mimeType = sanitized.inlineData?.mimeType
+      || sanitized.inlineData?.mime_type
+      || sanitized.inlineDataRef?.mimeType
+      || 'attachment';
     delete sanitized.inlineData;
     delete (sanitized as any).inlineDataRef;
     return { text: `[${mimeType} attachment preview omitted]` };
   }
 
   return sanitized;
+}
+
+function sanitizeWebUiTransportValue(value: any): any {
+  if (Array.isArray(value)) return value.map(sanitizeWebUiTransportValue);
+  if (!value || typeof value !== 'object') return value;
+
+  const result: Record<string, any> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'inlineData' && entry && typeof entry === 'object' && typeof (entry as any).data === 'string') {
+      const { data: _data, ...metadata } = entry as Record<string, any>;
+      result.inlineDataUnavailable = {
+        ...sanitizeWebUiTransportValue(metadata),
+        unavailable: true,
+      };
+      continue;
+    }
+    if (key === 'inlineDataItems' && Array.isArray(entry)) {
+      const retained: any[] = [];
+      const unavailable: any[] = [];
+      for (const item of entry) {
+        if (item && typeof item === 'object' && typeof item.data === 'string') {
+          const { data: _data, ...metadata } = item;
+          unavailable.push({ ...sanitizeWebUiTransportValue(metadata), unavailable: true });
+        } else {
+          retained.push(sanitizeWebUiTransportValue(item));
+        }
+      }
+      if (retained.length > 0) result.inlineDataItems = retained;
+      if (unavailable.length > 0) result.inlineDataItemsUnavailable = unavailable;
+      continue;
+    }
+    if (key === 'inlineDataRef' && entry && typeof entry === 'object') {
+      const { path: _path, apiPath: _apiPath, ...ref } = entry as Record<string, any>;
+      result.inlineDataRef = ref.blobId
+        ? { ...sanitizeWebUiTransportValue(ref), apiPath: `/blobs/${encodeURIComponent(ref.blobId)}` }
+        : { ...sanitizeWebUiTransportValue(ref), unavailable: true };
+      continue;
+    }
+    result[key] = sanitizeWebUiTransportValue(entry);
+  }
+  return result;
+}
+
+function buildWebUiMessage(message: Message): Message {
+  return sanitizeWebUiTransportValue(message) as Message;
+}
+
+async function materializeWebUiMessages(messages: Message[]): Promise<{ messages: Message[]; canonicalMessages: Message[]; changed: boolean }> {
+  try {
+    const canonical = await externalizeMessages(messages);
+    return {
+      canonicalMessages: canonical.messages,
+      changed: canonical.changed,
+      messages: canonical.messages.map(buildWebUiMessage),
+    };
+  } catch (error) {
+    logger.warn({ err: error }, 'Failed to materialize legacy images for WebUI transport');
+    return {
+      canonicalMessages: messages,
+      changed: false,
+      messages: messages.map(buildWebUiMessage),
+    };
+  }
+}
+
+async function sanitizeWebUiDebugPayload(payload: any): Promise<any> {
+  const result = { ...payload };
+  if (Array.isArray(payload?.history)) {
+    result.history = (await materializeWebUiMessages(payload.history)).messages;
+  }
+  if (Array.isArray(payload?.queue)) {
+    let queueItems: QueueItem[] = payload.queue;
+    try {
+      queueItems = (await externalizeQueueItems(payload.queue)).items;
+    } catch (error) {
+      logger.warn({ err: error }, 'Failed to materialize legacy queue images for WebUI debug transport');
+    }
+    result.queue = queueItems.map(item => ({
+      ...item,
+      ...(Array.isArray(item.parts) ? { parts: sanitizeQueuedPreviewParts(item.parts) } : {}),
+      ...(item.message ? { message: buildWebUiMessage(item.message) } : {}),
+    }));
+  }
+  return sanitizeWebUiTransportValue(result);
 }
 
 function sanitizeQueuedPreviewParts(parts: MessagePart[] | undefined): MessagePart[] {
@@ -1240,17 +1327,52 @@ export class WebUIChannel implements Channel {
       // Get session history (must be before DELETE /:sessionId)
 
       httpServerInstance.addRoute({
+        path: '/api/blobs/:blobId',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const blobId = req.params.blobId as string;
+            const blobPath = resolveImageBlobPath(blobId);
+            const stat = await fs.stat(blobPath);
+            if (!stat.isFile()) return res.status(404).json({ error: 'Image blob not found' });
+            const safeMimeType = getSafeRasterMimeType(blobId);
+            res.setHeader('Content-Type', safeMimeType || 'application/octet-stream');
+            res.setHeader('Content-Length', String(stat.size));
+            res.setHeader('ETag', `"${blobId}"`);
+            res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            if (!safeMimeType) {
+              res.setHeader('Content-Disposition', `attachment; filename="${blobId}"`);
+            }
+            await new Promise<void>((resolve, reject) => {
+              const stream = fs.createReadStream(blobPath);
+              stream.on('error', reject);
+              res.on('finish', resolve);
+              res.on('close', resolve);
+              stream.pipe(res);
+            });
+          } catch (e: any) {
+            if (e?.code === 'ENOENT') return res.status(404).json({ error: 'Image blob not found' });
+            if (e?.message === 'Invalid image blob id.') return res.status(400).json({ error: e.message });
+            logger.error({ err: e }, 'Failed to serve image blob');
+            if (!res.headersSent) res.status(500).json({ error: 'Failed to serve image blob' });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/debug-file',
         method: 'GET',
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
+            await sessionManager.getExistingSession(sessionId);
             const resolvedPath = getSessionHistoryFilePath(sessionId);
             if (!await fs.pathExists(resolvedPath)) {
               return res.status(404).json({ error: 'Session file not found' });
             }
             const payload = await fs.readJson(resolvedPath);
-            res.json({ resolvedPath, payload });
+            res.json({ resolvedPath, payload: await sanitizeWebUiDebugPayload(payload) });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to read session debug file');
             res.status(500).json({ error: e.message });
@@ -1287,9 +1409,14 @@ export class WebUIChannel implements Channel {
               return res.status(404).json({ error: 'Session not found' });
             }
             const queuedMessages = buildQueuedPreviewMessages(session.queue);
+            const webUiHistory = await materializeWebUiMessages(session.history);
+            if (webUiHistory.changed) {
+              session.history = webUiHistory.canonicalMessages;
+              await sessionManager.saveSession(session.id);
+            }
             res.json({
               session: buildWebUiSessionState(session),
-              messages: session.history,
+              messages: webUiHistory.messages,
               persistentMemorySnapshot: session.persistentMemorySnapshot || '',
               queuedMessages,
               queueLength: session.queue?.length || 0,
@@ -1319,7 +1446,12 @@ export class WebUIChannel implements Channel {
               blockId,
               previewLength: parseOptionalPositiveNumberQuery(req.query.previewLength, 'previewLength'),
             });
-            res.json(result);
+            const webUiMessages = await materializeWebUiMessages(result.messages);
+            res.json({
+              ...result,
+              messages: webUiMessages.messages,
+              items: result.items.map((item, index) => ({ ...item, message: webUiMessages.messages[index] })),
+            });
           } catch (e: any) {
             const statusCode = typeof e?.statusCode === 'number' ? e.statusCode : (e?.message?.includes('must be') ? 400 : 500);
             if (statusCode >= 500) {
@@ -2428,7 +2560,7 @@ export class WebUIChannel implements Channel {
     const clients = this.sseClients.get(sessionId);
     logger.debug({ sessionId, clientCount: clients?.length || 0, messageRole: message.role }, 'Broadcasting message to SSE clients');
     if (clients && clients.length > 0) {
-      const data = JSON.stringify({ type: 'message', message });
+      const data = JSON.stringify({ type: 'message', message: buildWebUiMessage(message) });
       clients.forEach(client => {
         try {
           client.write(`data: ${data}\n\n`);

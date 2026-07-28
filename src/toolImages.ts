@@ -1,9 +1,9 @@
-import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
 import sharp from 'sharp';
 import * as sessionManager from './sessionManager';
 import { ImageMeta, InlineData, Message, MessagePart } from './types';
+import { readImageRef } from './imageBlobs';
 
 export interface NormalizedToolResultImage {
   inlineData: InlineData;
@@ -203,8 +203,20 @@ async function buildResolvedImageFromPart(part: MessagePart): Promise<ResolvedIm
   }
 
   if (part.inlineDataRef?.path) {
-    const fullPath = resolveArchiveInlineDataPath(part.inlineDataRef.path);
-    const buffer = await fs.readFile(fullPath);
+    const buffer = await readImageRef(part.inlineDataRef);
+    return {
+      imageId: meta.imageId,
+      mimeType: meta.mimeType || part.inlineDataRef.mimeType || 'application/octet-stream',
+      buffer,
+      width: meta.width,
+      height: meta.height,
+      sizeBytes: meta.sizeBytes ?? part.inlineDataRef.byteLength ?? buffer.length,
+      sha256: meta.sha256,
+    };
+  }
+
+  if (part.inlineDataRef?.blobId) {
+    const buffer = await readImageRef(part.inlineDataRef);
     return {
       imageId: meta.imageId,
       mimeType: meta.mimeType || part.inlineDataRef.mimeType || 'application/octet-stream',

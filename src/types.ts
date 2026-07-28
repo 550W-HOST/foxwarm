@@ -12,7 +12,7 @@ export interface MessagePart {
   functionCall?: FunctionCall;
   functionResponse?: FunctionResponse;
   toolUseId?: string;
-  inlineData?: InlineData;  // Internal format - always use this
+  inlineData?: InlineData;  // Transient ingress/provider-boundary compatibility shape
   inlineDataRef?: InlineDataRef;
   imageMeta?: ImageMeta;
   [key: string]: any;  // Allow additional properties for flexibility
@@ -56,8 +56,10 @@ export interface InlineData {
 
 export interface InlineDataRef {
   imageId: string;
-  format: string;
-  path: string;
+  blobId?: string;
+  apiPath?: string; // WebUI transport-only; never written by canonical persistence.
+  format?: string;
+  path?: string; // Legacy archive reference; current writers use blobId.
   mimeType: string;
   byteLength: number;
   sha256: string;

@@ -14,6 +14,7 @@ type LoadedDeps = {
   layeredContext: typeof import('../session/layeredContext');
   httpServerModule: typeof import('../httpServer');
   webuiChannel: typeof import('../channels/webuiChannel');
+  imageBlobs: typeof import('../imageBlobs');
 };
 
 let depsPromise: Promise<LoadedDeps> | null = null;
@@ -41,7 +42,7 @@ async function loadDeps(): Promise<LoadedDeps> {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-archive-guard-'));
       process.env.FOXWARM_DATA_DIR = tempRoot;
 
-      const [sessionManager, toolsSessionAgent, archiveRecall, archive, layeredContext, httpServerModule, webuiChannel] = await Promise.all([
+      const [sessionManager, toolsSessionAgent, archiveRecall, archive, layeredContext, httpServerModule, webuiChannel, imageBlobs] = await Promise.all([
         import('../sessionManager'),
         import('../toolsSessionAgent'),
         import('./archiveRecall'),
@@ -49,10 +50,11 @@ async function loadDeps(): Promise<LoadedDeps> {
         import('../session/layeredContext'),
         import('../httpServer'),
         import('../channels/webuiChannel'),
+        import('../imageBlobs'),
       ]);
 
       await sessionManager.loadSessions();
-      return { tempRoot, sessionManager, toolsSessionAgent, archiveRecall, archive, layeredContext, httpServerModule, webuiChannel };
+      return { tempRoot, sessionManager, toolsSessionAgent, archiveRecall, archive, layeredContext, httpServerModule, webuiChannel, imageBlobs };
     })();
   }
 
@@ -75,7 +77,7 @@ async function appendTextMessages(sessionManager: typeof import('../sessionManag
   }
 }
 
-async function createArchivedSession(deps: LoadedDeps, sessionId: string): Promise<void> {
+async function createArchivedSession(deps: LoadedDeps, sessionId: string, firstMessageParts: any[] = [{ text: 'archived alpha' }]): Promise<void> {
   const session: Session = {
     ...createBaseSession(sessionId),
     nextMessageSeq: 1,
@@ -84,7 +86,7 @@ async function createArchivedSession(deps: LoadedDeps, sessionId: string): Promi
   } as Session;
 
   await deps.archive.appendMessagesToArchive(session, [
-    { role: 'user', parts: [{ text: 'archived alpha' }], __meta: { timestamp: 1000 } },
+    { role: 'user', parts: firstMessageParts, __meta: { timestamp: 1000 } },
     { role: 'model', parts: [{ text: 'archived beta' }], __meta: { timestamp: 2000 } },
     { role: 'user', parts: [{ text: 'archived gamma' }], __meta: { timestamp: 3000 } },
     { role: 'model', parts: [{ text: 'archived delta' }], __meta: { timestamp: 4000 } },
@@ -339,8 +341,8 @@ test('recall target selectors read block details and message ranges', async () =
 test('renderContextBlockExpansion returns structured child block/raw message items without mutating session state', async () => {
   const deps = await loadDeps();
   const sessionId = makeId('ctx_block_expand');
-  await createArchivedSession(deps, sessionId);
   const session = await ensureSession(deps.sessionManager, sessionId);
+  await createArchivedSession(deps, sessionId);
   session.contextFrontier = [
     { kind: 'block', id: 4, level: 2, rawStartSeq: 1, rawEndSeq: 2 },
     { kind: 'block', id: 3, level: 1, rawStartSeq: 3, rawEndSeq: 3 },
@@ -412,8 +414,8 @@ test('renderContextBlockExpansion returns structured child block/raw message ite
 test('renderContextBlockExpansion reports invalid session/block', async () => {
   const deps = await loadDeps();
   const sessionId = makeId('ctx_block_invalid');
-  await createArchivedSession(deps, sessionId);
   await ensureSession(deps.sessionManager, sessionId);
+  await createArchivedSession(deps, sessionId);
 
   await assert.rejects(
     () => deps.archiveRecall.renderContextBlockExpansion({ sessionId: `${sessionId}_missing`, blockId: 1 }),
@@ -432,8 +434,12 @@ test('renderContextBlockExpansion reports invalid session/block', async () => {
 test('WebUI context block expansion route is admin-authenticated and read-only', async () => {
   const deps = await loadDeps();
   const sessionId = makeId('ctx_block_route');
-  await createArchivedSession(deps, sessionId);
+  const imageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
   const session = await ensureSession(deps.sessionManager, sessionId);
+  await createArchivedSession(deps, sessionId, [
+    { text: 'archived alpha' },
+    { inlineData: { data: imageBase64, mimeType: 'image/png' } },
+  ]);
   session.contextFrontier = [{ kind: 'block', id: 4, level: 2, rawStartSeq: 1, rawEndSeq: 2 }];
   session.history = [];
   await deps.sessionManager.saveSession(sessionId);
@@ -446,6 +452,7 @@ test('WebUI context block expansion route is admin-authenticated and read-only',
   deps.httpServerModule.setHttpServer(server);
   new deps.webuiChannel.WebUIChannel({ router: {} as any, token: 'secret-token', enableTrigger: false, enableWebUI: true });
   await server.start();
+  let blobId: string | undefined;
   try {
     const baseUrl = `http://127.0.0.1:${port}`;
     const path = `/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/4/expand?previewLength=2000`;
@@ -474,6 +481,11 @@ test('WebUI context block expansion route is admin-authenticated and read-only',
     assert.equal(rawPayload.items[0].kind, 'message');
     assert.equal(rawPayload.messages[0].__meta.seq, 1);
     assert.match(rawPayload.messages[0].parts[0].text, /archived alpha/);
+    assert.equal(rawPayload.messages[0].parts[1].inlineData, undefined);
+    assert.equal(rawPayload.messages[0].parts[1].inlineDataRef.path, undefined);
+    assert.match(rawPayload.messages[0].parts[1].inlineDataRef.apiPath, /^\/blobs\//);
+    blobId = rawPayload.messages[0].parts[1].inlineDataRef.blobId;
+    assert.equal(JSON.stringify(rawPayload).includes(imageBase64), false);
 
     const invalidBlock = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/999/expand`, { headers: { Authorization: 'Bearer secret-token' } });
     assert.equal(invalidBlock.status, 404);
@@ -486,6 +498,7 @@ test('WebUI context block expansion route is admin-authenticated and read-only',
   } finally {
     await server.stop();
     deps.httpServerModule.setHttpServer(null);
+    if (blobId) await fs.remove(deps.imageBlobs.resolveImageBlobPath(blobId));
   }
 
   const after = await deps.sessionManager.getExistingSession(sessionId);

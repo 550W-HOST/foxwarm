@@ -164,9 +164,19 @@ export interface MessagePart {
     data: string
     mimeType: string
   }
+  inlineDataUnavailable?: {
+    mimeType?: string
+    mime_type?: string
+    unavailable: true
+  }
   inlineDataRef?: {
     mimeType?: string
     imageId?: string
+    blobId?: string
+    apiPath?: string
+    byteLength?: number
+    width?: number
+    height?: number
   }
 }
 

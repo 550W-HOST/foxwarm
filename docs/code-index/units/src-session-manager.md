@@ -53,6 +53,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 - **Wait-state transition table:** maintenance items are wait-neutral; matching timeout tokens wake; stale tokens drop; `waitAllSessions` defers listed child messages until all requested sessions report.
 - **Lazy hydration:** metadata creates lightweight session objects; `getSession` loads the per-session history snapshot and renders the embedded context frontier. A persisted live record remains hydratable even when archive rows exist, while an archive-only ID cannot implicitly start a new lifetime.
+- **Image canonicalization:** history append assigns sequence identity before materializing images; saves canonicalize history, queue, and managed inbox images, while lazy hydration performs tolerant read-old/write-new conversion for accessed legacy sessions.
 - **Session ID reservation:** one non-reentrant process-wide mutex spans check through strict commit for all public session creation/move façades. Nested implementation paths use private unlocked helpers; callback descendants cannot inherit a bypass capability. Automatic random/fork/child/timer allocation skips live IDs, aliases, and retained archive IDs.
 - **Critical persistence:** creation/move paths use strict history/metadata/channel writers and roll back known failed attempts, including partial archive appends. Ordinary runtime saves remain best-effort where callers historically do not handle persistence errors.
 - **Startup recovery:** pending identity-move recovery runs outside the ordinary best-effort load catch. Journal validation or recovery failure rejects initialization so partially recovered state is never loaded as a normal session stub.
@@ -68,6 +69,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - `src/sessionRuntimeState.ts` owns the canonical runtime-state model.
 - `src/migrations/` runs before normal lazy hydration.
 - `src/vector.ts` is used for archive-index lifecycle operations, not agent-memory-file CRUD.
+- `src/imageBlobs.ts` owns canonical image materialization and provider-compatible blob references.
 - `src/llm.ts` is used only for prompt/cache helpers required by lifecycle operations; the router owns the live LLM loop.
 
 ## Invariants

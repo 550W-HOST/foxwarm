@@ -4,7 +4,7 @@ Files: src/session/archive.ts, src/session/relations.ts, src/session/managedStat
 
 ## Purpose
 
-Provides session archiving (persisting messages with inline data extraction), parent/child session relationship management, managed session state tracking (leases, inboxes), message visibility control for display-only messages, stale session snapshot auto-refresh logic, and child session completion/reminder signaling.
+Provides session archiving (persisting messages with canonical image references), parent/child session relationship management, managed session state tracking (leases, inboxes), message visibility control for display-only messages, stale session snapshot auto-refresh logic, and child session completion/reminder signaling.
 
 ## Key Exports
 
@@ -25,9 +25,7 @@ Provides session archiving (persisting messages with inline data extraction), pa
 | `getMessageTimestamp(message)` | ~28 | Returns message timestamp or current time |
 | `getNextSessionMessageSeq(session)` | ~32 | Computes next available sequence number for a session |
 | `ensureMessageSeq(session, message)` | ~48 | Assigns or validates a sequence number on a message |
-| `getInlineDataMimeType(part)` | ~66 | Extracts MIME type from inline data part |
-| `getArchiveFileExtension(mimeType)` | ~70 | Maps MIME type to file extension |
-| `buildArchiveRecord(session, message)` | ~82 | Builds archive record, extracting inline images to disk |
+| `buildArchiveRecord(session, message)` | ~66 | Builds an archive record after canonical image materialization |
 | `appendMessagesToArchive(session, messages)` | ~126 | Appends messages to archive log and store |
 | `readArchiveMessages(sessionId)` | ~143 | Reads effective archive messages for a session |
 | `readLocalArchiveMessages(sessionId)` | ~147 | Reads local-only archive messages |
@@ -66,7 +64,8 @@ Provides session archiving (persisting messages with inline data extraction), pa
 ## Dependencies
 
 - `../types` — `Message`, `MessagePart`, `Session`, `QueueItem`
-- `../config` — `getSessionArchiveImagesDir`, `getSessionArchiveLogPath`
+- `../config` — `getSessionArchiveLogPath`
+- `../imageBlobs` — canonical image blob materialization
 - `../common` — `logger`
 - `./archiveStore` — `ensureSessionBranch`, `refreshSessionArchiveImportState`, `readEffectiveArchiveMessages`, `readLocalArchiveMessages`, `writeArchiveMessages`
 - `./metadataStore` — `getSessionHistoryFilePath`, `getSessionHistoryStore`
@@ -74,7 +73,7 @@ Provides session archiving (persisting messages with inline data extraction), pa
 
 ## Behavior
 
-- **Archive**: Extracts inline binary data (images) from message parts, writes them to disk with content hashing, replaces inline data with reference metadata, and appends JSONL records plus SQLite rows. Creation rollback can remove a partial append for a known uncommitted lifetime.
+- **Archive**: Canonicalizes image parts through the shared blob store before appending JSONL records plus SQLite rows. New archive rows contain blob references rather than inline base64 or per-session filesystem paths; compatible readers retain old path records. Creation rollback can remove a partial append for a known uncommitted lifetime.
 - **Relations**: Enforces agent isolation rules: if either side is isolated, an explicit direct parent/child link is allowed in either direction even across agent boundaries, while sibling and unrelated sessions are rejected. It also validates circular parent references and persists parent changes to metadata store.
 - **Inter-session target resolution and self-send guard**: `sendToSession` resolves literal `<main>` to the current agent's canonical main session and `<parent>` to the current session's parent before isolation/session lookup; `<parent>` without a parent errors clearly. It rejects cases where the resolved source session and target session are the same. The delivered content is wrapped as a single source-timestamped `<foxwarm-message type="inter-agent" sourceSessionId="..." replyVia="send_to_session" ...>raw body</foxwarm-message>` system part with escaped attrs and raw body text. The error includes `current_session_id`, `requested_session_id`, and `resolved_session_id` to correct agent identity confusion, and says that messages to the current session's direct user should be ordinary assistant text rather than `send_to_session`. Timestamp ownership is canonical in [D-pipeline-input-time](../threads/message-processing-pipeline.md#d-pipeline-input-time).
 - **Managed state**: Tracks session ownership via leases with TTL (15 min), manages pending inbox for managed sessions, routes queue items based on managed status.

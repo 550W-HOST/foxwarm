@@ -16,7 +16,8 @@ import * as vector from './vector';
 import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
-import { appendMessagesToArchive, getNextSessionMessageSeq } from './session/archive';
+import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq } from './session/archive';
+import { externalizeMessages, externalizeQueueItemImages, externalizeQueueItems } from './imageBlobs';
 import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
 import { ensureSessionBranch, hasArchivedSessionId, rollbackUncommittedSessionArchive } from './session/archiveStore';
 import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
@@ -46,6 +47,60 @@ const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
 
 let sessionIdentityLockTail: Promise<void> = Promise.resolve();
 const channelSessionCreationTails = new Map<string, Promise<void>>();
+
+async function externalizeSessionQueueImages(session: Session): Promise<boolean> {
+  const queue = session.queue || [];
+  const queueSnapshot = queue.slice();
+  const queueResult = await externalizeQueueItems(queueSnapshot);
+  const managed = getManagedSessionState(session);
+  const managedInboxResult = managed
+    ? await externalizeQueueItems(managed.pendingInbox)
+    : { items: [] as QueueItem[], changed: false };
+
+  if (!queueResult.changed && !managedInboxResult.changed) {
+    return false;
+  }
+
+  let changed = false;
+  if (queueResult.changed
+    && session.queue === queue
+    && queueSnapshot.every((item, index) => queue[index] === item)) {
+    queue.splice(0, queueSnapshot.length, ...queueResult.items);
+    changed = true;
+  } else if (queueResult.changed) {
+    throw new Error(`Session ${session.id} queue changed while image references were being materialized.`);
+  }
+  if (managed && managedInboxResult.changed) {
+    const currentManaged = getManagedSessionState(session);
+    if (currentManaged
+      && currentManaged.leaseId === managed.leaseId
+      && currentManaged.revision === managed.revision) {
+      currentManaged.pendingInbox = managedInboxResult.items;
+      setManagedSessionState(session, currentManaged);
+      changed = true;
+    } else {
+      throw new Error(`Session ${session.id} managed inbox changed while image references were being materialized.`);
+    }
+  }
+  return changed;
+}
+
+async function externalizeSessionImages(session: Session): Promise<boolean> {
+  const history = session.history || [];
+  const historySnapshot = history.slice();
+  const historyResult = await externalizeMessages(historySnapshot);
+  const queueChanged = await externalizeSessionQueueImages(session);
+  let historyChanged = false;
+  if (historyResult.changed
+    && session.history === history
+    && historySnapshot.every((message, index) => history[index] === message)) {
+    history.splice(0, historySnapshot.length, ...historyResult.messages);
+    historyChanged = true;
+  } else if (historyResult.changed) {
+    throw new Error(`Session ${session.id} history changed while image references were being materialized.`);
+  }
+  return historyChanged || queueChanged;
+}
 
 async function withSessionIdentityLock<T>(operation: () => Promise<T>): Promise<T> {
   const previous = sessionIdentityLockTail;
@@ -817,6 +872,16 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
     }
   }
 
+  try {
+    if (await externalizeSessionImages(session)) {
+      await saveSessionCritical(session.id);
+    }
+  } catch (error) {
+    // Legacy bytes remain intact in memory/on disk when blob materialization
+    // fails. Transport/provider boundaries retain their own tolerant readers.
+    logger.warn({ err: error, sessionId: session.id }, 'Failed to externalize legacy session images during lazy hydration');
+  }
+
   // Setup broadcast function
   if (!session.broadcast) {
     setupSessionBroadcast(sessionId);
@@ -1532,6 +1597,8 @@ async function saveSessionCritical(sessionId: string): Promise<void> {
     throw new Error(`Session "${sessionId}" not found for saving.`);
   }
 
+  await externalizeSessionImages(session);
+
   // Initialize historyVersion if not exists
   if (session.historyVersion === undefined) {
     session.historyVersion = 0;
@@ -1594,6 +1661,7 @@ async function saveSessionsMetadataCritical(): Promise<void> {
     }
 
     for (const [sessionId, session] of sessions.entries()) {
+      await externalizeSessionQueueImages(session);
       data.sessions[sessionId] = stripSessionMetadataForSave(session);
     }
 
@@ -1835,6 +1903,7 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
 
 async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem): Promise<void> {
   const sessionId = session.id;
+  item = (await externalizeQueueItemImages(item)).item;
   await reclaimManagedSessionIfStale(session);
   const managedBeforeEnqueue = !!getManagedSessionState(session);
 
@@ -2055,14 +2124,16 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
     return;
   }
 
-  await appendMessagesToArchive(session, messages);
+  for (const message of messages) ensureMessageSeq(session, message);
+  const canonicalMessages = (await externalizeMessages(messages)).messages;
+  await appendMessagesToArchive(session, canonicalMessages);
 
-  for (const message of messages) {
+  for (const message of canonicalMessages) {
     session.history.push(message);
   }
-  appendMessagesToContextFrontier(session, messages);
+  appendMessagesToContextFrontier(session, canonicalMessages);
 
-  const messagesToNotify = [...messages];
+  const messagesToNotify = [...canonicalMessages];
 
   if (options.strictPersistence) await saveSessionCritical(session.id);
   else await saveSession(session.id);
