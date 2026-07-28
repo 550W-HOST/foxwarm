@@ -31,6 +31,36 @@ async function createManager(root: string): Promise<PersistentExecManager> {
   });
 }
 
+test('persistent exec co-locates retained scripts and coordination metadata with dated log artifacts', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-artifacts-'));
+  const manager = await createManager(root);
+  const execRoot = path.join(root, 'exec');
+  const command = process.platform === 'win32' ? 'Write-Output "artifact placement"' : 'printf "artifact placement\\n"';
+
+  try {
+    const entry = await manager.startPersistentExec({ command, agentName: 'main', nodeId: 'master' });
+    const status = await manager.waitForExecCompletion(entry.id, 10_000);
+    assert.ok(status, 'short persistent exec should finish');
+
+    const datedDir = path.dirname(entry.logPath);
+    const commandSuffix = process.platform === 'win32' ? '.command.ps1' : '.command.sh';
+    assert.match(path.basename(datedDir), /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal(datedDir, path.dirname(entry.statusPath));
+    assert.equal(datedDir, path.dirname(entry.cwdPath));
+    assert.equal(await fs.pathExists(path.join(datedDir, `${entry.id}${commandSuffix}`)), true);
+    if (process.platform === 'win32') {
+      assert.equal(await fs.pathExists(path.join(datedDir, `${entry.id}.user.ps1`)), true);
+    }
+
+    assert.equal(await fs.pathExists(path.join(execRoot, `${entry.id}${commandSuffix}`)), false);
+    assert.equal(await fs.pathExists(path.join(execRoot, `${entry.id}.paths.json`)), false);
+    assert.equal(await fs.pathExists(path.join(datedDir, `${entry.id}.paths.json`)), false);
+    await manager.finalizeForegroundExec(entry.id);
+  } finally {
+    await fs.remove(root);
+  }
+});
+
 test('PersistentExecManager serializes concurrent registry mutations', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-'));
   const registryPath = path.join(root, 'running-exec.json');
@@ -75,6 +105,47 @@ test('PersistentExecManager serializes concurrent registry mutations', async () 
     persisted = await fs.readJson(registryPath);
     assert.deepEqual(persisted.execs, []);
     assert.deepEqual(manager.listRunningExecs(), []);
+  } finally {
+    await fs.remove(root);
+  }
+});
+
+test('persistent exec reconciles a dead stale entry after its dated artifact directory was removed', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-stale-status-'));
+  const registryPath = path.join(root, 'running-exec.json');
+  const statusPath = path.join(root, 'exec', '2026-07-27', 'stale.log.exit.json');
+  const entry = buildExecEntry(statusPath.slice(0, -'.exit.json'.length), {
+    id: 'stale-background-exec',
+    pid: 99_999_999,
+    startedAt: Date.now() - 10_000,
+    notifyOnCompletion: true,
+  });
+  const deliveries: Array<{ entry: RunningExecEntry; status: unknown }> = [];
+  const errors: unknown[] = [];
+  const manager = new PersistentExecManager({
+    registryPath,
+    nodeId: 'master',
+    getDefaultCwd: () => root,
+    getExecTempDir: () => path.join(root, 'exec'),
+    completionDispatcher: async (deliveredEntry, status) => {
+      deliveries.push({ entry: deliveredEntry, status });
+    },
+    logger: { error: payload => errors.push(payload) },
+  });
+
+  try {
+    await fs.writeJson(registryPath, { execs: [entry] });
+    assert.equal(await fs.pathExists(path.dirname(statusPath)), false);
+
+    await manager.initialize();
+
+    assert.equal(deliveries.length, 1);
+    assert.equal(deliveries[0].entry.id, entry.id);
+    assert.equal((deliveries[0].status as { error?: string }).error, 'Process exited but no status file was written.');
+    assert.equal(errors.length, 0);
+    assert.deepEqual(manager.listRunningExecs(), []);
+    assert.deepEqual((await fs.readJson(registryPath)).execs, []);
+    assert.equal((await fs.readJson(statusPath)).error, 'Process exited but no status file was written.');
   } finally {
     await fs.remove(root);
   }

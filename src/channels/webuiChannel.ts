@@ -1259,6 +1259,24 @@ export class WebUIChannel implements Channel {
       });
 
       httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/state',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const session = await sessionManager.getExistingSession(sessionId);
+            if (!session) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
+            res.json({ session: buildWebUiSessionState(session) });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get session state');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/history',
         method: 'GET',
         handler: async (req: express.Request, res: express.Response) => {
@@ -1272,6 +1290,7 @@ export class WebUIChannel implements Channel {
             res.json({
               session: buildWebUiSessionState(session),
               messages: session.history,
+              persistentMemorySnapshot: session.persistentMemorySnapshot || '',
               queuedMessages,
               queueLength: session.queue?.length || 0,
               queuedPreviewLimit: MAX_QUEUED_PREVIEW_ITEMS,
@@ -1846,9 +1865,9 @@ export class WebUIChannel implements Channel {
           // logger.info({ sessionId, clientCount: this.sseClients.get(sessionId)!.length }, 'SSE client connected');
           
           // Preserve the existing connection acknowledgement, then send a
-          // canonical state snapshot after registration. The snapshot closes
-          // the history/stream race: the history response supplies initial
-          // state, and this event reflects state at subscription time.
+          // canonical state snapshot after registration. Browser Chat starts
+          // history only after this registered stream opens, so live state and
+          // post-request messages take precedence over an older snapshot.
           res.write('data: {"type":"connected"}\n\n');
           const initialState = JSON.stringify({ type: 'session-state', session: buildWebUiSessionState(session) });
           res.write(`data: ${initialState}\n\n`);
@@ -2196,6 +2215,11 @@ export class WebUIChannel implements Channel {
           try {
             const sessionId = req.params.sessionId as string;
             const { text, parts, filePaths, uploadedFiles } = req.body;
+            const clientMessageId = typeof req.body?.clientMessageId === 'string'
+              && req.body.clientMessageId.length > 0
+              && req.body.clientMessageId.length <= 160
+              ? req.body.clientMessageId
+              : undefined;
 
             const existingSession = await sessionManager.getExistingSession(sessionId);
             if (!existingSession) {
@@ -2245,7 +2269,8 @@ export class WebUIChannel implements Channel {
               parts: finalParts,
               channelUserId: sessionId, // Use sessionId as channelUserId
               conversationId: sessionId,
-              username: 'webui'
+              username: 'webui',
+              ...(clientMessageId ? { clientMessageId } : {}),
             };
 
             const uploadedEntries = Array.isArray(uploadedFiles)

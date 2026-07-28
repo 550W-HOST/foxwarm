@@ -56,3 +56,4 @@ Defines the platform-neutral channel contract/registry, authorization inspection
 
 - Managed reload behavior: [D-channel-managed-reload](../modules/channels.md#d-channel-managed-reload).
 - Channel type/instance/conversation identity: [D-channel-identity-vocabulary](../modules/channels.md#d-channel-identity-vocabulary) and [D-channel-multiple-instances](../modules/channels.md#d-channel-multiple-instances).
+- WebUI-only optimistic client-message identity is transport metadata canonicalized by [D-streaming-optimistic-message-identity](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity).

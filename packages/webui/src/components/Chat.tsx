@@ -1,9 +1,10 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Check, Code2, Copy, ExternalLink, Menu, MessageSquareText, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
 import ChatTimeline from './ChatTimeline'
+import ContextScrollbar from './ContextScrollbar'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
@@ -15,8 +16,16 @@ import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import {
+  buildOptimisticUserMessage,
+  getClientMessageId,
+  hasStableHistoryIdentity,
+  mergeHistorySnapshot,
+  reconcileHistoryMessage,
+} from '../chatHistoryState'
+import {
   CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
+  CONTEXT_SCROLLBAR_ANCHOR_SELECTOR,
   chooseChatViewportState,
   getChatViewportAnchorAdjustment,
   getStoredChatViewportState,
@@ -232,9 +241,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
   const [resolvedSessionFilePath, setResolvedSessionFilePath] = useState<string | null>(null)
   const [sessionFilePayload, setSessionFilePayload] = useState<SessionFilePayload | null>(null)
+  const [persistentMemorySnapshot, setPersistentMemorySnapshot] = useState('')
   const [showFullTimeline, setShowFullTimeline] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
+  const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
 
   const viewportSessionId = canonicalSessionId || sessionId
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -250,7 +261,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const pendingUserLeaveBottomRef = useRef(false)
   const touchScrollStartYRef = useRef<number | null>(null)
   const pointerScrollInteractionRef = useRef(false)
-  const pendingSentMessagesRef = useRef<string[]>([])
+  const pendingSentMessageIdsRef = useRef<Set<string>>(new Set())
   const sessionBusyRef = useRef(false)
   const sessionQueueLengthRef = useRef(0)
   const queuedMessagesRef = useRef<Message[]>([])
@@ -266,9 +277,22 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const userInteractionVersionRef = useRef(0)
   const capturedInteractionVersionRef = useRef(0)
   const resizeRestoreFrameRef = useRef<number | null>(null)
+  const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
+  const pendingScrollToTrueTopRef = useRef(false)
   const modelRequestGateRef = useRef(createLatestRequestGate())
+  const historyRequestGateRef = useRef(createLatestRequestGate())
+  const historyAbortControllerRef = useRef<AbortController | null>(null)
+  const historyInFlightRef = useRef<{ sessionId: string; promise: Promise<boolean>; controller: AbortController } | null>(null)
+  const historyTrailingRefreshRef = useRef(false)
+  const historyEventVersionRef = useRef(0)
+  const historyStateEventVersionRef = useRef(0)
+  const historyModelStreamEventVersionRef = useRef(0)
+  const historyEventsRef = useRef<Array<{ version: number; message: Message }>>([])
+  const historyRefreshTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
+    setMessages([])
+    setHistoryLoaded(false)
     setStreamingAssistantDraft(null)
     setToolScriptProgress({})
     setQueuedMessages([])
@@ -278,7 +302,22 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     sessionBusyRef.current = false
     sessionQueueLengthRef.current = 0
     queuedMessagesRef.current = []
+    pendingSentMessageIdsRef.current.clear()
     sessionStateInitializedRef.current = false
+    historyRequestGateRef.current.invalidate()
+    historyAbortControllerRef.current?.abort()
+    historyAbortControllerRef.current = null
+    historyInFlightRef.current = null
+    historyTrailingRefreshRef.current = false
+    historyEventVersionRef.current = 0
+    historyStateEventVersionRef.current = 0
+    historyModelStreamEventVersionRef.current = 0
+    historyEventsRef.current = []
+    setPersistentMemorySnapshot('')
+    setResolvedSessionFilePath(null)
+    setSessionFilePayload(null)
+    pendingContextScrollbarNavigationRef.current = null
+    pendingScrollToTrueTopRef.current = false
   }, [sessionId])
 
   useEffect(() => {
@@ -493,9 +532,35 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       markUserViewportInteraction()
       shouldAutoScrollRef.current = false
       pendingUserLeaveBottomRef.current = false
+      if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+        pendingScrollToTrueTopRef.current = true
+        setShowFullTimeline(true)
+        return
+      }
       container.scrollTop = 0
     }
-  }, [markUserViewportInteraction])
+  }, [markUserViewportInteraction, messages.length, showFullTimeline])
+
+  const scrollToContextScrollbarAnchor = useCallback((anchorKey: string, fraction: number): boolean => {
+    const container = messagesContainerRef.current
+    const timeline = committedTimelineRef.current
+    if (!container || !timeline) return false
+    const anchor = Array.from(timeline.querySelectorAll<HTMLElement>(CONTEXT_SCROLLBAR_ANCHOR_SELECTOR))
+      .find((element) => element.getAttribute('data-context-scrollbar-anchor-key') === anchorKey)
+    if (!anchor) return false
+    const offset = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
+    container.scrollTop += offset + anchor.getBoundingClientRect().height * Math.max(0, Math.min(1, fraction))
+    return true
+  }, [])
+
+  const handleContextScrollbarNavigate = useCallback((anchorKey: string, fraction: number) => {
+    // This is an explicit pointer/keyboard scroll intent, so use the same
+    // latch as wheel/touch/scrollbar interaction before moving native scroll.
+    leaveBottomFollow()
+    if (scrollToContextScrollbarAnchor(anchorKey, fraction)) return
+    pendingContextScrollbarNavigationRef.current = { anchorKey, fraction }
+    setShowFullTimeline(true)
+  }, [leaveBottomFollow, scrollToContextScrollbarAnchor])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -609,42 +674,118 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [])
 
   const fetchHistory = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history`)
-      if (res.status === 404) {
-        setSessionMissing(true)
-        setMessages([])
-        setQueuedMessages([])
-        setSessionQueueLength(0)
-        lastKnownTimestampRef.current = 0
-        setHistoryLoaded(true)
-        return false
-      }
-
-      if (res.ok) {
-        const data = await res.json()
-        setSessionMissing(false)
-        applySessionState(data.session)
-        setMessages(data.messages || [])
-        const nextQueuedMessages = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
-        setQueuedMessages(nextQueuedMessages)
-        if (typeof data.queueLength === 'number') {
-          setSessionQueueLength(data.queueLength)
-        }
-        setStreamingAssistantDraft(null)
-        const lastMsg = data.messages?.[data.messages.length - 1]
-        if (lastMsg?.__meta?.timestamp) {
-          lastKnownTimestampRef.current = lastMsg.__meta.timestamp
-        }
-        setHistoryLoaded(true)
-        return true
-      }
-      return true
-    } catch (e) {
-      console.error('Failed to fetch history:', e)
-      return true
+    const activeRequest = historyInFlightRef.current
+    if (activeRequest?.sessionId === sessionId) {
+      historyTrailingRefreshRef.current = true
+      return activeRequest.promise
     }
+
+    const requestSequence = historyRequestGateRef.current.begin()
+    const eventVersionAtStart = historyEventVersionRef.current
+    const stateEventVersionAtStart = historyStateEventVersionRef.current
+    const modelStreamEventVersionAtStart = historyModelStreamEventVersionRef.current
+    const controller = new AbortController()
+    historyAbortControllerRef.current = controller
+
+    const requestPromise = (async () => {
+      try {
+        const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history`, {
+          signal: controller.signal,
+        })
+        if (!historyRequestGateRef.current.isCurrent(requestSequence)) return true
+
+        if (res.status === 404) {
+          if (historyStateEventVersionRef.current > stateEventVersionAtStart) return true
+          setSessionMissing(true)
+          setMessages([])
+          setQueuedMessages([])
+          setSessionQueueLength(0)
+          setPersistentMemorySnapshot('')
+          lastKnownTimestampRef.current = 0
+          setHistoryLoaded(true)
+          return false
+        }
+
+        if (res.ok) {
+          const data = await res.json()
+          if (!historyRequestGateRef.current.isCurrent(requestSequence)) return true
+
+          const concurrentMessages = historyEventsRef.current
+            .filter(entry => entry.version > eventVersionAtStart)
+            .map(entry => entry.message)
+          const snapshotMessages = Array.isArray(data.messages) ? data.messages as Message[] : []
+          const hasNewerStreamState = historyStateEventVersionRef.current > stateEventVersionAtStart
+          const hasNewerModelStream = historyModelStreamEventVersionRef.current > modelStreamEventVersionAtStart
+          const historyQueueLength = typeof data.queueLength === 'number' ? data.queueLength : null
+          const hasNewerMismatchedQueue = hasNewerStreamState
+            && historyQueueLength !== null
+            && historyQueueLength !== sessionQueueLengthRef.current
+
+          if (!hasNewerStreamState) {
+            setSessionMissing(false)
+            applySessionState(data.session)
+          }
+          setMessages(currentMessages => mergeHistorySnapshot({
+            snapshot: snapshotMessages,
+            concurrentMessages,
+            currentMessages,
+            pendingClientMessageIds: pendingSentMessageIdsRef.current,
+          }))
+          for (const message of snapshotMessages) {
+            const clientMessageId = getClientMessageId(message)
+            if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+          }
+          const nextQueuedMessages = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+          if (hasNewerMismatchedQueue) {
+            historyTrailingRefreshRef.current = true
+          } else {
+            setQueuedMessages(nextQueuedMessages)
+          }
+          setPersistentMemorySnapshot(typeof data.persistentMemorySnapshot === 'string' ? data.persistentMemorySnapshot : '')
+          if (!hasNewerStreamState && typeof data.queueLength === 'number') {
+            setSessionQueueLength(data.queueLength)
+          }
+          if (!hasNewerModelStream) setStreamingAssistantDraft(null)
+          const lastMsg = snapshotMessages[snapshotMessages.length - 1]
+          if (lastMsg?.__meta?.timestamp) {
+            lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, lastMsg.__meta.timestamp)
+          }
+          historyEventsRef.current = []
+          setHistoryLoaded(true)
+          return true
+        }
+        return true
+      } catch (e) {
+        if (controller.signal.aborted) return true
+        console.error('Failed to fetch history:', e)
+        return true
+      } finally {
+        if (historyAbortControllerRef.current === controller) {
+          historyAbortControllerRef.current = null
+        }
+      }
+    })()
+
+    historyInFlightRef.current = { sessionId, promise: requestPromise, controller }
+    void requestPromise.finally(() => {
+      if (historyInFlightRef.current?.controller !== controller) return
+      historyInFlightRef.current = null
+      if (!historyTrailingRefreshRef.current || !historyRequestGateRef.current.isCurrent(requestSequence)) return
+      historyTrailingRefreshRef.current = false
+      void fetchHistory()
+    })
+    return requestPromise
   }, [applySessionState, sessionId])
+
+  const scheduleHistoryRefresh = useCallback((delay = 100) => {
+    if (historyRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(historyRefreshTimeoutRef.current)
+    }
+    historyRefreshTimeoutRef.current = window.setTimeout(() => {
+      historyRefreshTimeoutRef.current = null
+      void fetchHistory()
+    }, delay)
+  }, [fetchHistory])
 
   const connectSSE = useCallback(() => {
     if (eventSourceRef.current) {
@@ -664,34 +805,59 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
     setConnectionState('connecting')
     const es = new EventSource(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/stream`)
+    let opened = false
 
     es.onopen = () => {
+      opened = true
       setConnectionState('connected')
       reconnectDelayRef.current = 1000
+      void fetchHistory().then((sessionExists) => {
+        if (sessionExists || eventSourceRef.current !== es) return
+        es.close()
+        eventSourceRef.current = null
+        setConnectionState('disconnected')
+      })
     }
 
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
         if (data.type === 'session-state') {
+          historyStateEventVersionRef.current += 1
           const hadSessionState = sessionStateInitializedRef.current
           const previousQueueLength = sessionQueueLengthRef.current
           const nextQueueLength = typeof data.session?.queueLength === 'number' ? data.session.queueLength : 0
+          setSessionMissing(false)
           applySessionState(data.session)
           if (hadSessionState && (
             nextQueueLength !== previousQueueLength ||
             (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)
           )) {
-            void fetchHistory()
+            scheduleHistoryRefresh()
           }
           return
         }
 
         if (data.type === 'session-deleted') {
+          historyRequestGateRef.current.invalidate()
+          historyAbortControllerRef.current?.abort()
+          historyAbortControllerRef.current = null
+          historyInFlightRef.current = null
+          historyTrailingRefreshRef.current = false
+          historyEventsRef.current = []
+          if (historyRefreshTimeoutRef.current !== null) {
+            window.clearTimeout(historyRefreshTimeoutRef.current)
+            historyRefreshTimeoutRef.current = null
+          }
           setSessionMissing(true)
           setSessionBusy(false)
           setSessionQueueLength(0)
           setQueuedMessages([])
+          setMessages([])
+          setPersistentMemorySnapshot('')
+          setStreamingAssistantDraft(null)
+          setHistoryLoaded(true)
+          lastKnownTimestampRef.current = 0
           sessionBusyRef.current = false
           sessionQueueLengthRef.current = 0
           queuedMessagesRef.current = []
@@ -704,6 +870,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         if (data.type === 'session-event') {
           const sessionEvent = data.event as SessionStreamEvent
           if (sessionEvent.type === 'model-stream-reset') {
+            historyModelStreamEventVersionRef.current += 1
             setStreamingAssistantDraft({
               streamId: sessionEvent.streamId || `stream-${sessionEvent.iteration ?? 'current'}`,
               iteration: sessionEvent.iteration,
@@ -712,6 +879,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               toolCalls: [],
             })
           } else if (sessionEvent.type === 'model-stream-update') {
+            historyModelStreamEventVersionRef.current += 1
             const streamId = sessionEvent.streamId || `stream-${sessionEvent.iteration ?? 'current'}`
             setStreamingAssistantDraft(prev => ({
               streamId,
@@ -741,75 +909,31 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           }
 
           if (sessionQueueLengthRef.current > 0 || queuedMessagesRef.current.length > 0) {
-            window.setTimeout(() => {
-              void fetchHistory()
-            }, 100)
+            scheduleHistoryRefresh()
           }
 
-          if (!isCommandResponse && !isUpdateExisting) {
-            if (msgTimestamp && msgTimestamp <= lastKnownTimestampRef.current) {
-              return
-            }
+          const incomingMessage = data.message as Message
+          const hasStableIdentity = hasStableHistoryIdentity(incomingMessage)
+          if (!isCommandResponse && !isUpdateExisting && !hasStableIdentity
+            && msgTimestamp && msgTimestamp <= lastKnownTimestampRef.current) {
+            return
           }
 
-          setMessages(prev => {
-            const msgSeq = data.message.__meta?.seq
-            const msgId = data.message.__meta?.id
-            if (!isCommandResponse && (msgSeq || msgId)) {
-              const existingIndex = prev.findIndex(m => (
-                (msgSeq && m.__meta?.seq === msgSeq) ||
-                (msgId && m.__meta?.id === msgId)
-              ))
-              if (existingIndex !== -1) {
-                if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
-                  lastKnownTimestampRef.current = msgTimestamp
-                }
-                const next = [...prev]
-                next[existingIndex] = data.message
-                return next
-              }
-            }
+          const clientMessageId = getClientMessageId(incomingMessage)
+          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+          historyEventVersionRef.current += 1
+          if (historyAbortControllerRef.current) {
+            historyEventsRef.current.push({
+              version: historyEventVersionRef.current,
+              message: incomingMessage,
+            })
+          }
 
-            if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
-              const exists = prev.some(m => m.__meta?.timestamp === msgTimestamp)
-              if (exists) {
-                return prev
-              }
-            }
+          setMessages(prev => reconcileHistoryMessage(prev, incomingMessage))
 
-            if (data.message.role === 'user') {
-              const newMessageText = data.message.parts
-                .map((p: MessagePart) => p.text || '')
-                .join('')
-                .trim()
-
-              const pendingIndex = pendingSentMessagesRef.current.findIndex(pending =>
-                newMessageText.includes(pending) || pending.includes(newMessageText)
-              )
-
-              if (pendingIndex !== -1) {
-                pendingSentMessagesRef.current.splice(pendingIndex, 1)
-
-                const filtered = prev.filter((m) => {
-                  if (m.role !== 'user') return true
-                  const userMessages = prev.filter(msg => msg.role === 'user')
-                  const isLastUser = m === userMessages[userMessages.length - 1]
-                  return !isLastUser
-                })
-
-                if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
-                  lastKnownTimestampRef.current = msgTimestamp
-                }
-
-                return [...filtered, data.message]
-              }
-            }
-
-            if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
-              lastKnownTimestampRef.current = msgTimestamp
-            }
-            return [...prev, data.message]
-          })
+          if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
+            lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, msgTimestamp)
+          }
 
           // Clean up toolscript progress when tool response message arrives
           if (data.message.role === 'tool') {
@@ -839,40 +963,83 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       es.close()
 
       if (es.readyState === EventSource.CLOSED) {
-        setConnectionState('reconnecting')
-        const delay = Math.min(reconnectDelayRef.current, 30000)
-        setReconnectCountdown(Math.ceil(delay / 1000))
+        const scheduleReconnect = () => {
+          setConnectionState('reconnecting')
+          const delay = Math.min(reconnectDelayRef.current, 30000)
+          setReconnectCountdown(Math.ceil(delay / 1000))
 
-        countdownIntervalRef.current = setInterval(() => {
-          setReconnectCountdown(prev => {
-            if (prev <= 1) {
-              if (countdownIntervalRef.current) {
-                clearInterval(countdownIntervalRef.current)
-                countdownIntervalRef.current = null
+          countdownIntervalRef.current = setInterval(() => {
+            setReconnectCountdown(prev => {
+              if (prev <= 1) {
+                if (countdownIntervalRef.current) {
+                  clearInterval(countdownIntervalRef.current)
+                  countdownIntervalRef.current = null
+                }
+                return 0
               }
-              return 0
-            }
-            return prev - 1
-          })
-        }, 1000)
+              return prev - 1
+            })
+          }, 1000)
 
-        reconnectTimeoutRef.current = setTimeout(() => {
-          fetchHistory().then((sessionExists) => {
-            if (sessionExists) {
-              connectSSE()
-            } else {
-              setConnectionState('disconnected')
+          reconnectTimeoutRef.current = setTimeout(() => {
+            connectSSE()
+            reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000)
+          }, delay)
+        }
+
+        if (opened) {
+          scheduleReconnect()
+        } else {
+          void (async () => {
+            try {
+              const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/state`)
+              if (eventSourceRef.current !== es) return
+              if (response.status === 404) {
+                historyRequestGateRef.current.invalidate()
+                historyAbortControllerRef.current?.abort()
+                historyAbortControllerRef.current = null
+                historyInFlightRef.current = null
+                historyTrailingRefreshRef.current = false
+                if (historyRefreshTimeoutRef.current !== null) {
+                  window.clearTimeout(historyRefreshTimeoutRef.current)
+                  historyRefreshTimeoutRef.current = null
+                }
+                setSessionMissing(true)
+                setSessionBusy(false)
+                setMessages([])
+                setQueuedMessages([])
+                setSessionQueueLength(0)
+                setPersistentMemorySnapshot('')
+                setStreamingAssistantDraft(null)
+                setHistoryLoaded(true)
+                lastKnownTimestampRef.current = 0
+                sessionBusyRef.current = false
+                sessionQueueLengthRef.current = 0
+                queuedMessagesRef.current = []
+                eventSourceRef.current = null
+                setConnectionState('disconnected')
+                return
+              }
+              if (response.ok) {
+                const data = await response.json()
+                if (eventSourceRef.current !== es) return
+                historyStateEventVersionRef.current += 1
+                setSessionMissing(false)
+                applySessionState(data.session)
+              }
+            } catch (error) {
+              console.error('Failed to probe session state after stream connection failure:', error)
             }
-          })
-          reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000)
-        }, delay)
+            if (eventSourceRef.current === es) scheduleReconnect()
+          })()
+        }
       } else {
         setConnectionState('disconnected')
       }
     }
 
     eventSourceRef.current = es
-  }, [applySessionState, fetchHistory, sessionId])
+  }, [applySessionState, fetchHistory, scheduleHistoryRefresh, sessionId])
 
   const refreshSessionDebugData = useCallback(async () => {
     setDebugInfoLoading(true)
@@ -907,7 +1074,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Failed to update model (${res.status})`)
       setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
-      await refreshSessionDebugData()
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update model'
       setModelError(message)
@@ -915,7 +1081,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     } finally {
       setModelBusy(false)
     }
-  }, [refreshSessionDebugData, sessionId])
+  }, [sessionId])
 
   const updateChildModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -929,7 +1095,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Failed to update child default model (${res.status})`)
       setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
-      await refreshSessionDebugData()
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update child default model'
       setModelError(message)
@@ -937,10 +1102,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     } finally {
       setModelBusy(false)
     }
-  }, [refreshSessionDebugData, sessionId])
+  }, [sessionId])
 
   useEffect(() => {
-    fetchHistory()
     connectSSE()
 
     return () => {
@@ -956,12 +1120,17 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         clearInterval(countdownIntervalRef.current)
         countdownIntervalRef.current = null
       }
+      if (historyRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(historyRefreshTimeoutRef.current)
+        historyRefreshTimeoutRef.current = null
+      }
+      historyRequestGateRef.current.invalidate()
+      historyAbortControllerRef.current?.abort()
+      historyAbortControllerRef.current = null
+      historyInFlightRef.current = null
+      historyTrailingRefreshRef.current = false
     }
   }, [connectSSE, fetchHistory])
-
-  useEffect(() => {
-    refreshSessionDebugData()
-  }, [refreshSessionDebugData])
 
   useEffect(() => {
     if (!pendingViewportRestoreRef.current && shouldAutoScrollRef.current) {
@@ -970,9 +1139,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
-    const snapshotText = typeof sessionFilePayload?.persistentMemorySnapshot === 'string'
-      ? sessionFilePayload.persistentMemorySnapshot.trim()
-      : ''
+    const snapshotText = persistentMemorySnapshot.trim()
 
     if (!snapshotText) {
       return null
@@ -986,7 +1153,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         synthetic: 'persistentMemorySnapshot',
       },
     }
-  }, [sessionFilePayload])
+  }, [persistentMemorySnapshot])
 
   const visibleMessages = useMemo(() => {
     if (showFullTimeline || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
@@ -1005,6 +1172,28 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     const baseMessages = snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
     return streamingAssistantMessage ? [...baseMessages, streamingAssistantMessage] : baseMessages
   }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages])
+
+  useLayoutEffect(() => {
+    if (!pendingScrollToTrueTopRef.current) return
+    const container = messagesContainerRef.current
+    if (!container || !showFullTimeline) return
+    container.scrollTop = 0
+    pendingScrollToTrueTopRef.current = false
+  }, [showFullTimeline, timelineMessages])
+
+  useEffect(() => {
+    if (showFullTimeline || !historyLoaded || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) return
+    const container = messagesContainerRef.current
+    const content = messagesContentRef.current
+    if (!container || !content) return
+    const expandIfNoUpwardScroll = () => {
+      if (container.scrollHeight <= container.clientHeight + 1) setShowFullTimeline(true)
+    }
+    expandIfNoUpwardScroll()
+    const observer = new ResizeObserver(expandIfNoUpwardScroll)
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [historyLoaded, messages.length, showFullTimeline, timelineMessages])
 
   useLayoutEffect(() => {
     const pending = pendingViewportRestoreRef.current
@@ -1031,6 +1220,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       applyViewportState(fallbackState)
     }
   }, [applyViewportState, historyLoaded, messages.length, showFullTimeline, timelineMessages])
+
+  useLayoutEffect(() => {
+    const pending = pendingContextScrollbarNavigationRef.current
+    if (!pending) return
+    if (scrollToContextScrollbarAnchor(pending.anchorKey, pending.fraction)) {
+      pendingContextScrollbarNavigationRef.current = null
+    }
+  }, [scrollToContextScrollbarAnchor, showFullTimeline, timelineMessages])
 
   useEffect(() => {
     const content = messagesContentRef.current
@@ -1149,9 +1346,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     setStreamingAssistantDraft(null)
 
     const userMessage = text.trim()
+    const isSlashCommand = /^\/[a-zA-Z_\-.]+(?:\s+.*)?$/s.test(userMessage)
     const files = [...attachments]
     const sendTimestamp = Date.now()
-    lastKnownTimestampRef.current = sendTimestamp
+    const clientMessageId = globalThis.crypto?.randomUUID?.()
+      || `webui-${sendTimestamp}-${Math.random().toString(36).slice(2)}`
 
     const parts: any[] = []
     let messageText = userMessage
@@ -1195,43 +1394,58 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
     const previewParts = messageText ? [{ text: messageText }] : parts
 
-    const appendOptimistic = shouldAppendOptimisticMessage(sessionBusyRef.current, sessionQueueLengthRef.current)
+    const appendOptimistic = !isSlashCommand
+      && shouldAppendOptimisticMessage(sessionBusyRef.current, sessionQueueLengthRef.current)
     if (appendOptimistic) {
-      pendingSentMessagesRef.current.push(userMessage)
-      setMessages(prev => [...prev, { role: 'user', parts: previewParts }])
+      pendingSentMessageIdsRef.current.add(clientMessageId)
+      setMessages(prev => [...prev, buildOptimisticUserMessage({
+        clientMessageId,
+        parts: previewParts,
+        timestamp: sendTimestamp,
+      })])
     }
 
-    try {
-      fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
+    void fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ parts, uploadedFiles }),
+        body: JSON.stringify({
+          parts,
+          uploadedFiles,
+          ...(!isSlashCommand ? { clientMessageId } : {}),
+        }),
       })
-        .then(response => {
-          if (!response.ok) {
-            throw new Error(`Failed to send message (${response.status})`)
-          }
-          if (!appendOptimistic) {
-            window.setTimeout(() => {
-              void fetchHistory()
-            }, 100)
-          }
+      .then(response => {
+        if (!response.ok) throw new Error(`Failed to send message (${response.status})`)
+        if (!appendOptimistic) scheduleHistoryRefresh()
+      })
+      .catch(e => {
+        console.error('Failed to send message:', e)
+        pendingSentMessageIdsRef.current.delete(clientMessageId)
+        setMessages(prev => {
+          const hasReconciledRow = prev.some(message => (
+            !message.__meta?.optimistic
+            && getClientMessageId(message) === clientMessageId
+          ))
+          const hasPendingOptimisticRow = prev.some(message => (
+            message.__meta?.optimistic
+            && getClientMessageId(message) === clientMessageId
+          ))
+          if (appendOptimistic && (hasReconciledRow || !hasPendingOptimisticRow)) return prev
+          return [
+            ...prev.filter(message => !(
+              message.__meta?.optimistic
+              && getClientMessageId(message) === clientMessageId
+            )),
+            { role: 'model', parts: [{ text: 'Error: Failed to send message' }], __meta: { temporary: true, timestamp: Date.now() } },
+          ]
         })
-        .catch(e => {
-          console.error('Failed to send message:', e)
-          setMessages(prev => [...prev, { role: 'model', parts: [{ text: 'Error: Failed to send message' }] }])
-        })
+      })
 
-      setLoading(false)
-      return true
-    } catch (e) {
-      console.error('Failed to send message:', e)
-      setLoading(false)
-      return false
-    }
-  }, [fetchHistory, loading, sessionId, sessionMissing])
+    setLoading(false)
+    return true
+  }, [loading, scheduleHistoryRefresh, sessionId, sessionMissing])
 
   const sendSessionCommand = useCallback(async (command: string) => {
     if (sessionMissing) return
@@ -1422,6 +1636,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     })
   }, [messages])
 
+  const contextLimit = useMemo(() => {
+    const currentModelKey = sessionRecord?.modelKey
+    return modelOptions.find(option => option.key === currentModelKey)?.contextLimit ?? null
+  }, [modelOptions, sessionRecord?.modelKey])
+
   return (
     <div ref={chatRootRef} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       <ContentHeader
@@ -1506,8 +1725,21 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       )}
 
       <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
-        <div ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-x-hidden overflow-y-auto p-4">
-          <div ref={messagesContentRef} className="min-w-0 max-w-full overflow-x-hidden">
+        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-x-hidden overflow-y-auto p-4">
+          {!isMobile && (
+            <div className="foxwarm-context-scrollbar-overlay">
+              <ContextScrollbar
+                messages={messages}
+                persistentMemorySnapshot={snapshotSystemMessage}
+                contextLimit={contextLimit}
+                containerId={chatMessageContainerId}
+                containerRef={messagesContainerRef}
+                timelineRef={committedTimelineRef}
+                onNavigate={handleContextScrollbarNavigate}
+              />
+            </div>
+          )}
+          <div ref={messagesContentRef} className="foxwarm-chat-messages-content min-w-0 max-w-full overflow-x-hidden">
             {hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
@@ -1534,7 +1766,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
           </div>
         </div>
-
         {showScrollTopButton && (
           <button
             onClick={scrollToTop}

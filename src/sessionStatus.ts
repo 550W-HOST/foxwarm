@@ -56,7 +56,10 @@ function formatUsage(usage: TokenUsage | null, total: number): string {
     return 'none';
   }
 
-  return `cached=${formatNumber(usage.cachedTokens || 0)}, input=${formatNumber(usage.inputTokens || 0)}, output=${formatNumber(usage.outputTokens || 0)}, total=${formatNumber(total)}`;
+  const reasoning = usage.reasoningTokens === undefined
+    ? ''
+    : ` (reasoning=${formatNumber(usage.reasoningTokens)})`;
+  return `cached=${formatNumber(usage.cachedTokens || 0)}, input=${formatNumber(usage.inputTokens || 0)}, output=${formatNumber(usage.outputTokens || 0)}${reasoning}, total=${formatNumber(total)}`;
 }
 
 function getNodeInfo(nodeId: string): SessionStatusInfo['currentNode'] {

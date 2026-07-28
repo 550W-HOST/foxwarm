@@ -114,6 +114,309 @@ html.dark {
   background-color: var(--foxwarm-scrollbar-thumb-hover);
 }
 
+/* The chat context overview owns a dedicated desktop gutter while the native
+ * message element remains the actual scroll container. */
+.foxwarm-context-scrollbar-shell {
+  display: none;
+}
+
+.foxwarm-chat-root {
+  container-type: inline-size;
+}
+
+@media (min-width: 769px) {
+  .foxwarm-chat-message-region {
+    display: flex;
+  }
+
+  .foxwarm-chat-messages {
+    min-width: 0;
+    flex: 1 1 auto;
+    position: relative;
+    container-type: size;
+    scrollbar-width: none;
+  }
+
+  .foxwarm-chat-messages::-webkit-scrollbar {
+    display: none;
+  }
+
+  .foxwarm-chat-messages[data-show-system-scrollbar="true"] {
+    scrollbar-width: auto;
+  }
+
+  .foxwarm-chat-messages[data-show-system-scrollbar="true"]::-webkit-scrollbar {
+    display: block;
+  }
+
+  .foxwarm-context-scrollbar-shell {
+    display: block;
+    position: relative;
+    width: 32px;
+    flex: 0 0 32px;
+    padding: 0;
+    background: transparent;
+    z-index: 30;
+    opacity: 0.5;
+    transition: opacity 120ms ease;
+  }
+
+  .foxwarm-context-scrollbar-shell:hover,
+  .foxwarm-context-scrollbar-shell:has(.foxwarm-context-scrollbar:focus-visible) {
+    opacity: 1;
+  }
+
+  .foxwarm-context-scrollbar-shell[data-context-scrollbar-dragging="true"] {
+    opacity: 1;
+  }
+
+  .foxwarm-context-scrollbar-overlay {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    height: 0;
+    pointer-events: none;
+  }
+
+  .foxwarm-context-scrollbar-overlay .foxwarm-context-scrollbar-shell {
+    position: absolute;
+    top: 0;
+    right: -16px;
+    height: 100cqh;
+    pointer-events: auto;
+  }
+
+  .foxwarm-chat-messages-content {
+    padding-right: 32px;
+  }
+
+  .foxwarm-chat-messages[data-show-context-minimap="false"] .foxwarm-chat-messages-content {
+    padding-right: 0;
+  }
+
+  @container (max-width: 1151px) {
+    .foxwarm-chat-root .foxwarm-chat-composer-inner {
+      max-width: calc(100% - 48px);
+      margin-left: 0;
+      margin-right: 48px;
+    }
+  }
+
+  .foxwarm-context-scrollbar {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 24px;
+    overflow: hidden;
+    cursor: pointer;
+    outline: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+    touch-action: none;
+    border-radius: 0.5rem 0 0 0.5rem;
+    background: color-mix(in srgb, var(--foxwarm-scrollbar-track) 72%, var(--foxwarm-scrollbar-thumb));
+  }
+
+  .foxwarm-context-scrollbar:focus-visible {
+    box-shadow: 0 0 0 2px rgb(59 130 246 / 0.72);
+  }
+
+  .foxwarm-context-scrollbar-used {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .foxwarm-context-scrollbar-segment {
+    width: 100%;
+  }
+
+  .foxwarm-context-scrollbar-tone-user { background: rgb(59 130 246); }
+  .foxwarm-context-scrollbar-tone-assistant { background: rgb(255 255 255); }
+  .foxwarm-context-scrollbar-tone-reasoning { background: rgb(148 163 184); }
+  .foxwarm-context-scrollbar-tone-tool-neutral { background: rgb(148 163 184); }
+  .foxwarm-context-scrollbar-tone-tool-success { background: rgb(52 211 153); }
+  .foxwarm-context-scrollbar-tone-tool-error { background: rgb(248 113 113); }
+  .foxwarm-context-scrollbar-tone-system { background: rgb(96 165 250); }
+  .foxwarm-context-scrollbar-tone-context-block { background: rgb(148 163 184); }
+
+  .dark .foxwarm-context-scrollbar-tone-assistant { background: rgb(31 41 55); }
+  .dark .foxwarm-context-scrollbar-tone-reasoning { background: rgb(100 116 139); }
+  .dark .foxwarm-context-scrollbar-tone-tool-neutral { background: rgb(100 116 139); }
+  .dark .foxwarm-context-scrollbar-tone-tool-success { background: rgb(16 185 129); }
+  .dark .foxwarm-context-scrollbar-tone-tool-error { background: rgb(239 68 68); }
+  .dark .foxwarm-context-scrollbar-tone-system { background: rgb(37 99 235); }
+  .dark .foxwarm-context-scrollbar-tone-context-block { background: rgb(100 116 139); }
+
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-tool-neutral,
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-context-block { background: color-mix(in srgb, var(--foxwarm-550a-text-dim) 60%, var(--foxwarm-550a-panel)); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-assistant { background: var(--foxwarm-550a-panel); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-reasoning { background: color-mix(in srgb, var(--foxwarm-550a-hover) 76%, var(--foxwarm-550a-text-dim)); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-user { background: color-mix(in srgb, var(--foxwarm-550a-accent-dim) 58%, var(--foxwarm-550a-panel)); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-tool-success { background: color-mix(in srgb, var(--foxwarm-550a-green) 48%, var(--foxwarm-550a-panel)); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-tool-error { background: color-mix(in srgb, var(--foxwarm-550a-orange) 50%, var(--foxwarm-550a-panel)); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tone-system { background: color-mix(in srgb, #5b9bd5 48%, var(--foxwarm-550a-panel)); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar { border-radius: 0; }
+
+  .foxwarm-context-scrollbar-free {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    background: rgb(148 163 184 / 0.12);
+    pointer-events: none;
+  }
+
+  .foxwarm-context-scrollbar-viewport {
+    position: absolute;
+    right: 0;
+    left: 0;
+    border-radius: 0;
+    background: rgb(0 0 0 / 0.38);
+    box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.46);
+    pointer-events: auto;
+  }
+
+  .foxwarm-context-scrollbar-viewport:hover {
+    background: rgb(0 0 0 / 0.56);
+    box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.68);
+  }
+
+  .foxwarm-context-scrollbar-shell[data-context-scrollbar-dragging="true"] .foxwarm-context-scrollbar-viewport {
+    background: rgb(0 0 0 / 0.47);
+    box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.57);
+  }
+
+  .dark .foxwarm-context-scrollbar-viewport {
+    background: rgb(255 255 255 / 0.38);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.46);
+  }
+
+  .dark .foxwarm-context-scrollbar-viewport:hover {
+    background: rgb(255 255 255 / 0.56);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.68);
+  }
+
+  .dark .foxwarm-context-scrollbar-shell[data-context-scrollbar-dragging="true"] .foxwarm-context-scrollbar-viewport {
+    background: rgb(255 255 255 / 0.47);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.57);
+  }
+
+  .foxwarm-context-scrollbar-info {
+    position: absolute;
+    left: 16px;
+    bottom: calc((32px - 17px) / 2);
+    z-index: 2;
+    transform: translateX(-50%);
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  .foxwarm-context-scrollbar-info-button {
+    display: grid;
+    width: 17px;
+    height: 17px;
+    place-items: center;
+    border: 1px solid rgb(100 116 139 / 0.56);
+    border-radius: 9999px;
+    background: rgb(255 255 255 / 0.34);
+    color: rgb(51 65 85 / 0.86);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: help;
+    touch-action: none;
+  }
+
+  .foxwarm-context-scrollbar-info-button:hover,
+  .foxwarm-context-scrollbar-info-button:focus-visible {
+    background: rgb(255 255 255 / 0.72);
+    outline: none;
+  }
+
+  .foxwarm-context-scrollbar-tooltip {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    display: none;
+    width: max-content;
+    min-width: 190px;
+    max-width: 250px;
+    padding: 6px 7px;
+    border: 1px solid rgb(100 116 139 / 0.36);
+    border-radius: 0.5rem;
+    background: rgb(255 255 255 / 0.94);
+    color: rgb(51 65 85);
+    box-shadow: 0 4px 12px rgb(15 23 42 / 0.18);
+    pointer-events: none;
+  }
+
+  .foxwarm-context-scrollbar-info:hover .foxwarm-context-scrollbar-tooltip,
+  .foxwarm-context-scrollbar-info:focus-within .foxwarm-context-scrollbar-tooltip {
+    display: grid;
+    gap: 3px;
+  }
+
+  .foxwarm-context-scrollbar-legend-row {
+    display: grid;
+    grid-template-columns: 8px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    line-height: 14px;
+    white-space: nowrap;
+  }
+
+  .foxwarm-context-scrollbar-legend-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  .foxwarm-context-scrollbar-legend-label { overflow: hidden; text-overflow: ellipsis; }
+  .foxwarm-context-scrollbar-legend-value { color: rgb(100 116 139); font-variant-numeric: tabular-nums; }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-snapshot,
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-system { background: rgb(96 165 250); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-tools { background: rgb(52 211 153); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-user { background: rgb(59 130 246); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-reasoning { background: rgb(148 163 184); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-free { background: rgb(148 163 184 / 0.12); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-model,
+  .foxwarm-context-scrollbar-segment-model-content { background: rgb(255 255 255); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-model { box-shadow: inset 0 0 0 1px rgb(100 116 139 / 0.52); }
+
+  .dark .foxwarm-context-scrollbar-info-button { border-color: rgb(148 163 184 / 0.48); background: rgb(255 255 255 / 0.16); color: rgb(226 232 240 / 0.9); }
+  .dark .foxwarm-context-scrollbar-info-button:hover,
+  .dark .foxwarm-context-scrollbar-info-button:focus-visible { background: rgb(255 255 255 / 0.34); }
+  .dark .foxwarm-context-scrollbar-tooltip { border-color: rgb(148 163 184 / 0.3); background: rgb(15 23 42 / 0.96); color: rgb(226 232 240); box-shadow: 0 4px 12px rgb(0 0 0 / 0.4); }
+  .dark .foxwarm-context-scrollbar-legend-value { color: rgb(148 163 184); }
+  .dark .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-model,
+  .dark .foxwarm-context-scrollbar-segment-model-content { background: rgb(31 41 55); }
+  .dark .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-model { box-shadow: inset 0 0 0 1px rgb(148 163 184 / 0.62); }
+  .dark .foxwarm-context-scrollbar-category-reasoning { background: rgb(100 116 139); }
+
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-info-button { border-radius: 0; border-color: var(--foxwarm-550a-border-hover); background: color-mix(in srgb, var(--foxwarm-550a-panel) 70%, white); color: var(--foxwarm-550a-text-bright); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-tooltip { border-radius: 0; border-color: var(--foxwarm-550a-border-panel); background: var(--foxwarm-550a-panel); color: var(--foxwarm-550a-text); box-shadow: none; }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-legend-value { color: var(--foxwarm-550a-text-dim); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-snapshot,
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-system { background: color-mix(in srgb, #5b9bd5 48%, var(--foxwarm-550a-panel)); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-tools { background: color-mix(in srgb, var(--foxwarm-550a-green) 48%, var(--foxwarm-550a-panel)); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-user { background: color-mix(in srgb, var(--foxwarm-550a-accent-dim) 58%, var(--foxwarm-550a-panel)); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-reasoning { background: color-mix(in srgb, var(--foxwarm-550a-hover) 76%, var(--foxwarm-550a-text-dim)); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-model,
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-segment-model-content { background: var(--foxwarm-550a-panel); }
+  html[data-foxwarm-ui-style="550a"] .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-model { box-shadow: inset 0 0 0 1px var(--foxwarm-550a-border-hover); }
+
+  .foxwarm-chat-message-region > button[aria-label="Scroll to top"],
+  .foxwarm-chat-message-region > button[aria-label="Scroll to bottom"] {
+    right: calc(32px + 1rem) !important;
+  }
+}
+
 /* Mobile: fixed positioning to prevent Safari address bar issues */
 @media (max-width: 768px) {
   html, body {

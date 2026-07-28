@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { RefreshCw, Settings } from 'lucide-react'
+import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings, writeContextScrollbarSettings } from '../contextScrollbarSettings'
 import ReloadAppButton from './ReloadAppButton'
 import { MENU_VIEWPORT_GUTTER, clampAnchoredMenuHorizontally, readHorizontalViewportBounds } from './menuPositioning'
 
@@ -57,8 +58,19 @@ export default function GlobalUiSettingsMenu({
   const [tabIconError, setTabIconError] = useState('')
   const [menuOffset, setMenuOffset] = useState(0)
   const [menuPositioned, setMenuPositioned] = useState(false)
+  const [contextScrollbarSettings, setContextScrollbarSettings] = useState(readContextScrollbarSettings)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const sync = () => setContextScrollbarSettings(readContextScrollbarSettings())
+    window.addEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
+      window.removeEventListener('storage', sync)
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -279,6 +291,20 @@ export default function GlobalUiSettingsMenu({
                 <span>Show usage badges</span>
                 <span className={`ml-3 inline-flex h-4 w-7 items-center rounded-full transition ${showUsageBadge ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
                   <span className={`h-3 w-3 rounded-full bg-white transition ${showUsageBadge ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={contextScrollbarSettings.showMinimap && !contextScrollbarSettings.showScrollbar}
+                onClick={() => {
+                  const next = { ...contextScrollbarSettings, showMinimap: !contextScrollbarSettings.showMinimap }
+                  setContextScrollbarSettings(writeContextScrollbarSettings(next))
+                }}
+                className={`${toggleRowClass} disabled:cursor-not-allowed disabled:opacity-50`}
+              >
+                <span>Show minimap</span>
+                <span className={`ml-3 inline-flex h-4 w-7 items-center rounded-full transition ${contextScrollbarSettings.showMinimap ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
+                  <span className={`h-3 w-3 rounded-full bg-white transition ${contextScrollbarSettings.showMinimap ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
                 </span>
               </button>
             </div>

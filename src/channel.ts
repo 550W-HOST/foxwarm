@@ -10,6 +10,8 @@ export interface ChannelMessage {
   channelUserId: string; // Legacy field: channel-side conversation/chat/room target id
   conversationId?: string; // Preferred name for channel-side conversation/chat/room target id
   username?: string;
+  /** Browser-generated identity used to reconcile one optimistic WebUI row. */
+  clientMessageId?: string;
 }
 
 export interface ChannelContext {

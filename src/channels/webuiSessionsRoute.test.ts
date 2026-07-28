@@ -175,7 +175,7 @@ test('WebUI history route returns queued preview messages separately from commit
     parts: [{ text: 'committed answer' }],
     __meta: { timestamp: Date.now(), seq: 1 },
   }];
-  session.persistentMemorySnapshot = '';
+  session.persistentMemorySnapshot = 'persisted system snapshot';
   session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
   session.busy = true;
   session.busyStartedAt = Date.now();
@@ -212,6 +212,24 @@ test('WebUI history route returns queued preview messages separately from commit
   await server.start();
 
   try {
+    const stateRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/state`, {
+      headers: { Authorization: 'Bearer history-token' },
+    });
+    assert.equal(stateRes.status, 200);
+    const statePayload = await stateRes.json() as any;
+    assert.deepEqual(Object.keys(statePayload), ['session']);
+    assert.equal(statePayload.session.id, sessionId);
+    assert.equal(statePayload.session.queueLength, 3);
+    assert.equal(statePayload.session.runtimeState.state, 'requesting-model');
+    assert.equal('messages' in statePayload, false);
+    assert.equal('persistentMemorySnapshot' in statePayload, false);
+    assert.equal('queuedMessages' in statePayload, false);
+
+    const missingStateRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(`${sessionId}_missing`)}/state`, {
+      headers: { Authorization: 'Bearer history-token' },
+    });
+    assert.equal(missingStateRes.status, 404);
+
     const res = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/history`, {
       headers: { Authorization: 'Bearer history-token' },
     });
@@ -225,6 +243,7 @@ test('WebUI history route returns queued preview messages separately from commit
     assert.equal(payload.session.runtimeState.state, 'requesting-model');
     assert.equal(payload.messages.length, 1);
     assert.equal(payload.messages[0].parts[0].text, 'committed answer');
+    assert.equal(payload.persistentMemorySnapshot, 'persisted system snapshot');
     assert.equal(payload.queuedMessages.length, 2);
     assert.equal(payload.queuedPreviewOmittedCount, 1);
 
@@ -245,6 +264,51 @@ test('WebUI history route returns queued preview messages separately from commit
     await server.stop();
     setHttpServer(null);
     session.busy = false;
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('WebUI message route forwards the bounded optimistic client identity to the router', async () => {
+  const sessionId = makeSessionId('webui_client_message_id');
+  const session = await sessionManager.getSession(sessionId);
+  session.agent = 'main';
+  session.history = [];
+  session.persistentMemorySnapshot = '';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = false;
+  session.queue = [];
+  session.meta = { lastMessageTime: Date.now() } as Session['meta'];
+  await sessionManager.saveSession(sessionId);
+
+  let routedMessage: any = null;
+  const router = {
+    handleMessage: async (_ctx: any, message: any) => {
+      routedMessage = message;
+    },
+  };
+  const port = 34600 + Math.floor(Math.random() * 400);
+  const token = 'client-message-id-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  new WebUIChannel({ router: router as any, token, enableTrigger: false, enableWebUI: true });
+  await server.start();
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/message`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ parts: [{ text: 'same text' }], clientMessageId: 'webui-send-same-a' }),
+    });
+    assert.equal(res.status, 200);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(routedMessage?.clientMessageId, 'webui-send-same-a');
+    assert.equal(routedMessage?.parts[0].text, 'same text');
+  } finally {
+    await server.stop();
+    setHttpServer(null);
     await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });

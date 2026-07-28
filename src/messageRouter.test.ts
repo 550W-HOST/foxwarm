@@ -303,6 +303,7 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
     parts: [{ text: '在吗' }],
     channelUserId: 'T83450036A',
     conversationId: 'T83450036A',
+    clientMessageId: 'webui-client-message-1',
   });
   const session = {
     history: [{ role: 'user', parts: [{ text: 'previous' }] }],
@@ -320,6 +321,27 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
   const sourcePart = parts.find((part: any) => typeof part.system === 'string' && part.system.includes('type="channel"'));
   assert.match(sourcePart?.system || '', /\n在吗\n<\/foxwarm-message>$/);
   assert.match(sourcePart?.system || '', /time="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}"/);
+  assert.equal(queueItem.clientMessageId, 'webui-client-message-1');
+});
+
+test('MessageRouter persists each queued WebUI client message identity on its user row', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('client_message_identity');
+
+  try {
+    await router.appendQueuedTurnInputs(session, session.id, [
+      { type: 'user', parts: [{ text: 'same' }], clientMessageId: 'same-a' },
+      { type: 'user', parts: [{ text: 'same' }], clientMessageId: 'same-b' },
+    ]);
+
+    assert.deepEqual(
+      session.history.map(message => message.__meta?.clientMessageId),
+      ['same-a', 'same-b'],
+    );
+    assert.deepEqual(session.history.map(message => message.__meta?.seq), [1, 2]);
+  } finally {
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
 });
 
 test('MessageRouter turn metadata no longer injects an idle-gap time marker', () => {

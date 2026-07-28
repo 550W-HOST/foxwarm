@@ -13,11 +13,48 @@ import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from './sess
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-function makeChatCompletionStream(text = 'ok'): PassThrough {
+function makeChatCompletionStream(text = 'ok', usage: Record<string, unknown> = {
+  prompt_tokens: 1,
+  completion_tokens: 1,
+  prompt_tokens_details: { cached_tokens: 0 },
+}): PassThrough {
   const stream = new PassThrough();
   process.nextTick(() => {
     stream.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: 'stop' }] })}\n\n`);
-    stream.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 0 } } })}\n\n`);
+    stream.write(`data: ${JSON.stringify({ choices: [], usage })}\n\n`);
+    stream.write('data: [DONE]\n\n');
+    stream.end();
+  });
+  return stream;
+}
+
+function makeResponsesStream(text = 'ok', usage: Record<string, unknown> = {
+  input_tokens: 1,
+  output_tokens: 1,
+}): PassThrough {
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { type: 'message', role: 'assistant', content: [] },
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.content_part.added',
+      output_index: 0,
+      content_index: 0,
+      part: { type: 'output_text', text: '' },
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.output_text.done',
+      output_index: 0,
+      content_index: 0,
+      text,
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.completed',
+      response: { output: [], usage },
+    })}\n\n`);
     stream.write('data: [DONE]\n\n');
     stream.end();
   });
@@ -115,6 +152,126 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
       inputTokens: 7,
       outputTokens: 3,
       cachedTokens: 1,
+    });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('OpenAI Responses and Chat Completions preserve whole output usage and map official reasoning components', async t => {
+  const originalPost = axios.post;
+  const responsesModel = {
+    providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example', apiKey: '', model: 'responses', extraFields: {}, extraHeaders: {},
+  } as any;
+  const chatModel = {
+    providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example', apiKey: '', model: 'chat', extraFields: {}, extraHeaders: {},
+  } as any;
+
+  try {
+    await t.test('Responses uses usage.output_tokens_details.reasoning_tokens', async () => {
+      (axios as any).post = async () => ({
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        data: makeResponsesStream('responses ok', {
+          input_tokens: 17,
+          output_tokens: 13,
+          input_tokens_details: { cached_tokens: 5 },
+          output_tokens_details: { reasoning_tokens: 8 },
+        }),
+      });
+
+      const result = await requestLlmOnce({
+        contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+        systemPrompt: '',
+        modelEntryOverride: responsesModel,
+        toolDefinitions: [],
+        notifySessionEvents: false,
+        registerAbortController: false,
+      });
+
+      assert.deepEqual(result.usage, {
+        inputTokens: 12,
+        outputTokens: 13,
+        cachedTokens: 5,
+        reasoningTokens: 8,
+      });
+    });
+
+    await t.test('Chat Completions uses usage.completion_tokens_details.reasoning_tokens', async () => {
+      (axios as any).post = async () => ({
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        data: makeChatCompletionStream('chat ok', {
+          prompt_tokens: 17,
+          completion_tokens: 13,
+          prompt_tokens_details: { cached_tokens: 5 },
+          completion_tokens_details: { reasoning_tokens: 8 },
+        }),
+      });
+
+      const result = await requestLlmOnce({
+        contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+        systemPrompt: '',
+        modelEntryOverride: chatModel,
+        toolDefinitions: [],
+        notifySessionEvents: false,
+        registerAbortController: false,
+      });
+
+      assert.deepEqual(result.usage, {
+        inputTokens: 12,
+        outputTokens: 13,
+        cachedTokens: 5,
+        reasoningTokens: 8,
+      });
+    });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('chat persists a provider-reported reasoning component on model message usage without changing totals', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession('reasoning_usage_message_meta_session');
+  const appendedMessages: Message[] = [];
+
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: makeChatCompletionStream('reasoned answer', {
+      prompt_tokens: 17,
+      completion_tokens: 13,
+      prompt_tokens_details: { cached_tokens: 5 },
+      completion_tokens_details: { reasoning_tokens: 8 },
+    }),
+  });
+
+  try {
+    await chat([{ text: 'hello' }], session, 0, {
+      appendMessage: async (message: Message) => {
+        appendedMessages.push(message);
+        session.history.push(message);
+      },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const modelMessage = appendedMessages.find(message => message.role === 'model');
+    assert.deepEqual(modelMessage?.__meta?.usage, {
+      inputTokens: 12,
+      outputTokens: 13,
+      cachedTokens: 5,
+      reasoningTokens: 8,
+    });
+    assert.deepEqual(session.stats, {
+      totalCachedTokens: 5,
+      totalInputTokens: 12,
+      totalOutputTokens: 13,
+      lastUsage: null,
     });
   } finally {
     (axios as any).post = originalPost;

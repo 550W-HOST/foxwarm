@@ -35,7 +35,7 @@ import {
   getToolResponseStatus,
   type OpenCodeFileHandler,
 } from './ToolTimelineItems'
-import { getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
+import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import ThreadLineButton from './ThreadLineButton'
 
 interface ChatTimelineProps {
@@ -620,6 +620,7 @@ const MessageRow = memo(function MessageRow({
     <div
       className={`flex w-full min-w-0 max-w-full ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${marginClass}`}
       data-chat-message-anchor-key={nestedDepth === 0 ? getMessageViewportAnchorKey(msg) || undefined : undefined}
+      data-context-scrollbar-anchor-key={nestedDepth === 0 ? getContextScrollbarAnchorKey(msg) || undefined : undefined}
     >
       <div
         className={`min-w-0 ${widthClass} ${

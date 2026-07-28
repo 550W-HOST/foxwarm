@@ -14,7 +14,8 @@ export type MigrationVersionEntry = {
   migratedFiles: number;
   skippedFiles: number;
   failedFiles: number;
-  backupRoot: string;
+  backupRoot?: string;
+  archiveRoots?: string[];
   failures?: Array<{ filePath: string; reason: string }>;
 };
 

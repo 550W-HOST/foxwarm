@@ -43,7 +43,7 @@ test('session status action reports current identity, usage, cwd, node, compact 
     session.displayName = 'Status Test';
     session.cwd = '/tmp/status-cwd';
     session.compactThresholdTokens = 7654;
-    session.stats.lastUsage = { cachedTokens: 11, inputTokens: 22, outputTokens: 33 };
+    session.stats.lastUsage = { cachedTokens: 11, inputTokens: 22, outputTokens: 33, reasoningTokens: 7 };
     session.history = [{ role: 'user', parts: [{ text: 'hello status' }] }];
     await sessionManager.saveSession(sessionId);
 
@@ -59,7 +59,7 @@ test('session status action reports current identity, usage, cwd, node, compact 
     assert.ok(status.includes(`agent dir: \`${getAgentDir('main')}\``));
     assert.ok(status.includes(`parent session id: \`${parentSessionId}\``));
     assert.match(status, /token estimate:/);
-    assert.match(status, /last usage: cached=11, input=22, output=33, total=66/);
+    assert.match(status, /last usage: cached=11, input=22, output=33 \(reasoning=7\), total=66/);
     assert.match(status, /auto-compact threshold: ~7,654 tokens \(override: 7,654 tokens\)/);
     assert.match(status, /current node: `master` \(connected, type=`master`/);
     assert.match(status, /current cwd: `\/tmp\/status-cwd`/);

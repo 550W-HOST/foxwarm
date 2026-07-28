@@ -58,7 +58,7 @@ A rich chat composer component for the web UI that handles text input with slash
 - The filter performs a case-insensitive substring match against each candidate's currently visible label and model id without fuzzy reordering. The default/follow row and the server's option order/current/child semantics remain unchanged.
 - Enter in the filter selects the current model only when exactly one actual candidate remains, reusing the existing current-model callback and closing the popup. Zero/multiple candidates and IME composition Enter are no-ops.
 - Opening the model popup requests a fresh `/api/models` list through Chat, so long-lived/multi-pane composers do not keep stale choices. The footer's icon-only, labeled Configure Models button delegates to App rather than changing location itself; the adjacent filter owns the remaining width and the popup remains viewport-clamped on mobile.
-- Adds semantic CSS hooks (`foxwarm-chat-composer-form`, `foxwarm-chat-composer-textarea`, `foxwarm-attachment-chip`) used by optional UI style layers such as 550A; these hooks should not change composer behavior or draft/attachment data flow.
+- Adds semantic CSS hooks (`foxwarm-chat-composer-inner`, `foxwarm-chat-composer-form`, `foxwarm-chat-composer-textarea`, `foxwarm-attachment-chip`) used by optional UI style layers such as 550A; these hooks should not change composer behavior or draft/attachment data flow. The inner wrapper keeps the ordinary centered 64rem composer geometry in wide panes; Chat-owned container CSS can reserve a desktop context-overview clearance in constrained per-pane layouts without altering mobile behavior.
 
 ## Integration
 
