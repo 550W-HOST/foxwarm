@@ -1,6 +1,6 @@
 # Unit: webui-settings-menu
 
-Files: packages/webui/src/components/GlobalUiSettingsMenu.tsx, packages/webui/src/components/menuPositioning.ts, packages/webui/test/settingsMenuPosition.e2e.mjs
+Files: packages/webui/src/components/GlobalUiSettingsMenu.tsx, packages/webui/src/contextScrollbarSettings.ts, packages/webui/src/components/menuPositioning.ts, packages/webui/test/settingsMenuPosition.e2e.mjs
 
 ## Purpose
 
@@ -33,7 +33,7 @@ Renders a dropdown settings menu for the web UI that allows users to configure t
 
 - Manages open/closed state of the dropdown menu with click-outside and Escape key dismissal via document event listeners.
 - Provides a `Theme style` selector (`Default` / `550A`) independent from the existing color mode selector (`auto` / `light` / `dark`). Changing theme style calls the parent callback and closes the menu.
-- Provides toggle switches for `groupTools` and `showUsageBadge` settings, calling parent callbacks on change.
+- Provides toggle switches for `groupTools`, `showUsageBadge`, and browser-local `Show minimap`; the latter uses shared ContextScrollbar settings and is a reliable recovery control after the minimap itself has been hidden. It is disabled only when minimap is the sole enabled display, so scrollbar/minimap preferences cannot become both disabled.
 - Supports inline editing of instance name and tab icon with optimistic draft state, async save, and error display.
 - Detects macOS/iOS to display the correct modifier key label (Cmd vs Ctrl) for the send-key option.
 - Closes the menu automatically after theme change, successful name/icon save, or setup open.

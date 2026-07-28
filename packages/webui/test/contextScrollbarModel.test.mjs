@@ -114,7 +114,7 @@ test('legend keeps the stable six-category order and includes snapshot, system e
   assert.ok(stats.filter(stat => stat.category !== 'reasoning').every(stat => stat.estimatedTokens > 0))
   assert.equal(Math.round(stats.reduce((sum, stat) => sum + stat.percentage, 0)), 100)
   assert.equal(segments[0].category, 'snapshot')
-  assert.equal(segments[0].anchorKey, 'seq-local-1', 'snapshot navigation targets the true first committed message, even before it mounts')
+  assert.equal(segments[0].anchorKey, 'persistent-memory-snapshot', 'snapshot navigation uses its dedicated ContextScrollbar DOM anchor without changing Chat viewport persistence')
 })
 
 test('persisted model reasoning is a separate anchored slice and contributes to the legend', () => {
@@ -169,13 +169,14 @@ test('scale model uses log1p, semantic hidden height, measured replacement, and 
   assert.ok(tools.estimatedRenderedHeight >= 94, 'paired tool response contributes collapsed-card semantic height')
   assert.ok(displayOnly.estimatedRenderedHeight > 0)
   const logSegments = buildContextScrollbarScaleSegments(segments, 'tokens-logarithmic')
-  assert.equal(logSegments.find(segment => segment.key === tools.key).estimatedTokens, Math.log1p(tools.estimatedTokens))
+  assert.equal(logSegments.find(segment => segment.key === tools.key).estimatedTokens, Math.log1p(tools.estimatedTokens / 32))
   const rendered = buildContextScrollbarScaleSegments(segments, 'rendered-height', { 'seq-local-1': 220, 'seq-local-3': 48 })
   assert.equal(rendered.find(segment => segment.key === displayOnly.key).estimatedTokens, 48)
   assert.equal(rendered.find(segment => segment.key === tools.key).estimatedTokens, 220)
 
   const snapshot = { role: 'tool', parts: [{ text: 'persistent snapshot' }], __meta: { synthetic: 'persistentMemorySnapshot' } }
   const snapshotSegments = buildContextScrollbarSegments([message('user', 'first row', 1)], snapshot)
+  assert.equal(snapshotSegments.find(segment => segment.category === 'snapshot').anchorKey, 'persistent-memory-snapshot')
   const snapshotRendered = buildContextScrollbarScaleSegments(snapshotSegments, 'rendered-height', { 'seq-local-1': 100 })
   assert.equal(snapshotRendered.find(segment => segment.category === 'snapshot').estimatedTokens, 36)
   assert.equal(snapshotRendered.find(segment => segment.key === 'seq-local-1-message').estimatedTokens, 100)

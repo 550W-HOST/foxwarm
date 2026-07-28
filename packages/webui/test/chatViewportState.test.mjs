@@ -15,7 +15,7 @@ async function loadTypeScriptModule(relativePath) {
 }
 
 test('chat viewport state uses stable persisted message identities', async () => {
-  const { getMessageStableKey, getMessageViewportAnchorKey } = await loadTypeScriptModule('../src/chatViewportState.ts')
+  const { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } = await loadTypeScriptModule('../src/chatViewportState.ts')
 
   const seqMessage = { role: 'user', parts: [], __meta: { seq: 42, timestamp: 1000 } }
   const idMessage = { role: 'model', parts: [], __meta: { id: 'message-id', timestamp: 1001 } }
@@ -27,6 +27,8 @@ test('chat viewport state uses stable persisted message identities', async () =>
   assert.equal(getMessageViewportAnchorKey(idMessage), 'id-message-id')
   assert.equal(getMessageViewportAnchorKey(timestampMessage), 'ts-1002')
   assert.equal(getMessageViewportAnchorKey(temporaryMessage), null)
+  assert.equal(getContextScrollbarAnchorKey(temporaryMessage), null)
+  assert.equal(getContextScrollbarAnchorKey({ role: 'tool', parts: [], __meta: { synthetic: 'persistentMemorySnapshot' } }), 'persistent-memory-snapshot', 'snapshot gets a ContextScrollbar-only anchor without becoming a persisted viewport anchor')
   assert.equal(getMessageStableKey({ role: 'user', parts: [] }, 7), 'idx-7')
 })
 

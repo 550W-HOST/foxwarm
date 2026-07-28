@@ -235,3 +235,28 @@ test('Escape, outside click, and menu-item selection retain their dismissal beha
   await page.waitForSelector('[data-global-ui-settings-menu]', { hidden: true })
   assert.equal(await page.evaluate(() => window.settingsMenuFixture.selectionCount()), 1)
 })
+
+test('global Show minimap recovers scrollbar-only mode and normalizes an invalid persisted pair', async () => {
+  await mountFixture({ width: 900, height: 760, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
+  await page.evaluate(() => {
+    localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', 'false')
+    localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'false')
+  })
+  await page.reload({ waitUntil: 'load' })
+  await page.waitForFunction(() => !!window.settingsMenuFixture)
+  assert.deepEqual(await page.evaluate(() => ({ scrollbar: localStorage.getItem('foxwarm.contextScrollbar.showScrollbar'), minimap: localStorage.getItem('foxwarm.contextScrollbar.showMinimap') })), { scrollbar: 'false', minimap: 'true' })
+  await openMenu()
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent?.includes('Show minimap'))?.disabled), true, 'the sole enabled minimap cannot be turned off')
+  await page.evaluate(() => {
+    localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', 'true')
+    localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'false')
+    window.dispatchEvent(new Event('foxwarm-context-scrollbar-settings'))
+  })
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].find(button => button.textContent?.includes('Show minimap'))?.disabled === false)
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent?.includes('Show minimap'))?.click())
+  assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm.contextScrollbar.showMinimap')), 'true')
+  await page.evaluate(() => {
+    localStorage.removeItem('foxwarm.contextScrollbar.showScrollbar')
+    localStorage.removeItem('foxwarm.contextScrollbar.showMinimap')
+  })
+})

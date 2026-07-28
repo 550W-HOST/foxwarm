@@ -26,8 +26,8 @@ async function buildFixtureBundle() {
     }))
     window.fetch = async (input) => {
       const url = String(input)
-      if (url.includes('/history')) { const params = new URL(location.href).searchParams; const compact = params.get('compact') === '1' || params.get('short') === '1'; const messages = compact ? allMessages.slice(-101).map(message => message.__meta.seq === 1101 ? { ...message, modelVisible: false } : message) : allMessages; return new Response(JSON.stringify({ session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, modelKey: 'fixture/model' }, messages, queuedMessages: [], queueLength: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }) }
-      if (url.includes('/models')) { const contextLimit = Number(new URL(location.href).searchParams.get('contextLimit')) || 1000; return new Response(JSON.stringify({ models: [{ key: 'fixture/model', contextLimit }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }) }
+      if (url.includes('/history')) { const params = new URL(location.href).searchParams; const compact = params.get('compact') === '1' || params.get('short') === '1'; const messages = compact ? allMessages.slice(-101).map(message => message.__meta.seq === 1101 ? { ...message, modelVisible: false } : message) : allMessages; const persistentMemorySnapshot = params.get('snapshot') === '1' ? 'expanded persistent snapshot '.repeat(800) : undefined; return new Response(JSON.stringify({ session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, modelKey: 'fixture/model' }, messages, persistentMemorySnapshot, queuedMessages: [], queueLength: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }) }
+      if (url.includes('/models')) { const params = new URL(location.href).searchParams; const contextLimit = params.get('unknownFree') === '1' ? null : Number(params.get('contextLimit')) || 1000; return new Response(JSON.stringify({ models: [{ key: 'fixture/model', contextLimit }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }) }
       if (url.includes('/asr/status')) return new Response(JSON.stringify({ configured: false, available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       return new Response('{}', { status: 404 })
     }
@@ -40,11 +40,11 @@ async function buildFixtureBundle() {
   return result.outputFiles[0].text
 }
 
-async function mount(width = 1000, contextLimit = 1000, height = 720, compact = false, short = false) {
+async function mount(width = 1000, contextLimit = 1000, height = 720, compact = false, short = false, unknownFree = false, snapshot = false) {
   if (page && !page.isClosed()) await page.close()
   page = await browser.newPage()
   await page.setViewport({ width, height, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
-  await page.goto(`${fixtureUrl}?contextLimit=${contextLimit}${compact ? '&compact=1' : ''}${short ? '&short=1' : ''}`, { waitUntil: 'load' })
+  await page.goto(`${fixtureUrl}?contextLimit=${contextLimit}${compact ? '&compact=1' : ''}${short ? '&short=1' : ''}${unknownFree ? '&unknownFree=1' : ''}${snapshot ? '&snapshot=1' : ''}`, { waitUntil: 'load' })
   await page.waitForSelector('.foxwarm-chat-messages')
   if (width >= 768) {
     await page.waitForSelector('.foxwarm-context-scrollbar')
@@ -58,7 +58,8 @@ before(async () => {
   server = createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     const compactFixtureCss = req.url?.includes('compact=1') ? '.foxwarm-chat-messages-content{height:1px!important;min-height:0!important;overflow:hidden!important}[data-chat-message-anchor-key]{height:1px!important;min-height:0!important;overflow:hidden!important;margin:0!important;padding:0!important}' : ''
-    res.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body,#root{margin:0;width:100%;height:100%;overflow:hidden}.foxwarm-chat-root>header{flex:0 0 48px}.foxwarm-chat-root form{display:none}[data-chat-message-anchor-key]{min-height:64px}[data-chat-message-anchor-key="seq-local-1001"]{min-height:480px}${compactFixtureCss}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
+    const snapshotFixtureCss = req.url?.includes('snapshot=1') ? '[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]{min-height:1600px!important}' : ''
+    res.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body,#root{margin:0;width:100%;height:100%;overflow:hidden}.foxwarm-chat-root>header{flex:0 0 48px}.foxwarm-chat-root form{display:none}[data-chat-message-anchor-key]{min-height:64px}[data-chat-message-anchor-key="seq-local-1001"]{min-height:480px}${compactFixtureCss}${snapshotFixtureCss}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -152,6 +153,67 @@ test('track remains sticky inside the native timeline scroll chain for wheel and
   assert.equal(after.page, before.page, 'wheel remains in the timeline scroll chain rather than scrolling the page')
 })
 
+test('a tall persistent snapshot has its own ContextScrollbar anchor and keeps a nonzero viewport thumb', async () => {
+  await mount(1000, 50000, 720, false, false, false, true)
+  const snapshot = await page.$('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]')
+  assert.ok(snapshot)
+  assert.equal(await snapshot.evaluate(element => element.getAttribute('data-chat-message-anchor-key')), null, 'snapshot remains excluded from generic Chat viewport persistence')
+  await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')) })
+  await new Promise(resolve => setTimeout(resolve, 100))
+  const initial = await page.$eval('.foxwarm-context-scrollbar-viewport', element => ({ top: element.getBoundingClientRect().top, height: element.getBoundingClientRect().height }))
+  assert.ok(initial.height > 1, 'both viewport edges inside the snapshot still interpolate a positive thumb span')
+  await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 200; element.dispatchEvent(new Event('scroll')) })
+  await new Promise(resolve => setTimeout(resolve, 80))
+  const afterScroll = await page.$eval('.foxwarm-context-scrollbar-viewport', element => ({ top: element.getBoundingClientRect().top, height: element.getBoundingClientRect().height }))
+  assert.ok(afterScroll.top > initial.top, 'snapshot-local boundary mapping advances as the native viewport scrolls')
+  assert.ok(afterScroll.height > 1)
+})
+
+test('overview dims as a whole at rest, strengthens its thumb on hover, and keeps an intermediate pressed state', async () => {
+  await mount()
+  const initial = await page.evaluate(() => ({
+    shellOpacity: getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-shell')).opacity,
+    thumb: getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-viewport')).backgroundColor,
+    thumbRadius: getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-viewport')).borderRadius,
+  }))
+  assert.equal(initial.shellOpacity, '0.5')
+  assert.equal(initial.thumb, 'rgba(0, 0, 0, 0.38)')
+  assert.equal(initial.thumbRadius, '0px')
+
+  await page.hover('.foxwarm-context-scrollbar-viewport')
+  await new Promise(resolve => setTimeout(resolve, 150))
+  const hovered = await page.evaluate(() => ({
+    shellOpacity: getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-shell')).opacity,
+    thumb: getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-viewport')).backgroundColor,
+  }))
+  assert.equal(hovered.shellOpacity, '1')
+  assert.equal(hovered.thumb, 'rgba(0, 0, 0, 0.56)')
+
+  const thumb = await page.$('.foxwarm-context-scrollbar-viewport')
+  const box = await thumb.boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x - 40, box.y + box.height / 2)
+  await new Promise(resolve => setTimeout(resolve, 150))
+  const pressed = await page.$eval('.foxwarm-context-scrollbar-shell', shell => ({ opacity: getComputedStyle(shell).opacity, dragging: shell.getAttribute('data-context-scrollbar-dragging'), thumb: getComputedStyle(shell.querySelector('.foxwarm-context-scrollbar-viewport')).backgroundColor }))
+  assert.equal(pressed.dragging, 'true')
+  assert.equal(pressed.opacity, '1')
+  assert.equal(pressed.thumb, 'rgba(0, 0, 0, 0.47)', 'pressed thumb stays between resting and hover fills without dimming the overview itself')
+  await page.mouse.up()
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(await page.$eval('.foxwarm-context-scrollbar-shell', shell => getComputedStyle(shell).opacity), '0.5', 'pointer focus must settle back to the non-hover opacity after release')
+  await page.focus('.foxwarm-context-scrollbar')
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(await page.$eval('.foxwarm-context-scrollbar-shell', shell => getComputedStyle(shell).opacity), '1', 'keyboard-visible focus retains an accessible full-opacity state')
+  await page.evaluate(() => document.documentElement.classList.add('dark'))
+  await page.mouse.move(1, 1)
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(await page.$eval('.foxwarm-context-scrollbar-viewport', element => getComputedStyle(element).backgroundColor), 'rgba(255, 255, 255, 0.38)', 'dark color mode keeps the approved white resting thumb')
+  await page.hover('.foxwarm-context-scrollbar-viewport')
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(await page.$eval('.foxwarm-context-scrollbar-viewport', element => getComputedStyle(element).backgroundColor), 'rgba(255, 255, 255, 0.56)', 'dark color mode keeps the approved white hover thumb')
+})
+
 test('explicit top action expands lazy history before reaching the true first row', async () => {
   await mount(1000, 1000, 720, false, true)
   assert.equal(await page.$('[data-chat-message-anchor-key="seq-local-1100"]'), null, 'fixture starts with only the recent lazy subset')
@@ -205,11 +267,11 @@ test('zero-token display-only user rows keep the viewport thumb at both viewport
 })
 
 test('info control exposes a stable legend without starting track navigation or native drag', async () => {
-  await mount(1000, 1000, 720, false, true)
+  await mount(1000, 50000, 720, false, true)
   const info = '.foxwarm-context-scrollbar-info-button'
   await page.hover(info)
   const legend = await page.$$eval('.foxwarm-context-scrollbar-legend-row', rows => rows.map(row => ({ text: row.textContent.replace(/\s+/g, ' ').trim(), label: row.querySelector('.foxwarm-context-scrollbar-legend-label')?.textContent })))
-  assert.equal(legend.length, 6)
+  assert.equal(legend.length, 7)
   assert.deepEqual(legend.map(row => row.label), [
     'system prompt snapshot',
     'system events',
@@ -217,8 +279,16 @@ test('info control exposes a stable legend without starting track navigation or 
     'user prompts',
     'model reasoning',
     'model contents',
+    'free context',
   ])
-  assert.ok(legend.every(row => /\d+(?:\.\d+)?[KM]? · \d+%$/.test(row.text)))
+  assert.ok(legend.every(row => /\d+\.\dK \(\d+%\)$/.test(row.text)))
+  const percentages = legend.map(row => Number(row.text.match(/\((\d+)%\)$/)?.[1]))
+  assert.ok(Math.abs(percentages.reduce((sum, percentage) => sum + percentage, 0) - 100) <= 1, 'occupied categories and free capacity share one visual capacity denominator')
+  const displayedTokens = legend.map(row => Number(row.text.match(/(\d+\.\d)K/)?.[1]) * 1000)
+  assert.ok(Math.abs(displayedTokens.reduce((sum, tokens) => sum + tokens, 0) - 50000) <= 500, 'occupied display tokens plus free tokens represent the provider capacity')
+  assert.ok(displayedTokens.at(-1) > 0 && percentages.at(-1) > 0, 'fixture has substantial measured free capacity')
+  const freeSurface = await page.$eval('.foxwarm-context-scrollbar-free', element => getComputedStyle(element).backgroundColor)
+  assert.equal(await page.$eval('.foxwarm-context-scrollbar-category-free', element => getComputedStyle(element).backgroundColor), freeSurface)
   await page.focus(info)
   assert.equal(await page.$eval('.foxwarm-context-scrollbar-tooltip', element => getComputedStyle(element).display), 'grid')
   const before = await page.$eval('.foxwarm-chat-messages', element => element.scrollTop)
@@ -230,6 +300,13 @@ test('info control exposes a stable legend without starting track navigation or 
     return event.defaultPrevented
   })
   assert.equal(prevented, true)
+})
+
+test('free tooltip is explicitly unknown when provider capacity is unavailable', async () => {
+  await mount(1000, 1000, 720, false, true, true)
+  await page.hover('.foxwarm-context-scrollbar-info-button')
+  const freeValue = await page.$eval('.foxwarm-context-scrollbar-legend-row:last-child .foxwarm-context-scrollbar-legend-value', element => element.textContent)
+  assert.equal(freeValue, 'unknown')
 })
 
 test('right-click vertical-scale menu persists and changes overview geometry coherently', async () => {
@@ -246,13 +323,32 @@ test('right-click vertical-scale menu persists and changes overview geometry coh
   await page.waitForSelector('[role="menu"] [role="menuitemcheckbox"]')
   assert.equal(await page.$eval('.foxwarm-chat-messages', element => element.scrollTop), beforeScroll, 'right-click opens the menu without context navigation')
   const labels = await page.$$eval('[role="menu"] [role="menuitemcheckbox"]', buttons => buttons.map(button => button.textContent.trim()))
-  assert.deepEqual(labels, ['Token count', 'Token count (logarithmic)', 'Rendered height'])
+  assert.deepEqual(labels, ['Token count', 'Token count (logarithmic)', 'Rendered height', 'Show scrollbar', 'Show minimap'])
+  const initialDisplayChecks = await page.$$eval('[role="menu"] [role="menuitemcheckbox"]', buttons => buttons.slice(3).map(button => ({ checked: button.getAttribute('aria-checked'), hasCheck: !!button.querySelector('svg') , disabled: button.disabled })))
+  assert.deepEqual(initialDisplayChecks, [{ checked: 'false', hasCheck: false, disabled: false }, { checked: 'true', hasCheck: true, disabled: true }], 'minimap-only is the normalized default and its sole enabled option is protected')
   await page.click('[role="menu"] [role="menuitemcheckbox"]:nth-of-type(3)')
   const after = await page.$eval('.foxwarm-context-scrollbar-segment', element => element.getBoundingClientRect().height)
   const persisted = await page.evaluate(() => window.localStorage.getItem('foxwarm.contextScrollbar.verticalScale'))
   assert.equal(persisted, 'rendered-height')
   assert.notEqual(after, before, 'rendered-height replaces token slice geometry')
+  await page.$eval('.foxwarm-context-scrollbar-shell', element => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 20 })))
+  await page.waitForSelector('[role="menu"] [role="menuitemcheckbox"]')
+  await page.click('[role="menu"] [role="menuitemcheckbox"]:nth-of-type(4)')
+  assert.equal(await page.$eval('.foxwarm-chat-messages', element => element.dataset.showSystemScrollbar), 'true')
+  assert.notEqual(await page.$eval('.foxwarm-chat-messages', element => getComputedStyle(element).scrollbarWidth), 'none')
+  await page.$eval('.foxwarm-context-scrollbar-shell', element => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 20 })))
+  await page.waitForSelector('[role="menu"] [role="menuitemcheckbox"]')
+  const bothEnabledChecks = await page.$$eval('[role="menu"] [role="menuitemcheckbox"]', buttons => buttons.slice(3).map(button => ({ checked: button.getAttribute('aria-checked'), hasCheck: !!button.querySelector('svg'), disabled: button.disabled })))
+  assert.deepEqual(bothEnabledChecks, [{ checked: 'true', hasCheck: true, disabled: false }, { checked: 'true', hasCheck: true, disabled: false }])
+  await page.click('[role="menu"] [role="menuitemcheckbox"]:nth-of-type(5)')
+  assert.equal(await page.$('.foxwarm-context-scrollbar-shell'), null, 'either enabled option may be turned off only after the other is enabled')
+  assert.equal(await page.$eval('.foxwarm-chat-messages', element => element.dataset.showSystemScrollbar), 'true')
   await page.evaluate(() => window.localStorage.removeItem('foxwarm.contextScrollbar.verticalScale'))
+  await page.evaluate(() => {
+    localStorage.removeItem('foxwarm.contextScrollbar.showScrollbar')
+    localStorage.removeItem('foxwarm.contextScrollbar.showMinimap')
+    window.dispatchEvent(new Event('foxwarm-context-scrollbar-settings'))
+  })
 })
 
 test('model-content bars and legend swatch use the assistant card surface in every theme', async () => {

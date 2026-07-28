@@ -2,6 +2,9 @@ import type { Message } from './components/chatShared'
 
 export const CHAT_MESSAGE_ANCHOR_ATTRIBUTE = 'data-chat-message-anchor-key'
 export const CHAT_MESSAGE_ANCHOR_SELECTOR = `[${CHAT_MESSAGE_ANCHOR_ATTRIBUTE}]`
+export const CONTEXT_SCROLLBAR_ANCHOR_ATTRIBUTE = 'data-context-scrollbar-anchor-key'
+export const CONTEXT_SCROLLBAR_ANCHOR_SELECTOR = `[${CONTEXT_SCROLLBAR_ANCHOR_ATTRIBUTE}]`
+export const PERSISTENT_MEMORY_SNAPSHOT_CONTEXT_SCROLLBAR_ANCHOR_KEY = 'persistent-memory-snapshot'
 export const CHAT_VIEWPORT_BOTTOM_THRESHOLD_PX = 200
 export const CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX = 4
 
@@ -84,6 +87,11 @@ export function getMessageViewportAnchorKey(message: Message): string | null {
   if (hasStableMetaValue(meta.id)) return `id-${String(meta.id)}`
   if (hasStableMetaValue(meta.timestamp)) return `ts-${String(meta.timestamp)}`
   return null
+}
+
+export function getContextScrollbarAnchorKey(message: Message): string | null {
+  if (message.__meta?.synthetic === 'persistentMemorySnapshot') return PERSISTENT_MEMORY_SNAPSHOT_CONTEXT_SCROLLBAR_ANCHOR_KEY
+  return getMessageViewportAnchorKey(message)
 }
 
 export function chooseChatViewportState(options: {

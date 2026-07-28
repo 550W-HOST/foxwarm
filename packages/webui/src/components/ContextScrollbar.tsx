@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { Check } from 'lucide-react'
-import { CHAT_MESSAGE_ANCHOR_SELECTOR } from '../chatViewportState'
+import { CONTEXT_SCROLLBAR_ANCHOR_SELECTOR } from '../chatViewportState'
+import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings, writeContextScrollbarSettings, type ContextScrollbarSettings } from '../contextScrollbarSettings'
 import ContextMenu, { type ContextMenuEntry } from './ContextMenu'
 import {
   buildContextScrollbarSegments,
@@ -28,7 +29,7 @@ type ViewportRange = { top: number; bottom: number } | null
 type TimelineAnchorGeometry = { key: string; top: number; bottom: number }
 
 const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value))
-const formatTokens = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}K` : String(value)
+const formatTooltipValue = (tokens: number, percentage: number) => `${(tokens / 1000).toFixed(1)}K (${percentage.toFixed(0)}%)`
 const legendLabels = {
   snapshot: 'system prompt snapshot',
   system: 'system events',
@@ -36,6 +37,7 @@ const legendLabels = {
   user: 'user prompts',
   reasoning: 'model reasoning',
   model: 'model contents',
+  free: 'free context',
 } as const
 const verticalScaleLabels: Record<ContextScrollbarVerticalScale, string> = {
   tokens: 'Token count',
@@ -45,14 +47,14 @@ const verticalScaleLabels: Record<ContextScrollbarVerticalScale, string> = {
 const VERTICAL_SCALE_STORAGE_KEY = 'foxwarm.contextScrollbar.verticalScale'
 
 const getBoundaryToken = (segments: ContextScrollbarSegment[], timeline: HTMLElement, viewportY: number): number | null => {
-  const anchors = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+  const anchors = Array.from(timeline.querySelectorAll<HTMLElement>(CONTEXT_SCROLLBAR_ANCHOR_SELECTOR))
   const anchor = anchors.find(element => {
     const rect = element.getBoundingClientRect()
     return rect.bottom > viewportY
   }) || anchors[anchors.length - 1]
   if (!anchor) return null
   const rect = anchor.getBoundingClientRect()
-  const key = anchor.getAttribute('data-chat-message-anchor-key')
+  const key = anchor.getAttribute('data-context-scrollbar-anchor-key')
   if (!key || rect.height <= 0) return null
   return interpolateContextScrollbarBoundary(segments, key, clamp((viewportY - rect.top) / rect.height))
 }
@@ -67,6 +69,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     const value = window.localStorage.getItem(VERTICAL_SCALE_STORAGE_KEY)
     return value === 'tokens-logarithmic' || value === 'rendered-height' ? value : 'tokens'
   })
+  const [settings, setSettings] = useState<ContextScrollbarSettings>(readContextScrollbarSettings)
   const [measuredAnchorHeights, setMeasuredAnchorHeights] = useState<Record<string, number>>({})
   const [scaleMenu, setScaleMenu] = useState<{ x: number; y: number } | null>(null)
   const segments = useMemo(() => buildContextScrollbarScaleSegments(rawSegments, verticalScale, measuredAnchorHeights), [measuredAnchorHeights, rawSegments, verticalScale])
@@ -75,6 +78,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
   const effectiveContextUsage = verticalScale === 'rendered-height' ? null : contextUsage
   const totalEstimatedTokens = segments[segments.length - 1]?.endTokens || 0
   const [viewportRange, setViewportRange] = useState<ViewportRange>(null)
+  const [isDragging, setIsDragging] = useState(false)
   const frameRef = useRef<number | null>(null)
   const draggingRef = useRef(false)
   const dragThumbFractionRef = useRef(0.5)
@@ -84,13 +88,42 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     setVerticalScale(next)
     setScaleMenu(null)
   }, [])
-  const scaleMenuEntries = useMemo<ContextMenuEntry[]>(() => (Object.keys(verticalScaleLabels) as ContextScrollbarVerticalScale[]).map(scale => ({
-    key: scale,
-    label: verticalScaleLabels[scale],
-    icon: verticalScale === scale ? <Check size={14} /> : null,
-    checked: verticalScale === scale,
-    onSelect: () => selectVerticalScale(scale),
-  })), [selectVerticalScale, verticalScale])
+  const updateSettings = useCallback((next: ContextScrollbarSettings) => {
+    setSettings(writeContextScrollbarSettings(next))
+  }, [])
+  const scaleMenuEntries = useMemo<ContextMenuEntry[]>(() => [
+    ...(Object.keys(verticalScaleLabels) as ContextScrollbarVerticalScale[]).map(scale => ({
+      key: scale,
+      label: verticalScaleLabels[scale],
+      icon: verticalScale === scale ? <Check size={14} /> : null,
+      checked: verticalScale === scale,
+      onSelect: () => selectVerticalScale(scale),
+    })),
+    { key: 'display-separator', type: 'separator' as const },
+    { key: 'show-scrollbar', label: 'Show scrollbar', icon: settings.showScrollbar ? <Check size={14} /> : null, checked: settings.showScrollbar, disabled: settings.showScrollbar && !settings.showMinimap, onSelect: () => updateSettings({ ...settings, showScrollbar: !settings.showScrollbar }) },
+    { key: 'show-minimap', label: 'Show minimap', icon: settings.showMinimap ? <Check size={14} /> : null, checked: settings.showMinimap, disabled: settings.showMinimap && !settings.showScrollbar, onSelect: () => updateSettings({ ...settings, showMinimap: !settings.showMinimap }) },
+  ], [selectVerticalScale, settings, updateSettings, verticalScale])
+
+  useEffect(() => {
+    const sync = () => setSettings(readContextScrollbarSettings())
+    window.addEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
+      window.removeEventListener('storage', sync)
+    }
+  }, [])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    container.dataset.showSystemScrollbar = String(settings.showScrollbar)
+    container.dataset.showContextMinimap = String(settings.showMinimap)
+    return () => {
+      delete container.dataset.showSystemScrollbar
+      delete container.dataset.showContextMinimap
+    }
+  }, [containerRef, settings.showMinimap, settings.showScrollbar])
 
   const updateViewportRange = useCallback(() => {
     const container = containerRef.current
@@ -107,9 +140,9 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
       return
     }
     const usedFraction = effectiveContextUsage ? effectiveContextUsage.usedTokens / effectiveContextUsage.capacityTokens : 1
-    const timelineAnchors = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+    const timelineAnchors = Array.from(timeline.querySelectorAll<HTMLElement>(CONTEXT_SCROLLBAR_ANCHOR_SELECTOR))
     const nextMeasuredHeights = timelineAnchors.reduce<Record<string, number>>((heights, anchor) => {
-      const key = anchor.getAttribute('data-chat-message-anchor-key')
+      const key = anchor.getAttribute('data-context-scrollbar-anchor-key')
       const height = anchor.getBoundingClientRect().height
       if (key && height > 0) heights[key] = height
       return heights
@@ -124,7 +157,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     let bottomPosition = toCommittedPosition(bottomToken)
     if (effectiveContextUsage && lastAnchor) {
       const lastRect = lastAnchor.getBoundingClientRect()
-      const lastStartToken = interpolateContextScrollbarBoundary(segments, lastAnchor.getAttribute('data-chat-message-anchor-key') || '', 0) ?? totalEstimatedTokens
+      const lastStartToken = interpolateContextScrollbarBoundary(segments, lastAnchor.getAttribute('data-context-scrollbar-anchor-key') || '', 0) ?? totalEstimatedTokens
       const finalRowDensity = Math.max(0, usedFraction - toCommittedPosition(lastStartToken)) / Math.max(1, lastRect.height)
       if (viewport.top > lastRect.bottom) {
         topPosition = clamp(usedFraction + (viewport.top - lastRect.bottom) * finalRowDensity)
@@ -202,9 +235,9 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     }
 
     const containerRect = container.getBoundingClientRect()
-    const anchors: TimelineAnchorGeometry[] = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+    const anchors: TimelineAnchorGeometry[] = Array.from(timeline.querySelectorAll<HTMLElement>(CONTEXT_SCROLLBAR_ANCHOR_SELECTOR))
       .map(anchor => {
-        const key = anchor.getAttribute('data-chat-message-anchor-key')
+        const key = anchor.getAttribute('data-context-scrollbar-anchor-key')
         const rect = anchor.getBoundingClientRect()
         return key && rect.height > 0
           ? { key, top: rect.top - containerRect.top + container.scrollTop, bottom: rect.bottom - containerRect.top + container.scrollTop }
@@ -254,6 +287,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     const position = clamp((event.clientY - rect.top) / Math.max(1, rect.height))
     const insideViewport = viewportRange !== null && position >= viewportRange.top && position <= viewportRange.bottom
     draggingRef.current = true
+    setIsDragging(true)
     dragThumbFractionRef.current = insideViewport
       ? clamp((position - viewportRange.top) / Math.max(0.0001, viewportRange.bottom - viewportRange.top))
       : 0.5
@@ -272,15 +306,26 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
 
   const stopDragging = useCallback(() => {
     draggingRef.current = false
+    setIsDragging(false)
     dragThumbFractionRef.current = 0.5
   }, [])
 
   const usedFraction = effectiveContextUsage ? clamp(effectiveContextUsage.usedTokens / effectiveContextUsage.capacityTokens) : 1
+  const tooltipLegendStats = useMemo(() => {
+    if (!effectiveContextUsage) return legendStats
+    const rawTotal = legendStats.reduce((total, stat) => total + stat.estimatedTokens, 0)
+    return legendStats.map(stat => {
+      const tokens = rawTotal > 0 ? effectiveContextUsage.usedTokens * stat.estimatedTokens / rawTotal : 0
+      return { ...stat, estimatedTokens: tokens, percentage: tokens / effectiveContextUsage.capacityTokens * 100 }
+    })
+  }, [effectiveContextUsage, legendStats])
   const viewportTop = viewportRange?.top ?? 0
   const viewportBottom = viewportRange?.bottom ?? viewportTop
 
+  if (!settings.showMinimap) return null
+
   return (
-    <div className="foxwarm-context-scrollbar-shell" aria-label="Context overview" onContextMenu={(event) => { event.preventDefault(); setScaleMenu({ x: event.clientX, y: event.clientY }) }}>
+    <div className="foxwarm-context-scrollbar-shell" data-context-scrollbar-dragging={isDragging || undefined} aria-label="Context overview" onContextMenu={(event) => { event.preventDefault(); setScaleMenu({ x: event.clientX, y: event.clientY }) }}>
       <div
         className="foxwarm-context-scrollbar"
         draggable={false}
@@ -294,7 +339,6 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
         onPointerDown={(event) => {
           if (event.button !== 0) return
           event.preventDefault()
-          event.currentTarget.focus({ preventScroll: true })
           handlePointerDown(event)
         }}
         onPointerMove={handlePointerMove}
@@ -332,13 +376,18 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
           i
         </button>
         <div className="foxwarm-context-scrollbar-tooltip" role="tooltip">
-          {legendStats.map(stat => (
+          {tooltipLegendStats.map(stat => (
             <div key={stat.category} className="foxwarm-context-scrollbar-legend-row">
               <span className={`foxwarm-context-scrollbar-legend-swatch foxwarm-context-scrollbar-category-${stat.category}`} />
               <span className="foxwarm-context-scrollbar-legend-label">{legendLabels[stat.category]}</span>
-              <span className="foxwarm-context-scrollbar-legend-value">{formatTokens(stat.estimatedTokens)} · {stat.percentage.toFixed(0)}%</span>
+              <span className="foxwarm-context-scrollbar-legend-value">{formatTooltipValue(stat.estimatedTokens, stat.percentage)}</span>
             </div>
           ))}
+          <div className="foxwarm-context-scrollbar-legend-row">
+            <span className="foxwarm-context-scrollbar-legend-swatch foxwarm-context-scrollbar-category-free" />
+            <span className="foxwarm-context-scrollbar-legend-label">{legendLabels.free}</span>
+            <span className="foxwarm-context-scrollbar-legend-value">{effectiveContextUsage ? formatTooltipValue(effectiveContextUsage.freeTokens, (1 - usedFraction) * 100) : 'unknown'}</span>
+          </div>
         </div>
       </div>
     </div>

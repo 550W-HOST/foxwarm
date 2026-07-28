@@ -1,6 +1,6 @@
 import { estimateTokenCount } from '../../../shared/src/tokenCount'
 import {
-  getMessageViewportAnchorKey,
+  getContextScrollbarAnchorKey,
   getMessageStableKey,
 } from '../chatViewportState'
 import {
@@ -133,22 +133,21 @@ const getPairedAnchorKey = (messages: Message[], index: number): string | null =
   if (message.role === 'tool' && index > 0) {
     const previous = messages[index - 1]
     if (previous.role === 'model' && previous.parts.some(part => !!part.functionCall)) {
-      return getMessageViewportAnchorKey(previous)
+      return getContextScrollbarAnchorKey(previous)
     }
   }
-  return getMessageViewportAnchorKey(message)
+  return getContextScrollbarAnchorKey(message)
 }
 
 export const buildContextScrollbarSegments = (messages: Message[], persistentMemorySnapshot?: Message | null): ContextScrollbarSegment[] => {
   let cursor = 0
   const committed = messages.filter(message => !message.__meta?.temporary && !message.__meta?.synthetic)
   const segments: ContextScrollbarSegment[] = []
-  const firstCommittedAnchorKey = committed.length > 0 ? getMessageViewportAnchorKey(committed[0]) : null
   if (persistentMemorySnapshot) {
     const estimatedTokens = estimateTokenCount(formatMessageForContextEstimate(persistentMemorySnapshot))
     segments.push({
       key: 'persistent-memory-snapshot',
-      anchorKey: firstCommittedAnchorKey,
+      anchorKey: getContextScrollbarAnchorKey(persistentMemorySnapshot),
       startTokens: cursor,
       endTokens: cursor + estimatedTokens,
       estimatedTokens,
@@ -240,7 +239,7 @@ export const buildContextScrollbarScaleSegments = (
   let cursor = 0
   return segments.map(segment => {
     let weight = segment.estimatedTokens
-    if (scale === 'tokens-logarithmic') weight = segment.estimatedTokens > 0 ? Math.log1p(segment.estimatedTokens) : 0
+    if (scale === 'tokens-logarithmic') weight = segment.estimatedTokens > 0 ? Math.log1p(segment.estimatedTokens / 32) : 0
     if (scale === 'rendered-height') {
       const measuredHeight = segment.anchorKey ? measuredAnchorHeights[segment.anchorKey] : undefined
       const estimatedGroupHeight = segment.anchorKey ? groupEstimatedHeights.get(segment.anchorKey) || 0 : 0

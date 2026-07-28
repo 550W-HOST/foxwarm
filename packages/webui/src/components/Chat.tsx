@@ -25,6 +25,7 @@ import {
 import {
   CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
+  CONTEXT_SCROLLBAR_ANCHOR_SELECTOR,
   chooseChatViewportState,
   getChatViewportAnchorAdjustment,
   getStoredChatViewportState,
@@ -544,8 +545,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     const container = messagesContainerRef.current
     const timeline = committedTimelineRef.current
     if (!container || !timeline) return false
-    const anchor = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
-      .find((element) => element.getAttribute('data-chat-message-anchor-key') === anchorKey)
+    const anchor = Array.from(timeline.querySelectorAll<HTMLElement>(CONTEXT_SCROLLBAR_ANCHOR_SELECTOR))
+      .find((element) => element.getAttribute('data-context-scrollbar-anchor-key') === anchorKey)
     if (!anchor) return false
     const offset = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
     container.scrollTop += offset + anchor.getBoundingClientRect().height * Math.max(0, Math.min(1, fraction))
