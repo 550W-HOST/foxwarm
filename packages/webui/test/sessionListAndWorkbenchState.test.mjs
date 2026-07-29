@@ -254,26 +254,58 @@ async function flushRefreshPromises() {
 }
 
 async function loadRefreshScheduler() {
-  const { createSessionListRefreshScheduler } = await loadTypeScriptModule('../src/sessionListRefresh.ts')
+  const {
+    createSessionListRefreshScheduler,
+    getSessionListRefreshDelayMs,
+    SESSION_LIST_HIDDEN_REFRESH_DELAY_MS,
+    SESSION_LIST_VISIBLE_REFRESH_DELAY_MS,
+  } = await loadTypeScriptModule('../src/sessionListRefresh.ts')
   const clock = createFakeRefreshClock()
+  let visibilityState = 'visible'
   const options = {
+    getDelayMs: () => getSessionListRefreshDelayMs(visibilityState),
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
   }
-  return { createSessionListRefreshScheduler, clock, options }
+  return {
+    createSessionListRefreshScheduler,
+    clock,
+    options,
+    setVisibilityState: state => { visibilityState = state },
+    hiddenDelayMs: SESSION_LIST_HIDDEN_REFRESH_DELAY_MS,
+    visibleDelayMs: SESSION_LIST_VISIBLE_REFRESH_DELAY_MS,
+  }
 }
 
-test('global refresh scheduler keeps the first fixed 200ms deadline', async () => {
-  const { createSessionListRefreshScheduler, clock, options } = await loadRefreshScheduler()
+test('global refresh scheduler uses a fixed 1s visible deadline across later intents and visibility changes', async () => {
+  const { createSessionListRefreshScheduler, clock, options, setVisibilityState, visibleDelayMs } = await loadRefreshScheduler()
   let refreshCount = 0
   const scheduler = createSessionListRefreshScheduler(async () => { refreshCount++ }, options)
 
   scheduler.requestRefresh()
-  assert.equal(clock.nextDeadline(), 200)
-  clock.advanceBy(100)
+  assert.equal(visibleDelayMs, 1_000)
+  assert.equal(clock.nextDeadline(), visibleDelayMs)
+  clock.advanceBy(500)
+  setVisibilityState('hidden')
   scheduler.requestRefresh()
-  assert.equal(clock.nextDeadline(), 200)
-  clock.advanceBy(99)
+  assert.equal(clock.nextDeadline(), visibleDelayMs)
+  clock.advanceBy(499)
+  assert.equal(refreshCount, 0)
+  clock.advanceBy(1)
+  await flushRefreshPromises()
+  assert.equal(refreshCount, 1)
+})
+
+test('global refresh scheduler uses a fixed 10s hidden deadline', async () => {
+  const { createSessionListRefreshScheduler, clock, options, setVisibilityState, hiddenDelayMs } = await loadRefreshScheduler()
+  let refreshCount = 0
+  const scheduler = createSessionListRefreshScheduler(async () => { refreshCount++ }, options)
+
+  setVisibilityState('hidden')
+  scheduler.requestRefresh()
+  assert.equal(hiddenDelayMs, 10_000)
+  assert.equal(clock.nextDeadline(), hiddenDelayMs)
+  clock.advanceBy(hiddenDelayMs - 1)
   assert.equal(refreshCount, 0)
   clock.advanceBy(1)
   await flushRefreshPromises()
@@ -281,7 +313,7 @@ test('global refresh scheduler keeps the first fixed 200ms deadline', async () =
 })
 
 test('global refresh scheduler coalesces all pre-start intents', async () => {
-  const { createSessionListRefreshScheduler, clock, options } = await loadRefreshScheduler()
+  const { createSessionListRefreshScheduler, clock, options, visibleDelayMs } = await loadRefreshScheduler()
   let refreshCount = 0
   const scheduler = createSessionListRefreshScheduler(async () => { refreshCount++ }, options)
 
@@ -289,13 +321,13 @@ test('global refresh scheduler coalesces all pre-start intents', async () => {
   scheduler.requestRefresh()
   scheduler.requestRefresh()
   assert.equal(clock.pendingCount(), 1)
-  clock.advanceBy(200)
+  clock.advanceBy(visibleDelayMs)
   await flushRefreshPromises()
   assert.equal(refreshCount, 1)
 })
 
-test('global refresh scheduler queues one trailing refresh 200ms after an in-flight refresh settles', async () => {
-  const { createSessionListRefreshScheduler, clock, options } = await loadRefreshScheduler()
+test('global refresh scheduler re-evaluates visibility when it arms one trailing refresh', async () => {
+  const { createSessionListRefreshScheduler, clock, options, setVisibilityState, hiddenDelayMs, visibleDelayMs } = await loadRefreshScheduler()
   let resolveFirst
   const firstRefresh = new Promise(resolve => { resolveFirst = resolve })
   let refreshCount = 0
@@ -305,17 +337,19 @@ test('global refresh scheduler queues one trailing refresh 200ms after an in-fli
   }, options)
 
   scheduler.requestRefresh()
-  clock.advanceBy(200)
+  clock.advanceBy(visibleDelayMs)
   await flushRefreshPromises()
   assert.equal(refreshCount, 1)
   scheduler.requestRefresh()
   scheduler.requestRefresh()
   assert.equal(clock.pendingCount(), 0)
 
+  setVisibilityState('hidden')
   resolveFirst()
   await flushRefreshPromises()
-  assert.equal(clock.nextDeadline(), clock.now() + 200)
-  clock.advanceBy(199)
+  assert.equal(clock.nextDeadline(), clock.now() + hiddenDelayMs)
+  clock.advanceBy(hiddenDelayMs - 1)
+  setVisibilityState('visible')
   scheduler.requestRefresh()
   assert.equal(clock.nextDeadline(), clock.now() + 1)
   clock.advanceBy(1)
@@ -324,7 +358,7 @@ test('global refresh scheduler queues one trailing refresh 200ms after an in-fli
 })
 
 test('global refresh scheduler never overlaps refreshes', async () => {
-  const { createSessionListRefreshScheduler, clock, options } = await loadRefreshScheduler()
+  const { createSessionListRefreshScheduler, clock, options, visibleDelayMs } = await loadRefreshScheduler()
   const pending = []
   let active = 0
   let maximumActive = 0
@@ -343,16 +377,16 @@ test('global refresh scheduler never overlaps refreshes', async () => {
   }, options)
 
   scheduler.requestRefresh()
-  clock.advanceBy(200)
+  clock.advanceBy(visibleDelayMs)
   await flushRefreshPromises()
   scheduler.requestRefresh()
-  clock.advanceBy(1000)
+  clock.advanceBy(visibleDelayMs)
   await flushRefreshPromises()
   assert.equal(refreshCount, 1)
 
   pending.shift()()
   await flushRefreshPromises()
-  clock.advanceBy(200)
+  clock.advanceBy(visibleDelayMs)
   await flushRefreshPromises()
   assert.equal(refreshCount, 2)
   assert.equal(maximumActive, 1)
@@ -361,12 +395,12 @@ test('global refresh scheduler never overlaps refreshes', async () => {
 })
 
 test('global refresh scheduler dispose cancels pending and trailing work', async () => {
-  const { createSessionListRefreshScheduler, clock, options } = await loadRefreshScheduler()
+  const { createSessionListRefreshScheduler, clock, options, visibleDelayMs } = await loadRefreshScheduler()
   let refreshCount = 0
   const pendingScheduler = createSessionListRefreshScheduler(async () => { refreshCount++ }, options)
   pendingScheduler.requestRefresh()
   pendingScheduler.dispose()
-  clock.advanceBy(200)
+  clock.advanceBy(visibleDelayMs)
   await flushRefreshPromises()
   assert.equal(refreshCount, 0)
 
@@ -377,13 +411,13 @@ test('global refresh scheduler dispose cancels pending and trailing work', async
     await inFlightRefresh
   }, options)
   inFlightScheduler.requestRefresh()
-  clock.advanceBy(200)
+  clock.advanceBy(visibleDelayMs)
   await flushRefreshPromises()
   inFlightScheduler.requestRefresh()
   inFlightScheduler.dispose()
   resolveRefresh()
   await flushRefreshPromises()
-  clock.advanceBy(1000)
+  clock.advanceBy(visibleDelayMs)
   inFlightScheduler.requestRefresh()
   assert.equal(refreshCount, 1)
   assert.equal(clock.pendingCount(), 0)

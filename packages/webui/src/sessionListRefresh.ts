@@ -2,7 +2,8 @@ export type LatestSessionListRequestGate = {
   latestRequestId: number
 }
 
-export const SESSION_LIST_REFRESH_DELAY_MS = 200
+export const SESSION_LIST_VISIBLE_REFRESH_DELAY_MS = 1_000
+export const SESSION_LIST_HIDDEN_REFRESH_DELAY_MS = 10_000
 
 export type SessionListRefreshScheduler = {
   requestRefresh: () => void
@@ -10,9 +11,15 @@ export type SessionListRefreshScheduler = {
 }
 
 type SessionListRefreshSchedulerOptions = {
-  delayMs?: number
+  getDelayMs?: () => number
   setTimer?: (callback: () => void, delayMs: number) => unknown
   clearTimer?: (timer: unknown) => void
+}
+
+export function getSessionListRefreshDelayMs(visibilityState: DocumentVisibilityState): number {
+  return visibilityState === 'visible'
+    ? SESSION_LIST_VISIBLE_REFRESH_DELAY_MS
+    : SESSION_LIST_HIDDEN_REFRESH_DELAY_MS
 }
 
 export function createLatestSessionListRequestGate(): LatestSessionListRequestGate {
@@ -36,7 +43,7 @@ export function createSessionListRefreshScheduler(
   refresh: () => Promise<unknown>,
   options: SessionListRefreshSchedulerOptions = {},
 ): SessionListRefreshScheduler {
-  const delayMs = options.delayMs ?? SESSION_LIST_REFRESH_DELAY_MS
+  const getDelayMs = options.getDelayMs ?? (() => getSessionListRefreshDelayMs(document.visibilityState))
   const setTimer = options.setTimer ?? ((callback, delay) => window.setTimeout(callback, delay))
   const clearTimer = options.clearTimer ?? ((timer) => window.clearTimeout(timer as number))
   let timer: unknown | null = null
@@ -56,7 +63,7 @@ export function createSessionListRefreshScheduler(
           () => finishRefresh(),
           () => finishRefresh(),
         )
-    }, delayMs)
+    }, getDelayMs())
   }
 
   const finishRefresh = () => {
