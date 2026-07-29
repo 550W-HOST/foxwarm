@@ -742,7 +742,7 @@ const getGroupedToolEntries = (msg: Message, nextMsg: Message, messageKeyPrefix:
     responseEntriesById.set(toolId, entries)
   })
 
-  nextMsg.parts.filter(p => p.inlineData).forEach(part => {
+  nextMsg.parts.filter(p => p.inlineData || p.inlineDataRef || p.inlineDataUnavailable).forEach(part => {
     if (part.toolUseId) {
       const entries = imageEntriesById.get(part.toolUseId) || []
       entries.push(part)

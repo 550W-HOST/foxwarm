@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import * as sessionManager from '../sessionManager';
 import { image_crop, image_write_to_file } from '../tools';
 import { normalizeToolResultImages } from '../toolImages';
+import { putImageBlob, resolveImageBlobPath } from '../imageBlobs';
 
 async function makePngBase64(width: number, height: number, rgb: { r: number; g: number; b: number } = { r: 32, g: 96, b: 192 }): Promise<string> {
   const buffer = await sharp({
@@ -132,9 +133,12 @@ test('image_write_to_file writes prior tool image by id into the session workspa
   const originalGetExistingSession = sessionManager.getExistingSession;
   const originalGetArchivedMessages = sessionManager.getArchivedMessages;
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-image-write-'));
+  let blobId: string | undefined;
 
   try {
     const base64 = await makePngBase64(5, 2);
+    const ref = await putImageBlob({ buffer: Buffer.from(base64, 'base64'), mimeType: 'image/png', imageId: 'call_source#1', width: 5, height: 2 });
+    blobId = ref.blobId;
     (sessionManager as any).getExistingSession = async () => ({
       id: 'image-write-session',
       history: [
@@ -143,7 +147,7 @@ test('image_write_to_file writes prior tool image by id into the session workspa
           parts: [
             {
               toolUseId: 'call_source',
-              inlineData: { mimeType: 'image/png', data: base64 },
+              inlineDataRef: ref,
               imageMeta: { imageId: 'call_source#1', mimeType: 'image/png', width: 5, height: 2, sizeBytes: Buffer.byteLength(base64, 'base64') },
             },
           ],
@@ -171,5 +175,6 @@ test('image_write_to_file writes prior tool image by id into the session workspa
     (sessionManager as any).getExistingSession = originalGetExistingSession;
     (sessionManager as any).getArchivedMessages = originalGetArchivedMessages;
     await fs.remove(tempDir);
+    if (blobId) await fs.remove(resolveImageBlobPath(blobId));
   }
 });

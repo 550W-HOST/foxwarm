@@ -8,9 +8,16 @@ import type { Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import fs from 'fs-extra';
 import { getAgentDir } from '../config';
+import { getSessionHistoryFilePath } from '../session/metadataStore';
+import sharp from 'sharp';
+import { resolveImageBlobPath } from '../imageBlobs';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function makeTinyPng(): Promise<Buffer> {
+  return sharp({ create: { width: 2, height: 1, channels: 4, background: { r: 20, g: 40, b: 60, alpha: 1 } } }).png().toBuffer();
 }
 
 function createSseDataReader(body: ReadableStream<Uint8Array>) {
@@ -168,11 +175,12 @@ test('WebUI sessions route treats bare wait as idle while preserving busy fields
 
 test('WebUI history route returns queued preview messages separately from committed history', async () => {
   const sessionId = makeSessionId('webui_history_queue');
+  const imageBuffer = await makeTinyPng();
   const session = await sessionManager.getSession(sessionId);
   session.agent = 'main';
   session.history = [{
     role: 'model',
-    parts: [{ text: 'committed answer' }],
+    parts: [{ text: 'committed answer' }, { inlineData: { data: imageBuffer.toString('base64'), mimeType: 'image/png' } }],
     __meta: { timestamp: Date.now(), seq: 1 },
   }];
   session.persistentMemorySnapshot = 'persisted system snapshot';
@@ -200,6 +208,13 @@ test('WebUI history route returns queued preview messages separately from commit
         system: formatFoxwarmMessage({ type: 'inter-agent', sourceSessionId: 'child-session', hint: 'inter-agent message' }, 'queued system message'),
       }],
     },
+    {
+      type: 'user',
+      source: {
+        platform: 'webui', channelId: 'webui', channelType: 'webui', channelUserId: sessionId, conversationId: sessionId,
+      },
+      parts: [{ inlineData: { data: imageBuffer.toString('base64'), mimeType: 'image/png' } }],
+    },
     { type: 'compact' },
   ];
   session.meta = { lastMessageTime: Date.now() } as Session['meta'];
@@ -210,6 +225,7 @@ test('WebUI history route returns queued preview messages separately from commit
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token: 'history-token', enableTrigger: false, enableWebUI: true });
   await server.start();
+  let blobId: string | undefined;
 
   try {
     const stateRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/state`, {
@@ -219,7 +235,7 @@ test('WebUI history route returns queued preview messages separately from commit
     const statePayload = await stateRes.json() as any;
     assert.deepEqual(Object.keys(statePayload), ['session']);
     assert.equal(statePayload.session.id, sessionId);
-    assert.equal(statePayload.session.queueLength, 3);
+    assert.equal(statePayload.session.queueLength, 4);
     assert.equal(statePayload.session.runtimeState.state, 'requesting-model');
     assert.equal('messages' in statePayload, false);
     assert.equal('persistentMemorySnapshot' in statePayload, false);
@@ -236,15 +252,20 @@ test('WebUI history route returns queued preview messages separately from commit
     assert.equal(res.status, 200);
     const payload = await res.json() as any;
 
-    assert.equal(payload.queueLength, 3);
+    assert.equal(payload.queueLength, 4);
     assert.equal(payload.session.id, sessionId);
     assert.equal(payload.session.busy, true);
-    assert.equal(payload.session.queueLength, 3);
+    assert.equal(payload.session.queueLength, 4);
     assert.equal(payload.session.runtimeState.state, 'requesting-model');
     assert.equal(payload.messages.length, 1);
     assert.equal(payload.messages[0].parts[0].text, 'committed answer');
+    assert.equal(payload.messages[0].parts[1].inlineData, undefined);
+    assert.equal(payload.messages[0].parts[1].inlineDataRef.path, undefined);
+    assert.match(payload.messages[0].parts[1].inlineDataRef.apiPath, /^\/blobs\//);
+    blobId = payload.messages[0].parts[1].inlineDataRef.blobId;
+    assert.equal(JSON.stringify(payload).includes(imageBuffer.toString('base64')), false);
     assert.equal(payload.persistentMemorySnapshot, 'persisted system snapshot');
-    assert.equal(payload.queuedMessages.length, 2);
+    assert.equal(payload.queuedMessages.length, 3);
     assert.equal(payload.queuedPreviewOmittedCount, 1);
 
     const channelPreview = payload.queuedMessages[0];
@@ -260,11 +281,67 @@ test('WebUI history route returns queued preview messages separately from commit
     assert.equal(systemPreview.__meta.queueType, 'intersession');
     assert.match(systemPreview.parts[0].system, /<foxwarm-message type="inter-agent"/);
     assert.match(systemPreview.parts[0].system, /queued system message/);
+
+    assert.match(payload.queuedMessages[2].parts[0].text, /image\/png attachment preview omitted/);
+    const persisted = await readSessionHistorySnapshot(sessionId);
+    assert.equal(JSON.stringify(persisted).includes(imageBuffer.toString('base64')), false);
+    const metadata = await loadSessionsMetadataSnapshot();
+    assert.equal(JSON.stringify((metadata.data as any).sessions[sessionId]?.queue || []).includes(imageBuffer.toString('base64')), false);
+
+    const unauthorizedBlob = await fetch(`http://127.0.0.1:${port}/api${payload.messages[0].parts[1].inlineDataRef.apiPath}`);
+    assert.equal(unauthorizedBlob.status, 401);
+    const authorizedBlob = await fetch(`http://127.0.0.1:${port}/api${payload.messages[0].parts[1].inlineDataRef.apiPath}`, {
+      headers: { Authorization: 'Bearer history-token' },
+    });
+    assert.equal(authorizedBlob.status, 200);
+    assert.equal(authorizedBlob.headers.get('content-type'), 'image/png');
+    assert.deepEqual(Buffer.from(await authorizedBlob.arrayBuffer()), imageBuffer);
+
+    const debugFixturePath = getSessionHistoryFilePath(sessionId);
+    const debugFixture = await fs.readJson(debugFixturePath);
+    const nestedSecretBase64 = imageBuffer.toString('base64');
+    const legacySecretPath = '/private/legacy/image-secret.png';
+    debugFixture.contextFrontier = [{
+      kind: 'message',
+      marker: 'context-frontier-business-field',
+      nestedFunctionResponse: {
+        functionResponse: {
+          tool_use_id: 'debug_nested_tool',
+          response: { inlineData: { data: nestedSecretBase64, mimeType: 'image/png' }, status: 'kept' },
+        },
+      },
+      nestedLegacyRef: {
+        inlineDataRef: {
+          imageId: 'debug-legacy-ref',
+          format: 'png',
+          path: legacySecretPath,
+          mimeType: 'image/png',
+          byteLength: 12,
+          sha256: 'debug-secret-hash',
+        },
+      },
+    }];
+    await fs.writeJson(debugFixturePath, debugFixture, { spaces: 2 });
+
+    const debugRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/debug-file`, {
+      headers: { Authorization: 'Bearer history-token' },
+    });
+    assert.equal(debugRes.status, 200);
+    const debugText = await debugRes.text();
+    assert.equal(debugText.includes(nestedSecretBase64), false);
+    assert.equal(debugText.includes(legacySecretPath), false);
+    assert.doesNotMatch(debugText, /"path"\s*:/);
+    const debugPayload = JSON.parse(debugText);
+    assert.equal(debugPayload.payload.contextFrontier[0].marker, 'context-frontier-business-field');
+    assert.equal(debugPayload.payload.contextFrontier[0].nestedFunctionResponse.functionResponse.response.status, 'kept');
+    assert.equal(debugPayload.payload.contextFrontier[0].nestedFunctionResponse.functionResponse.response.inlineDataUnavailable.unavailable, true);
+    assert.equal(debugPayload.payload.contextFrontier[0].nestedLegacyRef.inlineDataRef.unavailable, true);
   } finally {
     await server.stop();
     setHttpServer(null);
     session.busy = false;
     await sessionManager.deleteSession(sessionId).catch(() => {});
+    if (blobId) await fs.remove(resolveImageBlobPath(blobId));
   }
 });
 
@@ -315,6 +392,7 @@ test('WebUI message route forwards the bounded optimistic client identity to the
 
 test('WebUI per-session SSE sends initial and live canonical runtime state without a session-list fetch', async () => {
   const sessionId = makeSessionId('webui_session_stream');
+  const imageBuffer = await makeTinyPng();
   const alias = `${sessionId}_alias`;
   const session = await sessionManager.getSession(sessionId);
   session.aliases = [alias];
@@ -340,9 +418,11 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
   setHttpServer(server);
   const channel = new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
   sessionManager.setOnSessionStateUpdated((updatedSessionId) => channel.broadcastSessionStateUpdate(updatedSessionId));
+  sessionManager.setOnHistoryUpdated((updatedSessionId, message) => channel.broadcastMessage(updatedSessionId, message));
   await server.start();
 
   let sse: ReturnType<typeof createSseDataReader> | null = null;
+  let blobId: string | undefined;
   try {
     const missing = await fetch(`http://127.0.0.1:${port}/api/sessions/missing-session/stream`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -365,6 +445,30 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
     assert.equal(initial.session.runtimeState.state, 'waiting');
     assert.equal(initial.session.runtimeState.waiting.waitingFor, 'timer');
     assert.equal(initial.session.busy, false);
+
+    await sessionManager.appendSessionMessage(session, {
+      role: 'tool',
+      parts: [{
+        functionResponse: {
+          tool_use_id: 'sse_nested_tool',
+          name: 'screenshot',
+          response: {
+            status: 'kept',
+            inlineData: { data: imageBuffer.toString('base64'), mimeType: 'image/png' },
+          },
+        },
+      }],
+    });
+    let imageMessage = await sse.read();
+    while (imageMessage.type !== 'message') imageMessage = await sse.read();
+    assert.equal(imageMessage.type, 'message');
+    assert.equal(imageMessage.message.parts[0].functionResponse.response.status, 'kept');
+    assert.equal(imageMessage.message.parts[0].functionResponse.response.inlineData, undefined);
+    assert.equal(imageMessage.message.parts[1].toolUseId, 'sse_nested_tool');
+    assert.equal(imageMessage.message.parts[1].inlineDataRef.path, undefined);
+    assert.match(imageMessage.message.parts[1].inlineDataRef.apiPath, /^\/blobs\//);
+    blobId = imageMessage.message.parts[1].inlineDataRef.blobId;
+    assert.equal(JSON.stringify(imageMessage).includes(imageBuffer.toString('base64')), false);
 
     session.busy = true;
     session.busyStartedAt = Date.now();
@@ -412,9 +516,11 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
     await server.stop();
     setHttpServer(null);
     sessionManager.setOnSessionStateUpdated(() => {});
+    sessionManager.setOnHistoryUpdated(() => {});
     sessionManager.clearActiveSessionRuntimeState(sessionId);
     session.busy = false;
     await sessionManager.deleteSession(sessionId).catch(() => {});
+    if (blobId) await fs.remove(resolveImageBlobPath(blobId));
   }
 });
 

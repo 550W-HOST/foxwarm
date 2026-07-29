@@ -21,8 +21,9 @@ Canonical façade and child-ID ownership: [session core façade](../modules/sess
 2. `loadSessions()` loads the metadata index, creates lightweight session objects, and loads channel attachments.
 3. `getSession(id)` lazily loads the authoritative per-session history snapshot.
 4. When an embedded `contextFrontier` exists, hydration calls `renderHistoryFromFrontier(session)` or annotates an already matching rendered history.
-5. The shared metadata file remains a presentation/list index; per-session history owns messages, prompt snapshot/cache key, and frontier.
-6. Creation-critical history and metadata writes propagate errors. A known failed creation removes its map/history/archive artifacts so the same uncommitted ID can be retried; ordinary noncritical saves retain best-effort logging behavior.
+5. Accessed legacy live history/queue images are lazily materialized into canonical content-addressed blob references; there is no startup-wide image migration.
+6. The shared metadata file remains a presentation/list index; per-session history owns messages, prompt snapshot/cache key, and frontier.
+7. Creation-critical history and metadata writes propagate errors. A known failed creation removes its map/history/archive artifacts so the same uncommitted ID can be retried; ordinary noncritical saves retain best-effort logging behavior.
 
 Canonical data authority: [D-session-core-authoritative-history](../modules/session-core.md#d-session-core-authoritative-history).
 
@@ -81,6 +82,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 - [src-session-history](../units/src-session-history.md)
 - [src-session-layered-context](../units/src-session-layered-context.md)
 - [src-session-archive-store](../units/src-session-archive-store.md)
+- [image blob lifecycle](./image-blob-lifecycle.md)
 
 ## Compatibility
 

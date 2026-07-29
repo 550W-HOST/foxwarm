@@ -21,6 +21,8 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 
 ## Provider routing
 
+Canonical image messages remain blob-reference-only until the provider request boundary; clone-only hydration and diagnostic redaction are owned by [image blob lifecycle](../threads/image-blob-lifecycle.md).
+
 - `openai` and `openai-responses` use the Responses API.
 - `openai-completions` uses Chat Completions.
 - `anthropic` uses Anthropic Messages.

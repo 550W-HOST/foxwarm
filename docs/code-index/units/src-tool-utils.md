@@ -17,7 +17,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - `getImageMetaFromPart` — extracts image metadata from a message part
 - `buildImageGuidanceText` / `appendImageGuidanceText` — generates model-facing image usage hints
 - `cropImageById` — resolves an image by ID from session history and crops it
-- `resolveArchiveInlineDataPath` — resolves archived inline data file references
+- `resolveArchiveInlineDataPath` — compatibility resolver for archived path references
 - `NormalizedToolResultImage`, `NormalizedToolResultImages` — TypeScript interfaces for normalized image results
 
 ## Function Index
@@ -81,7 +81,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - `guardToolOutputForModel` applies a two-stage truncation to the non-image response that remains after image promotion: Stage A targets the `output` field specifically; Stage B catches any remaining oversized payload. Both stages save the complete text to disk and return a line-aware excerpt with location metadata, Foxwarm placeholder notes, and original line/character counts. A fallback path handles save failures. Canonical ordering is [D-dispatch-output-boundary](../threads/tool-dispatch.md#d-dispatch-output-boundary).
 - The guard preserves a curated set of shallow metadata keys (paths, IDs, status, error) in truncated summaries so the model retains actionable context.
 - `normalizeToolResultImages` accepts only current structured `inlineData` / `inlineDataItems` fields with `mimeType` and turns them into consistent `MessagePart[]` values with probed metadata. Source-specific old node shapes are outside this generic unit and are owned by [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
-- `cropImageById` resolves images by walking session history backwards (including archives), then uses sharp to extract a sub-region.
+- `cropImageById` resolves inline, canonical blob, or legacy archive-path images by walking session history backwards (including archives), then uses sharp to extract a sub-region. `image_write_to_file` uses the same reference reader.
 - The `wait` tool's stop-current-turn behavior is suppressed when any other tool in the batch returns an error.
 
 ## Integration
@@ -89,5 +89,6 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - The output guard is called by `executeTools` in the LLM layer before tool results are appended to session history, ensuring model context stays within token limits.
 - The guard preserves the structured tool-result object shape; provider serializers later call `formatToolResponsePayload()` to produce string content for OpenAI Chat Completions, OpenAI Responses function_call_output, and Anthropic tool_result blocks.
 - Image normalization feeds into the message part system, enabling downstream image tools (`image_crop`, `image_write_to_file`) to reference prior tool images by ID.
+- Durable image storage and provider/WebUI boundaries are canonical in [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - `stringifyFunctionCallArgs` is used by OpenAI format converters to serialize tool calls for the provider API, preserving exact raw text when available.
 - The test files validate tool schema contracts (parameter naming, `defaultInject` metadata), path resolution behavior (session cwd, isolated agents), read range placeholder handling (`startLine/endLine: 0` as omitted), write parent-directory semantics (`createDirs=true`), channel naming conventions, unified `call_tool`/`search_tools` dispatch, and MCP image results on both hidden and unified paths above and below the text guard threshold.

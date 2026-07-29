@@ -23,6 +23,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - Session list, history, create, update, fork, move, pin, model, cwd, and message routes.
 - Per-session SSE plus the independent global session-list stream.
 - File upload and authenticated download.
+- Authenticated content-addressed image blob delivery.
 - Model/provider and channel configuration, validation, and connectivity tests.
 - ASR and messaging-platform setup helpers.
 - Browser terminal REST/WebSocket routes.
@@ -44,6 +45,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 
 - `GET /api/sessions` returns canonical `runtimeState` while retaining documented legacy busy fields for compatibility.
 - `GET /api/sessions/:id/history` returns committed messages, the lightweight `persistentMemorySnapshot`, a separate bounded `queuedMessages` preview, queue length, and a canonical session snapshot. Queue previews never become committed history; normal Chat bootstrap does not need the full debug-file route.
+- History, persisted-message SSE, one-layer CTX-BLOCK expansion, and explicit Debug payloads recursively replace canonical image refs with deployment-relative `/blobs/:blobId` API paths and never expose base64 or legacy image paths, including nested function responses and non-history Debug structures. Unmaterializable legacy images become explicit unavailable metadata without discarding surrounding business fields. `GET /api/blobs/:blobId` is authenticated, immutable-cacheable, traversal-safe, and inline-serves only safe raster formats; other formats are attachment-only with `nosniff`. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - `GET /api/sessions/:id/state` returns only `{ session: buildWebUiSessionState(session) }` (or 404). Chat uses this lightweight authenticated probe only when EventSource fails before opening, so reconnect existence checks never download history.
 - `POST /api/sessions/:id/message` accepts a bounded optional browser `clientMessageId` and forwards it as routing metadata without adding it to model-visible parts.
 - Each per-session SSE connection sends an immediate state snapshot, then message, stream, runtime, queue, and deletion updates for that session.

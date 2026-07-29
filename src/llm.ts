@@ -27,6 +27,7 @@ import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
 import { formatLocalTimestamp } from './utils/localTime';
 import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
+import { hydrateMessagesForProvider } from './imageBlobs';
 import { guardToolOutputForModel } from './toolOutputGuard';
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
@@ -886,7 +887,7 @@ async function logRequest(data: any, iteration = 0): Promise<LlmInteractionLogFi
     try {
         const timestamp = formatTime();
         const requestPath = await getRecentLogPath(LOGS_DIR, `${timestamp}_iter${iteration}_req.json`);
-        await fs.writeJson(requestPath, data, { spaces: 2 });
+        await fs.writeJson(requestPath, redactProviderImagesForLog(data), { spaces: 2 });
         const responseFileName = `${timestamp}_iter${iteration}_res.json`;
         return {
             requestPath,
@@ -896,6 +897,30 @@ async function logRequest(data: any, iteration = 0): Promise<LlmInteractionLogFi
         logger.error({ err: e }, 'Failed to log LLM interaction');
         return null;
     }
+}
+
+export function redactProviderImagesForLog(value: any): any {
+    if (typeof value === 'string') {
+        return /^data:image\/[a-z0-9.+-]+;base64,/iu.test(value)
+            ? value.replace(/;base64,.+$/su, ';base64,[image omitted from diagnostics]')
+            : value;
+    }
+    if (Array.isArray(value)) return value.map(item => redactProviderImagesForLog(item));
+    if (!value || typeof value !== 'object') return value;
+
+    const result: Record<string, any> = {};
+    for (const [key, entry] of Object.entries(value)) {
+        if (key === 'data'
+            && typeof entry === 'string'
+            && value.type === 'base64'
+            && typeof value.media_type === 'string'
+            && value.media_type.startsWith('image/')) {
+            result[key] = '[image omitted from diagnostics]';
+        } else {
+            result[key] = redactProviderImagesForLog(entry);
+        }
+    }
+    return result;
 }
 
 async function logResponse(data: any, logFiles: LlmInteractionLogFiles | null) {
@@ -927,7 +952,7 @@ export function fixToolCalls(contents: Message[]): Message[] {
     const isSkippableSystemInterruption = (message: Message | null | undefined): boolean => {
         if (!message || message.role !== 'user' || !message.parts?.length) return false;
         return message.parts.every((part: MessagePart) => {
-            if (part.functionCall || part.functionResponse || part.inlineData || part.thinking) return false;
+            if (part.functionCall || part.functionResponse || part.inlineData || part.inlineDataRef || part.thinking) return false;
             if (part.system) return true;
             if (isSystemPayloadTextPart(part)) return true;
             return typeof part.text === 'string' && (part.text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(part.text));
@@ -2053,7 +2078,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
 }
 
 export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
-    const fixedContents = fixToolCalls(options.contents || []);
+    const fixedContents = fixToolCalls(await hydrateMessagesForProvider(options.contents || []));
     const resolvedModel = options.modelsConfigOverride
         ? (() => {
             const modelsConfig = options.modelsConfigOverride!;
@@ -2164,7 +2189,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 if (!logFiles) {
                     logFiles = await logRequest(virtualRequestLog, iteration);
                 } else {
-                    await fs.writeJson(logFiles.requestPath, virtualRequestLog, { spaces: 2 }).catch(error => {
+                    await fs.writeJson(logFiles.requestPath, redactProviderImagesForLog(virtualRequestLog), { spaces: 2 }).catch(error => {
                         logger.warn({ err: error, virtualModelKey: routeKey, attempt }, 'Failed to update virtual LLM request log');
                     });
                 }
