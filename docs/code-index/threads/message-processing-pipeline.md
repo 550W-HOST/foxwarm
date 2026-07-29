@@ -37,7 +37,7 @@ The interactive turn flow from channel input through authorization, queueing, pr
 - Platform turn identifiers such as WeWork stream IDs are hard merge/final-delivery boundaries.
 - `/stop` cancels the current run and leaves queued work pending.
 - `/dequeue` stops current work if needed and immediately resumes queued items.
-- `/retry` inserts an internal retry item using current model-visible history and `parts:null`; it does not regenerate a completed answer or add a model-facing retry marker.
+- `/retry` inserts an internal retry item using current model-visible history and `parts:null`; it does not regenerate a completed answer or add a model-facing retry marker. Once the control item is selected, the retry uses the ordinary turn loop, so compatible inputs queued behind it join at the normal pre-provider and post-tool safe points.
 
 ## Retry/error behavior
 
@@ -85,7 +85,7 @@ Retries are observable but not model-visible. One updatable display-only notice 
 
 ### D-pipeline-control-commands
 
-`/retry` retries a failed/pending LLM turn from current history. `/stop` preserves queued work; `/dequeue` proceeds with it.
+[2026-07-29] `/retry` retries a failed/pending LLM turn from current history by enqueuing an internal control item and then running an ordinary session turn with `parts:null`. The retry adds no synthetic model-visible marker and has no special queued-input deferral: compatible ordinary and structured inputs queued behind the control are appended as separate canonical history messages before the first retried provider request, and inputs arriving during retry tool execution join at the normal safe points. `/stop` preserves queued work; `/dequeue` proceeds with it.
 
 ### D-pipeline-dispatched-parts-ownership
 

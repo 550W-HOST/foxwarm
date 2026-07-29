@@ -566,47 +566,77 @@ test('MessageRouter LLM final failure keeps retry notice display-only without ap
   }
 });
 
-test('retrySession enqueues an internal retry item that reruns LLM without appending retry marker text', async () => {
+test('retrySession runs one ordinary turn with queued inputs and no retry marker text', async () => {
   const router = new MessageRouter() as any;
-  const sessionId = `retry_control_session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const session = await sessionManager.getSession(sessionId) as Session;
-  session.history = [{ role: 'user', parts: [{ text: 'original failed request' }], __meta: { seq: 1, timestamp: Date.now() } }];
-  session.persistentMemorySnapshot = 'system prompt';
-  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
-  session.busy = false;
-  session.queue = [];
-  session.meta = { lastMessageTime: Date.now() };
+  const session = await createRouterQueueTestSession('retry_control_session');
+  const sessionId = session.id;
+  await sessionManager.appendSessionMessage(session, {
+    role: 'user',
+    parts: [{ text: 'original failed request' }],
+  });
 
   const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
   let chatCallCount = 0;
-  const seenParts: any[] = [];
+  const seenParts: Array<MessagePart[] | null> = [];
+  const seenRequests: Message[][] = [];
 
   sessionManager.setSessionTriggerCallback(() => {});
-  (llm as any).chat = async (parts: any, activeSession: Session) => {
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     chatCallCount += 1;
     seenParts.push(parts);
-    const text = parts === null ? 'retried response' : 'queued response';
-    activeSession.history.push({ role: 'model', parts: [{ text }], __meta: { seq: chatCallCount + 1, timestamp: Date.now() } });
-    return { text, allParts: [{ text }] };
+    seenRequests.push(structuredClone(activeSession.history));
+    if (chatCallCount === 1) {
+      const toolCall = { id: 'retry-tool', name: 'read', args: { filePath: 'README.md' } };
+      await appendMockChatMessages(activeSession, parts, [{ functionCall: toolCall }]);
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    await appendMockChatMessages(activeSession, parts, [{ text: 'retried response' }]);
+    return { text: 'retried response', allParts: [{ text: 'retried response' }] };
+  };
+  (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(sessionId, {
+      type: 'user',
+      parts: [{ text: 'queued during retry tool' }],
+    });
+    return {
+      role: 'tool',
+      parts: [{ functionResponse: { tool_use_id: 'retry-tool', name: 'read', response: { output: 'ok' } } }],
+    };
   };
 
   try {
     await sessionManager.retrySession(sessionId);
-    session.queue.push({ type: 'user', parts: [{ text: 'queued after retry' }] });
-    assert.deepEqual(session.queue.map(item => item.type), ['retry', 'user']);
+    session.queue.push(
+      { type: 'user', parts: [{ text: 'queued after retry' }] },
+      {
+        type: 'intersession',
+        message: { role: 'user', parts: [{ system: 'queued intersession after retry' }] },
+      },
+    );
+    assert.deepEqual(session.queue.map(item => item.type), ['retry', 'user', 'intersession']);
 
     await router.processSessionQueue(sessionId);
 
     assert.equal(chatCallCount, 2);
     assert.equal(seenParts[0], null);
     assert.equal(seenParts[1], null);
+    assert.equal(countHistoryPartText(seenRequests[0], 'queued after retry'), 1);
+    assert.equal(countHistoryPartSystem(seenRequests[0], 'queued intersession after retry'), 1);
+    const firstRetryInputs = seenRequests[0].filter(message => message.role === 'user'
+      && message.parts.some(part => part.text === 'queued after retry' || part.system === 'queued intersession after retry'));
+    assert.equal(firstRetryInputs.length, 2);
+    assert.equal(countHistoryPartText(seenRequests[0], 'queued during retry tool'), 0);
+    assert.equal(countHistoryPartText(seenRequests[1], 'queued during retry tool'), 1);
     assert.equal(userTextOccurrences(session, 'queued after retry'), 1);
+    assert.equal(userTextOccurrences(session, 'queued during retry tool'), 1);
     assert.equal(session.queue.length, 0);
     assert.equal(session.busy, false);
     assert.equal(session.history.some(message => message.parts.some(part => /retrying last request|retrying-last-request/.test(String(part.text || part.system || '')))), false);
     assert.equal(session.history.some(message => message.role === 'model' && message.parts.some(part => part.text === 'retried response')), true);
   } finally {
     (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
     sessionManager.setSessionTriggerCallback(() => {});
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});

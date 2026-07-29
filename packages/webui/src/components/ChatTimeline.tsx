@@ -44,7 +44,8 @@ interface ChatTimelineProps {
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
-  onRetryFinalFailure?: () => void
+  retryableLlmRetryNotice?: Message | null
+  onRetryLlmNotice?: () => void
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   nestedDepth?: number
@@ -290,10 +291,6 @@ const MarkdownContent = memo(function MarkdownContent({ text, className }: { tex
   return <div className={`min-w-0 max-w-full ${className}`} dangerouslySetInnerHTML={{ __html: html }} onClick={handleMarkdownLinkClick} />
 })
 
-const isFinalLlmRetryNotice = (message: Message): boolean => (
-  message.__meta?.noticeType === 'llm-retry' && message.__meta?.retry?.final === true
-)
-
 const isHeavySystemLikeMessage = (message: Message): boolean => {
   if (message.role === 'model') return false
   return (
@@ -524,7 +521,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, showR
         <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-900 dark:text-gray-100">{jsonText}</pre>
       )}
       {showRetryButton && (
-        <div className="mt-2 flex justify-end">
+        <div className="mb-2 mt-2 flex justify-end">
           <button
             type="button"
             onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRetry?.() }}
@@ -557,7 +554,8 @@ interface MessageRowProps {
   onExpandGroup: (groupKey: string) => void
   sessionId: string
   nestedDepth: number
-  onRetryFinalFailure?: () => void
+  showRetryButton: boolean
+  onRetryLlmNotice?: () => void
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
@@ -582,7 +580,8 @@ const MessageRow = memo(function MessageRow({
   onExpandGroup,
   sessionId,
   nestedDepth,
-  onRetryFinalFailure,
+  showRetryButton,
+  onRetryLlmNotice,
   onOpenCodeFile,
   onOpenCodeCommit,
   renderNestedMessages,
@@ -657,7 +656,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIdx === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
               }
-              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} showRetryButton={isFinalLlmRetryNotice(msg)} onRetry={onRetryFinalFailure} onOpenCodeCommit={onOpenCodeCommit} />
+              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} showRetryButton={showRetryButton} onRetry={onRetryLlmNotice} onOpenCodeCommit={onOpenCodeCommit} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
@@ -689,13 +688,14 @@ const MessageRow = memo(function MessageRow({
   prev.groupExpanded === next.groupExpanded &&
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
-  prev.onRetryFinalFailure === next.onRetryFinalFailure &&
+  prev.showRetryButton === next.showRetryButton &&
+  prev.onRetryLlmNotice === next.onRetryLlmNotice &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
   prev.onOpenCodeCommit === next.onOpenCodeCommit &&
   prev.renderNestedMessages === next.renderNestedMessages
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onRetryFinalFailure, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, retryableLlmRetryNotice, onRetryLlmNotice, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
@@ -706,12 +706,11 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       isMobile={isMobile}
       groupTools={groupTools}
       showUsageBadge={nextNestedDepth > 0 ? false : showUsageBadge}
-      onRetryFinalFailure={onRetryFinalFailure}
       onOpenCodeFile={onOpenCodeFile}
       onOpenCodeCommit={onOpenCodeCommit}
       nestedDepth={nextNestedDepth}
     />
-  ), [groupTools, isMobile, onOpenCodeCommit, onOpenCodeFile, onRetryFinalFailure, sessionId, showUsageBadge])
+  ), [groupTools, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge])
 
   const toolGroupMeta = useMemo(() => {
     const messageKeys = messages.map((msg, idx) => getMessageStableKey(msg, idx))
@@ -915,9 +914,10 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             onExpandGroup={handleExpandGroup}
             sessionId={sessionId}
             nestedDepth={nestedDepth}
-            onRetryFinalFailure={onRetryFinalFailure}
+            showRetryButton={nestedDepth === 0 && msg === retryableLlmRetryNotice}
+            onRetryLlmNotice={onRetryLlmNotice}
             onOpenCodeFile={onOpenCodeFile}
-      onOpenCodeCommit={onOpenCodeCommit}
+            onOpenCodeCommit={onOpenCodeCommit}
             renderNestedMessages={renderNestedMessages}
           />
         )
