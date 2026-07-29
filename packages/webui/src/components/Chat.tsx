@@ -13,6 +13,7 @@ import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, Too
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
+import { getRetryableLlmRetryNotice } from '../retryNotice'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import {
@@ -1477,7 +1478,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     void sendSessionCommand('/dequeue')
   }, [sendSessionCommand])
 
-  const handleRetryFinalFailure = useCallback(() => {
+  const handleRetryLlmNotice = useCallback(() => {
     void sendSessionCommand('/retry')
   }, [sendSessionCommand])
 
@@ -1641,6 +1642,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     return modelOptions.find(option => option.key === currentModelKey)?.contextLimit ?? null
   }, [modelOptions, sessionRecord?.modelKey])
 
+  const retryableLlmRetryNotice = useMemo(
+    () => getRetryableLlmRetryNotice(messages, sessionBusy),
+    [messages, sessionBusy],
+  )
+
   return (
     <div ref={chatRootRef} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       <ContentHeader
@@ -1747,7 +1753,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             )}
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full overflow-x-hidden">
               <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} retryableLlmRetryNotice={retryableLlmRetryNotice} onRetryLlmNotice={handleRetryLlmNotice} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </ToolScriptProgressContext.Provider>
             </div>
             <ProcessingStatus
@@ -1760,7 +1766,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full overflow-x-hidden" data-queued-preview="true" aria-label="Queued messages">
-                <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onRetryFinalFailure={handleRetryFinalFailure} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </div>
             )}
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />

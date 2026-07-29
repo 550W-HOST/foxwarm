@@ -1,7 +1,7 @@
 # Unit: webui-chat-timeline
 
-Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/src/components/ContextBlockCard.tsx, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/usageBadgeDetails.e2e.mjs, packages/webui/test/systemMessageCards.e2e.mjs
-Secondary files: packages/webui/src/components/ImageParts.tsx, packages/webui/src/chatViewportState.ts
+Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/src/components/ContextBlockCard.tsx, packages/webui/src/retryNotice.ts, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/retryNotice.test.mjs, packages/webui/test/usageBadgeDetails.e2e.mjs, packages/webui/test/systemMessageCards.e2e.mjs
+Secondary files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/chatViewportState.ts
 
 ## Purpose
 
@@ -15,6 +15,7 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 - `ContextBlockCard` — renders CTX-BLOCK model messages as tool/reasoning-style thread cards with local expand/collapse state and the read-only WebUI archive expansion endpoint
 - `ImageParts` — renders safe raster inline data or authenticated blob URLs and exposes unsafe formats as download-only attachments
 - `getContextBlockMetaFromMessage(message)` — pure helper that prefers structured `__meta.contextBlock` metadata and falls back to parsing legacy CTX-BLOCK text only when needed
+- `getRetryableLlmRetryNotice(messages, sessionBusy)` — selects the current session's last committed LLM retry notice only while idle
 
 ## Function Index
 
@@ -22,6 +23,7 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 |----------|----------------|-------------|
 | `getMessageStableKey(msg, idx)` | ~28–34 | Produces a stable key from message metadata or index |
 | `getMessageViewportAnchorKey(message)` | `chatViewportState.ts` | Produces a context-block/seq/id/timestamp anchor key while excluding temporary/synthetic rows. |
+| `getRetryableLlmRetryNotice(messages, sessionBusy)` | `retryNotice.ts` | Returns only an idle session's last committed `llm-retry` notice, without requiring terminal retry metadata. |
 | `toTokenCount(value)` | ~67 | Safely coerces a value to a finite number or null |
 | `normalizeMessageUsage(value)` | ~71–84 | Normalizes various token usage shapes into a standard format |
 | `getModelMessageUsage(msg)` | ~86 | Extracts normalized usage from a model message |
@@ -66,8 +68,13 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 - User and assistant message surfaces expose semantic CSS hooks (`foxwarm-user-message-bubble`, `foxwarm-user-message-text`, `foxwarm-assistant-message-card`, `foxwarm-assistant-message-markdown`, `foxwarm-assistant-message-raw`) so opt-in UI style layers can restyle the timeline while preserving message grouping, Markdown sanitization, and view-mode behavior.
 - Timeline rows/cards and nested assistant, Reasoning, and CTX-BLOCK flex surfaces use `min-width: 0`/bounded widths so intrinsic Markdown content cannot widen the message or viewport. Top-level desktop model/tool/system rows fill 80% of the timeline, while user messages remain content-sized up to 80%; mobile and nested model/tool/system rows fill their timeline, and nested user messages cap at 85%. The built-CSS contract fixture is `packages/webui/test/messageWidth.e2e.mjs`, including persisted-`user` heavy/non-channel and nested system-card cases. The shared timeline/message-column boundaries also use horizontal-overflow clipping as defense in depth against a future malformed/oversized child; this does not remove nested scroll ownership from intentionally scrollable Markdown tables. Shared Markdown CSS breaks long prose tokens, wraps fenced code with preserved whitespace, and assigns horizontal scrolling only to wide tables; `packages/webui/test/messageOverflow.e2e.mjs` injects a deliberately oversized child.
 - The component is heavily memoized (`memo`) to avoid re-renders on large conversations.
+- The committed Chat timeline may show Retry only on the exact message selected from the current session's committed history by `getRetryableLlmRetryNotice`; queued previews and nested archive timelines receive no retry candidate.
 
 ## Design Decisions
+
+### D-webui-llm-retry-action
+
+[2026-07-29] Show Retry only when the current session is idle and its last committed history message has `__meta.noticeType === 'llm-retry'`. Do not require terminal retry metadata: a non-final notice left last after a stopped request remains retryable. Historical retry notices, queued-preview rows, nested/archive timelines, and independently last messages within those secondary timelines never qualify. Keep a small bottom gap below the button inside the assistant bubble.
 
 - [2026-07-24] The usage badge is the canonical interaction boundary for token detail disclosure. Preserve its existing collapsed compact labels, external desktop lower-right placement/gap, setting gate, and aggregate totals; on mouse/keyboard activation only the badge expands to full labels plus persisted time and routing attribution. Desktop expansion prefers that same external anchor and clamps left only by the amount needed to keep its right edge within the nearest timeline boundary; mobile remains flow layout. A virtual route is displayed as `virtual → concrete`; route/time metadata is never inferred from mutable UI state. For grouped calls, retain aggregation but show all unique routes and a time range rather than assigning the aggregate to one call.
 

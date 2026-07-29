@@ -9,7 +9,7 @@ import CreateTabButton from './components/CreateTabButton'
 import { API_BASE_PATH } from './config'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
-import { applyLatestSessionListRequest, createLatestSessionListRequestGate } from './sessionListRefresh'
+import { applyLatestSessionListRequest, createLatestSessionListRequestGate, createSessionListRefreshScheduler } from './sessionListRefresh'
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
@@ -133,6 +133,7 @@ function useEmbeddedSessions(onGlobalUpdate?: () => Promise<unknown>) {
         if (!disposed) setLoadError(error instanceof Error ? error.message : String(error))
       }
     }
+    const refreshScheduler = createSessionListRefreshScheduler(refresh)
     const connect = () => {
       if (disposed) return
       eventSource?.close()
@@ -140,7 +141,7 @@ function useEmbeddedSessions(onGlobalUpdate?: () => Promise<unknown>) {
       eventSource.onopen = () => { delay = 1000 }
       eventSource.onmessage = (event) => {
         try {
-          if (JSON.parse(event.data)?.type === 'sessions-updated') void refresh()
+          if (JSON.parse(event.data)?.type === 'sessions-updated') refreshScheduler.requestRefresh()
         } catch {}
       }
       eventSource.onerror = () => {
@@ -155,6 +156,7 @@ function useEmbeddedSessions(onGlobalUpdate?: () => Promise<unknown>) {
     void refresh().finally(connect)
     return () => {
       disposed = true
+      refreshScheduler.dispose()
       eventSource?.close()
       if (reconnectTimer.current !== null) window.clearTimeout(reconnectTimer.current)
     }

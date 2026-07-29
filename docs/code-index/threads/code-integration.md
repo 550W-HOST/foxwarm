@@ -26,7 +26,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 ## WebUI launch and bridge
 
 - `API_BASE_PATH` is converted to the deployment-relative `/vscode-web/` path; launch URLs preserve reverse-proxy prefixes.
-- Embedded mode owns one persistent top-level iframe portal. Inactive workbench tabs hide/reposition it rather than unmounting it.
+- Embedded mode owns one top-level iframe portal. A restored inactive Code tab, or a logically active Code tab while the mobile list hides the workbench surface, does not create it; the first Code tab actually shown as active in any visible workbench pane starts it. Ordinary tab switching then hides/repositions the persistent iframe without unmounting it, while explicit Code-tab close destroys it and resets the bridge so reopening starts a fresh frame.
 - Parent/workbench communication is versioned, exact-origin/source checked, and allowlisted to add-folder, open-file, and open-commit request shapes with acknowledgements.
 - Direct `read`, `write`, `edit`, and actionable `apply_patch` tool paths remain plain text; after exact node/cwd/path resolution, an adjacent icon-only Code action may issue the open-file request. See [D-webui-tool-call-region](../units/webui-tool-timeline.md#d-webui-tool-call-region) for the interaction contract. Memory tools, nested descriptors, and ambiguous paths remain inert.
 - New-tab mode carries initial target parameters; it does not control an already-open tab.
@@ -75,7 +75,7 @@ Represent node identity in URI authority and retain the real absolute POSIX path
 
 ### D-code-persistent-workspace
 
-Embedded Code uses one persistent multi-root workspace and persistent iframe. New folders/requests use a fixed bridge instead of reloading/replacing it.
+Embedded Code uses one persistent multi-root workspace and an iframe that starts on first actual Code-tab visibility in the displayed workbench surface, not merely because a restored or logically active Code tab exists. Once started, ordinary tab switching or hiding the workbench preserves the iframe and background workbench state; explicit Code-tab close destroys the iframe and resets its bridge lifecycle so reopening creates a fresh frame. New folders/requests use a fixed bridge instead of reloading/replacing it.
 
 ### D-code-fixed-remote-services
 

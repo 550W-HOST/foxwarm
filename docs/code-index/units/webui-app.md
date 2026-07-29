@@ -29,7 +29,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Workbench supports split panes and drag/reorder for chat, terminal, Agents, Setup, and Code. Closing an active tab advances the hash to the store-selected fallback before hydration can recreate it.
 - `GET /setup/status` controls forced OOBE. Missing models route to `system:setup`; close requests are ignored until status no longer reports OOBE.
 - App owns model-settings navigation from Chat: it activates or creates the singleton `system:setup` tab through the workbench API and increments a transient Models-editor focus request.
-- Initial/global `GET /sessions` plus global `sessions-updated` stream serve Sidebar, Architecture, metadata, terminal list concerns, title counts, and the one root-owned browser idle-notification observer. A request gate prevents an older response overwriting a newer list.
+- Initial `GET /sessions` remains immediate. Global `sessions-updated` refresh intents serve Sidebar, Architecture, metadata, terminal list concerns, title counts, and the one root-owned browser idle-notification observer through the fixed-delay coalescing contract in [D-webui-app-global-list-gate](#d-webui-app-global-list-gate); a request gate also prevents an older response overwriting a newer list.
 - Chat per-session runtime/history remains inside Chat.
 - Desktop expanded/collapsed sidebar and mobile shell share the same current tab records.
 - Browser-only theme, UI style, sidebar, send-key, last-tab/session, and Code preferences use local storage. Instance branding comes from server settings.
@@ -50,7 +50,7 @@ These are independent roots, not CSS-hidden full App instances. Active-target me
 
 ## Code and commit behavior
 
-- Embedded launch creates one singleton Code tab while the iframe lives in a top-level persistent portal. Tab changes hide/reposition it rather than remounting. In the 550A style, the full-screen scanline overlay remains above normal WebUI content but below this persistent iframe so the Code workbench stays visually unobscured and interactive.
+- Embedded launch creates one singleton Code tab. Restoring that tab without displaying it as active in a visible workbench pane leaves the top-level iframe uncreated, including while the mobile list replaces the workbench surface; its first actual display starts it. Later tab/surface changes hide/reposition the persistent iframe rather than remounting it, while explicit tab close destroys the frame and clears pending bridge state. In the 550A style, the full-screen scanline overlay remains above normal WebUI content but below the iframe so the Code workbench stays visually unobscured and interactive.
 - File-tool paths become typed open-file requests only after node/path/cwd normalization; `read` ranges become selections.
 - Strict standalone model-authored commit markers outside code fences render inert cards. Click dispatches typed `openCommit`; malformed/user markers remain text.
 - New-tab URLs carry one-shot targets. Running iframe transfer/pop-out is not implemented.
@@ -74,7 +74,7 @@ Advance the route/hash to the workbench fallback before a closed active tab can 
 
 ### D-webui-app-global-list-gate
 
-Global-list fetches carry a request generation, and only the newest overlapping response may update application state; a stale pre-creation snapshot cannot overwrite a newer list.
+[2026-07-30] Global `sessions-updated` refresh intents use one non-sliding, visibility-aware delay shared by normal App and embedded Sidebar/Agents list-data roots: 1 second when the page is visible and 10 seconds otherwise. Each first idle or trailing arm samples visibility once; later intents and visibility changes do not move an already fixed deadline. Intents received while a refresh is in flight coalesce into exactly one trailing refresh, whose new delay is chosen after the current refresh settles. Scheduled refreshes never overlap, and disposal cancels pending timers and suppresses trailing work. Normal App schedules sessions, agents, and terminals as one refresh group; initial bootstrap remains immediate. Session-list fetches retain their request generation guard so an older response from any other overlapping path cannot overwrite newer state.
 
 ### D-webui-app-leaf-embeds
 
@@ -82,7 +82,7 @@ Code-embedded sidebar/chat/Agents/Setup are strict leaf roots with allowlisted m
 
 ### D-webui-app-persistent-code-frame
 
-The Code workbench tab is a launcher/slot. A portal-owned iframe persists after first launch and receives fixed typed requests.
+The Code workbench tab is a launcher/slot. The portal-owned iframe starts only when Code is first visible in an active pane, persists across ordinary hiding after that first start, and is destroyed with its bridge state on explicit tab close. The full lifecycle contract is canonical in [D-code-persistent-workspace](../threads/code-integration.md#d-code-persistent-workspace).
 
 ### D-webui-app-client-preferences
 

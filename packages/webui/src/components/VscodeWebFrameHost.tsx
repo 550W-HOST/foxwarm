@@ -71,6 +71,16 @@ const VscodeWebFrameHost = forwardRef<VscodeWebFrameHostHandle, VscodeWebFrameHo
     for (const pending of pendingRef.current.values()) pending.sent = false
   }, [src])
 
+  useLayoutEffect(() => {
+    if (started) return
+    bridgeReadyRef.current = false
+    for (const pending of pendingRef.current.values()) {
+      window.clearTimeout(pending.timer)
+      pending.reject(new Error('Code frame was closed before the open request completed.'))
+    }
+    pendingRef.current.clear()
+  }, [started])
+
   useEffect(() => {
     const handleBridgeMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.source !== iframeRef.current?.contentWindow) return

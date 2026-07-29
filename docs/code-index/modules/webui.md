@@ -31,7 +31,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 ## State ownership
 
 - Mounted Chat owns one session's history and per-session SSE/runtime state.
-- App/Sidebar/Architecture own global list data and the independent global stream; overlapping list requests are latest-wins.
+- App/Sidebar/Architecture own global list data and the independent global stream. Stream-triggered refreshes use fixed-delay, non-overlapping coalescing, while the session-list request gate remains latest-wins; the canonical contract is [D-webui-app-global-list-gate](../units/webui-app.md#d-webui-app-global-list-gate).
 - Workbench store owns tab/pane/split layout. Chat viewport state is ephemeral in-memory state keyed by canonical session ID.
 - Browser-only theme/layout/draft/Code preferences remain local; instance name/icon are server settings.
 
