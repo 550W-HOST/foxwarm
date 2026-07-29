@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
@@ -15,7 +15,7 @@ import { applyLatestSessionListRequest, createLatestSessionListRequestGate } fro
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
-import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
+import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, selectCodeFrameStarted, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
@@ -519,6 +519,10 @@ function App() {
   const focusedPane = useMemo(() => (focusedPaneId ? findPaneNode(root, focusedPaneId) : null), [root, focusedPaneId])
   const focusedActiveTabId = focusedPane?.activeTabId || paneNodes[0]?.activeTabId || null
   const focusedActiveTab = focusedActiveTabId ? (tabsById[focusedActiveTabId] || null) : null
+  const activePaneTabTypes = useMemo(
+    () => paneNodes.map((pane) => pane.activeTabId ? tabsById[pane.activeTabId]?.type : null),
+    [paneNodes, tabsById],
+  )
   const handleVscodeFrameSlot = useCallback((element: HTMLElement | null) => setVscodeFrameSlot(element), [])
 
   const sessionTitle = (sessionId: string) => sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))?.displayName || sessionId
@@ -916,11 +920,11 @@ function App() {
     }
   }
 
-  useEffect(() => {
-    if (allTabs.some((tab) => tab.type === 'vscode')) {
-      setVscodeFrameStarted(true)
-    }
-  }, [allTabs])
+  useLayoutEffect(() => {
+    setVscodeFrameStarted((started) => selectCodeFrameStarted(started, activePaneTabTypes, {
+      workbenchVisible: !isMobile || !showSessionList,
+    }))
+  }, [activePaneTabTypes, isMobile, showSessionList])
 
   const updateCodePath = (path: string) => {
     const normalized = writeCodeWorkspacePathPreference(localStorage, path)
@@ -1142,6 +1146,10 @@ function App() {
         console.error('Failed to close terminal:', error)
       }
       await fetchActiveTerminals()
+    }
+
+    if (targetTab?.type === 'vscode') {
+      setVscodeFrameStarted((started) => selectCodeFrameStarted(started, [], { explicitlyClosed: true }))
     }
 
     removeTab(tabId)

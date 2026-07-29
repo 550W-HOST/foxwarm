@@ -26,6 +26,7 @@ const {
   normalizeCodePath,
   planCodeOpen,
   resolveToolCodeFileTarget,
+  selectCodeFrameStarted,
 } = await import(pathToFileURL(bundledPath).href)
 
 test('embedded Code starts once and then reuses the running frame', () => {
@@ -33,6 +34,15 @@ test('embedded Code starts once and then reuses the running frame', () => {
   assert.equal(planCodeOpen(true, false), 'reuse-embedded')
   assert.equal(planCodeOpen(true, true), 'new-window')
   assert.equal(planCodeOpen(true, false, true), 'new-window')
+})
+
+test('restored Code frame starts only when visible and persists until explicit close', () => {
+  assert.equal(selectCodeFrameStarted(false, ['chat', null]), false, 'an inactive restored Code tab stays unloaded')
+  assert.equal(selectCodeFrameStarted(false, ['vscode'], { workbenchVisible: false }), false, 'a logically active restored tab stays unloaded while the mobile list hides the workbench')
+  assert.equal(selectCodeFrameStarted(false, ['chat', 'vscode']), true, 'Code starts when active in any pane')
+  assert.equal(selectCodeFrameStarted(true, ['chat', 'terminal']), true, 'switching away preserves a started frame')
+  assert.equal(selectCodeFrameStarted(true, ['vscode'], { workbenchVisible: false }), true, 'hiding the workbench after start preserves the frame')
+  assert.equal(selectCodeFrameStarted(true, ['vscode'], { explicitlyClosed: true }), false, 'explicit close destroys a started frame')
 })
 
 test('Code paths normalize absolute POSIX paths', () => {

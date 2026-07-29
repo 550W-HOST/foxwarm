@@ -50,7 +50,7 @@ These are independent roots, not CSS-hidden full App instances. Active-target me
 
 ## Code and commit behavior
 
-- Embedded launch creates one singleton Code tab while the iframe lives in a top-level persistent portal. Tab changes hide/reposition it rather than remounting. In the 550A style, the full-screen scanline overlay remains above normal WebUI content but below this persistent iframe so the Code workbench stays visually unobscured and interactive.
+- Embedded launch creates one singleton Code tab. Restoring that tab without displaying it as active in a visible workbench pane leaves the top-level iframe uncreated, including while the mobile list replaces the workbench surface; its first actual display starts it. Later tab/surface changes hide/reposition the persistent iframe rather than remounting it, while explicit tab close destroys the frame and clears pending bridge state. In the 550A style, the full-screen scanline overlay remains above normal WebUI content but below the iframe so the Code workbench stays visually unobscured and interactive.
 - File-tool paths become typed open-file requests only after node/path/cwd normalization; `read` ranges become selections.
 - Strict standalone model-authored commit markers outside code fences render inert cards. Click dispatches typed `openCommit`; malformed/user markers remain text.
 - New-tab URLs carry one-shot targets. Running iframe transfer/pop-out is not implemented.
@@ -82,7 +82,7 @@ Code-embedded sidebar/chat/Agents/Setup are strict leaf roots with allowlisted m
 
 ### D-webui-app-persistent-code-frame
 
-The Code workbench tab is a launcher/slot. A portal-owned iframe persists after first launch and receives fixed typed requests.
+The Code workbench tab is a launcher/slot. The portal-owned iframe starts only when Code is first visible in an active pane, persists across ordinary hiding after that first start, and is destroyed with its bridge state on explicit tab close. The full lifecycle contract is canonical in [D-code-persistent-workspace](../threads/code-integration.md#d-code-persistent-workspace).
 
 ### D-webui-app-client-preferences
 

@@ -22,6 +22,15 @@ export type CodeFileTarget = Extract<CodeOpenRequest, { kind: 'openFile' }>
 
 export type CodeOpenPlan = 'new-window' | 'start-embedded' | 'reuse-embedded'
 
+export function selectCodeFrameStarted(
+  frameStarted: boolean,
+  activePaneTabTypes: readonly (string | null | undefined)[],
+  options: { workbenchVisible?: boolean; explicitlyClosed?: boolean } = {},
+): boolean {
+  if (options.explicitlyClosed) return false
+  return frameStarted || (options.workbenchVisible !== false && activePaneTabTypes.some((type) => type === 'vscode'))
+}
+
 export function planCodeOpen(frameStarted: boolean, preferredNewWindow: boolean, forceNewWindow = false): CodeOpenPlan {
   if (shouldOpenCodeInNewWindow(preferredNewWindow, forceNewWindow)) return 'new-window'
   return frameStarted ? 'reuse-embedded' : 'start-embedded'
