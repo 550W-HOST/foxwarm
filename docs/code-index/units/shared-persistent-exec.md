@@ -16,6 +16,8 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 - `PersistentExecManagerOptions` — Configuration for the manager
 - `DEFAULT_EXEC_TIMEOUT_SECONDS`, `MIN_EXEC_TIMEOUT_SECONDS`, `MAX_EXEC_TIMEOUT_SECONDS` — Timeout constants
 - `MAX_FULL_LOG_READ_BYTES` / `OVERSIZED_LOG_SAMPLE_BYTES` — 1 MiB full-read ceiling and 5,000-byte head/tail sampling budget for oversized logs
+- `BACKGROUND_PROCESS_CMDLINE_LIMIT` / `BACKGROUND_PROCESS_TREE_LIMIT` — 100-character per-command-line and 40-process live-tree display bounds
+- `ProcessSnapshotEntry`, `truncateProcessCmdline(...)`, `formatProcessTreeSnapshot(...)` — pure process-snapshot formatting contract used by timeout results
 - `resolveExecTimeoutSeconds(timeoutValue)` / `ResolvedExecTimeout` — validates timeout input, clamps finite values above 60 seconds, and returns requested/effective values with an optional warning
 
 ## Function Index
@@ -29,6 +31,9 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 | `formatExecTimeoutSeconds(seconds)` | ~96 | Formats timeout value as string |
 | `buildBackgroundTimeoutShortNotice(timeoutSeconds)` | ~100 | Short timeout notice string |
 | `buildBackgroundTimeoutFullNotice(timeoutSeconds)` | ~104 | Full timeout notice with instructions to stop polling |
+| `truncateProcessCmdline(cmdline, maxLength)` | timeout helpers | Normalizes and limits each displayed process command line without splitting Unicode code points |
+| `formatProcessTreeSnapshot(entries, rootPid)` | timeout helpers | Selects the managed root and descendants, renders topology, and bounds displayed process count |
+| `inspectSystemProcessSnapshot()` | timeout helpers | Best-effort POSIX `ps` or Windows CIM process snapshot without an external dependency |
 | `isPidRunning(pid)` | ~109 | Checks if a process is alive via signal 0 |
 | `buildStatusWriterInvocationPosix()` | ~117 | Generates Node one-liner to write status JSON on POSIX |
 | `buildManagedExecScript(command)` | ~121 | Builds platform-specific wrapper script (bash/PowerShell) for managed execution |
@@ -76,6 +81,7 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 - Output formatting handles truncation with shared line-aware per-line and whole-line omission placeholders, plus token estimation for inline display decisions.
 - Logs at or below 1 MiB retain the existing full-read, line-aware behavior. Oversized logs use only 5,000-byte head/tail reads from a stat-size snapshot, so growth or shrink races remain bounded. Each sample receives a UTF-8-aware scan: valid Unicode text counts as readable; disallowed ASCII/C1 controls (including NUL, while excluding tab/newline/carriage return) and invalid UTF-8 bytes are suspicious. Only up to three leading continuation bytes of the tail sample or a trailing incomplete sequence of the head sample are tolerated so a split multibyte character does not misclassify the sample; actual file start/end errors remain suspicious. More than 10% suspicious bytes selects a 64-byte head/tail hexadecimal preview. Text-like output preserves valid UTF-8 controls raw while rendering only invalid or sample-cut bytes as `\xNN`; a foreground or timeout footer identifies those placeholders as Foxwarm conversions, not literal command output.
 - Foreground exec completions always append a footer beginning with `---` and `Exit code: ...`; shortened outputs say `Command output saved to:` and background completion events say `Command output in`, accurately describing output captured from the shell command or pipeline as executed. Oversized-log footers report the sampled snapshot's exact original byte length and deliberately do not claim an original line count. An oversized-timeout warning is passed separately into foreground/background-switch formatting, so it remains in final metadata even when command output is truncated. Later background completion notifications do not repeat the already-delivered warning.
+- Immediate background-timeout results place partial output before a metadata footer beginning with `---`. That footer says the process remains outstanding until its completion event and includes a best-effort live tree rooted at the managed shell-script PID. POSIX hosts use `ps`; Windows hosts use the built-in CIM/PowerShell path. Snapshot races, permissions, unsupported platforms, and inspection failures produce an unavailable line instead of failing the exec result. Each normalized cmdline is limited to 100 Unicode characters, topology indentation is capped, and at most 40 processes are displayed with an explicit descendant-omission line. Canonical contract: [D-persistent-exec-background-timeout-footer-tree](#d-persistent-exec-background-timeout-footer-tree).
 
 ## Integration
 
@@ -95,3 +101,9 @@ The one-time cleanup of pre-decision root-level wrapper/user/paths files is owne
 ### D-persistent-exec-bounded-log-excerpts
 
 Persistent exec logs contain the output captured from the shell command or pipeline as executed; they do not reconstruct output before agent-added filtering. Completion command previews retain bounded head and tail text with a middle-omission marker. The shared sampling/classification contract is owned by [D-bounded-file-read-excerpts](./shared-node-tools.md#d-bounded-file-read-excerpts); this adapter retains the complete log on disk and uses command-output-specific footer wording. Because line counting would require a full scan, oversized foreground footers report only the exact stat-time byte length, not a line count.
+
+### D-persistent-exec-background-timeout-footer-tree
+
+[2026-07-30] Format an exec result that switches to background after its wait timeout like other exec metadata: partial command output first, then a footer beginning with `---`. The footer must include a best-effort live process tree rooted at the managed shell-script process, with the PID and cmdline on every displayed process line and each cmdline limited to 100 characters. Bound the tree independently of that per-line limit. Process inspection is observational only: races, missing permissions, unsupported hosts, or inspection failure must render a clear unavailable/omitted line without changing process lifecycle, registry, logging, or completion-notification behavior. Master and remote-node exec share this implementation.
+
+The timeout footer and both master/node exec descriptions must also remind the agent that, if it continues other work instead of waiting, the background process remains outstanding until its completion event arrives. Do not add a polling API or a separate persistent process-monitor subsystem for this snapshot.

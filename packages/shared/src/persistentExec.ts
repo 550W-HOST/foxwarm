@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, execFile, spawn } from 'child_process';
 import { promises as fsp } from 'fs';
 import { resolveValidatedExecCwd, type ExecCwdSource } from './execCwd';
 import { truncateOutputForDisplay, type OutputTruncationResult } from './outputTruncation';
@@ -61,6 +61,17 @@ export const OVERSIZED_LOG_SAMPLE_BYTES = BOUNDED_TEXT_SAMPLE_BYTES;
 const EXEC_PATHS_WAIT_TIMEOUT_MS = 1000;
 const EXEC_PATHS_POLL_INTERVAL_MS = 25;
 const BACKGROUND_COMMAND_PREVIEW_LIMIT = 100;
+export const BACKGROUND_PROCESS_CMDLINE_LIMIT = 100;
+export const BACKGROUND_PROCESS_TREE_LIMIT = 40;
+const BACKGROUND_PROCESS_TREE_MAX_INDENT = 20;
+const PROCESS_INSPECTION_TIMEOUT_MS = 2000;
+const PROCESS_INSPECTION_MAX_BUFFER_BYTES = 1024 * 1024;
+
+export interface ProcessSnapshotEntry {
+  pid: number;
+  parentPid: number;
+  cmdline: string;
+}
 
 export interface ExecStatus {
   exitCode: number | null;
@@ -118,6 +129,7 @@ export interface PersistentExecManagerOptions {
   registryPath?: string;
   nodeId?: string;
   completionDispatcher?: ExecCompletionDispatcher;
+  processSnapshotProvider?: () => Promise<ProcessSnapshotEntry[]>;
   logger?: {
     info?: (payload?: any, message?: string) => void;
     warn?: (payload?: any, message?: string) => void;
@@ -154,7 +166,107 @@ function buildBackgroundTimeoutShortNotice(timeoutSeconds: number): string {
 
 function buildBackgroundTimeoutFullNotice(timeoutSeconds: number): string {
   const shortNotice = buildBackgroundTimeoutShortNotice(timeoutSeconds);
-  return `${shortNotice} Switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification (unless working on other tasks in parallel).`;
+  return `${shortNotice} Switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification unless working on other tasks in parallel; if you continue other work, remember this process remains outstanding until its completion message arrives.`;
+}
+
+export function truncateProcessCmdline(cmdline: string, maxLength: number = BACKGROUND_PROCESS_CMDLINE_LIMIT): string {
+  const compact = cmdline.replace(/\s+/g, ' ').trim() || '[cmdline unavailable]';
+  const characters = Array.from(compact);
+  if (characters.length <= maxLength) return compact;
+  if (maxLength <= 1) return characters.slice(0, Math.max(0, maxLength)).join('');
+  return `${characters.slice(0, maxLength - 1).join('')}…`;
+}
+
+export function formatProcessTreeSnapshot(entries: ProcessSnapshotEntry[], rootPid: number): string {
+  const heading = `Process tree (best-effort live snapshot; managed shell-script root PID ${rootPid}):`;
+  const byPid = new Map<number, ProcessSnapshotEntry>();
+  for (const entry of entries) {
+    if (!Number.isInteger(entry.pid) || entry.pid <= 0 || byPid.has(entry.pid)) continue;
+    byPid.set(entry.pid, entry);
+  }
+  if (!byPid.has(rootPid)) {
+    return `${heading}\n(Process tree unavailable: the root process was no longer visible during inspection.)`;
+  }
+
+  const children = new Map<number, ProcessSnapshotEntry[]>();
+  for (const entry of byPid.values()) {
+    const siblings = children.get(entry.parentPid) || [];
+    siblings.push(entry);
+    children.set(entry.parentPid, siblings);
+  }
+  for (const siblings of children.values()) siblings.sort((left, right) => left.pid - right.pid);
+
+  const ordered: Array<{ entry: ProcessSnapshotEntry; depth: number }> = [];
+  const visited = new Set<number>();
+  const pending: Array<{ entry: ProcessSnapshotEntry; depth: number }> = [{ entry: byPid.get(rootPid)!, depth: 0 }];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (visited.has(current.entry.pid)) continue;
+    visited.add(current.entry.pid);
+    ordered.push(current);
+    const descendants = children.get(current.entry.pid) || [];
+    for (let index = descendants.length - 1; index >= 0; index -= 1) {
+      pending.push({ entry: descendants[index], depth: current.depth + 1 });
+    }
+  }
+
+  const visible = ordered.slice(0, BACKGROUND_PROCESS_TREE_LIMIT);
+  const lines = visible.map(({ entry, depth }) => {
+    const indent = ' '.repeat(Math.min(depth * 2, BACKGROUND_PROCESS_TREE_MAX_INDENT));
+    return `${indent}PID ${entry.pid}: ${truncateProcessCmdline(entry.cmdline)}`;
+  });
+  const omitted = ordered.length - visible.length;
+  if (omitted > 0) lines.push(`[foxwarm: ${omitted} additional descendant process(es) omitted]`);
+  return `${heading}\n${lines.join('\n')}`;
+}
+
+function runProcessInspectionCommand(command: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, {
+      encoding: 'utf8',
+      timeout: PROCESS_INSPECTION_TIMEOUT_MS,
+      maxBuffer: PROCESS_INSPECTION_MAX_BUFFER_BYTES,
+      windowsHide: true,
+    }, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(String(stdout));
+    });
+  });
+}
+
+async function inspectSystemProcessSnapshot(): Promise<ProcessSnapshotEntry[]> {
+  if (process.platform === 'win32') {
+    const script = [
+      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+      '$items = @(Get-CimInstance Win32_Process | ForEach-Object {',
+      '  [PSCustomObject]@{ pid = [int]$_.ProcessId; parentPid = [int]$_.ParentProcessId; cmdline = $(if ($_.CommandLine) { [string]$_.CommandLine } else { [string]$_.Name }) }',
+      '})',
+      'ConvertTo-Json -InputObject $items -Compress',
+    ].join('\n');
+    const output = await runProcessInspectionCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
+    const parsed = JSON.parse(output.trim() || '[]');
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    return items.map(item => ({
+      pid: Number(item?.pid),
+      parentPid: Number(item?.parentPid),
+      cmdline: typeof item?.cmdline === 'string' ? item.cmdline : '',
+    }));
+  }
+  if (process.platform !== 'linux' && process.platform !== 'darwin' && process.platform !== 'freebsd' && process.platform !== 'openbsd') {
+    throw new Error(`Process inspection is unsupported on ${process.platform}`);
+  }
+
+  const output = await runProcessInspectionCommand('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'command=']);
+  const entries: ProcessSnapshotEntry[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s*(.*)$/);
+    if (!match) continue;
+    entries.push({ pid: Number(match[1]), parentPid: Number(match[2]), cmdline: match[3] || '' });
+  }
+  return entries;
 }
 
 function isPidRunning(pid: number): boolean {
@@ -667,6 +779,16 @@ export class PersistentExecManager {
     return lines.join('\n');
   }
 
+  private async buildLiveProcessTree(entry: RunningExecEntry): Promise<string> {
+    try {
+      const entries = await (this.options.processSnapshotProvider || inspectSystemProcessSnapshot)();
+      return formatProcessTreeSnapshot(entries, entry.pid);
+    } catch (err) {
+      this.options.logger?.warn?.({ err, execId: entry.id, pid: entry.pid }, 'Failed to inspect background exec process tree');
+      return `Process tree (best-effort live snapshot; managed shell-script root PID ${entry.pid}):\n(Process tree unavailable: process inspection failed or is unsupported on this platform.)`;
+    }
+  }
+
   private async readExecStatus(statusPath: string): Promise<ExecStatus | null> {
     try {
       const raw = await fs.readJson(statusPath);
@@ -722,8 +844,8 @@ export class PersistentExecManager {
 
   async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string): Promise<string> {
     const partialOutput = await this.readPartialLog(entry.logPath);
-    const shortNotice = buildBackgroundTimeoutShortNotice(timeoutSeconds);
     const fullNotice = buildBackgroundTimeoutFullNotice(timeoutSeconds);
+    const processTree = await this.buildLiveProcessTree(entry);
     const nodeLine = entry.nodeId && entry.nodeId !== 'master' ? `Node: \`${entry.nodeId}\`\n` : '';
     const warningLine = warning ? `${warning}\n` : '';
     const sizeLine = partialOutput.oversized && partialOutput.originalByteLength !== undefined
@@ -732,7 +854,7 @@ export class PersistentExecManager {
     const conversionNote = partialOutput.hasDisplayByteConversions
       ? `\n${formatDisplayByteConversionDisclaimer('command output')}`
       : '';
-    return `${shortNotice}\n\nPartial Output:\n${partialOutput.text}\n\n${fullNotice}\n${warningLine}${nodeLine}PID: ${entry.pid}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
+    return `Partial Output:\n${partialOutput.text}\n---\n${fullNotice}\n${warningLine}${nodeLine}PID: ${entry.pid}\n${processTree}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
   }
 
   buildCompletionMessage(entry: RunningExecEntry, status: ExecStatus): string {

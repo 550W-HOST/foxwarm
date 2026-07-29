@@ -52,6 +52,8 @@ test('node exec schema allows oversized timeout values and documents clamping', 
   assert.match(String(timeout.description), /above the 60s maximum are clamped/i);
   assert.match(String(definition.description), /do not add \| head or \| tail merely to limit context/i);
   assert.match(String(definition.description), /filtering changes what the log captures/i);
+  assert.match(String(definition.description), /outstanding background process/i);
+  assert.match(String(definition.description), /if you continue other work instead of waiting, remember it is still running/i);
 });
 
 test('shared write contentRef retry hints are executable and JSON-escape actual arguments', () => {
@@ -231,11 +233,15 @@ test('node exec background timeout and completion point to a log path, not an op
       },
     );
 
-    assert.match(String(result), /Process running longer than 1s/i);
-    assert.match(String(result), /Node: `test-node`/);
-    assert.match(String(result), /PID: \d+/);
-    assert.match(String(result), /Log file: /);
-    assert.doesNotMatch(String(result), /execId:/);
+    const resultText = String(result);
+    assert.match(resultText, /\n---\n\[Process running longer than 1s\]/i);
+    assert.match(resultText, /Node: `test-node`/);
+    const managedPid = resultText.match(/PID: (\d+)/)?.[1];
+    assert.ok(managedPid);
+    assert.match(resultText, new RegExp(`managed shell-script root PID ${managedPid}\\):\\nPID ${managedPid}: `));
+    assert.match(resultText, /\n  PID \d+: sleep 2/);
+    assert.match(resultText, /Log file: /);
+    assert.doesNotMatch(resultText, /execId:/);
 
     const deadline = Date.now() + 9000;
     while (Date.now() < deadline && events.length === 0) {

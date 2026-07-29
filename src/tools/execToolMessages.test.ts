@@ -38,6 +38,8 @@ test('exec schema documents timeout clamping without rejecting values above the 
   assert.match(String(timeout.description), /above the 60s maximum are clamped/i);
   assert.match(String(def?.description), /do not add \| head or \| tail merely to limit context/i);
   assert.match(String(def?.description), /filtering changes what the command log captures/i);
+  assert.match(String(def?.description), /outstanding background process/i);
+  assert.match(String(def?.description), /if you continue other work instead of waiting, remember it is still running/i);
 });
 
 test('exec tool still rejects timeout values below the allowed range', async () => {
@@ -178,7 +180,7 @@ test('persistent exec rejects missing cwd with a friendly cwd-focused error and 
   assert.equal(await fs.pathExists(missing), false, 'missing cwd should not be auto-created');
 });
 
-test('background exec timeout result uses short header, body, then full footer notice with pid and log path', async () => {
+test('background exec timeout result uses partial output followed by a metadata footer, process tree, pid, and log path', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-timeout-'));
   const logPath = path.join(tempDir, 'command.log');
 
@@ -186,10 +188,11 @@ test('background exec timeout result uses short header, body, then full footer n
     await fs.writeFile(logPath, 'hello from partial output\n');
     const result = await buildBackgroundTimeoutResult(buildExecEntry(logPath), 7);
 
-    assert.ok(result.startsWith('[Process running longer than 7s]'));
-    assert.match(result, /\n\nPartial Output:\nhello from partial output/i);
-    assert.match(result, /\n\n\[Process running longer than 7s\] Switched to background\./);
+    assert.ok(result.startsWith('Partial Output:\nhello from partial output'));
+    assert.match(result, /\n---\n\[Process running longer than 7s\] Switched to background\./);
+    assert.match(result, /continue other work, remember this process remains outstanding until its completion message arrives/i);
     assert.ok(result.indexOf('PID: 4321') > result.indexOf('Wait for notification'));
+    assert.match(result, /Process tree \(best-effort live snapshot; managed shell-script root PID 4321\):/);
     assert.ok(result.endsWith(`Log file: ${logPath}`));
   } finally {
     await fs.remove(tempDir);
