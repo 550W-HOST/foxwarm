@@ -8,6 +8,7 @@ export interface OutputTruncationResult {
   lineTruncatedCount: number;
   omittedLineCount: number;
   omittedLineRange?: { begin: number; end: number };
+  omittedLineReason?: string;
   placeholderKinds: OutputTruncationPlaceholderKind[];
   footerNotes: string[];
 }
@@ -88,13 +89,16 @@ function joinedLength(lines: string[]): number {
   return lines.reduce((sum, line) => sum + charLength(line), 0) + Math.max(0, lines.length - 1);
 }
 
-function buildFooterNotes(result: Pick<OutputTruncationResult, 'lineTruncatedCount' | 'omittedLineCount' | 'originalLineCount' | 'originalCharCount'>): string[] {
+function buildFooterNotes(result: Pick<OutputTruncationResult, 'lineTruncatedCount' | 'omittedLineCount' | 'omittedLineRange' | 'omittedLineReason' | 'originalLineCount' | 'originalCharCount'>): string[] {
   const notes: string[] = [];
   if (result.lineTruncatedCount > 0 || result.omittedLineCount > 0) {
     const placeholders: string[] = [];
     if (result.lineTruncatedCount > 0) placeholders.push('line-too-long placeholders');
     if (result.omittedLineCount > 0) placeholders.push('line-range omission placeholders');
     notes.push(`Foxwarm placeholders above (${placeholders.join(', ')}) are not original output content.`);
+  }
+  if (result.omittedLineCount > 0 && result.omittedLineRange && result.omittedLineReason) {
+    notes.push(`Omitted ${result.omittedLineCount} line(s) from original line range ${result.omittedLineRange.begin}-${result.omittedLineRange.end} because ${result.omittedLineReason}.`);
   }
   notes.push(`Original output: ${result.originalLineCount} line(s), ${result.originalCharCount} character(s).`);
   return notes;
@@ -111,8 +115,12 @@ function truncateLongLines(lines: string[], options: Required<Pick<TruncateOutpu
   return { lines: output, count };
 }
 
-function lineRangePlaceholder(omittedCount: number, begin: number, end: number, reason: string): string {
+function lineRangeOmissionMessage(omittedCount: number, begin: number, end: number, reason: string): string {
   return `[foxwarm: ${omittedCount} lines (line range ${begin}-${end}) omitted because ${reason}]`;
+}
+
+function lineRangePlaceholder(omittedCount: number, begin: number, end: number, reason: string): string {
+  return `--- ${lineRangeOmissionMessage(omittedCount, begin, end, reason)} ---`;
 }
 
 function truncateWholeLines(lines: string[], maxChars: number, reason: string): { text: string; omittedLineCount: number; omittedLineRange?: { begin: number; end: number } } {
@@ -123,7 +131,7 @@ function truncateWholeLines(lines: string[], maxChars: number, reason: string): 
 
   if (lines.length <= 1) {
     const line = lines[0] || '';
-    const marker = lineRangePlaceholder(0, 1, 1, reason);
+    const marker = lineRangeOmissionMessage(0, 1, 1, reason);
     const available = Math.max(0, maxChars - charLength(marker));
     const head = Math.ceil(available / 2);
     const tail = Math.max(0, available - head);
@@ -227,6 +235,7 @@ export function truncateOutputForDisplay(text: string, options: TruncateOutputOp
     lineTruncatedCount: longLineResult.count,
     omittedLineCount: wholeLineResult.omittedLineCount,
     omittedLineRange: wholeLineResult.omittedLineRange,
+    omittedLineReason: wholeLineResult.omittedLineCount > 0 ? reason : undefined,
     placeholderKinds,
     footerNotes: [],
   };

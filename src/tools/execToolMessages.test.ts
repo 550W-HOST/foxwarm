@@ -223,6 +223,28 @@ test('foreground exec truncated output keeps line-aware excerpt and footer metad
   }
 });
 
+test('foreground exec repeats a decorated line-range omission in its footer', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-line-range-'));
+  const logPath = path.join(tempDir, 'command.log');
+  const output = Array.from({ length: 1000 }, (_, index) => `exec-line-${index + 1}-${'y'.repeat(50)}`).join('\n');
+
+  try {
+    await fs.writeFile(logPath, output);
+    const result = await buildForegroundExecResult(
+      buildExecEntry(logPath),
+      { exitCode: 0, finishedAt: new Date().toISOString() },
+    );
+    const omission = result.match(/^--- \[foxwarm: (\d+) lines \(line range (\d+)-(\d+)\) omitted because (.+)\] ---$/m);
+    assert.ok(omission);
+    assert.match(result, /---\nExit code: 0\nCommand output saved to:/);
+    assert.match(result, /Foxwarm placeholders above \(line-range omission placeholders\) are not original output content\./);
+    assert.ok(result.includes(`Omitted ${omission[1]} line(s) from original line range ${omission[2]}-${omission[3]} because ${omission[4]}.`));
+    assert.match(result, /Original output: 1000 line\(s\), \d+ character\(s\)\./);
+  } finally {
+    await fs.remove(tempDir);
+  }
+});
+
 test('foreground exec warning remains in the footer when command output is truncated', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-warning-truncated-'));
   const logPath = path.join(tempDir, 'command.log');

@@ -19,8 +19,10 @@ test('truncateOutputForDisplay shortens overlong lines only when overall output 
   assert.match(result.text, /alpha/);
   assert.match(result.text, /omega/);
   assert.match(result.text, /\.\.\.\[foxwarm: line too long \(714 chars at line 2\)\]\.\.\./);
+  assert.doesNotMatch(result.text, /--- \[foxwarm: line too long/);
   assert.ok(result.text.length < longLine.length + 20);
   assert.match(result.footerNotes.join('\n'), /line-too-long placeholders/);
+  assert.doesNotMatch(result.footerNotes.join('\n'), /^Omitted \d+ line/m);
   assert.match(result.footerNotes.join('\n'), /Original output: 3 line\(s\), 726 character\(s\)/);
 });
 
@@ -31,9 +33,15 @@ test('truncateOutputForDisplay omits whole middle lines instead of splitting lin
   assert.ok(result.omittedLineCount > 0);
   assert.match(result.text, /line-1-/);
   assert.match(result.text, /line-20-/);
-  assert.match(result.text, /\[foxwarm: \d+ lines \(line range \d+-\d+\) omitted because this file is too long\]/);
+  const omission = result.text.match(/^--- \[foxwarm: (\d+) lines \(line range (\d+)-(\d+)\) omitted because (.+)\] ---$/m);
+  assert.ok(omission);
+  assert.equal(Number(omission[1]), result.omittedLineCount);
+  assert.deepEqual(result.omittedLineRange, { begin: Number(omission[2]), end: Number(omission[3]) });
+  assert.equal(result.omittedLineReason, omission[4]);
+  assert.ok(result.text.length <= 220, 'decorated omission marker must count toward the max-character budget');
   assert.doesNotMatch(result.text, /\.\.\.TRUNCATED/);
   assert.match(result.footerNotes.join('\n'), /line-range omission placeholders/);
+  assert.ok(result.footerNotes.includes(`Omitted ${omission[1]} line(s) from original line range ${omission[2]}-${omission[3]} because ${omission[4]}.`));
 });
 
 test('truncateOutputForDisplay handles unicode and CRLF boundaries', () => {
