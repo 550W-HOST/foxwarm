@@ -29,7 +29,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Workbench supports split panes and drag/reorder for chat, terminal, Agents, Setup, and Code. Closing an active tab advances the hash to the store-selected fallback before hydration can recreate it.
 - `GET /setup/status` controls forced OOBE. Missing models route to `system:setup`; close requests are ignored until status no longer reports OOBE.
 - App owns model-settings navigation from Chat: it activates or creates the singleton `system:setup` tab through the workbench API and increments a transient Models-editor focus request.
-- Initial/global `GET /sessions` plus global `sessions-updated` stream serve Sidebar, Architecture, metadata, terminal list concerns, title counts, and the one root-owned browser idle-notification observer. A request gate prevents an older response overwriting a newer list.
+- Initial `GET /sessions` remains immediate. Global `sessions-updated` refresh intents serve Sidebar, Architecture, metadata, terminal list concerns, title counts, and the one root-owned browser idle-notification observer through the fixed-delay coalescing contract in [D-webui-app-global-list-gate](#d-webui-app-global-list-gate); a request gate also prevents an older response overwriting a newer list.
 - Chat per-session runtime/history remains inside Chat.
 - Desktop expanded/collapsed sidebar and mobile shell share the same current tab records.
 - Browser-only theme, UI style, sidebar, send-key, last-tab/session, and Code preferences use local storage. Instance branding comes from server settings.
@@ -74,7 +74,7 @@ Advance the route/hash to the workbench fallback before a closed active tab can 
 
 ### D-webui-app-global-list-gate
 
-Global-list fetches carry a request generation, and only the newest overlapping response may update application state; a stale pre-creation snapshot cannot overwrite a newer list.
+[2026-07-29] Global `sessions-updated` refresh intents use one non-sliding 200 ms delay shared by normal App and embedded Sidebar/Agents list-data roots. The first idle intent fixes the deadline; further intents before the refresh starts do not move it. Intents received while that refresh is in flight coalesce into exactly one trailing refresh scheduled 200 ms after settlement, and intents during that trailing wait do not move its deadline. Scheduled refreshes never overlap, and disposal cancels pending timers and suppresses trailing work. Normal App schedules sessions, agents, and terminals as one refresh group; initial bootstrap remains immediate. Session-list fetches retain their request generation guard so an older response from any other overlapping path cannot overwrite newer state.
 
 ### D-webui-app-leaf-embeds
 

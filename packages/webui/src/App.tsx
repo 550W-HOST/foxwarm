@@ -11,7 +11,7 @@ import type { Session, SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
-import { applyLatestSessionListRequest, createLatestSessionListRequestGate } from './sessionListRefresh'
+import { applyLatestSessionListRequest, createLatestSessionListRequestGate, createSessionListRefreshScheduler, type SessionListRefreshScheduler } from './sessionListRefresh'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
@@ -507,6 +507,7 @@ function App() {
 
   const globalSSERef = useRef<EventSource | null>(null)
   const sessionListRequestGateRef = useRef(createLatestSessionListRequestGate())
+  const sessionListRefreshSchedulerRef = useRef<SessionListRefreshScheduler | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const reconnectDelayRef = useRef<number>(1000)
   const pendingRouteTabIdRef = useRef<string | null>(null)
@@ -731,9 +732,7 @@ function App() {
       try {
         const data = JSON.parse(event.data)
         if (data.type === 'sessions-updated') {
-          void fetchSessions()
-          void fetchAgents()
-          void fetchActiveTerminals()
+          sessionListRefreshSchedulerRef.current?.requestRefresh()
         }
       } catch (error) {
         console.error('Failed to parse SSE message:', error)
@@ -754,6 +753,10 @@ function App() {
   }
 
   useEffect(() => {
+    const sessionListRefreshScheduler = createSessionListRefreshScheduler(async () => {
+      await Promise.all([fetchSessions(), fetchAgents(), fetchActiveTerminals()])
+    })
+    sessionListRefreshSchedulerRef.current = sessionListRefreshScheduler
     void fetchSessions()
     void fetchAgents()
     void fetchSetupStatus()
@@ -761,6 +764,10 @@ function App() {
     void fetchActiveTerminals()
     connectGlobalSSE()
     return () => {
+      sessionListRefreshScheduler.dispose()
+      if (sessionListRefreshSchedulerRef.current === sessionListRefreshScheduler) {
+        sessionListRefreshSchedulerRef.current = null
+      }
       globalSSERef.current?.close()
       globalSSERef.current = null
       if (reconnectTimeoutRef.current) {
