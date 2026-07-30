@@ -30,42 +30,68 @@ foxwarm-multica --version
 
 The bridge does not require compiled Foxwarm `lib/` output; it communicates with an already running Foxwarm server.
 
-## Configure the daemon environment
+## Configure and register a target
 
-Set these variables in the environment of the **Multica daemon process**:
-
-```bash
-export FOXWARM_MULTICA_BASE_URL='http://127.0.0.1:3000'
-export FOXWARM_MULTICA_TOKEN='replace-with-the-foxwarm-instance-token'
-export FOXWARM_MULTICA_AGENT='multica'
-```
-
-- `FOXWARM_MULTICA_BASE_URL` may include a deployment base path, but not embedded credentials, a query, or a fragment.
-- `FOXWARM_MULTICA_TOKEN` is the existing Foxwarm instance token. This POC does not introduce narrower run credentials.
-- `FOXWARM_MULTICA_AGENT` must name an existing dedicated Foxwarm agent. New Multica tasks create new sessions under this agent; Multica resume IDs map directly to existing Foxwarm session IDs under the same agent.
-- `FOXWARM_MULTICA_REQUEST_TIMEOUT_MS` optionally changes the 30-second timeout used for individual REST requests. It does not impose a turn timeout; Multica owns process lifetime and cancellation.
-
-Do not put the bearer token in a Multica runtime profile's fixed arguments.
-
-## Register the Multica custom runtime
-
-The current Multica command is:
+First authenticate the Multica CLI and select the workspace that should own the runtime profile:
 
 ```bash
-multica runtime profile create \
-  --display-name "Foxwarm" \
-  --protocol-family qwen \
-  --command-name foxwarm-multica
+multica login
+multica workspace switch <id-or-slug>
 ```
 
-If the daemon service cannot find the linked command on its `PATH`, pin the absolute local executable for that profile:
+For a named Multica CLI/daemon profile, use that profile consistently:
 
 ```bash
-command -v foxwarm-multica
-multica runtime profile set-path <profile-id> --path /absolute/path/to/foxwarm-multica
+multica --profile team-a login
+multica --profile team-a workspace switch <id-or-slug>
+foxwarm-multica setup --multica-profile team-a # plus Foxwarm target/token options
 ```
 
-Use the runtime profile returned by Multica for the workspace/agent configuration. Do not add fixed prompt, output-format, model, or resume arguments: Multica's Qwen adapter owns those arguments.
+Then run the setup command. The Foxwarm token must come from a file or the environment; it is intentionally not accepted as an argv option.
+
+```bash
+foxwarm-multica setup \
+  --url http://127.0.0.1:3001 \
+  --agent multica \
+  --token-file ~/.config/foxwarm/multica-token
+```
+
+The dedicated agent must already exist. Add `--create-agent` to create it explicitly when missing. Setup validates the Foxwarm API/token and current Multica workspace before any agent creation.
+
+Setup creates one private target directory under `~/.local/share/foxwarm-multica/<instance>/` by default:
+
+- `config.json` (`0600`, owned by the setup user) stores the copied token, endpoint, agent, selected Multica CLI profile, and recorded runtime profile ID.
+- `foxwarm-multica-<instance>` (`0700`) is a target-specific launcher. It contains only paths, never the token.
+
+The command creates or reuses a workspace custom runtime profile with protocol family `qwen`, then pins that profile to the local launcher with `multica runtime profile set-path`. Reruns reuse the recorded profile ID when valid, fall back to the deterministic target launcher name, refresh the private config/path, and do not create duplicate profiles.
+
+For multiple Foxwarm targets on one Multica daemon, give each a distinct local instance and display name:
+
+```bash
+FOXWARM_MULTICA_TOKEN="$(cat ~/.config/foxwarm/staging-token)" \
+  foxwarm-multica setup --instance staging --display-name "Foxwarm Staging" \
+  --url https://staging.example.test --agent multica_staging
+
+foxwarm-multica setup --instance production --display-name "Foxwarm Production" \
+  --url https://foxwarm.example.test --agent multica_production \
+  --token-file ~/.config/foxwarm/production-token
+```
+
+Each generated runtime carries its target through the private config/launcher. The launcher clears daemon-global Foxwarm target variables, and the private config is authoritative, so multiple targets cannot accidentally inherit one daemon-wide token or endpoint.
+
+Useful setup options:
+
+- `--multica <command-or-path>` selects the already-authenticated Multica executable.
+- `--multica-profile <name>` selects a named Multica CLI/daemon profile. Setup applies the same `--profile <name>` to profile list/create/update/path-pin operations and to the printed daemon start/restart commands. An omitted or explicitly empty value uses the default Multica profile.
+- `--install-root <path>` changes the private local setup root.
+- `--dry-run` validates Foxwarm and lists the current Multica profiles without creating agents, files, profiles, or path overrides.
+- `--help` shows all defaults and options.
+
+Setup never logs in, selects a workspace, or restarts the daemon. On success it prints the exact `multica [--profile <name>] daemon restart` command and the alternative start command for the same profile. Existing running tasks are not disrupted automatically.
+
+The generated launcher preserves the existing Qwen invocation unchanged. Do not add fixed prompt, output-format, model, resume, or token arguments to the profile.
+
+For Docker, the daemon container must be able to execute the pinned launcher and read its private config/bridge paths. Multica and Foxwarm must also see task workspaces at compatible paths; mount the launcher/config/bridge and workspace directories accordingly.
 
 ## Protocol behavior
 

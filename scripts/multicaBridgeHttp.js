@@ -82,6 +82,14 @@ class FoxwarmClient {
     return this.json('POST', '/api/sessions', { agentId }, { signal });
   }
 
+  listAgents(signal) {
+    return this.json('GET', '/api/agents', undefined, { signal });
+  }
+
+  createAgent(agentId, signal) {
+    return this.json('POST', '/api/agents', { agentId }, { signal });
+  }
+
   getState(sessionId, signal) {
     return this.json('GET', endpointPath(sessionId, '/state'), undefined, { signal });
   }

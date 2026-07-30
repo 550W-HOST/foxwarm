@@ -15,6 +15,7 @@
     "quality:unused": "node scripts/quality/unused-check.mjs",
     "test:model-cli": "node --test scripts/model.test.js",
     "test:multica-bridge": "node --test scripts/multicaBridge.test.js",
+    "test:multica-setup": "node --test scripts/multicaBridgeSetup.test.js",
     "test:code-index-generator": "python3 skills/code-index/tests/test_generate_code_index.py",
     "build-all": "npm install && npm run build && npm --prefix packages/webui install && npm --prefix packages/webui run build",
     "start": "./scripts/start.sh",

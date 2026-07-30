@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
@@ -53,13 +54,29 @@ function parseArgs(argv) {
 }
 
 function printHelp(stream) {
-  stream.write(`foxwarm-multica — Qwen JSONL compatibility bridge for Multica\n\nUsage:\n  foxwarm-multica -p <prompt> --output-format stream-json [--resume <session>] [--model <key>] [--yolo]\n\nConfiguration:\n  FOXWARM_MULTICA_BASE_URL   Foxwarm WebUI base URL\n  FOXWARM_MULTICA_TOKEN      Foxwarm instance bearer token\n  FOXWARM_MULTICA_AGENT      Dedicated Foxwarm agent name\n`);
+  stream.write(`foxwarm-multica — Qwen JSONL compatibility bridge for Multica\n\nUsage:\n  foxwarm-multica setup [options]\n  foxwarm-multica -p <prompt> --output-format stream-json [--resume <session>] [--model <key>] [--yolo]\n\nConfiguration:\n  FOXWARM_MULTICA_CONFIG     Private generated target config\n  FOXWARM_MULTICA_BASE_URL   Foxwarm WebUI base URL\n  FOXWARM_MULTICA_TOKEN      Foxwarm instance bearer token\n  FOXWARM_MULTICA_AGENT      Dedicated Foxwarm agent name\n`);
 }
 
 function loadConfig(env) {
-  const rawBaseUrl = env.FOXWARM_MULTICA_BASE_URL || '';
-  const token = env.FOXWARM_MULTICA_TOKEN || '';
-  const agent = env.FOXWARM_MULTICA_AGENT || '';
+  let fileConfig = {};
+  if (env.FOXWARM_MULTICA_CONFIG) {
+    try {
+      const stat = fsSync.lstatSync(env.FOXWARM_MULTICA_CONFIG);
+      if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0
+        || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) {
+        throw new Error('unsafe config');
+      }
+      const parsed = JSON.parse(fsSync.readFileSync(env.FOXWARM_MULTICA_CONFIG, 'utf8'));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid config');
+      fileConfig = parsed;
+    } catch {
+      throw new BridgeUsageError('FOXWARM_MULTICA_CONFIG must be a readable private regular JSON file.');
+    }
+  }
+  const hasFileConfig = Boolean(env.FOXWARM_MULTICA_CONFIG);
+  const rawBaseUrl = hasFileConfig ? (fileConfig.baseUrl || '') : (env.FOXWARM_MULTICA_BASE_URL || '');
+  const token = hasFileConfig ? (fileConfig.token || '') : (env.FOXWARM_MULTICA_TOKEN || '');
+  const agent = hasFileConfig ? (fileConfig.agent || '') : (env.FOXWARM_MULTICA_AGENT || '');
   if (!rawBaseUrl) throw new BridgeUsageError('FOXWARM_MULTICA_BASE_URL is required.');
   if (!token) throw new BridgeUsageError('FOXWARM_MULTICA_TOKEN is required.');
   if (!agent.trim()) throw new BridgeUsageError('FOXWARM_MULTICA_AGENT is required.');
@@ -68,7 +85,7 @@ function loadConfig(env) {
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new BridgeUsageError('FOXWARM_MULTICA_BASE_URL must be an HTTP(S) URL without credentials, query, or fragment.');
   }
-  const timeoutValue = Number(env.FOXWARM_MULTICA_REQUEST_TIMEOUT_MS || 30_000);
+  const timeoutValue = Number(hasFileConfig ? (fileConfig.requestTimeoutMs || 30_000) : (env.FOXWARM_MULTICA_REQUEST_TIMEOUT_MS || 30_000));
   if (!Number.isFinite(timeoutValue) || timeoutValue <= 0) throw new BridgeUsageError('FOXWARM_MULTICA_REQUEST_TIMEOUT_MS must be a positive number.');
   return {
     baseUrl: parsed.toString().replace(/\/+$/, ''),
@@ -351,7 +368,9 @@ async function runBridge(argv, options = {}) {
 }
 
 async function main(argv = process.argv.slice(2)) {
-  const code = await runBridge(argv);
+  const code = argv[0] === 'setup'
+    ? await require('./multicaBridgeSetup.js').runSetup(argv.slice(1))
+    : await runBridge(argv);
   process.exitCode = code;
 }
 
