@@ -2061,7 +2061,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
             ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
         } : null;
     } else if (plan.useOpenAIChatCompletionsApi) {
-        const cached = resp?.usage.prompt_tokens_details?.cached_tokens || 0;
+        const cached = resp?.usage?.prompt_tokens_details?.cached_tokens || 0;
         // OpenAI Chat Completions exposes this output component as
         // usage.completion_tokens_details.reasoning_tokens. completion_tokens
         // remains the complete output count, including reasoning.
