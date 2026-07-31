@@ -123,6 +123,39 @@ test('collectOpenAIChatCompletionsStream aggregates streamed tool calls', async 
   assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
 });
 
+test('collectOpenAIChatCompletionsStream splits parallel tool calls that reuse index 0', async () => {
+  // Mirrors a real provider stream where every parallel tool call reuses
+  // index 0 and only a fresh id marks the next call.
+  const stream = makeStream([
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'tooluse_AAA', type: 'function', function: { name: 'exec' } }] }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: '', function: { arguments: '{"command": "echo ok1"}' } }] }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { content: '', role: 'assistant' }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'tooluse_BBB', type: 'function', function: { name: 'exec' } }] }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: '', function: { arguments: '{"command": "echo ok2"}' } }] }, finish_reason: 'tool_calls' }],
+    },
+    '[DONE]',
+  ]);
+
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal);
+  const toolCalls = response.choices[0].message.tool_calls;
+  assert.equal(toolCalls.length, 2);
+  assert.equal(toolCalls[0].id, 'tooluse_AAA');
+  assert.equal(toolCalls[0].function.name, 'exec');
+  assert.equal(toolCalls[0].function.arguments, '{"command": "echo ok1"}');
+  assert.equal(toolCalls[1].id, 'tooluse_BBB');
+  assert.equal(toolCalls[1].function.name, 'exec');
+  assert.equal(toolCalls[1].function.arguments, '{"command": "echo ok2"}');
+});
+
 
 test('collectOpenAIResponsesStream rebuilds streamed output items from SSE deltas', async () => {
   const stream = makeStream([

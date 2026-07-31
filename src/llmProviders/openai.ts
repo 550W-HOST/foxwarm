@@ -853,7 +853,8 @@ export async function collectOpenAIChatCompletionsStream(
         let usage: any = null;
         let sawChoice = false;
         const decoder = new StringDecoder('utf8');
-        const toolCalls = new Map<number, any>();
+        const toolCalls: any[] = [];
+        const toolCallByIndex = new Map<number, any>();
         const message: any = {
             role: 'assistant',
             content: '',
@@ -875,18 +876,32 @@ export async function collectOpenAIChatCompletionsStream(
             callback();
         };
 
-        const ensureToolCall = (index: number) => {
-            if (!toolCalls.has(index)) {
-                toolCalls.set(index, {
-                    id: '',
-                    type: 'function',
-                    function: {
-                        name: '',
-                        arguments: '',
-                    },
-                });
+        const makeToolCall = () => ({
+            id: '',
+            type: 'function',
+            function: {
+                name: '',
+                arguments: '',
+            },
+        });
+
+        const ensureToolCall = (index: number, id?: string) => {
+            let entry = toolCallByIndex.get(index);
+            if (!entry) {
+                entry = makeToolCall();
+                toolCalls.push(entry);
+                toolCallByIndex.set(index, entry);
+                return entry;
             }
-            return toolCalls.get(index);
+            // Some providers reuse the same index for each parallel tool call
+            // instead of incrementing it. A fresh non-empty id different from
+            // the current one marks the start of a new tool call.
+            if (id && entry.id && id !== entry.id) {
+                entry = makeToolCall();
+                toolCalls.push(entry);
+                toolCallByIndex.set(index, entry);
+            }
+            return entry;
         };
 
         const buildReasoningSnapshot = (): string => [message.reasoning_content, message.reasoning]
@@ -894,9 +909,7 @@ export async function collectOpenAIChatCompletionsStream(
             .join('\n');
 
         const buildToolCallSnapshot = (): OpenAIStreamToolCallSnapshot[] =>
-            Array.from(toolCalls.entries())
-                .sort(([left], [right]) => left - right)
-                .map(([index, toolCall]) => ({
+            toolCalls.map((toolCall, index) => ({
                     index,
                     ...(cleanSnapshotString(toolCall.id) ? { id: cleanSnapshotString(toolCall.id) } : {}),
                     ...(cleanSnapshotString(toolCall.function?.name) ? { name: cleanSnapshotString(toolCall.function?.name) } : {}),
@@ -959,7 +972,7 @@ export async function collectOpenAIChatCompletionsStream(
 
                 if (Array.isArray(delta.tool_calls)) {
                     for (const toolCallDelta of delta.tool_calls) {
-                        const entry = ensureToolCall(toolCallDelta.index ?? 0);
+                        const entry = ensureToolCall(toolCallDelta.index ?? 0, toolCallDelta.id);
                         if (toolCallDelta.id) {
                             entry.id = appendDelta(entry.id, toolCallDelta.id) || entry.id;
                         }
@@ -1032,12 +1045,8 @@ export async function collectOpenAIChatCompletionsStream(
                     return;
                 }
 
-                const sortedToolCalls = Array.from(toolCalls.entries())
-                    .sort(([left], [right]) => left - right)
-                    .map(([, toolCall]) => toolCall);
-
-                if (sortedToolCalls.length > 0) {
-                    message.tool_calls = sortedToolCalls;
+                if (toolCalls.length > 0) {
+                    message.tool_calls = toolCalls;
                 }
 
                 resolve({
