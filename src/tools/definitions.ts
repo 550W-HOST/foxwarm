@@ -212,7 +212,7 @@ Example:
         {
             name: 'exec',
             defaultInject: true,
-            description: 'Execute a shell command. The working directory is the explicit cwd when provided (relative cwd resolves from the session cwd when set, otherwise from the current node default), otherwise the session cwd when set, otherwise the current node default (master default is the agent folder). Inline display is bounded and captured command/pipeline output is saved under the agent folder .temp/exec area, so do not add | head or | tail merely to limit context: filtering changes what the command log captures. For both a complete capture and filtered view, create that capture explicitly with a separate step or a tee pipeline whose downstream filter continues consuming input. Commands running longer than the configured timeout (default 15s, maximum 60s; larger values are clamped with a warning) continue in the background and send a completion system message later.',
+            description: 'Execute a shell command. The working directory is the explicit cwd when provided (relative cwd resolves from the session cwd when set, otherwise from the current node default), otherwise the session cwd when set, otherwise the current node default (master default is the agent folder). Inline display is bounded and captured command/pipeline output is saved under the agent folder .temp/exec area, so do not add | head or | tail merely to limit context: filtering changes what the command log captures. For both a complete capture and filtered view, create that capture explicitly with a separate step or a tee pipeline whose downstream filter continues consuming input. Commands running longer than the configured timeout (default 15s, maximum 60s; larger values are clamped with a warning) continue in the background and send a completion system message later. Until that completion arrives, the command remains an outstanding background process; if you continue other work instead of waiting, remember it is still running.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -320,13 +320,15 @@ Example:
         {
             name: 'session',
             defaultInject: true,
-            description: 'Get current session status or list sessions. With no args or action="status", returns current session agent id/name, agent dir, session id, parent session id, token estimate, last usage, auto-compact threshold, current node, current cwd, and recent child sessions. With action="list", returns the old list_sessions-style session list and accepts the same pagination args.',
+            description: 'Get current session status, list sessions, or rename a session. With no args or action="status", returns current session agent id/name, agent dir, session id, parent session id, token estimate, last usage, auto-compact threshold, current node, current cwd, and recent child sessions. With action="list", returns the paginated session list. With action="rename", sets or clears a session display name.',
             parameters: {
                 type: 'object',
                 properties: {
-                    action: { type: 'string', enum: ['status', 'list'], description: 'Optional action. Omit or use "status" for current session status; use "list" to list sessions.' },
+                    action: { type: 'string', enum: ['status', 'list', 'rename'], description: 'Optional action. Omit or use "status" for current session status; use "list" to list sessions; use "rename" to set or clear a display name.' },
                     start: { type: 'number', description: 'Start index in the session list sorted by last activity desc. Default: 0' },
-                    count: { type: 'number', description: 'Number of sessions to return. Default: 20' }
+                    count: { type: 'number', description: 'Number of sessions to return. Default: 20' },
+                    sessionId: { type: 'string', description: 'For action="rename": target session ID. Defaults to the current session.' },
+                    name: { type: 'string', description: 'For action="rename": new display name. Use an empty string to clear the name.' }
                 },
                 required: [] as string[]
             }
@@ -342,34 +344,23 @@ Example:
             }
         },
         {
-            name: 'list_skills',
+            name: 'skill',
             defaultInject: true,
-            description: 'List available skills for the current session agent (or an optionally specified agent), including agent-local, inherited-agent, and global skills.',
+            description: 'List available skills or load one skill entry document and its supporting resource list. Skills resolve through the current session agent by default, including agent-local, inherited-agent, and global sources. Loading lists supporting resources without eagerly reading them and does not dynamically add tools.',
             parameters: {
                 type: 'object',
                 properties: {
-                    agentName: { type: 'string', description: 'Optional agent name whose visible skills should be listed. Defaults to the current session agent.' }
+                    action: { type: 'string', enum: ['list', 'load'], description: 'Action to perform: "list" available skills or "load" one skill entry document.' },
+                    skillName: { type: 'string', description: 'For action="load": skill name to load.' },
+                    agentName: { type: 'string', description: 'Optional agent name whose visible skill search path should be used. Defaults to the current session agent.' }
                 },
-                required: [] as string[]
-            }
-        },
-        {
-            name: 'load_skill',
-            defaultInject: true,
-            description: 'Load a skill entry document and supporting resource list using the current session agent skill resolution (or an optionally specified agent). Supporting resources are listed but not eagerly read; this does not dynamically add tools.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    skillName: { type: 'string', description: 'Skill name to load' },
-                    agentName: { type: 'string', description: 'Optional agent name whose skill search path should be used. Defaults to the current session agent.' }
-                },
-                required: ['skillName']
+                required: ['action']
             }
         },
         {
             name: 'get_session_messages',
             defaultInject: true,
-            description: 'Get messages from a session with optional pagination. Defaults to last 10 messages. Output uses a total previewLength budget (auto-clamped to 1000-20000), folds tool calls/results by default, and can post-filter the selected result set with contentFilter/includeRegex/excludeRegex.',
+            description: 'Get messages and the current execution state from a session with optional pagination. Defaults to last 10 messages. Output uses a total previewLength budget (auto-clamped to 1000-20000), folds tool calls/results by default, and can post-filter the selected result set with contentFilter/includeRegex/excludeRegex.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -442,19 +433,6 @@ Example:
                     sessionId: { type: 'string', description: 'Session ID to delete' }
                 },
                 required: ['sessionId']
-            }
-        },
-        {
-            name: 'update_session_name',
-            defaultInject: true,
-            description: 'Update the display name of a session. The display name is shown in the session list.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    sessionId: { type: 'string', description: 'Session ID (optional, default: current session)' },
-                    name: { type: 'string', description: 'New display name for the session. Use empty string to clear the name.' }
-                },
-                required: ['name']
             }
         },
         {
@@ -665,7 +643,7 @@ Example:
         {
             name: 'search_tools',
             defaultInject: true,
-            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool; for timer tools, load the timer-automation skill first. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
+            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool; load the timer-automation skill before using timer tools and the mcp-management skill before changing MCP server configuration. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -718,8 +696,7 @@ Example:
         },
         {
             name: 'start_toolscript_run',
-            defaultInject: true,
-            description: 'Explicit background-oriented ToolScript run starter. Equivalent to run_script(..., mode="background") but with a clearer controller-run intent.',
+            description: 'Compatibility-only background ToolScript starter for existing user automation. New calls should use run_script with mode="background".',
             parameters: {
                 type: 'object',
                 properties: {
@@ -736,7 +713,7 @@ Example:
         {
             name: 'continue_script',
             defaultInject: true,
-            description: 'Resume a waiting ToolScript run created by run_script/start_toolscript_run. Used both for ask_agent continuations and for timeout-paused runs that explicitly report they can continue. The returned stdout field is only the stdout/print output produced by this continuation slice; fetch the run to see the persisted full stdout.',
+            description: 'Resume a waiting ToolScript run created by run_script. Used both for ask_agent continuations and for timeout-paused runs that explicitly report they can continue. The returned stdout field is only the stdout/print output produced by this continuation slice; fetch the run to see the persisted full stdout.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -810,8 +787,7 @@ Example:
         },
         {
             name: 'mcp_config',
-            defaultInject: true,
-            description: 'Configure an MCP server (store in state/mcp.json). Use enable=false to disable an existing server.',
+            description: 'Manage MCP server configuration through the authoritative live runtime. Successful changes apply immediately to subsequent MCP listing, discovery, and calls; no Foxwarm restart is required. Do not edit the backing state/config file manually because manual edits do not update the live configuration immediately. Use enable=false to disable an existing server.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -860,7 +836,6 @@ Example:
         },
         {
             name: 'list_mcp_servers',
-            defaultInject: true,
             description: 'List configured MCP servers with safe config summaries. Returns disabled servers too.',
             parameters: {
                 type: 'object',
@@ -868,24 +843,16 @@ Example:
             }
         },
         {
-            name: 'list_nodes',
+            name: 'node',
             defaultInject: true,
-            description: 'List all registered nodes and mark which node is current for this session.',
-            parameters: {
-                type: 'object',
-                properties: {}
-            }
-        },
-        {
-            name: 'change_current_node',
-            defaultInject: true,
-            description: 'Change the current node for the session. Execute future tools on the specified node.',
+            description: 'List registered nodes or select the current execution node for this session. Selecting a node clears the session cwd so subsequent path resolution uses that node\'s default cwd.',
             parameters: {
                 type: 'object',
                 properties: {
-                    nodeId: { type: 'string', description: 'Node ID to switch to' }
+                    action: { type: 'string', enum: ['list', 'select'], description: 'Action to perform: "list" registered nodes or "select" the session\'s current execution node.' },
+                    nodeId: { type: 'string', description: 'For action="select": node ID to use.' }
                 },
-                required: ['nodeId']
+                required: ['action']
             }
         },
         {

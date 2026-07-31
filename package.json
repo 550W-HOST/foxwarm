@@ -4,7 +4,8 @@
   "description": "A lightweight, extensible AI assistant framework with multi-channel support",
   "main": "lib/index.js",
   "bin": {
-    "foxwarm": "scripts/foxwarm.js"
+    "foxwarm": "scripts/foxwarm.js",
+    "foxwarm-multica": "scripts/multicaBridge.js"
   },
   "scripts": {
     "build": "npm --prefix packages/shared run build && npm --prefix packages/cli-node run build && rm -f lib/nodeClient.js lib/nodeClient.js.map lib/nodes/client.js lib/nodes/client.js.map lib/nodes/interactive-client.js lib/nodes/interactive-client.js.map && tsc",
@@ -13,6 +14,8 @@
     "quality:code-index": "python3 docs/code-index/scripts/audit_index.py --source-root . --fail-on-cjk",
     "quality:unused": "node scripts/quality/unused-check.mjs",
     "test:model-cli": "node --test scripts/model.test.js",
+    "test:multica-bridge": "node --test scripts/multicaBridge.test.js",
+    "test:multica-setup": "node --test scripts/multicaBridgeSetup.test.js",
     "test:code-index-generator": "python3 skills/code-index/tests/test_generate_code_index.py",
     "build-all": "npm install && npm run build && npm --prefix packages/webui install && npm --prefix packages/webui run build",
     "start": "./scripts/start.sh",

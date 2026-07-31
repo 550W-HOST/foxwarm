@@ -8,7 +8,7 @@ Implements the OpenAI LLM provider, handling conversion of internal message form
 
 ## Key Exports
 
-- `convertToOpenAIFormat(contents)` — Converts internal `Message[]` to OpenAI Chat Completions message format
+- `convertToOpenAIFormat(contents, concreteModelId?)` — Converts internal `Message[]` to OpenAI Chat Completions message format and emits model-scoped provider metadata only for its originating concrete model
 - `convertToOpenAIResponsesFormat(contents)` — Converts internal `Message[]` to OpenAI Responses API input format
 - `collectOpenAIResponsesStream(stream, signal, options?)` — Collects and reassembles a streamed OpenAI Responses API SSE response; options can receive raw decoded chunks and complete SSE blocks
 - `collectOpenAIChatCompletionsStream(stream, signal, options?)` — Collects and reassembles a streamed OpenAI Chat Completions SSE response; options can receive raw decoded chunks and complete SSE blocks
@@ -26,10 +26,10 @@ Implements the OpenAI LLM provider, handling conversion of internal message form
 | `cleanSnapshotString(value)` | ~6 | Trims and returns a string or undefined |
 | `mergeResponseContentPart(existing, incoming)` | ~15 | Merges two content parts for Responses API streaming |
 | `mergeResponseOutputItem(existing, incoming)` | ~35 | Deep-merges output items including content/summary arrays |
-| `convertToOpenAIFormat(contents)` | ~130 | Converts internal messages to OpenAI Chat Completions format |
+| `convertToOpenAIFormat(contents, concreteModelId?)` | ~180 | Converts internal messages to OpenAI Chat Completions format |
 | `convertToOpenAIResponsesFormat(contents)` | ~100 | Converts internal messages to OpenAI Responses API format |
 | `collectOpenAIResponsesStream(stream, signal, options?)` | ~180 | Collects SSE stream for Responses API, rebuilds output items |
-| `collectOpenAIChatCompletionsStream(stream, signal, options?)` | ~130 | Collects SSE stream for Chat Completions API, rebuilds message |
+| `collectOpenAIChatCompletionsStream(stream, signal, options?)` | ~250 | Collects SSE stream for Chat Completions API, rebuilds message |
 
 ## Dependencies
 
@@ -47,7 +47,7 @@ Implements the OpenAI LLM provider, handling conversion of internal message form
 - **SSE stream collection**: Both stream collectors parse chunked SSE data using a buffer with `\n\n` delimiters, handle `[DONE]` sentinel, and support abort signals. They incrementally build up the response object from deltas. They also expose optional `onRawChunk(text)` and `onRawSseBlock(block)` callbacks so the caller can log exact decoded provider stream data without changing parser semantics.
 - **Progress reporting**: Both collectors emit `onProgress` callbacks with current snapshot state (reasoning text, output text, tool call names/indices) as deltas arrive.
 - **Responses API specifics**: Handles `response.output_item.added`, text/refusal/arguments deltas, reasoning summary parts, and `response.completed`. Merges streamed output with the final completed response, preferring streamed content when the completed payload has empty arrays.
-- **Chat Completions specifics**: Accumulates `content` string and `tool_calls` array from choice deltas, tracks `finish_reason` and `usage`.
+- **Chat Completions specifics**: Accumulates `content` string and `tool_calls` array from choice deltas, tracks `finish_reason` and `usage`. Tool calls retain normal provider-index ordering; a fresh function identity can split broken compatible-provider streams which reuse an index, while id-only fragments continue the current call. The collector captures JSON-object `delta.provider_specific_fields` onto the assembled message. `convertToOpenAIFormat` echoes persisted fields only when `Message.providerMeta.sourceModelId` exactly matches the concrete destination model.
 
 ## Integration
 

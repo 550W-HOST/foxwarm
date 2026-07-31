@@ -38,7 +38,7 @@ function formatSkillResources(info: skills.SkillInfo): string {
   return result;
 }
 
-export async function tool_list_skills(args: ToolArgs = {}, ctx?: ToolContext) {
+async function listSkills(args: ToolArgs = {}, ctx?: ToolContext) {
   const agentName = resolveSkillAgentName(args, ctx);
   await assertCanUseSkillAgent(agentName, ctx, 'list skills');
   const skillList = await skills.listSkills({ agentName });
@@ -63,7 +63,7 @@ export async function tool_list_skills(args: ToolArgs = {}, ctx?: ToolContext) {
   return result;
 }
 
-export async function tool_load_skill(args: ToolArgs, ctx?: ToolContext) {
+async function loadSkill(args: ToolArgs, ctx?: ToolContext) {
   const { skillName } = args;
   const agentName = resolveSkillAgentName(args, ctx);
   await assertCanUseSkillAgent(agentName, ctx, 'load skills');
@@ -92,4 +92,15 @@ export async function tool_load_skill(args: ToolArgs, ctx?: ToolContext) {
   }
 
   return result.trimEnd();
+}
+
+export async function tool_skill(args: ToolArgs, ctx?: ToolContext) {
+  const action = typeof args?.action === 'string' ? args.action.trim().toLowerCase() : '';
+  if (action === 'list') {
+    return listSkills(args, ctx);
+  }
+  if (action === 'load') {
+    return loadSkill(args, ctx);
+  }
+  throw new Error('skill.action must be "list" or "load".');
 }

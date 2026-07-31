@@ -515,6 +515,7 @@ foxwarm/
 - [Session Management](docs/session-management.md)
 - [Multi-Agent Guide](docs/multi-agent.md)
 - [Node Client](docs/node-client.md)
+- [Multica Bridge POC](docs/multica-bridge.md)
 - [Vector Memory](docs/vector-memory.md)
 - [Development](docs/development.md)
 - [ToolScript examples](examples/toolscript/README.md)

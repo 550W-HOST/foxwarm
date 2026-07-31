@@ -195,8 +195,7 @@ def main(args):
 
 For controller-style automation, prefer starting the script as a **background ToolScript run**:
 
-- `start_toolscript_run({filePath, args})`
-- or `run_script({filePath, args, mode:"background"})`
+- `run_script({filePath, args, mode:"background"})`
 
 Why:
 

@@ -753,8 +753,8 @@ async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
 
     let combined = '';
     combined += 'The following skills provide specialized instructions for specific tasks.\n';
-    combined += 'When a task matches a skill\'s description, call the load_skill tool\n';
-    combined += 'with the skill\'s name to load its full instructions and resource list.\n';
+    combined += 'When a task matches a skill\'s description, call skill with action="load"\n';
+    combined += 'and the skill\'s name to load its full instructions and resource list.\n';
     combined += 'Read listed resources only when the loaded skill or current task needs them:\n';
     combined += '<available_skills>\n';
 
@@ -1642,6 +1642,7 @@ export async function chat(
         const assistantMsg: Message = {
             role: 'model',
             parts: result.allParts,
+            ...(result.providerMeta ? { providerMeta: result.providerMeta } : {}),
             ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
         };
         await appendMessage(assistantMsg);
@@ -1834,7 +1835,7 @@ function buildConcreteRequestPlan(options: {
             stream: true,
         };
     } else if (useOpenAIChatCompletionsApi) {
-        messages = convertToOpenAIFormatProvider(fixedContents);
+        messages = convertToOpenAIFormatProvider(fixedContents, modelId);
         url = `${baseUrl}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',
@@ -1936,6 +1937,7 @@ function buildConcreteRequestPlan(options: {
 function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): ChatResult {
     let responseText = '';
     const allParts: Message['parts'] = [];
+    let messageProviderMeta: ChatResult['providerMeta'];
 
     if (plan.useOpenAIResponsesApi) {
         const outputItems = Array.isArray(resp?.output) ? resp.output : [];
@@ -1977,6 +1979,16 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
     } else if (plan.useOpenAIChatCompletionsApi) {
         const choice = resp?.choices?.[0];
         const message = choice?.message;
+        if (
+            message?.provider_specific_fields
+            && typeof message.provider_specific_fields === 'object'
+            && !Array.isArray(message.provider_specific_fields)
+        ) {
+            messageProviderMeta = {
+                providerSpecificFields: message.provider_specific_fields,
+                sourceModelId: plan.modelId,
+            };
+        }
         if (message?.reasoning_content) {
             logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
             allParts.push({ thinking: message.reasoning_content });
@@ -2049,7 +2061,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
             ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
         } : null;
     } else if (plan.useOpenAIChatCompletionsApi) {
-        const cached = resp?.usage.prompt_tokens_details?.cached_tokens || 0;
+        const cached = resp?.usage?.prompt_tokens_details?.cached_tokens || 0;
         // OpenAI Chat Completions exposes this output component as
         // usage.completion_tokens_details.reasoning_tokens. completion_tokens
         // remains the complete output count, including reasoning.
@@ -2074,6 +2086,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
         usage,
         toolCalls,
         allParts: allParts.length > 0 ? allParts : undefined,
+        ...(messageProviderMeta ? { providerMeta: messageProviderMeta } : {}),
     };
 }
 

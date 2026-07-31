@@ -45,7 +45,7 @@ In practice, a good default flow is:
 1. use normal tool calls in the agent loop to explore/verify the tool path
 2. once you know the tools and argument shapes you want, write the ToolScript file with an explicit `def main(args): ...` entrypoint
 3. if the task is close to the canonical example, copy/adapt it instead of starting from a blank file
-4. run the script with `run_script(...)` or `start_toolscript_run(...)`
+4. run the script with `run_script(...)`; pass `mode: "background"` for a background run
 5. inspect the structured run result and resume with `continue_script(...)` if needed
 
 ToolScript scripts should now use an explicit entrypoint:
@@ -66,9 +66,6 @@ Current ToolScript run tools:
   - starts a ToolScript run
   - default mode is `foreground`
   - default timeout budget is `30s` per run/continue slice unless you pass `timeoutSecs`
-- `start_toolscript_run({filePath, args?, mode?})`
-  - clearer background-oriented entry point
-  - defaults to `background`
 - `continue_script({runId, continuationId, input})`
   - resumes a run that is waiting for `ask_agent(...)`
   - also resumes a run paused at `waitingReason="timeout"`
@@ -248,7 +245,7 @@ def main(args):
 
 ## How to interpret ToolScript run results
 
-After `run_script(...)` or `start_toolscript_run(...)`, inspect:
+After `run_script(...)`, inspect:
 
 - `status`
   - `completed`, `waiting`, `failed`, `cancelled`

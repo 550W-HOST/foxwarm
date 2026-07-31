@@ -113,8 +113,8 @@ skills/
       METHOD.md
 ```
 
-skill 会自动出现在可见 skills catalog 中；需要完整说明时，使用 `/skill show <skill>` 或 `load_skill` 按需加载。
-如果某个目录已经包含 `SKILL.md`，它就是一个 skill 边界；目录内部的 `references/`、`scripts/`、`assets/`、示例等都作为该 skill 的资源，不再继续扫描成独立 skill。`load_skill` 会返回入口文档，并在 header 中列出这些资源路径，agent 可按需读取。
+skill 会自动出现在可见 skills catalog 中；需要完整说明时，使用 `/skill show <skill>` 或 `skill({ action: "load", skillName: "<skill>" })` 按需加载。
+如果某个目录已经包含 `SKILL.md`，它就是一个 skill 边界；目录内部的 `references/`、`scripts/`、`assets/`、示例等都作为该 skill 的资源，不再继续扫描成独立 skill。`skill({ action: "load", ... })` 会返回入口文档，并在 header 中列出这些资源路径，agent 可按需读取。
 
 ## 调试
 

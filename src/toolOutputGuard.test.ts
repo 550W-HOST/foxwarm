@@ -338,7 +338,7 @@ test('read returns full content to unified guard instead of old 10000-char trunc
   const sessionId = makeSessionId('tool_output_guard_read');
   const relativePath = path.join('.temp', 'tool-output-guard-read', `${sessionId}.txt`);
   const fullPath = path.join(getAgentDir('main'), relativePath);
-  const content = 'READ_FULL_CONTENT\n' + 'R'.repeat(TOOL_OUTPUT_GUARD_CHAR_LIMIT + 6000);
+  const content = Array.from({ length: 1200 }, (_, index) => `READ_FULL_CONTENT_${index + 1}_${'R'.repeat(60)}`).join('\n');
   await fs.ensureDir(path.dirname(fullPath));
   await fs.writeFile(fullPath, content, 'utf8');
 
@@ -352,6 +352,11 @@ test('read returns full content to unified guard instead of old 10000-char trunc
   assert.equal(response.outputTruncated, true);
   assert.equal(response.outputOriginalLengthChars, content.length);
   assert.doesNotMatch(String(response.output), /Showing first 10000 chars only/);
+  const omission = String(response.output).match(/^--- \[foxwarm: (\d+) lines \(line range (\d+)-(\d+)\) omitted because (.+)\] ---$/m);
+  assert.ok(omission);
+  assert.match(String(response.output), /Foxwarm placeholders above \(line-range omission placeholders\) are not original output content\./);
+  assert.ok(String(response.output).includes(`Omitted ${omission[1]} line(s) from original line range ${omission[2]}-${omission[3]} because ${omission[4]}.`));
+  assert.match(String(response.output), /Original output: 1200 line\(s\), \d+ character\(s\)\./);
   assert.equal(await readSaved(response.outputFullPath), content);
   assert.ok(formatToolResponsePayload(response).length < TOOL_OUTPUT_GUARD_CHAR_LIMIT);
 });

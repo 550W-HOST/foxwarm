@@ -23,7 +23,7 @@ class ToolMock:
                 "- agent id/name: `main`\n"
                 "- current node: `master` (connected)\n"
             )
-        if tool_id == "builtin:list_nodes":
+        if tool_id == "builtin:node":
             return "Found 2 node(s). Current node: `master`.\n\n- `master` (local)\n- `worker-node-1` (remote)"
         if tool_id == "builtin:list_agents":
             lines = "Found 1 agent(s):\n\n- **main** (1 session)"
@@ -75,7 +75,7 @@ class CreateIsolatedWorkerTests(unittest.TestCase):
         self.assertEqual(result["plan"]["sessionId"], "tmp-worker-1/task")
         self.assertEqual(
             [tool for tool, _ in mock.calls],
-            ["builtin:session", "builtin:list_nodes", "builtin:list_agents"],
+            ["builtin:session", "builtin:node", "builtin:list_agents"],
         )
 
     def test_apply_calls_existing_tools_in_order(self):
@@ -88,7 +88,7 @@ class CreateIsolatedWorkerTests(unittest.TestCase):
             [tool for tool, _ in mock.calls],
             [
                 "builtin:session",
-                "builtin:list_nodes",
+                "builtin:node",
                 "builtin:list_agents",
                 "builtin:create_agent",
                 "builtin:create_session",
@@ -124,8 +124,8 @@ class CreateIsolatedWorkerTests(unittest.TestCase):
         mock = ToolMock()
 
         def offline(descriptor):
-            if descriptor["toolId"] == "builtin:list_nodes":
-                mock.calls.append(("builtin:list_nodes", {}))
+            if descriptor["toolId"] == "builtin:node":
+                mock.calls.append(("builtin:node", {"action": "list"}))
                 return (
                     "Found 1 node(s). Current node: `worker-node-1`.\n\n"
                     "- `master` (local)\n\n"

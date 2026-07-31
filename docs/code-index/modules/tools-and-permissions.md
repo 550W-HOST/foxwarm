@@ -36,6 +36,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - Oversized tool results are saved and replaced with a bounded line-aware excerpt before entering model context.
 - Image results receive stable IDs before model serialization.
 - Timer builtins remain discoverable but are not injected into the default model schema.
+- MCP server configuration/listing builtins remain discoverable but are not injected into the default model schema.
 - Patch application preserves the source line-ending convention.
 - Master and node patch results use the shared per-file add/update count formatter; the exact contract is canonical in [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 
@@ -74,6 +75,10 @@ Control and handoff tools return minimal success signals rather than echoing arg
 ### D-tools-schema-validity
 
 Default model-facing tool properties have concrete schema shapes accepted by strict providers. Runtime validation handles argument alternatives that JSON Schema cannot express cleanly.
+
+### D-tools-resource-action-consolidation
+
+[2026-08-01] Keep the default model-facing namespace compact by grouping closely related operations under singular resource tools: `session` owns status/list/rename, `skill` owns list/load, and `node` owns list/select. Removed internal names are not retained as aliases. `start_toolscript_run` is the narrow exception: it remains hidden and callable only for documented user-ToolScript compatibility, while current guidance uses `run_script({ mode: "background" })`. MCP configuration/listing is discoverable through `search_tools`/`call_tool` rather than injected by default.
 
 ## Canonical ownership
 

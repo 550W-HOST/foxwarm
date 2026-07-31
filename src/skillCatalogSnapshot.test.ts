@@ -6,7 +6,7 @@ import { COMMANDS } from './commands';
 import * as llm from './llm';
 import * as skillCore from './skills';
 import * as tools from './tools';
-import { tool_load_skill } from './toolsSessionAgent';
+import { tool_skill } from './toolsSessionAgent';
 import { getAgentDir } from './config';
 import * as sessionManager from './sessionManager';
 
@@ -14,7 +14,7 @@ function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-test('snapshot injects visible skills catalog, load_skill still loads docs, and attach/detach surfaces are removed or disabled', async () => {
+test('snapshot injects visible skills catalog, skill(load) loads docs, and attach/detach surfaces are removed or disabled', async () => {
   const agentName = makeId('skill_catalog_agent');
   const agentDir = getAgentDir(agentName);
   const skillName = 'visible-skill';
@@ -44,6 +44,7 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
   try {
     const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, systemPromptFiles: [] });
     assert.match(snapshot, /<available_skills>/);
+    assert.match(snapshot, /call skill with action="load"/);
     assert.match(snapshot, new RegExp(`<name>${skillName}</name>`));
     assert.match(snapshot, /<name>timer-automation<\/name>/);
     assert.match(snapshot, /<name>webui-markers<\/name>/);
@@ -51,7 +52,7 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
     assert.match(snapshot, /Analyze visible-skill tasks/);
     assert.doesNotMatch(snapshot, new RegExp(uniqueBody));
 
-    const loadedSkill = await tool_load_skill({ skillName, agentName }, {});
+    const loadedSkill = await tool_skill({ action: 'load', skillName, agentName }, {});
     assert.match(String(loadedSkill), new RegExp(uniqueBody));
     assert.doesNotMatch(String(loadedSkill), new RegExp(legacyMemoryBody));
     assert.doesNotMatch(String(loadedSkill), new RegExp(nestedResourceBody));
@@ -61,7 +62,7 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
     assert.match(String(loadedSkill), /references\/example-child\/SKILL\.md/);
     assert.match(String(loadedSkill), /FILE:/);
 
-    const loadedTimerSkill = await tool_load_skill({ skillName: 'timer-automation', agentName }, {});
+    const loadedTimerSkill = await tool_skill({ action: 'load', skillName: 'timer-automation', agentName }, {});
     assert.match(String(loadedTimerSkill), /create_timer/);
     assert.match(String(loadedTimerSkill), /update_timer/);
     assert.match(String(loadedTimerSkill), /list_timers/);
@@ -69,7 +70,7 @@ test('snapshot injects visible skills catalog, load_skill still loads docs, and 
     assert.match(String(loadedTimerSkill), /`W` .*not supported/);
     assert.doesNotMatch(String(loadedTimerSkill), /memory\//);
 
-    const loadedMarkerSkill = await tool_load_skill({ skillName: 'webui-markers', agentName }, {});
+    const loadedMarkerSkill = await tool_skill({ action: 'load', skillName: 'webui-markers', agentName }, {});
     assert.match(String(loadedMarkerSkill), /<foxwarm-commit node=/);
     assert.match(String(loadedMarkerSkill), /actually been created/);
     assert.match(String(loadedMarkerSkill), /Malformed markers are inert/);

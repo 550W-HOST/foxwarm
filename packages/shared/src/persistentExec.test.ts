@@ -3,7 +3,15 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import fs from 'fs-extra';
-import { MAX_FULL_LOG_READ_BYTES, PersistentExecManager, type RunningExecEntry } from './persistentExec';
+import {
+  BACKGROUND_PROCESS_CMDLINE_LIMIT,
+  BACKGROUND_PROCESS_TREE_LIMIT,
+  MAX_FULL_LOG_READ_BYTES,
+  PersistentExecManager,
+  formatProcessTreeSnapshot,
+  truncateProcessCmdline,
+  type RunningExecEntry,
+} from './persistentExec';
 
 function buildExecEntry(logPath: string, overrides: Partial<RunningExecEntry> = {}): RunningExecEntry {
   return {
@@ -30,6 +38,82 @@ async function createManager(root: string): Promise<PersistentExecManager> {
     getExecTempDir: () => path.join(root, 'exec'),
   });
 }
+
+test('background process tree preserves topology and bounds cmdlines and process count', () => {
+  const longCmdline = `worker ${'x'.repeat(140)}`;
+  const entries = [
+    { pid: 100, parentPid: 1, cmdline: '/bin/bash /tmp/managed.command.sh' },
+    { pid: 120, parentPid: 100, cmdline: 'second child' },
+    { pid: 110, parentPid: 100, cmdline: longCmdline },
+    { pid: 111, parentPid: 110, cmdline: 'grandchild --flag' },
+    { pid: 999, parentPid: 1, cmdline: 'unrelated process' },
+  ];
+
+  const tree = formatProcessTreeSnapshot(entries, 100);
+  assert.equal(tree, [
+    'Process tree (best-effort live snapshot; managed shell-script root PID 100):',
+    'PID 100: /bin/bash /tmp/managed.command.sh',
+    `  PID 110: ${truncateProcessCmdline(longCmdline)}`,
+    '    PID 111: grandchild --flag',
+    '  PID 120: second child',
+  ].join('\n'));
+  const renderedLongCmdline = tree.match(/^  PID 110: (.*)$/m)?.[1];
+  assert.equal(Array.from(renderedLongCmdline || '').length, BACKGROUND_PROCESS_CMDLINE_LIMIT);
+  assert.match(renderedLongCmdline || '', /…$/);
+  assert.doesNotMatch(tree, /unrelated process/);
+  assert.match(
+    formatProcessTreeSnapshot(entries, 404),
+    /Process tree unavailable: the root process was no longer visible during inspection\./,
+  );
+
+  const manyChildren = [
+    entries[0],
+    ...Array.from({ length: BACKGROUND_PROCESS_TREE_LIMIT + 5 }, (_, index) => ({
+      pid: 200 + index,
+      parentPid: 100,
+      cmdline: `child-${index}`,
+    })),
+  ];
+  const boundedTree = formatProcessTreeSnapshot(manyChildren, 100);
+  assert.equal((boundedTree.match(/^\s*PID /gm) || []).length, BACKGROUND_PROCESS_TREE_LIMIT);
+  assert.match(boundedTree, /\[foxwarm: 6 additional descendant process\(es\) omitted\]$/);
+});
+
+test('background timeout uses a metadata footer with a live process tree and degrades inspection failures', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-tree-'));
+  const logPath = path.join(root, 'command.log');
+  await fs.writeFile(logPath, 'partial output\n');
+  const entry = buildExecEntry(logPath, { pid: 100 });
+  const manager = new PersistentExecManager({
+    nodeId: 'master',
+    getDefaultCwd: () => root,
+    getExecTempDir: () => path.join(root, 'exec'),
+    processSnapshotProvider: async () => [
+      { pid: 100, parentPid: 1, cmdline: '/bin/bash /tmp/managed.command.sh' },
+      { pid: 101, parentPid: 100, cmdline: 'sleep 30' },
+    ],
+  });
+  const failingManager = new PersistentExecManager({
+    nodeId: 'master',
+    getDefaultCwd: () => root,
+    getExecTempDir: () => path.join(root, 'exec'),
+    processSnapshotProvider: async () => { throw new Error('inspection denied'); },
+  });
+
+  try {
+    const result = await manager.buildBackgroundTimeoutResult(entry, 7);
+    assert.match(result, /^Partial Output:\npartial output\n---\n\[Process running longer than 7s\] Switched to background\./);
+    assert.match(result, /continue other work, remember this process remains outstanding until its completion message arrives/i);
+    assert.match(result, /managed shell-script root PID 100[\s\S]*PID 100: \/bin\/bash \/tmp\/managed\.command\.sh[\s\S]*  PID 101: sleep 30/);
+    assert.ok(result.endsWith(`Log file: ${logPath}`));
+
+    const degraded = await failingManager.buildBackgroundTimeoutResult(entry, 7);
+    assert.match(degraded, /Process tree unavailable: process inspection failed or is unsupported on this platform\./);
+    assert.ok(degraded.endsWith(`Log file: ${logPath}`));
+  } finally {
+    await fs.remove(root);
+  }
+});
 
 test('persistent exec co-locates retained scripts and coordination metadata with dated log artifacts', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-artifacts-'));

@@ -20,6 +20,7 @@ Speech recognition is integrated as an external service boundary: Foxwarm sends 
 - [src-terminal-router](../units/src-terminal-router.md) — browser terminal routing across master and capable nodes.
 - [quality-scripts](../units/quality-scripts.md) — baseline TypeScript quality checks.
 - [model-cli](../units/model-cli.md) — one-shot CLI over the production LLM stack.
+- [multica-bridge-cli](../units/multica-bridge-cli.md) — local Qwen-JSONL bridge from Multica tasks to Foxwarm sessions.
 - [code-index-generators](../units/code-index-generators.md) — first-draft index generators.
 
 ## Public interfaces
@@ -32,6 +33,7 @@ Speech recognition is integrated as an external service boundary: Foxwarm sends 
 - Timer create, update, list, and delete APIs.
 - Local/remote terminal creation, attachment, input, resize, and close APIs.
 - `foxwarm model` one-shot model command.
+- `foxwarm-multica` local Multica custom-runtime bridge.
 - `npm run quality:unused` baseline check.
 
 ## Invariants

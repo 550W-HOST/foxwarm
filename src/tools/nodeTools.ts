@@ -187,6 +187,20 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
     return `Current node changed to \`${nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${defaultCwd}\`.`;
 };
 
+export async function tool_node(args: ToolArgs, ctx: ToolContext) {
+    const action = typeof args?.action === 'string' ? args.action.trim().toLowerCase() : '';
+    if (action === 'list') {
+        return tool_list_nodes(args, ctx);
+    }
+    if (action === 'select') {
+        if (typeof args.nodeId !== 'string' || !args.nodeId.trim()) {
+            throw new Error('node.nodeId is required for action="select".');
+        }
+        return tool_change_current_node({ ...args, nodeId: args.nodeId.trim() }, ctx);
+    }
+    throw new Error('node.action must be "list" or "select".');
+}
+
 export const tool_node_bootstrap_info = async (_args: ToolArgs = {}) => {
     const token = await ensureNodePairingToken();
     return buildNodeBootstrapInfo({ pairingToken: token });

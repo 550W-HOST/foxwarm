@@ -94,3 +94,21 @@ test('session list action preserves old list pagination behavior', async () => {
     await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });
+
+test('session rename action sets and clears a display name', async () => {
+  await sessionManager.loadSessions();
+  const sessionId = makeSessionId('session_rename_current');
+
+  try {
+    const session = await ensureSession(sessionId);
+    const renamed = String(await tool_session({ action: 'rename', name: 'Renamed Session' }, { sessionId, session }));
+    assert.match(renamed, /renamed to "Renamed Session"/);
+    assert.equal((await sessionManager.getExistingSession(sessionId))?.displayName, 'Renamed Session');
+
+    const cleared = String(await tool_session({ action: 'rename', name: '' }, { sessionId, session }));
+    assert.match(cleared, /display name cleared/);
+    assert.equal((await sessionManager.getExistingSession(sessionId))?.displayName, undefined);
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});

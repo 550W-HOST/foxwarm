@@ -42,6 +42,21 @@ test('collectOpenAIChatCompletionsStream aggregates streamed text and usage', as
   assert.ok(progress.some(snapshot => snapshot.text === 'Hello'));
 });
 
+test('collectOpenAIChatCompletionsStream captures delta provider_specific_fields', async () => {
+  const stream = makeStream([
+    {
+      choices: [{ index: 0, delta: { role: 'assistant', content: '', provider_specific_fields: { reasoning_signature: 'abc123' } }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { content: 'Hi' }, finish_reason: 'stop' }],
+    },
+    '[DONE]',
+  ]);
+
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal);
+  assert.deepEqual(response.choices[0].message.provider_specific_fields, { reasoning_signature: 'abc123' });
+});
+
 test('collectOpenAIChatCompletionsStream reports raw SSE body and blocks', async () => {
   const stream = makeStream([
     {
@@ -106,6 +121,84 @@ test('collectOpenAIChatCompletionsStream aggregates streamed tool calls', async 
   assert.equal(response.choices[0].message.tool_calls[0].function.name, 'read');
   assert.equal(response.choices[0].message.tool_calls[0].function.arguments, '{"filePath":"x"}');
   assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
+});
+
+test('collectOpenAIChatCompletionsStream splits parallel tool calls that reuse index 0', async () => {
+  // Mirrors a real provider stream where every parallel tool call reuses
+  // index 0 and only a fresh id marks the next call.
+  const stream = makeStream([
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'tooluse_AAA', type: 'function', function: { name: 'exec' } }] }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: '', function: { arguments: '{"command": "echo ok1"}' } }] }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { content: '', role: 'assistant' }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'tooluse_BBB', type: 'function', function: { name: 'exec' } }] }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: '', function: { arguments: '{"command": "echo ok2"}' } }] }, finish_reason: 'tool_calls' }],
+    },
+    '[DONE]',
+  ]);
+
+  const progress: any[] = [];
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal, {
+    onProgress: snapshot => progress.push(structuredClone(snapshot)),
+  });
+  const toolCalls = response.choices[0].message.tool_calls;
+  assert.equal(toolCalls.length, 2);
+  assert.equal(toolCalls[0].id, 'tooluse_AAA');
+  assert.equal(toolCalls[0].function.name, 'exec');
+  assert.equal(toolCalls[0].function.arguments, '{"command": "echo ok1"}');
+  assert.equal(toolCalls[1].id, 'tooluse_BBB');
+  assert.equal(toolCalls[1].function.name, 'exec');
+  assert.equal(toolCalls[1].function.arguments, '{"command": "echo ok2"}');
+  assert.deepEqual(progress[progress.length - 1]?.toolCalls?.map((call: any) => call.index), [0, 1]);
+});
+
+test('collectOpenAIChatCompletionsStream concatenates fragmented tool call ids', async () => {
+  const stream = makeStream([
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_', type: 'function', function: { name: 'read' } }] }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'abc', function: { arguments: '{"filePath":"x"}' } }] }, finish_reason: 'tool_calls' }],
+    },
+    '[DONE]',
+  ]);
+
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal);
+  assert.deepEqual(response.choices[0].message.tool_calls, [{
+    id: 'call_abc',
+    type: 'function',
+    function: { name: 'read', arguments: '{"filePath":"x"}' },
+  }]);
+});
+
+test('collectOpenAIChatCompletionsStream orders ordinary tool calls by provider index', async () => {
+  const stream = makeStream([
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 1, id: 'call_second', type: 'function', function: { name: 'write', arguments: '{}' } }] }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_first', type: 'function', function: { name: 'read', arguments: '{}' } }] }, finish_reason: 'tool_calls' }],
+    },
+    '[DONE]',
+  ]);
+
+  const progress: any[] = [];
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal, {
+    onProgress: snapshot => progress.push(structuredClone(snapshot)),
+  });
+  const toolCalls = response.choices[0].message.tool_calls;
+  assert.deepEqual(toolCalls.map((call: any) => call.id), ['call_first', 'call_second']);
+  const finalProgress = progress[progress.length - 1];
+  assert.deepEqual(finalProgress?.toolCalls?.map((call: any) => call.index), [0, 1]);
+  assert.deepEqual(finalProgress?.toolCalls?.map((call: any) => call.name), ['read', 'write']);
 });
 
 
@@ -309,4 +402,27 @@ test('OpenAI tool serializers prepend one persisted LLM timing marker before ima
   assert.ok(Array.isArray(firstResponse.output));
   assert.match(firstResponse.output[0].text, /prevLLMReqTime="8.2s"/);
   assert.equal(firstResponse.output.filter((part: any) => String(part.text || '').includes('prevLLMReqTime')).length, 1);
+});
+
+test('convertToOpenAIFormat echoes assistant providerSpecificFields only to the source concrete model', () => {
+  const history: Message[] = [
+    { role: 'user', parts: [{ text: 'hi' }] },
+    {
+      role: 'model',
+      parts: [{ text: 'hello' }],
+      providerMeta: {
+        providerSpecificFields: { reasoning_signature: 'sig-xyz' },
+        sourceModelId: 'provider/model-a',
+      },
+    },
+    { role: 'model', parts: [{ text: 'no meta' }] },
+  ];
+
+  const chat = convertToOpenAIFormat(history, 'provider/model-a');
+  assert.deepEqual(chat[1].provider_specific_fields, { reasoning_signature: 'sig-xyz' });
+  assert.equal('provider_specific_fields' in chat[0], false);
+  assert.equal('provider_specific_fields' in chat[2], false);
+
+  const otherModelChat = convertToOpenAIFormat(history, 'provider/model-b');
+  assert.equal('provider_specific_fields' in otherModelChat[1], false);
 });

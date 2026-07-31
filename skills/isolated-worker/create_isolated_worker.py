@@ -98,7 +98,7 @@ def main(args):
             raise ValueError("parentSessionId must match the current ToolScript owner session")
     parent_session_id = current_parent
 
-    nodes = call_tool({"toolId": "builtin:list_nodes", "args": {}})
+    nodes = call_tool({"toolId": "builtin:node", "args": {"action": "list"}})
     if not isinstance(nodes, str) or not _node_connected(nodes, node_id):
         raise ValueError(f"Node {node_id} is not currently connected; start/approve it before creating the worker")
 

@@ -338,6 +338,114 @@ test('chat persists a provider-reported reasoning component on model message usa
   }
 });
 
+test('chat persists streamed provider-specific fields and only the same concrete model receives them later', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession('provider_specific_fields_round_trip_session');
+  const requestBodies: any[] = [];
+  let requestIndex = 0;
+
+  const makeToolCallStream = (): PassThrough => {
+    const stream = new PassThrough();
+    process.nextTick(() => {
+      stream.write(`data: ${JSON.stringify({
+        choices: [{
+          index: 0,
+          delta: {
+            role: 'assistant',
+            provider_specific_fields: { reasoning_signature: 'sig-round-trip' },
+            tool_calls: [{
+              index: 0,
+              id: 'call_round_trip',
+              type: 'function',
+              function: { name: 'read', arguments: '{"filePath":"README.md"}' },
+            }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      })}\n\n`);
+      stream.write(`data: ${JSON.stringify({
+        choices: [],
+        usage: {
+          prompt_tokens: 4,
+          completion_tokens: 2,
+          prompt_tokens_details: { cached_tokens: 0 },
+        },
+      })}\n\n`);
+      stream.write('data: [DONE]\n\n');
+      stream.end();
+    });
+    return stream;
+  };
+
+  (axios as any).post = async (_url: string, data: any) => {
+    requestBodies.push(data);
+    const current = requestIndex++;
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: current === 0 ? makeToolCallStream() : makeChatCompletionStream('ok'),
+    };
+  };
+
+  try {
+    const firstResult = await chat([{ text: 'call a tool' }], session, 0, {
+      appendMessage: async (message: Message) => {
+        session.history.push(message);
+      },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.equal(firstResult.toolCalls?.[0]?.id, 'call_round_trip', 'tool-call-only responses remain usable');
+    const persistedAssistant = session.history.find(message => message.role === 'model');
+    assert.deepEqual(persistedAssistant?.providerMeta, {
+      providerSpecificFields: { reasoning_signature: 'sig-round-trip' },
+      sourceModelId: 'openai/gpt-5.2-codex',
+    });
+
+    const sameModel = {
+      providerKey: 'openai',
+      providerType: 'openai-completions',
+      baseUrl: 'https://same.example',
+      apiKey: '',
+      model: 'gpt-5.2-codex',
+      extraFields: {},
+      extraHeaders: {},
+    } as any;
+    await requestLlmOnce({
+      contents: session.history,
+      systemPrompt: '',
+      modelEntryOverride: sameModel,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const otherModel = {
+      ...sameModel,
+      providerKey: 'other',
+      baseUrl: 'https://other.example',
+    };
+    await requestLlmOnce({
+      contents: session.history,
+      systemPrompt: '',
+      modelEntryOverride: otherModel,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const sameAssistant = requestBodies[1].messages.find((message: any) => message.role === 'assistant');
+    assert.deepEqual(sameAssistant.provider_specific_fields, { reasoning_signature: 'sig-round-trip' });
+    const otherAssistant = requestBodies[2].messages.find((message: any) => message.role === 'assistant');
+    assert.equal('provider_specific_fields' in otherAssistant, false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('Anthropic request serialization normalizes consecutive internal user messages without changing history boundaries', async () => {
   const originalPost = axios.post;
   let capturedBody: any = null;

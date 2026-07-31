@@ -12,9 +12,9 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_get_session_messages`, `tool_get_archived_messages`, `tool_get_archived_blocks`, `tool_recall` — archive/recall
 - `tool_create_timer`, `tool_list_timers`, `tool_update_timer`, `tool_delete_timer` — timer management
 - `tool_create_agent`, `tool_list_agents`, `tool_set_agent_inherit`, `tool_set_agent_isolated`, `tool_move_session`, `tool_create_session` — agent/session management
-- `tool_list_skills`, `tool_load_skill` — skill discovery
+- `tool_skill` — skill list/load actions
 - `tool_set_goal`, `tool_set_session_compact_threshold`, `tool_set_session_child_model`, `tool_update_session_snapshot` — settings
-- `tool_session`, `tool_delete_session`, `tool_update_session_name`, `tool_stop_session`, `tool_compact_session` — session status/list and CRUD
+- `tool_session`, `tool_delete_session`, `tool_stop_session`, `tool_compact_session` — session status/list/rename and lifecycle
 
 ## Function Index
 
@@ -53,7 +53,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 ### toolsSessionAgent/archiveRecall.ts — Archive retrieval and recall
 | Function | Description |
 |----------|-------------|
-| `tool_get_session_messages` | Returns recent messages through the shared total-budget preview renderer |
+| `tool_get_session_messages` | Returns recent messages plus the target session's canonical execution-state summary through the shared total-budget preview renderer |
 | `tool_get_archived_messages` | Fetches archived messages by sequence range |
 | `tool_get_archived_blocks` | Fetches archived context blocks by ID range |
 | `tool_recall` | Retrieves archived context via target selector syntax |
@@ -97,8 +97,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 ### toolsSessionAgent/skills.ts — Skill discovery
 | Function | Description |
 |----------|-------------|
-| `tool_list_skills` | Lists available skills for an agent |
-| `tool_load_skill` | Loads a skill entry document and lists supporting resource paths without eagerly reading them |
+| `tool_skill` | Lists available skills or loads one entry document/resource list according to `action` |
 
 ### toolsSessionAgent/settings.ts — Session settings
 | Function | Description |
@@ -111,9 +110,8 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 ### toolsSessionAgent/sessionCrud.ts — Session lifecycle
 | Function | Description |
 |----------|-------------|
-| `tool_session` | Model-facing session helper: default/status action reports current session status; `action:"list"` lists sessions with pagination |
+| `tool_session` | Model-facing session helper: status, paginated list, and display-name rename actions |
 | `tool_delete_session` | Deletes a session (with busy-session safety) |
-| `tool_update_session_name` | Sets or clears session display name |
 | `tool_stop_session` | Sends stop signal to a busy session |
 | `tool_compact_session` | Requests session compaction |
 
@@ -147,7 +145,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 
 ## Behavior
 
-- `get_session_messages` and `recall` render through the shared context preview renderer: `previewLength` is a total output budget, values are clamped to 1000-20000 with a warning, tool calls/results default to name/id/status-only, and `contentFilter` / `includeRegex` / `excludeRegex` post-filter full message/block/tool content with match-centered snippets.
+- `get_session_messages` and `recall` render through the shared context preview renderer: `previewLength` is a total output budget, values are clamped to 1000-20000 with a warning, tool calls/results default to name/id/status-only, and `contentFilter` / `includeRegex` / `excludeRegex` post-filter full message/block/tool content with match-centered snippets. Every successful `get_session_messages` result also includes the target session's concise canonical runtime-state summary, including empty pages and pages reduced to zero matches; a nonzero queue length is appended without changing message selection or filter semantics.
 - `contentFilter` is a literal case-insensitive result post-filter, never a semantic or retrieval query. `get_session_messages` first selects its page; exact recall first resolves `target`; vector recall first searches with `vector_query` and reloads source archive items; only then does the shared renderer filter. Filter stages run in the documented order `contentFilter` -> `includeRegex` -> `excludeRegex`, report separate exclusion counts, and keep the notice visible even when zero items remain or body previews are truncated.
 - For CTX-BLOCK drill-down, the block metadata/summary header is not counted as a raw source message. Message-backed blocks post-filter/count source messages; block-backed blocks post-filter/count immediate child block summary items. When `contentFilter` excludes anything, recall tells the caller to omit it for complete target contents and use `vector_query` for semantic search.
 - The old `query` argument has been removed from both model-facing schemas and is explicitly rejected by the `recall` / `get_session_messages` runtime rather than silently ignored or compatibility-read.
@@ -156,11 +154,11 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_recall` rejects legacy parameter names (`startSeq`, `endSeq`, `includeMessages`, etc.) with guidance to use the new `target` selector syntax (`msg#N-M`, `B#N`, `blocks`).
 - `renderContextBlockExpansion` is not a model-facing tool. WebUI uses it with `sessionId + blockId` to render temporary one-layer archive previews as structured timeline messages; child block messages include `__meta.contextBlock` for recursive expansion, and raw archive messages keep their original message shape/seq metadata. Missing sessions/blocks are reported with structured errors.
 - `tool_wait` returns a `__toolLoopControl` signal that stops the agent's current turn. It accepts optional `waitExecIds?: string[]` as advisory metadata for runtime-state display; empty/omitted args remain a normal wait for any new message/event.
-- `tool_session` replaces the old `list_sessions` tool. With omitted args or `action:"status"`, it returns the same status fields as `/status` using `src/sessionStatus`: agent id/name, agent dir, session id, parent id, token/image estimate, last usage (with optional reasoning tokens displayed inside output rather than added to total), auto-compact threshold, current node, current cwd/default cwd, canonical runtime-state summary, and up to 10 recent child sessions. With `action:"list"`, it preserves old list pagination (`start`, `count`) and row formatting. Isolated sessions may use status but not list.
+- `tool_session` replaces the old `list_sessions` tool and owns display-name changes. With omitted args or `action:"status"`, it returns the same status fields as `/status` using `src/sessionStatus`: agent id/name, agent dir, session id, parent id, token/image estimate, last usage (with optional reasoning tokens displayed inside output rather than added to total), auto-compact threshold, current node, current cwd/default cwd, canonical runtime-state summary, and up to 10 recent child sessions. With `action:"list"`, it preserves old list pagination (`start`, `count`) and row formatting; with `action:"rename"`, it sets or clears a display name. Isolated sessions may use status but not list/rename.
 - `tool_submit_compact_plan` remains guarded outside dedicated compaction, but its model-facing schema now includes `preserveMessages` and `removePreservedMessages` for compact-time raw-message preservation/removal handled by `src/session/compactPlan` and `src/session/history`.
 - `tool_send_to_session` delegates to session relations, accepts `<main>` / `<parent>` special target ids, and cannot target the current/source session itself; self-send errors include current/requested/resolved IDs and remind agents that messages to the current session's direct user should be ordinary assistant text instead.
 - `send_to_session(waitAfterHandoff:true)` emits a hidden post-batch generic-wait request only after delivery succeeds. `create_child_session(waitAfterHandoff:true)` requires a non-empty initial message and awaits its delivery before emitting the same request; ordinary unflagged child creation retains its existing asynchronous initial-send behavior. The former option name is not compatibility-read. Canonical orchestration: [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).
-- `tool_load_skill` is progressive-disclosure oriented: it returns `SKILL.md` plus skill directory/resource-path guidance, not full companion resources. Isolated sessions may list/load skills for their own agent only.
+- `tool_skill({ action: "load" })` is progressive-disclosure oriented: it returns `SKILL.md` plus skill directory/resource-path guidance, not full companion resources. The list/load actions share the same resolution, and isolated sessions may use them for their own agent only.
 - Path resolution expands `~` and resolves relative paths against the agent directory or session CWD.
 - All mutating tools check isolation status via `requireNotIsolated` before proceeding.
 - Goal setting normalizes text, resolves remind-every defaults, and persists to session state.
@@ -176,6 +174,8 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - The `__toolLoopControl` return shape is consumed by the orchestration layer to halt or continue the agent turn loop.
 
 ## Design Decisions
+
+- [2026-08-01] Every successful `get_session_messages` response must include the target session's execution state via the shared `buildSessionRuntimeState` and `formatSessionRuntimeStateSummary` path, including empty and fully filtered pages. Keep the four-state runtime taxonomy canonical rather than defining retrieval-specific labels; append only a nonzero queue count when the compact summary would otherwise omit pending work.
 
 - [2026-07-22] Rename the shared literal result filter on `recall` and `get_session_messages` from ambiguous `query` to `contentFilter`. It is explicitly a case-insensitive post-filter after target/page/vector retrieval; `target` owns exact CTX-BLOCK/range selection and `vector_query` owns semantic search. Do not preserve old `query` compatibility: reject it clearly. Report staged literal/include/exclude exclusion counts, and preserve the count/omit-filter hint even for zero-result or truncated previews.
 

@@ -12,6 +12,7 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.ok(names.includes('isolated-worker'));
   assert.ok(names.includes('agent-skill-creator'));
   assert.ok(names.includes('web-search'));
+  assert.ok(names.includes('mcp-management'));
   assert.ok(!names.includes('ask-gemini'));
   assert.ok(!names.includes('agent-skill-creator/references/examples/weekly-crm-report'));
   assert.ok(!names.includes('agent-skill-creator/docs/superpowers/plans/2026-05-27-agent-skill-creator-v5-artifacts-first'));
@@ -19,7 +20,8 @@ test('global ToolScript skills are visible and loadable', async () => {
   const automation = await loadSkillDocuments('toolscript-automation', { agentName: 'main' });
   const automationText = automation.documents.map(doc => doc.content).join('\n\n');
   assert.match(automationText, /run_script/);
-  assert.match(automationText, /start_toolscript_run/);
+  assert.match(automationText, /mode:\s*["']background["']/);
+  assert.doesNotMatch(automationText, /start_toolscript_run/);
   assert.match(automationText, /call_tool\(/);
 
   const managed = await loadSkillDocuments('toolscript-managed-controller', { agentName: 'main' });
@@ -45,4 +47,13 @@ test('global ToolScript skills are visible and loadable', async () => {
   const webSearch = await loadSkillDocuments('web-search', { agentName: 'main' });
   assert.match(webSearch.documents[0].content, /formerly ask-gemini/);
   assert.ok(webSearch.info.resourceFiles.includes('web-search.js'));
+
+  const mcpManagement = await loadSkillDocuments('mcp-management', { agentName: 'main' });
+  const mcpText = mcpManagement.documents[0].content;
+  assert.match(mcpText, /builtin:mcp_config/);
+  assert.match(mcpText, /no Foxwarm restart is required/i);
+  assert.match(mcpText, /Do \*\*not\*\* manually edit the MCP state\/config file/i);
+  assert.match(mcpText, /builtin:list_mcp_servers/);
+  assert.match(mcpText, /streamable-http/);
+  assert.match(mcpText, /Never print.*real tokens/i);
 });

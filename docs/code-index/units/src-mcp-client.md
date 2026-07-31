@@ -24,6 +24,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 | Symbol/section | Responsibility |
 |---|---|
 | config normalization | Current `transport` plus legacy `type` reader and validated persisted server shapes |
+| live config snapshot | First-load cache, store-reset invalidation, and persist-before-publish managed updates |
 | server summary | Names/counts only for secret-bearing args/env/header fields |
 | standard transport connection | Streamable HTTP, SSE, and `auto` fallback lifecycle |
 | stdio pool | Config-signature keyed reuse with idle cleanup |
@@ -33,6 +34,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 
 ## Transport behavior
 
+- The first runtime read loads and normalizes the durable configuration (including fallback recovery) into one live snapshot. Later list/discovery/call reads use that snapshot; manual file edits remain invisible until process/store reinitialization. Managed writes publish a cloned snapshot only after durable persistence succeeds. Canonical contract: [D-dispatch-mcp-live-configuration](../threads/tool-dispatch.md#d-dispatch-mcp-live-configuration).
 - `stdio` requires a command and uses a pooled client keyed by server name plus command/args/env/cwd/stderr signature. A config change selects a new key for later calls; the old keyed entry is not synchronously invalidated and closes through its idle TTL or transport `onclose` path.
 - `streamable-http` and `sse` require a URL and use short-lived standard connections.
 - `auto` tries streamable HTTP and falls back to SSE.

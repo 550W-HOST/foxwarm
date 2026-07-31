@@ -195,7 +195,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
         case 'attach':
         case 'detach':
-          ctx.reply('❌ Skill attach/detach is no longer supported. Visible skills are cataloged automatically in session snapshots; use `/skill show <skill>` or the `load_skill` tool to load full instructions on demand.')
+          ctx.reply('❌ Skill attach/detach is no longer supported. Visible skills are cataloged automatically in session snapshots; use `/skill show <skill>` or `skill({ action: "load", skillName: "<skill>" })` to load full instructions on demand.')
           break
         case 'show': {
           if (subArgs.length < 1) { ctx.reply('Usage: /skill show <skill>'); return }
